@@ -58,7 +58,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
-from . import lifecycle
+from . import company_pause, lifecycle
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
@@ -407,6 +407,22 @@ def bump_bot_session_epoch(c, bot):
         "epoch=epoch+1,updated_at=excluded.updated_at",
         (bot, H.now()),
     )
+
+
+def reset_bot_sessions(c, bot):
+    """Keep durable history while fencing local provider sessions for one bot."""
+    bump_bot_session_epoch(c, bot)
+    reset = 0
+    for conversation in c.execute("SELECT id,participants FROM conversations").fetchall():
+        if "bot:" + bot not in json.loads(conversation["participants"]):
+            continue
+        c.execute(
+            "INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+            "epoch=epoch+1,updated_at=excluded.updated_at",
+            (conversation["id"], H.now()),
+        )
+        reset += 1
+    return reset
 
 
 def model_changed_since(c, bot, since):
@@ -2405,6 +2421,10 @@ def _claim_refusal(
         caps = capability_set(runner["capabilities"])
     if draining:
         return "draining", None
+    company = loads.company if loads is not None else company_pause.record(c)
+    if company is not None:
+        # The company pause: nothing new starts until someone resumes (backend/company_pause.py).
+        return "company_paused", None
     if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
@@ -2818,7 +2838,8 @@ def obsolete_notices_sql(c):
     entered) once the task is at another step, unless a person's act caused it,
     a pull request's checks result for a head no open pull request on the task is at any more (a newer push supersedes it),
     the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
-    moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
+    moved it elsewhere), a stranded-task resume once its task has moved on, finished or changed owner since it was written
+    (stranded_resume.obsolete_sql), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
     The legacy per-task wakes (check_back, status_check, stalled, step_status) still queued unstarted are obsolete whatever
     the task says: the task roundup sends one list instead. A turn that started and yielded (a drain's time limit, a shared
     login's hold cap) is never one of them: it is the rest
@@ -2829,6 +2850,8 @@ def obsolete_notices_sql(c):
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     # A held job waits: a wake preset's or a quota reset's until its release, a claim's until its wait ends. The pass
     # takes it once it is free, and the claim then closes the item its hold opened (claim_holds.clear).
+    from . import stranded_resume
+
     return (
         "FROM assignments x CROSS JOIN jobs j CROSS JOIN message_refs m "
         f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
@@ -2851,6 +2874,7 @@ def obsolete_notices_sql(c):
         "OR ((m.ref_wake IN ('status_check','stalled','step_status') "
         "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM history_events "
         "e WHERE e.subject_type='task' AND e.subject_id=t.id AND e.created_at>m.created_at AND e.actor_id<>m.sender_id)) "
+        f"OR ({stranded_resume.obsolete_sql()}) "
         "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
         "AND e.subject_id=t.id AND e.created_at>m.created_at AND e.kind='step')) "
         "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
@@ -4947,7 +4971,7 @@ class Execution:
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
         subscribed = model_subscriptions.for_claim(c, runner, config)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
-        # Its department's tier (Medium by default) is looked up only when a turn would use it.
+        # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
         config = models_preset.with_gateway_fallback(
             record, here, models_preset.main_config(record, here, config, tier), tier
@@ -5233,6 +5257,7 @@ class Execution:
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context, worktrees
+        from .finance import brief as finance_brief
 
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
         if making_page:
@@ -5315,6 +5340,9 @@ class Execution:
                 # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                 # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                 "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
+                # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
+                "finance": finance_brief.for_turn(c, (acting or bot_who).actor),
                 "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
                 **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                 # place "updates": the recent updates that person may read and open, read now as them
@@ -6144,7 +6172,8 @@ class Execution:
             "SELECT active_message.conversation_id FROM attempts active_attempt "
             "JOIN jobs active_job ON active_job.id=active_attempt.job_id "
             "JOIN messages active_message ON active_message.id=active_job.message_id "
-            "WHERE active_attempt.id=?) OR m.conversation_id=? OR (m.kind='ask' AND m.wait_s>0 "
+            "WHERE active_attempt.id=?) OR m.conversation_id=? OR ((m.kind='ask' "
+            "OR json_extract(m.refs,'$.needs_action')=1) AND m.wait_s>0 "
             "AND m.sender_id LIKE 'bot:%')) ORDER BY m.rowid",
             (attempt["bot_id"], claim_holds.REASON, H.now(), aid, task_room),
         ).fetchall()
@@ -6663,9 +6692,20 @@ class Execution:
             posting = not already and not same
             if source["kind"] in ("say", "ask", "steer") or task:
                 target = source["sender_id"]
-                # A bot is answered only when it asked, except where the thread's wake rule chose to start this run
-                # for its message (a carrier): the loop guard, not this rule, bounds bots answering bots there.
-                replyable = not str(target).startswith("bot:") or source["kind"] == "ask" or carried
+                # A bot is answered only when it asked (a message flagged needs_action; an ask before step 6c), except
+                # where the thread's wake rule chose to start this run for its message (a carrier): the loop guard,
+                # not this rule, bounds bots answering bots there. The reply itself asks nothing back. A bot's
+                # needs-action comment on a task only wakes the owner: the work on the task answers it, and posting
+                # the run's text back would wake the commenter (bot_to_bot WAKES) on every nudge, a scheduled-only
+                # lead included (Dev 606). Bots ask bots in a DM.
+                source_refs = H._json(source.get("refs"), {})
+                source_refs = source_refs if isinstance(source_refs, dict) else {}
+                replyable = (
+                    not str(target).startswith("bot:")
+                    or source["kind"] == "ask"
+                    or carried
+                    or (bool(source_refs.get("needs_action")) and not source_refs.get("comment"))
+                )
                 if target == H.KEEPER and task:
                     target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
@@ -6728,7 +6768,7 @@ class Execution:
                             )
                     # The org rule check's verdict (backend/org_rule_check.py), whether the reply is posted now or
                     # waits on the run until Done: held, the run keeps only the note, never the reply.
-                    rule_gate, asked_text = None, body.text
+                    rule_gate = None
                     if rule_check and not refused:
                         from . import org_rule_check
 
@@ -6767,24 +6807,9 @@ class Execution:
                     if replyable and not refused:
 
                         def post_reply():
-                            if msg["kind"] == "ask":
-                                # The pick is resolved on the reply's own words; a warning goes on what the asker
-                                # reads (task_review.reply_answer).
-                                from .task_review import reply_answer
-                                from . import org_rule_check
-
-                                sent = reply_answer(
-                                    c,
-                                    self.auth,
-                                    Identity(actor, "bot", attempt_id=aid),
-                                    msg,
-                                    asked_text,
-                                    org_rule_check.warn_line(rule_gate),
-                                )
-                            else:
-                                sent = self._say_reply(
-                                    c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
-                                )
+                            sent = self._say_reply(
+                                c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
+                            )
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, source)
                             return sent
@@ -7123,7 +7148,6 @@ class Execution:
                     ("completed" if body.outcome == "completed" else "canceled", incoming["message_id"]),
                 )
                 continue
-            answered = incoming["kind"] != "ask" or bool(H.answers_to(c, [incoming["message_id"]]))
             task_id = work_task_id(message, H.conversation(c, message["conversation_id"]))
             deferred = False
             if task_id and task_id != turn_task:
@@ -7138,7 +7162,7 @@ class Execution:
                 "queued"
                 if deferred
                 else "completed"
-                if body.outcome == "completed" and answered
+                if body.outcome == "completed"
                 else "uncertain"
                 if held_back
                 else "queued"
@@ -7836,7 +7860,7 @@ class Execution:
                 # A safe second computer loss waits for the source, not a person's effects decision.
                 continue
             calls, acted = facts['calls'], facts['acted']
-            # `stopped` is what the review card leads with (ui/app/settings.js executionReview), by the same rule the
+            # `stopped` is what the review card leads with (ui/app/settings.ts executionReview), by the same rule the
             # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.
             if facts['fallback_unknown']:
                 stopped = 'unknown'
@@ -7882,7 +7906,7 @@ class Execution:
                 )
             elif facts['restart'] and facts['starts'] <= 1:
                 # Safe to resume, but the run did reach tools that can change things: the card must
-                # never say it only read (ui/app/settings.js renders each bucket's own words).
+                # never say it only read (ui/app/settings.ts renders each bucket's own words).
                 stopped = 'restarted'
                 reason = (
                     f"{restart_cause(facts)}; no consumed approval or named irreversible outside "

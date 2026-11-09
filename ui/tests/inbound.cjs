@@ -1,4 +1,4 @@
-// Tico addresses and Texts in (ui/app/inboxes-texts.js) under Tools: external text cannot execute, an inbox's
+// Tico addresses and Texts in (ui/app/inboxes-texts.ts) under Tools: external text cannot execute, an inbox's
 // recent messages ask for that inbox only, Reveal code, a released address listed as Not in use with its messages,
 // Tools › Messages (every inbox or the ones picked, kept through a redraw, by channel, sender, words, code and spam,
 // a page at a time, with each message's channel and inbox), joining a Tico company account with a code (explicit consent,
@@ -36,10 +36,10 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-      const file = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const file = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (file && fs.existsSync(uiFile(file[1]))) return route.fulfill({contentType: file[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1)))});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const body = request.postData() ? request.postDataJSON() : null;
       if (p.startsWith('/api/v2/inbound/')) {

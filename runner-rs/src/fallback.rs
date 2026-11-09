@@ -164,7 +164,7 @@ fn choose(
             return None;
         }
         let runtime = crate::harness_tools::runtime_of(&harness);
-        // The server's pick for this bot (`gateway_fallback`, its department and level) replaces the company row's
+        // The server's pick for this bot (`gateway_fallback`, its level and Fast) replaces the company row's
         // model when the hop is the Gateway.
         let pick = text_of(&config["gateway_fallback"]);
         let model = if crate::hosts::pi::is_gateway(Some(&model))
@@ -718,7 +718,7 @@ mod tests {
             assert_eq!(limited_config(&other, None), other);
         }
         let keyed = json!({"runtime": "pi", "harness": "pi", "model": "own-key-model",
-                           "fallback": {"harness": "pi", "model": "tico-mid-1.0"}});
+                           "fallback": {"harness": "pi", "model": "tico-medium-1.0"}});
         assert_eq!(limited_config(&keyed, None), keyed);
     }
 
@@ -818,7 +818,7 @@ mod tests {
             json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"});
         let choices = vec![
             json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"}),
-            json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"}),
+            json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"}),
         ];
         let mut env = crate::env::Env::new();
         // The signed-in provider comes first; the Gateway is the last row.
@@ -835,23 +835,22 @@ mod tests {
         let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
         assert_eq!(
             (hop.harness.as_str(), hop.model.as_str(), hop.default),
-            ("pi", "tico-mid-1.0", true)
+            ("pi", "tico-medium-1.0", true)
         );
     }
 
     #[test]
     fn the_gateway_hop_runs_the_bots_own_pick_when_the_server_sent_one() {
-        let choices =
-            vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-general-medium-1.0"})];
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"})];
         let mut env = crate::env::Env::new();
         env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
         let mut config = json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5",
-                                "gateway_fallback": "tico-engineering-high-1.0"});
+                                "gateway_fallback": "tico-high-1.0"});
         assert_eq!(
             default_choice(&config, &choices, &env, |_| false)
                 .unwrap()
                 .model,
-            "tico-engineering-high-1.0"
+            "tico-high-1.0"
         );
         // No pick, or one that is not a Tico model: the company's row stands.
         config["gateway_fallback"] = json!("");
@@ -859,14 +858,14 @@ mod tests {
             default_choice(&config, &choices, &env, |_| false)
                 .unwrap()
                 .model,
-            "tico-general-medium-1.0"
+            "tico-medium-1.0"
         );
         config["gateway_fallback"] = json!("gpt-5.5");
         assert_eq!(
             default_choice(&config, &choices, &env, |_| false)
                 .unwrap()
                 .model,
-            "tico-general-medium-1.0"
+            "tico-medium-1.0"
         );
     }
 
@@ -876,7 +875,7 @@ mod tests {
         // `tried` (the primary's slot, then each hop's) leaves no next hop, so the turn settles on the cap.
         let config =
             json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5"});
-        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"})];
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"})];
         let mut env = crate::env::Env::new();
         env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
         let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
@@ -899,7 +898,7 @@ mod tests {
         // `tried` grows by each hop's slot, so the loop ends after each of the company's rows ran once at most.
         let choices = vec![
             json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"}),
-            json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"}),
+            json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"}),
         ];
         let mut env = crate::env::Env::new();
         env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
@@ -921,7 +920,7 @@ mod tests {
             }
             assert_eq!(
                 ran,
-                ["gpt-5.5", "tico-mid-1.0"],
+                ["gpt-5.5", "tico-medium-1.0"],
                 "{config}: the Gateway last, once"
             );
         }
@@ -931,21 +930,21 @@ mod tests {
     fn a_pi_bot_on_its_own_key_can_end_on_the_gateway_and_a_gateway_bot_never_hops_to_itself() {
         let choices = vec![
             json!({"runtime": "pi", "harness": "pi", "model": "openrouter/some-model"}),
-            json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"}),
+            json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"}),
         ];
         let mut env = crate::env::Env::new();
         env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
         let own = json!({"runtime": "pi", "harness": "pi", "model": "openrouter/other-model"});
         // Another pi row is still never a hop from a pi primary; the Gateway is.
         let hop = default_choice(&own, &choices, &env, |_| true).unwrap();
-        assert_eq!(hop.model, "tico-mid-1.0");
+        assert_eq!(hop.model, "tico-medium-1.0");
         let tried = vec![
             slot("pi", "openrouter/other-model"),
             slot(&hop.runtime, &hop.model),
         ];
         assert!(next_choice(&own, &choices, &env, &tried, |_| true).is_none());
         // A bot already on the Gateway: no hop to the Gateway.
-        let tico = json!({"runtime": "pi", "harness": "pi", "model": "tico-mid-1.0"});
+        let tico = json!({"runtime": "pi", "harness": "pi", "model": "tico-medium-1.0"});
         assert!(default_choice(&tico, &choices[1..], &env, |_| true).is_none());
     }
 

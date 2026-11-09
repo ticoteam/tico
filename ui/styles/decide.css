@@ -49,8 +49,6 @@
 .dc-wait{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);color:var(--muted);letter-spacing:var(--track-tight)}
 .dc-blank{margin:0;color:var(--muted);font-size:var(--t-md);line-height:var(--lh-read)}
 .dc-ask{align-self:flex-start}
-/* one-click clarify on a stale ask: a quiet way in, aligned like the ask button */
-.dc-clarify{align-self:flex-start}
 .dc-details{color:var(--muted);font-size:var(--t-sm);border-top:1px solid var(--line);padding-top:10px}
 .dc-details summary{width:max-content;cursor:pointer;font-weight:500}
 .dc-details[open]>summary{margin-bottom:10px}
@@ -140,7 +138,7 @@
 }
 @media (prefers-reduced-motion:reduce){.dc-card{transition:none}}
 
-/* the question card (ui/app/question-card.js), the same in Decide and the task page's Needs you box: several picks
+/* the question card (ui/app/question-card.ts), the same in Decide and the task page's Needs you box: several picks
    are checkboxes, every pick and button has its "what happens" line, the fallback is a small line at the foot */
 .qc-why{color:var(--ink)}
 .qc-picks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}

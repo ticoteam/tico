@@ -97,6 +97,19 @@ def _rules_args(args):
     return args
 
 
+def _directory_args(args):
+    """`hub directory` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
+    --option pairs are an attribute's options. The pairs are the command line's; the tool takes objects."""
+    if getattr(args, "match", None):
+        args.match = {args.match[0]: args.match[1]}
+    if getattr(args, "set_values", None) is not None:
+        args.values = dict(args.set_values)
+    args.set_values = None
+    if getattr(args, "options", None) is not None:
+        args.options = [{"key": key, "label": label} for key, label in args.options]
+    return args
+
+
 def via_tool(client, args, **more):
     """Run the tool of the command's own name with the command's flags as its arguments."""
     from clients import hubtools
@@ -104,7 +117,7 @@ def via_tool(client, args, **more):
     fields = {
         k: v
         for k, v in vars(args).items()
-        if k not in ("cmd", "sub", "subsub", "fn", "visual", "visual_title") and v is not None
+        if k not in ("cmd", "sub", "subsub", "fn", "visual", "visual_title", "as_text") and v is not None
     }
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
@@ -333,6 +346,8 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "thread":
         return via_tool(client, args)
+    if args.cmd == "directory":
+        return via_tool(client, _directory_args(args))
     if args.cmd == "finance":
         return via_tool(
             client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {})
@@ -342,6 +357,8 @@ def run(args, who=None):
     if args.cmd == "feedback":
         return via_tool(client, args)
     if args.cmd == "call":
+        return via_tool(client, args)
+    if args.cmd in ("requirements", "requirement"):
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
@@ -472,6 +489,9 @@ def run(args, who=None):
         "seat create",
         "seat update",
         "seat close",
+        "setup show",
+        "setup complete",
+        "setup invite",
     ):
         return via_tool(client, args)
     if fn == "run export":
@@ -547,8 +567,13 @@ def run(args, who=None):
         "gateway search",
         "gateway fetch",
         "gateway image",
+        "gateway video",
+        "gateway video-status",
     ):
         return via_tool(client, args)
+    if fn == "gateway digest":
+        items = json.loads(Path(args.items_file).read_text(encoding="utf-8"))
+        return via_tool(client, args, items=items)
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":
@@ -728,28 +753,6 @@ def run(args, who=None):
                 **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {}),
             },
         )
-    if fn == "question answer":
-        return post(
-            f"messages/{args.message_id}/answer",
-            {"text": args.text or args.unknown, "unknown": bool(args.unknown)},
-            delegate=getattr(args, "on_behalf_of", None) or False,
-        )
-    if fn == "question ask":
-        if len(args.words) < 2:
-            raise APIError("usage", 'hub question ask <bot> [<bot>...] "question"')
-        from clients import hubtools
-
-        wait = max(0, min(int(args.wait), hubtools.ASK_WAIT_MAX))
-        fields = {"operation_id": key}
-        pending, failed = hubtools.ask_create(client, args.words[:-1], args.words[-1], wait, fields)
-        # Said before the wait: a shell that kills a long wait still leaves the bot holding each id.
-        for mid, bot in pending.items():
-            if routed := pending.routed.get(bot):
-                print("hub: " + routed["rerouted"], file=sys.stderr, flush=True)
-            print(
-                f"hub: asked {bot}, message {mid}; waiting up to {wait} s for the answer", file=sys.stderr, flush=True
-            )
-        return {**failed, **hubtools.ask_wait(client, pending, wait, fields)}
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
         payload = {
@@ -869,14 +872,11 @@ def run(args, who=None):
             return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
         if sub in ("list", "snooze", "unsnooze", "readers", "followers", "follow", "unfollow"):
             return via_tool(client, args)
-        if sub == "ask":
-            return post(f"tasks/{args.id}/ask", {"text": args.text})
         if sub == "question":
             return via_tool(client, args)
         if sub == "comment":
-            from clients.task_review import ask_from_args, attachment
+            from clients.task_review import attachment
 
-            ask = ask_from_args(args)
             references = list(getattr(args, "file", None) or [])
             for index, path in enumerate(getattr(args, "attach", None) or []):
                 made = post(f"tasks/{args.id}/files", attachment(path), suffix=f":attachment:{index}")
@@ -898,8 +898,6 @@ def run(args, who=None):
             body = {"text": args.text}
             if references:
                 body["attachments"] = references
-            if ask is not None:
-                body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
             body.update(_delivery(args))
@@ -920,11 +918,6 @@ def run(args, who=None):
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
             return post(f"tasks/{args.id}/comments/{args.comment_id}/delete", {})
-        if sub == "ask-resolve":
-            return post(
-                f"tasks/{args.id}/comments/{args.comment_id}/resolve",
-                {"quote": args.quote} if args.quote is not None else {},
-            )
         if sub == "delete":
             return post(f"tasks/{args.id}/delete", {})
         if sub == "deleted":
@@ -969,12 +962,7 @@ def run(args, who=None):
             return post("tasks/" + args.id, body, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
-            from clients.task_review import ask_from_args
-
             body = {"name": args.name or path.name}
-            ask = ask_from_args(args)
-            if ask is not None:
-                body["ask"] = ask
             if getattr(args, "note", None) is not None:
                 body["note"] = args.note
             if client.features().get("task_files_multipart"):
@@ -1062,7 +1050,8 @@ def run(args, who=None):
     if fn == "market briefing post":
         body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
         items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
-        return via_tool(client, args, body=body, items=items)
+        answers = json.loads(Path(args.answers_file).read_text()) if args.answers_file else None
+        return via_tool(client, args, body=body, items=items, answers=answers)
     if cmd == "market" and fn in MARKET_SPEND:
         return market_spend(client, args, tool)
     if cmd == "market":
@@ -1915,6 +1904,46 @@ def email_text(result, action):
     return "\n".join(lines)
 
 
+def _entity_line(row):
+    """One entity in a list: its id, name and status, and the link keys it has to us (customer_of ...)."""
+    keys = " ".join(row.get("links_to_us") or [])
+    return f"{row['id']}  {row['name']}  {row['status']}" + (f"  [{keys}]" if keys else "")
+
+
+def directory_text(fn, result):
+    """`--text` for the Directory's reads: a short summary, one line per entity, or a card. Any other command prints JSON."""
+    if fn == "directory self":
+        lines = [result["name"] + (f" ({result['primary_domain']})" if result.get("primary_domain") else "")]
+        if result.get("operates_in"):
+            lines.append("operates in: " + ", ".join(place["name"] for place in result["operates_in"]))
+        lines.append(
+            "obligations: " + ("none yet" if not result.get("obligations") else str(len(result["obligations"])))
+        )
+        return "\n".join(lines)
+    if fn == "directory find":
+        lines = [_entity_line(row) for row in result.get("rows", [])] or ["(none you can see)"]
+        if result.get("next"):
+            lines.append(f"more: --after {result['next']}")
+        return "\n".join(lines)
+    if fn == "directory get":
+        if result.get("ambiguous"):
+            return f"{result['ref']} matches {len(result['matches'])} entities; name one by id:\n" + "\n".join(
+                _entity_line(row) for row in result["matches"]
+            )
+        lines = [f"{result['name']} ({result['type']}) {result['id']}"]
+        for key, value in sorted(result.get("values", {}).items()):
+            for item in value if isinstance(value, list) else [value]:
+                lines.append(f"  {key}: {item['value']} (from {item['source_type']}, {str(item['updated_at'])[:10]})")
+        for link in result.get("links", []):
+            lines.append(f"  {link['link_key']}: {link['other_name']} ({link['other_type']})")
+        for ref in result.get("refs", []):
+            lines.append(f"  in {ref['system']}: {ref['external_type']} {ref['external_id']}")
+        for note in result.get("notes", []):
+            lines.append(f"  note ({note['audience']}, {note['author_key']}): {note['body']}")
+        return "\n".join(lines)
+    return json.dumps(result, indent=2)
+
+
 def main(args, who=None):
     try:
         result = run(args, who)
@@ -1944,6 +1973,8 @@ def main(args, who=None):
 
             print(dbquery.render(result, args))
             return 0 if result.get("ok", True) else 2
+        elif args.cmd == "directory" and getattr(args, "as_text", False):
+            print(directory_text(args.fn, result))
         elif args.fn == "tool list" and not args.bot and not args.json:
             print(integrations_text(result))
         elif args.fn == "tool show" and not args.json:

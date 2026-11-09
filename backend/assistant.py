@@ -168,10 +168,7 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
 INSTRUCTION_TTL_S = 30 * 60
 # The steps a bulk card (`POST /api/v2/assistant/batch`) may hold: task changes, comments, links, approval decisions and
 # answers. A card is still checked against this list, whatever a turn may do on its own.
-_INSTRUCTED = [
-    re.compile(p)
-    for p in (r"/api/v2/tasks/[^/]+", r"/api/v2/tasks/[^/]+/(comments|links)", r"/api/v2/messages/[^/]+/answer")
-]
+_INSTRUCTED = [re.compile(p) for p in (r"/api/v2/tasks/[^/]+", r"/api/v2/tasks/[^/]+/(comments|links|answers)")]
 # An automation's change and an org rule's add or retire may sit on a bulk card too (one card holds the closes and the
 # rule stop). Each runs as the person through its own route, and must pass `admits_on_turn` like any other write.
 _CARD_OTHER = [
@@ -284,6 +281,9 @@ NEVER = [
         # credential or a grant is here, by its canonical path (`admits_on_turn` renames the old spellings first), and
         # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
         ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
+        # The setup handoff makes the owner's personal token from a one-time secret, and its switch revokes that token
+        # (backend/setup_handoff.py): a token's issue and its end, so the person's, never a chat's.
+        ("POST", r"/api/v2/setup/handoff(/off)?"),
         ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
         # A person's skills helper token (backend/skill_devices.py): connecting, revoking and its reporting are the person's.
         (None, r"/api/v2/skills/devices(/.*)?"),
@@ -538,8 +538,10 @@ def require_addressed(c, who, path, body):
             row = H.approval(c, m.group(1)) or {}
             refuse_own_click(row)
             message_id = row.get("message_id")
-        elif m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", target):
-            message_id = m.group(1)
+        elif m := re.fullmatch(r"/api/v2/tasks/([^/]+)/answers", target):
+            if (H.task(c, m.group(1)) or {}).get("owner_id") != who.actor:  # a question task is its person's
+                raise Problem("forbidden", "That approval or question is not addressed to you", 403)
+            continue
         else:
             continue
         if (H.message(c, message_id) or {}).get("recipient_id") != who.actor:
@@ -848,10 +850,10 @@ _PROPOSABLE = [
         ("POST", r"/api/v2/automations"),
         ("PATCH", r"/api/v2/automations/[^/]+"),
         ("POST", r"/api/v2/approvals/[^/]+"),
-        ("POST", r"/api/v2/messages/[^/]+/answer"),
+        ("POST", r"/api/v2/tasks/[^/]+/answers"),
         ("POST", r"/api/v2/tasks"),
         ("POST", r"/api/v2/tasks/[^/]+"),
-        ("POST", r"/api/v2/tasks/[^/]+/(comments|links|labels|run-now|ask)"),
+        ("POST", r"/api/v2/tasks/[^/]+/(comments|links|labels|run-now)"),
         ("POST", r"/api/v2/messages"),
         ("POST", r"/api/v2/chat/[^/]+"),
         ("POST", r"/api/v2/notes"),
@@ -1008,7 +1010,7 @@ def age(ts):
 def _kind(step):
     """What one step of a card is, for counting and grouping: approvals, answers or task actions."""
     path = str(step.get("path") or "")
-    return "approval" if _DECIDING.fullmatch(path) else "answer" if path.endswith("/answer") else "task"
+    return "approval" if _DECIDING.fullmatch(path) else "answer" if path.endswith("/answers") else "task"
 
 
 def batch_line(steps):
@@ -1038,8 +1040,8 @@ def groups(c, steps):
             row = H.approval(c, m.group(1)) or {}
             verb = "Approve" if body.get("decision") == "approved" else "Decline"
             noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created_at")
-        elif m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", path):
-            verb, noun, created = "Answer", "bot question", (H.message(c, m.group(1)) or {}).get("created_at")
+        elif m := re.fullmatch(r"/api/v2/tasks/([^/]+)/answers", path):
+            verb, noun, created = "Answer", "bot question", (H.task(c, m.group(1)) or {}).get("created_at")
         else:
             m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(comments|links))?", path)
             sub = m.group(2) if m else None
@@ -1151,12 +1153,18 @@ def describe(c, method, path, body, viewer=None, admins=()):
             + (f"; reason: {preview(body['note'], 120)}" if body.get("note") else "")
         )
 
-    def answer_line(mid):
-        asked = H.message(c, mid) or {}
+    def answer_line(tid):
+        from . import question_tasks
+
+        card = H.task(c, tid) or {}
+        asked = ((question_tasks.fields(card)["questions"] or [{}])[0].get("question") if card else "") or card.get(
+            "title"
+        )
+        said = body.get("other") or "; ".join(str(v) for v in (body.get("answers") or {}).values())
         return (
-            f"Answer {who(asked.get('sender_id'))}'s question “{preview(asked.get('body'), 80)}”"
-            + (f", {age(asked['created_at'])}" if asked.get("created_at") else "")
-            + f": {preview(body.get('text'), 120)}"
+            f"Answer {who(card.get('requester_id'))}'s question “{preview(asked, 80)}”"
+            + (f", {age(card['created_at'])}" if card.get("created_at") else "")
+            + f": {preview(said, 120)}"
         )
 
     diff = []
@@ -1170,10 +1178,10 @@ def describe(c, method, path, body, viewer=None, admins=()):
         return f"Change task “{t['title']}” ({len(diff)} field{'s' if len(diff) != 1 else ''})", diff
     rules = (
         (r"/api/v2/approvals/([^/]+)", lambda g: approval_line(g[0])),
-        (r"/api/v2/messages/([^/]+)/answer", lambda g: answer_line(g[0])),
+        (r"/api/v2/tasks/([^/]+)/answers", lambda g: answer_line(g[0])),
         (r"/api/v2/tasks", lambda g: f"Create task “{body.get('title', '')}” for {who(body.get('owner'))}"),
         (
-            r"/api/v2/tasks/([^/]+)/(comments|links|labels|run-now|ask)",
+            r"/api/v2/tasks/([^/]+)/(comments|links|labels|run-now)",
             lambda g: f"{g[1].replace('-', ' ').title()} on task “{(H.task(c, g[0]) or {}).get('title', g[0])}”",
         ),
         (r"/api/v2/messages", lambda g: f"Send a message to {who(body.get('to'))}"),
@@ -1460,6 +1468,32 @@ PERSON_ONLY_FIELDS = ("replace_lost_key",)
 # step that fails does not stop the rest.
 BATCH_PATH = "/api/v2/assistant/batch"
 MAX_BATCH = 100
+
+
+def pending_on_task(c, task_id):
+    """Whether a Confirm card still waits for a person's click on this task: a change, comment, link or answer on
+    `/api/v2/tasks/<id>`, alone or as a step of a bulk card, proposed within the day it may still run. Two seeks of the
+    pending cards' path index (migration 20261108191356); a database without the table has none."""
+    if not H._has_table(c, "assistant_actions"):
+        return False
+    base = "/api/v2/tasks/" + str(task_id)
+    since = H.shift(H.now(), hours=-CONFIRM_TTL_H)
+    # `/` sorts just below `0`: the range holds the task's own path and every path under it, and a little more,
+    # which the exact test below leaves out.
+    for row in c.execute(
+        "SELECT path, body FROM assistant_actions WHERE status='pending' AND path>=? AND path<? AND created_at>=? "
+        "UNION ALL SELECT path, body FROM assistant_actions WHERE status='pending' AND path=? AND created_at>=?",
+        (base, base + "0", since, BATCH_PATH, since),
+    ):
+        paths = [row["path"]]
+        if row["path"] == BATCH_PATH:
+            try:
+                paths = [str(s.get("path") or "") for s in json.loads(row["body"] or "{}").get("actions") or ()]
+            except (TypeError, ValueError, AttributeError):
+                paths = []
+        if any(p == base or p.startswith(base + "/") for p in paths):
+            return True
+    return False
 
 
 def batch_steps(body):

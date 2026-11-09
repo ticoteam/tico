@@ -277,7 +277,7 @@ def publication_responses(api, token):
         {"owner": "ops", "title": "Review synthetic team plan", "body": "Check the synthetic plan.", "private": False},
     )
     writes = {
-        "human": ("messages", {"to": "ana", "kind": "ask", "text": "Synthetic meeting summary?"}),
+        "human": ("task-questions", {"on": "ana", "question": "Synthetic meeting summary?"}),
         "bot": ("messages", {"to": "finance", "text": "Review this synthetic meeting summary."}),
         "task": (
             "tasks",

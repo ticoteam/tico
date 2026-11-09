@@ -1,4 +1,4 @@
-"""Approvals and asks nobody will act on leave Needs you: the task ended, a newer request replaced them, or they aged."""
+"""Approvals nobody will act on leave Needs you: the task ended, a newer request replaced them, or they aged."""
 
 from backend import approval_expiry
 from backend import hubdb as H
@@ -98,71 +98,15 @@ class Withdrawn(HubCase):
         self.assertEqual(approval_expiry.sweep(self.conn, later)["stale"], [appr["id"]])
         self.assertEqual(H.approval_request(self.conn, CMO, "merge", MERGE)["decision"], None)
 
-    def test_the_sweep_clears_what_tasks_that_ended_earlier_left_open_but_a_done_task_keeps_its_review(self):
+    def test_the_sweep_clears_what_tasks_that_ended_earlier_left_open(self):
         notes = H.task_create(self.conn, ANA, "Write the notes", "Draft them.", CMO, lint=False)
         appr = H.approval_request(self.conn, CMO, "merge", MERGE, task_id=notes["id"])
-        plain = H.task_ask(self.conn, CMO, notes["id"], "Should the notes cover the beta too?")
-        site = H.task_create(self.conn, ANA, "Fix the site", "Fix it.", CMO, lint=False)
-        review = H.task_comment(
-            self.conn,
-            CMO,
-            site["id"],
-            "Is this ready?",
-            ask={
-                "questions": [
-                    {
-                        "id": "ok",
-                        "header": "Review",
-                        "question": "Is this ready?",
-                        "options": [{"label": "Yes"}, {"label": "No"}],
-                    }
-                ]
-            },
-        )
-        # Ended before this change shipped: nothing withdrew or superseded anything then. Separate tasks, because a
-        # newer ask from the same bot to the same person already replaces the plain one.
-        self.conn.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (notes["id"], site["id"]))
+        # Ended before this change shipped: nothing withdrew anything then.
+        self.conn.execute("UPDATE tasks SET status='done' WHERE id=?", (notes["id"],))
         out = approval_expiry.sweep(self.conn)
-        self.assertEqual((out["ended"], out["asks"]), ([appr["id"]], [plain["id"]]))
-        self.assertIsNone(H.message(self.conn, review["id"])["superseded_at"])
+        self.assertEqual(out["ended"], [appr["id"]])
         # A task that has ended takes no new approval: nothing would act on it.
         self.refused("lint", H.approval_request, self.conn, CMO, "merge", {**MERGE, "pr": 99}, task_id=notes["id"])
-
-    def test_a_bot_cannot_ask_a_person_about_an_ended_task_but_a_done_task_still_asks_for_acceptance(self):
-        review = {
-            "questions": [
-                {
-                    "id": "ok",
-                    "header": "Review",
-                    "question": "Is this ready?",
-                    "options": [{"label": "Yes"}, {"label": "No"}],
-                }
-            ]
-        }
-        done = H.task_create(self.conn, ANA, "Write the notes", "Draft them.", CMO, lint=False)
-        H.task_update(self.conn, CMO, done["id"], status="done", note="drafted")
-        # It would only be superseded within the hour, so it is refused when asked, however it is asked.
-        self.refused("lint", H.task_ask, self.conn, CMO, done["id"], "Should the notes cover the beta too?")
-        self.refused(
-            "lint",
-            H.say,
-            self.conn,
-            CMO,
-            ANA,
-            "Should the notes cover the beta too?",
-            kind="ask",
-            refs={"task": done["id"]},
-        )
-        accepted = H.task_comment(self.conn, CMO, done["id"], "Is this ready?", ask=review)
-        self.assertEqual(approval_expiry.sweep(self.conn)["asks"], [])
-        self.assertIsNone(H.message(self.conn, accepted["id"])["superseded_at"])
-        closed = H.task_create(self.conn, ANA, "Fix the site", "Fix it.", CMO, lint=False)
-        H.task_close(self.conn, ANA, closed["id"])
-        self.refused("lint", H.task_comment, self.conn, CMO, closed["id"], "Is this ready?", ask=review)
-        # A bot's ask to another bot, and a person's ask, are not a person's queue.
-        self.assertEqual(
-            H.say(self.conn, ANA, CMO, "Why was it closed?", kind="ask", refs={"task": closed["id"]})["kind"], "ask"
-        )
 
 
 class SupersededReleases(HubCase):

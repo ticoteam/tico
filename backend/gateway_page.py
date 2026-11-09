@@ -20,15 +20,13 @@ def catalog(c, settings=None):
 
 def pick_row(found, bots):
     """One row of the picks table from `gateway_tiers.resolve`: no "Tico" in the name, the version or `auto`."""
-    old = found["old"]
     return {
         "id": found["id"],
         "name": found["label"],
         "model": found["model"],
-        "version": "auto" if found["auto"] else found["version"] + (" (old lineup)" if old else ""),
+        "version": "auto" if found["auto"] else found["version"],
         "bots": bots,
         "price": gateway_tiers.money(found["price"]),
-        "old": old,
     }
 
 
@@ -51,11 +49,13 @@ def picks(c, settings=None):
         for model in used:
             counts[model] = counts.get(model, 0) + 1
     cat = gateway_tiers.catalog()
-    out = []
+    merged = {}
     for model, bots in counts.items():
         found = gateway_tiers.resolve(model, cat)
         if found and found["kind"] == "chat":
-            out.append(pick_row(found, bots))
+            # An id from before this lineup counts under the id it is now.
+            merged[found["id"]] = (found, merged.get(found["id"], (found, 0))[1] + bots)
+    out = [pick_row(found, bots) for found, bots in merged.values()]
     return sorted(out, key=lambda r: (-r["bots"], r["name"])), record["decide_level"]
 
 
@@ -86,37 +86,17 @@ def _now(tier):
 
 
 def models(cat):
-    """The models table of the Gateway card: one row per level with its model and its Fast model. Every department
-    runs a level on the same model today; if one ever differs, the rows are per department instead (`same` false).
-    A tier that runs a held model is not shown (`gateway_tiers.live_row`)."""
-    names = {row["id"]: row["name"] for row in cat["departments"]}
+    """The models table of the Gateway card: one row per level with its model and its Fast model. A tier that runs a
+    held model is not shown (`gateway_tiers.live_row`)."""
     live = [row for row in map(gateway_tiers.live_row, cat["models"]) if row is not None]
-    tiers = {(row["department"], row["level"], bool(row["fast"])): _now(row) for row in live if row.get("department")}
-    departments = [ident for ident in names if any(key[0] == ident for key in tiers)]
-    levels = [(row["id"], row["name"]) for row in cat["levels"]]
-    same = bool(departments) and all(
-        tiers.get((d, level, fast)) == tiers.get((departments[0], level, fast))
-        for d in departments
-        for level, _ in levels
-        for fast in (False, True)
-    )
-    groups = [("", departments[0])] if same else [(names[d] + " · ", d) for d in departments]
-    rows = [
-        {
-            "id": level if same else f"{department}-{level}",
-            "name": prefix + name,
-            "model": tiers[(department, level, False)],
-            "fast": tiers.get((department, level, True)),
-        }
-        for prefix, department in groups
-        for level, name in levels
-        if (department, level, False) in tiers
-    ]
+    tiers = {(row["level"], bool(row["fast"])): _now(row) for row in live if row.get("level")}
     meeting = next((row for row in live if row["id"] == gateway_tiers.MEETING_TIER), None)
     return {
-        "same": same,
-        "departments": [names[d] for d in departments],
-        "levels": rows,
+        "levels": [
+            {"id": level, "name": name, "model": tiers[(level, False)], "fast": tiers.get((level, True))}
+            for level, name in ((row["id"], row["name"]) for row in cat["levels"])
+            if (level, False) in tiers
+        ],
         "meeting": {"name": meeting["name"], **_now(meeting)} if meeting else None,
         "decisions": [
             {"id": row["id"], "name": row["name"], **_now(row)}

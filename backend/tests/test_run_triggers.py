@@ -248,10 +248,10 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     assert (row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1000, 200, 30)
 
 
-def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):
+def test_an_answer_to_a_bots_question_in_the_final_text_counts_once(api):
     r = machine(api)
     with api.app.state.store.transaction() as c:
-        H.say(c, "bot:finance", "bot:ops", "Is the bank feed in?", kind="ask")
+        H.say(c, "bot:finance", "bot:ops", "Is the bank feed in?", refs={"needs_action": True})
     attempt = claim(api, r)
     start(api, r, attempt)
     finish(api, r, attempt, "Yes, it came in at six.")

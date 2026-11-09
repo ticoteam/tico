@@ -1479,7 +1479,7 @@ def plan(
     never = way == "defer" and defer_for == "never"
     wanted = {}  # actor -> reason, first reason wins
     for actor, reason in found:
-        wanted.setdefault(actor, "ask" if kind == "ask" and actor == primary else reason)
+        wanted.setdefault(actor, reason)
     if audience in ("personal", "participants") and not thread.get("parent_id"):
         for actor in _dm_members(c, root):
             wanted.setdefault(actor, "dm")
@@ -1493,7 +1493,7 @@ def plan(
     replied = _replied_author(c, root, in_reply_to)
     if replied:
         wanted.setdefault(replied, "reply")
-    if not system and not (on_task and kind in ("ask", "answer")):
+    if not system:
         for actor, notify, reason in _follower_rows(c, thread["id"]):
             if not on_task and actor.startswith("human:") and reason in ("joined", "read"):
                 continue
@@ -1593,18 +1593,14 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         if primary.startswith("human:") and reason in ("follower", "digest"):
             # Written to a person who also follows: it addresses them (Needs you lists it), unless only following
             # lets it reach them (a bot's post in a task's thread, hubdb.delivery_counts_sql).
-            written = "ask" if message.get("kind") == "ask" else "addressed"
-            if H.counts_for_person(c, message, written, thread["id"]):
-                reason = written
+            if H.counts_for_person(c, message, "addressed", thread["id"]):
+                reason = "addressed"
         c.execute(
             "UPDATE message_deliveries SET reason=? WHERE message_id=? AND recipient=?",
             (reason if reason in REASONS else "addressed", message["id"], primary),
         )
         # The trigger wrote no row for a bot's post in a task's thread to a person (hubdb.delivery_counts_sql): one that
         # reaches them for a reason that counts gets it here.
-        # An ask's reason is 'ask' here; one that @mentions the person it asks is written as the mention it is.
-        if reason == "ask" and any(a == primary and k == "mention" for a, k in in_audience):
-            reason = "mention"
         if (
             primary.startswith("human:")
             and not c.execute(
@@ -2651,8 +2647,10 @@ def _post(
         duplicate = _duplicate(c, origin, thread)
         if duplicate is not None:
             return duplicate
-    if kind not in ("say", "ask", "answer", "notice", "steer"):
-        raise Problem("kind", "A message is say, ask, answer, notice or steer", 422)
+    if kind in H.OLD_MESSAGE_KINDS:
+        raise Problem("kind", H.ASK_GONE, 422)
+    if kind not in ("say", "notice", "steer"):
+        raise Problem("kind", "A message is say, notice or steer", 422)
     text = str(body or "")
     if not text.strip() and not attachments:
         raise Problem("empty", "Write the message", 422)
@@ -2676,10 +2674,6 @@ def _post(
             raise Problem("not_found", "Unknown recipient", 404)
         if not str(target).startswith(OUTSIDE_PREFIXES) and not audience_has(c, thread, target):
             raise Problem("forbidden", "That teammate cannot read this thread. Add them first.", 403)
-    elif kind == "ask":
-        target = next((a for a, _ in found if audience_has(c, thread, a)), None)
-        if not target:
-            raise Problem("ask", "An ask names who it asks: @mention them", 422)
     elif audience_of(root_of(c, thread)) in ("personal", "participants") and not thread.get("parent_id"):
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
@@ -3169,22 +3163,6 @@ def _may_see(c, v, target):
         return False
 
 
-def asks_still_readable(c, actor, messages):
-    """The loose asks to `actor` they may still read. A stored audience is the outer boundary: an ask in a thread they
-    left is off their list until they are back. A row with no stored audience keeps its addressee, who may never have
-    been on its participant list."""
-    v = None
-    out = []
-    for m in messages:
-        root = root_of(c, m["conversation_id"])
-        if root is not None and root.get("audience") in AUDIENCES:
-            v = v or actor_viewer(c, actor)
-            if v is None or not message_readable(c, v, m):
-                continue
-        out.append(m)
-    return out
-
-
 def search(c, v, query, *, limit=20, before=None):
     """Message search as this viewer: `thread_search` over C1, each hit decided in full and its author named as `Known`
     says. The SQL only narrows; a hit is shown when `message_readable` says so (a private task, a restricted message)."""
@@ -3212,6 +3190,7 @@ def search(c, v, query, *, limit=20, before=None):
         if found["hits"]
         else {}
     )
+    named = shown_names(c, v, [h["thread_id"] for h in found["hits"] if not h["title"]])
     hits = []
     for hit in found["hits"]:  # the sender's `source` needs the message's refs (a keeper line's kind)
         shown = known.message(
@@ -3222,6 +3201,8 @@ def search(c, v, query, *, limit=20, before=None):
             }
         )
         hits.append({**hit, "sender_id": shown["sender_id"], "source": shown["source"]})
+    # A hit in a thread with no title is named as the thread is (`shown_names`).
+    hits = [{**h, "title": h["title"] or named.get(h["thread_id"], "")} for h in hits]
     return {**found, "hits": hits}
 
 
@@ -4294,6 +4275,72 @@ def dm_with(c, v, rows):
     }
 
 
+# ----------------------------------------------------------------------------- names
+# A thread's name is its title. A thread with none (a group chat, a members thread, a sub-thread, a DM with one other
+# person) is named by the people in it: their display names, the viewer left out, at most NAME_SHOWN of them and "+N"
+# for the rest; "You" when nobody else is in it. Nothing is stored, so a rename wins and a change of members changes the
+# name. Every name a person reads comes from here (the thread view's `name`, a breadcrumb, a search hit, Needs you).
+NAME_SHOWN = 3
+
+
+def _group_names(c):
+    from . import views
+
+    groups = views.roster(c, shared=True).get("org_groups") or {}
+    return {gid: (g or {}).get("name") or gid for gid, g in groups.items()}
+
+
+def _name_of_actors(c, actors):
+    """{actor: display name} for people, bots and groups; one the store does not know is named by its id."""
+    from . import names as display
+
+    found = display.lookup(c, [a for a in actors if a.startswith(("human:", "bot:"))])
+    groups = _group_names(c) if any(a.startswith("group:") for a in actors) else {}
+    return {a: found.get(a) or groups.get(a[6:]) or a for a in actors}
+
+
+def _thread_name(c, v, root, stored):
+    """The name of a root with no title, from its member rows `stored`: the people and bots in it and its groups, the
+    viewer left out. A reader who is not in the thread is told only of the people they may see (`dm_with`'s rule)."""
+    member = v is not None and bool(set(v.member_names(c)) & set(stored))
+    actors = list(dict.fromkeys(_dm_members(c, root, stored) + [a for a in stored if str(a).startswith("group:")]))
+    if v is not None:
+        actors = [a for a in actors if a != v.actor]
+        if not member and actors:
+            actors = v.known(c).seen(actors)
+    if not actors:
+        return "You" if member else "Thread"
+    label = _name_of_actors(c, actors)
+    listed = sorted(actors, key=lambda a: label[a].casefold())
+    text = ", ".join(label[a] for a in listed[:NAME_SHOWN])
+    more = len(listed) - NAME_SHOWN
+    return text + (f" +{more}" if more > 0 else "")
+
+
+def _name(c, v, root, title):
+    """A thread's name as `v` (a Viewer, or None for the system) reads it: its `title`, else a home's owner's name, else
+    the people in its root (`_thread_name`)."""
+    if title:
+        return title
+    if audience_of(root) == "home":
+        owner = home_owner(root)
+        return (_name_of_actors(c, [owner]).get(owner) if owner else "") or "Home"
+    return _thread_name(c, v, root, _member_rows(c, v, [root["id"]])[root["id"]])
+
+
+def shown_names(c, v, threads_):
+    """{thread id: its name as `v` reads it} for these threads (rows or ids), with one member read for all of them."""
+    rows = [r for r in (thread_row(c, t) for t in threads_) if r]
+    roots = {r["id"]: root_of(c, r) for r in rows}
+    _member_rows(c, v, [root["id"] for root in roots.values() if root and audience_of(root) != "home"])
+    return {r["id"]: _name(c, v, roots[r["id"]], _shown_title(c, v, r)) for r in rows}
+
+
+def shown_name(c, v, thread):
+    """One thread's name as `v` reads it (`shown_names`); "" for a thread that is not there."""
+    return shown_names(c, v, [thread]).get(thread["id"] if isinstance(thread, dict) else thread, "")
+
+
 def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
     """A thread as `principal` reads it. `summary` (subtree_summaries) makes `me.unread` and `me.activity` the whole
     subtree's, as a root row in a list shows them, in place of this thread's own, and adds `new_at`. `dm` is this row's
@@ -4323,6 +4370,8 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
         "retention_days": root.get("retention_days"),
         "pinned_for_everyone": bool(root.get("pinned_for_everyone_at")),
     }
+    # What the thread is called: its title, or the name its people give it (`_name`). Never stored.
+    out["name"] = _name(c, v, root, out["title"])
     if out["audience"] == "home":
         out["home"] = {"actor": home_owner(root)}
     elif v is not None:
@@ -4403,10 +4452,11 @@ def pinned(for_everyone, own):
 
 
 def breadcrumb(c, v, row):
-    """The thread's path from its root, each title as `v` may read it (`_shown_title`)."""
+    """The thread's path from its root, each title as `v` may read it (`_shown_title`), or its name (`shown_names`) when
+    it has no title."""
     v = _as_viewer(v)
     ids = [p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]
-    names = (
+    titles = (
         {
             r["id"]: _shown_title(c, v, dict(r))
             for r in c.execute(
@@ -4417,7 +4467,8 @@ def breadcrumb(c, v, row):
         if ids
         else {}
     )
-    return [{"id": i, "title": names.get(i, "")} for i in ids]
+    named = shown_names(c, v, [i for i in ids if not titles.get(i)])
+    return [{"id": i, "title": titles.get(i) or named.get(i, "")} for i in ids]
 
 
 def get(c, v, thread_id):

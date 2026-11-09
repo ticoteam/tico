@@ -9,9 +9,9 @@ now.
 
 The person answers the merged item once, as they answer any question task ("answer" in Needs you, or Done with a
 note), and `on_close` (from hubdb.task_update) passes the answer to every original: as the answer to a bot's open
-question or question task, or as a comment that wakes the bot that filed the task for them. An item merged before
-step 6b is the Strategy Bot's own task with an open question to the person; `on_reply` (from hubdb.task_comment and
-hubdb.answer) passes its answer on the same way and closes it.
+question task, or as a comment that wakes the bot that filed the task for them. An item merged before step 6b is the
+Strategy Bot's own task with an open question to the person; `on_reply` (from hubdb.task_comment) passes a reply
+there on the same way and closes it.
 
 Nothing is dropped: an original whose answer can't be passed on, or every original of a merged item that ends without an
 answer, is back in the person's Needs you as it was. A merged item counts in what the Strategy Bot asked today
@@ -31,21 +31,13 @@ def _name(c, actor):
     return (H.human(c, H.actor_id(actor)) or {}).get("name") or H.actor_id(actor or "")
 
 
-def _open_ask(c, row, person):
-    """The open question a bot asked `person` on this task, or None."""
-    return next((a for a in H.open_task_asks(c, row) if a["recipient_id"] == person and H.is_bot(a["sender_id"])), None)
-
-
 def waiting_on(c, person, row):
-    """How this task waits on `person` in their Needs you, the bot that asked, and the question when it is one:
-    ("asked", bot, ask id) for a bot's open question on it, ("waiting", bot, None) for a bot's task waiting on an open
-    question task of theirs (derived: question_tasks.waiting_on), ("owned", bot, None) for a task a bot filed for them,
-    a question task among them; None when it does not wait on them."""
+    """How this task waits on `person` in their Needs you, and the bot that asked: ("waiting", bot, None) for a bot's
+    task waiting on an open question task of theirs (derived: question_tasks.waiting_on), ("owned", bot, None) for a
+    task a bot filed for them, a question task among them; None when it does not wait on them. ("asked", bot, ask id),
+    a bot's open ask message on it, was merged before step 6c; its ask is a question task under it now."""
     if not row or row["status"] not in H.ACTIVE_STATUSES:
         return None
-    ask = _open_ask(c, row, person)
-    if ask:
-        return "asked", ask["sender_id"], ask["id"]
     if H.is_bot(row["owner_id"]) and H._waits_on(c, row, person):
         return "waiting", row["owner_id"], None
     if row["owner_id"] == person and H.is_bot(row["requester_id"]):
@@ -59,7 +51,7 @@ def _current(c, link, row):
     if not row or row["status"] not in H.ACTIVE_STATUSES:
         return False
     if link["how"] == "asked":
-        return any(a["id"] == link["ask_id"] for a in H.open_task_asks(c, row))
+        return _question_of(c, row, link["person"]) is not None  # the ask, moved to a question task (step 6c)
     how = waiting_on(c, link["person"], row)
     return bool(how) and how[:2] == (link["how"], link["asker"])
 
@@ -103,7 +95,7 @@ def _hidden_ids(c, link):
     """The original, and for a bot's task waiting on the person the question task it waits on: that card is what
     stood in their Needs you for it, so it goes out with it."""
     ids = [link["original"]]
-    if link["how"] == "waiting" and link["state"] == "merged":
+    if link["how"] in ("waiting", "asked") and link["state"] == "merged":
         card = _question_of(c, H.task(c, link["original"]), link["person"])
         if card:
             ids.append(card["id"])
@@ -251,17 +243,12 @@ def _pass_on(c, person, link, item, text, text_sources=()):
         f'{_name(c, person)} answered this in the {strategy_bot.name(c)}\'s merged item "{item["title"]}": "{text}"',
         text_sources,
     )
-    if link["how"] == "asked":
-        H.task_ask_resolve(
-            c, STRATEGY_BOT, row["id"], link["ask_id"], quote=text, relay=True, text_sources=text_sources
-        )
-        return None
     from . import question_tasks
 
     card = None
     if link["how"] == "owned" and question_tasks.is_open(row):
         card = row
-    elif link["how"] == "waiting":
+    elif link["how"] in ("waiting", "asked"):
         card = _question_of(c, row, person)
     if card is not None:
         # An open question task: answered as the person, as if they closed it there. Its bot hears it once, on the
@@ -308,7 +295,7 @@ def on_close(c, actor, row, status, text, *, text_sources=()):
 
 def on_reply(c, actor, row, text, *, text_sources=()):
     """A person's reply on a merged item filed before step 6b, the Strategy Bot's own task with an open question to
-    them (hubdb.task_comment, hubdb.answer): passed to every original, then the item is done; called again for the same
+    them (hubdb.task_comment): passed to every original, then the item is done; called again for the same
     reply, it finds nothing left to pass on. An original it can't reach is back in their Needs you, with the reason
     kept."""
     if not row or row["owner_id"] != STRATEGY_BOT or not H.is_human(actor):

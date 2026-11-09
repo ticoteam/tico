@@ -688,7 +688,8 @@ def opening(background=False):
         "turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose "
         "an arbitrary answer-length or list-length cap.",
         "A task owner marks work done; its requester or an authorized human closes it.",
-        "Use hub question ask/answer for questions, and preserve durable knowledge in your repository's memory/ or "
+        "Ask a person with hub task question, ask a bot with hub message send and --needs-action, answer a question task in "
+        "Tico, and preserve durable knowledge in your repository's memory/ or "
         "knowledge/; end each such commit message with the line `Tico-Run: this run`.",
         "Your memory is your repository, where your owner reads and edits it; keep none anywhere else. Read the working rules "
         "at the top of memory/learnings.md at the start of each turn and follow them. Save a working rule you are given or "

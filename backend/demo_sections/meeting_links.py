@@ -1,6 +1,7 @@
 """The task and Meetings pages share one existing project meeting in the demo."""
 
 from .. import hubdb as H
+from .. import question_tasks as QT
 
 
 def seed(b):
@@ -30,14 +31,12 @@ def seed(b):
         # An answerable follow-up puts the shared task in the personal card queue and its Tasks badge.
         b.at(hours=1)
         b.write(
-            lambda c: H.say(
+            lambda c: QT.ask_plain(
                 c,
                 H.task(c, task_id)['owner_id'],
                 'human:ana',
                 "Can we use the meeting's agreed follow-up for the launch? If you agree, I'll add it to the plan.",
-                kind='ask',
-                conversation_id=H.task(c, task_id)['conversation_id'],
-                refs={'task': task_id},
+                parent=H.task(c, task_id),
             )
         )
     # Settings > People shows each person's Tico Recorder (backend/recorder_installs.py); Ana and Cara use one.

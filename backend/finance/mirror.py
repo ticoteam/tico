@@ -22,6 +22,7 @@ from . import closing as CL
 from . import purchasing as PU
 from .context import Ctx, load
 from .core import ap as AP
+from .core import attribution as CA
 from .core import dates
 from .core import feeds as F
 from .core import kinds as K
@@ -33,6 +34,7 @@ from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denie
 from .core.org import SYSTEM
 from .store import access as SA
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import banking as SK
 from .store import catalog as SC
 from .store import ledger as SL
@@ -931,12 +933,15 @@ def _refund_cash(c: sqlite3.Connection, ctx: Ctx, credit: str, before: int, afte
     out: it is the money owed, not revenue."""
     entry = SL.entry_row(c, credit)
     control = documents.control(ctx, "bill" if str(entry["source"]) == "bill" else "invoice").id
-    lines = [line for _, line in SL.entry_lines(c, credit) if line.account_id != control]
+    rows = [(row, line) for row, line in SL.entry_lines(c, credit) if line.account_id != control]
+    lines = [line for _, line in rows]
     flip = -1 if sum(x.amount for x in lines) < 0 else 1  # a credit posts revenue or cost in one direction
-    for x, share in zip(lines, AP.shares([flip * x.amount for x in lines], before, after), strict=True):
+    for (row, x), share in zip(rows, AP.shares([flip * x.amount for x in lines], before, after), strict=True):
         account = ctx.accounts.get(x.account_id)
         if share and account is not None and account.type in L.PNL_TYPES:
-            SAP.cash_roll(c, ctx.book.id, day, x.account_id, x.tags, x.contact_id, flip * share)
+            splits = ATT.in_force_splits(c, str(row["id"]))
+            for tags, amount in CA.spread(x.tags, flip * share, splits, ctx.org.team_of):
+                SAP.cash_roll(c, ctx.book.id, day, x.account_id, tags, x.contact_id, amount)
 
 
 def _unrefund(c: sqlite3.Connection, ctx: Ctx, row: Any) -> None:

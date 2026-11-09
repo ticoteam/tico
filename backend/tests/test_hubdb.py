@@ -180,7 +180,6 @@ class Schema(HubCase):
                 "messages_reply_kind",
                 "messages_from_kind",
                 "tasks_carried_by",
-                "messages_pending_conversation",
                 "bot_file_versions_blob_media",
                 "tasks_owner_status_cover",
                 "tasks_requester_status_cover",
@@ -195,7 +194,6 @@ class Schema(HubCase):
         self.conn.execute("DROP INDEX messages_reply_kind")
         self.conn.execute("DROP INDEX tasks_carried_by")
         self.conn.execute("DROP INDEX messages_from_kind")
-        self.conn.execute("DROP INDEX messages_pending_conversation")
         self.conn.commit()
         self.conn.close()
         migrated = H.connect(Path(self.dir.name) / "hub.db")
@@ -207,14 +205,20 @@ class Schema(HubCase):
             ("SELECT id FROM tasks WHERE carried_by='existing-run'", "tasks_carried_by"),
             ("SELECT 1 FROM messages WHERE in_reply_to='question' AND kind='answer'", "messages_reply_kind"),
             ("SELECT id FROM messages WHERE sender_id='bot:cmo' AND kind='ask'", "messages_from_kind"),
-            (
-                "SELECT id FROM messages WHERE conversation_id='task-thread' AND kind='ask' "
-                "AND answered_by_id IS NULL AND deleted_at IS NULL",
-                "messages_pending_conversation",
-            ),
         ):
             plan = " ".join(r[3] for r in migrated.execute("EXPLAIN QUERY PLAN " + query))
             self.assertIn(index, plan)
+        # The ask indexes went with asks (migration 20261106200453).
+        for name in ("messages_pending_conversation", "messages_open_asks_to"):
+            self.assertIsNone(
+                migrated.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
+            )
+        # The sender and recipient index stays: its leading columns serve the lookups named in hubdb.REPLY_ANSWERS_ASKS.
+        self.assertIsNotNone(
+            migrated.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name=?", ("messages_open_asks",)
+            ).fetchone()
+        )
 
     def test_existing_database_gains_the_media_version_lookup_index(self):
         self.conn.execute("DROP INDEX bot_file_versions_blob_media")
@@ -476,11 +480,6 @@ class Rule1Identity(HubCase):
     def test_a_bot_may_not_write_another_bots_status(self):
         self.refused("identity", H.status_set, self.conn, CMO, "seo", state="blocked")
 
-    def test_only_the_addressee_answers_an_ask(self):
-        ask = H.say(self.conn, CMO, SEO, "how many posts shipped?", kind="ask")
-        self.assertEqual(H.answer(self.conn, SEO, ask["id"], "four")["recipient_id"], CMO)
-        self.refused("identity", H.answer, self.conn, ANALYTICS, ask["id"], "four")
-
 
 # ----------------------------------------------------------------------------- rule 2
 
@@ -492,15 +491,6 @@ class Rule3Caps(HubCase):
         for i in range(H.CAP_PER_HOUR):
             H.say(self.conn, CMO, SEO, f"line {i}", conversation_id=conv["id"])
         self.refused("cap", H.say, self.conn, CMO, SEO, "one more", conversation_id=conv["id"])
-
-    def test_an_ask_chain_reaches_depth_three_and_stops(self):
-        first = H.say(self.conn, CMO, SEO, "what is the traffic?", kind="ask")
-        self.assertEqual(first["refs"]["depth"], 1)
-        second = H.say(self.conn, SEO, ANALYTICS, "what is the traffic?", kind="ask")
-        self.assertEqual(second["refs"]["depth"], 2)
-        third = H.say(self.conn, ANALYTICS, COO, "what is the traffic?", kind="ask")
-        self.assertEqual(third["refs"]["depth"], 3)
-        self.refused("depth", H.say, self.conn, COO, "legal", "and you?", kind="ask")
 
 
 # ----------------------------------------------------------------------------- rule 4
@@ -550,16 +540,6 @@ class Rule5Tasks(HubCase):
             ).fetchone()[0],
             0,
         )
-
-    def test_only_one_unanswered_question_is_allowed_on_a_task(self):
-        row = self.open_task()
-        first = H.task_ask(self.conn, SEO, row["id"], "Which format?")
-        self.refused("one-question", H.task_ask, self.conn, SEO, row["id"], "Which day?")
-        H.answer(self.conn, CMO, first["id"], "Markdown.")
-        second = H.task_ask(self.conn, SEO, row["id"], "Which day?")
-        self.refused("one-question", H.task_ask, self.conn, SEO, row["id"], "Which audience?")
-        H.answer(self.conn, CMO, second["id"], "Monday.")
-        self.assertTrue(H.task_ask(self.conn, SEO, row["id"], "Which audience?"))
 
     def stale(self, row):
         self.conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-2), row["id"]))
@@ -619,7 +599,7 @@ class Rule5Tasks(HubCase):
     def test_a_person_finishing_a_task_tells_every_bot_on_it_once(self):
         from backend.store import SCHEMA
 
-        # Superseding its ask card exercises the server's versioned unblock path.
+        # A question task's blocker clears through the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
         self.conn.execute(_BOT_SETTINGS_TABLE)
@@ -630,27 +610,12 @@ class Rule5Tasks(HubCase):
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
-        H.task_comment(
-            self.conn,
-            COO,
-            row["id"],
-            "Which image?",
-            ask={
-                "questions": [
-                    {
-                        "id": "pick",
-                        "header": "",
-                        "question": "Which image?",
-                        "options": [{"label": "A"}, {"label": "B"}],
-                        "multi": False,
-                        "other": True,
-                    }
-                ],
-                "who": ANA,
-            },
-        )
+        # A bot not on the task cannot ask under it (no subtask), so it is not told: only its parties are.
+        with self.assertRaises(H.Refused):
+            QT.ask_plain(self.conn, COO, ANA, "Which image?", parent=row)
         H.task_update(self.conn, ANA, row["id"], status="done", note="Use B.")
-        for bot in (CMO, SEO, COO):
+        self.assertFalse(self.finished(row, COO))
+        for bot in (CMO, SEO):
             told = self.finished(row, bot)
             self.assertEqual(len(told), 1, bot)
             self.assertIn("Use B.", told[0]["body"])
@@ -669,7 +634,7 @@ class Rule5Tasks(HubCase):
             for m in H.messages(self.conn, row["conversation_id"])
             if m["body"].startswith("Ana Rivera marked this done:")
         }
-        self.assertEqual(quiet, {CMO: True, SEO: False, COO: False}, "tasks-only bots hear it quietly")
+        self.assertEqual(quiet, {CMO: True, SEO: False}, "tasks-only bots hear it quietly")
         # A private task tells only its parties: the parent's owner cannot read it.
         secret = H.task_create(
             self.conn, ANA, "Review the settlement", "Read it.", SEO, parent_id=parent["id"], private=True
@@ -701,42 +666,6 @@ class Rule5Tasks(HubCase):
         notes = self.conn.execute("SELECT body FROM notes WHERE to_actor=?", (SEO,)).fetchall()
         self.assertEqual(len(notes), 1)
         self.assertIn("1 task", notes[0][0])
-
-    def test_an_answer_goes_back_to_the_bot_that_asked_and_clears_the_wait(self):
-        row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO)
-        H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
-        asked = H.task_comment(
-            self.conn,
-            CMO,
-            row["id"],
-            "Which image?",
-            ask={
-                "questions": [
-                    {
-                        "id": "pick",
-                        "header": "",
-                        "question": "Which image?",
-                        "options": [{"label": "A"}, {"label": "B"}],
-                        "multi": False,
-                        "other": True,
-                    }
-                ],
-                "who": ANA,
-            },
-        )
-        said = H.task_comment(
-            self.conn,
-            ANA,
-            row["id"],
-            "Ana answered: B.",
-            answer_to=asked["id"],
-            extra_refs={
-                "answer": {"target": {"comment": asked["id"]}, "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}
-            },
-        )
-        self.assertEqual((said["kind"], said["recipient_id"]), ("answer", CMO))
-        self.assertNotIn("waiting_on", H.task(self.conn, row["id"]))
-        self.assertFalse(said["refs"].get("quiet"), "it wakes the asker")
 
 
 # ----------------------------------------------------------------------------- rule 6
@@ -1158,57 +1087,30 @@ class Reads(HubCase):
         self.assertEqual(len(mine["approvals"]), 1)
 
 
-class APersonsReplyAnswersWhatWasAsked(HubCase):
-    """A reply resolves only the ask or task it identifies, leaving other work open."""
+class APersonsAnswerClosesOnlyTheirQuestion(HubCase):
+    """Answering a question task closes that question and leaves other work open."""
 
-    def test_task_reply_allows_the_next_question_without_answering_another_task(self):
+    def setUp(self):
+        super().setUp()
+        # Server tasks carry the optimistic version used when completing a blocker.
+        self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+
+    def test_an_answer_closes_its_question_without_answering_another_task(self):
         room = H.say(self.conn, ANA, CMO, "Please write two drafts")["conversation_id"]
         first = H.task_create(self.conn, ANA, "Draft the report", "Write a report", CMO, conversation_id=room)
         second = H.task_create(self.conn, ANA, "Draft the update", "Write an update", CMO, conversation_id=room)
-        question = H.task_ask(self.conn, CMO, first["id"], "Which format?")
-        other = H.task_ask(self.conn, CMO, second["id"], "Which audience?")
+        question = QT.ask_plain(self.conn, CMO, ANA, "Which format?", parent=first)
+        other = QT.ask_plain(self.conn, CMO, ANA, "Which audience?", parent=second)
         self.assertNotEqual(first["conversation_id"], second["conversation_id"], "a bot's task has its own room")
         self.assertEqual(H.unanswered_ask(self.conn, first)["id"], question["id"])
         self.assertEqual(H.unanswered_ask(self.conn, second)["id"], other["id"])
-        reply = H.task_comment(self.conn, ANA, first["id"], "Markdown")
-        self.assertEqual(H.answers_to(self.conn, [question["id"]])[question["id"]]["id"], reply["id"])
+        H.task_update(self.conn, ANA, question["id"], status="done", note="Markdown")
         self.assertIsNone(H.unanswered_ask(self.conn, first))
         self.assertIsNone(H.waiting_for(self.conn, first))
-        self.assertEqual(H.waiting_for(self.conn, second), "an unanswered question")
-        self.assertEqual([row["id"] for row in H.tasks_asked_of(self.conn, ANA)], [second["id"]])
-        self.assertTrue(H.task_ask(self.conn, CMO, first["id"], "Which date?"))
-        self.refused("one-question", H.task_ask, self.conn, CMO, second["id"], "Another question?")
-
-    def test_older_untagged_questions_still_belong_to_their_dedicated_task(self):
-        task = H.task_create(self.conn, ANA, "Draft a report", "Write it", CMO)
-        ask = H.task_ask(self.conn, CMO, task["id"], "Which format?")
-        self.conn.execute("UPDATE messages SET refs='{}' WHERE id=?", (ask["id"],))
-        self.assertEqual(H.unanswered_ask(self.conn, task)["id"], ask["id"])
-        H.task_comment(self.conn, ANA, task["id"], "Markdown")
-        self.assertIsNone(H.unanswered_ask(self.conn, task))
-        self.assertTrue(H.task_ask(self.conn, CMO, task["id"], "Which date?"))
-
-    def test_general_chat_preserves_asks_and_direct_reply_closes_only_named_ask(self):
-        a = H.say(self.conn, CMO, ANA, "ship now or wait for the split?", kind="ask")
-        b = H.say(self.conn, CMO, ANA, "is 7% the right warning level?", kind="ask")
-        H.say(self.conn, ANA, CMO, "ship now, and 7% is right. also re-check Aug 13.")
-        self.assertEqual(
-            H.answers_to(self.conn, [a["id"], b["id"]]),
-            {},
-            "a general message does not identify which questions it answers",
-        )
-        reply = H.say(
-            self.conn,
-            ANA,
-            CMO,
-            "ship now. also re-check Aug 13.",
-            conversation_id=a["conversation_id"],
-            in_reply_to=a["id"],
-        )
-        got = H.answers_to(self.conn, [a["id"], b["id"]])
-        self.assertEqual(set(got), {a["id"]}, "the sibling ask remains unanswered")
-        self.assertEqual(got[a["id"]]["id"], reply["id"])
-        self.assertIn("re-check Aug 13", got[a["id"]]["body"], "the whole reply is the answer")
+        self.assertTrue(H.waiting_for(self.conn, second))
+        self.assertEqual(H.unanswered_ask(self.conn, second)["id"], other["id"])
+        self.assertEqual([t["id"] for t in H.needs_you(self.conn, ANA)["tasks"]], [other["id"]])
+        self.assertTrue(QT.ask_plain(self.conn, CMO, ANA, "Which date?", parent=first))
 
 
 if __name__ == "__main__":
@@ -1269,16 +1171,19 @@ class WaitingWithDependency(HubCase):
         done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
         self.assertEqual(done['status'], 'done')
         self.assertEqual(H.task(self.conn, child['id'])['status'], 'closed')
-        said = [
-            e['new']
-            for e in H._rows(
-                self.conn.execute(
-                    "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'",
-                    (parent['id'],),
-                )
+        from backend import task_reads
+
+        # The event keeps the subtask's id; its title is written in for a reader who may open it (task_reads.children_text).
+        events = H._rows(
+            self.conn.execute(
+                "SELECT kind, new, data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'",
+                (parent['id'],),
             )
-        ]
-        self.assertEqual(said, ['Closed with it: Approve the final copy'])
+        )
+        self.assertEqual(
+            [e['new'] for e in task_reads.children_text(self.conn, '1', events)],
+            ['Closed with it: Approve the final copy'],
+        )
 
     def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
@@ -1382,9 +1287,9 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(len(told), 1, told)
         # A question to a person counts too, once per task, until it is answered.
         asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO)
-        question = H.task_ask(self.conn, CMO, asked['id'], 'Which date?')
+        question = QT.ask_plain(self.conn, CMO, ANA, 'Which date?', parent=asked)
         self.assertEqual(needs(), 1)
-        H.answer(self.conn, ANA, question['id'], 'Friday')
+        H.task_update(self.conn, ANA, question['id'], status='done', note='Friday')
         self.assertEqual(needs(), 0)
         # A bot's private task to itself reaches the one person it asks, a reader (Dev 172), and no second one.
         secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
@@ -1465,7 +1370,6 @@ class WaitingWithDependency(HubCase):
             self.assertEqual(len(woken), 1, bot)
         # The root still has its own open subtask (the other bot's part), so it stays waiting on that.
 
-    def test_an_ask_joins_only_a_card_it_made_never_across_privacy_and_answers_by_the_link(self):
         cards = lambda: [t['id'] for t in H.needs_you(self.conn, 'ana')['tasks']]
         root = H.task_create(self.conn, CMO, 'Plan the offsite', '', CMO, private=False)
         part = H.task_create(self.conn, CMO, 'Book the rooms', 'Book them.', SEO, parent_id=root['id'])
@@ -1543,53 +1447,6 @@ class WaitingWithDependency(HubCase):
             if m['recipient_id'] == CMO and ('Yes.' in m['body'] or m['body'].startswith('Unblocked'))
         ]
         self.assertEqual(len(woken), 1, [m['body'] for m in woken])
-        # The bot's own question under its task is the card: no second one, and the note names the person.
-        trial = H.task_create(self.conn, CMO, 'Assess the vendor trial', '', CMO, private=False)
-        question = H.task_create(
-            self.conn, CMO, 'Run the trial once?', 'Run the trial once?', CMO, parent_id=trial['id']
-        )
-        H.task_comment(
-            self.conn,
-            CMO,
-            question['id'],
-            'Run the trial once?',
-            ask={
-                'questions': [
-                    {
-                        'id': 'decision',
-                        'header': '',
-                        'question': 'Run the trial once?',
-                        'options': [{'label': 'Yes'}, {'label': 'No'}],
-                        'multi': False,
-                        'other': False,
-                    }
-                ],
-                'who': ANA,
-            },
-        )
-        H.task_update(self.conn, CMO, question['id'], status='waiting', waiting_on='ana')
-        before = cards()
-        after = H.task_update(
-            self.conn,
-            CMO,
-            trial['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Run the trial once? If yes, I will add the results to the report.',
-        )
-        self.assertEqual(
-            (after['asked_in']['id'], after['note'], cards()),
-            (
-                question['id'],
-                'Blocked on Ana Rivera: Run the trial once? If yes, I will add the results to the report.',
-                before,
-            ),
-        )
-        H.task_update(self.conn, CMO, question['id'], status='done', note='Ana said yes.')
-        self.assertEqual(
-            (H.task(self.conn, trial['id'])['status'], H.task(self.conn, trial['id'])['note']),
-            ('open', f"{H.person_name(self.conn, CMO)} closed the ask to Ana Rivera: Ana said yes."),
-        )
 
     def test_a_plain_ask_passes_and_shorthand_does_not(self):
         # Abbreviations, initials, a year after a few letters, a standard's number and a product name are plain words.
@@ -1646,11 +1503,11 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(H.task(self.conn, after['asked_in']['id'])['body'], plain)
         # An open question to them on the task already asks (`hub task question`): no note is needed.
         asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO, private=False)
-        H.task_ask(self.conn, CMO, asked['id'], 'Which date should it go out?')
+        question = QT.ask_plain(self.conn, CMO, ANA, 'Which date should it go out?', parent=asked)
         self.assertEqual(
             H.task_update(self.conn, CMO, asked['id'], status='waiting', waiting_on='ana')['status'], 'waiting'
         )
-        self.assertEqual(TR.child_ids(self.conn, asked['id']), [])
+        self.assertEqual(TR.child_ids(self.conn, asked['id']), [question['id']])
         # A task given to a person opens its body with the ask; the rest of the body is details.
         with self.assertRaises(H.Refused) as refused:
             H.task_create(
@@ -1962,14 +1819,12 @@ class WaitingWithDependency(HubCase):
         H.approval_request(self.conn, CMO, 'spend', {'amount': 5, 'account': 'ops', 'what': 'a key'}, task_id=key['id'])
         # Two tasks wait on Ana: the build host, and the key once though it has a question and an approval.
         self.assertEqual((H.status_live(self.conn, 'cmo')['needs_human'], stored('cmo')), (2, 2))
-        # A plain reply answers a question; deleting the reply reopens it.
+        # Answering the question task ends the wait.
         other = H.task_create(self.conn, ANA, 'Draft the launch post', '', SEO)
-        H.task_ask(self.conn, SEO, other['id'], 'Which date?')
+        question = QT.ask_plain(self.conn, SEO, ANA, 'Which date?', parent=other)
         self.assertEqual(stored('seo'), 1)
-        reply = H.task_comment(self.conn, ANA, other['id'], 'Friday')
+        H.task_update(self.conn, ANA, question['id'], status='done', note='Friday')
         self.assertEqual(stored('seo'), 0)
-        H.task_comment_delete(self.conn, ANA, other['id'], reply['id'])
-        self.assertEqual(stored('seo'), 1)
 
 
 # ----------------------------------------------------------------------------- the Strategy Bot's old names, dropped

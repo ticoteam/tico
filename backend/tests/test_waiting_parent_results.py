@@ -145,11 +145,9 @@ def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
                 (H.new_id(), parent, H.now(), H.now()),
             )
         elif wait == "question":  # read past the skipped subtasks: wait_detail's own checks still hold it
-            c.execute(
-                "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-                "VALUES(?,?,'bot:ops','human:ana','ask','Which release?',?,?)",
-                (H.new_id(), H.task(c, parent)["conversation_id"], '{"task": "%s"}' % parent, H.now()),
-            )
+            from backend import question_tasks
+
+            question_tasks.ask_plain(c, 'bot:ops', 'human:ana', 'Which release?', parent=H.task(c, parent))
         elif wait == "manual":
             set_holds(c, parent, blocked_kind='manual', blocked_reason='Held until the freeze lifts')
         else:  # a task outside this one that it waits on, not one of its subtasks
@@ -164,5 +162,17 @@ def test_a_subtask_that_also_blocks_its_parent_does_not_hold_another_subtasks_re
     machine, parent, done, still = waiting_parent(api, results=1)
     with api.app.state.store.transaction() as c:
         TR.relate(c, "bot:ops", still, parent, "blocks")
+    (result,) = results(api, parent)
+    assert refusal(api, machine, result) is None
+
+
+def test_a_question_a_person_filed_on_the_parent_does_not_hold_a_result(api):
+    """A manager says the ticket waits on her (`--status waiting --on ana`): that files a question task she requested
+    under it, one more open subtask, so the verdict still reaches the builder. Only the owner's own question holds it
+    (the "question" case above)."""
+    machine, parent, done, still = waiting_parent(api, results=1)
+    with api.app.state.store.transaction() as c:
+        card = H._ask_in_subtask(c, "human:ana", H.task(c, parent), "human:ana", "Is the vendor contract signed?")
+        assert card["requester_id"] == "human:ana" and card["questions"]
     (result,) = results(api, parent)
     assert refusal(api, machine, result) is None

@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import anyio
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.datastructures import DefaultPlaceholder
 from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
@@ -21,15 +21,28 @@ from starlette.requests import ClientDisconnect
 
 
 from . import built_on
-from . import agents, app_delivery, lifecycle, mcp_oauth, oidc, views
+from . import agents, app_delivery, mcp_oauth, oidc, views
 from . import outcome_stats
+from . import (
+    factory_manager,
+    pipeline_engine,
+    pipeline_factories,
+    pipeline_github_checks,
+    pipeline_judges,
+    pipeline_links,
+    pipeline_manager,
+    pipeline_overview,
+    pipeline_requirements,
+    pipeline_review,
+    requirement_attachments,
+)
 from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import task_followers
 from . import sources as SRC
 from . import start_places
-from . import ask_ingest, ask_routing, delivery, strategy_bot, invites, owner_link
+from . import ask_ingest, delivery, strategy_bot, invites, owner_link, setup_handoff
 from . import org_rule_check
 from . import bot_home_merge
 from .roadmaps import exact_approval
@@ -39,6 +52,7 @@ from . import thread_api
 from . import step_age
 from . import task_holds
 from . import question_tasks
+from . import recipients as recipient_gate
 from . import runs
 from . import bot_stops, turn_budgets, task_caps, reach
 from . import (
@@ -58,6 +72,7 @@ from . import (
 )
 from . import task_privacy as privacy
 from . import task_relations as TR
+from . import pipeline_rights
 from . import task_roles as TRo
 from . import placement as placing
 from . import turns as turn_work
@@ -66,7 +81,7 @@ from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, route as error_route
-from .execution import Execution, bot_repository, bump_bot_session_epoch, flag_cut
+from .execution import Execution, bot_repository, flag_cut, reset_bot_sessions
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -93,9 +108,10 @@ from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
-from .store import H, P, Problem, Store, bot_readiness, encode, message_page, task_message_page
+from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
 from . import bot_status_routes, computers_routes
+from . import brand_icons
 from .approvals_routes import SEND_WAY_DEFERS  # noqa: F401
 from .bot_status_routes import INBOX_LIMIT  # noqa: F401
 from .bot_status_routes import INBOX_PAGE  # noqa: F401
@@ -134,22 +150,6 @@ STABLE_PATH = re.compile(
 GATEWAY_IMAGE_SLOTS = 4
 
 
-def reset_bot_sessions(c, bot):
-    """Keep durable history while fencing local provider sessions for one bot."""
-    bump_bot_session_epoch(c, bot)
-    reset = 0
-    for conversation in c.execute("SELECT id,participants FROM conversations").fetchall():
-        if "bot:" + bot not in json.loads(conversation["participants"]):
-            continue
-        c.execute(
-            "INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
-            "epoch=epoch+1,updated_at=excluded.updated_at",
-            (conversation["id"], H.now()),
-        )
-        reset += 1
-    return reset
-
-
 def create_app(settings=None):
     settings = settings or Settings.from_env()
     SRC.set_assistant_name(settings.assistant_name)  # the labels of keeper lines (backend/sources.py)
@@ -176,7 +176,7 @@ def create_app(settings=None):
         # The default pool is min(32, cpus + 4) threads, about 6 on the server. Long waits (every
         # open chat stream's polls, uploads) filled it, and
         # every request's sign-in queued behind them for seconds. Give the loop a
-        # roomier pool, and sign-in its own (AUTH_POOL below).
+        # roomier pool, and sign-in its own (app.state.auth_pool, made below and shut down on the way out).
         from concurrent.futures import ThreadPoolExecutor
 
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico"))
@@ -459,9 +459,19 @@ def create_app(settings=None):
             from . import demo
 
             demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
+        # Sign-in's own threads, one pool per run of the app: an app built and served again and again (a demo build,
+        # every test) would otherwise keep 16 idle threads, and the app they hold, for the life of the process.
+        # A test can run the same app's lifespan inside another (two clients on one app), so each run keeps its own
+        # pool and clears the shared slot only while that slot is still its own.
+        auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+        app.state.auth_pool = auth_pool
         try:
             yield
         finally:
+            # First, so nothing below that raises can skip it; requests are done by the time the server shuts down.
+            if app.state.auth_pool is auth_pool:
+                app.state.auth_pool = None
+            auth_pool.shutdown(wait=False, cancel_futures=True)
             stop.set()
             if start_jobs_task:
                 await start_jobs_task  # short, and each in its own transaction: let it finish
@@ -533,6 +543,8 @@ def create_app(settings=None):
 
                 await asyncio.to_thread(ad_worker.stop)
             telemetry.close()
+            # Every task above has stopped, so no read is in flight: the store's idle connections close with the server.
+            store.close()
 
     app = FastAPI(
         title=settings.app_name + " API",
@@ -666,7 +678,7 @@ def create_app(settings=None):
         telemetry.capture("request", exc, 503, route=error_route(request))
         request.state.telemetry_captured = True
         # The write lock stayed taken past store.WRITE_WAIT: a load answer, not a fault. Clients retry with the same
-        # Idempotency-Key (runner, clients/tico.py, ui/app/api.js), so the write lands once.
+        # Idempotency-Key (runner, clients/tico.py, ui/app/api.ts), so the write lands once.
         if "locked" in str(exc) or "busy" in str(exc):
             return JSONResponse(
                 {"error": {"code": "busy", "detail": "Tico is busy; retry shortly", "retryable": True}},
@@ -694,10 +706,9 @@ def create_app(settings=None):
         "script-src " + " ".join(["'self'", *hashes]) + "; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
     )
 
-    from concurrent.futures import ThreadPoolExecutor
     from .timing import Timing
 
-    AUTH_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+    app.state.auth_pool = None  # the lifespan's own, while it runs; outside it sign-in uses the loop's default pool
     app.state.timing = Timing()
     app.state.timing.recorder = recorder
     app.state.flight = recorder
@@ -789,6 +800,9 @@ def create_app(settings=None):
                 return await call_next(request)
             if request.url.path == owner_link.SCRIPT_PATH and request.method == "GET":
                 return await call_next(request)
+            # The setup handoff's one trade: the owner's agent holds a one-time secret and no token yet (backend/setup_handoff.py).
+            if request.url.path == setup_handoff.PATH and request.method == "POST":
+                return await call_next(request)
             # A frontend's one-time sign-in code, exchanged with its PKCE verifier (backend/oidc.py).
             if request.url.path == oidc.TOKEN_PATH and request.method == "POST":
                 return await call_next(request)
@@ -798,6 +812,10 @@ def create_app(settings=None):
                 return await call_next(request)
             if request.url.path == "/api/v2/team/icon" and request.method == "GET":
                 return await call_next(request)
+            # The server's icons (backend/brand_icons.py): the two root icons and the brand files a page links, and nothing
+            # else under /assets/.
+            if request.method in ("GET", "HEAD") and brand_icons.public(request.url.path):
+                return brand_icons.harden(await call_next(request))
             # Tico HQ's check that a self-run server is the one at its address (backend/company_server.py): only a
             # digest, and only while an owner's connect is pending.
             if request.url.path == company_server.PROOF_PATH and request.method == "GET":
@@ -858,7 +876,7 @@ def create_app(settings=None):
             if request.url.path != "/api/v2/runners/enroll" and not agent_door:
                 began = time.perf_counter()
                 who = await asyncio.get_running_loop().run_in_executor(
-                    AUTH_POOL, auth.authenticate, request.headers, request.url.path, request.method
+                    app.state.auth_pool, auth.authenticate, request.headers, request.url.path, request.method
                 )
                 if who.support:
                     # Again on the path as sent, still percent-encoded: the gate then reads the address the router
@@ -1273,8 +1291,8 @@ def create_app(settings=None):
                 and response.status_code in (200, 304)
                 and ui_bundle.versioned(settings.ui_dir, request.url.path, request.query_params.get("v"))
             ):
-                # theme.js and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
-                # year, so an open needs no round trip for them; theme.js holds up the first paint.
+                # theme.ts and marked under the `?v=` the page names them with (ui_bundle STANDALONE): kept for a
+                # year, so an open needs no round trip for them; theme.ts holds up the first paint.
                 response.headers["Cache-Control"] = ui_bundle.IMMUTABLE
             elif not request.url.path.startswith("/api") and "etag" in response.headers:
                 response.headers["Cache-Control"] = (
@@ -1636,6 +1654,7 @@ def create_app(settings=None):
         value.pop("checkpoint_state", None)  # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)  # blocker_asks' match key, for the server only
         value.pop("holds_cleared_at", None)  # task_holds' clock, for the server only
+        value.pop("work_revision", None)  # pipeline_engine's change counter, for the server only
         # Most list rows have no accumulated clock; omit empty optional fields.
         for field in ("building_started_at", "building_seconds"):
             if not value.get(field):
@@ -1649,7 +1668,8 @@ def create_app(settings=None):
         typ = next((t for t in pipelines if t["id"] == row.get("type_id")), None)
         value["type"] = {"id": typ["id"], "name": typ["name"]} if typ else None
         step = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
-        # A step's check pool and flow are the type's settings (Settings > Tasks), not sent again on each of a board's tasks.
+        # A step's check pool and flow are the type's settings, not sent again on each of a board's tasks. Its warn time
+        # (limit_minutes) stays: a card's time in its stage shows once past it (ui/app/pipeline-rail.ts pipelineStepLate).
         value["step"] = (
             {k: v for k, v in step.items() if k not in ("check_pool", "check_limit", "flow")} if step else None
         )
@@ -1662,11 +1682,11 @@ def create_app(settings=None):
             routine = c.execute('SELECT schedule_id FROM schedule_occurrences WHERE task_id=?', (row['id'],)).fetchone()
             if routine:
                 value.update(routine_id=routine['schedule_id'])
-            asks = H.open_task_asks(c, row, actor=privacy.actor(who))
+            asks = []
             if question_tasks.is_open(row):
                 # A question task is its own ask; its files under review as this reader may see them.
                 mine = question_tasks.as_ask(row)
-                asks = [visual_view(c, who, [mine])[0] if who is not None else mine, *asks]
+                asks = [visual_view(c, who, [mine])[0] if who is not None else mine]
             value.update({"origin_actor": H.task_origin(c, row), "ask": next(iter(asks), None), "open_asks": len(asks)})
             if who is not None and visible_sql != "1":
                 value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
@@ -1776,34 +1796,13 @@ def create_app(settings=None):
         ):
             attachments[asset["task_id"]].append(brief(asset))
 
-        from .privacy_index import ReadIndex
-
-        provenance = ReadIndex(c, who)
-        asks, open_counts = {}, {}
-        # Readability is checked here, not by a SQL function: installing one marks the pooled connection
-        # as changed, so it was closed after every task list and the next read paid for a new one.
-        open_asks = c.execute(
-            "SELECT m.*,t.id AS ask_task_id FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
-            f"JOIN messages m ON m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
-            f"WHERE t.id IN ({marks}) AND m.kind='ask' AND m.deleted_at IS NULL "
-            f"AND {H.OPEN_ASK_SQL} ORDER BY m.rowid DESC",
-            ids,
-        ).fetchall()
-        # Each ask's room is checked below; the rooms are read together first, not one room per task.
-        provenance.meetings.prime_conversations({message["conversation_id"] for message in open_asks})
-        for message in open_asks:
-            if not provenance.message(
-                message["id"], message["conversation_id"], message["refs"], message["in_reply_to"]
-            ):
-                continue
-            message = dict(message)
-            tid = message.pop("ask_task_id")
-            open_counts[tid] = open_counts.get(tid, 0) + 1
-            if tid in asks:
-                continue  # the newest readable open ask is the one shown
-            message["refs"] = H._json(message.get("refs"), {}) or {}
-            message["stale"] = H.ask_older(message)  # it stays until the weekday batch sends it back (still_needed)
-            asks[tid] = message
+        # A question task is its own ask (backend/question_tasks.py), read off its row: no query per task. Its files
+        # under review as this reader may see them, all in one pass.
+        mine = [question_tasks.as_ask(row) for row in rows if question_tasks.is_open(row)]
+        if mine and who is not None:
+            mine = visual_view(c, who, mine)
+        asks = {ask["id"]: ask for ask in mine}
+        open_counts = {tid: 1 for tid in asks}
 
         origins = {}
         for event in c.execute(
@@ -1826,6 +1825,7 @@ def create_app(settings=None):
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
         step_since = step_age.since_map(c, rows)
+        requirement_dots = pipeline_engine.dots_many(c, rows)  # empty unless a stage has requirements
         hold_marks = task_holds.marks(c, rows)
         waits = question_tasks.waiting_on_many(c, rows)
         result = []
@@ -1853,6 +1853,8 @@ def create_app(settings=None):
                     value["deferred"] = value["quiet"] = deferred  # `quiet`: the older name, one more release
             if row["id"] in step_since:
                 value["step_since"] = step_since[row["id"]]
+            if row["id"] in requirement_dots:
+                value["requirements"] = requirement_dots[row["id"]]
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
@@ -1972,16 +1974,16 @@ def create_app(settings=None):
                 # the asker typed or picked, never another person's data.
                 if not isinstance(values, dict) or len(json.dumps(values)) > 2000:
                     raise Problem("reference", "automations_filter is a small object", 422)
-            elif kind not in ("depth", "turn_id", "rerouted_from"):
+            elif kind != "turn_id":
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
     def named_destination(c, who, body, create=True):
-        return ask_routing.named_destination(c, who, body, auth, create=create)
+        return recipient_gate.named_destination(c, who, body, auth, create=create)
 
     def send(c, who, body):
         body = routed_message(c, who, body)
         check_refs(c, who, body.refs)
-        body = ask_routing.require_recipient(c, who, body.to, body=body, auth=auth)
+        body = recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
         to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if (
@@ -2007,7 +2009,7 @@ def create_app(settings=None):
             in_reply_to=body.in_reply_to,
             wait_s=body.wait_s,
         )
-        ask_routing.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
+        recipient_gate.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":
@@ -2483,9 +2485,8 @@ def create_app(settings=None):
         people = T.mentioned_people(c, text, author) if text else []
         return [a for a in dict.fromkeys((row["owner_id"], row["requester_id"], *people, *extra)) if a]
 
-    def rule_comment_audience(c, who, row, text, ask=None):
-        target = [H.task_ask_route(c, who.actor, row, ask)[0]] if ask else []
-        return rule_task_audience(c, row, who.actor, text, *target)
+    def rule_comment_audience(c, who, row, text):
+        return rule_task_audience(c, row, who.actor, text)
 
     def rule_message_to(c, who, body):
         """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
@@ -2703,42 +2704,12 @@ def create_app(settings=None):
         )
 
     def message_ingest(who, body):
-        """Ask ingest (backend/ask_ingest.py): a bot's question to a person is judged before it is written, whatever
-        task or message it refers to; a refusal creates no message. Outside
-        the write, as the rule check is."""
-        if body.kind != "ask":
-            return None
-        with store.read() as c:
-            body = routed_message(c, who, body)
-        title = body.text.strip().split("\n")[0][:300]
-        tref = H._task_ref((body.refs or {}).get("task"))
-        if tref and ask_ingest.gated(who, settings.assistant_bot):
-            # The task's title is judged only when the bot may read the task; the send refuses it otherwise.
-            with store.read() as c:
-                try:
-                    title = auth.task(c, who, tref).get("title") or title
-                except Problem:
-                    pass
-        return ask_ingest.preflight(
-            store,
-            app.state.judge,
-            who,
-            body.to,
-            title,
-            body.text,
-            kind="question" if tref else "loose",
-            asked=(body.refs or {}).get("questions"),
-        )
+        """Ask ingest judges a task for a person (backend/ask_ingest.py), never a message: a message no longer asks
+        anything (step 6c), so there is nothing to judge here."""
+        return None
 
     def routed_message(c, who, body):
-        body = body.model_copy(deep=True)
-        if body.kind == "ask":
-            from . import ask_routing
-
-            body.to, body.refs = ask_routing.resolve(
-                c, who.actor, body.to, body.refs, body.conversation_id, body.in_reply_to, body=body, who=who, auth=auth
-            )
-        return body
+        return body.model_copy(deep=True)
 
     def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
@@ -2759,21 +2730,8 @@ def create_app(settings=None):
                 ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.held_answer(c, who, rule, auth=auth)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
-        # Judged against the plate before the question is on it.
-        gate = (
-            ask_ingest.apply(c, ingest) if ingest and ask_ingest.matches(ingest, H.resolve_actor(c, body.to)) else None
-        )
         message = send(c, who, sent)
-        if not gate or not ask_ingest.matches(ingest, message.get("recipient_id")) or message.get("kind") != "ask":
-            if ingest:
-                ask_ingest.skipped(c, ingest, "target")
-            return {**message, **org_rule_check.answer(rule)}
-        tid = H.message_task_id(H.message(c, message["id"]), H.conversation(c, message["conversation_id"]))
-        verdict = {**ingest, "kind": "question" if tid else "loose"}
-        ask_ingest.record(c, verdict, gate, tid or message["id"], message["id"])
-        if gate["acts"]:
-            ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
-        return {**message, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
+        return {**message, **org_rule_check.answer(rule)}
 
     def message_checks(who, body, retry=False, place=None, operation="message"):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
@@ -2847,7 +2805,6 @@ def create_app(settings=None):
             body.text,
             lambda c: rule_message_audience(c, who, body),
             place=place or rule_message_place(who, body),
-            track_route=body.kind == "ask",
         )
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
@@ -3040,40 +2997,7 @@ def create_app(settings=None):
         task_view,
     )
 
-    def answer_write(c, who, mid, text, unknown=False, warn="", destination=False):
-        """One answer, as `/messages/{mid}/answer` writes it and Send anyway replays it. The pick is resolved on the
-        answer's own words; `warn` (an org rule's Warn) goes on the message its reader gets. `destination`: Send
-        anyway's check, as the run the answer came from, that the question's readers may read what it carries."""
-        msg = H.message(c, mid)
-        if not msg:
-            raise Problem("not_found", "Message not found", 404)
-        conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
-        lifecycle.refuse_send(c, who, msg["sender_id"], conversation, what="an answer")
-        # A private run's answer is read by its question's readers, ordinary or replayed: the same check either way.
-        if destination or privacy.private_execution(c, who):
-            privacy.require_destination(c, who, msg["sender_id"], msg["conversation_id"], {}, msg)
-        if H.has_pick_options(msg):
-            from .task_review import answer_text
-
-            return answer_text(c, auth, who, msg, text, unknown=unknown, warn=warn)
-        return H.answer(
-            c,
-            who.actor,
-            mid,
-            warn + "\n\n" + text if warn else text,
-            unknown=unknown,
-            classify_text=text,
-            turn_id=who.attempt_id,
-        )
-
-    def answer_audience(c, who, mid):
-        msg = H.message(c, mid)
-        if not msg:
-            raise Problem("not_found", "Message not found", 404)
-        conv = H.conversation(c, msg["conversation_id"]) or {}
-        return sorted({msg["sender_id"], *(conv.get("participants") or [])} - {None, ""})
-
-    answers_routes.register(app, answer_audience, answer_write, auth, checked_write, mutate)
+    answers_routes.register(app, auth, mutate)
 
     def task_filters(
         c,
@@ -3091,10 +3015,12 @@ def create_app(settings=None):
         snoozed=None,
         by_id=False,
         exact=False,
+        viewer="",
     ):
         """The filters `GET /api/v2/tasks` takes, checked and resolved: (owner, requester, H.tasks keywords). A bulk
         change (`POST /api/v2/task-bulk`) selects with the same ones. `exact` refuses an owner or requester that names
-        nobody, where a list would quietly drop the filter: a bulk change must never widen to every task."""
+        nobody, where a list would quietly drop the filter: a bulk change must never widen to every task. `viewer` is the
+        reader's actor: a members-only pipeline it may not see is refused as an unknown type, and its steps are not named."""
         found_owner = H.resolve_actor(c, owner) if owner else None
         found_requester = H.resolve_actor(c, requester) if requester else None
         if exact and (owner and not found_owner or requester and not found_requester):
@@ -3114,12 +3040,16 @@ def create_app(settings=None):
         if lane and lane not in H.TASK_LANES:
             raise Problem("kind", "lane is company or product", 422)
         typ = H.type_get(c, type) if type else None
+        if typ and not pipeline_rights.may_see(c, viewer, typ["id"]):
+            typ = None
         if type and not typ:
             raise Problem("type", "No task type " + type, 422)
         step_ids = None
         if step:
-            # By id or name: in the type when one is given, else every type's step of that name.
-            steps = typ["steps"] if typ else H._rows(c.execute("SELECT id,name FROM task_steps"))
+            # By id or name: in the type when one is given, else every type's step of that name the reader may see.
+            hidden = pipeline_rights.hidden_pipeline_ids(c, viewer)
+            steps = typ["steps"] if typ else H._rows(c.execute("SELECT id,name,type_id FROM task_steps"))
+            steps = [s for s in steps if s.get("type_id") not in hidden]
             step_ids = [s["id"] for s in steps if step in (s["id"], s["name"])]
             if not step_ids:
                 raise Problem("step", "No step " + step + (" in " + typ["name"] if typ else ""), 422)
@@ -3178,19 +3108,41 @@ def create_app(settings=None):
             # A bot task now lives in the bot's chat room. Only this task's messages
             # come back here; the rest of that room stays on Chat.
             who = request.state.identity
-            children = [
-                {"id": t["id"], "title": t["title"], "status": t["status"], "owner_id": t["owner_id"]}
-                for t in H._rows(
-                    c.execute(
-                        "SELECT id,title,status,owner_id FROM tasks WHERE id IN ("
-                        + TR.CHILD_IDS
-                        + ") AND ("
-                        + auth.task_sql(c, who)
-                        + ") ORDER BY (rank IS NULL), rank, created_at",
-                        (tid,),
-                    )
+            # Each related ticket is read on its own: the pipeline-aware list rule (pipeline_rights.list_sql), so owning
+            # this ticket on a members-only pipeline grants no other ticket of it (its children, relations or counts).
+            related_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
+            child_rows = H._rows(
+                c.execute(
+                    "SELECT id,title,status,owner_id FROM tasks WHERE id IN ("
+                    + TR.CHILD_IDS
+                    + ") AND ("
+                    + related_sql
+                    + ") ORDER BY (rank IS NULL), rank, created_at",
+                    (tid,),
                 )
+            )
+            child_refs = H.ticket_refs(c, [t["id"] for t in child_rows])
+            children = [
+                {
+                    "id": t["id"],
+                    "title": t["title"],
+                    "status": t["status"],
+                    "owner_id": t["owner_id"],
+                    **child_refs[t["id"]],
+                }
+                for t in child_rows
             ]
+            # The parent ticket, when there is one. Its title is given only when the reader may read it: auth.task
+            # refuses a task the reader cannot see, and then the parent is null.
+            parent = None
+            parent_id = TR.parent_of(c, tid)
+            if parent_id:
+                try:
+                    parent_row = auth.task(c, who, parent_id)
+                except Problem:
+                    parent_row = None
+                if parent_row:
+                    parent = {"id": parent_id, "title": parent_row["title"], **H.ticket_refs(c, [parent_id])[parent_id]}
             from .task_review import comment_rights
             from .views import task_wait
 
@@ -3200,6 +3152,28 @@ def create_app(settings=None):
             except Problem:
                 can_comment = False
             history = privacy.content_readable_rows(c, privacy.actor(who), H.task_history(c, tid, provenance=True))
+            # An event that names a ticket the reader may not open (a hidden child, say) is no detail of this one: it goes.
+            named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
+            if named:
+                known = {
+                    r[0]
+                    for r in c.execute(
+                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(named),)
+                    )
+                }
+                readable = {
+                    r[0]
+                    for r in c.execute(
+                        "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND (" + related_sql + ")",
+                        (json.dumps(named),),
+                    )
+                }
+                hidden_refs = known - readable
+                history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden_refs)]
+            # A subtask summary's text names its subtasks only where the reader may open them (task_reads.children_text).
+            from . import task_reads
+
+            history = task_reads.children_text(c, related_sql, history)
             lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out
@@ -3207,12 +3181,13 @@ def create_app(settings=None):
             # Who follows it (backend/task_followers.py): null for a task with no thread of its own.
             return {
                 "task": {
-                    **task_view(row, c, visible_sql=auth.task_sql(c, who), who=who),
+                    **task_view(row, c, visible_sql=related_sql, who=who),
                     "followers": task_followers_seen(c, who, row),
                 },
                 "events": history,
                 "can_comment": can_comment,
                 "children": children,
+                "parent": parent,
                 # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
                 # the steps one click away) and `execution` is the run it follows while it works: the owner's,
                 # or the one for a person's message, whichever bot that went to. `comment_to` is who the reader's
@@ -4063,7 +4038,10 @@ def create_app(settings=None):
                 # BotOps' own report on its own task: they read as BotOps, like its other progress notes.
                 H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
                 note = ""
-            H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
+            # A question task closed with one of its options named in the note is answered as that pick (its answer, so a
+            # picked spend gets its approval); any other close is the plain close.
+            if question_tasks.close_by_label(c, auth, who, row, note) is None:
+                H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
             warnings, gates = None, []
         else:
             fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
@@ -4302,24 +4280,6 @@ def create_app(settings=None):
 
     task_actions_routes.register(app, auth, mover, mutate, settings_admin, task_view)
 
-    @app.post("/api/v2/tasks/{tid}/ask")
-    def task_ask(request: Request, tid: str, body: M.Answer):
-        """The owner's one question to the task's requester (hubdb.task_ask). A bot's question to a person passes
-        ask ingest first (backend/ask_ingest.py): a refusal rolls the write back, so the task does
-        not wait on them."""
-        who = request.state.identity
-
-        def recipients(c):
-            row = auth.task(c, who, auth.resolve_task(c, who, tid))
-            target, _ = H.task_ask_route(c, who.actor, row)
-            return [target]
-
-        rc = rule_check(who, "task_ask", body.text, recipients, track_route=True)
-        ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else task_ask_ingest(who, tid, body)
-        return ask_ingest.judged(
-            store, ingest, lambda: mutate(request, body, lambda c: task_ask_write(c, who, tid, body, ingest, rc))
-        )
-
     def readable_task(who, tid):
         """The task `who` may read, or None: what an ingest preflight outside the write judges."""
         with store.read() as c:
@@ -4327,59 +4287,6 @@ def create_app(settings=None):
                 return auth.task(c, who, auth.resolve_task(c, who, tid))
             except Problem:
                 return None
-
-    def task_ask_ingest(who, tid, body):
-        if not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
-            return None
-        from . import dream
-
-        with store.read() as c:
-            if dream.exempt(c, row):
-                return None  # the person started the dream to be asked (backend/dream.py)
-            target, _ = H.task_ask_route(c, who.actor, row)
-        return ask_ingest.preflight(store, app.state.judge, who, target, row["title"], body.text, kind="task_ask")
-
-    def rule_prepare_task_ask(store_, bot, replay):
-        return task_ask_ingest(bot, replay["task"], M.Answer.model_validate(replay["body"]))
-
-    @org_rule_check.replayer("task_ask", prepare=rule_prepare_task_ask)
-    def rule_replay_task_ask(c, bot, hold, replay, ingest, gate=None):
-        return task_ask_write(
-            c, bot, replay["task"], M.Answer.model_validate(replay["body"]), ingest, org_rule_check.decided(gate)
-        )
-
-    def task_ask_write(c, who, tid, body, ingest=None, rc=None):
-        task_id = auth.resolve_task(c, who, tid)
-        row = auth.task(c, who, task_id)
-        lifecycle.refuse_send(c, who, None, what="task questions")
-        route = H.task_ask_route(c, who.actor, row)
-        target, _ = route
-        rule = org_rule_check.apply(
-            c,
-            rc,
-            body.text,
-            {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
-            audience_now=[target],
-        )
-        if rule and rule.get("moved"):
-            raise Problem("moved", "Who this goes to changed while it was checked; send it again", 409, retryable=True)
-        if rule and rule.get("held"):
-            if ingest:
-                ask_ingest.skipped(c, ingest, "held")
-            return org_rule_check.answer(rule)
-        body = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
-        gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, target) else None
-        if ingest and not gate:
-            ask_ingest.skipped(c, ingest, "target")
-        # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
-        msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]), route=route)
-        if gate:
-            ask_ingest.record(c, ingest, gate, task_id, msg["id"])
-            if gate["acts"]:
-                H.task_ask_resolve(c, who.actor, task_id, msg["id"])
-                # Why, on the task's record, like the other merge notes.
-                H.task_comment(c, H.KEEPER, task_id, gate["text"], wake=False)
-        return {**msg, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
     task_comments_routes.register(
         app,
@@ -5682,28 +5589,16 @@ def create_app(settings=None):
         privacy.require_destination(
             c, Identity(bot.actor, "bot", attempt_id=replay["attempt"]), target, conv["id"], refs, msg
         )
-        if msg["kind"] == "ask":
-            from .task_review import reply_answer
-
-            sent = reply_answer(
-                c,
-                auth,
-                Identity(bot.actor, "bot", attempt_id=replay["attempt"]),
-                msg,
-                replay["text"],
-                org_rule_check.warn_line(gate),
-            )
-        else:
-            text, _ = split_runner_notices(replay["text"])
-            sent = H.say(
-                c,
-                bot.actor,
-                target,
-                org_rule_check.warned_text(gate, text),
-                conversation_id=conv["id"],
-                in_reply_to=msg["id"],
-                refs=refs,
-            )
+        text, _ = split_runner_notices(replay["text"])
+        sent = H.say(
+            c,
+            bot.actor,
+            target,
+            org_rule_check.warned_text(gate, text),
+            conversation_id=conv["id"],
+            in_reply_to=msg["id"],
+            refs=refs,
+        )
         return {"message": sent}
 
     def reply_audience(c, bot, replay):
@@ -5738,9 +5633,7 @@ def create_app(settings=None):
 
         def comment(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
-            return rule_comment_audience(
-                c, bot, task_row(c, bot, replay), body.text, body.ask.model_dump() if body.ask else None
-            )
+            return rule_comment_audience(c, bot, task_row(c, bot, replay), body.text)
 
         def comment_edit(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
@@ -5755,8 +5648,6 @@ def create_app(settings=None):
             "bulk": task_update,
             "comment": comment,
             "comment_edit": comment_edit,
-            "answer": lambda c, bot, replay: answer_audience(c, bot, replay["message"]),
-            "task_ask": lambda c, bot, replay: [H.task_ask_route(c, bot.actor, task_row(c, bot, replay))[0]],
             "task_answer": lambda c, bot, replay: rule_task_audience(c, task_row(c, bot, replay), bot.actor),
             "reply": reply_audience,
         }
@@ -5946,6 +5837,17 @@ def create_app(settings=None):
     from .meeting_items import install_meeting_items
 
     install_meeting_items(app, store, mutate, task_create, auth)
+    pipeline_engine.install(app, store, mutate, auth)
+    pipeline_links.install(app, store, mutate, auth)
+    pipeline_requirements.install(app, store, mutate, auth)
+    pipeline_factories.install(app, store, mutate, auth)
+    requirement_attachments.install(app, store, mutate, auth)
+    pipeline_judges.install(app, store, mutate, auth)
+    pipeline_review.install(app, store, mutate, auth)
+    pipeline_manager.install(app, store, mutate, auth)
+    factory_manager.install(app, store, mutate, auth)
+    pipeline_overview.install(app, store, mutate, auth)
+    pipeline_github_checks.install(app, store, mutate, auth)
     from . import presence
 
     presence.install(app, store, mutate, auth)
@@ -6057,6 +5959,9 @@ def create_app(settings=None):
     from . import finance_routes
 
     finance_routes.install(app, store, auth, mutate)  # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from .entities import routes as entity_routes
+
+    entity_routes.install(app, store, auth, mutate)  # The Directory: `hub directory` (backend/entities/routes.py)
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages

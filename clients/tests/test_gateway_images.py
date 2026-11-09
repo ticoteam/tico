@@ -30,7 +30,7 @@ def sent(monkeypatch):
             calls.append((path, body))
             return {
                 "model": "tico-images-1.0",
-                "category": body["category"],
+                "category": body.get("category"),
                 "images": [
                     {"mime": "image/png", "b64": base64.b64encode(MADE + bytes([n])).decode()}
                     for n in range(body["count"])
@@ -70,6 +70,7 @@ def test_images_are_saved_beside_each_other_with_a_sidecar_for_each(sent, tmp_pa
     assert out.read_bytes() == MADE + b"\x00" and (out.parent / "frame-2.png").read_bytes() == MADE + b"\x01"
     ((path, body),) = sent
     assert path == "gateway/images" and body["category"] == "character" and body["count"] == 2
+    assert body["model"] == "tico-images-1.0"
     assert body["images"] == ["data:image/png;base64," + base64.b64encode(PNG).decode()]
     assert "out" not in body and "refs" not in body
     sidecar = json.loads((out.parent / "frame.png.json").read_text())
@@ -138,7 +139,13 @@ def test_the_client_sends_the_gateways_shape_and_keeps_only_the_images(monkeypat
     )
     assert (status, code) == (200, "")
     assert sent["url"] == "https://gateway.example.test/v1/gateway/images" and sent["timeout"] == 130
-    assert sent["body"] == {"prompt": "a fox", "category": "photo", "count": 2, "size": "1920x1080"}
+    assert sent["body"] == {
+        "model": "tico-images-1.0",
+        "prompt": "a fox",
+        "category": "photo",
+        "count": 2,
+        "size": "1920x1080",
+    }
     assert sent["headers"] == {"Authorization": "Bearer tgw-key", "X-Tico-Bot": "ops"}
     assert answer == {
         "model": "tico-images-1.0",
@@ -148,3 +155,146 @@ def test_the_client_sends_the_gateways_shape_and_keeps_only_the_images(monkeypat
     }
     monkeypatch.setattr(G, "_post", lambda *args: (404, {}, "not_found"))
     assert G.image("https://gateway.example.test/v1/gateway", "k", "x", "storyboard") == (404, {}, "not_found")
+
+
+def test_the_lineup_models_send_their_own_choice_and_the_svg_is_saved_as_svg(sent, tmp_path):
+    result = run(
+        ["gateway", "image", "a fox", "--model", "high", "--category", "graphic", "--out", str(tmp_path / "a.png")]
+    )
+    assert result["category"] == "graphic" and result["quality"] is None
+    run(["gateway", "image", "a fox", "--out", str(tmp_path / "low.png")])
+    run(["gateway", "image", "a fox", "--model", "svg", "--out", str(tmp_path / "icon")])
+    run(["gateway", "image", "a fox", "--model", "svg", "--quality", "pro", "--out", str(tmp_path / "icon2.svg")])
+    bodies = [body for _, body in sent]
+    assert bodies[0] == {"model": "tico-images-high", "category": "graphic", "prompt": "a fox", "count": 1}
+    assert bodies[1] == {"model": "tico-images-low", "prompt": "a fox", "count": 1}
+    assert bodies[2] == {"model": "tico-svg", "quality": "standard", "prompt": "a fox", "count": 1}
+    assert bodies[3] == {"model": "tico-svg", "quality": "pro", "prompt": "a fox", "count": 1}
+    assert (tmp_path / "icon.svg").exists() and (tmp_path / "icon.svg.json").exists()
+    assert not (tmp_path / "icon.png").exists()
+    assert json.loads((tmp_path / "icon.svg.json").read_text())["quality"] == "standard"
+
+
+def test_the_lineup_refuses_a_choice_its_model_does_not_take_before_anything_is_sent(sent, tmp_path):
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(PNG)
+    refused = [
+        ["gateway", "image", "x", "--model", "low", "--category", "photo", "--out", str(tmp_path / "a.png")],
+        ["gateway", "image", "x", "--model", "high", "--quality", "pro", "--out", str(tmp_path / "a.png")],
+        ["gateway", "image", "x", "--model", "svg", "--ref", str(ref), "--out", str(tmp_path / "a.svg")],
+        ["gateway", "image", "x", "--model", "svg", "--out", str(tmp_path / "a.png")],
+        ["gateway", "image", "x", "--model", "svg", "--size", "64x64", "--out", str(tmp_path / "a.svg")],
+    ]
+    for argv in refused:
+        with pytest.raises(ValueError):
+            run(argv)
+    assert sent == []
+
+
+class VideoGateway:
+    """A fake Tico server for the video tools: the job's state moves through `states`, one per status call."""
+
+    def __init__(self, states, content=b"\x00\x00\x00\x18ftypmp4 bytes", cost=0.4):
+        self.states, self.content, self.cost = list(states), content, cost
+        self.calls = []
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def post(self, path, body, key=None):
+        self.calls.append(("POST", path, body))
+        return {"id": "gv_" + "a" * 24, "status": "queued"}
+
+    def get(self, path):
+        self.calls.append(("GET", path, None))
+        state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+        job = {
+            "id": "gv_" + "a" * 24,
+            "status": state,
+            "seconds": 8,
+            "resolution": "720p",
+            "aspect": "16:9",
+            "audio": True,
+        }
+        return {**job, "cost_usd": self.cost} if state == "done" else job
+
+    def request(self, method, path, binary=False, limit=None):
+        self.calls.append((method, path, limit))
+        assert binary and limit == hubtools.VIDEO_MAX_BYTES
+        return self.content
+
+
+@pytest.fixture
+def video(monkeypatch):
+    gateway = VideoGateway(["queued", "running", "done"])
+    monkeypatch.setattr(remotecli, "Client", gateway)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    return gateway
+
+
+def test_a_video_is_started_then_checked_until_it_is_done_and_saved_once(video, tmp_path):
+    frame = tmp_path / "first.png"
+    frame.write_bytes(PNG)
+    started = run(
+        [
+            "gateway",
+            "video",
+            "a kettle boils",
+            "--seconds",
+            "5",
+            "--resolution",
+            "1080p",
+            "--no-audio",
+            "--first-frame",
+            str(frame),
+        ]
+    )
+    assert started == {"id": "gv_" + "a" * 24, "status": "queued", "seconds": 5, "resolution": "1080p"}
+    method, path, body = video.calls[0][0], video.calls[0][1], video.calls[0][2]
+    assert (method, path) == ("POST", "gateway/videos")
+    assert "model" not in body and body["audio"] is False and body["aspect"] == "16:9"  # the route sets the model
+    assert body["first_frame"] == "data:image/png;base64," + base64.b64encode(PNG).decode() and "last_frame" not in body
+    out = tmp_path / "clips" / "kettle.mp4"
+    job = "gv_" + "a" * 24
+    assert run(["gateway", "video-status", job, "--out", str(out)])["status"] == "queued"
+    assert run(["gateway", "video-status", job, "--out", str(out)])["status"] == "running"
+    assert not out.exists()
+    saved = run(["gateway", "video-status", job, "--out", str(out)])
+    assert saved["status"] == "done" and saved["saved"] == str(out) and saved["cost_usd"] == 0.4
+    assert out.read_bytes() == video.content
+    record = json.loads((out.parent / "kettle.mp4.json").read_text())
+    assert record["id"] == job and record["model"] == "tico-video" and record["seconds"] == 8
+    with pytest.raises(ValueError, match="exists"):
+        run(["gateway", "video-status", job, "--out", str(out)])
+    assert out.read_bytes() == video.content
+
+
+def test_a_failed_or_given_up_video_saves_nothing(monkeypatch, tmp_path):
+    for state in ("failed",):
+        gateway = VideoGateway([state])
+        monkeypatch.setattr(remotecli, "Client", gateway)
+        monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+        out = tmp_path / f"{state}.mp4"
+        assert run(["gateway", "video-status", "gv_" + "b" * 24, "--out", str(out)]) == {
+            "id": "gv_" + "b" * 24,
+            "status": state,
+        }
+        assert not out.exists() and not any(c[0] == "GET" and "content" in c[1] for c in gateway.calls)
+
+
+def test_a_video_needs_an_out_file_an_mp4_name_and_a_job_id(video, tmp_path):
+    job = "gv_" + "a" * 24
+    video.states = ["done"]
+    with pytest.raises(ValueError, match="out is needed"):
+        run(["gateway", "video-status", job])
+    with pytest.raises(ValueError, match="mp4"):
+        run(["gateway", "video-status", job, "--out", str(tmp_path / "clip.mov")])
+    with pytest.raises(ValueError, match="job id"):
+        run(["gateway", "video-status", "../../etc/passwd", "--out", str(tmp_path / "x.mp4")])
+    with pytest.raises(ValueError, match="seconds"):
+        run(["gateway", "video", "x", "--seconds", "16"])
+    frame = tmp_path / "frame.webp"
+    frame.write_bytes(b"RIFF\x00\x00\x00\x00WEBPVP8 ")
+    with pytest.raises(ValueError, match="PNG or JPEG"):
+        run(["gateway", "video", "x", "--first-frame", str(frame)])
+    assert not any(call[0] == "POST" for call in video.calls)

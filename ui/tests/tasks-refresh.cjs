@@ -1,4 +1,4 @@
-// The open Tasks list never drifts for long (ui/app/refresh.js, tasks-page.js, pull-refresh.js). After one full read
+// The open Tasks list never drifts for long (ui/app/refresh.ts, tasks-page.js, pull-refresh.ts). After one full read
 // the page takes only what the change log names (a delta read from its cursor, live events), so a change it never
 // names stayed out until a reload, and an installed phone app has no reload button. The fixture's delta read misses
 // every change and its full read answers 304 to any tag the page holds, as the server does when the change log has
@@ -25,9 +25,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 const now = new Date().toISOString();
 const task = (id, title, over) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', lane: 'company',
   labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
-const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester_id: 'bot:ops', origin_actor: 'bot:ops', created_at: now,
-  ask: {id: 'm-loose', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: now}};
+// A question to Ana outside any task is a question task now: its card is keyed by the task id.
+const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
+  body: 'Is Friday fine for the summary?', requester_id: 'bot:ops', owner_id: 'human:ana', origin_actor: 'bot:ops', created_at: now,
+  ask: {id: 'm-loose', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: now, question_task: true,
+    refs: {questions: [{id: 'friday', question: 'Is Friday fine for the summary?', options: [{label: 'Yes'}, {label: 'No'}]}]}}};
 
 (async () => {
   const browser = await chromium.launch();
@@ -54,10 +56,10 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -96,8 +98,8 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await page.waitForFunction(() => TASKS_ST.since === '12.a' && TASKS_ST.fullAt > 0);
   await settled();
 
-  // A question asked outside any task is one line on Needs you (its answer is on its card); the poll still reads.
-  assert.equal(await page.locator('#task-body [data-need-card="ask:m-loose"]').count(), 1);
+  // A question to Ana is one line on Needs you (its answer is on its card); the poll still reads.
+  assert.equal(await page.locator('#task-body [data-need-card="task:m-loose"]').count(), 1);
   let delta = reads.delta;
   await page.evaluate(() => refresh(false));
   await page.waitForFunction(() => TASKS_ST.since === '13.a', null, {timeout: t(5000)});
@@ -265,7 +267,7 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   // card, over the list, keeps its words.
   server.title = 'Draft the release notes, fifth pass';
   full = reads.full.length;
-  await page.evaluate(() => decideOpen('ask:m-loose'));
+  await page.evaluate(() => decideOpen('task:m-loose'));
   await page.locator('#need-card .dc-note textarea').fill('Friday is fine');
   await page.evaluate(() => { TASKS_ST.fullAt = Date.now() - 16 * 60e3; tasksTick(); });
   await shows('Draft the release notes, fifth pass');

@@ -381,7 +381,7 @@ def start(c, actor, items, snapshot, scope=None, reader=None):
     line = lineup(c, actor, notes + rows)
     open_ = current(c, actor)
     if open_:
-        return _presented(c, actor, {**view(c, open_, resumed=True), "lineup": line}, reader)
+        return {**view(c, open_, resumed=True), "lineup": line}
     group = _scope(c, actor, line, scope)
     if group:
         rows = [r for r in rows if group_of(r, actor) == group]
@@ -433,20 +433,7 @@ def start(c, actor, items, snapshot, scope=None, reader=None):
     H.event(
         c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)), "scope": group}
     )
-    return _presented(c, actor, {**view(c, batch), "lineup": line}, reader)
-
-
-def _presented(c, actor, out, reader=None):
-    """The item the person now hears in full is opened: its task's questions to them that they may read are read
-    (delivered and read set, as opening it in Needs you does; backend/task_holds.py says so when one is withdrawn).
-    A question they may not read stays unread, as on the task page."""
-    key = str((out.get("item") or {}).get("key") or "")
-    if key.startswith("task:"):
-        row = H.task(c, key[5:])
-        if row:
-            mine = [a["id"] for a in H.open_task_asks(c, row, actor=reader or actor) if a["recipient_id"] == actor]
-            H.asks_seen(c, actor, mine, read=True)
-    return out
+    return {**view(c, batch), "lineup": line}
 
 
 def _items(batch):
@@ -505,7 +492,7 @@ def next_item(c, actor, batch_id, reader=None):
     cursor = min(int(batch["cursor"] or 0) + 1, len(items))
     c.execute("UPDATE batches SET cursor=? WHERE id=?", (cursor, batch["id"]))
     batch["cursor"] = cursor
-    return _presented(c, actor, view(c, batch), reader)
+    return view(c, batch)
 
 
 def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", until=None):
@@ -680,8 +667,11 @@ def _apply_decide(c, auth, who, item, r, boards):
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
         return f"Closed: {item['title']}"
     ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
-    if ask and ask.get("recipient_id") == who.actor:
-        H.answer(c, who.actor, ask["id"], text)
+    card = H.task(c, ask["id"]) if ask and ask.get("recipient_id") == who.actor else None
+    if card and question_tasks.is_open(card) and question_tasks.may_answer(c, auth, who, card):
+        # The task's open question task for them (a subtask or blocker): answered as above.
+        if not question_tasks.close_by_label(c, auth, who, card, text):
+            H.task_update(c, who.actor, card["id"], status="done", note=text or None)
         return f"Answered {H.actor_name(c, ask['sender_id'])}: {_clip(text, 120)}"
     to = H.task_origin(c, row) or row.get("requester_id")
     if not to or to == who.actor:

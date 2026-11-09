@@ -31,7 +31,7 @@ def register(app, auth, mutate, send, store, task_view):
     # collected and applied together on commit (backend/batch.py). Any front end runs it.
     def batch_send(c, who, text, refs, to):
         # Each bot hears about its own items in the person's chat with it.
-        return send(c, who, M.MessageCreate(to=to, text=text, kind="ask", refs=refs))
+        return send(c, who, M.MessageCreate(to=to, text=text, refs=refs))
 
     @app.post("/api/v2/batch")
     def batch_start(request: Request, body: M.BatchStart):
