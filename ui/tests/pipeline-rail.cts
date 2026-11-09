@@ -73,7 +73,7 @@ const composerInside = async (page: Page, panel: string) => {
         assert.match(await page.locator('.pr-ran').innerText(), /Ran \d\d:\d\d/);
         assert.deepEqual(await page.locator('.pr-tab').allInnerTexts().then(a => a.map(s => s.replace(/\s+\d+$/, '').trim())), ['Log', 'Tasks', 'Learned']);
         assert.equal((await page.locator('.pr-tab').nth(1).innerText()).trim(), 'Tasks 1', 'the Tasks tab counts the manager\'s open tasks');
-        assert.match(await page.locator('.pr-late').first().innerText(), /D17/);
+        assert.match(await page.locator('.pr-late').first().innerText(), /Sim stuck checks/, 'a late card shows by its title, not its id');
         const lines = await page.locator('.pr-log .pr-line').allInnerTexts();
         assert.match(lines[0]!, /unreachable/, 'errors first');
         assert.equal(await page.locator('.pr-chat').count(), 1, 'chat with the manager is in the rail');
@@ -111,7 +111,7 @@ const composerInside = async (page: Page, panel: string) => {
         await bar.click();
         await page.waitForFunction(() => document.querySelector('#pipe-rail')?.classList.contains('sheet-open'));
         await page.locator('.pr-late').first().waitFor({state: 'visible'});
-        assert.match(await page.locator('.pr-late').first().innerText(), /D17/);
+        assert.match(await page.locator('.pr-late').first().innerText(), /Sim stuck checks/, 'a late card shows by its title, not its id');
         await page.waitForSelector('.pr-chat .thv-composer', {timeout: t(5000)});
         assert.ok(await composerInside(page, '.pr-panel'), label + ': the composer sits inside the sheet');
         await page.locator('.pr-x[data-rail-close]').click();
