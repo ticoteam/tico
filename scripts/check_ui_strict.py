@@ -28,9 +28,12 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
    page configs exclude exactly ./sw.ts). Its config keeps every strict flag on and names exactly that file, and tsc
    reports nothing in it: any finding fails, with no baseline.
 10. The UI test scripts (ui/tests/*.cts, TypeScript run by Node's type stripping) type-check under ui/tests/tsconfig.json
-   with no baseline: every diagnostic fails. Skipped while no .cts script exists. The config keeps moduleDetection
-   "force" (each script is its own scope), and a script never uses `declare global`: every script shares one program,
-   so a global one script declares changes the types every other script sees. Page globals are file-local declarations.
+   with no baseline: every diagnostic fails. Skipped while no .cts script exists. The config's effective options (tsc
+   --showConfig, not the raw JSON: it extends tsconfig.node.json, so inherited options count) keep strict,
+   erasableSyntaxOnly and verbatimModuleSyntax on and moduleDetection "force" (each script is its own scope), and a
+   script never uses `declare global`: every script shares one program, so a global one script declares changes the
+   types every other script sees. Page globals are file-local declarations. The Node scripts outside ui/ have their own
+   gate on the same base config, scripts/check_node_types.py.
 
 Runs in a few seconds: one tsc pass over the UI and one over the worker. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
 """
@@ -45,6 +48,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import check_node_types as node_types  # tsc --showConfig: a config's options with extends followed (rule 10)
 import ui_baseline  # the per-file baseline paths and the script-tag rule, shared with the ratchets
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -564,15 +568,20 @@ def run_tests_tsc():
     return done.returncode, done.stdout + done.stderr
 
 
+def show_tests_config():
+    """ui/tests/tsconfig.json as tsc reads it: extends followed, so the options it inherits count."""
+    return node_types.effective_config(TESTS_CONFIG, root=ROOT)
+
+
 def check_tests_gate():
     """Rule 10: the .cts test scripts type-check under their own strict config. No baseline: any diagnostic fails. Costs
     nothing while no .cts script exists."""
     if not any((ROOT / "ui/tests").glob("*.cts")):
         return []
     try:
-        config = json.loads((ROOT / TESTS_CONFIG).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        return [f"{TESTS_CONFIG}: cannot be read as JSON ({error})"]
+        config = show_tests_config()
+    except node_types.ConfigError as error:
+        return [str(error)]
     problems = []
     options = config.get("compilerOptions", {})
     for flag in TESTS_REQUIRED:

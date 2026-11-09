@@ -32,6 +32,7 @@ check bash scripts/check_ui_types.sh --base "$base"
 [ -d node_modules ] || check npm ci --ignore-scripts --no-audit --no-fund --silent
 check bash scripts/check_ui_lint.sh --base "$base"
 check python3 scripts/check_ui_strict.py --base "$base"
+check python3 scripts/check_node_types.py
 check bash scripts/check_ui_routes.sh --base "$base"
 check python3 scripts/check_ui_source_suffixes.py
 check bash scripts/shell_lint.sh
