@@ -9,7 +9,7 @@
 
 type AuNewTemplate = import('../types/api').AutomationTemplates['templates'][number];
 /** An automation as the page reads it: the API's type, plus the owner string the list rows carry. */
-type AuNewAuto = import('../types/api').Automation & { owner?: string; readonly?: boolean };
+type AuNewAuto = AuRow & { owner?: string };
 /** A template filled for an owner and an inbox (GET /v2/automations/templates/<id>). */
 type AuNewFilled = import('../types/api').AutomationTemplate & { group?: string };
 /** A flow step as the board reads it: the fields it looks at, and every other field the step keeps. */
@@ -79,6 +79,7 @@ function auApplyFlow(a: AuNewAuto, filled: AuNewFilled) {
 type AuNewFlow = NonNullable<ReturnType<typeof auApplyFlow>>;
 
 async function auTemplates(): Promise<AuNewTemplate[]> {
+  auHave(AU);
   if (!AU.templates) AU.templates = (await get<import('../types/api').AutomationTemplates>('/v2/automations/templates')).templates || [];
   return AU.templates;
 }
@@ -86,6 +87,7 @@ async function auTemplates(): Promise<AuNewTemplate[]> {
 // One dialog at a time, inside the page (so it goes when the page does, and reads the page's colors). Its clicks and
 // keys stay in it: the page's own handlers read data-* attributes the dialog has no business with.
 function auDialog(cls: string, title: string, icon: string, body: string, foot: string): HTMLDialogElement {
+  auHave(AU);
   const root: HTMLElement | null = AU.root;
   root?.querySelectorAll<HTMLDialogElement>('dialog.au-nd').forEach(d => d.close());
   const dlg = document.createElement('dialog');
@@ -115,6 +117,7 @@ function auNdError(dlg: HTMLDialogElement, e: unknown): void {
 // saves it with the switch's on or off, and opens it (a board).
 function auNewInbox(): void {
   auNewMenu(false);
+  auHave(AU);
   const me: Partial<SelfPerson> = S.me || {}, state = AU;
   const groups: import('../types/api').Group[] = AU.groups;
   const n: AuNewN = {inbox: me.email || '', kind: 'person', person: 'person:' + me.id, bot: auBots()[0]?.[0] || '',
@@ -178,7 +181,7 @@ function auNewInbox(): void {
     go.disabled = true;
     try {
       const f = await get<AuNewFilled>(auTplUrl(n.tid, owner(), n.inbox.trim()), {fresh: true});
-      const out: import('../types/api').Automation = auNormal(await post('/v2/automations', {name: f.name, owner: f.owner, ...(f.group ? {group: f.group} : {}),
+      const out: AuRow = auNormal(await post('/v2/automations', {name: f.name, owner: f.owner, ...(f.group ? {group: f.group} : {}),
         enabled: n.on, builtin: false, trigger: f.trigger, steps: f.steps || [], ...(Array.isArray(f.destinations) ? {destinations: f.destinations} : {})}));
       dlg.close();
       if (AU !== state) return;
@@ -192,6 +195,7 @@ function auNewInbox(): void {
 // Apply template: pick one, see the destinations it fills in for this automation's owner and inbox, then Apply saves
 // the new flow as a new version (name, trigger and on/off as they were).
 function auApplyTemplate(): void {
+  auHave(AU);
   const a: AuNewAuto | null = AU.cur, state = AU;
   if (!auApplies(a)) return;
   const owner = String(a.owner_id || a.owner), inbox = String(a.trigger?.inbox);
@@ -235,7 +239,7 @@ function auApplyTemplate(): void {
     if (go.disabled || !t.filled) return;
     go.disabled = true; auNdError(dlg, null);
     try {
-      const out: import('../types/api').Automation = auNormal(await patch(auApi(a.id), {...t.filled, summary: 'Applied a template'}));
+      const out: AuRow = auNormal(await patch(auApi(a.id), {...t.filled, summary: 'Applied a template'}));
       dlg.close();
       if (AU !== state) return;
       auAdopt(out);
