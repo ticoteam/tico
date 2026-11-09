@@ -1032,6 +1032,31 @@ def test_a_line_an_ended_budget_shares_goes_to_the_active_one_on_the_same_accoun
         assert (state.actual, state.remaining) == (10_000, 10_000), state
 
 
+def test_a_root_opex_and_ci_coexist_and_a_6150_charge_counts_toward_both_totals(books):
+    """Opex (6000) and the CI budget on its child line 6150 are both roots: one line sits strictly inside the other, so they
+    may coexist. A 6150 charge counts toward both totals (the P&L roll-up), and the gate takes CI, the narrower line. A pair
+    that only partly covers each other still clashes."""
+    with books.transaction() as c:
+        opex = str(
+            act(
+                c,
+                OWNER,
+                "budget_create",
+                {"name": "Opex", "account_id": account(c, "6000"), "amount": 20_000, "at_limit": "decline"},
+            ).result["budget_id"]
+        )
+        ci = budget(c, "CI")
+        spend(c, "6150", 1_000)
+        assert (FA.budget_state(c, opex, AT).actual, FA.budget_state(c, ci, AT).actual) == (1_000, 1_000)
+        ctx = load(c, AT)
+        assert budgeting.leaf(ctx, account(c, "6150")).id == ci
+        assert budgeting.leaf(ctx, account(c, "6000")).id == opex  # a charge on Opex's own line is Opex's
+        budgets = ctx.budgets()
+        assert not B.overlaps(budgets[opex], budgets[ci], ctx.accounts, ctx.org)
+        partly = replace(budgets[opex], team="eng")  # scoped to a team the CI line does not name: partial cover
+        assert B.overlaps(partly, budgets[ci], ctx.accounts, ctx.org)
+
+
 def test_lowering_a_parent_below_an_ended_childs_retained_allocation_is_refused(books):
     """A 10,000 parent with a 10,000 Web child that holds Eve's 8,000 and has spent 5,000 for her. Ending Web keeps the whole
     8,000 against the parent (its unused 3,000 and the 5,000 spent), so lowering the parent to 3,000 is refused ("reserve

@@ -43,6 +43,10 @@ interface ThreadRow {
   activity_seq?: number | undefined;
   last_message_at?: string | null | undefined;
   pinned_for_everyone?: boolean | undefined;
+  // The thread's task, and on a single thread view whether the task hides the thread (finished: off the list and out of
+  // Catch up, as the server counts it).
+  task_id?: string | null | undefined;
+  task_hidden?: boolean | undefined;
   [key: string]: unknown;
 }
 // The rail's reply: Pinned and the rest, the next page's cursor, the Catch up count and the unread of each DM.
@@ -76,6 +80,8 @@ interface ThreadRoot {
   dm: string | null | undefined;
   muted: boolean;
   following: boolean;
+  // Whether it belongs to a task: its task's state (a close, a post after it) decides whether it is listed.
+  task?: boolean | undefined;
 }
 // The threads topic's events (GET /api/v2/events) and the needs ones read here: one kind, with the fields that kind sends.
 interface ThreadsEvent {
@@ -142,7 +148,7 @@ const threadIsBotDm = (t: ThreadRow) => threadIsDm(t) && !t.parent_id && Number(
 const threadIsGroupDm = (t: ThreadRow | null | undefined) => threadIsDm(t) && !t?.parent_id && (Number(t.dm_with_count) || threadOthers(t).length) >= 2;
 const threadPrivate = (t: ThreadRow | null | undefined) => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience ?? '');
 // What the rail lists (and what may be pinned): a root that is a public, team or members thread, or a group DM.
-const threadOnRail = (t: ThreadRow | null | undefined) => !!t && !t.parent_id && !t.archived_at && (['company', 'team', 'members'].includes(t.audience) || threadIsGroupDm(t));
+const threadOnRail = (t: ThreadRow | null | undefined) => !!t && !t.parent_id && !t.archived_at && !t.task_hidden && (['company', 'team', 'members'].includes(t.audience) || threadIsGroupDm(t));
 // The other people in a DM: `dm_with` on a thread view, or a members list read for it. The viewer is left out.
 const threadOthers = (t: ThreadRow | null | undefined): (string | undefined)[] => (t?.dm_with || (Array.isArray(t?.members) ? t.members : t?.members?.members) || [])
   .map(m => typeof m === 'string' ? m : m?.actor).filter(a => a && a !== myActor());
@@ -237,6 +243,8 @@ async function threadsLoad(): Promise<void> {
       if (!r) { if (THREADS.on !== true) THREADS.on = false; return; }
       const moved = JSON.stringify(r.dms) !== JSON.stringify(THREADS.dms);
       Object.assign(THREADS, {on: true, ...r, needsSeen: gen === THREADS.gen ? seen : null, readAt: Date.now()});
+      // An open Catch up follows what this read counts, an empty one too.
+      if (typeof cuReconcile === 'function') cuReconcile();
       if (moved && typeof renderTree === 'function') renderTree();
       liveTopicAdd('threads');
     } catch (e) {
@@ -298,6 +306,7 @@ const threadsEach = (fn: (t: ThreadRow) => ThreadRow | null | undefined) => {
 // `recheck` (a members event): whether the viewer is still in it decides, not whether it is listed.
 function threadsPut(view: ThreadRow, {recheck = false} = {}) {
   if (!view?.id || view.parent_id) return;
+  if (view.archived_at || view.task_hidden) THREADS.cu?.delete(view.id);
   let row: ThreadRow | null = null;
   threadsEach(t => {
     if (t.id !== view.id) return;
@@ -341,6 +350,32 @@ function threadsAllRead(id: string) {
   if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
   threadsSideRender();
 }
+// Archive a thread from its row or its header: it leaves Threads and Catch up at once, and a short Undo puts it back.
+// The server refuses anyone who does not manage the thread.
+// An archived thread, here or in another window, leaves Catch up and its count at once; a 1:1 DM's count on its teammate
+// goes too (a DM is not on the list, so only this clears it).
+function threadsArchivedGone(id: string, dm?: string | null) {
+  THREADS.cu?.delete(id);
+  if (typeof catchUpGone === 'function') catchUpGone(id, true);
+  if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
+  threadsSideRender();
+}
+async function threadsArchive(id: string): Promise<void> {
+  const view: ThreadRow = await patch(thvPath(id), {archived: true});
+  threadsPut(view);
+  threadsArchivedGone(id, threadsRootLearn(view)?.dm);
+  toast('Archived', false, {label: 'Undo', run: async () => {
+    threadsUnarchived(await patch(thvPath(id), {archived: false}));
+  }});
+  threadsRecount();
+}
+// A thread taken back out of the archive (Undo, or Unarchive in its header): it is back in its list, and Catch up counts
+// it again at once when it has unread messages. The rail read after this says what the server counts.
+function threadsUnarchived(back: ThreadRow) {
+  threadsPut(back);
+  if (THREADS.cu && threadUnread(back) > 0) THREADS.cu.add(back.id);
+  threadsRecount();
+}
 const threadsRow = (id: string | undefined): ThreadRow | null => [...THREADS.pinned, ...THREADS.threads].find(t => t.id === id) || null;
 // What a root not on the rail is, read alone once (GET /v2/threads/{id}): a 1:1 DM counts on its teammate.
 function threadsRootLearn(view: ThreadRow | null | undefined): ThreadRoot | null {
@@ -349,7 +384,7 @@ function threadsRootLearn(view: ThreadRow | null | undefined): ThreadRoot | null
   const dm = threadIsDm(view) && !threadIsGroupDm(view) && others.length === 1 ? others[0] : null;
   // Another's Home is in Catch up only through a mention, an ask or a hold, which `needs` brings.
   const theirHome = view.audience === 'home' && view.home?.actor !== myActor();
-  return (THREADS.roots[view.id] = {dm, muted: view.me?.notify === 'muted' || theirHome, following: !!(view.me?.following || view.me?.member)});
+  return (THREADS.roots[view.id] = {dm, muted: view.me?.notify === 'muted' || theirHome, following: !!(view.me?.following || view.me?.member), task: !!view.task_id});
 }
 async function threadsRoot(id: string): Promise<ThreadRoot> {
   const known = THREADS.roots[id];
@@ -357,16 +392,28 @@ async function threadsRoot(id: string): Promise<ThreadRoot> {
   const t = await get<ThreadRow>(thvPath(id), {fresh: true}).catch(() => null);
   return threadsRootLearn(t) || (THREADS.roots[id] = {dm: null, muted: false, following: false});
 }
+// A task's thread is read again on its own once its events burst is in: the closing notice is no change to its row, and a
+// post after the finish brings it back, so its view (which says whether the task hides it) decides whether it is listed.
+const threadsViewLater = (id: string) => liveSoon('threads-view:' + id, () => { void threadsReadView(id); }, 400);
+async function threadsReadView(id: string): Promise<void> {
+  const view = await get<ThreadRow>(thvPath(id), {fresh: true}).catch(() => null);
+  if (!view?.id) return;
+  threadsRootLearn(view);
+  threadsPut(view);
+  if (view.task_hidden && typeof catchUpGone === 'function') catchUpGone(id, true);
+}
 // A message anywhere under a root (`activity`). Unread for this viewer and not in the open thread: its row counts one
 // more and Catch up takes the root; the open thread reads it itself. Otherwise someone else's is activity on its row.
 async function threadsActivity(d: ThreadsEvent) {
-  const root = d.root_id || d.thread_id, here = S.route === threadHref(root);
-  if (!root || here) { threadsSideRender(); return; }
+  const root = d.root_id || d.thread_id;
+  if (!root) { threadsSideRender(); return; }
+  const row = threadsRow(root), info = row ? null : await threadsRoot(root);
+  if (row?.task_id || info?.task) threadsViewLater(root);
+  if (S.route === threadHref(root)) { threadsSideRender(); return; }
   const fresh = d.unread === true && !(d.message_id && THREADS.counted.has(d.message_id));
   // Several messages in one batch come as one event: `unread_count` of them are unread (1 from an older server).
   const more = fresh ? Math.max(1, Number(d.unread_count) || 1) : 0;
   if (d.message_id) { if (THREADS.counted.size > 2000) THREADS.counted.clear(); THREADS.counted.add(d.message_id); }
-  const row = threadsRow(root);
   if (row) {
     const theirs = d.unread === true || (d.actor && d.actor !== myActor());
     threadsEach(t => {
@@ -376,10 +423,8 @@ async function threadsActivity(d: ThreadsEvent) {
       return {...t, ...counters, activity_seq: Math.max(Number(t.activity_seq) || 0, Number(d.counters?.last_seq) || 0), me};
     });
     if (fresh && row.me?.notify !== 'muted') THREADS.cu?.add(root);
-  } else if (fresh) {
+  } else if (fresh && info) {
     // Not on the rail: a DM, a task's thread or a Home. Catch up counts it; a 1:1 DM counts on its teammate too.
-    const info = await threadsRoot(root);
-    if (S.route === threadHref(root)) return;
     if (!info.muted) THREADS.cu?.add(root);
     if (info.dm && info.dm in THREADS.dms) {
       THREADS.dms = {...THREADS.dms, [info.dm]: threadsDmUnread(info.dm) + more};
@@ -422,11 +467,16 @@ function threadsSync() {
       // A 1:1 DM is not on the rail: it is learned for its teammate's count; a new one starts that count.
       if (threadIsDm(d.thread) && !threadIsGroupDm(d.thread)) {
         const info = threadsRootLearn(d.thread);
-        if (d.kind === 'created' && info?.dm && info.following && !info.muted && !(info.dm in THREADS.dms)) {
+        if (d.thread.archived_at) threadsArchivedGone(d.thread.id, info?.dm);
+        else if (d.kind === 'created' && info?.dm && info.following && !info.muted && !(info.dm in THREADS.dms)) {
           THREADS.dms = {...THREADS.dms, [info.dm]: threadUnread(d.thread)};
           if (typeof renderTree === 'function') renderTree();
         }
-      } else threadsPut(d.thread, {recheck: d.kind === 'members'});
+      } else {
+        threadsPut(d.thread, {recheck: d.kind === 'members'});
+        // Archived, here or in another window, or finished with its task (the view says so): its Catch up card goes too.
+        if ((d.thread.archived_at || d.thread.task_hidden) && typeof catchUpGone === 'function') catchUpGone(d.thread.id, true);
+      }
     }
     // A paused root is a Needs you row with no `needs` event of its own, so that list is read whole, as if one had come.
     if (d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);

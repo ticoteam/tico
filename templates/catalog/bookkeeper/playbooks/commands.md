@@ -54,6 +54,11 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 - `hub finance report cash_flow --start <first day> --end <last day>` — cash in and out.
 - `hub finance metric runway_months` — one number, with its as-of time.
 
+## Usage and calendar
+- `hub api GET usage?from=<YYYY-MM-DD>&to=<YYYY-MM-DD>&group=bot` — estimated model-run spend by bot (UTC dates; default the last seven days). A bot's own credentials may be refused.
+- `hub api GET usage/limits` — the usage limits set.
+- `hub calendar list` — the dates on the team calendar.
+
 ## Actions and tasks
 - `hub finance action <action id>` — an action's status: committed, needs_approval, denied or failed.
 - `hub task show <task id>` — the task, its body and its comments.

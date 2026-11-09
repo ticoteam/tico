@@ -1,21 +1,95 @@
 """The owner changes their own sign-in email in place: the same person, every copy at once, audited."""
 
 import json
+import shutil
 import threading
+from pathlib import Path
 
 import pytest
+import yaml
+from fastapi.testclient import TestClient
 
 from backend import access as Access
 from backend import manage
 from backend import routines
 from backend import views
+from backend.app import create_app
 from backend.auth import Identity
-from backend.store import H
-from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
+from backend.config import Settings
+from backend.store import H, encode
+from backend.tests.test_onboarding import (
+    ASSISTANT_AGENT,
+    ASSISTANT_CARD,
+    BOTOPS_CARD,
+    COMPANY,
+    OWNER_EMAIL,
+    PEOPLE,
+    SALES_CARD,
+    SEED,
+    SUPPORT_AGENT,
+    SUPPORT_CARD,
+    TOKEN,
+    signed_in,
+    write_catalog,
+)
 from backend.tests.test_people_access import HeaderProxy, call, person_headers, view
 from backend import bot_settings as BS
 
 NEW = "morgan@new.example"
+
+CARDS = [(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (SUPPORT_CARD, SUPPORT_AGENT), (SALES_CARD, "")]
+
+
+def _settings(root: Path) -> Settings:
+    return Settings(
+        db_path=root / "hub.db",
+        registry_dir=root / "registry",
+        catalog_dir=root / "catalog",
+        local_owner_token_file=root / "token",
+        **{"owner_email": OWNER_EMAIL, "enabled_providers": ("openai",), **COMPANY},
+    )
+
+
+def _seed(client):
+    """The same seeding test_onboarding.environment does for a default environment, written once into the boot."""
+    with client.app.state.store.transaction() as c:
+        H.sync_registry(c, SEED, PEOPLE)
+        c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode(PEOPLE),))
+        for slug, config in SEED.items():
+            c.execute("INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)", (slug, "morgan", "emp-" + slug))
+            BS.write(c, slug, config)
+
+
+@pytest.fixture(scope="module")
+def booted(tmp_path_factory) -> Path:
+    """One initialized, seeded hub for the module: each test copies this directory (the boot is the slow part)."""
+    root = tmp_path_factory.mktemp("owner-email")
+    (root / "registry").mkdir()
+    (root / "registry" / "hub-access.yaml").write_text(yaml.safe_dump({"bot_admins": ["riley@acme.example"]}))
+    (root / "token").write_text(TOKEN)
+    (root / "token").chmod(0o600)
+    write_catalog(root / "catalog", CARDS)
+    with TestClient(create_app(_settings(root))) as client:
+        _seed(client)
+    return root
+
+
+@pytest.fixture
+def environment(tmp_path, booted):
+    """A signed-in loopback environment seeded like test_onboarding.environment's default, from a copy of the boot."""
+    clients = []
+
+    def build():
+        root = tmp_path / ("env-%d" % len(clients))
+        shutil.copytree(booted, root)
+        client = TestClient(create_app(_settings(root)))
+        client.__enter__()
+        clients.append(client)
+        return client
+
+    yield build
+    for client in clients:
+        client.__exit__(None, None, None)
 
 
 def change(api, email, headers=None, expected=200, again=None, revision=None):

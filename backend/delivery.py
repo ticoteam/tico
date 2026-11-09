@@ -276,7 +276,9 @@ def _alive(conn, row):
         "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id)",
         (row["item"],),
     ).fetchone()
-    if found is None:
+    from .enqueue import parked
+
+    if found is None or parked(conn, row["item"]):  # a card On ice wakes no run (backend/enqueue.py)
         return False
     refs = H._json(found[0], {}) or {}
     task_id = H.message_task_id({"refs": refs}, {"task_id": found[2]})

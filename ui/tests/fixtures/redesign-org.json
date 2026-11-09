@@ -29,6 +29,7 @@
     {"id": "eng", "name": "Engineering", "parent": "", "lead": "bot:eng-lead", "people": ["cara"], "bots": ["eng-lead", "builder", "reviewer"], "order": 0, "bet_id": null},
     {"id": "web", "name": "Web", "parent": "eng", "lead": "bot:web-dev", "people": [], "bots": ["web-dev"], "order": 0, "bet_id": null},
     {"id": "sales", "name": "Sales", "parent": "", "lead": "person:ben", "people": ["ben"], "bots": ["sales-lead", "sdr"], "order": 1, "bet_id": null},
-    {"id": "outbound", "name": "Outbound", "parent": "sales", "lead": "", "people": [], "bots": [], "order": 0, "bet_id": null}
+    {"id": "outbound", "name": "Outbound", "parent": "sales", "lead": "", "people": [], "bots": [], "order": 0, "bet_id": null},
+    {"id": "built-in", "name": "Built-in", "parent": "", "lead": "", "people": [], "bots": ["coo", "botops", "librarian", "goal-manager"], "order": 2, "bet_id": null}
   ]
 }
