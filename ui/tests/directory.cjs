@@ -20,7 +20,7 @@ async function flow(page, tag) {
     ['person', 'organization', 'place', 'document']);
   assert.match(await jane.innerText(), /Bright Homes Retail/);
   assert.match(await jane.locator('[data-dir-rel]').innerText(), /Customer/);
-  assert.match(await page.locator('[data-dir-count]').innerText(), /^4 people$/);
+  assert.match(await page.locator('[data-dir-count]').innerText(), /^8 people$/);
   // Prefix search narrows the rows; the relationship menu narrows by a link to us, through the person's organization.
   await page.locator('[data-dir-search-toggle]').click();
   await page.locator('[data-dir-q]').fill('Ra');
@@ -28,7 +28,9 @@ async function flow(page, tag) {
   assert.equal(await page.locator('[data-dir-row]').getAttribute('data-dir-row'), 'person/raj-patel');
   assert.match(page.url(), /q=Ra/);
   await page.goto(page.url().split('#')[0] + '#/library/directory?link=customer_of');
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-dir-row]')].map(r => r.dataset.dirRow).join() === 'person/jane-ortiz,person/sam-brooks', null, {timeout: t(10000)});
+  // Customers' people (Bright Homes, Cedar Venues, Maple Street: backend/demo_sections/directory.py), in any order.
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-dir-row]')].map(r => r.dataset.dirRow).sort().join()
+    === 'person/dev-shah,person/jane-ortiz,person/priya-nair,person/sam-brooks', null, {timeout: t(10000)});
   await page.goto(page.url().split('#')[0] + '#/library/directory');
   await jane.waitFor({timeout: t(10000)});
   await shot(page, `list-${tag}`);
@@ -91,7 +93,7 @@ async function flow(page, tag) {
           // Settings › Directory: the types with their counts, and the shared places.
           await page.goto(page.url().split('#')[0] + '#/settings/directory');
           await page.locator('[data-dirs-type="person"]').waitFor({timeout: t(20000)});
-          assert.match(await page.locator('[data-dirs-type="person"]').innerText(), /4/);
+          assert.match(await page.locator('[data-dirs-type="person"]').innerText(), /8/);
           await page.locator('[data-dirs-field="title"]').count();
           await page.locator('[data-dirs-places-on]').waitFor({timeout: t(10000)});
           // Where we operate: the owner removes Texas, then finds it by name and adds it back (the phone pass needs it).
