@@ -209,3 +209,67 @@ def test_a_letter_check_that_errors_holds_the_letter(jane_letter, monkeypatch):
     sent = send(api, row, token="ops-test")
     assert json.loads(hold_row(api, sent["held"]["id"])["verdict"])["error"] == "RuntimeError"
     assert sent["status"] == "quoted" and hq.provider_submits == 0
+
+
+# ---- Send anyway, then a new rule toward the same recipient: the resend is held again ----------------------------
+JANE_MAIL = "Do not email Jane Doe."
+JANE_NEVER = "Never contact Jane Doe."
+
+
+def _send_anyway(api, hold_id):
+    view = get(api, f"rule-holds/{hold_id}")
+    assert view["can_send"]
+    assert post(api, f"rule-holds/{hold_id}/send", {"nonce": view["nonce"]})["hold"]["state"] == "sent"
+
+
+def _jane_rule(api, text, *channels):
+    return rule(
+        api,
+        {
+            "kind": "internal",
+            "text": text,
+            "who": {"bots": ["ops"]},
+            "toward_scope": ["entity:person/jane-doe", *[f"channel:{ch}" for ch in channels]],
+            "if_broken": "block",
+        },
+    )
+
+
+def test_a_mail_sent_anyway_is_held_again_by_a_rule_added_toward_its_recipient(ruled):
+    api, _judge = ruled
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO entities (id, type, name, name_key, primary_email, created_by, created_at, updated_at) "
+            "VALUES ('person/jane-doe', 'person', 'Jane Doe', 'jane doe', 'jane@outside.example', 'seed', ?, ?)",
+            (H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO entity_identifiers (entity_id, kind, value, normalized_value, primary_identifier, derived) "
+            "VALUES ('person/jane-doe', 'email', 'jane@outside.example', 'jane@outside.example', 1, 0)"
+        )
+    _jane_rule(api, JANE_MAIL, "email")
+    mail = {"to": ["jane@outside.example"], "subject": "Hi", "body": "A quote for your lights."}
+    held = post(api, "bots/ops/mail-check", mail, token="ops-test")
+    assert held["outcome"] == "held" and held["held"]["rules"][0]["text"] == JANE_MAIL
+    hold = hold_row(api, held["held"]["id"])
+    assert hold["check_kind"] == "structured"
+    assert json.loads(hold["payload"])["input"]["contacts"] == ["jane@outside.example"]
+    _send_anyway(api, hold["id"])
+    _jane_rule(api, JANE_NEVER)
+    again = post(api, "bots/ops/mail-check", mail, token="ops-test")
+    assert again["outcome"] == "held"
+    assert JANE_NEVER in [r["text"] for r in again["held"]["rules"]]
+    assert again["held"]["id"] != hold["id"]
+
+
+def test_a_letter_sent_anyway_is_held_again_by_a_rule_added_toward_its_addressee(jane_letter):
+    api, hq, row = jane_letter
+    sent = send(api, row, token="ops-test")
+    hold = hold_row(api, sent["held"]["id"])
+    assert json.loads(hold["payload"])["input"]["contacts"] == ["name:Jane Doe"]
+    _send_anyway(api, hold["id"])
+    _jane_rule(api, JANE_NEVER, "letter")
+    again = send(api, row, token="ops-test")
+    assert JANE_NEVER in [r["text"] for r in again["held"]["rules"]]
+    assert again["held"]["id"] != hold["id"]
+    assert again["status"] == "quoted" and hq.provider_submits == 0

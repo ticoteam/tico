@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl
 import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -55,11 +56,34 @@ class FakeGitHub:
         self.account_status = None  # an int, or (int, headers): every account lookup answers that instead
         self.account_down = False  # every account lookup fails to connect
         self.conversion_owner = {"login": "Acme", "type": "Organization"}  # whose account GitHub made the App under
+        self.token_login = "ana-dev"  # the login GitHub says an authorized user token is for
+        self.user_id = 9001  # the numeric id of that login (GET /user)
+        self.installation_account_id = 9001  # the account the installation is on (GET /app/installations/{id})
+        self.refresh_status = None  # answer every refresh with this status, as GitHub failing does, when set
+        self.refuse_refresh = False  # refuse every refresh (the refresh token is no longer good)
+        self.refreshes, self.issued = 0, 0  # refreshes made; tokens issued (gho_<n> access, ghr_<n> refresh)
+        self.access_tokens, self.live_refresh = set(), set()
+        self.revoked = set()  # access tokens DELETE /applications/{client_id}/grant revoked
+        self.user_repo_status = 201  # POST /user/repos answers this
+        self.expires_in = 28800
 
     def __call__(self, request):
-        body = json.loads(request.content) if request.content else None
+        raw = request.content.decode() if request.content else ""
+        try:
+            body = json.loads(raw) if raw else None
+        except ValueError:
+            body = dict(parse_qsl(raw))  # the OAuth token endpoint takes form fields
         self.calls.append((request.method, request.url.path, body, request.headers.get("authorization", "")))
         path = request.url.path
+        if path == "/login/oauth/access_token":
+            return self._oauth(body)
+        if path == "/user":
+            return httpx.Response(200, json={"login": self.token_login, "id": self.user_id})
+        if path == "/user/repos":
+            return self._user_repos(request, body)
+        if path.startswith("/applications/") and path.endswith("/grant"):
+            self.revoked.add(body["access_token"])
+            return httpx.Response(204)
         if path.startswith("/users/"):
             name = path.split("/")[2]
             if self.account_down:
@@ -112,7 +136,7 @@ class FakeGitHub:
         if path == "/app/installations":
             return httpx.Response(200, json=self.installations)
         if path.startswith("/app/installations/") and not path.endswith("/access_tokens"):
-            info = {"id": 77, "repository_selection": self.selection}
+            info = {"id": 77, "repository_selection": self.selection, "account": {"id": self.installation_account_id}}
             if self.permissions is not None:
                 info["permissions"] = self.permissions
             return httpx.Response(200, json=info)
@@ -181,6 +205,44 @@ class FakeGitHub:
                 },
             )
         return httpx.Response(404)
+
+    def _oauth(self, body):
+        """GitHub's OAuth token endpoint: a code is exchanged once, and a refresh rotates the refresh token (the one given stops
+        working). A refusal is a 200 with an error in the body, as GitHub answers it."""
+        if body.get("grant_type") == "refresh_token":
+            if self.refresh_status:
+                return httpx.Response(self.refresh_status, json={"message": "GitHub is unavailable"})
+            if self.refuse_refresh or body.get("refresh_token") not in self.live_refresh:
+                return httpx.Response(200, json={"error": "bad_refresh_token"})
+            self.live_refresh.discard(body["refresh_token"])
+            self.refreshes += 1
+        elif body.get("code") != "the-code":
+            return httpx.Response(200, json={"error": "bad_verification_code"})
+        self.issued += 1
+        access, refresh = f"gho_{self.issued}", f"ghr_{self.issued}"
+        self.access_tokens.add(access)
+        self.live_refresh.add(refresh)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": access,
+                "token_type": "bearer",
+                "expires_in": self.expires_in,
+                "refresh_token": refresh,
+                "refresh_token_expires_in": 15897600,
+            },
+        )
+
+    def _user_repos(self, request, body):
+        """POST /user/repos: an empty repository in the signed-in person's account, for a token GitHub still accepts."""
+        token = request.headers.get("authorization", "").removeprefix("Bearer ")
+        if token not in self.access_tokens or token in self.revoked:
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        if self.user_repo_status >= 300:
+            return httpx.Response(self.user_repo_status, json={"message": self.create_response_message})
+        repository = f"{self.token_login}/{body['name']}"
+        self.created_repositories.add(repository)
+        return httpx.Response(201, json={"full_name": repository, "html_url": "https://github.com/" + repository})
 
     def of(self, suffix):
         return [c for c in self.calls if c[1].endswith(suffix)]

@@ -115,6 +115,11 @@ ALL = (
     # vendor identity: one vendor per merchant (backend/finance/vendors.py)
     "vendor_merge",
     "vendor_unmerge",
+    # statement uploads: a CSV or OFX statement for a bank or card account (backend/finance/statement_upload.py)
+    "statement_post",
+    "statement_undo",
+    # a bank or card Tico cannot connect, for statement uploads (backend/finance/banking.py money_account_add)
+    "money_account_add",
     # receipts: a Library file read and matched to a bank or card row (backend/finance/receipts.py)
     "receipt_read",
     "receipt_match",
@@ -206,6 +211,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
     "subscription_undo": R.BOOK,
     "vendor_merge": R.BOOK,
     "vendor_unmerge": R.BOOK,
+    "statement_post": R.BOOK,
+    "statement_undo": R.BOOK,
 }
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = (
@@ -217,6 +224,7 @@ ADMIN_ONLY = (
     "connection_disconnect",
     "connection_map",
     "connection_settings",
+    "money_account_add",
     "books_disconnect",
     "bills_address_set",
 )
@@ -856,6 +864,22 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "estimate_accept": (("estimate_id", "str", "a sent estimate is accepted"),),
     "estimate_decline": (("estimate_id", "str", "a sent estimate is declined"),),
     "estimate_convert": (("estimate_id", "str", "an accepted estimate becomes one invoice draft, once"),),
+    "statement_post": (
+        ("money_account_id", "str", ""),
+        ("file", "str", "the statement file, base64: CSV, OFX or QFX, 1 MB at most"),
+        ("file_name?", "str", "what the file was called, for the record"),
+        ("preview_token?", "str", "from the preview of this file: post only what it showed"),
+        ("skip?", "list[str]", "row ids (the preview's row id) to leave out of the post"),
+        ("signs?", "auto|as_shown|flipped", "how the amounts read; the same as the preview (default auto)"),
+    ),
+    "statement_undo": (("upload_id", "str", "a statement upload with no reconciled row"),),
+    "money_account_add": (
+        ("kind", "bank|card_program", ""),
+        ("name", "str", "e.g. Chase Checking"),
+        ("last4?", "str", "the account number's last 4 digits"),
+        ("subtype?", "checking|savings|credit|debit", "checking for a bank, credit for a card by default"),
+        ("account_id?", "str", "an existing line to map it to; default a new line"),
+    ),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -957,6 +981,9 @@ WORDS: dict[str, str] = {
     "estimate_accept": "Record that the customer accepted an estimate.",
     "estimate_decline": "Record that the customer declined an estimate.",
     "estimate_convert": "Make an accepted estimate one invoice draft (once).",
+    "statement_post": "Post a bank or card statement file: its new rows enter the feed and post by the usual rules.",
+    "statement_undo": "Undo a statement upload: its rows leave the feed, unless a reconciliation has cleared one.",
+    "money_account_add": "Add a bank account or card Tico cannot connect, for statement uploads.",
 }
 
 

@@ -4,9 +4,9 @@
     python3 scripts/release_shots.py --base v0.5.204 --head origin/main --version v0.5.205 --out DIR [--upload]
 
 The base and the head are each checked out as a git worktree, and each runs the demo (python -m backend.demo) on its
-own port, one after the other. This checkout's harness, scripts/screenshots/index.js, shoots the pages the diff's ui/ files
+own port, one after the other. This checkout's harness, scripts/screenshots/index.cts, shoots the pages the diff's ui/ files
 draw (its PAGES table says which), at desktop 1440 px and phone 390 px, light, and dark too when a dark-theme file
-changed. Pairs are compared in plain Node, which decodes the PNGs itself (scripts/screenshots/compare.js; no browser).
+changed. Pairs are compared in plain Node, which decodes the PNGs itself (scripts/screenshots/compare.cts; no browser).
 A pair under 0.1% changed pixels is unchanged and is listed on one line; a page the head adds has no before.
 
 DIR gets <page>-<width>-before.png and <page>-<width>-after.png (dark: <page>-<width>-dark-before.png), manifest.json,
@@ -37,8 +37,10 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-HARNESS = Path('scripts/screenshots/index.js')
-COMPARE = Path('scripts/screenshots/compare.js')
+HARNESS = Path('scripts/screenshots/index.cts')
+# The harness before it became TypeScript: a base commit from before the rename still has it here.
+LEGACY_HARNESS = Path('scripts/screenshots/index.js')
+COMPARE = Path('scripts/screenshots/compare.cts')
 REMOTE = 'origin'
 EVIDENCE_BRANCH = 'release-evidence'
 DEFAULT_REPO = 'ticoteam/tico'
@@ -62,7 +64,7 @@ BOT_IDENTITY = {
 
 @dataclass(frozen=True)
 class Selection:
-    """The pages the diff's ui/ files draw, from this checkout's PAGES table (scripts/screenshots/select.js)."""
+    """The pages the diff's ui/ files draw, from this checkout's PAGES table (scripts/screenshots/select.cts)."""
 
     pages: list[str]
     every: bool
@@ -200,11 +202,13 @@ def select_pages(base_sha: str, head_sha: str, repo: Path = ROOT) -> Selection:
 
 def page_names(sha: str) -> set[str]:
     """The PAGES names at sha. A page the base does not have is new in the head and has no before."""
-    try:
-        text = git(['show', f'{sha}:{HARNESS}'], ROOT)
-    except RuntimeError:
-        return set()
-    return {match.group(1) for match in PAGE_NAME.finditer(text)}
+    for harness in (HARNESS, LEGACY_HARNESS):
+        try:
+            text = git(['show', f'{sha}:{harness}'], ROOT)
+        except RuntimeError:
+            continue
+        return {match.group(1) for match in PAGE_NAME.finditer(text)}
+    return set()
 
 
 def free_port() -> int:
