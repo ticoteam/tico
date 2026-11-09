@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/counsel.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 17,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

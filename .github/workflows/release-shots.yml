@@ -2,7 +2,9 @@ name: Release shots
 
 # Before and after screenshots of the pages a release changes (scripts/release_shots.py), for the release's owner to
 # approve by looking. Called by the release train with base, head and version; run by hand with workflow_dispatch.
-# A caller grants `contents: write` (the job pushes the changed pictures to the release-evidence branch).
+# A caller grants `contents: write` (the job pushes the changed pictures to the release-evidence branch). The job uploads
+# its folder as the artifact `release-shots-<version>`: release-shots.md (the section) and the pictures. A caller in the
+# same run downloads it by that name (train.yml, approval-shots), and it is missing when the job died before it uploaded.
 
 on:
   workflow_call:
@@ -20,9 +22,9 @@ on:
         required: true
         type: string
     outputs:
-      markdown:
-        description: The path on the runner of the "What it looks like" markdown section
-        value: ${{ jobs.shots.outputs.markdown }}
+      artifact:
+        description: "The name of the artifact holding release-shots.md, the \"What it looks like\" section; download it by this name"
+        value: ${{ jobs.shots.outputs.artifact }}
   workflow_dispatch:
     inputs:
       base:
@@ -51,7 +53,7 @@ jobs:
     permissions:
       contents: write
     outputs:
-      markdown: ${{ steps.shots.outputs.markdown }}
+      artifact: release-shots-${{ inputs.version }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -75,7 +77,6 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Capture the pages the release changed
-        id: shots
         env:
           BASE: ${{ inputs.base }}
           HEAD: ${{ inputs.head }}
@@ -83,11 +84,8 @@ jobs:
           OUT: ${{ runner.temp }}/release-shots
           DEMO_PYTHON: ${{ runner.temp }}/shots-venv/bin/python
         run: |
-          status=0
           python3 scripts/release_shots.py --base "$BASE" --head "$HEAD" --version "$VERSION" --out "$OUT" \
-            --python "$DEMO_PYTHON" --repo "$GITHUB_REPOSITORY" --upload || status=$?
-          if [ -f "$OUT/release-shots.md" ]; then echo "markdown=$OUT/release-shots.md" >> "$GITHUB_OUTPUT"; fi
-          exit "$status"
+            --python "$DEMO_PYTHON" --repo "$GITHUB_REPOSITORY" --upload
       - name: Keep the pictures, the manifest and the markdown
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

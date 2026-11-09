@@ -699,3 +699,26 @@ def test_a_restored_bot_keeps_the_model_its_config_names(environment):
     with store.read() as c:
         config = BS.read(c, "coo")
     assert config["model"] == "claude-opus-5-5"
+
+
+def test_a_save_that_names_no_places_keeps_the_saved_ones_and_an_empty_list_clears_them(environment):
+    api = environment()
+    machine(api)
+    assert draft(api, answers={"what_we_do": "Kits.", "regions": ["Worldwide", "Texas"]}).status_code == 200
+    assert draft(api, answers={"what_we_do": "Kits and parts."}).status_code == 200
+    assert api.get("/api/v2/onboarding", headers=signed_in()).json()["answers"]["regions"] == ["Worldwide", "Texas"]
+    assert draft(api, answers={"what_we_do": "Kits.", "regions": []}).status_code == 200
+    assert api.get("/api/v2/onboarding", headers=signed_in()).json()["answers"]["regions"] == []
+
+
+def test_the_places_a_company_serves_are_held_to_the_company_file_rule():
+    from pydantic import ValidationError
+
+    from backend import models as M
+
+    assert M.OnboardingAnswers(regions=["  Texas ", "texas", "Worldwide\n"]).regions == ["Texas", "Worldwide"]
+    assert M.OnboardingAnswers(regions=["Texas\nOhio"]).regions == ["Texas Ohio"]
+    assert M.OnboardingAnswers().regions == []
+    for bad in (["   "], ["x" * 61], [f"Place {i}" for i in range(13)]):
+        with pytest.raises(ValidationError):
+            M.OnboardingAnswers(regions=bad)

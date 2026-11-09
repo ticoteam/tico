@@ -22,7 +22,7 @@ from statistics import median
 
 from fastapi import Request
 
-from . import pipeline_exceptions, task_privacy as privacy
+from . import pipeline_exceptions, pipeline_rights, task_privacy as privacy
 from .store import H, Problem
 
 TASK_CAP = 5000  # tickets read for one report; `truncated` says when a type holds more live ones
@@ -413,6 +413,10 @@ def report(
 
     auth.domain(who)
     typ = H.type_get(c, type) if type else default_type(c)
+    principal = who.task_actor or who.actor
+    # A members-only pipeline the caller may not see is no task type to them: its name and steps are not told.
+    if typ and typ["id"] in pipeline_rights.hidden_pipeline_ids(c, principal):
+        typ = None
     if not typ:
         raise Problem(
             "type", f"No task type {type}" if type else "Name a task type: this team has no engineering board", 422
@@ -436,7 +440,7 @@ def report(
         limit=TASK_CAP + 1,
         type_id=typ["id"],
         updated_since=changed,
-        visible=auth.task_sql(c, who),
+        visible=pipeline_rights.list_sql(c, principal, auth.task_sql(c, who)),
         snoozed=None if snoozed == "all" else snoozed,
         order="step",
     )

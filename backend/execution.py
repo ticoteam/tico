@@ -58,7 +58,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
-from . import lifecycle
+from . import company_pause, lifecycle
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
@@ -407,6 +407,22 @@ def bump_bot_session_epoch(c, bot):
         "epoch=epoch+1,updated_at=excluded.updated_at",
         (bot, H.now()),
     )
+
+
+def reset_bot_sessions(c, bot):
+    """Keep durable history while fencing local provider sessions for one bot."""
+    bump_bot_session_epoch(c, bot)
+    reset = 0
+    for conversation in c.execute("SELECT id,participants FROM conversations").fetchall():
+        if "bot:" + bot not in json.loads(conversation["participants"]):
+            continue
+        c.execute(
+            "INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+            "epoch=epoch+1,updated_at=excluded.updated_at",
+            (conversation["id"], H.now()),
+        )
+        reset += 1
+    return reset
 
 
 def model_changed_since(c, bot, since):
@@ -2405,6 +2421,10 @@ def _claim_refusal(
         caps = capability_set(runner["capabilities"])
     if draining:
         return "draining", None
+    company = loads.company if loads is not None else company_pause.record(c)
+    if company is not None:
+        # The company pause: nothing new starts until someone resumes (backend/company_pause.py).
+        return "company_paused", None
     if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
@@ -2818,7 +2838,8 @@ def obsolete_notices_sql(c):
     entered) once the task is at another step, unless a person's act caused it,
     a pull request's checks result for a head no open pull request on the task is at any more (a newer push supersedes it),
     the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
-    moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
+    moved it elsewhere), a stranded-task resume once its task has moved on, finished or changed owner since it was written
+    (stranded_resume.obsolete_sql), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
     The legacy per-task wakes (check_back, status_check, stalled, step_status) still queued unstarted are obsolete whatever
     the task says: the task roundup sends one list instead. A turn that started and yielded (a drain's time limit, a shared
     login's hold cap) is never one of them: it is the rest
@@ -2829,6 +2850,8 @@ def obsolete_notices_sql(c):
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     # A held job waits: a wake preset's or a quota reset's until its release, a claim's until its wait ends. The pass
     # takes it once it is free, and the claim then closes the item its hold opened (claim_holds.clear).
+    from . import stranded_resume
+
     return (
         "FROM assignments x CROSS JOIN jobs j CROSS JOIN message_refs m "
         f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
@@ -2851,6 +2874,7 @@ def obsolete_notices_sql(c):
         "OR ((m.ref_wake IN ('status_check','stalled','step_status') "
         "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM history_events "
         "e WHERE e.subject_type='task' AND e.subject_id=t.id AND e.created_at>m.created_at AND e.actor_id<>m.sender_id)) "
+        f"OR ({stranded_resume.obsolete_sql()}) "
         "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
         "AND e.subject_id=t.id AND e.created_at>m.created_at AND e.kind='step')) "
         "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
@@ -5233,6 +5257,7 @@ class Execution:
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context, worktrees
+        from .finance import brief as finance_brief
 
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
         if making_page:
@@ -5315,6 +5340,9 @@ class Execution:
                 # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                 # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                 "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
+                # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
+                "finance": finance_brief.for_turn(c, (acting or bot_who).actor),
                 "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
                 **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                 # place "updates": the recent updates that person may read and open, read now as them
@@ -7832,7 +7860,7 @@ class Execution:
                 # A safe second computer loss waits for the source, not a person's effects decision.
                 continue
             calls, acted = facts['calls'], facts['acted']
-            # `stopped` is what the review card leads with (ui/app/settings.js executionReview), by the same rule the
+            # `stopped` is what the review card leads with (ui/app/settings.ts executionReview), by the same rule the
             # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.
             if facts['fallback_unknown']:
                 stopped = 'unknown'
@@ -7878,7 +7906,7 @@ class Execution:
                 )
             elif facts['restart'] and facts['starts'] <= 1:
                 # Safe to resume, but the run did reach tools that can change things: the card must
-                # never say it only read (ui/app/settings.js renders each bucket's own words).
+                # never say it only read (ui/app/settings.ts renders each bucket's own words).
                 stopped = 'restarted'
                 reason = (
                     f"{restart_cause(facts)}; no consumed approval or named irreversible outside "

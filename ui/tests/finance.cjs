@@ -275,7 +275,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push([method, p + url.search, body, req.headers()['idempotency-key'] || '']);
@@ -396,7 +396,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const tag = 'owner';
       const {page, errors, writes, reads, hub} = await open(browser);
       await page.locator('.fin-pl').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Budgets', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
+      assert.deepEqual(await tabs(page), ['P&L', 'Budgets', 'Attribution', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
       await page.locator('#side a[data-nav="finance"]').waitFor({state: 'visible'});   // Finance in the sidebar once its access read lands
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
@@ -1319,12 +1319,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
       assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
       await page.goBack();
-      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 10);
+      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 11);
       await page.goForward();
       await page.locator('.fin-as').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
       await page.locator('.fin-as button').click();
-      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 10);
+      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 11);
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

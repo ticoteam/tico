@@ -36,19 +36,20 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
-  'ui/app/tasks.js', 'ui/app/tasks-page.js', 'ui/app/task-*.js', 'ui/app/pull-refresh.js', 'ui/app/hub-v2.js',
-  'ui/app/issues.js', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
+  'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.js',
+  'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
+  'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
 ];
 const BOT_CHAT_UI = [
-  'ui/app/bot-*.js', 'ui/bot-files.js', 'ui/bot-tools.js', 'ui/app/chat*.js', 'ui/app/feedback.js',
-  'ui/app/slash-commands.js', 'ui/app/visual-*.js', 'ui/app/question-card.js', 'ui/styles/bot-*.css',
+  'ui/app/bot-*.js', 'ui/app/bot-*.ts', 'ui/bot-files.ts', 'ui/bot-tools.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts',
+  'ui/app/slash-commands.ts', 'ui/app/visual-*.ts', 'ui/app/question-card.ts', 'ui/app/github-nudge.ts', 'ui/styles/bot-*.css',
   'ui/styles/chat*.css', 'ui/styles/feedback.css', 'ui/styles/visual-*.css',
 ];
 const MEETINGS_UI = [
-  'ui/app/meetings*.js', 'ui/app/live-meetings.js', 'ui/meeting-importers.js', 'ui/app/task-meetings.js',
+  'ui/app/meetings*.ts', 'ui/app/live-meetings.ts', 'ui/meeting-importers.ts', 'ui/app/task-meetings.ts',
   'ui/styles/meetings.css', 'ui/styles/task-meetings.css',
 ];
-const SETTINGS_UI = ['ui/app/settings.js', 'ui/styles/settings.css'];
+const SETTINGS_UI = ['ui/app/settings.ts', 'ui/styles/settings.css'];
 
 // name: the file is <name>-<width>-<theme>.png. route: the hash to open. ready: text that means the page has
 // its data. tab: a Settings tab to select first (Settings remembers the last tab in sessionStorage, so a
@@ -56,17 +57,18 @@ const SETTINGS_UI = ['ui/app/settings.js', 'ui/styles/settings.css'];
 // open a dialog). ui: the files under ui/ that draw the page, as globs (scripts/screenshots/select.js): a change
 // to one of them shoots this page, and a change to a file no page claims is listed, never silently dropped.
 const PAGES = [
-  {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.js', 'ui/styles/updates.css']},
+  {name: 'updates', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/app/updates.ts', 'ui/styles/updates.css']},
   {name: 'tasks', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?', ui: TASKS_UI, steps: async page => {
     await page.click('#task-scope');
     await page.click('#task-filter-pop [data-task-type="general"]');
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?',
-    ui: [...TASKS_UI, 'ui/app/needs-you.js', 'ui/app/decide.js', 'ui/app/question-card.js', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
+    ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/question-card.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
-    ui: ['ui/app/goals.js', 'ui/app/goals-kpi-views.js', 'ui/goals-kpis.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js',
-      'ui/app/org-fan.js', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
+    ui: ['ui/app/goals.ts', 'ui/app/goals-kpi-views.ts', 'ui/goals-kpis.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts',
+      'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
+      'ui/styles/org-factories.css']},
   // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
   {name: 'bot-chat', route: '#/bot/support', ready: 'No messages yet', ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
@@ -76,24 +78,24 @@ const PAGES = [
   })), ready: 'Calibration works first time for 84 percent of owners', ui: MEETINGS_UI, steps: async page => {
     await page.getByText('Let\'s start with the port').first().waitFor();
   }},
-  {name: 'usage', route: '#/usage', ready: 'API-equivalent', ui: ['ui/app/usage.js', 'ui/styles/usage.css'], steps: async page => {
+  {name: 'usage', route: '#/usage', ready: 'API-equivalent', ui: ['ui/app/usage.ts', 'ui/styles/usage.css'], steps: async page => {
     await page.locator('.use-line').first().click();
     await page.locator('.use-col').first().waitFor();
   }},
   {name: 'settings-health', route: '#/settings/health', ready: 'Setup check',
-    ui: [...SETTINGS_UI, 'ui/app/settings-storage.js', 'ui/app/settings-release.js', 'ui/app/settings-repositories.js',
-      'ui/app/settings-hosted.js', 'ui/health.js', 'ui/runner-updates.js']},
+    ui: [...SETTINGS_UI, 'ui/app/settings-storage.ts', 'ui/app/settings-release.ts', 'ui/app/settings-repositories.ts',
+      'ui/app/settings-hosted.ts', 'ui/health.ts', 'ui/runner-updates.ts']},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
-    ui: [...SETTINGS_UI, 'ui/app/settings-devices.js', 'ui/app/computer-detail.js', 'ui/app/cloud-machines.js',
-      'ui/app/subscriptions.js', 'ui/runner-updates.js']},
-  {name: 'support', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/support.js', 'ui/styles/support.css', 'ui/app/updates.js', 'ui/styles/updates.css'],
+    ui: [...SETTINGS_UI, 'ui/app/settings-devices.ts', 'ui/app/computer-detail.ts', 'ui/app/cloud-machines.ts',
+      'ui/app/subscriptions.ts', 'ui/runner-updates.ts']},
+  {name: 'support', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/support.ts', 'ui/styles/support.css', 'ui/app/updates.ts', 'ui/styles/updates.css'],
     steps: async page => {
       await page.evaluate(() => window.supportOpen());
       await page.locator('#support-pop[open] [data-compose] [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
       await page.waitForTimeout(300);
     }},
   {name: 'tour', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
-    ui: ['ui/app/welcome.js', 'ui/getting-started.js', 'ui/styles/getting-started.css', 'ui/app/settings-devices.js', ...SETTINGS_UI],
+    ui: ['ui/app/welcome.js', 'ui/getting-started.ts', 'ui/styles/getting-started.css', 'ui/app/settings-devices.ts', ...SETTINGS_UI],
     steps: async page => {
       // On a phone the account menu is in the drawer, which stays closed (and inert) until More opens it.
       if (await page.locator('#mobile-more').isVisible()) await page.click('#mobile-more');
@@ -106,7 +108,7 @@ const PAGES = [
   {name: 'docs', route: async page => '#/docs/' + encodeURIComponent(await page.evaluate(async () => {
     const {docs} = await (await fetch('/api/v2/docs?limit=500')).json();
     return docs.find(doc => doc.title === 'Returns and replacements').id;
-  })), ready: 'Support may send a replacement lens set without asking.', ui: ['ui/docs-*.js', 'ui/styles/hub-v2.css'], steps: async page => {
+  })), ready: 'Support may send a replacement lens set without asking.', ui: ['ui/docs-*.ts', 'ui/styles/hub-v2.css'], steps: async page => {
     if (page.viewportSize().width < 600) {
       await page.locator('#docs-reader .docs-back').click();
       await page.locator('#docs-h-linked').waitFor();
@@ -129,24 +131,24 @@ const PAGES = [
         last = draws;
       }
     },
-    ui: ['ui/market-*.js', 'ui/app/redesign.js', 'ui/app/redesign-market.js', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
+    ui: ['ui/market-*.ts', 'ui/app/redesign.ts', 'ui/app/redesign-market.ts', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
       'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'strategy', route: '#/strategy', ready: 'Who we serve',
-    ui: ['ui/strategy-page.js', 'ui/app/redesign.js', 'ui/app/redesign-org.js', 'ui/app/redesign-market.js', 'ui/app/strategy-budget.js',
+    ui: ['ui/strategy-page.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts', 'ui/app/redesign-market.ts', 'ui/app/strategy-budget.ts',
       'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
-  {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.js', 'ui/app/growth-*.ts', 'ui/app/brand-page.js', 'ui/styles/growth.css']},
-  {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/styles/finance.css']},
-  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.js', 'ui/app/org-rule-holds.js', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css']},
-  {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/styles/automations.css']},
+  {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
+  {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
+  {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css']},
+  {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/app/automations*.ts', 'ui/styles/automations.css']},
   {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
-    ui: ['ui/app/learnings.js', 'ui/app/learned.js', 'ui/app/bot-learnings.js', 'ui/styles/learnings.css', 'ui/styles/bot-learnings.css']},
+    ui: ['ui/app/learnings.ts', 'ui/app/learned.ts', 'ui/app/bot-learnings.ts', 'ui/styles/learnings.css', 'ui/styles/bot-learnings.css']},
   {name: 'threads', route: '#/threads', ready: 'Threads',
-    ui: ['ui/app/threads*.js', 'ui/app/thread-*.js', 'ui/app/catch-up.js', 'ui/app/chat*.js', 'ui/app/feedback.js', 'ui/app/visual-*.js',
-      'ui/app/slash-commands.js', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
+    ui: ['ui/app/threads*.ts', 'ui/app/thread-*.ts', 'ui/app/catch-up.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts', 'ui/app/visual-*.ts',
+      'ui/app/slash-commands.ts', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
       'ui/styles/visual-*.css']},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
     (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post',
-    ui: ['ui/app/recruit.js', 'ui/app/team-build.js', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
+    ui: ['ui/app/recruit.ts', 'ui/app/team-build.ts', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
 ];
 
 function argument(name, fallback = '') {
@@ -260,16 +262,14 @@ async function capture() {
     for (const theme of themes) {
       for (const width of widths) {
         const context = await browser.newContext({...WIDTHS[width], colorScheme: THEMES[theme], locale: 'en-US', timezoneId: 'America/Los_Angeles'});
-        // ui/theme.js is dark unless this browser saved a choice, so colorScheme alone shot dark for both themes: save the
+        // ui/theme.ts is dark unless this browser saved a choice, so colorScheme alone shot dark for both themes: save the
         // theme before the page's scripts read it. colorScheme stays for the CSS that follows the system.
         await context.addInitScript(saved => { try { localStorage.setItem('tico.theme', saved); } catch { /* no storage */ } }, theme);
-        // The ask peek ("Got a quick question for you") shows a few seconds after load: it is not part of any page. And a
-        // panel still sliding or fading when a page measures itself (the rail's "More" fold) would be measured at a
+        // A panel still sliding or fading when a page measures itself (the rail's "More" fold) would be measured at a
         // different size each run, so transitions and animations end at once.
         await context.addInitScript(() => document.addEventListener('DOMContentLoaded', () => {
           const style = document.createElement('style');
-          style.textContent = '#ask-peek { display: none !important; }'
-            + ' *, *::before, *::after { transition: none !important; animation-duration: 0s !important; animation-delay: 0s !important; }';
+          style.textContent = '*, *::before, *::after { transition: none !important; animation-duration: 0s !important; animation-delay: 0s !important; }';
           document.head.append(style);
         }));
         // The market graph clears its canvas once per frame while its layout runs, and asks for no frame once it settles.
@@ -332,7 +332,7 @@ async function capture() {
           }
           await page.getByText(spec.ready).first().waitFor({timeout: 20000}).catch(() => problems.push(`${label}: never showed "${spec.ready}"`));
           if (spec.steps) await spec.steps(page).catch(error => problems.push(`${label}: ${error.message.split('\n')[0]}`));
-          // Items mark themselves read 700 to 900 ms after they show (ui/app/updates.js), and side panels fill in as their
+          // Items mark themselves read 700 to 900 ms after they show (ui/app/updates.ts), and side panels fill in as their
           // lists arrive, so a shot waits 3 s after the page is ready.
           await page.waitForTimeout(3000);
           // A click scrolls its target into view and a list that loads late moves the page again: every shot starts at the

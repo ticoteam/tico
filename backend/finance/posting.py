@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from . import budgeting
+from . import platform_share as PS
 from .context import Ctx, load
 from .core import attribution as CA
 from .core import dates
@@ -96,17 +97,22 @@ def post(
                 splits = claims[n].splits if n in claims else ()
                 for tags, amount in CA.spread(x.tags, -x.amount, splits, ctx.org.team_of):
                     SAP.cash_roll(ctx.c, ctx.book.id, e.entry_date, x.account_id, tags, x.contact_id, amount)
+    if not reversing:
+        # A charge posting changes the window of the charge after it on its vendor (platform_share.py).
+        from .attribution import after_post  # lazy: attribution imports this module
+
+        after_post(ctx, e.lines, e.entry_date, by)
     if touch:
         touched(ctx, e.lines, by)
     return entry_id, line_ids
 
 
 def _claims(ctx: Ctx, e: L.Entry) -> dict[int, ATT.Claim]:
-    """The attribution the book's rules give each P&L line of an entry as it posts: the enabled rule its vendor, its
-    money account (the entry's first line on a balance sheet account) or its account matches, by precedence."""
+    """The attribution each P&L line of an entry takes as it posts: the enabled rule its vendor, its money account (the
+    entry's first line on a balance sheet account), its account, or its class, location or project matches, by
+    precedence (ATT.PRECEDENCE); else an ad platform's share (platform_share.py) when its vendor is a platform's own
+    contact."""
     rules = ATT.rules(ctx.c, ctx.book.id)
-    if not rules:
-        return {}
     money = ""
     for x in e.lines:
         account = ctx.accounts.get(x.account_id)
@@ -119,7 +125,9 @@ def _claims(ctx: Ctx, e: L.Entry) -> dict[int, ATT.Claim]:
         if account is None or account.type not in L.PNL_TYPES:
             continue
         keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, x.contact_id)
-        claim = ATT.claim_for(rules, ATT.Facts(x.account_id, keys, money))
+        claim = ATT.claim_for(rules, ATT.facts_of_tags(x.account_id, keys, money, x.tags)) if rules else None
+        if claim is None:
+            claim = PS.claim_at_posting(ctx, keys, e.entry_date)
         if claim is not None:
             out[n] = claim
     return out
@@ -193,6 +201,9 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
     rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True, claims=claims)
     if SL.mark_reversed(ctx.c, entry_id) != 1:
         raise FinanceError(CONFLICT, "that entry is already reversed")
+    from .attribution import after_reversal  # lazy: attribution imports this module
+
+    after_reversal(ctx, entry_id, by)  # the charges it undid leave the windows of the charges after them
     if raw_month:
         refresh_covered(ctx, before)  # a reversed raw-totals month uncovers the feed rows behind it (§4.1)
     return rid

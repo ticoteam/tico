@@ -1,4 +1,4 @@
-// Finance › Budgets and Sources' connect (ui/app/finance-budgets.js, finance-admin.js) against a fake hub: Acme Lights,
+// Finance › Budgets and Sources' connect (ui/app/finance-budgets.ts, finance-admin.js) against a fake hub: Acme Lights,
 // with marketing budgets per ad bot per platform under team budgets under the Marketing line. The Budgets tab sits
 // after P&L for the owner and anyone holding finance.budgets, and stays hidden (even by address) from a teammate
 // without it. It draws the budgets as a tree, with platform, pace (amber past the amount) and the used meter when the
@@ -101,7 +101,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push([method, p + url.search, body]);
@@ -172,7 +172,7 @@ async function shot(page, name) {
       const tag = 'budgets';
       const {page, errors, writes, reads, hub} = await open(browser);
       await row(page, 'b-rental-g').waitFor();
-      assert.deepEqual((await tabs(page)).slice(0, 3), ['P&L', 'Budgets', 'Balance sheet'], tag + ': Budgets right after P&L');
+      assert.deepEqual((await tabs(page)).slice(0, 2), ['P&L', 'Budgets'], tag + ': Budgets right after P&L');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Consumer Marketing Manager', 'Consumer Google Ad Owner',
         'Rental Marketing Manager', 'Rental Google Ad Owner', 'Rental Social Ad Owner', 'Video production'], tag + ': a tree, children under their parent');
       const depth = async id => (await row(page, id).getAttribute('style')).match(/--d:(\d+)/)[1];

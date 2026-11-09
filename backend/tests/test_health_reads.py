@@ -1,6 +1,8 @@
 """The health checks read the company's settings once a page, and each bot's own rows once for all the bots."""
 
 import contextlib
+import re
+from collections import Counter
 
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_assigned_start import advance, cancel, clock, sweep  # noqa: F401
@@ -36,6 +38,29 @@ def counted(api, monkeypatch, path, token="ana-test", trace=None):
     return response.json(), len(seen)
 
 
+def warmed(api, monkeypatch, path, trace):
+    """`counted` after one untraced read of `path`: a statement a first read fills in (a cache, a table check, a
+    thread's first pass) is not counted, while one that repeats for each bot still is."""
+    api.get(path, headers=headers("ana-test"))
+    return counted(api, monkeypatch, path, trace=trace)
+
+
+def statement_shape(sql):
+    """A statement with its ids, values and numbers blanked, so the same query compares equal across the two reads."""
+    text = " ".join(sql.split())
+    text = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "U", text)
+    text = re.sub(r"'[^']*'", "'S'", text)
+    return re.sub(r"\b\d+(\.\d+)?\b", "N", text)[:200]
+
+
+def statements_apart(few_trace, many_trace):
+    """What only the twelve-bot read ran, and what only the six-bot read ran, each with its count."""
+    few_count, many_count = Counter(map(statement_shape, few_trace)), Counter(map(statement_shape, many_trace))
+    more = [f"{n} x {sql}" for sql, n in (many_count - few_count).items()]
+    fewer = [f"{n} x {sql}" for sql, n in (few_count - many_count).items()]
+    return f"only at 12 bots: {more or ['none']}; only at 6 bots: {fewer or ['none']}"
+
+
 def test_health_issues_health_and_employees_cost_few_or_no_statements_per_extra_bot(api, monkeypatch):
     # One company, six then twelve busy bots, three endpoints. Issues: production's bot-by-bot pass read about 30
     # statements a bot (its tools, its repositories, its usage limit, its status, the company's settings once per bot);
@@ -48,18 +73,30 @@ def test_health_issues_health_and_employees_cost_few_or_no_statements_per_extra_
     paths = ("/api/v2/health/issues", "/api/v2/health", "/api/employees")
     for path in paths:
         counted(api, monkeypatch, path)  # warm: the table checks each connection keeps
-    few = {path: counted(api, monkeypatch, path)[1] for path in paths}
+    few_sql = {path: [] for path in paths}
+    few = {path: counted(api, monkeypatch, path, trace=few_sql[path])[1] for path in paths}
     busy(api, machine, 6, 12)
-    body, many = counted(api, monkeypatch, "/api/v2/health/issues")
+    many_sql = {path: [] for path in paths}
+    body, many = warmed(api, monkeypatch, "/api/v2/health/issues", many_sql["/api/v2/health/issues"])
     assert body["counts"] and body["bots"] >= 12
     assert (many - few["/api/v2/health/issues"]) / 6 <= 12, (
         few,
         many,
+        statements_apart(few_sql["/api/v2/health/issues"], many_sql["/api/v2/health/issues"]),
     )  # about 33 a bot before; what is left is each bot's own tools and repositories
-    assert counted(api, monkeypatch, "/api/v2/health")[1] == few["/api/v2/health"]
-    body, many = counted(api, monkeypatch, "/api/employees")
+    _, health = warmed(api, monkeypatch, "/api/v2/health", many_sql["/api/v2/health"])
+    assert health == few["/api/v2/health"], (
+        few,
+        health,
+        statements_apart(few_sql["/api/v2/health"], many_sql["/api/v2/health"]),
+    )
+    body, many = warmed(api, monkeypatch, "/api/employees", many_sql["/api/employees"])
     assert len([row for row in body if str(row.get("name", "")).startswith("busy-")]) >= 18
-    assert many == few["/api/employees"], (few, many)
+    assert many == few["/api/employees"], (
+        few,
+        many,
+        statements_apart(few_sql["/api/employees"], many_sql["/api/employees"]),
+    )
 
 
 def lost_assignments(api, clock, names):

@@ -23,12 +23,14 @@ from datetime import timedelta
 from typing import Any, cast
 
 from . import budgeting, documents, payments, posting, posting_rules, shared
+from . import receipts as RCP
 from .context import Ctx
 from .core import dates
 from .core import feeds as F
 from .core import kinds as K
 from .core import ledger as L
 from .core import validate as V
+from .core.merchant import merchant_key
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
@@ -621,6 +623,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
         "txn_date": t.txn_date,
         "amount": t.amount,
         "counterparty": t.counterparty,
+        "vendor_key": merchant_key(t.counterparty),
         "description": t.description,
         "pending": 1 if t.pending else 0,
         "provider_status": t.status,
@@ -665,6 +668,8 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
             return fid
         SK.update(ctx.c, "fin_feed_txns", fid, fields)
     _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, t)
+    if not t.pending and not (t.void or t.reversed) and (row is None or int(row["pending"])):
+        RCP.feed_changed(ctx, fid)  # a settled row a receipt may match (receipts.py)
     if (
         row is None
         and not t.pending
@@ -1217,18 +1222,37 @@ def provider_fee_line(ctx: Ctx, row: Any, money: Any) -> dict[str, object] | Non
     return fee_line(ctx, row) if str(money["provider"]) == "stripe" else None
 
 
-def vendor_lines(ctx: Ctx, lines: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+def vendor_lines(
+    ctx: Ctx, lines: Sequence[dict[str, object]], merchant: bool = False, day: str = ""
+) -> list[dict[str, object]]:
     """A feed row's lines with each vendor as its one key: a counterparty that names a vendor contact (any case) is
     that contact's id, so its card rows and its bills count under one vendor (store/ap.vendor_key); a merchant with
-    no contact keeps its name (posting.post keys it folded and keeps the text as its label)."""
+    no contact keeps its name (posting.post keys it folded and keeps the text as its label). `merchant` (the bank and
+    card feed) keys a merchant with no contact by its merchant key instead, the text as its label on `day` (_bank_vendor)."""
     keys: dict[str, str] = {}
     out: list[dict[str, object]] = []
     for line in lines:
         key = str(line.get("contact_id") or "")
         if key and key not in keys:
-            keys[key] = SAP.vendor_key(ctx.c, ctx.book.id, key)
+            keys[key] = _bank_vendor(ctx, key, day) if merchant else SAP.vendor_key(ctx.c, ctx.book.id, key)
         out.append({**line, "contact_id": keys[key]} if key else dict(line))
     return out
+
+
+def _bank_vendor(ctx: Ctx, raw: str, day: str) -> str:
+    """The vendor key a bank or card row's counterparty posts under: an active vendor contact's id when an alias on the
+    text's name key or on its merchant key names one (in that order); else the merchant key, with the text recorded as
+    its label on `day` (a strong label, so posting.post's weak label leaves it)."""
+    text = raw.strip()
+    if not text or SAP.is_contact(ctx.c, text):
+        return raw
+    mk = merchant_key(text)
+    for k in dict.fromkeys([L.name_key(text), mk]):
+        vendor = SAP.active_vendor_alias(ctx.c, ctx.book.id, k)
+        if vendor:
+            return vendor
+    SL.label_vendor(ctx.c, ctx.book.id, mk, text, day or ctx.at[:10])
+    return mk
 
 
 def post_row(
@@ -1258,7 +1282,7 @@ def post_row(
             "source": source,
             "source_id": fresh_source(ctx, source, fid),
             "memo": memo,
-            "lines": [*vendor_lines(ctx, lines), feed_line(gl_id, t.amount)],
+            "lines": [*vendor_lines(ctx, lines, merchant=True, day=when), feed_line(gl_id, t.amount)],
         },
         hold_ids=holds,
         at=ctx.at,

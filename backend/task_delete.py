@@ -57,10 +57,21 @@ TASK_ROWS = (
     "maintenance_listings",
     "maintenance_handoffs",
     "quarantine_holds",
+    # Where the ticket stands in its pipeline (backend/pipeline_engine.py): its stage stays, judgements, evidence, claims.
+    "stage_visits",
+    "stage_decisions",
+    "requirement_attachments",
+    "review_claims",
+    "pipeline_handoffs",
+    "pipeline_check_runs",
 )
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
-TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
+# A handoff names two tasks, so either one takes its row ("a|b": a row of either column).
+TASK_KEYS = {
+    "history_events": ("subject_id", "subject_type='task'"),
+    "pipeline_handoffs": ("source_task_id|target_task_id", None),
+}
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (
     "attempts",
@@ -169,7 +180,8 @@ def _columns(c, table):
 
 def _has(c, table, column):
     """An older database may lack a table or a column; there is nothing in it to move."""
-    return column in _columns(c, table)
+    have = _columns(c, table)
+    return all(name in have for name in column.split("|"))
 
 
 def _marks(values):
@@ -187,14 +199,21 @@ def _task_key(table):
 
 
 def _where(column, where, p):
-    return (f"{where} AND " if where else "") + f"{column} IN ({_marks(p)})"
+    names = column.split("|")
+    found = " OR ".join(f"{name} IN ({_marks(p)})" for name in names)
+    return (f"{where} AND " if where else "") + (f"({found})" if len(names) > 1 else found)
+
+
+def _args(column, p):
+    """The parameters `_where` marks: `p` once for each column it names."""
+    return list(p) * len(column.split("|"))
 
 
 def _count(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
     return sum(
-        c.execute(f"SELECT count(*) FROM {table} WHERE {_where(column, where, p)}", p).fetchone()[0]
+        c.execute(f"SELECT count(*) FROM {table} WHERE {_where(column, where, p)}", _args(column, p)).fetchone()[0]
         for p in _parts(values)
     )
 
@@ -206,7 +225,10 @@ def _rows(c, table, column, values, where=None):
     out = []
     for p in _parts(values):
         out += [
-            dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {_where(column, where, p)}", p)
+            dict(r)
+            for r in c.execute(
+                f"SELECT rowid AS _rowid, * FROM {table} WHERE {_where(column, where, p)}", _args(column, p)
+            )
         ]
     return out
 
@@ -214,7 +236,10 @@ def _rows(c, table, column, values, where=None):
 def _delete(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"DELETE FROM {table} WHERE {_where(column, where, p)}", p).rowcount for p in _parts(values))
+    return sum(
+        c.execute(f"DELETE FROM {table} WHERE {_where(column, where, p)}", _args(column, p)).rowcount
+        for p in _parts(values)
+    )
 
 
 def _column(c, sql, values):
@@ -400,6 +425,13 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             c.execute(
                 "INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
                 "SELECT task_id, blob_id FROM task_assets WHERE task_id=?",
+                (tid,),
+            )
+        if _has(c, "requirement_attachments", "task_id"):
+            # Evidence a stage requirement counts is the ticket's too: the trash keeps its bytes past a purge.
+            c.execute(
+                "INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
+                "SELECT task_id, blob_id FROM requirement_attachments WHERE task_id=? AND blob_id IS NOT NULL",
                 (tid,),
             )
         for table in TASK_ROWS:

@@ -941,7 +941,7 @@ LINT_LISTED_PICKS = re.compile(
 
 
 def lint_question(question, *, written=False):
-    """The problems with one question a bot puts to a person, as a card shows it (ui/app/question-card.js), empty
+    """The problems with one question a bot puts to a person, as a card shows it (ui/app/question-card.ts), empty
     when it passes. Its picks are options, each saying what happens when it is chosen (`then`); several picks
     (`multi`) mark the ones the bot recommends; and the question, its "why it matters" line and each `then` line
     carry nothing that belongs under Details (lint_plain), nor does any pick's label or description. A question with no options is a yes/no or a written
