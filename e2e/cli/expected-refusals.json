@@ -101,6 +101,8 @@
  "proposal create": "lint",
  "proposal decide": "not_found",
  "release now": "not_found",
+ "requirement attach": "not_found",
+ "requirements": "not_found",
  "rules add": "validation",
  "rules retire": "not_found",
  "settings ask": "not_found",

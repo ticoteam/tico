@@ -473,6 +473,7 @@ async function taskSave(d, id, body, then, field) {
     const data = body.snooze ? await post(path + '/snooze', {until: body.snooze})
       : body.unsnooze ? await post(path + '/unsnooze', {})
       : await post(path, {version: cur.version, ...body});
+    taskOverCapWarn(cur, body, data);
     if (note) taskOutcomeTaken(cur);
     errs.delete(field);
     if (data.task && String(d.liveTask?.id) === id) d.liveTask = data.task;

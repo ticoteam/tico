@@ -46,7 +46,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Conversations | Chats with bots: send, list, and stream replies. |
 | Tasks | Work assigned to people and bots. |
 | Updates | Daily and weekly updates bots post to people. |
-| Changelog | Shipped Tico releases, product announcements and the signed-in person's read state ([guide](updates.md)). |
+| Changelog | Product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
 | Calls | Tico Meet calls ([guide](meet.md)): audio and screen share in a thread, a live transcript posted to it when it ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera. |

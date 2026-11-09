@@ -23,6 +23,9 @@ nothing. The task roundup (backend/task_roundup.py) lists each entry on the mana
 none of them.
 """
 
+import sqlite3
+from typing import Any
+
 from . import task_privacy as privacy
 from .store import H
 
@@ -45,7 +48,8 @@ def reads_list(c, slug):
 
 
 def _check_children(c, ids):
-    """{child id: ticket id} for the open checks (Review, QA, Security) filed below these tickets."""
+    """{child id: ticket id} for the open checks (Review, QA, Security) filed below these tickets; a check On ice (D69) is
+    parked on purpose, never stuck."""
     from .check_pools import is_check_title
 
     if not ids:
@@ -56,7 +60,7 @@ def _check_children(c, ids):
             "SELECT t.id, t.title, r.to_task, p.type_id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
             "JOIN tasks p ON p.id=r.to_task "
             f"WHERE r.kind='parent' AND r.to_task IN ({','.join('?' * len(part))}) "
-            f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
+            f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND NOT {H.ON_ICE % 't'}",
             (*part, *H.ACTIVE_STATUSES),
         ):
             if is_check_title(c, {"type_id": row["type_id"]}, row["title"]):
@@ -384,6 +388,72 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 
 
+def waiting_room(c: sqlite3.Connection) -> dict[str, dict[str, str]]:
+    """The tickets a link, a bot or an automation could not move into a full stage (D68, rule stage_full), as
+    {task_id: {type_id, stage_id, created_at}}: the latest refusal of each. There is no time limit: the card waits, where it
+    is, until its stage has room, or it moves, or it finishes. A refusal is dropped when the card has a step change after it,
+    when it is no longer active or already in that stage, or when the stage is no longer full. A wait to enter a pipeline
+    that was all On ice (its context names the pipeline, `entry`) ends once that pipeline takes the card: it is not all On
+    ice and its first stage has room."""
+    from . import pipeline_engine
+
+    waiting: dict[str, dict[str, str]] = {}
+    for event in c.execute("SELECT created_at, detail FROM refusals WHERE rule='stage_full' ORDER BY created_at, id"):
+        facts = H._json(event["detail"], {}) or {}
+        context = facts.get("context") or {}
+        task_id, stage_id = facts.get("task"), context.get("stage")
+        if not task_id or not stage_id:
+            continue
+        found = c.execute("SELECT type_id, step_id, status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        moved = c.execute(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at>? LIMIT 1",
+            (task_id, event["created_at"]),
+        ).fetchone()
+        if (
+            found is None
+            or found["status"] not in H.ACTIVE_STATUSES
+            or found["step_id"] == stage_id
+            or moved is not None
+            or pipeline_engine.full_stage(c, stage_id, task_id) is None
+            or (context.get("entry") and _entry_open(c, str(context["entry"]), task_id))
+        ):
+            waiting.pop(task_id, None)
+            continue
+        waiting[task_id] = {"type_id": found["type_id"], "stage_id": stage_id, "created_at": event["created_at"]}
+    return waiting
+
+
+def _entry_open(c: sqlite3.Connection, pipeline_id: str, task_id: str) -> bool:
+    """Whether a wait to enter a pipeline that was all On ice is over: it is not all On ice now
+    (pipeline_engine.frozen_entry) and the stage a link files a ticket at has room."""
+    from . import pipeline_engine
+
+    if pipeline_engine.frozen_entry(c, pipeline_id) is not None:
+        return False
+    entry = pipeline_engine.first_stage(c, pipeline_id)
+    return entry is not None and pipeline_engine.full_stage(c, str(entry["id"]), task_id) is None
+
+
+def _waiting_for_room(c: sqlite3.Connection, out: _List, rows: list[Any]) -> None:
+    """The waiting tickets among these rows, for the manager's list (waiting_room)."""
+    tickets = {r["id"]: r for r in rows}
+    if not tickets:
+        return
+    for task_id, waiting in waiting_room(c).items():
+        row = tickets.get(task_id)
+        if row is None:
+            continue
+        found = c.execute("SELECT name FROM task_steps WHERE id=?", (waiting["stage_id"],)).fetchone()
+        name = str(found["name"]) if found else "its stage"
+        out.add(
+            "ticket:" + task_id,
+            "room",
+            f"waiting for room in {name}",
+            waiting["created_at"],
+            ticket=_label(c, row),
+        )
+
+
 def _refusals(c, out, rows, at):
     """Refused moves no longer retried, and one rule refusing the same ticket twice in a day with no retry pending."""
     from . import move_retry
@@ -474,7 +544,8 @@ def build(c, typ, rows=None, at=None, reader=None):
             )
             if H.bot_reads_task(c, reader, r)
         ][:5000]
-    rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES]
+    on_ice = {str(r["id"]) for r in H._rows(c.execute("SELECT id FROM task_steps WHERE card_cap = 0"))}
+    rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES and str(r.get("step_id")) not in on_ice]
     out = _List()
     children = _check_children(c, {r["id"] for r in rows})
     _stuck(c, out, rows, children, at, reader)
@@ -482,6 +553,7 @@ def build(c, typ, rows=None, at=None, reader=None):
     _slots(c, out, typ, rows)
     _outages(c, out, typ, rows, at)
     _refusals(c, out, rows, at)
+    _waiting_for_room(c, out, rows)
     _merges(c, out, rows)
     return sorted(out.items.values(), key=lambda e: (e["since"], e["key"]))[:MAX_EXCEPTIONS]
 

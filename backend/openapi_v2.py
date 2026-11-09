@@ -33,7 +33,7 @@ TAGS = {
     "Conversations": "Chats with bots: send, list, and stream replies.",
     "Tasks": "Work assigned to people and bots.",
     "Updates": "Daily and weekly updates bots post to people.",
-    "Changelog": "Shipped Tico releases, product announcements and the signed-in person's read state (docs/updates.md).",
+    "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
     "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
@@ -932,8 +932,8 @@ STABLE = [
         "get",
         "Changelog",
         "listChangelog",
-        "Shipped changes with your read state; kind=product|activity|all (default all), unread=true, q search, "
-        "since_version for releases newer than a version, and limit/offset paging. Only installed releases or earlier appear. "
+        "Product updates and agent activity, with your read state; kind=product|activity|all (default all), "
+        "unread=true, q search, and limit/offset paging. "
         "unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
         "ChangelogList",
     ),
@@ -2461,6 +2461,21 @@ SCHEMAS = {
             "limit_minutes": {
                 "type": ["integer", "null"],
                 "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
+            },
+            "card_cap": {
+                "type": ["integer", "null"],
+                "description": "The most cards the stage holds at once (0 is On ice: it takes no card from a bot and "
+                "its cards wake no one), or null for no cap",
+            },
+            "held": {
+                "type": "integer",
+                "description": "The open cards the stage holds now that the caller may read, snoozed and hidden ones "
+                "included. For the pipeline's rule editor, every open card: the count its card cap is enforced against",
+            },
+            "unseen": {
+                "type": "integer",
+                "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones, "
+                "or ones a bot it may not read works on); 0 for anyone else",
             },
             "flow": {
                 "type": "object",

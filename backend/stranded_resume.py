@@ -297,6 +297,8 @@ def stranded(c: sqlite3.Connection, row: dict[str, Any] | None, at: str) -> bool
 
     if not in_scope(c, row):
         return False
+    if H.on_ice_row(c, row):  # parked On ice (D69): it starts no run, so no resume is owed
+        return False
     row = cast(dict[str, Any] | None, task_holds.with_holds(c, row))
     if row is None:
         return False

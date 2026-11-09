@@ -1,7 +1,19 @@
 // Machine status uses live runner presence ahead of a stale cloud lifecycle record, at desktop and phone widths.
-const {chromium} = require('playwright');
+import type * as PageSupport from './support/page.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {uiFile} = require('./support/page.cjs');
+const {uiFile} = require('./support/page.cjs') as typeof PageSupport;
+
+// Defined by app/computer-detail.ts and app/cloud-machines.ts, which the page loads below.
+declare function machineNowWords(machine: unknown): string;
+declare function cloudMachineComputerHTML(machine: unknown): string;
+
+interface Machine {
+  last_seen_at: string;
+  cloud_machine: {state: string};
+  turn_counts?: Record<string, number>;
+  revoked_at?: string;
+}
 
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -15,7 +27,7 @@ const {uiFile} = require('./support/page.cjs');
         await page.addScriptTag({path: uiFile(script)});
       }
       const status = await page.evaluate(() => {
-        const machine = {last_seen_at: new Date().toISOString(), cloud_machine: {state: 'stopped'}};
+        const machine: Machine = {last_seen_at: new Date().toISOString(), cloud_machine: {state: 'stopped'}};
         const live = machineNowWords(machine);
         machine.turn_counts = {running: 1};
         const busy = machineNowWords(machine);
@@ -27,7 +39,7 @@ const {uiFile} = require('./support/page.cjs');
         machine.revoked_at = new Date().toISOString();
         const revoked = machineNowWords(machine);
         // The hub's employee payload reconciles a stale lifecycle state with live runner contact.
-        document.querySelector('#status').innerHTML = cloudMachineComputerHTML({cloud_machine: {
+        document.querySelector('#status')!.innerHTML = cloudMachineComputerHTML({cloud_machine: {
           mode: 'cloud', placement: 'own', state: 'running', size: 'default', machine_size: 'default'
         }});
         return {live, busy, asleep, offline, revoked};
