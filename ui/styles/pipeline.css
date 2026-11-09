@@ -144,11 +144,12 @@
 .pr-sec { padding-bottom: 6px; }
 .pr-sec > .pipe-h { padding: 10px 16px 4px; }
 .pr-list { margin: 0; padding: 0; list-style: none; }
-.pr-late { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 6px 16px; border: 0;
+.pr-late { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 6px 16px; border: 0;
   background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .pr-late:hover { background: var(--surface2); }
-.pr-late-id { font-weight: 600; }
-.pr-late-what { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-late-main { display: flex; flex-direction: column; min-width: 0; }
+.pr-late-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-late-what { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-late-age { color: var(--wait-ink); }
 .pr-line { display: grid; grid-template-columns: 40px 8px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 16px; font-size: 12px; }
 .pr-when { color: var(--muted); }
