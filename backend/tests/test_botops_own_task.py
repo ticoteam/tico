@@ -77,7 +77,12 @@ def test_botops_files_its_delegated_task_as_the_requester(api, botops):
             "SELECT body FROM messages WHERE conversation_id=? AND kind='notice' ORDER BY created_at DESC LIMIT 1",
             (made["conversation_id"],),
         ).fetchone()
+        origin = c.execute(
+            "SELECT actor FROM events WHERE action='botops.task_requested' AND target=?",
+            (made["id"],),
+        ).fetchone()
     assert made["requester_id"] == "bot:botops"
+    assert origin["actor"] == "human:ana"  # the delegation source remains distinct from the task requester
     assert notice["body"] == "New task from bot:botops: Review the shared access"
 
 

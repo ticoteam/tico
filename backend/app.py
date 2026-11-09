@@ -4626,11 +4626,17 @@ def create_app(settings=None):
                     if made and H._json(made["detail"], {}).get("via") != "assistant":
                         person = auth.identity_for_actor(c, task["requester_id"])
                         return acting_as(person, task_id)
-                origin = c.execute(
-                    "SELECT actor FROM events WHERE action='botops.task_requested' AND target=? AND actor=? LIMIT 1",
-                    (task_id, task["requester_id"]),
-                ).fetchone()
-                if origin and str(origin["actor"]).startswith("human:"):
+                # The task is BotOps' own; this event retains the human whose request authorized its work.
+                origin = (
+                    c.execute(
+                        "SELECT actor FROM events WHERE action='botops.task_requested' AND target=? "
+                        "AND actor LIKE 'human:%' LIMIT 1",
+                        (task_id,),
+                    ).fetchone()
+                    if task["requester_id"] == "bot:" + H.FLEET_MAINTAINER
+                    else None
+                )
+                if origin and H.is_human(origin["actor"]):
                     auth.conversation(c, who, task["conversation_id"])
                     person = auth.identity_for_actor(c, origin["actor"])
                     H.VIA.set("botops")

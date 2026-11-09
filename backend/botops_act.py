@@ -32,7 +32,7 @@ def request_task(c, auth, who, title, body):
         conversation_id=rooms.task_conversation_id(c, auth, H.bot_actor(H.FLEET_MAINTAINER), who.actor),
     )
     if who.role in ("owner", "human") and who.via != "assistant":
-        H.event(c, "bot:" + H.FLEET_MAINTAINER, "botops.task_requested", task["id"], {})
+        H.event(c, who.actor, "botops.task_requested", task["id"], {})
     return task
 
 
