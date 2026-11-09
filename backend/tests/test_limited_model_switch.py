@@ -5,10 +5,12 @@ status stays `limited` while that turn runs (execution.settle_status). The model
 turn ("Wait for the current bot turn to finish"), so the bot showed Rate limited yet could not be moved off the spent
 model. The change now applies while the turn runs and takes effect from the next one; the limit that turn hits is the
 old model's and never lands on the new one."""
+
 from backend import login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401 (fixture)
 from backend.tests.test_login_holds import CLAUDE, at, limit, providers_on, signed_in
+from backend import bot_settings as BS
 
 
 def revision(api, bot="ops"):
@@ -27,12 +29,12 @@ def test_a_limited_bot_with_a_turn_running_can_be_moved_to_another_model(api, mo
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "expected_revision": revision(api)})
 
     post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
-    limit(api, machine, claim(api, machine))                    # the model's plan runs out
+    limit(api, machine, claim(api, machine))  # the model's plan runs out
     assert status(api)["state"] == "limited"
 
     # A person writes, which is worth one try: the turn starts and the header still says Rate limited.
@@ -44,8 +46,9 @@ def test_a_limited_bot_with_a_turn_running_can_be_moved_to_another_model(api, mo
 
     # The move the person makes to unstick it goes through, and lifts the old model's cooldown.
     at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
-    moved = post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5",
-                                               "expected_revision": revision(api)})
+    moved = post(
+        api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "expected_revision": revision(api)}
+    )
     assert moved["state"] == "applied"
     assert status(api)["state"] != "limited"
 
@@ -53,8 +56,12 @@ def test_a_limited_bot_with_a_turn_running_can_be_moved_to_another_model(api, mo
     at(monkeypatch, "2026-10-21T23:25:40.000000Z", api)
     events = [{"seq": 1, "kind": "error", "payload": {"error": CLAUDE, "limit": True}}]
     post(api, f"attempts/{retry['id']}/events", {"events": events}, machine["token"])
-    post(api, f"attempts/{retry['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{retry['id']}/complete",
+        {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+        machine["token"],
+    )
     assert status(api)["state"] != "limited"
     with api.app.state.store.read() as c:
         assert not login_holds.get(c, machine["runner_id"], "", "claude")
@@ -76,9 +83,17 @@ def test_a_move_to_another_computer_still_waits_for_the_running_turn(api):
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"]}, machine["token"])
     signed_in(api, other, [], ("fake", "codex"))
     generation = get(api, "bots/ops")["assignment"]["generation"]
-    refused = post(api, "bots/ops/transitions", {"kind": "machine", "runner_id": other["runner_id"],
-                                                 "expected_revision": revision(api),
-                                                 "expected_generation": generation}, expected=409)
+    refused = post(
+        api,
+        "bots/ops/transitions",
+        {
+            "kind": "machine",
+            "runner_id": other["runner_id"],
+            "expected_revision": revision(api),
+            "expected_generation": generation,
+        },
+        expected=409,
+    )
     assert refused["error"]["code"] == "busy"
 
 
@@ -90,9 +105,11 @@ def test_a_turn_leased_before_a_model_change_does_not_start_the_new_models_sessi
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "expected_revision": revision(api)})
     post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
-    turn = claim(api, machine)                                  # handed the old model
+    turn = claim(api, machine)  # handed the old model
     at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
-    post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "expected_revision": revision(api)})
+    post(
+        api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "expected_revision": revision(api)}
+    )
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "old-" + turn["id"]}, machine["token"])
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM bot_sessions WHERE bot='ops' AND model='claude-haiku-5-5'").fetchone() is None
@@ -102,7 +119,7 @@ def limited_with_a_retry_running(api, monkeypatch, machine, model="gpt-6-luna"):
     """The bot on `model` hits its plan's limit, a person writes, and the retry's turn is running: Rate limited."""
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=16 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/model", {"model": model, "expected_revision": revision(api)})
     post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
@@ -119,8 +136,12 @@ def limited_with_a_retry_running(api, monkeypatch, machine, model="gpt-6-luna"):
 def finish_limited(api, machine, turn):
     events = [{"seq": 1, "kind": "error", "payload": {"error": CLAUDE, "limit": True}}]
     post(api, f"attempts/{turn['id']}/events", {"events": events}, machine["token"])
-    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{turn['id']}/complete",
+        {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+        machine["token"],
+    )
 
 
 def test_the_hub_and_mcp_model_change_also_moves_a_limited_bot_while_its_turn_runs(api, monkeypatch):
@@ -152,8 +173,11 @@ def test_an_effort_only_change_or_a_move_away_and_back_keeps_the_running_turns_l
     machine = runner(api)
     retry = limited_with_a_retry_running(api, monkeypatch, machine)
     at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
-    post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "effort": "low",
-                                       "expected_revision": revision(api)})
+    post(
+        api,
+        "bots/ops/transitions",
+        {"kind": "model", "model": "gpt-6-luna", "effort": "low", "expected_revision": revision(api)},
+    )
     # An effort-only change leaves the bot on the spent model: nothing lifts, and no model is said to have changed.
     assert status(api)["state"] == "limited" and "Model changed" not in (status(api).get("focus") or "")
     post(api, "bots/ops/model", {"model": "claude-haiku-5-5", "expected_revision": revision(api)})
@@ -172,8 +196,9 @@ def test_a_move_onto_a_model_whose_login_is_held_keeps_rate_limited(api, monkeyp
     with api.app.state.store.read() as c:
         assert login_holds.get(c, machine["runner_id"], "", "claude")
     at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
-    post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5",
-                                       "expected_revision": revision(api)})
+    post(
+        api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "expected_revision": revision(api)}
+    )
     now = status(api)
     assert now["state"] == "limited"
     assert "resumes" not in (now.get("focus") or "")
@@ -192,6 +217,7 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
     from backend import execution
     from backend.store import encode
     import json
+
     providers_on(api)
     at(monkeypatch, "2026-10-21T23:16:00.000000Z")
     machine = runner(api)
@@ -201,10 +227,10 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
     limit(api, machine, claim(api, machine), errors=("Tico AI Gateway: cap_reached for this key",))
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
-        for model, held in (("tico-mid-1.0", "gateway"), ("claude-haiku-5-5", "")):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        for model, held in (("tico-medium-1.0", "gateway"), ("claude-haiku-5-5", "")):
+            config = BS.read(c, 'ops')
             config.update({"model": model, "runtime": "pi" if held else "claude"})
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
+            BS.write(c, 'ops', config)
             assert execution.model_change_hold(c, settings, "ops") == held
 
 

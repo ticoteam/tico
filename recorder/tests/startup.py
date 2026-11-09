@@ -12,13 +12,15 @@ root.mkdir(parents=True, exist_ok=True, mode=0o700)
 log = root / 'startup.log'
 environment = {**os.environ, 'TICO_RECORDER_DATA_DIR': str(root / 'demo-library')}
 with log.open('w') as output:
-    process = subprocess.Popen([str(app / 'Contents/MacOS/tico-recorder'), '--demo'], env=environment, stdout=output, stderr=subprocess.STDOUT)
+    process = subprocess.Popen(
+        [str(app / 'Contents/MacOS/tico-recorder'), '--demo'], env=environment, stdout=output, stderr=subprocess.STDOUT
+    )
     try:
         deadline = time.monotonic() + 7
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 raise RuntimeError('Native app exited during startup: ' + log.read_text()[-2000:])
-            time.sleep(.2)
+            time.sleep(0.2)
         cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
         cg = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
         cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
@@ -46,9 +48,13 @@ with log.open('w') as output:
         cf.CFRelease(windows)
         assert own_windows >= 1, 'The native process did not create a normal application window'
         memory = subprocess.check_output(['ps', '-o', 'rss=', '-p', str(process.pid)], text=True).strip()
-        receipt = {'native_window_count': own_windows, 'demo_rss_kib': int(memory),
-                   'binary_bytes': (app / 'Contents/MacOS/tico-recorder').stat().st_size,
-                   'synthetic_demo_only': True, 'capture_started': False}
+        receipt = {
+            'native_window_count': own_windows,
+            'demo_rss_kib': int(memory),
+            'binary_bytes': (app / 'Contents/MacOS/tico-recorder').stat().st_size,
+            'synthetic_demo_only': True,
+            'capture_started': False,
+        }
         (root / 'startup-receipt.json').write_text(json.dumps(receipt, indent=2))
         print(json.dumps(receipt))
     finally:

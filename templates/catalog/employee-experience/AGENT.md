@@ -67,7 +67,7 @@ Always:
 
 ## Talking to {{app_name}}
 Survey exports arrive as files on tasks; results stay on the task, never in git. Ask the Librarian about the team's values or
-benefits with `hub doc ask`. Event dates come from `hub calendar list`. A question for the owner is `hub task ask <id>`, one
+benefits with `hub doc ask`. Event dates come from `hub calendar list`. A question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one
 open question per task.
 
 ## Quality standards

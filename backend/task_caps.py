@@ -37,6 +37,7 @@ class Capped(Problem):
 
 class TaskCap(Contract):
     """A cap on the tasks `sender` sends `receiver` a day. null (or left out) removes it; 0 blocks the pair."""
+
     sender: ID
     receiver: ID
     per_day: int | None = Field(default=None, ge=0, le=MAX)
@@ -44,6 +45,7 @@ class TaskCap(Contract):
 
 class TaskCapPair(Contract):
     """The two teammates a cap is between, for DELETE."""
+
     sender: ID
     receiver: ID
 
@@ -59,7 +61,7 @@ def actor(value):
     """A teammate ref (`person:<id>`, `bot:<slug>`, or an actor) as an actor string, or None when it is none of those."""
     text = str(value or "").strip()
     if text.startswith("person:"):
-        text = "human:" + text[len("person:"):]
+        text = "human:" + text[len("person:") :]
     return text if text.startswith(("bot:", "human:")) else None
 
 
@@ -72,6 +74,7 @@ def _node(found):
 def _person(c, pid):
     from . import groups as G
     from . import people as P
+
     return P.person(pid, G._roster(c))
 
 
@@ -79,6 +82,9 @@ def _teammate(c, value):
     """The actor a request names, which must be a bot or a person that exists."""
     found = actor(value) or (H.resolve_actor(c, str(value)) if value else None)
     kind, _, ident = (found or "").partition(":")
+    if kind == "bot":
+        ident = (H.resolve_bot(c, ident) or {}).get("id", ident)
+        found = "bot:" + ident
     exists = (kind == "bot" and H.bot(c, ident)) or (kind == "human" and _person(c, ident))
     if not exists:
         raise Problem("not_found", f"Unknown teammate: {value}", 404)
@@ -97,6 +103,7 @@ def _group_manager(roster, configs, gid):
     """The node above a group: its lead (while a teammate of it), else its reports_to person, else the group it is
     nested in."""
     from . import groups as G
+
     group = (roster.get("org_groups") or {}).get(gid) or {}
     lead = G.lead_of(gid, roster, configs) if gid in (roster.get("org_groups") or {}) else ""
     if lead:
@@ -111,6 +118,7 @@ def above(c, who):
     """The teammates above `who` (an actor) on the org chart, nearest first, as actors. A manager at any level counts."""
     from . import groups as G
     from . import people as P
+
     roster, configs, archived = G._roster(c), G._configs(c), G._archived(c)
     kind, _, ident = who.partition(":")
     seen = {("b:" if kind == "bot" else "p:") + ident}
@@ -129,6 +137,7 @@ def above(c, who):
 
 def _team(c, who, roster, configs):
     from . import people as P
+
     kind, _, ident = who.partition(":")
     if kind == "bot":
         return P.team_of(ident, configs, roster) or ""
@@ -139,6 +148,7 @@ def led(c, who, teammate):
     """Whether `who` (an actor) leads a group `teammate` is in, or a group nested under one it leads."""
     from . import groups as G
     from . import people as P
+
     roster, configs = G._roster(c), G._configs(c)
     led_ids = {gid for gid in (roster.get("org_groups") or {}) if actor(G.lead_of(gid, roster, configs)) == who}
     team = _team(c, teammate, roster, configs)
@@ -149,6 +159,7 @@ def led(c, who, teammate):
 def _midnight():
     """Local midnight in the team's time zone, in the UTC timestamp format every row uses."""
     from .updates import ZONE
+
     start = datetime.now(ZONE).replace(hour=0, minute=0, second=0, microsecond=0)
     return start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
@@ -156,25 +167,36 @@ def _midnight():
 def _acted(c, row, receiver):
     """Whether the receiver changed the task after it arrived and before the sender closed it: an event on the task or a
     message in its conversation from the receiver (a status, a step, a comment, an answer)."""
-    window = (row["sent_at"], row["closed_at"])     # both ends inclusive: a comment in the same instant as the send counts
-    if c.execute("SELECT 1 FROM events WHERE target=? AND actor=? AND ts>=? AND ts<=? LIMIT 1",
-                 (row["task_id"], receiver, *window)).fetchone():
+    window = (row["sent_at"], row["closed_at"])  # both ends inclusive: a comment in the same instant as the send counts
+    if c.execute(
+        "SELECT 1 FROM events WHERE target=? AND actor=? AND created_at>=? AND created_at<=? LIMIT 1",
+        (row["task_id"], receiver, *window),
+    ).fetchone():
         return True
-    return bool(row["conversation_id"]) and c.execute(
-        "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>=? AND created<=? LIMIT 1",
-        (row["conversation_id"], receiver, *window)).fetchone() is not None
+    return (
+        bool(row["conversation_id"])
+        and c.execute(
+            "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>=? AND created_at<=? LIMIT 1",
+            (row["conversation_id"], receiver, *window),
+        ).fetchone()
+        is not None
+    )
 
 
 def counted(c, sender, receiver):
     """The tasks `sender` sent `receiver` today that still count, oldest first. A task the sender closed before the
     receiver acted on leaves the count."""
     rows = c.execute(
-        "SELECT s.task_id, s.sent_at, t.title, t.status, t.closed_at, t.closed_by, t.conversation_id "
+        "SELECT s.task_id, s.sent_at, t.title, t.status, t.closed_at, t.closed_by_id, t.conversation_id "
         "FROM task_cap_log s LEFT JOIN tasks t ON t.id = s.task_id "
         "WHERE s.sender=? AND s.receiver=? AND s.sent_at>=? ORDER BY s.sent_at",
-        (sender, receiver, _midnight())).fetchall()
-    return [dict(row) for row in rows
-            if not (row["closed_by"] == sender and row["closed_at"] and not _acted(c, row, receiver))]
+        (sender, receiver, _midnight()),
+    ).fetchall()
+    return [
+        dict(row)
+        for row in rows
+        if not (row["closed_by_id"] == sender and row["closed_at"] and not _acted(c, row, receiver))
+    ]
 
 
 def record(c, task_id, sender, receiver):
@@ -182,8 +204,10 @@ def record(c, task_id, sender, receiver):
     the same task adds a row and never takes an earlier send out of its sender's count."""
     if not str(sender).startswith(("bot:", "human:")) or not receiver or sender == receiver:
         return
-    c.execute("INSERT OR IGNORE INTO task_cap_log(task_id, sender, receiver, sent_at) VALUES(?,?,?,?)",
-              (task_id, sender, receiver, H.now()))
+    c.execute(
+        "INSERT OR IGNORE INTO task_cap_log(task_id, sender, receiver, sent_at) VALUES(?,?,?,?)",
+        (task_id, sender, receiver, H.now()),
+    )
 
 
 def _payload(c, sender, receiver, cap, today):
@@ -196,9 +220,14 @@ def _payload(c, sender, receiver, cap, today):
     else:
         open_now = sum(1 for row in today if not row["closed_at"])
         message = f"{_name(c, receiver)} takes {cap} tasks a day from {_name(c, sender)} and {open_now} are open."
-    payload = {"error": "task_cap", "cap": cap, "count": len(today), "receiver": ref(receiver),
-               "today": [{"id": row["task_id"], "title": row["title"] or "", "status": row["status"] or ""} for row in today],
-               "message": message + " Nothing was queued."}
+    payload = {
+        "error": "task_cap",
+        "cap": cap,
+        "count": len(today),
+        "receiver": ref(receiver),
+        "today": [{"id": row["task_id"], "title": row["title"] or "", "status": row["status"] or ""} for row in today],
+        "message": message + " Nothing was queued.",
+    }
     if cap == 0 and via:
         payload["via"] = ref(via)
     return payload
@@ -237,19 +266,29 @@ def apply(c, actor_, sender, receiver, per_day, via=None):
     if per_day is None:
         c.execute("DELETE FROM task_caps WHERE sender=? AND receiver=?", (sender, receiver))
     else:
-        c.execute("INSERT INTO task_caps(sender, receiver, per_day, updated, updated_by) VALUES(?,?,?,?,?) "
-                  "ON CONFLICT(sender, receiver) DO UPDATE SET per_day=excluded.per_day, updated=excluded.updated, "
-                  "updated_by=excluded.updated_by", (sender, receiver, per_day, H.now(), actor_))
-    audit_log.write(c, actor_, f"task_cap:{ref(sender)}>{ref(receiver)}",
-                    None if before is None else _cap(sender, receiver, before),
-                    None if per_day is None else _cap(sender, receiver, per_day), via)
+        c.execute(
+            "INSERT INTO task_caps(sender, receiver, per_day, updated_at, updated_by) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(sender, receiver) DO UPDATE SET per_day=excluded.per_day, updated_at=excluded.updated_at, "
+            "updated_by=excluded.updated_by",
+            (sender, receiver, per_day, H.now(), actor_),
+        )
+    audit_log.write(
+        c,
+        actor_,
+        f"task_cap:{ref(sender)}>{ref(receiver)}",
+        None if before is None else _cap(sender, receiver, before),
+        None if per_day is None else _cap(sender, receiver, per_day),
+        via,
+    )
 
 
 def propose(c, who, sender, receiver, per_day):
     """A bot's own cap as an approval a person decides (kind task_cap, the payload is the change). Returns its id."""
     from .proposals import decider
-    row = H.approval_request(c, who.actor, "task_cap", {"sender": ref(sender), "receiver": ref(receiver),
-                                                        "per_day": per_day}, to=decider(c))
+
+    row = H.approval_request(
+        c, who.actor, "task_cap", {"sender": ref(sender), "receiver": ref(receiver), "per_day": per_day}, to=decider(c)
+    )
     return row["id"]
 
 
@@ -268,12 +307,13 @@ def forget(c, teammate):
     so its new pairs start uncapped. Each removed cap is audited as the hub's own change."""
     if not teammate:
         return
-    for row in c.execute("SELECT sender, receiver FROM task_caps WHERE sender=? OR receiver=?",
-                         (teammate, teammate)).fetchall():
+    for row in c.execute(
+        "SELECT sender, receiver FROM task_caps WHERE sender=? OR receiver=?", (teammate, teammate)
+    ).fetchall():
         apply(c, H.KEEPER, row["sender"], row["receiver"], None, via="group move")
     named = ref(teammate)
-    for row in c.execute("SELECT id, payload_json FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
-        change = json.loads(row["payload_json"] or "{}")
+    for row in c.execute("SELECT id, payload FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
+        change = json.loads(row["payload"] or "{}")
         if named in (change.get("sender"), change.get("receiver")):
             H.approval_withdraw(c, row["id"], "A teammate in it moved group.")
 
@@ -285,27 +325,40 @@ def may_set(c, auth, who, sender):
         return "direct"
     if who.role == "bot" and who.actor == sender:
         return "proposal"
-    raise Problem("forbidden", "Only the owner, an admin or the sender's group lead sets a task cap; a bot proposes its own",
-                  403)
+    raise Problem(
+        "forbidden", "Only the owner, an admin or the sender's group lead sets a task cap; a bot proposes its own", 403
+    )
 
 
 def _proposals(c):
     """The bots' cap changes a person has yet to decide: undecided approvals of kind task_cap."""
     out = []
-    for row in c.execute("SELECT id, requested_by, created, payload_json FROM approvals "
-                         "WHERE kind='task_cap' AND decision IS NULL ORDER BY created"):
-        change = json.loads(row["payload_json"] or "{}")
-        out.append({"id": row["id"], "sender": change.get("sender"), "receiver": change.get("receiver"),
-                    "per_day": change.get("per_day"), "status": "pending", "proposed_by": ref(row["requested_by"]),
-                    "created": row["created"]})
+    for row in c.execute(
+        "SELECT id, requested_by_id, created_at, payload FROM approvals "
+        "WHERE kind='task_cap' AND decision IS NULL ORDER BY created_at"
+    ):
+        change = json.loads(row["payload"] or "{}")
+        out.append(
+            {
+                "id": row["id"],
+                "sender": change.get("sender"),
+                "receiver": change.get("receiver"),
+                "per_day": change.get("per_day"),
+                "status": "pending",
+                "proposed_by": ref(row["requested_by_id"]),
+                "created_at": row["created_at"],
+            }
+        )
     return out
 
 
 def tally(c, sender, receiver):
     """Today's (count, closed) for a pair: the tasks that still count, and the ones the sender closed before the receiver
     acted on (they leave the count)."""
-    sent = c.execute("SELECT COUNT(*) FROM task_cap_log WHERE sender=? AND receiver=? AND sent_at>=?",
-                     (sender, receiver, _midnight())).fetchone()[0]
+    sent = c.execute(
+        "SELECT COUNT(*) FROM task_cap_log WHERE sender=? AND receiver=? AND sent_at>=?",
+        (sender, receiver, _midnight()),
+    ).fetchone()[0]
     count = len(counted(c, sender, receiver))
     return count, sent - count
 
@@ -314,8 +367,17 @@ def _listing(c, auth, who):
     caps = []
     for r in c.execute("SELECT * FROM task_caps ORDER BY sender, receiver"):
         count, closed = tally(c, r["sender"], r["receiver"])
-        caps.append({"sender": ref(r["sender"]), "receiver": ref(r["receiver"]), "per_day": r["per_day"],
-                     "count": count, "closed": closed, "updated": r["updated"], "updated_by": ref(r["updated_by"])})
+        caps.append(
+            {
+                "sender": ref(r["sender"]),
+                "receiver": ref(r["receiver"]),
+                "per_day": r["per_day"],
+                "count": count,
+                "closed": closed,
+                "updated_at": r["updated_at"],
+                "updated_by": ref(r["updated_by"]),
+            }
+        )
     proposals = _proposals(c) if (who.role == "owner" or auth.bot_admin(who)) else []
     return {"caps": caps, "proposals": proposals}
 
@@ -330,8 +392,11 @@ def install(app, store, auth, mutate):
             raise Problem("validation", f"{receiver_ref} is not a manager above {sender_ref}", 422)
         if may_set(c, auth, who, sender) == "proposal":
             aid = propose(c, who, sender, receiver, per_day)
-            return {"approval": aid, "status": "pending",
-                    "cap": {"sender": ref(sender), "receiver": ref(receiver), "per_day": per_day}}
+            return {
+                "approval": aid,
+                "status": "pending",
+                "cap": {"sender": ref(sender), "receiver": ref(receiver), "per_day": per_day},
+            }
         apply(c, who.actor, sender, receiver, per_day)
         return {"cap": {"sender": ref(sender), "receiver": ref(receiver), "per_day": per_day}}
 
@@ -352,6 +417,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return set_cap(c, who, body.sender, body.receiver, body.per_day)
+
         return mutate(request, body, work)
 
     @app.delete("/api/v2/task-caps")
@@ -364,5 +430,5 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return set_cap(c, who, body.sender, body.receiver, None)
-        return mutate(request, body, work)
 
+        return mutate(request, body, work)

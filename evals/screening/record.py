@@ -7,6 +7,7 @@ A call's key is a hash of what the model was asked (the source and the fenced te
 pair is one recording: a webhook's payload, a mail's subject and body, an idea's title and summary and a watcher's title
 and body are different text. A recording that is there is kept unless --force. It needs live credentials (HUB_API_URL
 and HUB_TOKEN, or TYPESAFE_API_KEY); without them nothing is sent and the exit code is 2."""
+
 import argparse
 import sys
 
@@ -24,7 +25,9 @@ def main(argv=None):
         return 2
     kept = {"force": args.force}
     code, _ = live(X.load_corpus(), engine, record_to=kept)
-    print(f"\n{len(kept.get('saved', []))} recorded, {len(kept.get('skipped', []))} kept as they were, in {X.RECORDINGS}")
+    print(
+        f"\n{len(kept.get('saved', []))} recorded, {len(kept.get('skipped', []))} kept as they were, in {X.RECORDINGS}"
+    )
     return code
 
 

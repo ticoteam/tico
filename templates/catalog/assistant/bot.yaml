@@ -7,14 +7,16 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: high
 max_run_minutes: 60
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts the draft on the task and drafts until a person turns mail sending on in Tico.
-outbound_send: false
-
 # Routines this bot owns. The server runs the clock and turns each occurrence into a task.
-# Start with none. A routine earns its place after a human has read a week of the same work done
-# by hand. See docs/routines.md for the shape.
-routines: []
+# The morning message runs once a day for the whole Assistant, not per person: for each person it sends at most one
+# message (`hub assistant morning`), or none on a quiet day. The id stays `daily-sweep` for installs that have it.
+# See docs/routines.md for the shape.
+routines:
+  - id: daily-sweep
+    title: Morning message
+    cron: "0 8 * * *"                 # runs in the company's timezone (no timezone: the team default applies)
+    template: playbooks/daily-sweep.md
+    labels: [priority:p2]
 
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value. Store a Credential in Tico and grant it to this bot;
@@ -22,7 +24,7 @@ routines: []
 # tools:
 #   - service: mail
 #     identity: "desk@example.com"
-#     can: [read, draft]          # send only with outbound_send: true
+#     can: [read, draft]          # send only with send access; Tico's sending policy decides
 #     env: MAIL_CREDENTIALS
 #     note: "reads and drafts on its own mailbox; never files and never sends"
 tools: []

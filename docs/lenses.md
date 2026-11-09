@@ -16,6 +16,7 @@ Lenses are on the [Strategy](strategy.md) page, under **Lenses**. Market lenses 
 | Scenarios | strategy | scenario planning | a 2x2 |
 | Seven Powers | strategy | Seven Powers | a table of bets and powers |
 | Good Strategy | strategy | Rumelt's kernel | a table |
+| Startup idea check | strategy | YC's idea checks, and the tarpit test | a table |
 | Pre-mortem | strategy | a pre-mortem | a table |
 | Positioning | strategy | Dunford positioning | none |
 | Where to Play | market | Playing to Win | a table of segments |
@@ -31,7 +32,7 @@ older guide files kept for reference; they are not listed.
    result what it assumed instead.
 2. Choose what it reads: the **published** strategy (the default) or your **draft** (owner only; the run is private
    to you). A strategy lens needs a published version unless you run it on the draft. A market lens reads the market
-   pages and the strategy, and ignores the choice.
+   pages and the strategy, and ignores the choice. Startup idea check also reads the market's sizes.
 3. The run answers at once with `running`, then finishes in under a minute. The page and `hub lens show` poll it.
 
 If no model provider is set up, the run is `no_model` and your answers are saved; nothing else happens.

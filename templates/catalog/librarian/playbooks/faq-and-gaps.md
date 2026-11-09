@@ -1,10 +1,13 @@
 # Gaps, the log and the FAQ
 
-Three docs record what people ask and what the docs could not say. You write them after the answer is
-sent, never before. Each is written with `hub doc write <path> --title "<title>" --body-file <file>
+Three docs record what people ask and what the docs could not say. You write them once the answer is worked out and before your final message:
+the final message is the answer, sent last. Each is written with `hub doc write <path> --title "<title>" --body-file <file>
 --note "<what>"`. Read the current one first; add to it; never rewrite what is there.
 
 Title the docs "Question log", "Docs gaps" and "FAQ". Use team wording in their headings.
+
+A file below that does not exist yet is created by its first write, with the headings shown here. A missing file is never
+a reason to skip the write. `_librarian/missing.md` keeps all four headings, even when one of them says None.
 
 Keep names, emails and any personal detail out of all three. Paraphrase a question to its general form
 ("how long do refunds take") rather than quoting a human's wording with their details in it.
@@ -40,7 +43,7 @@ Keep names, emails and any personal detail out of all three. Paraphrase a questi
   during daily refresh; "None" is valid only when there are no current failures. A later successful
   fetch removes the entry.
 - Add a gap the first time you say "Not in the docs", with the count and the date after that; a gap is
-  its most useful when it says how often it is asked.
+  its most useful when it says how often it is asked. A repeat question raises the count on its existing line.
 - When a question is now answered (someone wrote the doc), remove its line and say so in the `--note`.
 - Order each section with the most-asked first.
 - This is a to-do list for humans. The daily routine's task note tells them to read it; keep it short
@@ -48,7 +51,7 @@ Keep names, emails and any personal detail out of all three. Paraphrase a questi
 
 ## `FAQ.md`: the answers that keep being asked
 
-Promote a question to `FAQ.md` when it has been asked **three times** in the log and its answer is stable
+Promote a question to `FAQ.md` when the log already holds **two** lines for it and this answer is the **third**, and its answer is stable
 (the same docs, a covered answer). One entry: the question, a short answer, its citations, the date last
 confirmed.
 
@@ -63,7 +66,7 @@ confirmed.
 - FAQ.md is an internal doc like any other and is searched first: that is the point, since the next
   human's question finds it directly.
 - An owner or a bot admin may lock it. If a write is refused as locked, put the entry in `missing.md`
-  under "Docs that need an update" and move on.
+  under "Out of date" and move on.
 
 Use **Computer** for where a bot runs and **Instructions** for its persistent prose in FAQ
 headings and answers. Replace old generated how-to wording when refreshing an entry; preserve

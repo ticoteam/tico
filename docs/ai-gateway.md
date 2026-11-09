@@ -1,49 +1,49 @@
 # Tico AI Gateway
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
-department, a level (Low, Medium or High), Fast or not, and a version. Decide asks the Gateway with the same key. You
-connect it once, in **Settings → Models**; **Settings → Gateway** shows what is in use. How runs reach the Gateway, for developers, is in
+level (X-Low, Low, Medium, High or X-High), Fast or not, and a version. Decide asks the Gateway with the same key. You
+connect it once, in **Settings → Models**, where the **Tico Gateway** card also shows prices and what is in use. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 ## The picks
 
-A pick is a name, not a model: Tico can change what runs underneath it. Every department has the same levels.
+A pick is a name, not a model: Tico can change what runs underneath it.
 
 | Level | Version 1.0 runs | Fast runs | For |
 |---|---|---|---|
-| Low | Claude Haiku 5.5 · $0.15 / $0.75 per 1M | DeepSeek V4.1 Flash · $0.45 / $1.80 | Sorting, triage, short replies, routine checks |
+| X-Low | DeepSeek V4 Flash · $0.14 / $0.27 per 1M | Inception Mercury 3 · $0.30 / $1.05 | Bulk sorting, tagging, short checks |
+| Low | Claude Haiku 5.5 · $0.15 / $0.75 | DeepSeek V4.1 Flash · $0.45 / $1.80 | Triage, short replies, routine checks |
 | Medium | Claude Sonnet 5.5 · $2.50 / $12.50 | Claude Opus 5.5 in fast mode · $10 / $50 | Writing, analysis, most turns |
 | High | Claude Opus 5.5 · $5 / $25 | Claude Opus 5.5 in fast mode · $10 / $50 | Hard problems, long plans, careful work |
+| X-High | Claude Fable 5.1 · $12.50 / $62.50 | Claude Fable 5.1 (no fast mode yet) · $12.50 / $62.50 | The hardest problems |
 
 Prices are input and output, USD per 1M tokens. A Low request whose prompt is over 100,000 tokens costs the whole request
 at $0.75 input, $0.075 cached input and $3.75 output, and **Usage** estimates it that way.
 
-Images a bot sends go to the models that read them: every pick except Low Fast.
+Images a bot sends go to the models that read them: Low, Medium, High and X-High, and their Fast picks except Low Fast.
+X-Low and X-Low Fast read text only.
 
-The ids are `tico-<department>-<level>` with `-fast` for Fast: `tico-sales-medium`, `tico-engineering-high-fast`. The
-departments are General, Product, Engineering, Marketing, Sales, Finance, Legal, Science, Operations and Data (the list
-is Tico's and can grow). A bot's department comes from its group on the org chart: Support and People bots use Operations,
-Leadership uses General. That id always means the tier's **current version**. Add the version to pin it:
-`tico-sales-medium-1.0` keeps its model and price when a newer version ships. Settings pins the current version by
-default and also offers older versions and **Auto (always latest)**. Tico publishes the list at
-`GET <gateway url>/catalog`; the server asks for it at most once an hour while the Gateway is connected, ignores an answer
-it cannot read, and otherwise uses the list shipped with its release.
+The ids are `tico-<level>` with `-fast` for Fast: `tico-medium`, `tico-xhigh-fast`. That id always means the tier's
+**current version**. Add the version to pin it: `tico-medium-1.0` keeps its model and price when a newer version ships.
+Settings pins the current version by default and also offers older versions and **Auto (always latest)**. Tico publishes
+the list at `GET <gateway url>/catalog` (schema 2); the server asks for it at most once an hour while the Gateway is
+connected, ignores an answer it cannot read, and otherwise uses the list shipped with its release.
 
-The first picks, **Tico Cheap 1.1**, **Mid 1.0** and **Power 1.0** (and Cheap 1.0), are the **old lineup**. A bot, a
-default or a fallback already on one keeps it, runs on it and pays its old price, shown as "Mid 1.0 (old lineup)". Nothing
-new can pick them.
+Ids from before this lineup (with a department, such as Sales or Engineering, or the first lineup's Cheap, Mid and
+Power) were rewritten once to the level they ran at when the server updated, and an id like that from an older install
+still runs as that level.
 
 ## Choose how bots get their models
 
 In the first step of setup the owner picks one of four choices. Later, **Settings → Models → Tico Gateway** keeps one
-switch, **Use when a computer has no subscription, or a plan runs out**: on is the first choice (or Tico Gateway only,
+switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out): on is the first choice (or Tico Gateway only,
 when that was picked), off is the second (or your company's plans or API keys).
 
 The four choices:
 
 - **Your Claude and ChatGPT subscriptions, plus Tico Gateway** (recommended). Bots do their main work on your Claude
   and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
-  **Settings → Computers**, and don't share one login across your team. Until you sign in, bots run on Tico Mid 1.0
+  **Settings → Computers**, and don't share one login across your team. Until you sign in, bots run on Tico Medium 1.0
   through the Gateway, and they move to your subscriptions on their next turn once you do, with no restart. When a
   plan runs out, the bot finishes on the Gateway, after any other provider signed in on its computer. Decide and
   update drafts run on the Gateway.
@@ -82,7 +82,7 @@ Only the owner can do this.
    (`TICO_GATEWAY_URL`) follows the same rule, or the key is not sent and the card says **Not working**.
 4. Press **Connect**.
 
-The card shows **Connected**, and Tico Cheap 1.1, Mid 1.0 and Power 1.0 appear in the bot model list. The key field empties as
+The card shows **Connected**, and the Tico levels appear in the bot model list. The key field empties as
 soon as you press **Connect**, and the key is never shown again: the field shows only a short preview, its first and
 last three characters. If the card says **Not working** or **Not ready**, see [What the card says](#what-the-card-says).
 
@@ -146,7 +146,7 @@ under 24 hours, including any fallback; its run details explain the shorter limi
   on the card turns it back on.
 - If Tico turns the Gateway off for your install, Health says "Tico AI Gateway was turned off for this install by
   Tico. Contact support." Decide and bots on Tico models stop, and the server stops asking for a key.
-- If the invite code doesn't work (expired, used by all the installs it allows, or cancelled), Health says so. Ask
+- If the invite code doesn't work (expired, used by all the installs it allows, or canceled), Health says so. Ask
   Tico Team for a new code and run the install command again with it, or paste a gateway key on the card.
 
 The Gateway counts each call against the install, its key, the model and the bot. It gets an id for the bot that only
@@ -177,16 +177,15 @@ not list it.
 
 While the Gateway is connected, choose **Tico AI Gateway** as a bot's harness / provider in **Settings → Bots**
 ([Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback)). The Model list then gives
-way to four controls: **Department** (the bot's group's, marked "(from group)"), **Level** (Low, Medium, High), **Fast**
-and **Version**. One line under them says what runs and the price, for example "Claude Sonnet 5.5 · $2.50 / $12.50 per
+way to three controls: **Level** (X-Low, Low, Medium, High, X-High), **Fast** and **Version**. One line under them says what runs and the price, for example "Claude Sonnet 5.5 · $2.50 / $12.50 per
 1M". Effort, Fallback and Tasks work as for any model. The same controls appear for a fallback or a task model.
 
-A bot on the Gateway with no model of its own, for example one that waits for a sign-in, runs on its department's Medium
-pick at the current version. A template can start a bot on another level: its `bot.yaml` may hold
-`gateway: {level: low, fast: true}` ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
+A bot on the Gateway with no model of its own, for example one that waits for a sign-in, runs on Medium at the current
+version. A template can start a bot on another level: its `bot.yaml` may hold
+`gateway: {level: low, fast: true}` (level `xlow`, `low`, `medium`, `high` or `xhigh`) ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
 
 **Settings → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
-`tico-decide-1.0`), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
+`tico-decide-low`, on Jev), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
 seconds per try instead of 8). Higher costs more per question and answers slower.
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
@@ -237,7 +236,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
 | Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute. The Gateway can take up to five minutes to refresh its balance after credit is added. |
 | Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. When the bot's other model finished the turn, the bot tries Tico models again after a minute. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
-| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in **Settings → Gateway**'s list, or in the bot's Model controls. |
+| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in the bot's Model controls; **Settings → Models → Tico Gateway** lists the picks in use. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |
 | The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried. Check the **Gateway URL**. |
@@ -246,44 +245,105 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
 saying the Tico AI Gateway cut the reply off.
 
-## Settings → Gateway
+## Settings → Models → Tico Gateway
 
-One flat page for the owner and admins: a line saying whether the Gateway is connected and this month's spend against its
-cap; **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with each service's status
-(Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
-**Settings → Models**, one link away.
+One card. Its first line says whether the Gateway is connected (and, for the owner only, this month's spend against its
+cap, with a bar) beside the **Use as fallback** switch. Owners and admins also see **prices** per 1M tokens in and out by
+level (X-Low to X-High) and mode (Regular, Fast), without the models underneath; **Picks in use** (name, version or
+Auto, number of bots) when a bot uses one; **API keys**, a link for the owner while the Gateway is connected
+([API keys](#api-keys)); and **Services**, folded, with each service's status (Live, On request, Coming soon), price and
+the tools that use it. The owner's key and Gateway URL are under **Advanced**. The old **Settings → Gateway** address
+(`#/settings/gateway`) opens this card.
 
-Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
-(live), with transcription, sending email, enrichment, voice and physical mail coming soon. Bots and agents read
+Services today: **Decide** (live), **Inbox** email addresses (live) and numbers (on request), **Search**, **Fetch**,
+**Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.30 per audio hour for live text) and **Mail** (live), with sending letters and email,
+enrichment and voice coming soon.
+A choice question (which of your labels fits) is a Decide question. Bots and agents read
 the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
-`hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
+`hub gateway search QUERY`, `hub gateway fetch URL`, `hub gateway digest --items-file FILE`, the `hub_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
+
+## API keys
+
+To use the Gateway from other tools (your own code, Claude Code, Codex, curl), make an API key on
+[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys). The owner reaches it from **Settings → Models → Tico Gateway → API keys**.
+Each key has a name and a monthly cap in dollars billed ($1 to $100, $20 by default), and its use bills to the company's
+credit like its bots' use. The company's owners and admins on app.tico.dev make and revoke keys once the company has
+prepaid credit. The key is shown once.
+
+An API key calls only the model and service endpoints: chat, models, decisions, search, fetch, images, videos, audio, markets,
+MCP and key. It can't reach billing, servers, computers, mail, webhooks, files or anything else of the company's.
+
+Bots don't need an API key: they use the install's Gateway key.
+
+OpenAI SDK:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://updates.tico.team/v1/gateway", api_key="<key>")
+reply = client.chat.completions.create(model="tico-medium",
+                                       messages=[{"role": "user", "content": "Hello"}])
+```
+
+Claude Code (the Gateway's tools over MCP):
+
+```sh
+claude mcp add --transport http tico https://updates.tico.team/v1/gateway/mcp --header "Authorization: Bearer <key>"
+```
+
+Search with curl:
+
+```sh
+curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" -d '{"query": "Tico AI Gateway", "max_results": 5}'
+```
 
 ## Images
 
-`hub gateway image PROMPT --category C --out PATH` makes an image through the Gateway and saves it. The categories:
+`hub gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
 
-- **storyboard**: a fast model that keeps people and places from `--ref` images, for frames (about 4 to 8 US cents an image).
-- **photo**: for photographic images.
-- **character**: keeps a person or character from the `--ref` files (up to 4, PNG, JPEG or WebP, 2 MiB each).
-- **graphic**: best for text and layout.
+- **low** (the default): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or WebP, 2 MiB each).
+  Good for frames and quick pictures.
+- **high**: `--category photo` (the default), `graphic` (best for text and layout) or `character` (keeps a person or
+  character from the `--ref` files).
+- **svg**: a vector image, scalable without loss, saved as `.svg`. `--quality standard` (the default) or `pro`. It takes no
+  `--ref` and no `--size`. HQ strips scripts and event handlers from the SVG before it
+  reaches the computer, and anything in the app that shows an SVG does it as a picture (`<img>`), never inline.
 
-`--size WxH` asks for the nearest aspect ratio, `--count N` makes up to 4 images. The first image is saved to `PATH`, the
-others beside it as `name-2.png`, `name-3.png`. Each image gets a sidecar `PATH.json` with its prompt, category, model,
-cost, the reference names and their sha256. An existing file is never overwritten.
+`--size WxH` asks for the nearest aspect ratio (not for svg), `--count N` makes up to 4 images. The first image is saved to
+`PATH`, the others beside it as `name-2.png`, `name-3.png`. Each image gets a sidecar `PATH.json` with its prompt, model,
+category or quality, cost, the reference names and their sha256. An existing file is never overwritten. A call with
+`--category` and no `--model` keeps the older door's choice (`storyboard`, `photo`, `character` or `graphic`).
 
 Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
-varies with the model and size, so it is not one number. The catalog lists the service (`hub gateway catalog images`).
-Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and answers the saved paths, never
-the image bytes.
+varies with the model and size, so it is not one number. The catalog lists the services (`hub gateway catalog images`
+and `hub gateway catalog svg`). Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and
+answers the saved paths, never the image bytes.
+
+## Videos
+
+`hub gateway video PROMPT` starts a short video: 3 to 15 seconds (8 by default), 360p, 720p (the default), 1080p or 4k,
+16:9 or 9:16, with sound unless `--no-audio`. Optional `--first-frame` and `--last-frame` are PNG or JPEG files the video
+starts or ends on. It answers a job id at once. A video takes minutes, so the command does not wait: check it with
+`hub gateway video-status ID --out PATH.mp4`. While the job runs the answer says so and nothing is saved; once it is done
+the MP4 is saved to `PATH.mp4` (never overwritten) with a sidecar `PATH.mp4.json`, and the answer gives its seconds and cost.
+The Gateway keeps no video: save it when it is done, as the status command does. A video that fails costs nothing;
+one still open after 15 minutes is given up and charged its hold, since the provider may still finish it. Only the key
+that started a job can read it.
+
+Bots use the same two things with the `hub_gateway_video` and `hub_gateway_video_status` tools. The video is priced per
+second at what the video model costs plus 25% (`hub gateway catalog video`), held when the job starts and charged when it
+ends, from the same cap as the other Gateway services.
+
 When the Finance budget for Video production refuses at its limit and is used up for whoever asks (a bot or a person,
-by the team they are in), new images are refused with `video_budget_reached` until the budget is raised or its period
-ends.
+by the team they are in), new images and videos are refused with `video_budget_reached` until the budget is raised or its
+period ends.
 
 ## Webhooks through the Gateway
 
-With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Webhooks → Through Tico
-Gateway). It keeps what senders post while your server is off or asleep, hands it over within seconds of the server being back,
+With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Models → Tico
+Gateway → Webhooks). It keeps what senders post while your server is off or asleep, hands it over within seconds of the server being back,
 and wakes a server Tico hosts that is asleep. The same key brings notices from Tico Team. See [Webhooks](webhooks.md#through-tico-gateway).
 
 ## Credit and the minimum balance

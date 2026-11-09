@@ -1,4 +1,4 @@
-// Setup's first two steps (ui/setup-strategy.js, ui/app/welcome.js) against a stand-in for the setup record, the
+// Setup's first two steps (ui/setup-strategy.ts, ui/app/welcome.js) against a stand-in for the setup record, the
 // research job (POST /api/v2/strategy/draft-from, polled) and the strategy draft (fixtures only, the Acme example).
 // What are you building saves the website and the line, then starts the research once (Back and Next again starts no
 // second one). Your bets polls it, then shows the proposed bets as claims: Keep makes one active (Rules out and Wrong
@@ -79,7 +79,7 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     const config = {...CONFIG, onboarding_needed: record.needed};
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', role: 'owner', cloud: true, email: 'ana@acme.example', config});
     if (p === '/api/v2/config') return json(config);
@@ -107,7 +107,7 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
       if (mode === 'refuse') return json({error: {code: 'validation', detail: "That address is this computer or an internal one; give the team's public website"}}, 422);
       job = {id: 'job-1', state: mode === 'no_model' ? 'no_model' : 'running', step: mode === 'no_model' ? null : body.url ? 'reading' : 'thinking',
         url: body.url, text: body.text, revision: st.draft.revision, pages: [], found: null, written: null, error: null,
-        started: '2026-10-25T09:00:00Z', finished: null};
+        started_at: '2026-10-25T09:00:00Z', finished_at: null};
       return json(job);
     }
     const poll = p.match(/^\/api\/v2\/strategy\/draft-from\/([^/]+)$/);
@@ -262,7 +262,7 @@ async function building(page, website, text) {
       const found = page.locator('#ss-found');
       await found.waitFor();
       assert.match(await found.innerText(), /^The draft changed while this ran, so nothing was written\. It found:/);
-      // Summary, vision, the four sections and the one bet, in that order.
+      // Summary, vision, the sections it found and the one bet, in that order.
       assert.deepEqual(await found.locator('.ss-found-row .strat-bet-k').allTextContents(), ['Summary', 'Vision', 'Who we serve',
         'What we sell, and for how much', "What we know that others don't", "What we won't do", 'Bet']);
       await shot(page, '6-bets-found');

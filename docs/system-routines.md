@@ -1,8 +1,8 @@
 # System routines
 
-System routines are the jobs Tico runs on its own, such as stale ticket reviews and nightly learnings. Task rules close eligible done tasks. Both appear in the same list, separate from bot routines, which are [Automations](routines.md) now.
+System routines are the jobs Tico runs on its own, such as stale ticket reviews. Task rules close eligible done tasks. Both appear in the same list, separate from bot routines, which are [Automations](routines.md) now. Learn runs in [Maintenance](maintenance.md), with its switch and schedule there; its nightly timer and read-only Automations mirror are retired.
 
-Open **Settings → System** (old `#/settings/rules` and `#/settings/routines` links land here too). The page has, top to bottom: **What Tico runs on its own** (this list), **Releases** and **Task Manager**. The same jobs and task rules show read-only on the Automations page. Everyone who can open Settings sees the flat list of built-in jobs and task rules, without group headings. The Task Manager's report shows its schedule as **Hourly on weekdays, 08:00–18:00**, and its row says when the Task Manager is paused.
+Open **Automations → System jobs** (`#/automations/system-jobs`), a built-in row beside Maintenance; old `#/settings/system`, `#/settings/rules` and `#/settings/routines` links land there too. **Releases** is on the Release Manager's **Settings** tab and **Task Manager** on the Task Manager's. The same jobs and task rules also show read-only on the Automations page. Everyone who can open Automations sees the flat list of built-in jobs and task rules, without group headings. The Task Manager's report shows its schedule as **Hourly on weekdays, 08:00–18:00**, and its row says when the Task Manager is paused.
 
 Wake rules are automations now: **What wakes bots** (the built-in rules, read-only) and one **What wakes ...** automation per bot, team, task type, department or task, on the Automations page. A person's message, an ask, an answer, an approval, a needs-action flag, a reply and a gate verdict always wake.
 
@@ -21,7 +21,7 @@ Task rules, the built-in switches, schedules and run records described here are 
 | Name and one line | What the job or rule does. |
 | **WHEN … THEN …** | Its trigger and action. Multiple conditions or actions join with **AND**. |
 | Department tag | Exactly one department from the org chart's fixed list. For task rules, it controls editing permissions. |
-| Schedule | How often it checks or runs, in words. Daily times use Pacific time. A task rule's schedule is separate from its untouched wait. |
+| Schedule | How often it checks or runs, in words. Times use Pacific time. A task rule's schedule is separate from its untouched wait. |
 | **Last run** | When it last finished (hover for the exact time) and the result in words, such as "9 checked, 2 suggestions". A job with no recorded run says "Not run yet". |
 | **Next run** | When the job or rule runs next, from its schedule and its last run. **Off** means it is switched off. A dash means Tico cannot tell. |
 | On or off | A switch if you may change it; otherwise its saved state. Housekeeping shows **Tico needs this to run** instead. |
@@ -29,7 +29,7 @@ Task rules, the built-in switches, schedules and run records described here are 
 
 A run that failed shows **Failed:** and a plain reason in red, for example "Failed: the database was busy". The reason names the kind of failure, never the error text, because error text can hold people's data.
 
-A job that wakes every few seconds and finds nothing to do does not add a row each time. A quiet run with the same result as the last one moves that row's times forward, at most once a minute. Built-ins and task rules share these run records. Tico keeps the last 50 records for each job or rule. Task-rule results include "2 tasks closed" or "No eligible done tasks".
+A job that wakes every few seconds and finds nothing to do does not add a row each time. A quiet run with the same result as the last one moves that row's times forward, at most once every 5 minutes, so a 10-second job's last run can read up to 5 minutes ago. A failure with the same reason as the last row folds the same way: the row keeps the time of the first failure and counts the repeats. A job that does not apply here writes nothing when it has nothing to do. Built-ins and task rules share these run records. Tico keeps the last 50 records for each job or rule. Task-rule results include "2 tasks closed" or "No eligible done tasks".
 
 The list refreshes when you open the tab and at most once a minute while it stays open.
 
@@ -38,15 +38,13 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | Row | Who can change it | Available controls |
 |---|---|---|
 | Task rule | Members of its department, including humans and bots in nested teams; the owner or an admin for any department | On or off, **Edit**, and schedule presets |
-| **Stale ticket review**, **Nightly learnings**, **Still wanted?**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
-| **Health scan** | Owner only | On or off, schedule presets, **Run now** |
+| **Stale ticket review**, **KPI stale asks** | Owner or admin | On or off, schedule presets, **Run now** |
+| **Ask go-ahead** (a [Heartbeat](heartbeat.md) step) | Owner or admin | On or off, on its row on the Heartbeat screen |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
-| **Start fresh when the topic changes**, **Stalled task check** | Owner or admin | On or off |
+| **Start fresh when the topic changes** | Owner or admin | On or off |
 | Housekeeping and other fixed built-ins | No switch or schedule editor on this page | Fixed operation; housekeeping cannot be switched off |
 
 A department tag on a built-in does not grant permission to change it. Task rules have no separate view-only role within their department. People outside that department can read the list without gaining editing rights.
-
-**Health scan** finds nothing while the Health Monitor itself is off in **Settings → Health**.
 
 ## Schedules and Run now
 
@@ -54,16 +52,19 @@ Choose from the presets offered on the row:
 
 | Row | Presets |
 |---|---|
-| Task rules, **Still wanted?**, **KPI stale asks**, **Health scan**, **Ask go-ahead** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
+| Task rules, **KPI stale asks** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
 | **Task Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
 | **Stale ticket review** | Hourly, Every 4 hours, Daily at a time |
-| **Nightly learnings** | Nightly at a time; initially 03:00 |
 
-Daily times use Pacific time. Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
+Times use company time (Pacific). Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
 
-**Run now** appears only on the seven scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
+Task roundup is now [Maintenance's Find stuck step](maintenance.md). Its old switch, schedule and read-only Automations mirror are retired. The latest saved switch carries over at cutover. Use `hub maintenance run --step find_stuck` to run it now; `POST /api/v2/system-routines/task_roundup/run` also runs that step and returns Maintenance's `{run, started}` response.
 
-Nightly learnings runs once per night. A failed, capped, or unconfigured night waits until the next night unless an authorized person uses **Run now**.
+**Run now** appears only on the scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
+
+The retired `learnings` Run now endpoint starts Maintenance's Learn step and returns `{run, started}`. Learn is off by default; its switch stays in effect for Run now.
+
+**Auto dream** is not a System routine. It is Maintenance's Dream step, once a day, for up to "Most bots per run" bots (three by default). Its switch and "Most bots per run" are in Automations › Maintenance. See [Learnings](learnings.md#dream).
 
 ## Task rules
 
@@ -94,7 +95,7 @@ Only the done-and-untouched trigger and close action are available for task rule
 
 ## Which AI answered
 
-Three jobs ask Decide, Tico's question-answering model: **Stale ticket review**, **Nightly learnings** and **Stalled task check**. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.
+**Stale ticket review** asks Decide, Tico's question-answering model. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered. Learn also asks Decide; its counts and cost appear in Maintenance.
 
 | Pill | Meaning |
 |---|---|
@@ -119,43 +120,61 @@ or evening tick does not run. It finds nothing while the Task Manager bot is pau
 
 Built-ins appear in one flat list. This table gives their default schedules; saved choices replace the defaults on controllable rows.
 
-| Job | What it does | Default schedule |
-|---|---|---|
-| **Start assigned tasks** | Starts eligible assigned work on a free computer turn; respects task caps, usage holds, and computer capacity. | When a turn is free |
-| **Stale ticket review** (AI) | Finds open tasks that look finished or forgotten and suggests to each owner what to do. See [Stale ticket review](tasks.md#stale-ticket-review). | Hourly |
-| **Still wanted?** | Asks a task's person once whether a task idle for a week is still wanted. | Daily at 09:00 |
-| **KPI stale asks** | Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track. | Hourly |
-| **Health scan** | Checks Tico's health and wakes the Health Monitor only for a finding the last scan did not have. | Hourly |
-| **Task Manager report** | Looks for stalled tasks, overdue asks, review tickets without a PR, merged work whose step did not move and similar, and opens one "Task check" task per department for the [Task Manager](task-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |
-| **Books check** | Reads the [Bookkeeper](bookkeeper.md)'s Finance work queue in plain code and opens one "Books check" task for it only when something is new. Nothing new is a quiet run: no task, no model call. Opens nothing while the Bookkeeper is paused. | Hourly |
-| **Books watch** | Reads runway, unusual spend, duplicate charges and price increases in plain code and opens one "Watch" task for the [Bookkeeper](bookkeeper.md) only when something new is found. Not a switch: the Bookkeeper's pause stops it. | Daily |
-| **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly |
-| **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
-| **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
-| **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
-| **Approval expiry** | Takes approvals and asks nobody will act on out of Needs you. | Hourly |
-| **Unanswered questions** | On weekday mornings, sends questions unanswered for two business days back to their bots. | Hourly |
-| **Stalled task check** (AI) | Before a stall check stays silent on a stalled task nothing has changed on, Decide reads its last six messages: it sets the wait the messages name, closes the task if it is finished, or lets one stall wake through if it is stuck; unsure changes nothing and shows in the Task Manager's report. On by default; see [Stalled tasks](tasks.md). | When it happens |
-| **Stall checks** | Wakes the bot on a task nothing is moving, never one with a live session or a recorded wait, no sooner than 30 minutes after the last check and doubling to 8 hours while the task stays unchanged (only other people's comments, status, step, owner, waiting-on and related tasks count as change), and drops queued work its bot can no longer read. | Every minute |
-| **Turn fixer** | Frees turns proven dead (lease lost and process gone, or stopped before they started) with a note on the task; holds a dead turn that may have pushed, sent or paid for BotOps instead of retrying it; keeps one Health finding per busy-turns incident and hands what it cannot fix to BotOps. See [Computers](computers.md#the-turn-fixer). | Every 10 seconds |
-| **Waiting checks** | Sends bot tasks waiting on nothing back to work, and turns a bot's plain ask to a person into a small task. | Hourly |
-| **Snooze ends** | Brings snoozed tasks back when their date comes and starts deferred runs that are due. | Every 10 seconds |
-| **Go-live expiry** | Ends a go-live waiting for a computer that never reports. | Every 10 minutes |
-| **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily |
-| **Goal colours** | Works out every goal's colour again as its data ages. | Hourly |
-| **Cleanup** | Clears old events, mail, retry keys and recorder data. | Hourly |
-| **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly |
-| **Billing check** | Reads HQ's nightly billing check for the owner's Health page. | Hourly |
-| **Updates** | Asks people and bots for today's updates, one at a time. | Every 10 seconds |
-| **GitHub sync** | Catches up on pull requests, merges and releases whose notice from GitHub never arrived. | Every 10 seconds |
-| **Repository and setup waits** | Finishes a bot waiting for its repository or a worktree, and tells a person about a bot stuck in setup. | Every 10 seconds |
-| **Release and feed check** | Checks for a new Tico release and fetches subscribed updates. | Every 10 seconds; a new release is looked for every 6 hours |
-| **Directory sync** | Brings people in from the company directory. | Hourly, or the interval you set; "Off: no directory connected" until you connect one |
-| **Meeting notes sync** | Brings in meeting notes from each person's connected Granola. | Every 30 seconds |
-| **Document sync** | Refreshes linked documents from their sources. | Every few seconds |
-| **Start fresh when the topic changes** | Starts a fresh session, like Clear, when a direct-chat message changes the topic. | When it happens |
+The list shows only the jobs that can run on this server. A job whose feature is not set up is left out here and on
+Automations (its rows, runs and counts) until it is: the **only when** column says what each one needs. Nothing is
+deleted, so the row comes back by itself. Every job records its runs.
 
-**Last run** on **Meeting notes sync** and **Document sync** says "Each connection shows its own", because each connection keeps its own last run. **Start assigned tasks** has no shared run record. **Start fresh when the topic changes** and **Stalled task check** say "Runs when it happens".
+Check health runs as a [Maintenance](maintenance.md) step. It has no separate System routines row or timer.
+
+The jobs that must happen within seconds (due times, recovery and outside polls) are steps of the [Heartbeat](heartbeat.md), one row here. Each step's last run, result, day counts and last error are on the Heartbeat's own screen on Automations.
+
+| Job | What it does | Default schedule | Only when |
+|---|---|---|---|
+| **Heartbeat** | Runs its steps in one short beat: due reminders, snooze ends, updates, digests, ask go-ahead and approval expiry; stall checks, the turn fixer, run housekeeping and the other recovery checks; GitHub sync, repository waits and personal alerts. See [Heartbeat](heartbeat.md). | Every 10 seconds, or the interval set there |  |
+| **Start assigned tasks** | Starts eligible assigned work on a free computer turn; respects task caps, usage holds, and computer capacity. Each start is one run. | When a turn is free | |
+| **Stale ticket review** (AI) | Finds open tasks that look finished or forgotten and suggests to each owner what to do. See [Stale ticket review](tasks.md#stale-ticket-review). | Hourly |  |
+| **KPI stale asks** | Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track. | Hourly |  |
+| **Task Manager report** | Looks for stalled tasks, overdue asks, review tickets without a PR, merged work whose step did not move and similar, and opens one "Task check" task per department for the [Task Manager](task-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |  |
+| **Books check** | Reads the [Bookkeeper](bookkeeper.md)'s Finance work queue in plain code and opens one "Books check" task for it only when something is new. Nothing new is a quiet run: no task, no model call. Opens nothing while the Bookkeeper is paused. | Hourly | a Bookkeeper bot |
+| **Books watch** | Reads runway, unusual spend, duplicate charges, price increases and unused subscriptions in plain code and opens one "Watch" task for the [Bookkeeper](bookkeeper.md) only when something new is found. Not a switch: the Bookkeeper's pause stops it. | Daily | a Bookkeeper bot |
+| **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly | a Bookkeeper bot |
+| **Unanswered questions** | On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' task roundup, never as a wake. | Hourly |  |
+| **Task roundup (retired)** | Grouped task lists now run through [Maintenance Find stuck](maintenance.md), with its switch, schedule and wake limits. | Maintenance schedule |  |
+| **Waiting checks** | Sends a bot's task waiting on nothing tracked back to open after two hours (not before its due date or snooze ends). A task sent back three times in 24 hours stays waiting, and its manager bot (or BotOps, never a person) is told once a day. | Hourly |  |
+| **Resume stranded work** | Wakes a bot once on its task left in progress with no run and nothing to wait on, 15 minutes after its last run ended (or on its ticket at a check step with its check over and no CI going, after an hour); at most 25 tasks a pass, one per bot. After three runs with no progress it stops and lists the task once on the task roundup of the bot's manager bot (or the bot's own), never a person. See [Resuming stranded work](tasks.md#resuming-stranded-work). | Every 10 minutes |  |
+| **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily | a watched page |
+| **Goal colours** | Works out every goal's colour again as its data ages. | Hourly |  |
+| **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly | a Gateway key |
+| **Billing check** | Reads HQ's nightly billing check for the owner's Health page. | Hourly | HQ's staff key (Tico's own server) |
+| **Release and feed check** | Checks for a new Tico release and fetches subscribed updates. | Every 10 seconds; a new release is looked for every 6 hours |  |
+| **Directory sync** | Brings people in from the company directory. | Hourly, or the interval you set; "Off: no directory connected" until you connect one | a directory connected |
+| **Meeting notes sync** | Brings in meeting notes from each person's connected Granola. | Every 30 seconds | a Granola connection |
+| **Document sync** | Refreshes linked documents from their sources. | Every 5 seconds | a linked document |
+| **Start fresh when the topic changes** | Starts a fresh session, like Clear, when a direct-chat message changes the topic. | When it happens |  |
+| **Thread retention** | Deletes messages past the time their thread keeps them, in short batches. | Every 15 minutes | |
+| **Skill usage** | Folds skill uses into daily counts for Library › Skills and deletes raw uses, and the daily counts of skills outside the directory, older than 90 days. | Hourly | |
+| **Production checks** | Reads a few production invariants in plain code and shows each failing one on Health. | Every 15 minutes | |
+| **Skill screening** (AI) | Screens each proposed skill and update with plain-code patterns and Decide High before an admin can approve it, a few a pass, oldest first. Mandatory: no switch, and no other model answers in its place. See [Skills](skills.md#screening). | As skills are proposed | a skill proposal |
+| **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10, for the threads API's `sort=important` order. In that order a thread that needs attention comes first, whatever its level. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. That order otherwise leaves out level 1 threads, threads of finished tasks, and task threads no person owns or asked for. It also stops for the day once the server's Decide calls reach 80% of the bots' daily call budget, so the checks that act on tasks keep room. | Every 5 minutes | |
+| **Tico company heartbeat** | Tells app.tico.dev this server's version once a day. | Daily | a linked Tico company |
+| **Scheduled update** | Updates a hosted server to the release Tico support scheduled, once no bot turn runs. | Every minute | a hosted server |
+| **Daily release** | At the release hour, sends the Release Manager one task for what is at Pending Release. | At the release hour | the daily release on |
+| **Outside text check** | Screens outside text a restart left waiting. | Every 10 seconds | |
+| **Finance upkeep** | Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and finished approvals, watches documents and opens next month's period. | Every 10 seconds | |
+| **Hourly deadlines** | Turns off a webhook that failed for five days, retires replaced computers, and hands a person a support ticket or screened item that waited an hour. | Hourly | |
+| **Strategy note check** | Starts the Strategy Bot's Monday note above Passive and pauses it at Passive. | Hourly | a Strategy Bot |
+| **Tico Cloud check** | Reads this company's Tico Cloud access from HQ and renews its file hosting keys. | Every minute on Tico Cloud, else hourly | a Gateway key |
+| **Workspace key check** | Checks a pending or failing Google Workspace key again until it works or its hour is up. | Every 10 seconds | a Workspace key |
+| **Inbound mail** | Brings in mail and bills from HQ, and deletes inbound mail older than 90 days. | Every 15 seconds | |
+| **Gateway webhooks** | Brings in webhooks and Tico notices waiting at Tico Gateway. | Every 15 seconds with a relay, else every minute | a Gateway key |
+| **Physical mail** | Reads and routes letters the mail relay and the mail-intake inbox kept. | Every minute | physical mail received |
+| **Letters sync** | Sends approved letters and follows each one until it is delivered. | Every 30 seconds | a letter sent |
+| **Sleep when idle** | Asks HQ to put this server to sleep once nobody has used it for the set time. | Every 5 minutes; every minute on a cell | sleep set, or a cell |
+| **Cloud machines** | Starts bots' cloud machines for work and stops them when idle. | Every 10 seconds | a Tico Cloud company |
+
+Every row shows its last run. **Meeting notes sync** and **Document sync** record one run per pass, **Start fresh when the topic changes** one per check, and **Start assigned tasks** one per start.
+
+Not listed, because they are not timed jobs of their own: the automations engine (its runs are each automation's own), the workers that send webhooks and sync Finance's bank, books and Gateway (they act on queued work and show it on that work's page), the one-off backfills a release runs once, and the restart of a worker that stopped.
 
 ## If a row looks wrong
 
@@ -163,4 +182,4 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 - **Failed in red.** Read the reason. A busy database clears on the next run. A repeated "Tico refused it" or "Decide did not answer" means the job is failing each time; tell your Tico admin.
 - **Uses AI with no route.** The job has not asked Decide yet, for example because nothing needed a decision.
 
-<!-- Sources checked 2026-10-24 at PR #1293 head f0fcafdf65c082a408f4524e379cc091109a2b3c: ui/app/settings-recurring.js; backend/task_rules.py; backend/system_routines.py; backend/models.py (TaskRuleUpdate). Task-rules spec v1, acceptance 11. -->
+<!-- Sources checked 2026-11-05 at main 1ed46c055: docs/maintenance.md; backend/maintenance_steps/dream.py; backend/dream_auto.py; ui/app/automations-maintenance.ts (Auto dream). Earlier, 2026-10-24 at PR #1293 head f0fcafdf65c082a408f4524e379cc091109a2b3c: ui/app/settings-recurring.ts; backend/task_rules.py; backend/system_routines.py; backend/models.py (TaskRuleUpdate). Task-rules spec v1, acceptance 11. -->

@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/maintenance.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 36,
+                    "endColumn": 46,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

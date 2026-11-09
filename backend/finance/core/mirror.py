@@ -1,6 +1,7 @@
 """Mirror mode (spec §10): the rules by which a book copies a provider's books, with no I/O. Which revision of a provider
 record the books take, how a bank row finds the entry it is, how a backfill pages through a provider's records, when
 the change feed is read, and which provider class a tag sends. The store and the sync call these."""
+
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -9,42 +10,60 @@ from typing import Any, cast
 
 from . import dates
 
-BACKFILL_SIZE = 1000    # records per provider read (QuickBooks returns at most 1000 a query): one page, one transaction
-MATCH_DAYS = 3          # a bank row finds an entry this many days either side of its own date
-CDC_DAYS = 30           # how far back a change feed reaches (QuickBooks keeps 30 days of changes)
-CDC_OVERLAP = 300       # seconds read again before the last pass, so a change made during it is not missed
-CDC_EVERY = 900         # seconds between change feed reads (the safety net under the webhooks)
+BACKFILL_SIZE = 1000  # records per provider read (QuickBooks returns at most 1000 a query)
+APPLY_CHUNK = 100  # records applied per transaction: a page is applied in chunks, and its cursor moves once all are in
+MATCH_DAYS = 3  # a bank row finds an entry this many days either side of its own date
+CDC_DAYS = 30  # how far back a change feed reaches (QuickBooks keeps 30 days of changes)
+CDC_OVERLAP = 300  # seconds read again before the last pass, so a change made during it is not missed
+CDC_EVERY = 900  # seconds between change feed reads (the safety net under the webhooks)
+CDC_FLOOR_MARGIN = timedelta(days=1)  # the change feed never starts on the window's edge (a read is sent after `now`)
 # A write's reference: the id a provider keeps on the record it makes, so a record that comes in can be bound to the
 # write that made it (the write's idempotency key, in this namespace). Providers store the same string in their notes.
 REFERENCE_NAMESPACE = uuid.UUID("6f0c5a1e-2b7d-4c8e-9a13-5d2f7e4b9c01")
-TAX_ACCOUNT = "Tax:sales"     # a provider line that is the sales tax on a document: the books' sales tax account
-SALES_TAX = "sales tax"       # the subtype of the account a taxed record's tax lands on
+TAX_ACCOUNT = "Tax:sales"  # a provider line that is the sales tax on a document: the books' sales tax account
+SALES_TAX = "sales tax"  # the subtype of the account a taxed record's tax lands on
 
 # What the books do with one provider record (decide).
-CREATE = "create"       # new to the books
-REPLACE = "replace"     # a newer revision: an entry is reversed and posted again; an account or party is updated
-DELETE = "delete"       # deleted at the provider: an entry is reversed; an account or party is made inactive
-SAME = "same"           # the revision the books hold
-OLDER = "older"         # a revision older than the books hold arrived late: nothing changes
-GONE = "gone"           # deleted at the provider and never in the books: nothing to do
+CREATE = "create"  # new to the books
+REPLACE = "replace"  # a newer revision: an entry is reversed and posted again; an account or party is updated
+DELETE = "delete"  # deleted at the provider: an entry is reversed; an account or party is made inactive
+SAME = "same"  # the revision the books hold
+OLDER = "older"  # a revision older than the books hold arrived late: nothing changes
+GONE = "gone"  # deleted at the provider and never in the books: nothing to do
 
 BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books take it (one cursor per entity)
-    "quickbooks": ("accounts", "parties", "documents", "payments", "entries"),
-    "xero": ("accounts", "parties", "invoices", "credit_notes", "payments", "manual_journals",
-             "bank_transactions", "bank_transfers", "overpayments", "prepayments"),
+    "quickbooks": ("accounts", "parties", "records", "documents", "payments", "entries"),
+    "xero": (
+        "accounts",
+        "parties",
+        "items",
+        "tracking",
+        "invoices",
+        "credit_notes",
+        "payments",
+        "manual_journals",
+        "bank_transactions",
+        "bank_transfers",
+        "overpayments",
+        "prepayments",
+    ),
 }
 
 
 @dataclass(frozen=True)
 class Ext:
     """A provider record's identity: its entity kind, its id within that kind, and its revision (a counter the provider
-    bumps on each change). `reference` is the write reference the provider holds on the record, when it holds one."""
+    bumps on each change). A provider that gives no revision gives a `content` digest instead, and the books make the
+    revision from it (`content_revision`). `reference` is the write reference the provider holds on the record, when it
+    holds one."""
+
     kind: str
     external_id: str
     revision: str
     deleted: bool = False
     reference: str = ""
-    currency: str = ""      # the record's currency code ("" when the provider names none)
+    currency: str = ""  # the record's currency code ("" when the provider names none)
+    content: str = ""  # a digest of the record's content, for a record whose revision the books make
 
     @property
     def key(self) -> str:
@@ -57,75 +76,127 @@ class ChartAccount:
     ext: Ext
     code: str
     name: str
-    type: str           # asset | liability | equity | income | expense
+    type: str  # asset | liability | equity | income | expense
     subtype: str = ""
     active: bool = True
-    payroll: bool = False   # a payroll expense account: its lines are private until the owner says otherwise
+    payroll: bool = False  # a payroll expense account: its lines are private until the owner says otherwise
 
 
 @dataclass(frozen=True)
 class Party:
     ext: Ext
     name: str
-    kind: str           # vendor | customer | both; "" when the provider does not say (the books keep their kind)
+    kind: str  # vendor | customer | both; "" when the provider does not say (the books keep their kind)
     active: bool = True
     emails: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
+class Item:
+    """A provider product or service: what a line sells or buys, and the accounts it posts to (provider keys)."""
+
+    ext: Ext
+    name: str
+    sku: str = ""
+    kind: str = "service"  # service | inventory | non_inventory | bundle | category (the books' item kinds)
+    price: int | None = None
+    income: str = ""  # the provider's key for the account a sale posts to, "" for none
+    expense: str = ""  # the provider's key for the account a purchase posts to, "" for none
+    asset: str = ""  # the provider's key for an inventory item's asset account, "" for none
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class Location:
+    """A provider location (a department): what a line is tagged with for the location it was for."""
+
+    ext: Ext
+    name: str
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class Dimension:
+    """A provider class: a line's class, which the books keep as a class dimension."""
+
+    ext: Ext
+    name: str
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class Project:
+    """A provider job: a customer that is a job of its parent customer. The books keep it as a project under that
+    customer, and a line for it is tagged with the project."""
+
+    ext: Ext
+    name: str
+    customer: str = ""  # the parent customer's key ("Customer:4"), "" when the provider names none
+    active: bool = True
+
+
+Tags = tuple[tuple[str, str], ...]  # a provider line's tags: (kind, provider key), kind location | class | project
+
+
+@dataclass(frozen=True)
 class EntryLine:
-    account: str        # the provider's key for the account ("Account:55")
-    amount: int         # minor units, debits positive
-    party: str = ""     # the provider's key for the vendor or customer ("Vendor:9"), "" for none
+    account: str  # the provider's key for the account ("Account:55")
+    amount: int  # minor units, debits positive
+    party: str = ""  # the provider's key for the vendor or customer ("Vendor:9"), "" for none
     description: str = ""
     rounding: bool = False  # the provider's rounding on a document: the one line that may be negative
-    key: str = ""       # the provider's id for the line: it stays the same when the line's amount changes
+    key: str = ""  # the provider's id for the line: it stays the same when the line's amount changes
+    tags: Tags = ()  # the line's location, class and project (provider keys), a transaction's header ones included
+    item: str = ""  # the provider's key for the product or service the line sells or buys ("Item:5"), "" for none
 
 
 @dataclass(frozen=True)
 class Journal:
     """One provider entry as the books take it: a balanced set of lines, dated, from one source (sync, bill, invoice
     or payment)."""
+
     ext: Ext
     day: str
     memo: str
     source: str
     lines: tuple[EntryLine, ...]
-    basis: str = "both"     # "accrual" when the provider keeps the entry out of its cash-basis reports
-    currency: str = ""      # the provider's currency code; "" when the provider names none (the books' own)
-    refund_of: str = ""     # the credit memo or supplier's credit this refunds money for ("" for none)
+    basis: str = "both"  # "accrual" when the provider keeps the entry out of its cash-basis reports
+    currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
+    refund_of: str = ""  # the credit memo or supplier's credit this refunds money for ("" for none)
 
 
 @dataclass(frozen=True)
 class Document:
     """A provider's bill, invoice or credit memo. Its lines are positive amounts on accounts; the books post a bill's lines
     as debits and an invoice's as credits (a credit memo's as debits, against receivables)."""
+
     ext: Ext
-    party: str          # the vendor or customer key ("Vendor:9", "Customer:4"), "" when the provider names none
+    party: str  # the vendor or customer key ("Vendor:9", "Customer:4"), "" when the provider names none
     number: str
     day: str
     due: str
-    total: int          # minor units, positive
+    total: int  # minor units, positive
     lines: tuple[EntryLine, ...]
     memo: str = ""
-    links: tuple[tuple[str, int], ...] = ()     # a credit memo's applied invoices ("Invoice:5", amount)
-    tax: int = 0                                # the sales tax in its total, posted on TAX_ACCOUNT
+    links: tuple[tuple[str, int], ...] = ()  # a credit memo's applied invoices ("Invoice:5", amount)
+    tax: int = 0  # the sales tax in its total, posted on TAX_ACCOUNT
     currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
-    control: str = ""                           # the provider's payable or receivable account ("Account:33")
+    control: str = ""  # the provider's payable or receivable account ("Account:33")
 
 
 @dataclass(frozen=True)
 class Settlement:
     """A provider's payment of bills or invoices: a bill payment or a received payment. Its money moves between the bank
     account and the party's control account; `links` says how much settles each document ("Bill:12", amount)."""
+
     ext: Ext
     day: str
     memo: str
     party: str
-    bank: str           # the provider's key for the money account, "" when the provider names none
-    total: int          # minor units, positive
+    bank: str  # the provider's key for the money account, "" when the provider names none
+    total: int  # minor units, positive
     links: tuple[tuple[str, int], ...] = ()
-    credits: tuple[tuple[str, int], ...] = ()    # a payment's applied credit memos ("CreditMemo:7", amount)
+    credits: tuple[tuple[str, int], ...] = ()  # a payment's applied credit memos ("CreditMemo:7", amount)
     currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
 
 
@@ -133,6 +204,7 @@ class Settlement:
 class Refused:
     """A provider record the books refuse to take in, with the reason a person reads. It waits like any record the
     books could not take in, and is refused again on each read until the provider's record changes."""
+
     ext: Ext
     why: str
 
@@ -149,6 +221,14 @@ def revision_order(a: str, b: str) -> int:
     if a.isdigit() and b.isdigit():
         return (int(a) > int(b)) - (int(a) < int(b))
     return (a > b) - (a < b)
+
+
+def content_revision(stored: str, at: str, digest: str) -> str:
+    """The revision a record takes when the provider gives it none: the time the books first see its content, so a
+    change
+    sorts after the revision it replaces. The stored revision stays while the content is the same, so an unchanged
+    record is not a new revision on every read."""
+    return stored if stored.endswith(f"-{digest}") else f"{at}-{digest}"
 
 
 def decide(have: tuple[str, str] | None, ext: Ext) -> str:
@@ -192,8 +272,9 @@ def backfill_next(state: Mapping[str, object], entity: str) -> int | None:
     return start if isinstance(start, int) and start > 0 else 1
 
 
-def backfill_after(state: Mapping[str, object], entity: str, start: int, count: int,
-                   size: int = BACKFILL_SIZE) -> dict[str, object]:
+def backfill_after(
+    state: Mapping[str, object], entity: str, start: int, count: int, size: int = BACKFILL_SIZE
+) -> dict[str, object]:
     """The backfill state once the page from `start` (`count` records) is in the books. A short page is the last."""
     return {**state, entity: {"next": start + count, "done": count < size}}
 
@@ -214,11 +295,22 @@ def stamp(value: str, n: int) -> str:
 
 
 def cdc_since(cursor: str | None, now: str) -> str:
-    """The time a change feed is read from: the last read less an overlap, never more than CDC_DAYS back (ISO, UTC)."""
+    """The time a change feed is read from: the last read less an overlap, never more than CDC_DAYS back less a margin
+    (ISO, UTC). QuickBooks keeps CDC_DAYS of changes; a read sent after `now` must still be inside them."""
     at = parse(now)
-    floor = at - timedelta(days=CDC_DAYS)
+    floor = at - timedelta(days=CDC_DAYS) + CDC_FLOOR_MARGIN
     base = parse(cursor) - timedelta(seconds=CDC_OVERLAP) if cursor else floor
     return max(base, floor).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cdc_clamped(cursor: str | None, now: str) -> bool:
+    """Whether a feed's cursor is older than the provider keeps changes for (the window, with its one-day margin): a read
+    from it would start at the floor, so the changes between the cursor and the floor are gone and the books are read in
+    full instead. A feed never read has no cursor and is not clamped."""
+    if not cursor:
+        return False
+    floor = parse(now) - timedelta(days=CDC_DAYS) + CDC_FLOOR_MARGIN
+    return parse(cursor) - timedelta(seconds=CDC_OVERLAP) < floor
 
 
 def cdc_due(cursor: str | None, now: str, every: int = CDC_EVERY) -> bool:
@@ -226,9 +318,12 @@ def cdc_due(cursor: str | None, now: str, every: int = CDC_EVERY) -> bool:
     return cursor is None or (parse(now) - parse(cursor)).total_seconds() >= every
 
 
-def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]) -> dict[str, str]:
-    """The provider class for each tag a line carries, by tag kind. `mapping` is {tag kind: {tag value: class id}}; a
-    tag with no class in it sends none, and an empty mapping (the default) sends nothing."""
+def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]], own: str = "") -> dict[str, str]:
+    """The provider class a line is sent with. A line's own class (`own`, its class tag's provider class) is the class
+    it is sent with; otherwise each tag's class from `mapping`, which is {tag kind: {tag value: class id}}. A tag with no
+    class in it sends none, and an empty mapping (the default) sends nothing."""
+    if own:
+        return {"class": own}
     out: dict[str, str] = {}
     for kind, value in tags.items():
         cls = mapping.get(kind, {}).get(value, "")
@@ -238,7 +333,7 @@ def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]
 
 
 # ------------------------------------------------------------------------------------------------ parked records
-Record = ChartAccount | Party | Journal | Document | Settlement | Ext | Refused
+Record = ChartAccount | Party | Journal | Document | Settlement | Item | Location | Dimension | Project | Ext | Refused
 
 
 def encode(r: Record) -> dict[str, Any]:
@@ -247,14 +342,31 @@ def encode(r: Record) -> dict[str, Any]:
 
 
 def _ext(d: Mapping[str, Any]) -> Ext:
-    return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)),
-               str(d.get("reference", "")), str(d.get("currency", "")))
+    return Ext(
+        str(d["kind"]),
+        str(d["external_id"]),
+        str(d["revision"]),
+        bool(d.get("deleted", False)),
+        str(d.get("reference", "")),
+        str(d.get("currency", "")),
+        str(d.get("content", "")),
+    )
 
 
 def _lines(raw: Any) -> tuple[EntryLine, ...]:
-    return tuple(EntryLine(str(x["account"]), int(x["amount"]), str(x.get("party", "")),
-                           str(x.get("description", "")), bool(x.get("rounding", False)),
-                           key=str(x.get("key", ""))) for x in raw)
+    return tuple(
+        EntryLine(
+            str(x["account"]),
+            int(x["amount"]),
+            str(x.get("party", "")),
+            str(x.get("description", "")),
+            bool(x.get("rounding", False)),
+            key=str(x.get("key", "")),
+            tags=tuple((str(k), str(v)) for k, v in x.get("tags", [])),
+            item=str(x.get("item", "")),
+        )
+        for x in raw
+    )
 
 
 def _pairs(raw: Any) -> tuple[tuple[str, int], ...]:
@@ -268,23 +380,76 @@ def decode(d: Mapping[str, Any]) -> Record:
         return _ext(d)
     ext = _ext(d["ext"])
     if kind == "ChartAccount":
-        return ChartAccount(ext, str(d["code"]), str(d["name"]), str(d["type"]), str(d.get("subtype", "")),
-                            bool(d.get("active", True)), bool(d.get("payroll", False)))
+        return ChartAccount(
+            ext,
+            str(d["code"]),
+            str(d["name"]),
+            str(d["type"]),
+            str(d.get("subtype", "")),
+            bool(d.get("active", True)),
+            bool(d.get("payroll", False)),
+        )
     if kind == "Party":
-        return Party(ext, str(d["name"]), str(d["kind"]), bool(d.get("active", True)),
-                     tuple(str(x) for x in d.get("emails", [])))
+        return Party(
+            ext, str(d["name"]), str(d["kind"]), bool(d.get("active", True)), tuple(str(x) for x in d.get("emails", []))
+        )
     if kind == "Journal":
-        return Journal(ext, str(d["day"]), str(d["memo"]), str(d["source"]), _lines(d["lines"]),
-                       str(d.get("basis", "both")), str(d.get("currency", "")),
-                       refund_of=str(d.get("refund_of", "")))
+        return Journal(
+            ext,
+            str(d["day"]),
+            str(d["memo"]),
+            str(d["source"]),
+            _lines(d["lines"]),
+            str(d.get("basis", "both")),
+            str(d.get("currency", "")),
+            refund_of=str(d.get("refund_of", "")),
+        )
     if kind == "Document":
-        return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
-                        _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),
-                        int(d.get("tax", 0)), str(d.get("currency", "")),
-                        control=str(d.get("control", "")))
+        return Document(
+            ext,
+            str(d["party"]),
+            str(d["number"]),
+            str(d["day"]),
+            str(d["due"]),
+            int(d["total"]),
+            _lines(d["lines"]),
+            str(d.get("memo", "")),
+            _pairs(d.get("links", [])),
+            int(d.get("tax", 0)),
+            str(d.get("currency", "")),
+            control=str(d.get("control", "")),
+        )
     if kind == "Settlement":
-        return Settlement(ext, str(d["day"]), str(d["memo"]), str(d["party"]), str(d["bank"]), int(d["total"]),
-                          _pairs(d.get("links", [])), _pairs(d.get("credits", [])), str(d.get("currency", "")))
+        return Settlement(
+            ext,
+            str(d["day"]),
+            str(d["memo"]),
+            str(d["party"]),
+            str(d["bank"]),
+            int(d["total"]),
+            _pairs(d.get("links", [])),
+            _pairs(d.get("credits", [])),
+            str(d.get("currency", "")),
+        )
+    if kind == "Item":
+        price = d.get("price")
+        return Item(
+            ext,
+            str(d["name"]),
+            str(d.get("sku", "")),
+            str(d.get("kind", "service")),
+            None if price is None else int(price),
+            str(d.get("income", "")),
+            str(d.get("expense", "")),
+            str(d.get("asset", "")),
+            bool(d.get("active", True)),
+        )
+    if kind == "Location":
+        return Location(ext, str(d["name"]), bool(d.get("active", True)))
+    if kind == "Dimension":
+        return Dimension(ext, str(d["name"]), bool(d.get("active", True)))
+    if kind == "Project":
+        return Project(ext, str(d["name"]), str(d.get("customer", "")), bool(d.get("active", True)))
     if kind == "Refused":
         return Refused(ext, str(d["why"]))
     raise ValueError(f"not a mirror record: {kind}")

@@ -15,7 +15,7 @@ const {unrouted} = require('./support/routes.cjs');
     const at = ms => new Date(Date.now() + ms).toISOString();
     const folder = '/home/runner/.tico-host/state-box/musecode/data/muse/sessions';
     const problem = `Muse Code can't save sessions: the bot user can't write ${folder} (another user owns it or it is read-only)`;
-    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['ops'], platform: 'linux', version: '0.3.74', last_seen: at(-3000),
+    const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['ops'], platform: 'linux', version: '0.3.74', last_seen_at: at(-3000),
       readiness: {
         runtimes: {musecode: {installed: true, authenticated: 'failed', detail: problem, data_problem: problem}},
         bots: {ops: {ready: false, runtime: 'musecode', sign_in: 'failed', data_problem: problem, problems: [problem]}},
@@ -27,17 +27,17 @@ const {unrouted} = require('./support/routes.cjs');
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (req.method() !== 'GET') return json({});
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', operator: 'ana', can_manage: true,
-        users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', operator: 'ana'}}]);
+      if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', owner_id: 'ana', can_manage: true,
+        users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});

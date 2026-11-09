@@ -1,4 +1,4 @@
-// A routine with a due date on a real hub (ui/app/automations*.js, docs/routines.md "Before a due date"): + New, Before a
+// A routine with a due date on a real hub (ui/app/automations*.js, docs/routines.md "Before a due date"): +, Before a
 // due date makes an off routine of Dana's on a due trigger; the trigger editor sets First due, Repeats, the days before
 // and the zone, saved as the hub's trigger; the list reads "Due Mar 1 · yearly · 21d before", files it under Due date
 // and shows the next due day over when its task opens. A Create task step made in the editor opens a task for a bot,
@@ -37,10 +37,10 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   const page = await open(browser, hub, 'dana', {phone, hash: '#/automations', time: HUB_NOW});
   await page.locator('tr.au-row').first().waitFor({timeout: t(10000)});
 
-  // + New offers the triggers; Before a due date makes the routine and opens it.
+  // + New offers New inbox and the triggers; Before a due date makes the routine and opens it.
   await page.locator('.au-new').click();
   assert.deepEqual(await page.locator('.au-newm [data-new]').evaluateAll(els => els.map(x => x.lastChild.textContent)),
-    ['On a schedule', 'When something happens', 'Before a due date']);
+    ['New inbox', 'On a schedule', 'When something happens', 'Before a due date']);
   await page.locator('.au-newm [data-new="due"]').click();
   await page.locator('.au-hd .au-name:text("New automation")').waitFor({timeout: t(10000)});
   const made = await automationNamed(page, 'New automation');
@@ -66,7 +66,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
     null, {timeout: t(10000)});
   const saved = await automationNamed(page, 'New automation');
   assert.deepEqual(saved.trigger, {type: 'due', first_due: '2027-03-01', repeats: 'yearly', open_days: 21, tz: 'America/New_York'});
-  assert.equal(saved.next_due, '2027-03-01', `${tag}: the hub's next due day`);
+  assert.equal(saved.next_due_at, '2027-03-01', `${tag}: the hub's next due day`);
   assert.equal(Date.parse(saved.next_run), Date.parse('2027-02-08T05:00:00Z'), `${tag}: its task opens 21 days before, at midnight in New York`);
   assert.equal(await page.locator('.au-trig .au-c1').innerText(), 'Due Mar 1 · yearly · 21d before');
 
@@ -108,7 +108,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   assert.ok(groups.includes('due') && groups.indexOf('due') === groups.length - 1 - (groups.includes('system') ? 1 : 0),
     `${tag}: Due date after the other kinds, before system jobs (${groups})`);
   // The Due date chip narrows the list to it.
-  if (phone) await page.locator('[data-filters]').click();
+  if (phone) { await page.locator('[data-filters]').click(); await page.locator('[data-fsec="trig"]').click(); }
   await page.locator('[data-ftrig="due"]').click();
   assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => x.dataset.row)), [made.id]);
   await page.locator('[data-ftrig="due"]').click();
@@ -137,7 +137,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   for (const day of ['2026-10-15', '2026-11-30']) {
     const task = tasks.find(x => x.occurrence === `${made.id}:${day}`);
     assert.ok(task, `${tag}: the task for ${day}`);
-    assert.equal(task.owner, 'bot:' + BOT);
+    assert.equal(task.owner_id, 'bot:' + BOT);
     opened.push(task);
   }
   const plain = await ok(page, 'POST', 'tasks', {title: 'Look again at the backlog', body: 'Later', owner: 'bot:' + BOT,
@@ -171,7 +171,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   assert.equal(manual.status, 'ok', `${tag}: the no-input run (${JSON.stringify(manual).slice(0, 300)})`);
   const ny = ((await ok(page, 'GET', 'tasks?limit=200')).tasks || []).find(x => x.occurrence === `${made.id}:2027-03-01`);
   assert.ok(ny, `${tag}: the no-input run made the Mar 1 task`);
-  assert.equal(ny.due, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
+  assert.equal(ny.due_at, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
   const utc = await open(browser, hub, 'dana', {phone, hash: '#/task/' + encodeURIComponent(ny.id), time: HUB_NOW,
     timezone: 'UTC'});
   const utcDue = utc.locator('[data-prop-row="due"] .prop-txt:visible').first();

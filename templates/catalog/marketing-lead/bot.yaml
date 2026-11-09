@@ -7,10 +7,6 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 45
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts every draft on the task and drafts until a person turns mail sending on in Tico.
-outbound_send: false
-
 # Declared off. Setup switches on only the first routine; the onboarding playbook (step 6) switches on the two growth
 # routines with `hub automation update <id> --enable`. `hub bot create` seeds them once; from then on Tico's automations
 # are the routines (docs/routines.md).
@@ -29,11 +25,11 @@ routines:
     template: playbooks/weekly-meeting.md
     labels: [priority:p2]
     enabled: false
-  - id: monthly-growth-report
-    title: Monthly growth report
-    cron: "0 9 3 * *"
+  - id: weekly-numbers
+    title: Weekly numbers
+    cron: "0 7 * * 1"
     timezone: America/Los_Angeles     # set this to the team's own timezone
-    template: playbooks/monthly-report.md
+    template: playbooks/weekly-numbers.md
     labels: [priority:p2]
     enabled: false
 

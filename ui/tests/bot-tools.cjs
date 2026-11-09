@@ -30,14 +30,14 @@ const TOOLS = [
   ...['acme-co/docs', 'acme-co/pricing-api'].map((name, n) => tool('github-extra-' + n, 'github', 'GitHub', {logo_key: 'github', identity: name,
     can: n ? ['read', 'write'] : ['read'], scope: {repo: name}, url: 'https://github.com/' + name, status: 'unknown', detail: 'Granted repository'})),
 ];
-const task = (id, title, extra) => ({id, title, status: 'doing', owner: 'bot:cmo', requester: 'human:ana', created: iso(-30 * hour), updated: iso(-hour), ...extra});
+const task = (id, title, extra) => ({id, title, status: 'doing', owner_id: 'bot:cmo', requester_id: 'human:ana', created_at: iso(-30 * hour), updated_at: iso(-hour), ...extra});
 const TASKS = [task('t1', 'Draft the October pricing page copy'), task('t2', 'Pull last week\'s funnel numbers from PostHog', {status: 'open'}),
   task('t3', 'Write the launch email for the new plan', {status: 'waiting'}),
   task('t4', 'Weekly report', {status: 'done', done_at: iso(-20 * hour)}), task('t5', 'Clean up UTM tags', {status: 'done', done_at: iso(-40 * hour)})];
-const ASKED = [task('a1', 'Approve the pricing page before Friday', {owner: 'human:ana', requester: 'bot:cmo'})];
-const UPDATE = {id: 'u1', bot: 'cmo', kind: 'daily', day: '2026-10-01', read: false, created: iso(-10 * hour), updated: iso(-10 * hour),
+const ASKED = [task('a1', 'Approve the pricing page before Friday', {owner_id: 'human:ana', requester_id: 'bot:cmo'})];
+const UPDATE = {id: 'u1', bot: 'cmo', kind: 'daily', day: '2026-10-01', read: false, created_at: iso(-10 * hour), updated_at: iso(-10 * hour),
   body: '- Drafted the pricing page copy; two headline options are on the task.\n- Funnel: sign-ups up 8% week over week.'};
-const said = (n, who, body) => ({id: 'm' + n, from_actor: who, body, created: iso((n - 9) * hour)});
+const said = (n, who, body) => ({id: 'm' + n, sender_id: who, body, created_at: iso((n - 9) * hour)});
 const CHAT = [said(1, 'human:ana', 'Where are we on the pricing page?'),
   said(2, 'bot:cmo', 'The copy is drafted, with two headline options on the task. I am pulling last week\'s funnel numbers to pick between them.'),
   said(3, 'human:ana', 'Go with the shorter headline if the numbers are close.'),
@@ -62,7 +62,7 @@ async function open(browser, viewport, options = {}, data = {}) {
     // The vendored Markdown and icon font, so the page reads as it does for real.
     const vendor = p.match(/^\/vendor\/((?:fonts\/)?[\w.-]+)$/);
     if (vendor && fs.existsSync(uiFile('vendor/' + vendor[1]))) return route.fulfill({path: uiFile('vendor/' + vendor[1])});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
@@ -106,13 +106,28 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const longGoal = 'Deliver dependable releases and keep every customer informed about important improvements across the whole team';
       const {page, errors, context} = await open(browser, {width: 1380, height: 900}, {colorScheme: scheme}, {
         bots: [{...bots[0], display_name: name}],
-        goals: [{id: 'g-engineering', title: longGoal, owner: 'bot:cmo', status: 'active', rank: 1}],
+        goals: [{id: 'g-engineering', title: longGoal, owner_id: 'bot:cmo', status: 'active', rank: 1},
+                {id: 'g-docs', title: 'Keep the docs current', owner_id: 'bot:cmo', status: 'active', rank: 2}],
       });
       await page.goto('https://tico-ui.test/#/bot/cmo');
       await page.locator('#bot-goal[data-status="set"] .bot-goal-title').waitFor();
       await page.locator('#bot-tasks-h').waitFor();
       assert.equal(await page.locator('#pane-tasks').isVisible(), true, scheme + ': Tasks rail is open');
       assert.equal((await page.locator('#bot-goal .bot-goal-title').innerText()).trim(), longGoal, scheme + ': unchanged goal');
+      // The goal: a target, the first goal cut to fit and "+1"; a tap lists both and Add goal. All of it on one line,
+      // right of the bot's name.
+      assert.equal(await page.locator('#bot-goal .bot-goal-n').innerText(), '+1', scheme + ': the other goal is a count');
+      const line = await page.evaluate(() => {
+        const mid = s => { const r = document.querySelector(s).getBoundingClientRect(); return {y: r.top + r.height / 2, left: r.left, right: r.right}; };
+        return {name: mid('.bot-ident h1'), goal: mid('#bot-goal-btn'), more: mid('#bot-more-btn')};
+      });
+      assert(Math.abs(line.name.y - line.goal.y) < 4 && Math.abs(line.goal.y - line.more.y) < 4, scheme + ': one line ' + JSON.stringify(line));
+      assert(line.goal.left > line.name.right && line.goal.right <= line.more.left, scheme + ': the goal sits right, by the actions');
+      await page.locator('#bot-goal-btn').click();
+      const items = await page.locator('#bot-goal-pop .tl-mi').evaluateAll(els => els.map(el =>
+        [...el.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
+      assert.deepEqual(items, [longGoal, 'Keep the docs current', 'Add goal'], scheme + ': the goal menu');
+      await page.keyboard.press('Escape');
       const header = await page.locator('.bot-ident h1').evaluate(el => {
         // Measure the whole heading: the runtime mark sits inside it, and a fractional overflow ellipsizes the line.
         const range = document.createRange();
@@ -142,7 +157,6 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await page.locator('#t-open .trow').first().waitFor();
       await page.locator('#bot-files .bf-row').first().waitFor();
       await page.locator('#bot-latest:not([hidden])').waitFor();
-      await page.locator('#bot-tool-strip .bts-stack .bts-icon').first().waitFor();
 
       assert.deepEqual(await railOrder(page), ['Tasks', 'Updates', 'Files'], scheme + ': Tasks leads');
       assert.equal(await page.locator('#pane-tasks .card').count(), 0, 'no cards in the rail');
@@ -160,35 +174,13 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '+2');
       // No routines on the rail: they are Automations now.
       assert.equal(await page.locator('#bot-recurring').count(), 0);
-      // Assigned to others is a tab now, not a folded section; Done Recently is a tab that stays closed.
+      // Assigned to others is a tab now, not a folded section; Done recently is a tab that stays closed.
       assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
-      // Tools beside the name: the runtime mark, then one stack of three icons (not the model again) and "+8".
-      const strip = page.locator('#bot-tool-strip');
-      const stack = strip.locator('.bts-stack');
+      // The top line keeps no tool icons; the Tools card under More lists them.
       assert.equal(await page.locator('.bot-nameline .rt').count(), 1);
-      assert.equal(await strip.locator('button').count(), 1, 'one button, not an icon each');
-      assert.deepEqual(await stack.locator('.bts-icon').evaluateAll(els => els.map(el => el.dataset.tool)), ['repo', 'posthog', 'slack']);
-      assert.equal((await stack.locator('.bts-more').innerText()).trim(), '+8');
-      assert.equal(await stack.getAttribute('aria-label'), 'Tools: 11');
-      assert.equal(await stack.locator('[data-tool=posthog] .bt-dot').count(), 1, 'a problem shows a dot');
-      if (shots) await page.screenshot({path: path.join(shots, `bot-page-desktop-${scheme}.png`)});
-      // It opens a list, one line a tool; Escape closes it and gives the button back its focus.
-      await stack.click();
-      const pop = page.locator('#bts-pop');
-      assert.equal(await stack.getAttribute('aria-expanded'), 'true');
-      assert.equal(await pop.locator('.bts-row').count(), 11);
-      assert.match(await pop.locator('.bts-row[data-tool=slack]').getAttribute('title'), /^Slack, Acme workspace, can read, post, channels #ops, #launch, Ready$/);
-      assert.match(await pop.locator('.bts-row[data-tool=posthog]').innerText(), /PostHog[\s\S]*Credential missing on Test Mac/);
-      await page.keyboard.press('Escape');
-      assert.equal(await pop.count(), 0);
-      assert.equal(await stack.evaluate(el => el === document.activeElement), true);
-      // From the keyboard, "Manage" opens the Tools card under More: a closed line a tool, the repositories sharing one.
-      await page.keyboard.press('Enter');
-      await page.locator('#bts-pop .bts-manage').waitFor();
-      await page.keyboard.press('Enter');
-      await page.waitForFunction(() => location.hash === '#/bot/cmo/tools');
-      assert.equal(await pop.count(), 0, 'leaving closes the list');
+      assert.equal(await page.locator('#bot-tool-strip').isVisible(), false, 'no tool icons in the top line');
+      await page.goto('https://tico-ui.test/#/bot/cmo/tools');
       const list = page.locator('#bot-tools');
       await list.locator('.bt-item').first().waitFor();
       assert.equal(await page.locator('#pane-more').isVisible(), true);
@@ -211,8 +203,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
         'funnels only', 'Credential missing on Test Mac', '#ops, #launch', 'SLACK_TOKEN', 'nothing to check', 'account 3'])
         assert(text.includes(expected), scheme + ': the list says ' + expected + '\n' + text);
       assert.equal(await list.locator('[data-tool=repo] summary a').getAttribute('href'), 'https://github.com/acme-co/emp-cmo');
-      // Who else has a tool, and its credentials, are one link away in Library › Tools.
-      assert.match(await list.locator('[data-tool=repo] .bt-open').getAttribute('href'), /^#\/library\/tools\/github\?who=bot:cmo$/);
+      // Who else has a tool, and its keys, are one link away: the tool's page under Tools.
+      assert.equal(await list.locator('[data-tool=repo] .bt-open').getAttribute('href'), '#/tools/github');
       // The repository's name opens GitHub (window.open is stubbed: nothing leaves the test) and leaves its line as it was.
       await page.evaluate(() => { window.opened = []; window.open = url => { window.opened.push(url); return null; }; });
       await list.locator('[data-tool=repo]').evaluate(d => { d.open = false; });
@@ -247,7 +239,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const scheme = 'dark';
       const {page, errors, context} = await open(browser, {width: 390, height: 844}, {colorScheme: scheme});
       await page.goto('https://tico-ui.test/#/bot/cmo');
-      await page.locator('#conv').waitFor();
+      await page.locator('#bot-thread').waitFor();
       assert.equal(await page.locator('#pane-tasks').isVisible(), false, 'chat alone');
       assert.equal(await page.locator('#bot-tool-strip').isVisible(), false, 'no room for the tools beside the name');
       if (shots) await page.screenshot({path: path.join(shots, `bot-page-phone-chat-${scheme}.png`)});
@@ -276,7 +268,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       // A quarantine from repeated refusals says when it lifts and offers Resume now to a manager; the message box stays.
       const since = iso(-10 * 60e3), resumes = iso(50 * 60e3);
       const why = `Quarantined for repeated refused writes (rule 8; 10 repeated refusals today): resumes by itself at ${new Date(resumes).toISOString().slice(0, 16).replace('T', ' ')} UTC; a person who manages it can clear it sooner. Refused write (identity): Only a person changes a task number. <script>throw 1</script>`;
-      const held = {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', since, focus: '10 repeated refusals today',
+      const held = {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', changed_at: since, focus: '10 repeated refusals today',
         quarantine: {since, auto: true, resumes_at: resumes, why}};
       const {page, errors, context, cleared} = await open(browser, viewport, {timezoneId: 'America/Los_Angeles'}, {status: held});
       await page.goto('https://tico-ui.test/#/bot/cmo');
@@ -299,7 +291,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
     for (const scheme of ['dark', 'light']) {
       // A usage limit offers Try now beside the warning and in the chat banner; one click clears it.
       const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {colorScheme: scheme},
-        {status: {bot: 'cmo', state: 'limited', bot_state: 'active', since: iso(-10 * 60e3), focus: 'claude usage limit at 01:43; retrying after 02:13 UTC'}});
+        {status: {bot: 'cmo', state: 'limited', bot_state: 'active', changed_at: iso(-10 * 60e3), focus: 'claude usage limit at 01:43; retrying after 02:13 UTC'}});
       await page.goto('https://tico-ui.test/#/bot/cmo');
       const banner = page.locator('#conv-paused:not([hidden])');
       await banner.waitFor();
@@ -320,7 +312,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const since = iso(-10 * 60e3);
       const review = {what: 'task note', found: 'bot-coo/', preview: 'Paste this into bot-coo/tools.yaml: token=[hidden]', task: {id: 't9', title: 'Set up the tool'}};
       const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {}, {bots: bots.map(b => ({...b, host: 'runner'})),
-        status: {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', since, focus: 'escape: the task note reaches outside the hub',
+        status: {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', changed_at: since, focus: 'escape: the task note reaches outside the hub',
           quarantine: {since, auto: false, resumes_at: null, review}}});
       await page.goto('https://tico-ui.test/#/bot/cmo/more');
       const card = page.locator('#bot-quarantine');
@@ -342,8 +334,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       // Never a bare "Crashed" (Oct 22): a run its computer never started is a grey line that says nothing is needed;
       // a run that stopped partway is red, offers the one action that exists, and a click says what happened.
       const NOT_STARTED = "Last run didn't start in time. Nothing was lost; nothing is needed.";
-      const soft = {bot: 'cmo', state: 'idle', bot_state: 'active', since: iso(-60e3), last_stop: {kind: 'not_started', tone: 'soft',
-        needs_person: false, action: null, at: iso(-60e3), attempt_id: 'a1', text: NOT_STARTED,
+      const soft = {bot: 'cmo', state: 'idle', bot_state: 'active', changed_at: iso(-60e3), last_stop: {kind: 'not_started', tone: 'soft',
+        needs_person: false, action: null, at: iso(-60e3), run_id: 'a1', text: NOT_STARTED,
         reason: "Its computer took the run but didn't start it before its lease ran out. It is back in the queue and runs again shortly."}};
       let {page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: soft});
       await page.goto('https://tico-ui.test/#/bot/cmo');
@@ -361,8 +353,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await dialog.waitFor({state: 'detached'});
       assert.deepEqual(errors, [], 'soft last-run errors');
       await context.close();
-      const stopped = {bot: 'cmo', state: 'crashed', bot_state: 'active', since: iso(-60e3), focus: 'One run stopped; saved for later',
-        last_stop: {kind: 'stopped', tone: 'alert', needs_person: true, action: 'review', at: iso(-60e3), attempt_id: 'a2',
+      const stopped = {bot: 'cmo', state: 'crashed', bot_state: 'active', changed_at: iso(-60e3), focus: 'One run stopped; saved for later',
+        last_stop: {kind: 'stopped', tone: 'alert', needs_person: true, action: 'review', at: iso(-60e3), run_id: 'a2',
           text: 'Last run stopped partway. Retry it or dismiss it.',
           reason: 'Its computer stopped answering while the run was going, so the run\'s lease ran out.'}};
       ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: stopped}));

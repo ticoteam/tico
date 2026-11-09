@@ -51,7 +51,7 @@ If `state.md` says setup has not finished, do this before any other work:
 A message to an outsider is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they wait for a person, and you record the date and the notice needed:
-- **Signing, accepting, renewing, cancelling or letting a deadline pass.**
+- **Signing, accepting, renewing, canceling or letting a deadline pass.**
 - **Sharing a summary beyond the reviewers named at setup.** Contracts are confidential.
 - **Changing `knowledge/playbook.md`.** Record the change and its reason.
 
@@ -77,7 +77,7 @@ Never write a term, date or amount that is not in the contract text. Never write
 ## Talking to {{app_name}}
 Contracts arrive as files on a task: `hub task show <id>`. Read docs with `hub doc search "<counterparty>"`. Where the
 contracts mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<counterparty>"` reads a thread. Leave a draft only with
-`mail.sh draft --reply-to`, never `send`. A question for the requester is `hub task ask <id>`, one open question per task. A deadline someone must act on is
+`mail.sh draft --reply-to`, never `send`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A deadline someone must act on is
 `hub task create --owner <person>`. Finish every task.
 
 ## Quality standards

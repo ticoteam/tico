@@ -10,7 +10,7 @@ stores when to pick it up, and the task says which of delivered, eligible or que
 import pytest
 
 from backend import github as G
-from backend import health_monitor
+from backend import maintenance_health
 from backend import hubdb as H
 from backend import quiet_work as Q
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
@@ -24,8 +24,9 @@ def setup(api):
 
 
 def later(api, title="Watch the new refund requests"):
-    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Check the counts on your next run.",
-                               "next_run": True})
+    return post(
+        api, "tasks", {"owner": "ops", "title": title, "body": "Check the counts on your next run.", "next_run": True}
+    )
 
 
 def wake(api, r, text="How are the numbers today?"):
@@ -37,8 +38,7 @@ def wake(api, r, text="How are the numbers today?"):
 
 
 def finish(api, r, attempt, outcome="completed"):
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": outcome, "text": "ok", "last_seq": 0},
-         token=r["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": outcome, "text": "ok", "last_seq": 0}, token=r["token"])
 
 
 def shown(api, task):
@@ -50,9 +50,12 @@ def shown(api, task):
 
 def own_jobs(api, task):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "JOIN conversations cv ON cv.id=m.conversation_id "
-                         f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=?", (task["id"],)).fetchone()[0]
+        return c.execute(
+            "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=?",
+            (task["id"],),
+        ).fetchone()[0]
 
 
 def test_a_run_that_leaves_it_hands_it_to_the_next_run(api):
@@ -75,7 +78,7 @@ def test_a_run_that_leaves_it_hands_it_to_the_next_run(api):
     assert [t["id"] for t in second["next_run"]] == [task["id"]], "the next run carries it again"
 
 
-def test_a_run_that_worked_it_does_not_carry_it_again(api):
+def test_a_run_that_worked_it_a_comment_a_step_move_or_an_explicit_handled_does_not_carry_it_again(api):
     r = setup(api)
     task = later(api)
     first = wake(api, r)
@@ -85,18 +88,17 @@ def test_a_run_that_worked_it_does_not_carry_it_again(api):
     after = shown(api, task)
     assert after["next_run_waiting"] is False
     assert after["deferred"]["state"] == "delivered" and after["deferred"]["worked"] is True
-    assert wake(api, r, "Anything else?")["next_run"] == [], "worked: not re-carried"
-
-
-def test_a_step_move_or_an_explicit_handled_counts_as_worked(api):
-    r = setup(api)
-    task = later(api)
-    first = wake(api, r)
+    again = wake(api, r, "Anything else?")
+    assert again["next_run"] == [], "worked: not re-carried"
+    finish(api, r, again)
+    # An explicit handled counts as worked too.
+    task = later(api, "Watch the new signups")
+    first = wake(api, r, "And the signups?")
     with api.app.state.store.transaction() as c:
         Q.defer(c, "bot:ops", task["id"], handled=True)
     finish(api, r, first)
     assert shown(api, task)["deferred"]["worked"] is True
-    assert wake(api, r, "Anything else?")["next_run"] == []
+    assert wake(api, r, "Anything more?")["next_run"] == []
 
 
 def test_a_pull_request_refreshed_is_not_work_and_one_pushed_to_is(api):
@@ -108,16 +110,27 @@ def test_a_pull_request_refreshed_is_not_work_and_one_pushed_to_is(api):
         H.task_link(c, "human:ana", task["id"], url)
     first = wake(api, r)
     with api.app.state.store.transaction() as c:
-        G.pull_request(c, {"action": "refresh", "pull_request": {"html_url": url, "state": "open",
-                                                                 "head": {"sha": "a1"}, "mergeable": True}})
-        assert c.execute("SELECT updated FROM task_links WHERE task_id=?", (task["id"],)).fetchone()[0]
+        G.pull_request(
+            c,
+            {
+                "action": "refresh",
+                "pull_request": {"html_url": url, "state": "open", "head": {"sha": "a1"}, "mergeable": True},
+            },
+        )
+        assert c.execute("SELECT updated_at FROM task_links WHERE task_id=?", (task["id"],)).fetchone()[0]
     finish(api, r, first)
     assert shown(api, task)["deferred"]["state"] == "eligible", "metadata only: handed back"
     second = wake(api, r, "Anything else?")
     assert [t["id"] for t in second["next_run"]] == [task["id"]]
     with api.app.state.store.transaction() as c:
-        G.pull_request(c, {"action": "synchronize", "sender": {"login": "ops-bot"},
-                           "pull_request": {"html_url": url, "state": "open", "head": {"sha": "b2"}}})
+        G.pull_request(
+            c,
+            {
+                "action": "synchronize",
+                "sender": {"login": "ops-bot"},
+                "pull_request": {"html_url": url, "state": "open", "head": {"sha": "b2"}},
+            },
+        )
     finish(api, r, second)
     after = shown(api, task)
     assert after["deferred"]["state"] == "delivered" and after["deferred"]["worked"] is True, "a push is work"
@@ -148,7 +161,7 @@ def test_deferred_until_a_task_is_done_runs_once_when_it_is(api):
     r = setup(api)
     blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM jobs")       # ops's own run for the blocker is not what this tests
+        c.execute("DELETE FROM jobs")  # ops's own run for the blocker is not what this tests
     task = later(api, "Dev 242")
     first = wake(api, r)
     with api.app.state.store.transaction() as c:
@@ -206,7 +219,7 @@ def test_next_run_puts_it_back_at_once(api):
     assert [t["id"] for t in wake(api, r, "Anything else?")["next_run"]] == [task["id"]]
 
 
-def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
+def test_a_person_defers_through_the_api_wrong_asks_are_refused_and_run_now_drops_the_condition(api):
     setup(api)
     blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     task = later(api)
@@ -214,23 +227,20 @@ def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
     assert got["deferred"]["resume"]["task"] == blocker["id"] and got["next_run_waiting"] is False
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"], "next_run": True}, expected=422)
     post(api, f"tasks/{task['id']}/defer", {"at": "2020-01-01T00:00:00Z"}, expected=422)
-    post(api, f"tasks/{blocker['id']}/defer", {"next_run": True}, expected=422)   # not a quiet task
+    post(api, f"tasks/{blocker['id']}/defer", {"next_run": True}, expected=422)  # not a quiet task
     with api.app.state.store.transaction() as c:
         with pytest.raises(H.Refused):
-            Q.defer(c, "bot:cpo", task["id"], next_run=True)     # another bot's task
+            Q.defer(c, "bot:cpo", task["id"], next_run=True)  # another bot's task
         H.task_update(c, "bot:ops", blocker["id"], status="done", note="Reviewed.")
         other = H.task_create(c, "human:ana", "Later", "Later.", "bot:ops", next_run=True)
         with pytest.raises(H.Refused):
-            Q.defer(c, "bot:ops", other["id"], after=blocker["id"])   # already finished: work it now
-
-
-def test_run_now_drops_a_stored_condition(api):
-    setup(api)
-    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
-    task = later(api)
+            Q.defer(c, "bot:ops", other["id"], after=blocker["id"])  # already finished: work it now
+    # Run now drops a stored condition.
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 243 review", "body": "Review it."})
+    task = later(api, "Watch the new signups")
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
     got = post(api, f"tasks/{task['id']}/run-now", {})["task"]
-    assert "resume_json" not in got and got["deferred"]["state"] == "queued"
+    assert "resume" not in got and got["deferred"]["state"] == "queued"
 
 
 def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
@@ -239,15 +249,15 @@ def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
     first = wake(api, r)
     finish(api, r, first)
     with api.app.state.store.transaction() as c:
-        assert health_monitor._quiet_work_checks(c) == [], "not yet two hours"
+        assert maintenance_health._quiet_work_checks(c) == [], "not yet two hours"
         old = H.shift(H.now(), hours=-3)
-        c.execute("UPDATE events SET ts=? WHERE action=?", (old, Q.CARRIED))
-        found = health_monitor._quiet_work_checks(c)
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (old, Q.CARRIED))
+        found = maintenance_health._quiet_work_checks(c)
         assert [f["key"] for f in found] == [f"quiet_unworked:ops:{task['id']}"]
         assert "ops" in found[0]["title"] and task["id"][:8] in found[0]["detail"]
         assert "hub task later " + task["id"] in found[0]["fix"]
         Q.defer(c, "bot:ops", task["id"], at=H.shift(H.now(), hours=1))
-        assert health_monitor._quiet_work_checks(c) == [], "a stored condition is not a finding"
+        assert maintenance_health._quiet_work_checks(c) == [], "a stored condition is not a finding"
 
 
 def test_a_carrier_from_before_settling_counts_too(api):
@@ -256,11 +266,11 @@ def test_a_carrier_from_before_settling_counts_too(api):
     task = later(api)
     first = wake(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed', finished=? WHERE id=?", (H.now(), first["id"]))
-        c.execute("UPDATE events SET ts=? WHERE action=?", (H.shift(H.now(), hours=-3), Q.CARRIED))
+        c.execute("UPDATE attempts SET state='completed', finished_at=? WHERE id=?", (H.now(), first["id"]))
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (H.shift(H.now(), hours=-3), Q.CARRIED))
         view = Q.view(c, H.task(c, task["id"]))
         assert view["state"] == "delivered" and view["worked"] is False
-        assert [f["key"] for f in health_monitor._quiet_work_checks(c)] == [f"quiet_unworked:ops:{task['id']}"]
+        assert [f["key"] for f in maintenance_health._quiet_work_checks(c)] == [f"quiet_unworked:ops:{task['id']}"]
 
 
 def test_health_leaves_a_task_the_run_worked_or_handled(api):
@@ -273,13 +283,13 @@ def test_health_leaves_a_task_the_run_worked_or_handled(api):
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:ops", commented["id"], "Counts look normal.", wake=False)
         Q.defer(c, "bot:ops", handled["id"], handled=True)
-        c.execute("UPDATE events SET ts=? WHERE action=?", (old, Q.CARRIED))
-        assert health_monitor._quiet_work_checks(c) == [], "the run is still going and worked both"
-        c.execute("UPDATE attempts SET state='completed', finished=? WHERE id=?", (H.now(), first["id"]))
-        assert health_monitor._quiet_work_checks(c) == [], "a run that ended before settling, likewise"
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (old, Q.CARRIED))
+        assert maintenance_health._quiet_work_checks(c) == [], "the run is still going and worked both"
+        c.execute("UPDATE attempts SET state='completed', finished_at=? WHERE id=?", (H.now(), first["id"]))
+        assert maintenance_health._quiet_work_checks(c) == [], "a run that ended before settling, likewise"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='running', finished=NULL WHERE id=?", (first["id"],))
+        c.execute("UPDATE attempts SET state='running', finished_at=NULL WHERE id=?", (first["id"],))
     finish(api, r, first)
     with api.app.state.store.transaction() as c:
-        assert health_monitor._quiet_work_checks(c) == [], "and once settled"
+        assert maintenance_health._quiet_work_checks(c) == [], "and once settled"
         assert [Q.view(c, H.task(c, t["id"]))["worked"] for t in (commented, handled)] == [True, True]

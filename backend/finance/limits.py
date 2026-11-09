@@ -2,6 +2,7 @@
 limit a bot can be over, so the bot takes no new job and reads "Paused: AI services budget reached". Video production is
 not a run limit (a run need not make images): at its cutoff it refuses new image making for whoever it covers, people
 included, and pauses no bot. One `Cutoffs` serves a whole pass over many bots: the budgets' states are read once."""
+
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -22,6 +23,7 @@ class Cutoff:
     """The budget a bot is held by: its id and name, its period's word, and when that period ends (UTC midnight after
     its last day; "" for a one-time budget, which never turns over). No amounts: who reads a paused bot may not see
     the budget's numbers."""
+
     budget_id: str
     name: str
     period: str
@@ -40,7 +42,7 @@ class Cutoffs:
         return self.holding("bot:" + bot)
 
     def holding(self, mate: str) -> Cutoff | None:
-        """The cutoff holding teammate `mate` (`bot:<slug>` or `human:<id>`), or None."""
+        """The cutoff holding teammate `mate` (`bot:<id>` or `human:<id>`), or None."""
         if not self.cut or self.ctx is None:
             return None
         if mate not in self._seen:
@@ -48,8 +50,10 @@ class Cutoffs:
         return self._seen[mate]
 
     def _find(self, ctx: Ctx, mate: str) -> Cutoff | None:
-        """The first budget on the teammate's path that is at its limit for them: money set aside for them there is
-        still theirs to spend, exactly as their hold would see it."""
+        """The first budget on the teammate's path whose spend (actuals and holds) has reached its amount. Money set aside
+        in an allocation, the teammate's own or a Gateway key's or another teammate's, is not spend, so it pauses no bot
+        on its own. A new request that no reserve leaves room for is refused where it is placed (runs.hold), by the
+        budget's remaining, which counts reserves (§4.4)."""
         today = dates.day(ctx.today)
         for account in self.lines:
             found = budgeting.leaf(ctx, account, teammate=mate)
@@ -61,15 +65,15 @@ class Cutoffs:
                 if st.at_limit:
                     end = date.fromisoformat(st.period_end)
                     until = "" if end >= B.ONCE_END else (end + timedelta(days=1)).isoformat() + "T00:00:00Z"
-                    return Cutoff(budget_id=b.id, name=b.name, period=PERIOD_WORDS.get(b.period, b.period),
-                                  until=until)
+                    return Cutoff(budget_id=b.id, name=b.name, period=PERIOD_WORDS.get(b.period, b.period), until=until)
         return None
 
 
 def cutoffs(c: sqlite3.Connection, at: str | None = None, line: str = AI) -> Cutoffs:
-    """The `decline` budgets that are at their limit now, read against each teammate's path on `line` (an account
-    code; AI services for usage limits), counting every allocation (each teammate's own come off when their cutoff is
-    read). Cheap when Finance is not set up or no such budget has an amount."""
+    """The `decline` budgets whose spend has reached their amount now, read against each teammate's path on `line` (an
+    account code; AI services for usage limits). Spend is actuals and holds (§4.4): an allocation sets money aside but is
+    not spend, so a Gateway key's allocation reserving the whole budget pauses no bot. Cheap when Finance is not set up or
+    no such budget has an amount."""
     book = SL.book(c)
     if book is None:
         return Cutoffs(ctx=None, cut={}, lines=())
@@ -84,8 +88,8 @@ def cutoffs(c: sqlite3.Connection, at: str | None = None, line: str = AI) -> Cut
     today = dates.day(ctx.today)
     cut: dict[str, B.State] = {}
     for bid in budgets:
-        if not versions.get(bid):
-            continue
+        if not versions.get(bid) or budgeting.budget_platform(ctx, budgets[bid]):
+            continue  # an ad budget only warns (budgeting.warn_only)
         st = budgeting.state(ctx, bid, today)
         if st.at_limit and st.amount is not None:
             cut[bid] = st

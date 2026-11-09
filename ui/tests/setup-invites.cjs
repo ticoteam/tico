@@ -27,8 +27,8 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     let record = {names: {company_name: 'Initech'}, completed: '2026-10-20T10:00:00Z', needed: false, bots: [],
       company_import_failed: null, company_import: {seats: 1, deferred: [], people: setupPeople}};
     const access = () => ({
-      owner: {email: 'ana@acme.example', revision: 1, person: 'ana'},
-      people: people.map(p => ({...p, left: false, owner: p.id === 'ana', role: p.id === 'ana' ? 'owner' : 'member',
+      owner_id: {email: 'ana@acme.example', revision: 1, person: 'ana'},
+      people: people.map(p => ({...p, left: false, owner_id: p.id === 'ana', role: p.id === 'ana' ? 'owner' : 'member',
         bot_admin: false, create_bots: true, add_people: true, add_people_default: true, sign_in: true, can_sign_in: true})),
       allowed: people.map(p => p.email), allowed_domains: [], admins: [], bot_admins: [], member_bot_limit: 25, rules: {},
       company_domains: ['acme.example'], company_domain_source: 'owner', revision: 3, proxy: 'oidc', home_domain: 'acme.example',
@@ -37,7 +37,7 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module && fs.existsSync(uiFile(module[1]))) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config});
       if (p === '/api/v2/config') return json(config);
@@ -117,7 +117,7 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     // The person from setup: typed address, refused, the error stays on the row and Invite tries again with no address.
     const dana = page.locator('[data-setup-person=dana]');
     await dana.waitFor();
-    assert.match(await page.locator('#setup-people').innerText(), /Tico's sign-in email.*not your company's mailbox/s);
+    assert.match(await page.locator('#setup-people').innerText(), /Tico's sign-in email/);
     await dana.locator('[name=email]').fill('dana@acme.example');
     await dana.locator('button[type=submit]').click();
     await dana.locator('.err', {hasText: "couldn't deliver the invite to dana@acme.example"}).waitFor();

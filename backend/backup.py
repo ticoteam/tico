@@ -13,6 +13,7 @@ from pathlib import Path
 from . import hubdb
 from .blobs import Blobs
 from .config import Settings
+from . import sources as SRC
 
 
 class RecoveryBlobs(Blobs):
@@ -30,10 +31,16 @@ def iter_blob_inventory(database, unverified_in=None):
     bucket's recovery prefix.
     """
     with closing(sqlite3.connect(Path(database).resolve().as_uri() + "?mode=ro", uri=True)) as c:
-        rows = c.execute("SELECT digest,min(size),max(size),count(*) FROM blobs "
-                         + ("WHERE digest NOT IN (SELECT sha256 FROM backup_verified_blobs WHERE bucket=?) "
-                            if unverified_in else "") + "GROUP BY digest ORDER BY digest",
-                         (unverified_in,) if unverified_in else ())
+        rows = c.execute(
+            "SELECT digest,min(size),max(size),count(*) FROM blobs "
+            + (
+                "WHERE digest NOT IN (SELECT sha256 FROM backup_verified_blobs WHERE bucket=?) "
+                if unverified_in
+                else ""
+            )
+            + "GROUP BY digest ORDER BY digest",
+            (unverified_in,) if unverified_in else (),
+        )
         for digest, low, high, references in rows:
             key = RecoveryBlobs.key(digest)
             if not isinstance(low, int) or low < 0 or high != low:
@@ -59,9 +66,14 @@ def inventory_summary(database):
 
 
 def immutable_put(s3, bucket, key, data, digest):
-    return s3.put_object(Bucket=bucket, Key=key, Body=data, IfNoneMatch="*",
-                         ServerSideEncryption="AES256",
-                         ChecksumSHA256=base64.b64encode(bytes.fromhex(digest)).decode())
+    return s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=data,
+        IfNoneMatch="*",
+        ServerSideEncryption="AES256",
+        ChecksumSHA256=base64.b64encode(bytes.fromhex(digest)).decode(),
+    )
 
 
 def verify_stored(s3, bucket, key, size, digest):
@@ -86,10 +98,12 @@ def verify_objects(items, verify):
     """
     with ThreadPoolExecutor(max_workers=4) as pool:
         batch, size = [], 0
+
         def finish():
             for future in batch:
                 future.result()
             batch.clear()
+
         for item in items:
             if batch and (len(batch) >= 4 or size + item['size'] > 32 * 1024 * 1024):
                 finish()
@@ -107,9 +121,12 @@ def record_verified_blobs(source, bucket, items):
     if not items:
         return
     from .store import H, Store
+
     with Store(Settings(db_path=Path(source))).transaction() as c:
-        c.executemany("INSERT OR IGNORE INTO backup_verified_blobs VALUES(?,?,?,?)",
-                      [(bucket, item["sha256"], item["key"], H.now()) for item in items])
+        c.executemany(
+            "INSERT OR IGNORE INTO backup_verified_blobs VALUES(?,?,?,?)",
+            [(bucket, item["sha256"], item["key"], H.now()) for item in items],
+        )
 
 
 # The local key files beside the database (backend/credentials.py, github_app.py, slack_app.py): a database restored
@@ -132,7 +149,9 @@ def read_key_files(key_dir):
             continue
         data = path.read_bytes()
         if len(data) != KEY_BYTES:
-            raise RuntimeError(name + " beside the database is not a valid key (32 bytes); the backup was not published")
+            raise RuntimeError(
+                name + " beside the database is not a valid key (32 bytes); the backup was not published"
+            )
         found[name] = data
     return found
 
@@ -154,8 +173,7 @@ def upload_bundle(source, bucket, key, s3, blobs, key_dir=None):
     recovery = RecoveryBlobs(Settings(db_path=Path(source), blob_bucket=bucket), s3)
     # Keep the snapshot workspace beside the source database on the retained data
     # volume instead of relying on the instance's small PrivateTmp filesystem.
-    with tempfile.TemporaryDirectory(
-            prefix=".tico-bundle-", dir=Path(source).resolve().parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".tico-bundle-", dir=Path(source).resolve().parent) as temporary:
         local = Path(temporary) / "snapshot.sqlite"
         expected = snapshot(source, local)
         inventory = inventory_summary(local)
@@ -166,6 +184,7 @@ def upload_bundle(source, bucket, key, s3, blobs, key_dir=None):
         if blobs.bucket:
             blobs.s3
         verified = []
+
         def verify(item):
             data = blobs.get(item["sha256"])
             if len(data) != item["size"]:
@@ -179,6 +198,7 @@ def upload_bundle(source, bucket, key, s3, blobs, key_dir=None):
             if recovery.get(item["sha256"]) != data:
                 raise RuntimeError("Recovery blob failed independent download verification")
             verified.append(item)
+
         # A recovery copy read back once is immutable and versioned, so later bundles
         # skip it; the daily isolated restore still reads every one. Blobs verified
         # before a failure stay recorded.
@@ -204,9 +224,16 @@ def upload_bundle(source, bucket, key, s3, blobs, key_dir=None):
         with s3.get_object(Bucket=bucket, Key=key + ".manifest.json")["Body"] as stream:
             if stream.read() != encoded:
                 raise RuntimeError("Backup manifest failed independent download verification")
-        report = {"bucket": bucket, "key": key, "verified": True, **expected,
-                  "objects": inventory["count"], "object_bytes": inventory["bytes"],
-                  "objects_verified": len(verified), "manifest_sha256": hashlib.sha256(encoded).hexdigest()}
+        report = {
+            "bucket": bucket,
+            "key": key,
+            "verified": True,
+            **expected,
+            "objects": inventory["count"],
+            "object_bytes": inventory["bytes"],
+            "objects_verified": len(verified),
+            "manifest_sha256": hashlib.sha256(encoded).hexdigest(),
+        }
         if key_dir is not None:
             report["key_files"] = sorted(key_files)
         return report
@@ -247,6 +274,7 @@ def restore_bundle(bucket, key, destination, s3):
             raise RuntimeError("Backup object inventory does not match the database")
         recovery = RecoveryBlobs(Settings(db_path=target, blob_bucket=bucket), s3)
         output = Blobs(destination, s3)
+
         def verify(item):
             data = recovery.get(item["sha256"])
             if len(data) != item["size"]:
@@ -254,11 +282,17 @@ def restore_bundle(bucket, key, destination, s3):
             output.put(data)
             if output.get(item["sha256"]) != data:
                 raise RuntimeError("Restored blob failed independent verification")
+
         verify_objects(iter_blob_inventory(downloaded), verify)
         result = restore_snapshot(downloaded, target)
-        return {**result, "objects": inventory["count"], "object_bytes": inventory["bytes"],
-                "manifest_sha256": hashlib.sha256(encoded).hexdigest(), "verified": True,
-                "key_files": place_key_files(keys, target.parent)}
+        return {
+            **result,
+            "objects": inventory["count"],
+            "object_bytes": inventory["bytes"],
+            "manifest_sha256": hashlib.sha256(encoded).hexdigest(),
+            "verified": True,
+            "key_files": place_key_files(keys, target.parent),
+        }
 
 
 def fetch_key_files(manifest, bucket, key, s3, directory):
@@ -278,8 +312,10 @@ def fetch_key_files(manifest, bucket, key, s3, directory):
             raise RuntimeError(name + " in the backup does not match its manifest")
         here = Path(directory) / name
         if here.exists() and here.read_bytes() != data:
-            raise ValueError(here.name + " already exists beside the restore target and is a different key; restore "
-                             "to an empty directory (nothing was restored)")
+            raise ValueError(
+                here.name + " already exists beside the restore target and is a different key; restore "
+                "to an empty directory (nothing was restored)"
+            )
         found[name] = data
     return found
 
@@ -290,16 +326,16 @@ def place_key_files(keys, directory):
     for name, data in keys.items():
         path = Path(directory) / name
         if path.exists():
-            placed[name] = "kept"          # the same key (fetch_key_files refused a different one)
+            placed[name] = "kept"  # the same key (fetch_key_files refused a different one)
             continue
-        fd, temporary = tempfile.mkstemp(prefix=".restore-key-", dir=directory)    # mode 0600
+        fd, temporary = tempfile.mkstemp(prefix=".restore-key-", dir=directory)  # mode 0600
         try:
             with os.fdopen(fd, "wb") as out:
                 out.write(data)
                 out.flush()
                 os.fsync(out.fileno())
             os.chmod(temporary, 0o600)
-            os.link(temporary, path)       # fails rather than replace a key that appeared meanwhile
+            os.link(temporary, path)  # fails rather than replace a key that appeared meanwhile
         finally:
             os.unlink(temporary)
         placed[name] = "restored"
@@ -319,15 +355,24 @@ def inspect(path):
         integrity = [row[0] for row in c.execute("PRAGMA integrity_check")]
         foreign_keys = c.execute("PRAGMA foreign_key_check").fetchall()
         names = [row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
-        counts = {name: c.execute('SELECT count(*) FROM "' + name.replace('"', '""') + '"').fetchone()[0] for name in names}
-        return {"integrity": integrity, "foreign_key_violations": len(foreign_keys), "tables": counts,
-                "bytes": Path(path).stat().st_size, "sha256": checksum(path)}
+        counts = {
+            name: c.execute('SELECT count(*) FROM "' + name.replace('"', '""') + '"').fetchone()[0] for name in names
+        }
+        return {
+            "integrity": integrity,
+            "foreign_key_violations": len(foreign_keys),
+            "tables": counts,
+            "bytes": Path(path).stat().st_size,
+            "sha256": checksum(path),
+        }
 
 
 def copy_pages(source, destination):
     """Copy one consistent page image of a live database into a new private file."""
     source, destination = Path(source).resolve(), Path(destination).resolve()
-    if source == destination or any(Path(str(destination) + suffix).exists() for suffix in ("", "-wal", "-shm", "-journal")):
+    if source == destination or any(
+        Path(str(destination) + suffix).exists() for suffix in ("", "-wal", "-shm", "-journal")
+    ):
         raise ValueError("Snapshot destination must be a new, distinct file")
     destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as src:
@@ -381,6 +426,7 @@ def compact(database):
     a fresh snapshot of the rewritten file when it comes back.
     """
     from .store import Store, sweep_idempotency
+
     database = Path(database).resolve()
     before = database.stat().st_size
     store = Store(Settings(db_path=database))
@@ -395,8 +441,13 @@ def compact(database):
         if vacuumed:
             c.execute("VACUUM")
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    return {"deleted": deleted, "free_bytes": free_bytes, "vacuumed": vacuumed,
-            "bytes_before": before, "bytes_after": database.stat().st_size}
+    return {
+        "deleted": deleted,
+        "free_bytes": free_bytes,
+        "vacuumed": vacuumed,
+        "bytes_before": before,
+        "bytes_after": database.stat().st_size,
+    }
 
 
 def upload_snapshot(source, bucket, key, s3):
@@ -405,8 +456,7 @@ def upload_snapshot(source, bucket, key, s3):
     Production operations use upload_bundle; restore_bundle rejects this older
     manifest format. No success until an independent DB download verifies.
     """
-    with tempfile.TemporaryDirectory(
-            prefix=".tico-backup-", dir=Path(source).resolve().parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".tico-backup-", dir=Path(source).resolve().parent) as temporary:
         local = Path(temporary) / "snapshot.sqlite"
         expected = snapshot(source, local)
         s3.upload_file(str(local), bucket, key, ExtraArgs={"Metadata": {"sha256": expected["sha256"]}})
@@ -415,11 +465,16 @@ def upload_snapshot(source, bucket, key, s3):
         actual = inspect(restored)
         if actual != expected:
             raise RuntimeError("Uploaded backup failed independent download/restore verification")
-        s3.put_object(Bucket=bucket, Key=key + ".manifest.json", Body=json.dumps(expected).encode(),
-                      ContentType="application/json")
+        s3.put_object(
+            Bucket=bucket,
+            Key=key + ".manifest.json",
+            Body=json.dumps(expected).encode(),
+            ContentType="application/json",
+        )
         return {"bucket": bucket, "key": key, "verified": True, **expected}
 
 
+@SRC.scoped("system:backup")
 def restore_snapshot(source, destination):
     """Restore to a new file and fence all pre-disaster machine/execution credentials.
 
@@ -429,6 +484,7 @@ def restore_snapshot(source, destination):
     report = snapshot(source, destination)
     from .config import Settings
     from .store import H, Store
+
     store = Store(Settings(db_path=Path(destination)))
     store.initialize(seed_market=False)
     with store.transaction() as c:
@@ -436,24 +492,42 @@ def restore_snapshot(source, destination):
         active = c.execute("SELECT count(*) FROM attempts WHERE state IN ('leased','running')").fetchone()[0]
         c.execute("UPDATE jobs SET state='uncertain' WHERE state IN ('running','input')")
         c.execute("UPDATE jobs SET state='queued' WHERE state='leased'")
-        c.execute("UPDATE attempts SET state='expired',finished=?,lease_until=? WHERE state IN ('leased','running')", (now, now))
+        c.execute(
+            "UPDATE attempts SET state='expired',finished_at=?,lease_until=? WHERE state IN ('leased','running')",
+            (now, now),
+        )
         from .run_triggers import SETTLE_SQL
+
         # Its runner will never report these runs' tokens: 0 with the reason, as hubdb.turn_finish records it.
-        c.execute(f"UPDATE turns SET finished=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
-                  "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE finished IS NULL", (now,))
-        c.execute("UPDATE assignments SET generation=generation+1,updated=?,updated_by='keeper'", (now,))
+        c.execute(
+            f"UPDATE attempts SET settled_at=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
+            "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE settled_at IS NULL "
+            "AND (job_id IS NULL OR trigger IS NOT NULL)",
+            (now,),
+        )
+        c.execute("UPDATE assignments SET generation=generation+1,updated_at=?,updated_by='keeper'", (now,))
         c.execute("UPDATE runners SET revoked_at=coalesce(revoked_at,?)", (now,))
-        c.execute("UPDATE enrollments SET expires=?", (now,))
-        c.execute("UPDATE bots SET token_hash=NULL")
+        c.execute("UPDATE enrollments SET expires_at=?", (now,))
         # An old backup must not resurrect a credential grant revoked after it was taken.
-        c.execute("UPDATE credential_grants SET revoked=coalesce(revoked,?),revoked_by='recovery'", (now,))
-        c.execute("UPDATE service_jobs SET state='queued',runner_id=NULL,token_hash=NULL,lease_until=NULL,updated=? WHERE state='running'", (now,))
-        H.event(c, H.KEEPER, "recovery.fenced", "database", {"source_sha256": report["sha256"], "active_attempts": active})
-    return {"source": report, "restored": inspect(destination), "reenrollment_required": True, "fenced_attempts": active}
+        c.execute("UPDATE credential_grants SET revoked_at=coalesce(revoked_at,?),revoked_by='recovery'", (now,))
+        c.execute(
+            "UPDATE service_jobs SET state='queued',runner_id=NULL,token_hash=NULL,lease_until=NULL,updated_at=? WHERE state='running'",
+            (now,),
+        )
+        H.event(
+            c, H.KEEPER, "recovery.fenced", "database", {"source_sha256": report["sha256"], "active_attempts": active}
+        )
+    return {
+        "source": report,
+        "restored": inspect(destination),
+        "reenrollment_required": True,
+        "fenced_attempts": active,
+    }
 
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Restore a verified Tico database and all registered binary objects")
     parser.add_argument("--bucket", required=True, help="Private backup bucket")
     parser.add_argument("--key", required=True, help="Exact backups/*.sqlite recovery point (manifest required)")
@@ -464,12 +538,19 @@ def main():
     parser.add_argument("--profile", help="AWS profile; omit on EC2 to use the instance role")
     parser.add_argument("--region", default="us-west-2")
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--old-backend-fenced", action="store_true",
-                      help="Confirm the old backend is stopped and cannot accept writes or schedule work")
-    mode.add_argument("--isolated-drill", action="store_true",
-                      help="Confirm the restore target is isolated and will not serve production traffic or runners")
+    mode.add_argument(
+        "--old-backend-fenced",
+        action="store_true",
+        help="Confirm the old backend is stopped and cannot accept writes or schedule work",
+    )
+    mode.add_argument(
+        "--isolated-drill",
+        action="store_true",
+        help="Confirm the restore target is isolated and will not serve production traffic or runners",
+    )
     args = parser.parse_args()
     import boto3
+
     session = boto3.Session(profile_name=args.profile, region_name=args.region)
     settings = Settings(db_path=args.database, blob_dir=args.blob_dir, blob_bucket=args.blob_bucket or "")
     result = restore_bundle(args.bucket, args.key, settings, session.client("s3"))

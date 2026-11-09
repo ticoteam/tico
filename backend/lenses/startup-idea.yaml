@@ -1,0 +1,55 @@
+# In the style of YC's questions for judging a startup idea, plus the tarpit check: is this team the one to build it,
+# is the market big, is the problem bad, why now, and has it been tried and failed. The changes go to "How we know
+# they want it", "Why now" and "What we know that others don't".
+id: startup-idea
+name: Startup idea check
+applies_to: strategy
+description: 'In the style of YC''s idea checks: why you, how big, how bad the problem is, why now, and the tarpit test.'
+minutes: 10
+listed: true
+market_spend: true             # reads the Market tab's sizes for "how big"
+steps:
+  - key: why_you
+    ask: What have you seen or done that makes you the team to build this?
+    input: text
+  - key: size
+    ask: If it works, how many customers could there be, and what would each pay?
+    input: text
+    hint: The Market tab may have sized it already.
+  - key: acute
+    ask: How badly do customers need this, and what do they do today instead?
+    input: text
+  - key: competition
+    ask: Who else does this, and what do you understand that they don't?
+    input: text
+  - key: want
+    ask: Do you, or people you know, want this yourselves?
+    input: choice
+    options: ['Yes', 'Some of us', 'No']     # quoted: YAML reads a bare Yes or No as true or false
+  - key: now
+    ask: What changed recently that makes this possible or needed now?
+    input: text
+  - key: proxy
+    ask: Which successful company is the closest to this, and how is yours different?
+    input: text
+  - key: years
+    ask: Would you work on this for the next ten years?
+    input: choice
+    options: ['Yes', 'Not sure', 'No']
+  - key: scale
+    ask: Does each new customer need more of your people, or does it get cheaper as you grow?
+    input: text
+  - key: space
+    ask: If this exact idea fails, what nearby ideas could you move to with what you learn?
+    input: text
+  - key: tarpit
+    ask: Have many teams tried this and failed? What did they miss, and why will you not?
+    input: text
+    hint: An idea that looks easy and that many have tried is often a tarpit.
+output:
+  chart: table
+  sections: [The idea checked, Where it is strong, Where it is weak, Tarpit risk, What it means for the bets]
+sharpen:
+  - Market size for the segments the team plays in
+  - Companies that tried this idea and what happened to them
+  - The closest successful company and how it grew

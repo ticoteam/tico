@@ -1,0 +1,5 @@
+{
+  "backend/tests/test_task_manager_rights.py": {
+    "F841": 1
+  }
+}

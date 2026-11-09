@@ -1,5 +1,6 @@
 """Visual replies 1/4 (Dev 245): a visual attached to a chat reply or a task comment, its clean-up, its signed
 cookie-free address and who may open it. Spec tests 1-4, 18, 19 and 22 (Product roadmap "Visual replies")."""
+
 import base64
 import hashlib
 import pathlib
@@ -35,8 +36,11 @@ def png(api, attempt, name="chart.png", data=PNG):
 
 def bot_reply(api, attempt, to="human:ben", **body):
     conversation = attempt["conversation_id"] if "conversation_id" in attempt else attempt["message"]["conversation_id"]
-    return api.post("/api/v2/messages", json={"to": to, "text": "Here is the chart", "conversation_id": conversation,
-                                              **body}, headers=headers(attempt["token"]))
+    return api.post(
+        "/api/v2/messages",
+        json={"to": to, "text": "Here is the chart", "conversation_id": conversation, **body},
+        headers=headers(attempt["token"]),
+    )
 
 
 def test_a_bots_chat_reply_carries_a_titled_versioned_visual_and_reading_returns_it(api):
@@ -46,9 +50,16 @@ def test_a_bots_chat_reply_carries_a_titled_versioned_visual_and_reading_returns
     sent = bot_reply(api, attempt, attachments=[{"ref": f"{fid}@1", "title": "Weekly signups"}])
     assert sent.status_code == 200, sent.text
     message = sent.json()
-    for read in (api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json(),
-                 next(m for m in api.get(f"/api/v2/conversations/{message['conversation_id']}/messages",
-                                         headers=headers("ben-test")).json()["messages"] if m["id"] == message["id"])):
+    for read in (
+        api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json(),
+        next(
+            m
+            for m in api.get(
+                f"/api/v2/conversations/{message['conversation_id']}/messages", headers=headers("ben-test")
+            ).json()["messages"]
+            if m["id"] == message["id"]
+        ),
+    ):
         [item] = read["refs"]["attachments"]
         assert (item["file_id"], item["version"], item["title"], item["kind"]) == (fid, 1, "Weekly signups", "image")
         assert (item["name"], item["content_type"], item["size"]) == ("chart.png", "image/png", len(PNG))
@@ -69,8 +80,12 @@ def test_a_chat_reply_cannot_attach_a_file_from_another_conversation(api):
 
 def task_with_file(api, *, private, name="page.html", text="<p>hi</p>"):
     task_with_file.n = getattr(task_with_file, "n", 0) + 1
-    task = post(api, "tasks", {"owner": "ops", "title": f"Chart {task_with_file.n}", "body": "x", "private": private},
-                "ben-test")
+    task = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": f"Chart {task_with_file.n}", "body": "x", "private": private},
+        "ben-test",
+    )
     tid = task["id"]
     made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": name, "text": text}, headers=headers("ben-test"))
     assert made.status_code == 200, made.text
@@ -81,8 +96,11 @@ def test_a_task_comment_page_gets_its_local_images_embedded_and_reports_nothing_
     """Spec 2: a page whose two images are embedded data: URIs stays as it is and reports zero unembedded."""
     page = f'<html><body><img src="{DOT}"><div style="background:url({DOT})"></div></body></html>'
     tid, fid, number = task_with_file(api, private=False, text=page)
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "See the page",
-                 "attachments": [{"ref": f"{fid}@{number}", "title": "Funnel"}]}, headers=headers("ben-test"))
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments",
+        json={"text": "See the page", "attachments": [{"ref": f"{fid}@{number}", "title": "Funnel"}]},
+        headers=headers("ben-test"),
+    )
     assert r.status_code == 200, r.text
     assert r.json()["visuals"] == [{"ref": f"{fid}@{number}", "kind": "page", "unembedded": []}]
     [item] = r.json()["comment"]["refs"]["attachments"]
@@ -91,23 +109,33 @@ def test_a_task_comment_page_gets_its_local_images_embedded_and_reports_nothing_
 
 def test_a_remote_reference_is_named_and_the_stored_page_loads_nothing(api):
     """Spec 3: the attach result names each remote reference; the stored file has none that loads."""
-    page = ('<html><head><link rel="stylesheet" href="https://cdn.example/a.css"><style>@import "https://f.example/x.css";'
-            'body{background:url(https://img.example/bg.png)}</style></head><body><img src="https://img.example/a.png">'
-            '<img srcset="//img.example/b.png 2x"><script src="https://js.example/x.js"></script>'
-            '<a href="https://example.com/more">more</a></body></html>')
+    page = (
+        '<html><head><link rel="stylesheet" href="https://cdn.example/a.css"><style>@import "https://f.example/x.css";'
+        'body{background:url(https://img.example/bg.png)}</style></head><body><img src="https://img.example/a.png">'
+        '<img srcset="//img.example/b.png 2x"><script src="https://js.example/x.js"></script>'
+        '<a href="https://example.com/more">more</a></body></html>'
+    )
     tid, fid, number = task_with_file(api, private=False, text=page)
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Page", "attachments": [f"{fid}@{number}"]},
-                 headers=headers("ben-test"))
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments",
+        json={"text": "Page", "attachments": [f"{fid}@{number}"]},
+        headers=headers("ben-test"),
+    )
     assert r.status_code == 200, r.text
     [report] = r.json()["visuals"]
-    assert report["unembedded"] == ["https://cdn.example/a.css", "https://f.example/x.css",
-                                    "https://img.example/bg.png", "https://img.example/a.png", "//img.example/b.png"]
+    assert report["unembedded"] == [
+        "https://cdn.example/a.css",
+        "https://f.example/x.css",
+        "https://img.example/bg.png",
+        "https://img.example/a.png",
+        "//img.example/b.png",
+    ]
     [item] = r.json()["comment"]["refs"]["attachments"]
-    assert item["version"] == number + 1                    # the cleaned copy is the version posted
+    assert item["version"] == number + 1  # the cleaned copy is the version posted
     stored = api.get(f"/api/v2/files/{fid}/versions/{item['version']}", headers=headers("ben-test"))
     assert stored.status_code == 200
     assert V.loading_references(stored.content) == [] and b"<script" not in stored.content
-    assert b'href="https://example.com/more"' in stored.content       # a link is a click, not a load
+    assert b'href="https://example.com/more"' in stored.content  # a link is a click, not a load
 
 
 def test_over_the_limit_or_another_type_is_a_plain_file_never_a_visual(api, monkeypatch):
@@ -116,8 +144,9 @@ def test_over_the_limit_or_another_type_is_a_plain_file_never_a_visual(api, monk
     tid, fid, number = task_with_file(api, private=False, text="<p>" + "x" * 50 + "</p>")
     tid2, fid2, number2 = task_with_file(api, private=False, name="notes.csv", text="a,b")
     for t, f, n in ((tid, fid, number), (tid2, fid2, number2)):
-        r = api.post(f"/api/v2/tasks/{t}/comments", json={"text": "x", "attachments": [f"{f}@{n}"]},
-                     headers=headers("ben-test"))
+        r = api.post(
+            f"/api/v2/tasks/{t}/comments", json={"text": "x", "attachments": [f"{f}@{n}"]}, headers=headers("ben-test")
+        )
         assert r.status_code == 200, r.text
         [item] = r.json()["comment"]["refs"]["attachments"]
         assert item["kind"] == "file" and "src" not in item
@@ -129,14 +158,20 @@ def test_six_attachments_come_back_all_in_order(api):
     tid = post(api, "tasks", {"owner": "ops", "title": "Six", "body": "x", "private": False}, "ben-test")["id"]
     refs = []
     for i in range(6):
-        made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": f"p{i}.html", "text": f"<p>{i}</p>"},
-                        headers=headers("ben-test")).json()
+        made = api.post(
+            f"/api/v2/tasks/{tid}/files",
+            json={"name": f"p{i}.html", "text": f"<p>{i}</p>"},
+            headers=headers("ben-test"),
+        ).json()
         refs.append({"ref": f"{made['file_id']}@{made['version']}", "title": f"Page {i}"})
     r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "x", "attachments": refs}, headers=headers("ben-test"))
     assert r.status_code == 200, r.text
     wanted = [(a["ref"], a["title"], "page") for a in refs]
-    comment = next(m for m in api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
-                   if m["id"] == r.json()["comment"]["id"])
+    comment = next(
+        m
+        for m in api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
+        if m["id"] == r.json()["comment"]["id"]
+    )
     for read in (r.json()["comment"], comment):
         items = read["refs"]["attachments"]
         assert [(a["ref"], a["title"], a["kind"]) for a in items] == wanted
@@ -146,8 +181,11 @@ def test_six_attachments_come_back_all_in_order(api):
 # ---------------------------------------------------------------------------------------------- access (18, 19)
 def visual_on_task(api, private):
     tid, fid, number = task_with_file(api, private=private, name="chart.html", text="<p>chart</p>")
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "chart", "attachments": [f"{fid}@{number}"]},
-                 headers=headers("ben-test"))
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments",
+        json={"text": "chart", "attachments": [f"{fid}@{number}"]},
+        headers=headers("ben-test"),
+    )
     assert r.status_code == 200, r.text
     return tid, fid, r.json()["comment"]
 
@@ -156,9 +194,13 @@ def test_a_private_tasks_visual_is_refused_to_a_reader_without_access(api):
     """Spec 18: the message, the file and the direct link are each refused."""
     tid, fid, comment = visual_on_task(api, private=True)
     [item] = comment["refs"]["attachments"]
-    assert api.get(item["src"]).status_code == 200                      # the reader's own address works
-    for path in (f"/api/v2/messages/{comment['id']}", f"/api/v2/tasks/{tid}/comments",
-                 f"/api/v2/files/{fid}", f"/api/v2/files/{fid}/versions/{item['version']}"):
+    assert api.get(item["src"]).status_code == 200  # the reader's own address works
+    for path in (
+        f"/api/v2/messages/{comment['id']}",
+        f"/api/v2/tasks/{tid}/comments",
+        f"/api/v2/files/{fid}",
+        f"/api/v2/files/{fid}/versions/{item['version']}",
+    ):
         assert api.get(path, headers=headers("cara-test")).status_code in (403, 404), path
     # A token minted for a reader without access opens nothing.
     forged = V.mint(api.app.state.visual_key, "human:cara", fid, item["version"])
@@ -173,7 +215,7 @@ def test_a_non_private_tasks_visual_is_open_to_its_readers(api):
     assert listed.status_code == 200
     [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
     assert api.get(item["src"]).status_code == 200
-    page = api.get(f"/api/v2/tasks/{tid}", headers=headers("cara-test")).json()     # the task page reads them too
+    page = api.get(f"/api/v2/tasks/{tid}", headers=headers("cara-test")).json()  # the task page reads them too
     [item] = next(m for m in page["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
     assert api.get(item["src"]).status_code == 200
 
@@ -194,16 +236,22 @@ def test_a_reader_taken_off_a_private_task_is_refused_the_next_range_with_their_
     """The claim Review 2 and Security lean on: the address is checked against the reader's access on every request,
     each byte range included, so losing access ends it at once, not when the token expires."""
     tid = post(api, "tasks", {"owner": "ops", "title": "Cara's chart", "body": "x", "private": True}, "cara-test")["id"]
-    made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "chart.png", "content_base64": base64.b64encode(PNG).decode()},
-                    headers=headers("cara-test"))
+    made = api.post(
+        f"/api/v2/tasks/{tid}/files",
+        json={"name": "chart.png", "content_base64": base64.b64encode(PNG).decode()},
+        headers=headers("cara-test"),
+    )
     assert made.status_code == 200, made.text
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "chart", "attachments": [
-        f"{made.json()['file_id']}@{made.json()['version']}"]}, headers=headers("cara-test"))
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments",
+        json={"text": "chart", "attachments": [f"{made.json()['file_id']}@{made.json()['version']}"]},
+        headers=headers("cara-test"),
+    )
     assert r.status_code == 200, r.text
     src = r.json()["comment"]["refs"]["attachments"][0]["src"]
     assert api.get(src, headers={"Range": "bytes=0-1"}).status_code == 206
-    with api.app.state.store.transaction() as c:                # the task is handed to Ben: Cara no longer reads it
-        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (tid,))
+    with api.app.state.store.transaction() as c:  # the task is handed to Ben: Cara no longer reads it
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
     assert api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("cara-test")).status_code in (403, 404)
     for request in ({"Range": "bytes=0-1"}, {"Range": "bytes=4-9"}, {}):
         assert api.get(src, headers=request).status_code == 404
@@ -222,9 +270,10 @@ def test_a_chat_visual_is_refused_to_everyone_outside_the_chat(api):
 def test_the_public_roadmap_never_shows_a_private_tasks_visual(api):
     """Spec 19: nothing of a private task's visual (file id, title, address) reaches a public roadmap response."""
     tid, fid, comment = visual_on_task(api, private=True)
-    assert comment["refs"]["attachments"][0]["src"].startswith(VISUALS + "/visuals/")     # a reader does see it
+    assert comment["refs"]["attachments"][0]["src"].startswith(VISUALS + "/visuals/")  # a reader does see it
     from backend import public_roadmaps
     from backend.store import H
+
     with api.app.state.store.transaction() as c:
         # Even marked public and on a task made public, the comment's visual does not travel.
         c.execute("UPDATE messages SET public=1 WHERE id=?", (comment["id"],))
@@ -254,45 +303,53 @@ def test_the_snapshot_and_the_live_stream_give_each_reader_the_visual_and_nobody
     tid, fid, comment = visual_on_task(api, private=True)
     with api.app.state.store.read() as c:
         room = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
-    for cid, mid, file_id in ((room, comment["id"], fid),
-                              (reply["conversation_id"], reply["id"], png_id)):
+    for cid, mid, file_id in ((room, comment["id"], fid), (reply["conversation_id"], reply["id"], png_id)):
         item = snapshot_item(api, cid, mid, "ben-test")
         assert (item["file_id"], item["current_version"], item["removed"]) == (file_id, 1, False)
         assert api.get(item["src"]).status_code == 200
-        assert snapshot_item(api, cid, mid, "cara-test") in (403, 404)       # not a reader: no snapshot at all
+        assert snapshot_item(api, cid, mid, "cara-test") in (403, 404)  # not a reader: no snapshot at all
 
     stream = live("ben-test", f"?topics=messages&conversation={room}")
     assert stream.status == 200
     stream.until(lambda e: e["event"] in ("keepalive", "cursor", "messages"))
-    made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "next.html", "text": "<p>next</p>"},
-                    headers=headers("ben-test")).json()
-    sent = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "next", "attachments": [
-        {"ref": f"{made['file_id']}@{made['version']}", "title": "Next"}]}, headers=headers("ben-test")).json()
-    event = stream.until(lambda e: e["event"] == "messages"
-                         and (e["data"].get("message") or {}).get("id") == sent["comment"]["id"])
+    made = api.post(
+        f"/api/v2/tasks/{tid}/files", json={"name": "next.html", "text": "<p>next</p>"}, headers=headers("ben-test")
+    ).json()
+    sent = api.post(
+        f"/api/v2/tasks/{tid}/comments",
+        json={"text": "next", "attachments": [{"ref": f"{made['file_id']}@{made['version']}", "title": "Next"}]},
+        headers=headers("ben-test"),
+    ).json()
+    event = stream.until(
+        lambda e: e["event"] == "messages" and (e["data"].get("message") or {}).get("id") == sent["comment"]["id"]
+    )
     [item] = event["data"]["message"]["refs"]["attachments"]
     assert item["title"] == "Next" and item["removed"] is False and api.get(item["src"]).status_code == 200
 
 
 def test_dropping_an_embed_or_frame_keeps_the_rest_of_the_page():
     """embed and frame have no end tag: dropping one must not drop what follows, alone or inside a dropped object."""
-    for page in ('<p>before</p><embed src="old.pdf"><p>after</p>',
-                 '<p>before</p><object data="x.swf"><embed src="y.swf"><p>fallback</p></object><p>after</p>',
-                 '<p>before</p><frame src="f.html"><p>after</p>'):
+    for page in (
+        '<p>before</p><embed src="old.pdf"><p>after</p>',
+        '<p>before</p><object data="x.swf"><embed src="y.swf"><p>fallback</p></object><p>after</p>',
+        '<p>before</p><frame src="f.html"><p>after</p>',
+    ):
         cleaned, unembedded = V.clean(page.encode(), "page", base=False)
         assert b"<p>before</p>" in cleaned and b"<p>after</p>" in cleaned, cleaned
         assert b"embed" not in cleaned and b"frame" not in cleaned and b"object" not in cleaned
-        assert b"fallback" not in cleaned                    # a dropped container's own content still goes
+        assert b"fallback" not in cleaned  # a dropped container's own content still goes
 
 
 def test_unquoted_src_and_both_srcset_forms_are_embedded_and_survive_the_server(tmp_path):
     """Spec 2 for ordinary HTML: every local image a browser would load ends up a data: URI the server keeps."""
     from clients import visual_embed
+
     (tmp_path / "a.png").write_bytes(PNG)
     other = b"\x89PNG\r\n\x1a\n" + b"\x01" * 64
     (tmp_path / "b.png").write_bytes(other)
-    (tmp_path / "page.html").write_text('<img src=a.png><img src=\'b.png\'><img srcset="a.png 1x,b.png 2x">'
-                                        '<img srcset="b.png 1x, a.png 2x">')
+    (tmp_path / "page.html").write_text(
+        '<img src=a.png><img src=\'b.png\'><img srcset="a.png 1x,b.png 2x"><img srcset="b.png 1x, a.png 2x">'
+    )
     data, embedded, unembedded = visual_embed.embed(tmp_path, "page.html")
     assert unembedded == [] and b"a.png" not in data and b"b.png" not in data
     cleaned, removed = V.clean(data, "page", base=False)
@@ -306,24 +363,29 @@ def test_an_older_task_attachment_stays_a_plain_file(api):
     a picture, a clean page and a page cleaning would change all post, none becomes a visual or is marked removed."""
     from backend.auth import Identity
     from backend.blobs import register
+
     tid = post(api, "tasks", {"owner": "ops", "title": "Old files", "body": "x", "private": False}, "ben-test")["id"]
     refs = []
-    for name, data, mime in (("old.png", PNG, "image/png"), ("clean.html", b"<p>report</p>", "text/html"),
-                             ("remote.html", b'<img src="remote.png"><p>report</p>', "text/html")):
+    for name, data, mime in (
+        ("old.png", PNG, "image/png"),
+        ("clean.html", b"<p>report</p>", "text/html"),
+        ("remote.html", b'<img src="remote.png"><p>report</p>', "text/html"),
+    ):
         digest = api.app.state.blobs.put(data, mime)
         with api.app.state.store.transaction() as c:
             old = register(c, Identity("human:ben", "admin"), digest, len(data), name, mime)
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, old["id"]))
         refs.append(f"{old['id']}@1")
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "old ones", "attachments": refs},
-                 headers=headers("ben-test"))
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments", json={"text": "old ones", "attachments": refs}, headers=headers("ben-test")
+    )
     assert r.status_code == 200, r.text
     listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
     for read in (r.json()["comment"], next(m for m in listed if m["id"] == r.json()["comment"]["id"])):
         items = read["refs"]["attachments"]
         assert [a["ref"] for a in items] == refs and {a["kind"] for a in items} == {"file"}
         assert not any("src" in a or a.get("removed") for a in items)
-    for ref in refs:                                             # the bytes are as they were: nothing was rewritten
+    for ref in refs:  # the bytes are as they were: nothing was rewritten
         assert api.get("/api/v2/files/" + ref.split("@")[0], headers=headers("ben-test")).status_code == 200
 
 
@@ -386,6 +448,7 @@ def test_tokens_are_signed_expire_and_stay_stable_within_half_their_life():
 def test_a_visual_origin_equal_to_the_app_origin_is_refused():
     class S:
         public_url, visual_origin = "https://tico.example", "https://tico.example/"
+
     try:
         V.check_origin(S)
     except ValueError:
@@ -401,7 +464,9 @@ def test_actual_config_projects_visual_origin_only_after_api_auth_without_privat
     monkeypatch.setattr(settings, "visual_origin", "")
     config = api.get("/api/v2/config", headers=headers()).json()
     assert (config["visual_origin"], config["visuals"]) == ("", "media")
-    monkeypatch.setattr(settings, "visual_origin", replace(settings, visual_origin="https://visuals.acme-files.example/").visual_origin)
+    monkeypatch.setattr(
+        settings, "visual_origin", replace(settings, visual_origin="https://visuals.acme-files.example/").visual_origin
+    )
     monkeypatch.setattr(settings, "oidc_client_secret", "synthetic-private-oidc-secret")
     monkeypatch.setattr(settings, "gateway_key", "synthetic-private-gateway-key")
     monkeypatch.setattr(settings, "screen_relay_key", "synthetic-private-screen-key")
@@ -416,9 +481,12 @@ def test_actual_config_projects_visual_origin_only_after_api_auth_without_privat
 
 def test_visual_projection_hides_legacy_credentials_and_bad_hosts_without_changing_runtime(api, monkeypatch):
     settings = api.app.state.store.settings
-    for configured in ("https://synthetic-user:synthetic-visual-password@visuals.acme-files.example/",
-                       "https://@visuals.acme-files.example/", "https://bad_host.acme.example/",
-                       "https://visuals.acme-files.example:"):
+    for configured in (
+        "https://synthetic-user:synthetic-visual-password@visuals.acme-files.example/",
+        "https://@visuals.acme-files.example/",
+        "https://bad_host.acme.example/",
+        "https://visuals.acme-files.example:",
+    ):
         legacy = replace(settings, visual_origin=configured).visual_origin
         monkeypatch.setattr(settings, "visual_origin", legacy)
         response = api.get("/api/v2/config", headers=headers())
@@ -433,21 +501,25 @@ def test_visual_projection_hides_legacy_credentials_and_bad_hosts_without_changi
 
 def test_a_persons_chat_upload_is_a_titled_versioned_visual_too(api):
     """Choice 2: a picture a person sends is a visual like a bot's; older clients keep the blob id and url."""
-    r = api.post("/api/v2/uploads/chat/ops", data={"text": "My sketch", "titles": '["Sketch"]'},
-                 files={"files": ("sketch.png", PNG, "image/png")}, headers=headers("ben-test", "k-visual-1"))
+    r = api.post(
+        "/api/v2/uploads/chat/ops",
+        data={"text": "My sketch", "titles": '["Sketch"]'},
+        files={"files": ("sketch.png", PNG, "image/png")},
+        headers=headers("ben-test", "k-visual-1"),
+    )
     assert r.status_code == 200, r.text
     message = r.json()["message"]
-    [now] = message["refs"]["attachments"]                                    # the upload's own response
+    [now] = message["refs"]["attachments"]  # the upload's own response
     assert now["src"].startswith(VISUALS + "/visuals/") and (now["current_version"], now["removed"]) == (1, False)
     read = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()
     [item] = read["refs"]["attachments"]
-    assert item["url"] == "/api/v2/files/" + item["id"]                     # unchanged for today's chips
+    assert item["url"] == "/api/v2/files/" + item["id"]  # unchanged for today's chips
     assert (item["title"], item["kind"], item["version"]) == ("Sketch", "image", 1)
     assert item["file_id"] != item["id"] and api.get(item["src"]).status_code == 200
     with api.app.state.store.read() as c:
         scope = c.execute("SELECT scope FROM bot_files WHERE id=?", (item["file_id"],)).fetchone()["scope"]
     assert scope == "conversation:" + message["conversation_id"]
-    for other in ("cara", "ana"):                   # the company owner included: a personal chat is not theirs
+    for other in ("cara", "ana"):  # the company owner included: a personal chat is not theirs
         assert api.get("/api/v2/files/" + item["file_id"], headers=headers(other + "-test")).status_code == 404
         token = V.mint(api.app.state.visual_key, "human:" + other, item["file_id"], 1)
         assert api.get("/visuals/" + token).status_code == 404
@@ -455,18 +527,26 @@ def test_a_persons_chat_upload_is_a_titled_versioned_visual_too(api):
 
 def test_a_file_from_one_chat_cannot_be_posted_into_another_by_someone_who_can_read_both(api):
     """The conversation check stands alone: Ben can open his ops chat's file, and still can't post it to cpo."""
-    r = api.post("/api/v2/uploads/chat/ops", data={"text": "Sketch"},
-                 files={"files": ("sketch.png", PNG, "image/png")}, headers=headers("ben-test", "k-visual-2"))
+    r = api.post(
+        "/api/v2/uploads/chat/ops",
+        data={"text": "Sketch"},
+        files={"files": ("sketch.png", PNG, "image/png")},
+        headers=headers("ben-test", "k-visual-2"),
+    )
     fid = r.json()["message"]["refs"]["attachments"][0]["file_id"]
     assert api.get("/api/v2/files/" + fid, headers=headers("ben-test")).status_code == 200
-    moved = api.post("/api/v2/chat/cpo", json={"text": "Look", "attachments": [f"{fid}@1"]},
-                     headers=headers("ben-test", "k-visual-3"))
+    moved = api.post(
+        "/api/v2/chat/cpo",
+        json={"text": "Look", "attachments": [f"{fid}@1"]},
+        headers=headers("ben-test", "k-visual-3"),
+    )
     assert moved.status_code == 404, moved.text
 
 
 def wav():
     import io
     import wave
+
     out = io.BytesIO()
     with wave.open(out, "wb") as w:
         w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000), w.writeframes(b"\x00\x01" * 800)
@@ -477,20 +557,34 @@ def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api, 
     """QA d1c1857a: Python 3.15 guesses .wav as audio/vnd.wave, which was a file chip. JSON and multipart uploads
     store it as audio/wav, the comment shows an audio card, and the visual route serves it by range."""
     import mimetypes
-    guess = mimetypes.guess_type      # the machine's own MIME tables vary; pin the guess QA saw on the shipped build
-    monkeypatch.setattr(mimetypes, "guess_type", lambda name, *a, **k: ("audio/vnd.wave", None)
-                        if str(name).lower().endswith(".wav") else guess(name, *a, **k))
+
+    guess = mimetypes.guess_type  # the machine's own MIME tables vary; pin the guess QA saw on the shipped build
+    monkeypatch.setattr(
+        mimetypes,
+        "guess_type",
+        lambda name, *a, **k: ("audio/vnd.wave", None) if str(name).lower().endswith(".wav") else guess(name, *a, **k),
+    )
     data = wav()
     task = post(api, "tasks", {"owner": "ops", "title": "Voice note", "body": "x", "private": True}, "ben-test")
     tid = task["id"]
-    by_json = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "private.wav",
-                       "content_base64": base64.b64encode(data).decode()}, headers=headers("ben-test"))
-    by_form = api.post(f"/api/v2/tasks/{tid}/files", data={"name": "second.wav"},
-                       files={"file": ("second.wav", data, "application/octet-stream")}, headers=headers("ben-test"))
+    by_json = api.post(
+        f"/api/v2/tasks/{tid}/files",
+        json={"name": "private.wav", "content_base64": base64.b64encode(data).decode()},
+        headers=headers("ben-test"),
+    )
+    by_form = api.post(
+        f"/api/v2/tasks/{tid}/files",
+        data={"name": "second.wav"},
+        files={"file": ("second.wav", data, "application/octet-stream")},
+        headers=headers("ben-test"),
+    )
     for made in (by_json, by_form):
         assert made.status_code == 200, made.text
-        r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Listen",
-                     "attachments": [f"{made.json()['file_id']}@{made.json()['version']}"]}, headers=headers("ben-test"))
+        r = api.post(
+            f"/api/v2/tasks/{tid}/comments",
+            json={"text": "Listen", "attachments": [f"{made.json()['file_id']}@{made.json()['version']}"]},
+            headers=headers("ben-test"),
+        )
         assert r.status_code == 200, r.text
         [item] = r.json()["comment"]["refs"]["attachments"]
         assert (item["kind"], item["content_type"]) == ("audio", "audio/wav"), item
@@ -501,8 +595,12 @@ def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api, 
 def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
     """Versions stored before the fix, and a browser that sends audio/vnd.wave, keep the audio card."""
     assert V.kind_of("audio/vnd.wave", 1000) == "audio" and V.stored_type("audio/vnd.wave") == "audio/wav"
-    r = api.post("/api/v2/uploads/chat/ops", data={"text": "My voice note"},
-                 files={"files": ("note.wav", wav(), "audio/vnd.wave")}, headers=headers("ben-test", "k-visual-wav"))
+    r = api.post(
+        "/api/v2/uploads/chat/ops",
+        data={"text": "My voice note"},
+        files={"files": ("note.wav", wav(), "audio/vnd.wave")},
+        headers=headers("ben-test", "k-visual-wav"),
+    )
     assert r.status_code == 200, r.text
     [item] = r.json()["message"]["refs"]["attachments"]
     assert item["kind"] == "audio" and item["src"].startswith(VISUALS + "/visuals/")
@@ -512,6 +610,7 @@ def media_settled(api):
     """Wait until the media worker (backend/file_metadata.py) has nothing pending, deferred retries included: its
     save rewrites a version's poster and preview, so one landing after a test sets them would clear them."""
     from backend.file_metadata import PENDING
+
     for _ in range(200):
         with api.app.state.store.read() as c:
             if not c.execute(PENDING, (float("inf"),)).fetchone():
@@ -526,13 +625,18 @@ def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
     a bot's address for a task file still opens."""
     _, attempt = turn(api)
     fid, _ = png(api, attempt)
-    made = publish(api, attempt, name="clip.mp4", text=None, content_base64=base64.b64encode(bytes(range(256))).decode())
+    made = publish(
+        api, attempt, name="clip.mp4", text=None, content_base64=base64.b64encode(bytes(range(256))).decode()
+    )
     assert made.status_code == 200, made.text
     clip = made.json()["file"]["id"]
     media_settled(api)
-    with api.app.state.store.transaction() as c:              # a video with its poster ready, as file_metadata leaves it
-        c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT blob_id FROM bot_file_versions WHERE file_id=?) "
-                  "WHERE file_id=?", (fid, clip))
+    with api.app.state.store.transaction() as c:  # a video with its poster ready, as file_metadata leaves it
+        c.execute(
+            "UPDATE bot_file_versions SET poster_blob_id=(SELECT blob_id FROM bot_file_versions WHERE file_id=?) "
+            "WHERE file_id=?",
+            (fid, clip),
+        )
     sent = bot_reply(api, attempt, attachments=[f"{fid}@1", f"{clip}@1"])
     assert sent.status_code == 200, sent.text
     message = sent.json()
@@ -542,7 +646,9 @@ def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
         for item in (picture, video):
             assert not item["removed"] and item["current_version"] == 1
             assert item.get("src") is None and item.get("poster_url") is None, item
-    picture, video = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"]["attachments"]
+    picture, video = api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"][
+        "attachments"
+    ]
     for address in (picture["src"], video["src"], video["poster_url"]):  # the person's addresses are unchanged
         assert api.get(address).status_code in (200, 206), address
 
@@ -558,9 +664,13 @@ def test_a_reader_acting_for_someone_else_gets_a_working_address(api):
     visual address names one reader: the tuple once crashed the task page with a 500 and could not be signed."""
     from backend.auth import Identity
     from backend.store import H
+
     tid, fid, comment = visual_on_task(api, private=False)
     settings = api.app.state.store.settings
-    for who in (Identity("bot:ops", "bot", task_actor="human:ben"), Identity("human:ben", "human", task_actor="bot:ops")):
+    for who in (
+        Identity("bot:ops", "bot", task_actor="human:ben"),
+        Identity("human:ben", "human", task_actor="bot:ops"),
+    ):
         with api.app.state.store.read() as c:
             [message] = V.for_reader(api.app, settings, c, who, [H.message(c, comment["id"])])
         [item] = message["refs"]["attachments"]
@@ -572,12 +682,14 @@ def test_first_requests_at_once_share_one_whole_secret(tmp_path, monkeypatch):
     import threading
     from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
+
     monkeypatch.delenv("TICO_VISUAL_SECRET", raising=False)
     settings, start = SimpleNamespace(db_path=tmp_path / "hub.db"), threading.Barrier(16)
 
     def first():
         start.wait()
         return V.secret(settings)
+
     with ThreadPoolExecutor(16) as pool:
         keys = set(pool.map(lambda _: first(), range(16)))
     assert len(keys) == 1 and len(keys.pop()) == 64

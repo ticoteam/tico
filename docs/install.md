@@ -42,6 +42,12 @@ a local server, with no Open link.
 - The Gateway is enrolled from an invite whoever runs the install puts in the environment, `TICO_GATEWAY_INVITE`; you
   never type it, and the installer never prints it. With one, the Gateway connects on Tico's first start; without one
   the install still runs, on your subscriptions, and says the Gateway is not set up.
+- A server Tico hosts can be finished by the owner's own coding agent with no one signed in. Whoever runs the install
+  puts a one-time setup secret in the environment, `TICO_SETUP_HANDOFF` (32 to 128 letters, digits, `-` and `_`); like
+  the Gateway invite it is never typed, never printed and never saved: the server gets only its sha256 as
+  `TICO_SETUP_HANDOFF_HASH`, and it needs the https domain and `TICO_OWNER_EMAIL`. Tico's team, which runs these installs,
+  passes the secret to the customer's agent, which trades it once for a personal token of the owner
+  ([Handed over from setup](connect-an-agent.md#handed-over-from-setup)). Without the variable, nothing changes.
 - If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
   Computers > Add computer**.
 - It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
@@ -97,12 +103,14 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
    to run; until then each bot says "Add an AI provider", and **Settings > Models** adds it.
-   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (department, level, Fast, version).
+   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (level, Fast, version).
+   With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** The four built-in bots are created automatically. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Eight built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
+   Bookkeeper, Counsel and Brand Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -131,16 +139,18 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
    Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
-2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
-   and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
+2. **Hire Content Marketer.** On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired
+   before its manager reports to the nearest hired manager above it until that manager is hired, then moves under it. On
+   Content Marketer's page, press **Start onboarding**. Paste the [sample answers](#sample-answers-for-content-marketer)
+   and answer anything else it asks. It posts a first draft in the same DM, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
-3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+3. **Give it one task.** On **Tasks**, press **+** (New task) and assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
    no claims. Return a draft on this task.”
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
    `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
 5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
-   press **Close task** at the top of the task (it is also in its **…** menu).
+   press **Close** at the top of the task (it is also in its **…** menu).
 
 Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
 Health issue.
@@ -151,7 +161,7 @@ summary with decisions and action items. Close that task the same way.
 
 ### Sample answers for Content Marketer
 
-Paste this into its Setup chat (or replace it with your own facts):
+Paste this into its Setup DM (or replace it with your own facts):
 
 > Our readers are project teams; the next step is to try our example app locally. Plan a weekly blog post and a short
 > social version; keep both as drafts for me. Two voice examples: “Keep the next task beside the meeting notes.” and
@@ -163,14 +173,14 @@ Paste this into its Setup chat (or replace it with your own facts):
 
 ### First-result recovery
 
-- **Add an AI provider**: when chat says "Saved — no AI provider is chosen", use its **Add an AI provider** link
+- **Add an AI provider**: when the DM says "Saved — no AI provider is chosen", use its **Add an AI provider** link
   to open **Settings > Models**, then select the bot's model in **Settings > Bots**. Your message stays saved.
 - **Offline** or **Missing bot repository or AGENT.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
   **Tools > Credentials**; for a computer-local key or login, update it or use **Sign in** in **Settings > Computers**.
   Older computers show both paths. See [Harnesses](harnesses.md).
-- **Needs setup**: open the bot's chat and press **Set up**; tasks and routines wait until that conversation is finished.
+- **Needs setup**: open the bot's page and press **Start onboarding**; tasks and routines wait until its onboarding is finished.
 - **A missing Tool or Credential**: use the bot's card or [Connect tools](connect-tools.md) and grant the credential to that bot.
 
 [Set up your first bots](onboarding-guide.md) covers how to review and improve the result.
@@ -384,7 +394,7 @@ plans and diagnostics, and stay in setup's 0600 private environment copy for ret
 excluded from public setup state and runner settings. An explicit nonempty environment value replaces its saved value.
 
 For an existing workspace with an Inbox key, a signed-in owner or admin can connect its Inbox to a company in the
-customer portal. In **Settings > More > Email & Phone**, open **Connect Inbox to Tico account/company** and follow the
+customer portal. In **Tools > Settings > Email**, open **Join your company's shared Inbox** and follow the
 portal link to obtain a five-minute connection code. Paste it into the workspace, preview the company name and ID,
 then confirm sharing in both directions: existing workspace inboxes and messages join the company's shared Inbox,
 and the workspace's agents can read that shared Inbox. The key stays on the server; no agent receives it. A saved
@@ -406,7 +416,7 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 |---|---|---|
 | `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) and `TICO_OIDC_LABEL` (the provider's name: a signed-out browser then gets a page with one "Sign in with <label>" button instead of going straight to the provider) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. The setup wizard's `--auth oidc --issuer <url> --client-id <id>` takes any issuer, with the secret from `TICO_OIDC_CLIENT_SECRET` in the environment and `--signin-label` for the button. On a server Tico hosts (`--hosted`), the owner sign-in link below stays as break-glass beside it (`TICO_OWNER_LINK_HASH`): it never calls the issuer, so the owner gets in while the issuer is down, and people already signed in stay signed in. |
 | `cloudflare` | `TICO_ACCESS_ISSUER`, `TICO_ACCESS_AUDIENCE` | Cloudflare Access in front of the tunnel |
-| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. |
+| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. The same holds for the setup handoff: `TICO_SETUP_HANDOFF` in the installer's environment (Tico's team passes it) reaches the server only as its hash, `TICO_SETUP_HANDOFF_HASH`, and the owner's agent trades the secret once for a token ([connect-an-agent.md](connect-an-agent.md#handed-over-from-setup)). |
 | unset (or `none`) | nothing; leave `TICO_DOMAIN` unset | The quick start. The server answers on `http://127.0.0.1:8765` and the owner signs in with the token from `docker compose exec server cat /data/local-owner.token` (`Authorization: Bearer <token>`, or `GET /api/v2/local-signin?token=...`). With `TICO_DOMAIN` set, the server refuses to start. |
 
 The owner is the first human on the roster; add the others in the app. The wizard writes these settings; to change
@@ -588,7 +598,7 @@ minutes:
 {"type": "tico.wake", "install": "acme", "pending": 3, "oldest_received_at": "2026-10-25T10:00:00Z"}
 ```
 
-Set it as the owner, with the Tico Gateway connected in Settings → Gateway:
+Set it as the owner, with the Tico Gateway connected in Settings → Models:
 
 ```
 hub relay wake-url set https://wake.acme.example/start-tico
@@ -788,6 +798,9 @@ to the computer, write a `.env` next to it with `TICO_URL=https://tico.example.c
 `TICO_RUNNER_LABEL=<name>`, and `TICO_TAG` and `TICO_UPDATER_TAG` set to the server's release (`vX.Y.Z`, not `latest`), and run
 `docker compose -f runner.compose.yaml up -d`.
 
+The runner's container is capped at `TICO_RUNNER_MEMORY` (for example `16g`): the installer and the updater set a default from the
+computer's memory, less a reserve of 3 GiB or 12%, whichever is larger. Put your own value in `.env` to change it, or `0` for no limit.
+
 **Meeting importers and Close calls run here too, with nothing extra to start.** The runner container also runs the
 `importers` and `close-calls` jobs that a Mac runs as launchd jobs, as children of the runner with restart and backoff,
 and only while they are wanted:
@@ -796,7 +809,7 @@ and only while they are wanted:
   tick **Enabled** and choose this computer. The job starts within a minute and stops again when you switch it off
   or pick another computer. Put the tool's credential in the runner's secrets folder, for example
   `docker exec '<container-name>' sh -c 'umask 077; printf "%s\n" "GRANOLA_API_KEY=<key>" | tee /home/runner/workspace/secrets/granola.env >/dev/null'`
-  (the file names are in [meetings](meetings.md#meeting-importers)); `docker exec '<container-name>' python -m runner
+  (the file names are in [meetings](meetings.md#meeting-importers)); `docker exec '<container-name>' python -m runner_support
   --config /home/runner/runner.json importers-doctor` says which are present.
 - *Close calls*: put `CLOSE_API_KEY=<key>` in `/home/runner/workspace/secrets/close-calls.env` the same way. The job
   starts when that file appears; keep it on one computer only. See [meetings](meetings.md#close).
@@ -814,7 +827,7 @@ gets a computer to itself ([Message bots](mail.md#who-can-read-the-key)).
 The job starts within a minute of the file appearing, builds its Python environment into the volume the first time
 (about a minute; `docker logs` shows it), and stops when the file is removed. Instead of the key, an owner who
 sets `TICO_PROCESSING_OPERATORS` on the server assigns the job to that owner's runners. `docker exec '<container-name>'
-python -m runner --config /home/runner/runner.json connectors-doctor` says whether the key is found.
+python -m runner_support --config /home/runner/runner.json connectors-doctor` says whether the key is found.
 `TICO_SIDE_JOBS=0` in the container's environment turns the supervisor off.
 
 Update a runner with `docker pull ghcr.io/ticoteam/tico-runner:latest`, then remove and re-run the container
@@ -847,7 +860,7 @@ allowed, take control. The computer itself decides whether it offers one:
   once the computer is idle, since that recreates the runner's container and cuts off a running turn.
   `install.sh --runner --screen` writes `TICO_SCREEN=1` too. The `$([ -f runner.override.yaml ] && ...)` part adds the
   override file a named or `--server-network` runner has, as every compose call for that runner must.
-- A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
+- A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico-computer screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
 In **Bot → Settings → Screen**, use the switch to enable or disable screen access. If setup is needed, the switch
@@ -883,8 +896,12 @@ Native release checkouts download the matching checksummed binary. Development c
 it with Rust 1.92 or newer. `TICO_SCREEN_RELAY_BIN` can supply a matching executable; its source
 fingerprint is checked before startup. Use `CARGO_HOME`, `CARGO_TARGET_DIR`, `RUSTUP_HOME` and
 `TMPDIR` on your work disk to keep build files there. Docker ships the binary and needs no compiler.
+A checkout also compiles the web UI's TypeScript files: install Node 22 and run `npm ci` once, and
+`python -m backend.server` runs `npm run build:ui` itself when the build is missing or stale, with the Node on
+PATH or, for a launchd or systemd job whose PATH lacks it, one in /opt/homebrew/bin, /usr/local/bin, Volta or nvm's
+default. Without them it refuses to start and says what is missing (ui/README.md, "TypeScript"). The Docker image ships the compiled UI.
 
-Existing native launchd/systemd server jobs need a one-time `scripts/tico -e <env> server install`
+Existing native launchd/systemd server jobs need a one-time `scripts/tico-computer -e <env> server install`
 after updating, so they run `backend.server` rather than a direct Uvicorn listener. New jobs already
 use that entry point. The server creates a fresh private control secret and allocated loopback ports
 on every start; no relay option or manually managed secret is required. The public listener refuses
@@ -894,7 +911,7 @@ The standard Compose file's front doors (Caddy, cloudflared) reach the server ov
 addresses, and the server trusts forwarded client addresses only from those two, loopback and the network's dynamic
 range (where only the server and the tunnel's `hold` live), so each visitor keeps their own rate limit with no change to
 `compose.yaml`. If `172.30.254.0/28` clashes with a network on your computer, move it with `TICO_EDGE_SUBNET`,
-`TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS` and `TICO_CLOUDFLARED_ADDRESS` in `.env`; an update that hits the clash
+`TICO_EDGE_DYNAMIC_RANGE`, `TICO_CADDY_ADDRESS`, `TICO_CLOUDFLARED_ADDRESS` and, with calls on, `TICO_LIVEKIT_ADDRESS` in `.env`; an update that hits the clash
 rolls back and its message names these settings. After setting them, run `docker compose up -d` (or update again).
 Docker keeps an existing network's subnet, so to move an edge network that was already created, run
 `docker compose down` once first. With your own reverse proxy, set `TICO_TRUSTED_PROXIES` to its addresses plus loopback.
@@ -926,14 +943,14 @@ TICO_SCREEN_RELAY_BIN=/path/on/work-disk/to/tico-screen-relay \
 
 The native runner is unchanged and fully supported: a Mac keeps its own logins, desktop apps and files. Choose **Mac**
 in Add computer and **Use a Tico checkout instead**, then in the Tico checkout on that Mac run the command it prints
-(`scripts/setup-runner.sh "$HOME/Downloads/<setup-file>.json"`, or `scripts/tico -e <env> enroll --code-file <file>
---label "Studio Mac"`, then `scripts/tico -e <env> install bot`; see the README). It connects to
+(`scripts/setup-runner.sh "$HOME/Downloads/<setup-file>.json"`, or `scripts/tico-computer -e <env> enroll --code-file <file>
+--label "Studio Mac"`, then `scripts/tico-computer -e <env> install bot`; see the README). It connects to
 `https://<TICO_DOMAIN>`, runs under launchd, and reconnects on its own after the server restarts.
 
 **Mac updates.** The runner follows the server's release by itself ([updates.md](updates.md#a-mac-or-linux-checkout)).
 After a healthy update it also restarts the side jobs installed beside it (`connectors`, `close-calls`, `importers`), and
 each side job exits and restarts when it sees the checkout move to another revision (checked about once a minute), so no job
-keeps old code in memory. `scripts/tico restart` does the same by hand.
+keeps old code in memory. `scripts/tico-computer restart` does the same by hand.
 
 ### Windows PC (WSL 2)
 
@@ -958,13 +975,13 @@ Docker Desktop is not needed; if its WSL integration is on for Ubuntu, the runne
 
 ### A Linux checkout (systemd)
 
-A Linux computer can also run the native runner from a Tico checkout, the way a Mac does. `scripts/tico` drives it with
+A Linux computer can also run the native runner from a Tico checkout, the way a Mac does. `scripts/tico-computer` drives it with
 systemd **user** units instead of launchd; no root is needed:
 
 ```
-scripts/tico -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
-scripts/tico -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
-scripts/tico -e <env> status
+scripts/tico-computer -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
+scripts/tico-computer -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
+scripts/tico-computer -e <env> status
 ```
 
 `install` writes `~/.config/systemd/user/tico-<job>.service` (`tico-<env>-<job>.service` with `-e`), enables and starts
@@ -972,8 +989,8 @@ each, and tells you to run `loginctl enable-linger $USER` when linger is off (ot
 does not start at boot). It needs a user session: over a bare ssh login that has none, set
 `XDG_RUNTIME_DIR=/run/user/$(id -u)` first. `restart`, `logs`, `doctor`, `uninstall` and `update` behave as on a Mac.
 Run `install` once: it is also what lets the runner update itself when the server does
-([updates.md](updates.md#linux-from-a-checkout-run-scriptstico-install-once)); until then Settings > Computers and Health say
-"run `scripts/tico install` once".
+([updates.md](updates.md#linux-from-a-checkout-run-scriptstico-computer-install-once)); until then Settings > Computers and Health say
+"run `scripts/tico-computer install` once".
 
 ## Slack
 
@@ -1307,6 +1324,14 @@ In **Settings > Computers**, revoked computers are hidden by default; **Show rev
 records. **Remove computer** revokes its registration immediately. Its assigned bots remain visible;
 use **Reassign in Bots** to choose another computer. The page shows how to stop the Docker runner from that computer's
 install directory; this keeps its repositories and sign-in. Re-register it with a new code if you want to use it again.
+
+The hourly cleanup automatically revokes only replaced self-hosted computers: one with no bots assigned and more than
+24 hours without contact (or since enrollment if it never connected), when a newer, unrevoked computer with the same
+owner, machine name and platform enrolled or checked in after its last contact. Sharing browser exits, cloud machines,
+app delivery computers, and computers with model subscriptions, stored keys, login records, profiles or reported
+signed-in AI tools are kept. A computer without a matching replacement is kept however long it is offline.
+The event records why it was retired and names its replacement. Retired computers leave Health and the active computer
+list; they can be registered again with a new code.
 
 ## Operating it
 

@@ -8,7 +8,7 @@ Inputs: the lines in `knowledge/reasons.md` from the last four weeks, billing or
 Outcome: one page in the shape of `knowledge/examples/retention-report.md`: requests, saves and losses by reason with the offer
 used, the week's finding, the open replies ready, the watch list, and one suggested change. Nothing is sent or changed.
 
-Done when: every line from the week has an outcome (cancelled, downgraded, paused, saved, lost or open); every save of 30 or more
+Done when: every line from the week has an outcome (canceled, downgraded, paused, saved, lost or open); every save of 30 or more
 days is confirmed still paying or marked lost; every reason has a count and a four-week average; the report is published; and the
 task note gives the counts and the path.
 
@@ -16,7 +16,7 @@ task note gives the counts and the path.
 
 ## 1. Close the week's requests
 
-For each line in `knowledge/reasons.md` from the last seven days, record the outcome from the record: cancelled, downgraded, paused,
+For each line in `knowledge/reasons.md` from the last seven days, record the outcome from the record: canceled, downgraded, paused,
 saved, or still open. A save made 30 or more days ago is confirmed only if the customer is still paying (billing or CRM read);
 otherwise mark it lost. Record a 90-day check as its own line when there is one.
 
