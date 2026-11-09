@@ -61,7 +61,7 @@ const visualPageSrc = (src: string) => { const ok = visualSrc({src}); return ok 
 // An ACK can arrive after a live snapshot painted chips. Every place that draws visuals draws again from the data it
 // already holds: no new read, draft reset or whole-page refresh.
 // A page's Open card keeps the page it was drawn from (pageCard, ui/app/pages.ts).
-interface VisualPageCard extends HTMLElement { pageData?: unknown; pageSize?: string }
+interface VisualPageCard extends HTMLElement { pageData?: import('../types/api').Page; pageSize?: string }
 function nativeVisualRepaint() {
   if (typeof V2C !== 'undefined' && V2C) v2ChatRender(V2C);
   if (typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.data && taskChatCurrent(TASK_CHAT))
