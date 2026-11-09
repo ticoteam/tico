@@ -1,13 +1,22 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // The account button's one status dot and its menu (Amendment v3, _plan-maintenance.md, Chris Nov 4): two states only.
 // "Can't reach Tico" is amber, clears by itself and offers Retry. "Bots aren't running" is red: the cloud scheduler or
 // Tico on this computer stopped, or no computer is online at all. Health's checks, the person's operation issues,
 // computer restarts and a bot's stopped-runs Review never reach the menu, the dot or its hover card. Settings > Health
 // lists the checks, and a bot's own page holds its Review. Fixtures only.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+declare const S: {me: {role: string; bot_admin: boolean}};
+declare function refresh(force: boolean): Promise<void>;
+declare function hlRefresh(): Promise<void>;
+declare function setAccountMenu(open: boolean): void;
+declare function refreshConfig(): Promise<void>;
+declare function renderAdministration(): void;
+declare function setDrawer(open: boolean): void;
 
 // Each of these lit the dot or filled the menu before Amendment v3. None may do so now.
 const NOISE_HEALTH = {audience: 'owner', stuck: [], attention: 3, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures: [], checks: [
@@ -28,15 +37,15 @@ const NOISE_ISSUES = [
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    const errors = [];
+    const errors: string[] = [];
     let status = {cloud: true, keeper_alive: true, health_issues: NOISE_ISSUES};
     let health = NOISE_HEALTH;
     let failStatus = false;
-    let config = {company_name: 'Acme'};
-    const serve = async route => {
+    let config: {company_name: string; administration_url?: string} = {company_name: 'Acme'};
+    const serve = async (route: import('playwright').Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
-      const json = (body, code = 200) => route.fulfill({status: code, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, code = 200) => route.fulfill({status: code, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
@@ -63,7 +72,7 @@ const NOISE_ISSUES = [
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
     const settle = async () => { await page.evaluate(async () => { await refresh(false); await hlRefresh(); }); };
     // Status dots in the sidebar footer, whatever their class: what a person sees as a small coloured circle.
-    const dots = () => page.evaluate(() => [...document.querySelectorAll('.side-utility *')].filter(el => {
+    const dots = () => page.evaluate(() => [...(document.querySelectorAll('.side-utility *') as unknown as Element[])].filter(el => {
       if (el.closest('.account-status')) return false;   // the bullets of the lines themselves
       const box = el.getBoundingClientRect(), css = getComputedStyle(el);
       return box.width > 0 && box.width <= 12 && Math.abs(box.width - box.height) < 1 && parseFloat(css.borderRadius) >= box.width / 2 - 1
@@ -71,7 +80,7 @@ const NOISE_ISSUES = [
     }).length);
     const dot = page.locator('#account .account-dot');
     const menuLines = async () => { await page.evaluate(() => setAccountMenu(true)); await page.locator('#account-menu').waitFor(); return page.locator('#account-menu .account-status-line'); };
-    const texts = locator => locator.locator('.account-status-text').allInnerTexts();
+    const texts = (locator: import('playwright').Locator) => locator.locator('.account-status-text').allInnerTexts();
 
     // A server being remote is not a portal connection. A linked company supplies its own portal URL.
     await page.locator('#account').click();
@@ -84,7 +93,7 @@ const NOISE_ISSUES = [
     await administration.waitFor();
     assert.equal(await administration.getAttribute('href'), portal);
     assert.equal(await administration.getAttribute('target'), '_blank');
-    assert.match(await administration.getAttribute('rel'), /noopener/);
+    assert.match((await administration.getAttribute('rel'))!, /noopener/);
     assert.equal(await page.getByRole('link', {name: 'Admin', exact: true}).count(), 1);
     await page.context().route(portal, route => route.fulfill({contentType: 'text/html', body: '<title>Account portal</title>'}));
     const popupOpened = page.waitForEvent('popup');
@@ -215,7 +224,7 @@ const NOISE_ISSUES = [
     await phoneLines.first().waitFor();
     assert.equal(await phone.getByRole('link', {name: 'Admin', exact: true}).getAttribute('href'), portal);
     assert.deepEqual(await texts(phoneLines), ["Bots aren't running: no computer is online"]);
-    const menu = await phone.locator('#account-menu').boundingBox();
+    const menu = (await phone.locator('#account-menu').boundingBox())!;
     assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the menu fits a phone: ${JSON.stringify(menu)}`);
     assert.equal(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no horizontal page scroll');
     await phone.locator('#account-menu .account-status-line a').tap();

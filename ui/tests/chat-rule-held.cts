@@ -1,12 +1,14 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // Offline browser regression: a person's message to a bot (their DM thread) that an org rule holds is not a failed
 // send. Nothing is posted, no error shows, and the DM shows the held message with its rule. A reopened DM lists what is
 // still held; Edit withdraws the hold and puts the text back in the box to send again.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
 const TEXT = 'Our favorite color is gold.';
 const HOLD = {id: 'h-own', operation: 'threads', author: 'human:ana', author_name: 'Ana', state: 'held', outcome: 'blocked',
   rules: [{id: 'r-color', kind: 'internal', text: 'Acme does not name a favorite color.', version: 1, status: 'active', if_broken: 'warn'}],
@@ -20,15 +22,15 @@ const DM = {id: 't-dm', title: '', audience: 'personal', root_id: 't-dm', last_s
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce'});
-    const errors = [], withdrawn = [], posted = [];
-    let listed = [];
-    page.on('pageerror', e => errors.push(e.message));
+    const errors: string[] = [], withdrawn: string[] = [], posted: string[] = [];
+    let listed: (typeof HOLD)[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});

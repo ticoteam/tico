@@ -1,19 +1,50 @@
+import type * as PageSupport from './support/page.cjs';
 // Email sending (ui/app/inboxes-sending.ts) over a fake API: the company policy's writes, a mailbox's Limits card (each
 // bot's sends, what and a day; the caps in one summary; Edit opens the form), inheritance, cancel and phone layout.
-const {chromium} = require('playwright');
-const fs = require('node:fs');
-const assert = require('node:assert/strict');
-const path = require('node:path');
-const {uiFile} = require('./support/page.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const fs: typeof import('node:fs') = require('node:fs');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
+const {uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const root = path.resolve(__dirname, '..');
 
+// Browser-side state set by the inline script below and by inboxes-sending.ts.
+interface SendingCtx {
+  admin: boolean;
+  once(key: string, fn: () => unknown): unknown;
+  live(): boolean;
+  refresh(): number;
+}
+interface SendingSetting {
+  render(el: Element | null, ctx: SendingCtx): unknown;
+}
+interface SendingPanel {
+  render(el: Element | null, data: {address: string; can_manage: boolean; accesses: unknown[]}, ctx: SendingCtx): unknown;
+}
+interface SendingWrite {
+  p: string;
+  b: Record<string, unknown> & {approvers?: string[]};
+  method: string;
+}
+declare const specs: {'email.sending': SendingSetting};
+declare const panels: {'email.sending': SendingPanel};
+declare const ctx: SendingCtx;
+declare const writes: SendingWrite[];
+declare let refreshes: number;
+declare const doc: {
+  company: Record<string, unknown>;
+  inbox: Record<string, unknown>;
+  bot: Record<string, unknown>;
+  effective: Record<string, unknown> & {approval_rules?: unknown[]};
+};
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     for (const width of [1280, 390]) {
       const page = await browser.newPage({viewport: {width, height: 1000}});
-      const errors = [];
-      page.on('pageerror', e => errors.push(e.message));
+      const errors: string[] = [];
+      page.on('pageerror', (e: Error) => errors.push(e.message));
       await page.setContent('<main id="settings"></main><main id="detail"></main>');
       await page.addStyleTag({content: 'body{font:14px sans-serif;margin:16px;--line:#ccc;--muted:#666}button,input,select{font:inherit}main{min-width:0}.ib-field{display:grid;grid-template-columns:180px minmax(0,1fr);gap:10px;padding:10px 0}@media(max-width:760px){.ib-field{grid-template-columns:1fr}}'});
       await page.addStyleTag({content: fs.readFileSync(path.join(root, 'styles/inboxes.css'), 'utf8')});
@@ -44,7 +75,7 @@ const root = path.resolve(__dirname, '..');
       await form.locator('[name=max_outside_recipients]').fill('3');
       await form.locator('[type=submit]').click();
       await page.waitForFunction(() => refreshes === 1);
-      const write = await page.evaluate(() => writes[0]);
+      const write = (await page.evaluate(() => writes[0]))!;
       assert.equal(write.p, '/v2/email/sending-policy');
       assert.equal(write.b.mode, 'on_their_own');
       assert.equal(write.b.ask_attachments, false);
@@ -61,7 +92,7 @@ const root = path.resolve(__dirname, '..');
       assert.match(await page.locator('#inbox-sending .ib-send-summary').innerText(), /This mailbox\s+200 a day[\s\S]*Company\s+1,000 a day[\s\S]*Undo\s+2 min/);
       assert.match(await page.locator('#inbox-sending').innerText(), /People send as themselves, with no limits\./);
       assert.equal(await page.locator('#detail [data-send-form]').isVisible(), false, 'the form waits behind Edit');
-      assert.match(await page.locator('#inbox-waiting-to-send').textContent(), /<script>unsafe<\/script>/);
+      assert.match((await page.locator('#inbox-waiting-to-send').textContent())!, /<script>unsafe<\/script>/);
       assert.equal(await page.locator('#detail script').count(), 0);
       await page.locator('[data-send-preview]').click();
       await page.locator('.email-send-preview pre').waitFor();
@@ -73,10 +104,10 @@ const root = path.resolve(__dirname, '..');
       await page.evaluate(async () => { doc.inbox = {who_can_ok:'named_people',approvers:['cara']}; doc.effective.approval_rules = [{value:'bot_managers',source:'company'},{value:'named_people',source:'inbox',approvers:['cara']}]; await panels['email.sending'].render(document.querySelector('#detail'), {address:'support@acme.example',can_manage:true,accesses:[]}, ctx); });
       assert.equal(await page.locator('#detail [name=who_can_ok]').inputValue(), 'named_people');
       assert.equal(await page.locator('#detail [name=approvers]').inputValue(), 'cara');
-      assert.match(await page.locator('#detail').textContent(), /Bot managers · Company \+ Named people · Inbox/);
+      assert.match((await page.locator('#detail').textContent())!, /Bot managers · Company \+ Named people · Inbox/);
       await page.locator('#detail [data-send-edit]').click();
       await page.locator('#detail [data-send-form] [type=submit]').click();
-      await page.waitForFunction(() => writes.some(w => w.b.who_can_ok === 'named_people' && w.b.approvers[0] === 'cara'));
+      await page.waitForFunction(() => writes.some(w => w.b.who_can_ok === 'named_people' && w.b.approvers![0] === 'cara'));
       await page.locator('#detail [data-send-inherit]').click();
       await page.waitForFunction(() => writes.some(w => w.b.inherit === true));
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `overflow at ${width}`);

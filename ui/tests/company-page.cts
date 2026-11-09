@@ -1,3 +1,5 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // The Company page (ui/app/company-page.ts) against a fake hub: Acme (acme.example). Company's Share tab shows owners and admins
 // the page in a sandboxed frame, a share panel and Manage; a member has no tab and no way in by address. The section: Transparency warns before Open and says what stops being visible before
 // anything is taken away, and sends nothing on Cancel. The queue puts a held edition first with its reason. Approve shows
@@ -8,12 +10,61 @@
 // A failed draft offers drafting again. A stopped schedule, no email, a failed release and a tightened rule's reach all show.
 // A phone has no sideways scroll and shows one audience at a time. No native dialog ever opens.
 // TICO_UI_SHOTS=<dir> saves each part at 1280 and 390 wide, light and dark.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+type Browser = Awaited<ReturnType<typeof chromium.launch>>;
+type Page = Awaited<ReturnType<Browser['newPage']>>;
+type PWResponse = Awaited<ReturnType<Page['waitForResponse']>>;
+// Browser-side globals: set by the app's scripts or by the page under test.
+declare const S: {me?: unknown; emps?: unknown[]};
+declare function searchEntries(): {label: string; href: string}[];
+declare global {
+  interface Window {
+    __pwned?: number;
+    __copied: string[]; // set by the test before it is read
+  }
+}
+interface Approval {id: string; state: string; to?: string; to_name?: string; note?: string}
+interface Edition {
+  id: string; status: string; audience_id: string; title: string | null; audience_name: string;
+  author: {id: string; name: string; kind: string};
+  period_start: string; period_end: string; version: number;
+  sections: {key: string; items: {body: string; ask_id: string | null}[]}[];
+  checks: {version: number; kind: string; outcome: string; detail: Record<string, unknown>}[];
+  sources: unknown[]; seen_by: unknown[]; seen_count: number; checks_current: boolean;
+  last_check: {outcome: string; reasons: string[]} | null;
+  approval?: Approval;
+  [key: string]: unknown;
+}
+type Audience = (typeof AUDIENCES)[number];
+type Stat = (typeof STATS)[number];
+interface Settings {transparency: string; slug: string | null; accent: null; logo_file_id: null; company_name: string; reader_origin: string; page_domain: string; address: string; public_live: boolean}
+interface Reader {id: string; email: string; name: string | null; notify: boolean; audiences: {id: string; name: string; kind: string}[]}
+interface Rule {data_class: string; ref_id: string; mode: string; lag_days: number; rounding: string | null}
+interface RuleIn {data_class: string; ref_id: string; mode: string; lag_days: number; rounding?: string | null}
+type Write = [string, string, unknown];
+type Reply = [number, unknown];
+interface ScheduleProblem {audience_id: string; name: string; problem: string}
+interface HubOpts {noDomain?: boolean; noSlug?: boolean; noEmail?: boolean; scheduleProblems?: ScheduleProblem[]; releaseFails?: boolean; tightened?: number; privateOn?: boolean; noEditions?: boolean; noAudiences?: boolean; fail?: string[]; denied?: boolean}
+// The request body the fake hub reads; only the fields it uses.
+interface Payload {
+  slug?: string; rules?: RuleIn[]; audience_id?: string; author?: string; note?: string; decision?: string;
+  audience_ids?: string[]; email?: string; name?: string | null;
+  source_kind?: string; ref_id?: string; chart?: string; position?: number;
+}
+interface Hub {
+  settings: Settings; emailAvailable: boolean; scheduleProblems: ScheduleProblem[]; releaseFails: boolean; tightenedCount: number;
+  signIn: {available: boolean; reason: string};
+  editions: Edition[]; audiences: Audience[]; previews: string[]; stats: Stat[]; readers: Reader[]; invites: unknown[];
+  rules: Record<string, Rule[]>; fail: Set<string>; writes: Write[]; reads: string[];
+  denied?: boolean; disclosureDelay?: number;
+}
+type PersonId = keyof typeof ME;
+interface OpenOpts {viewer?: PersonId; viewport?: {width: number; height: number}; hash?: string; theme?: string; hubOpts?: HubOpts; ready?: boolean}
 const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1280, height: 900};
 
@@ -29,7 +80,7 @@ const AUDIENCES = [
   {id: 'a-inv', name: 'Investors', kind: 'investors', cadence: 'monthly', due_rule: {kind: 'business_day', n: 10}, approver: 'human:cara', enabled: true, built_in: true, next_due: '2026-12-14'},
   {id: 'a-pub', name: 'Public', kind: 'public', cadence: 'monthly', due_rule: {kind: 'days_after_period_end', n: 30}, approver: null, enabled: false, built_in: true, next_due: null},
 ];
-const ed = (id, status, audience_id, title, extra = {}) => ({id, status, audience_id, title, audience_name: '', author: {id: 'company', name: 'Company', kind: 'company'}, period_start: '2026-10-01', period_end: '2026-10-31', version: 1,
+const ed = (id: string, status: string, audience_id: string, title: string | null, extra: Partial<Edition> = {}): Edition => ({id, status, audience_id, title, audience_name: '', author: {id: 'company', name: 'Company', kind: 'company'}, period_start: '2026-10-01', period_end: '2026-10-31', version: 1,
   sections: [{key: 'highlights', items: [{body: 'Revenue grew **12%** in October.', ask_id: null}]}, {key: 'asks', items: [{body: 'Intros to two design partners.', ask_id: 'ask-1'}]}],
   checks: [{version: 1, kind: 'summary', outcome: 'pass', detail: {reasons: []}}, {version: 1, kind: 'rules', outcome: 'pass', detail: {}}, {version: 1, kind: 'leak', outcome: 'pass', detail: {}}, {version: 1, kind: 'leak', outcome: 'flagged', detail: {names: ['An older run']}}],
   sources: [{id: 'src1', update_id: 'u1', body_sha256: 'x', body: 'Shipped the importer.', author_name: 'Engineering Lead'}], seen_by: [], seen_count: 0, checks_current: true, last_check: {outcome: 'pass', reasons: []}, ...extra});
@@ -54,16 +105,16 @@ const EDITIONS = () => [
 const STATS = [{id: 's1', source_kind: 'finance_metric', ref_id: 'revenue', data_class: 'revenue', label: 'Revenue', chart: 'line', position: 0},
   {id: 's2', source_kind: 'kpi', ref_id: 'k1', data_class: 'customers', label: 'Active homes', chart: 'number', position: 1},
   {id: 's3', source_kind: 'finance_metric', ref_id: 'gross_margin', data_class: 'gross_margin', label: 'Gross margin', chart: 'bars', position: 2}];
-const series = vals => vals.map((value, i) => ({period: `2026-0${i + 5}`, value, display: String(value)}));
+const series = (vals: number[]) => vals.map((value, i) => ({period: `2026-0${i + 5}`, value, display: String(value)}));
 const PROJECTION = {stats: [{id: 's1', label: 'Revenue', definition: 'Recognised revenue', chart: 'line', period: 'Oct 2026', as_of: '2026-11-01', display: '$50K', stale: false, series: series([31, 34, 38, 41, 46, 50])},
   {id: 's2', label: 'Active homes', chart: 'number', period: 'Oct 2026', as_of: '2026-09-30', display: '320', stale: true, series: []}],
   held: [{id: 's3', label: 'Gross margin', reason: 'Gross margin next to revenue would show cost of sales, which is Hidden.'}], absent: [{id: 's4', label: 'Burn', reason: 'Hidden'}], approved: false, next_offset: null};
 const AVAILABLE = [{source_kind: 'kpi', ref_id: 'k1', label: 'Active homes'}, {source_kind: 'kpi', ref_id: 'k2', label: 'Pipeline'}, {source_kind: 'finance_metric', ref_id: 'revenue', label: 'Revenue'},
   {source_kind: 'finance_metric', ref_id: 'gross_margin', label: 'Gross margin'}, {source_kind: 'finance_line', ref_id: 'line-hosting', label: 'Hosting'}];
 
-function fakeHub(opts) {
+function fakeHub(opts: HubOpts): Hub {
   const domain = opts.noDomain ? '' : 'pages.acme.example', origin = opts.noSlug || opts.noDomain ? '' : 'https://open.acme.example';
-  const hub = {settings: {transparency: 'closed', slug: opts.noSlug || opts.noDomain ? null : 'acme', accent: null, logo_file_id: null, company_name: 'Acme', reader_origin: origin, page_domain: domain, address: origin, public_live: false},
+  const hub: Hub = {settings: {transparency: 'closed', slug: opts.noSlug || opts.noDomain ? null : 'acme', accent: null, logo_file_id: null, company_name: 'Acme', reader_origin: origin, page_domain: domain, address: origin, public_live: false},
     emailAvailable: opts.noEmail !== true, scheduleProblems: opts.scheduleProblems || [], releaseFails: !!opts.releaseFails, tightenedCount: opts.tightened || 0,
     signIn: opts.privateOn === false ? {available: false, reason: 'No sign-in provider is set up (OIDC), so private audiences are off'} : {available: true, reason: ''},
     editions: opts.noEditions ? [] : EDITIONS(), audiences: opts.noAudiences ? [] : structuredClone(AUDIENCES), previews: [], stats: opts.noEditions ? [] : structuredClone(STATS),
@@ -74,7 +125,7 @@ function fakeHub(opts) {
     fail: new Set(opts.fail || []), writes: [], reads: []};
   return hub;
 }
-function answer(hub, method, p, url, payload) {
+function answer(hub: Hub, method: string, p: string, url: URL, payload: Payload): Reply | null {
   if (hub.fail.has(p)) return [500, {error: {code: 'down', detail: 'Did not load'}}];
   if (p === '/api/v2/company-page' && method === 'GET') return hub.denied ? [403, {error: {code: 'denied', detail: 'no'}}] : [200, hub.settings];
   if (p === '/api/v2/company-page' && method === 'PATCH') {
@@ -83,14 +134,14 @@ function answer(hub, method, p, url, payload) {
     return [200, hub.settings];
   }
   if (p === '/api/v2/audiences') return [200, {audiences: hub.audiences, next_offset: null}];
-  let m;
-  if ((m = /^\/api\/v2\/audiences\/([^/]+)\/sources$/.exec(p))) return [200, {sources: m[1] === 'a-pub' ? [] : [{id: 'src-' + m[1], author: 'company'}, {id: 'src2-' + m[1], author: 'eng-lead'}]}];
+  let m: RegExpExecArray | null;
+  if ((m = /^\/api\/v2\/audiences\/([^/]+)\/sources$/.exec(p))) return [200, {sources: m![1] === 'a-pub' ? [] : [{id: 'src-' + m![1], author: 'company'}, {id: 'src2-' + m![1], author: 'eng-lead'}]}];
   if ((m = /^\/api\/v2\/audiences\/([^/]+)\/disclosure$/.exec(p))) {
     if (method === 'PUT') {
-      const held = hub.rules[m[1]] ||= [];
-      for (const r of payload.rules) { const at = held.findIndex(x => x.data_class === r.data_class && x.ref_id === r.ref_id); if (at >= 0) held.splice(at, 1); held.push({rounding: null, ...r}); }
+      const held = hub.rules[m![1]!] ||= [];
+      for (const r of payload.rules!) { const at = held.findIndex(x => x.data_class === r.data_class && x.ref_id === r.ref_id); if (at >= 0) held.splice(at, 1); held.push({rounding: null, ...r}); }
     }
-    return [200, {...(method === 'PUT' ? {published_editions: hub.tightenedCount} : {}), rules: hub.rules[m[1]] || [], revision: 'rev', data_classes: ['revenue', 'growth', 'gross_margin', 'burn', 'cash_runway', 'fundraising', 'ai_spend', 'pnl_line', 'headcount', 'customers', 'pipeline', 'kpi', 'customer_names', 'product', 'people', 'legal', 'security', 'mission'], modes: [], presets: []}];
+    return [200, {...(method === 'PUT' ? {published_editions: hub.tightenedCount} : {}), rules: hub.rules[m![1]!] || [], revision: 'rev', data_classes: ['revenue', 'growth', 'gross_margin', 'burn', 'cash_runway', 'fundraising', 'ai_spend', 'pnl_line', 'headcount', 'customers', 'pipeline', 'kpi', 'customer_names', 'product', 'people', 'legal', 'security', 'mission'], modes: [], presets: []}];
   }
   if ((m = /^\/api\/v2\/audiences\/([^/]+)\/stats\/approval$/.exec(p))) return [200, {approval: null}];
   if ((m = /^\/api\/v2\/audiences\/([^/]+)\/stats$/.exec(p))) return [200, PROJECTION];
@@ -102,45 +153,45 @@ function answer(hub, method, p, url, payload) {
   }
   if (p === '/api/v2/editions') return [200, {id: payload.audience_id === 'a-inv' && payload.author === 'company' ? 'e-failed' : 'e-ready'}];
   if ((m = /^\/api\/v2\/editions\/([^/]+)\/notices$/.exec(p))) return [200, {readers: {pending: 1, sent: 2, failed: 1, unavailable: 0, canceled: 0}, issuer: {delivered: 2, failed: 1, limited: 0}, email_available: hub.emailAvailable}];
-  if ((m = /^\/api\/v2\/editions\/([^/]+)\/publish$/.exec(p))) { const e = hub.editions.find(x => x.id === m[1]); Object.assign(e, {status: 'published', published_at: '2026-11-01'}); return [200, {...e, release_failed: hub.releaseFails}]; }
+  if ((m = /^\/api\/v2\/editions\/([^/]+)\/publish$/.exec(p))) { const e = hub.editions.find(x => x.id === m![1]); Object.assign(e!, {status: 'published', published_at: '2026-11-01'}); return [200, {...e, release_failed: hub.releaseFails}]; }
   if ((m = /^\/api\/v2\/editions\/([^/]+)$/.exec(p)) && method === 'GET') {
-    const e = hub.editions.find(x => x.id === m[1]);
+    const e = hub.editions.find(x => x.id === m![1]);
     return e ? [200, e] : [404, {error: {code: 'not_found', detail: 'no'}}];
   }
-  if ((m = /^\/api\/v2\/editions\/([^/]+)$/.exec(p)) && method === 'PATCH') { Object.assign(hub.editions.find(x => x.id === m[1]), payload); return [200, {}]; }
-  if ((m = /^\/api\/v2\/editions\/([^/]+)\/retract$/.exec(p))) { Object.assign(hub.editions.find(x => x.id === m[1]), {status: 'retracted', retraction_note: payload.note}); return [200, {}]; }
-  if ((m = /^\/api\/v2\/editions\/([^/]+)\/override$/.exec(p))) { Object.assign(hub.editions.find(x => x.id === m[1]), {status: 'ready', override_note: payload.note}); return [200, {}]; }
-  if ((m = /^\/api\/v2\/approvals\/([^/]+)$/.exec(p))) { const e = hub.editions.find(x => x.approval?.id === m[1]); if (e) { e.approval.state = payload.decision; e.approval.note = payload.note || ''; } return [200, {}]; }
+  if ((m = /^\/api\/v2\/editions\/([^/]+)$/.exec(p)) && method === 'PATCH') { Object.assign(hub.editions.find(x => x.id === m![1])!, payload); return [200, {}]; }
+  if ((m = /^\/api\/v2\/editions\/([^/]+)\/retract$/.exec(p))) { Object.assign(hub.editions.find(x => x.id === m![1])!, {status: 'retracted', retraction_note: payload.note}); return [200, {}]; }
+  if ((m = /^\/api\/v2\/editions\/([^/]+)\/override$/.exec(p))) { Object.assign(hub.editions.find(x => x.id === m![1])!, {status: 'ready', override_note: payload.note}); return [200, {}]; }
+  if ((m = /^\/api\/v2\/approvals\/([^/]+)$/.exec(p))) { const e = hub.editions.find(x => x.approval?.id === m![1]); if (e) { e.approval!.state = payload.decision!; e.approval!.note = payload.note || ''; } return [200, {}]; }
   if (p === '/api/v2/company-page/stats' && method === 'GET') return [200, {stats: hub.stats, next_offset: null, available: AVAILABLE}];
-  if (p === '/api/v2/company-page/stats') { const row = {id: 's9', label: 'Pipeline', data_class: 'kpi', position: 3, ...payload}; hub.stats.push(row); return [200, row]; }
+  if (p === '/api/v2/company-page/stats') { const row = {id: 's9', label: 'Pipeline', data_class: 'kpi', position: 3, ...payload} as Stat; hub.stats.push(row); return [200, row]; }
   if (p === '/api/v2/readers' && method === 'GET') return [200, {readers: hub.readers, next: null, sign_in: hub.signIn, email_available: hub.emailAvailable}];
   if ((m = /^\/api\/v2\/readers\/([^/]+)$/.exec(p)) && method === 'PATCH') {
-    const r = hub.readers.find(x => x.id === m[1]), {audience_ids, ...rest} = payload;
-    Object.assign(r, rest, {audiences: AUDIENCES.filter(a => audience_ids.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))});
+    const r = hub.readers.find(x => x.id === m![1])!, {audience_ids, ...rest} = payload;
+    Object.assign(r, rest, {audiences: AUDIENCES.filter(a => audience_ids!.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))});
     return [200, r];
   }
   if (p === '/api/v2/readers') {
-    const r = {id: 'r9', email: payload.email, name: payload.name || null, notify: true, audiences: AUDIENCES.filter(a => payload.audience_ids.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))};
+    const r = {id: 'r9', email: payload.email!, name: payload.name || null, notify: true, audiences: AUDIENCES.filter(a => payload.audience_ids!.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))};
     hub.readers.push(r); return [200, r];
   }
-  if ((m = /^\/api\/v2\/readers\/([^/]+)$/.exec(p)) && method === 'DELETE') { hub.readers = hub.readers.filter(r => r.id !== m[1]); return [200, {}]; }
+  if ((m = /^\/api\/v2\/readers\/([^/]+)$/.exec(p)) && method === 'DELETE') { hub.readers = hub.readers.filter(r => r.id !== m![1]); return [200, {}]; }
   return null;
 }
-async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/company-page', theme, hubOpts = {}, ready = true} = {}) {
+async function open(browser: Browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/company-page', theme, hubOpts = {}, ready = true}: OpenOpts = {}) {
   const hub = fakeHub(hubOpts);
   if (hubOpts.denied) hub.denied = true;
-  const person = people.find(x => x.id === viewer);
+  const person = people.find(x => x.id === viewer)!;
   const me = {id: viewer, name: person.name, email: person.email, cloud: true, ...ME[viewer]};
   const config = {company_name: 'Acme'};
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE, colorScheme: 'dark'});
-  if (theme) await context.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
+  if (theme) await context.addInitScript((t: string) => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
   const page = await context.newPage();
-  const errors = [], natives = [];
+  const errors: string[] = [], natives: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('dialog', d => { natives.push(d.message()); void d.dismiss(); });
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (data, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(data)});
+    const json = (data: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(data)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
@@ -170,17 +221,17 @@ async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/comp
   if (ready) await page.locator('#cp-readers .cp-sec-ready, #cp-readers header').first().waitFor();
   return {page, hub, errors, natives, close: () => context.close()};
 }
-const tabLabels = page => page.locator('.dash-tabs a').allInnerTexts();
-const loaded = page => page.waitForFunction(() => !document.querySelector('#cp-page .skel'));
-const flat = async (page, what) => {
+const tabLabels = (page: Page) => page.locator('.dash-tabs a').allInnerTexts();
+const loaded = (page: Page) => page.waitForFunction(() => !document.querySelector('#cp-page .skel'));
+const flat = async (page: Page, what: string) => {
   const info = await page.evaluate(() => {
     const w = document.documentElement.clientWidth, main = document.querySelector('#main');
-    const wide = [...document.querySelectorAll('#main *, dialog[open] *')].filter(el => !el.closest('.scroll') && el.getBoundingClientRect().right > w + 1).slice(0, 6).map(el => `${el.tagName}.${el.className}`);
-    return {sw: document.documentElement.scrollWidth, w, main: main.scrollWidth - main.clientWidth, wide};
+    const wide = [...document.querySelectorAll('#main *, dialog[open] *') as unknown as Element[]].filter(el => !el.closest('.scroll') && el.getBoundingClientRect().right > w + 1).slice(0, 6).map(el => `${el.tagName}.${el.className}`);
+    return {sw: document.documentElement.scrollWidth, w, main: main!.scrollWidth - main!.clientWidth, wide};
   });
   assert.ok(info.sw <= info.w + 1 && info.main <= 1 && !info.wide.length, `${what}: no sideways scroll ${JSON.stringify(info)}`);
 };
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
@@ -190,10 +241,10 @@ async function shot(page, name) {
   await page.screenshot({path: path.join(dir, name + '.png'), fullPage: false});
 }
 // One part filling the shot: #main scrolls inside the window, so a full-page picture would cut it off.
-async function shotPart(page, id, name) {
+async function shotPart(page: Page, id: string, name: string) {
   if (!process.env.TICO_UI_SHOTS) return;
   await page.locator('#cp-' + id).scrollIntoViewIfNeeded();
-  await page.evaluate(i => { const el = document.getElementById('cp-' + i); document.querySelector('#main').scrollTop += el.getBoundingClientRect().top - 12; }, id);
+  await page.evaluate((i: string) => { const el = document.getElementById('cp-' + i)!; document.querySelector('#main')!.scrollTop += el.getBoundingClientRect().top - 12; }, id);
   await shot(page, name);
 }
 
@@ -214,7 +265,7 @@ async function shotPart(page, id, name) {
     const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
     assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
     assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Share')), false);
-    await tab.page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
+    await tab.page.evaluate((h: string) => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
     assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
@@ -228,7 +279,7 @@ async function shotPart(page, id, name) {
     const {page, hub, close} = await open(browser, {viewer: 'cara', hubOpts: {denied: true}, ready: false});
     await page.locator('#cp-page .empty-state').waitFor();
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
-    await page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
+    await page.evaluate((h: string) => { location.hash = h; }, '#/overview/company-page');
     await page.locator('#cp-tab-body .empty-state').waitFor();
     assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
@@ -242,12 +293,12 @@ async function shotPart(page, id, name) {
     const {page, hub, errors, natives, close} = await open(browser);
     await loaded(page);
     assert.equal(await page.locator('a[data-nav="company-page"]').count(), 0, 'no sidebar link');
-    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Company stays lit');
-    const parts = await page.locator('#cp-page > section').evaluateAll(s => s.map(x => x.id));
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
+    const parts = await page.locator('#cp-page > section').evaluateAll((s: HTMLElement[]) => s.map(x => x.id));
     assert.deepEqual(parts, ['cp-transparency', 'cp-editions', 'cp-audiences', 'cp-disclosure', 'cp-stats', 'cp-readers', 'cp-preview'], 'the parts, in order');
 
     // Transparency: Closed has no address; Open warns once and Cancel sends nothing.
-    const level = v => page.locator(`[data-cp-level] [data-v="${v}"]`);
+    const level = (v: string) => page.locator(`[data-cp-level] [data-v="${v}"]`);
     assert.equal(await page.locator('.cp-address').count(), 0);
     await level('open').click();
     assert.match(await page.locator('dialog.cp-dlg').innerText(), /public internet/);
@@ -287,7 +338,7 @@ async function shotPart(page, id, name) {
     assert.equal(await page.locator('dialog.cp-dlg').count(), 0);
 
     // The queue: held first, its reason in the row; a text from a bot's update never runs.
-    const rows = await page.locator('.cp-ed-row').evaluateAll(r => r.map(x => x.dataset.cpEdition));
+    const rows = await page.locator('.cp-ed-row').evaluateAll((r: HTMLElement[]) => r.map(x => x.dataset.cpEdition));
     assert.deepEqual(rows, ['e-held', 'e-failed', 'e-approved', 'e-mine', 'e-other', 'e-declined', 'e-lapsed', 'e-stale', 'e-ready', 'e-pub', 'e-gone', 'e-dropped']);
     const held = page.locator('.cp-ed-row[data-cp-edition="e-held"]');
     assert.match(await held.innerText(), /can't see/);
@@ -323,7 +374,7 @@ async function shotPart(page, id, name) {
     assert.match(await dlg.locator('.cp-checks').innerText(), /No model to run this/);
     await shot(page, 'edition-failed-draft-1280');
     await dlg.locator('[data-act="redraft"]').click();
-    await page.waitForFunction(() => document.querySelector('dialog.cp-ed [data-act]')?.disabled === false);
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('dialog.cp-ed [data-act]')?.disabled === false);
     assert.deepEqual(hub.writes.at(-1), ['POST', '/api/v2/editions', {audience_id: 'a-inv', author: 'company', period_start: '2026-10-01', period_end: '2026-10-31'}]);
     await dlg.locator('[data-close]').click();
 
@@ -332,7 +383,7 @@ async function shotPart(page, id, name) {
     assert.match(await page.locator('.cp-ed-row[data-cp-edition="e-declined"]').innerText(), /Declined by Cara Lee/);
     assert.match(await page.locator('.cp-ed-row[data-cp-edition="e-lapsed"]').innerText(), /Approval lapsed/);
     assert.match(await page.locator('.cp-ed-row[data-cp-edition="e-stale"]').innerText(), /Changed since asked/);
-    for (const [id, words, act] of [['e-declined', /Too much on churn/, 'request'], ['e-lapsed', /lapsed/, 'request'], ['e-stale', /changed after/, 'request'], ['e-approved', /Approved by Cara Lee/, 'publish']]) {
+    for (const [id, words, act] of [['e-declined', /Too much on churn/, 'request'], ['e-lapsed', /lapsed/, 'request'], ['e-stale', /changed after/, 'request'], ['e-approved', /Approved by Cara Lee/, 'publish']] as [string, RegExp, string][]) {
       await page.locator(`.cp-ed-row[data-cp-edition="${id}"]`).click();
       await dlg.locator(`.cp-ed-acts .primary[data-act="${act}"]`).waitFor();
       assert.match(await dlg.locator('[data-ed-body]').innerText(), words);
@@ -413,16 +464,16 @@ async function shotPart(page, id, name) {
     assert.equal(await page.locator('.cp-table thead th[scope=col]').count(), 3);
     // Delay the fake's write receipt so a local repaint cannot accidentally satisfy the assertion.
     hub.disclosureDelay = 75;
-    const disclosureWrite = dataClass => page.waitForResponse(response => response.request().method() === 'PUT'
+    const disclosureWrite = (dataClass: string) => page.waitForResponse((response: PWResponse) => response.request().method() === 'PUT'
       && response.url().endsWith('/api/v2/audiences/a-inv/disclosure')
       && response.request().postDataJSON()?.rules?.[0]?.data_class === dataClass);
     const headcountWrite = disclosureWrite('headcount');
     const cell = page.locator('select[data-cp-mode][data-aud="a-inv"][data-class="headcount"]');
     assert.equal(await cell.inputValue(), 'hidden', 'no rule is Hidden');
     await cell.selectOption('delayed');
-    await page.waitForFunction(() => document.querySelector('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]')?.closest('.cp-lag') && !document.querySelector('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]').closest('.cp-lag').hidden);
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]')?.closest('.cp-lag') && !document.querySelector<HTMLElement>('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]')!.closest<HTMLElement>('.cp-lag')!.hidden);
     await headcountWrite;
-    assert.deepEqual(hub.writes.find(w => w[1] === '/api/v2/audiences/a-inv/disclosure')[2], {rules: [{data_class: 'headcount', ref_id: '', mode: 'delayed', lag_days: 30}]});
+    assert.deepEqual(hub.writes.find(w => w[1] === '/api/v2/audiences/a-inv/disclosure')![2], {rules: [{data_class: 'headcount', ref_id: '', mode: 'delayed', lag_days: 30}]});
     // A KPI on the board has a row of its own, filed under kpi, and reads its class's rule until it has one.
     await page.locator('[data-cp-group="kpi"]').click();
     const kpiCell = page.locator('select[data-cp-mode][data-aud="a-inv"][data-class="kpi"][data-ref="k1"]');
@@ -431,9 +482,9 @@ async function shotPart(page, id, name) {
     // "Whole quarters only" stays when the mode changes.
     const revenueWrite = disclosureWrite('revenue');
     await page.locator('select[data-cp-mode][data-aud="a-inv"][data-class="revenue"]').selectOption('range');
-    await page.waitForFunction(() => document.querySelector('select[data-cp-mode][data-aud="a-inv"][data-class="revenue"]')?.value === 'range');
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('select[data-cp-mode][data-aud="a-inv"][data-class="revenue"]')?.value === 'range');
     await revenueWrite;
-    assert.deepEqual(hub.writes.at(-1)[2], {rules: [{data_class: 'revenue', ref_id: '', mode: 'range', lag_days: 0, rounding: 'quarterly'}]});
+    assert.deepEqual(hub.writes.at(-1)![2], {rules: [{data_class: 'revenue', ref_id: '', mode: 'range', lag_days: 0, rounding: 'quarterly'}]});
 
     // A stat comes from the KPIs and Finance's numbers; the server fills in its class and words.
     await page.locator('[data-cp-add-stat]').click();
@@ -460,7 +511,7 @@ async function shotPart(page, id, name) {
     await readerEdit.locator('button[type=submit]').click();
     await readerEdit.waitFor({state: 'detached'});
     assert.deepEqual(hub.writes.at(-1), ['PATCH', '/api/v2/readers/r1', {name: 'Rita Vale', notify: false, audience_ids: ['a-inv']}]);
-    await page.waitForFunction(() => /Emails off/.test(document.querySelector('[data-cp-reader="r1"]')?.innerText || ''));
+    await page.waitForFunction(() => /Emails off/.test(document.querySelector<HTMLElement>('[data-cp-reader="r1"]')?.innerText || ''));
 
     // Removing a reader states the rule, and only the second click removes.
     await page.locator('[data-cp-reader-remove="r1"]').click();
@@ -472,7 +523,7 @@ async function shotPart(page, id, name) {
     assert.equal(hub.readers.length, 1);
 
     // Preview opens the server's page.
-    assert.match(await page.locator('[data-cp-preview="a-inv"]').getAttribute('href'), /\/api\/v2\/company-page\/preview\?audience=a-inv$/);
+    assert.match((await page.locator('[data-cp-preview="a-inv"]').getAttribute('href'))!, /\/api\/v2\/company-page\/preview\?audience=a-inv$/);
 
     assert.deepEqual(natives, [], 'no native dialogs');
     assert.deepEqual(errors, []);
@@ -558,7 +609,7 @@ async function shotPart(page, id, name) {
     await page.locator('#cp-disclosure').scrollIntoViewIfNeeded();
     await shot(page, 'disclosure-tightened-1280');
     await page.locator('[data-cp-tightened] [data-cp-editions-of]').click();
-    await page.waitForFunction(() => [...document.querySelectorAll('.cp-ed-row')].every(r => r.dataset.cpEdition === 'e-pub'));
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('.cp-ed-row') as unknown as HTMLElement[]].every(r => r.dataset.cpEdition === 'e-pub'));
     assert.match(await page.locator('#cp-editions').innerText(), /Published to Board/);
     await page.locator('#cp-editions [data-cp-editions-of=""]').click();
     await page.waitForFunction(() => document.querySelectorAll('.cp-ed-row').length > 1);
@@ -573,9 +624,9 @@ async function shotPart(page, id, name) {
     await loaded(page);
     await flat(page, 'the page');
     assert.equal(await page.locator('.cp-table thead').count(), 0);
-    assert.deepEqual(await page.locator('select[data-cp-mode][data-class="revenue"]').evaluateAll(s => s.map(x => x.dataset.aud)), ['a-board']);
+    assert.deepEqual(await page.locator('select[data-cp-mode][data-class="revenue"]').evaluateAll((s: HTMLElement[]) => s.map(x => x.dataset.aud)), ['a-board']);
     await page.locator('[data-cp-pick="disclosure"]').selectOption('a-inv');
-    await page.waitForFunction(() => document.querySelector('select[data-cp-mode][data-class="revenue"]')?.dataset.aud === 'a-inv');
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('select[data-cp-mode][data-class="revenue"]')?.dataset.aud === 'a-inv');
     assert.equal(await page.locator('select[data-cp-mode][data-class="revenue"]').inputValue(), 'rounded');
     await flat(page, 'another audience');
     await page.locator('[data-cp-group="kpi"]').click();
@@ -596,12 +647,12 @@ async function shotPart(page, id, name) {
 
   // Screenshots of every part, wide and narrow, light and dark.
   if (process.env.TICO_UI_SHOTS) {
-    for (const [viewport, w] of [[DESKTOP, 1280], [PHONE, 390]]) for (const theme of ['dark', 'light']) {
+    for (const [viewport, w] of [[DESKTOP, 1280], [PHONE, 390]] as [typeof DESKTOP, number][]) for (const theme of ['dark', 'light']) {
       const {page, close} = await open(browser, {viewport, theme});
       await loaded(page);
-      await page.evaluate(() => { document.querySelector('[data-cp-level] [data-v="private"]').click(); });
+      await page.evaluate(() => { document.querySelector<HTMLElement>('[data-cp-level] [data-v="private"]')!.click(); });
       await page.waitForFunction(() => document.querySelector('[data-cp-level] [data-v="private"]')?.getAttribute('aria-checked') === 'true');
-      for (const [id] of [['transparency'], ['editions'], ['audiences'], ['disclosure'], ['stats'], ['readers'], ['preview']]) await shotPart(page, id, `${id}-${w}-${theme}`);
+      for (const [id] of [['transparency'], ['editions'], ['audiences'], ['disclosure'], ['stats'], ['readers'], ['preview']] as [string][]) await shotPart(page, id, `${id}-${w}-${theme}`);
       for (const id of ['e-held', 'e-mine']) {
         await page.locator(`.cp-ed-row[data-cp-edition="${id}"]`).click();
         await page.locator('dialog.cp-ed .cp-read').waitFor();
@@ -611,7 +662,7 @@ async function shotPart(page, id, name) {
       await page.locator('[data-cp-audience="a-inv"]').click();
       await shot(page, `audience-edit-${w}-${theme}`);
       await page.locator('dialog.cp-dlg [data-close]').first().click();
-      const open1 = async (selector, name) => { await page.locator(selector).click(); await page.locator('dialog.cp-dlg').first().waitFor(); await shot(page, `${name}-${w}-${theme}`); await page.locator('dialog.cp-dlg [data-close]').first().click(); await page.locator('dialog.cp-dlg').first().waitFor({state: 'detached'}); };
+      const open1 = async (selector: string, name: string) => { await page.locator(selector).click(); await page.locator('dialog.cp-dlg').first().waitFor(); await shot(page, `${name}-${w}-${theme}`); await page.locator('dialog.cp-dlg [data-close]').first().click(); await page.locator('dialog.cp-dlg').first().waitFor({state: 'detached'}); };
       await open1('[data-cp-draft]', 'draft-now');
       await open1('[data-cp-add-stat]', 'add-stat');
       await open1('[data-cp-add-reader]', 'add-reader');
@@ -642,17 +693,17 @@ async function shotPart(page, id, name) {
     const frame = page.locator('iframe.cp-frame');
     await frame.waitFor();
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
-    assert.match(await frame.getAttribute('src'), /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
-    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Company stays lit');
+    assert.match((await frame.getAttribute('src'))!, /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
     assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Share');
     const pick = page.locator('.cp-tab-acts select');
     await pick.selectOption('a-pub');
-    await page.waitForFunction(() => document.querySelector('iframe.cp-frame')?.src.includes('audience=a-pub'));
+    await page.waitForFunction(() => document.querySelector<HTMLIFrameElement>('iframe.cp-frame')?.src.includes('audience=a-pub'));
 
     // Sharing: Closed by default with no address. Open still warns, and the address is a link only once the page is live.
     // The vendored icon font has no share glyph, so a ligature would render as a clipped letter.
     assert.equal(await page.locator('[data-cp-share] svg').count(), 1);
-    assert.equal(await page.locator('[data-cp-share]').evaluate(b => b.textContent.trim()), '');
+    assert.equal(await page.locator('[data-cp-share]').evaluate((b: HTMLElement) => b.textContent!.trim()), '');
     await page.locator('[data-cp-share]').click();
     const panel = page.locator('dialog.cp-share');
     await panel.locator('[data-cp-level]').waitFor();
@@ -680,7 +731,7 @@ async function shotPart(page, id, name) {
     assert.equal(await panel.locator('[data-cp-share-add] select').inputValue(), 'a-inv', 'the audience chosen holds');
     await shot(page, 'share-people-1280');
     // The invite link goes straight to the clipboard; one the clipboard refuses is shown instead.
-    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.__copied.push(t); }}}); });
+    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (t: string) => { window.__copied.push(t); }}}); });
     await panel.locator('[data-cp-share-invite]').click();
     await page.waitForFunction(() => window.__copied.length);
     assert.deepEqual(await page.evaluate(() => window.__copied), ['https://acme.tico.page/invite/one-time']);
@@ -700,13 +751,13 @@ async function shotPart(page, id, name) {
     await page.locator('#cp-page').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/company-page');
     await page.locator('#cp-readers [data-cp-reader="r1"]').waitFor();
-    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Company stays lit');
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
     await page.locator('[data-cp-view]').click();
     await frame.waitFor();
-    assert.match(await frame.getAttribute('src'), /audience=a-pub/, 'the audience chosen holds');
+    assert.match((await frame.getAttribute('src'))!, /audience=a-pub/, 'the audience chosen holds');
 
     // The live address copies.
-    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.__copied.push(t); }}}); });
+    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (t: string) => { window.__copied.push(t); }}}); });
     await page.locator('[data-cp-share]').click();
     await panel.locator('a.cp-address').waitFor();
     await panel.locator('[data-cp-copy]').click();
@@ -715,7 +766,7 @@ async function shotPart(page, id, name) {
     await panel.locator('[data-close]').click();
 
     // A deep link from Needs you still lands on its edition.
-    await page.evaluate(h => { location.hash = h; }, '#/company-page?edition=e-pub');
+    await page.evaluate((h: string) => { location.hash = h; }, '#/company-page?edition=e-pub');
     await page.locator('dialog.cp-ed [data-ed-body] .cp-read').waitFor();
     assert.match(await page.locator('dialog.cp-ed').innerText(), /September update/);
     assert.deepEqual(natives, [], 'no native dialogs');
@@ -756,14 +807,14 @@ async function shotPart(page, id, name) {
       await page.locator('iframe.cp-frame').waitFor();
       await flat(page, `the tab at ${w}`);
       const fit = await page.evaluate(() => {
-        const main = document.querySelector('#main'), box = document.querySelector('iframe.cp-frame').getBoundingClientRect(), holder = main.getBoundingClientRect();
+        const main = document.querySelector<HTMLElement>('#main')!, box = document.querySelector<HTMLIFrameElement>('iframe.cp-frame')!.getBoundingClientRect(), holder = main.getBoundingClientRect();
         return {extra: main.scrollHeight - main.clientHeight, gapBelow: holder.bottom - box.bottom, gapRight: holder.right - box.right, gapLeft: box.left - holder.left};
       });
       assert.ok(fit.extra <= 1, `one scrollbar at ${w} ${JSON.stringify(fit)}`);
       assert.ok(Math.abs(fit.gapBelow) <= 1 && Math.abs(fit.gapRight) <= 1 && Math.abs(fit.gapLeft) <= 1, `the frame fills at ${w} ${JSON.stringify(fit)}`);
       // The label sits beside the picker on one row, and stays on the app's side of the frame.
       const besidePicker = () => page.evaluate(() => {
-        const box = el => el.getBoundingClientRect(), label = box(document.querySelector('[data-cp-preview]')), pick = box(document.querySelector('.cp-tab-acts select')), last = box(document.querySelector('[data-cp-manage]'));
+        const box = (el: Element) => el.getBoundingClientRect(), label = box(document.querySelector('[data-cp-preview]')!), pick = box(document.querySelector('.cp-tab-acts select')!), last = box(document.querySelector('[data-cp-manage]')!);
         return {besides: label.right <= pick.left, sameRow: Math.abs((label.top + label.bottom) / 2 - (pick.top + pick.bottom) / 2) <= 2, left: label.left, right: last.right, clear: document.documentElement.clientWidth};
       });
       const row = await besidePicker();
@@ -772,7 +823,7 @@ async function shotPart(page, id, name) {
       if (viewport === PHONE && theme === 'light') {
         // A narrower phone and a long audience name: the picker gives way, the label and the controls stay.
         await page.setViewportSize({width: 360, height: viewport.height});
-        await page.evaluate(() => { document.querySelector('.cp-tab-acts select').selectedOptions[0].textContent = 'Series B lead investors and observers'; });
+        await page.evaluate(() => { document.querySelector<HTMLSelectElement>('.cp-tab-acts select')!.selectedOptions[0]!.textContent = 'Series B lead investors and observers'; });
         const tight = await besidePicker();
         assert.ok(tight.besides && tight.sameRow && tight.left >= 0 && tight.right <= tight.clear, `the label fits a long name at 360 ${JSON.stringify(tight)}`);
         await flat(page, 'a long audience name at 360');

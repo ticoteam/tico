@@ -1,28 +1,42 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // Tico Cloud access (ui/app/cloud-access.ts, backend/cloud_access.py) against a fake server. Off cloud nothing shows.
 // Frozen: a slim strip over every page, "Out of credit · Add credit" to the billing page, the page below shortened to
 // fit and still usable, on a desktop and a phone with no sideways scroll. Locked: the whole page is Pay to continue,
 // with Open billing and the owner's Download your files, shown at once by any 402 `locked`; open again reloads the page
 // by itself. Every request is intercepted. TICO_SHOTS=<dir> saves screenshots of both states.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 const shots = process.env.TICO_SHOTS || '';
 const BILLING = 'https://app.tico.dev/billing/boatyard';
+
+// The cloud access state the fixture serves, and the page functions the test drives.
+interface CloudAccess {
+  access: string;
+  reason: string | null;
+  plan: string;
+  trial_days_left: number | null;
+  billing_url: string;
+}
+declare function refresh(force: boolean): Promise<void>;
+declare function cloudAccessPoll(): Promise<void>;
+declare function get(path: string): Promise<unknown>;
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
-    let cloud = null, role = 'owner', lockTasks = false, failCheck = false;   // lockTasks: one read answers 402 `locked`
-    const serve = async route => {
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
+    let cloud: CloudAccess | null = null, role = 'owner', lockTasks = false, failCheck = false;   // lockTasks: one read answers 402 `locked`
+    const serve = async (route: import('playwright').Route) => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
-      const json = (body, code = 200) => route.fulfill({status: code, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, code = 200) => route.fulfill({status: code, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
@@ -45,7 +59,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
       await page.evaluate(async () => { await refresh(false); });
     };
-    const shown = sel => page.locator(sel).isVisible();
+    const shown = (sel: string) => page.locator(sel).isVisible();
 
     // Off cloud: nothing.
     await open();
@@ -60,7 +74,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
     await page.locator('#cloud-banner').waitFor();
     assert.equal(await page.locator('#cloud-banner').getAttribute('hidden'), null);
     assert.equal(await page.locator('#cloud-banner a').getAttribute('href'), BILLING);
-    const bar = await page.locator('#cloud-banner').boundingBox(), side = await page.locator('#side').boundingBox();
+    const bar = (await page.locator('#cloud-banner').boundingBox())!, side = (await page.locator('#side').boundingBox())!;
     assert.ok(bar.height <= 32 && bar.y === 0, 'a slim strip at the top');
     assert.ok(side.y >= bar.height - 1, 'the sidebar starts below the strip');
     assert.equal(await shown('#cloud-lock'), false);
@@ -88,7 +102,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
     assert.equal(await page.locator('#side').isVisible(), false, 'nothing else shows');
     failCheck = true;
     await page.locator('#cloud-lock [data-cloud-refresh]').click();
-    await page.waitForFunction(() => document.querySelector('[data-cloud-check]').textContent.includes('Couldn’t check'));
+    await page.waitForFunction(() => document.querySelector('[data-cloud-check]')!.textContent!.includes('Couldn’t check'));
     assert.equal(await shown('#cloud-lock'), true, 'a failed check never opens a locked team');
     assert.equal(await page.locator('#cloud-lock [data-cloud-refresh]').isEnabled(), true);
     failCheck = false;

@@ -1,28 +1,37 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // The Assistant page (ui/app/assistant-page.ts): its own chat at #/assistant with the bot chat's thread and composer,
 // reached from your own person page's Assistant tab (absent from anyone else's); search
 // (⌘K) does not offer it. An empty chat offers suggestions, a lookup answers at once with in-app
 // links, a proposal is a Confirm / Cancel card that only your click runs, and it all fits a phone. Fixtures only.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+type Card = {id: string; summary: string; method: string; path: string; status: string; result: {status_code?: number; error?: string} | null;
+  description: string; diff: {field: string; new: string; routine?: boolean}[]; body: Record<string, unknown>; proposed_via: string; proposer?: string};
+type Msg = {id: string; sender_id: string; body: string; refs: Record<string, unknown>; created_at: string; kind: string};
+type AsstState = {reads: number; sent: string[]; decided: string[][]; messages: Msg[]; card: Card | null; bulk: Card; enrol: Card; routine: Card;
+  fail?: boolean; turnedOn?: number; view: () => unknown; reply: () => {message: Msg}};
+declare const S: {route: string};
+declare const V2C: {rendered: boolean; stick: {atBottom: boolean}; messages: Msg[]};
+declare function v2ChatRender(conv: unknown): void;
 
 const now = new Date().toISOString();
-const msg = (id, from, body, refs = {}) => ({id, sender_id: from, body, refs, created_at: now, kind: 'say'});
+const msg = (id: string, from: string, body: string, refs: Record<string, unknown> = {}): Msg => ({id, sender_id: from, body, refs, created_at: now, kind: 'say'});
 
-async function open(browser, viewport, state) {
+async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, state: AsstState) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
@@ -37,7 +46,7 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant' && method === 'GET') { state.reads++; return json(state.view()); }
     if (p === '/api/v2/assistant/messages') {
       if (state.fail) return route.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({detail: 'The Assistant could not be reached'})});
-      state.sent.push(JSON.parse(route.request().postData()).text);
+      state.sent.push(JSON.parse(route.request().postData()!).text);
       return json(state.reply());
     }
     const act = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)\/(confirm|cancel)$/);
@@ -47,8 +56,8 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act3' && method === 'GET') return json({action: state.enrol});
     if (p === '/api/v2/assistant/actions/act4' && method === 'GET') return json({action: state.routine});
     if (act) {
-      const card = {act2: state.bulk, act3: state.enrol, act4: state.routine}[act[1]] || state.card;
-      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'canceled';
+      const card = ({act2: state.bulk, act3: state.enrol, act4: state.routine} as Record<string, Card>)[act[1]!] || state.card!;
+      state.decided.push([act[1]!, act[2]!]); card.status = act[2] === 'confirm' ? 'done' : 'canceled';
       if (act[1] === 'act2') card.result = {status_code: 200, error: '1 of 3 did not go through: Task not found'};
       // A new computer's code comes back to the person who tapped, in this answer only.
       if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires_at: new Date(Date.now() + 9e5).toISOString(), owner_id: 'ana'}});
@@ -60,8 +69,8 @@ async function open(browser, viewport, state) {
   return {page, errors};
 }
 
-function fixture() {
-  const state = {reads: 0, sent: [], decided: [], messages: [], card: null};
+function fixture(): AsstState {
+  const state = {reads: 0, sent: [] as string[], decided: [] as string[][], messages: [] as Msg[], card: null} as AsstState;
   state.card = {id: 'act1', summary: 'Archive the Ops bot', method: 'POST', path: '/api/v2/bots/ops/archive', status: 'pending', result: null,
     description: 'Archive bot Ops', diff: [], body: {expected_revision: 3, text: 'Long message. '.repeat(30) + 'THE-END'}, proposed_via: 'assistant'};
   // One card for a group of task actions: one line per task, one Confirm for all of them.
@@ -78,7 +87,7 @@ function fixture() {
   state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Acme', can_turn_on: false, room_id: 'room1',
     messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk, act3: state.enrol, act4: state.routine}, pending: []});
   state.reply = () => {
-    const user = msg('u' + state.sent.length, 'human:ana', state.sent.at(-1));
+    const user = msg('u' + state.sent.length, 'human:ana', state.sent.at(-1)!);
     const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)');
     state.messages.push(user, bot);
     return {message: user};
@@ -87,9 +96,9 @@ function fixture() {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
-    for (const [tag, viewport] of [['desktop', {width: 1280, height: 900}], ['phone', {width: 390, height: 800}]]) {
+    for (const [tag, viewport] of [['desktop', {width: 1280, height: 900}], ['phone', {width: 390, height: 800}]] as [string, {width: number; height: number}][]) {
       const state = fixture();
       const {page, errors} = await open(browser, viewport, state);
       const box = page.locator('#chat-composer .p-text');
@@ -226,7 +235,7 @@ function fixture() {
       const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
       const gap = async () => { await frames(); return thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight); };
       assert.ok(await gap() <= 1, 'stick: opens at the newest line');
-      const rect = await thread.boundingBox();
+      const rect = (await thread.boundingBox())!;
       await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
       await page.mouse.wheel(0, -1500);
       await page.waitForFunction(() => !V2C.stick.atBottom);
