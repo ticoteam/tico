@@ -655,7 +655,11 @@ arrived since stays on the card.
 
 ### The question card
 
-Decide and the task's **Needs you** box show the same question card: the same text, picks, and buttons.
+Decide and the task's **Needs you** box show the same question card: the same text, picks, and buttons. Needs you on the
+web and phone, the task's Needs you box, and the Assistant ask card also offer **Close** beside the answer actions.
+Close declines the question without answering it. A short optional note goes to the bot that asked, which is told the
+question was closed (declined), not answered. Thumbs up and down on a question card only send feedback; the question
+stays open.
 
 #### Question tasks
 
@@ -670,8 +674,8 @@ another bot: the request is refused, and the bot is pointed to a direct message 
 Answering closes the question task, and the answer stays on it:
 
 - A pick, Yes or No, or a note closes it **Done** and records the answer.
-- Declining closes it **Declined**.
-- Done or Declined from the task itself, Decide's buttons, or the Assistant counts as an answer too. A note that names
+- **Close** closes it **Declined** without an answer; its optional note goes to the asking bot.
+- Done from the task itself, Decide's buttons, or the Assistant counts as an answer too. A note that names
   an option ("Yes." or "Yes. Ship it Friday") picks that option.
 - Only the person asked answers, or someone acting for them: the install owner or their manager. The bot that asked never
   does, and a question task never moves to a bot.
@@ -679,7 +683,8 @@ Answering closes the question task, and the answer stays on it:
   open question to that person.
 - Reopening an answered question task clears its answer, so it asks again.
 
-The bot hears the answer once, on its own task, or as the question task's requester when there is no parent.
+The bot hears the answer once, on its own task, or as the question task's requester when there is no parent. A Close
+instead wakes the bot with a closed (declined) result and its optional note.
 A question can carry a `--topic`, a short key for what it decides. A new question to the same person on the same
 topic updates the open one instead of opening a second. A question task closes on its date (see
 [When nobody answers](#when-nobody-answers)): the default goes ahead as the answer, or the task closes and the bot

@@ -36,6 +36,7 @@ What waits on you from elsewhere comes at the end of the DM as cards: a Confirm 
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
 task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question task in your words, and the Assistant records it as your answer. It answers only when your words give what the question asks, such as a price, a pick, a yes or no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer nothing: the question stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell which one you meant. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a yes in your chat ([below](#goals-agreed-in-words)).
+Question task cards also offer **Close**: it declines the question without an answer, and a short optional note goes to the bot that asked. The bot is told the question was closed, not answered.
 
 ## Helpers through the Assistant
 

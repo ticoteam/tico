@@ -703,7 +703,9 @@ final answer. To get an answer back, send it flagged `--needs-action`
 sends that reply explicitly with `hub message send`. Humans' replies are delivered automatically.
 
 A bot never answers a question for a person. A person answers a question task in **Needs you**, in Decide, in
-the Assistant, or by replying in their chat with the bot, and the bot hears the answer once.
+the Assistant, or by replying in their chat with the bot, and the bot hears the answer once. From a question card in
+Needs you, Decide or the Assistant, they can instead Close it without answering; the bot hears that it was closed
+(declined), along with any note.
 
 Computer readiness covers only bots assigned to that Computer. Eligible bots are placement
 options, and their missing repositories do not count as readiness or Health failures there.
