@@ -5,9 +5,9 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-const {html, uiFile, bundled} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile, bundled} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 // Every finite animation and transition has finished (an endless spinner does not count).
 const settled = () => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity);
@@ -39,7 +39,7 @@ const UPDATE: NewVersionUpdate = {current: '0.1.0', latest: '0.2.0', available: 
         const config = {version: update ? update.current : '0.1.0', update, app_name: 'Tico', ...(changelog ? {changelog} : {})};
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
         if (p === '/api/v2/config') return json({...config, version: served || (polls > 1 ? '0.2.0' : '0.1.0')});
-        // What's new opens on a click from the row; its list is not under test here (changelog.cjs has it).
+        // What's new opens on a click from the row; its list is not under test here (changelog.cts has it).
         if (p === '/api/v2/changelog') return json({entries: [], unread_count: changelog?.unread_count || 0, next_offset: null, can_add: false, can_review: false, drafts: [], current_version: config.version});
         if (p === '/api/v2/system/update' && req.method() === 'POST') {
           posts.push(req.postDataJSON());

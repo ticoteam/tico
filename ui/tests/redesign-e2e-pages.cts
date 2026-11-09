@@ -5,9 +5,9 @@
 // has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports in
 // the full view, and a card holds its size's fixed height and fades the cut. Phone, then desktop.
 import type {Page} from 'playwright';
-import type * as R from './support/redesign-e2e.cjs';
+import type * as R from './support/redesign-e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {run, open, go, ok, api, sideways, shot, t} = require('./support/redesign-e2e.cjs') as typeof R;
+const {run, open, go, ok, api, sideways, shot, t} = require('./support/redesign-e2e.cts') as R.Api;
 
 // A page as the pages API lists it, and the page-side helpers the probe calls.
 interface PageRecord {file_id: string; title: string; src: string | null; task_id: string}

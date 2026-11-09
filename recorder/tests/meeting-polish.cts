@@ -2,7 +2,7 @@
 // Enter to add, the transcript's copy button, Stop as the one end action, and suggested tasks without a Details
 // sheet: a created task's row opens it in Tico.
 import type {Route} from 'playwright';
-require('../../ui/tests/support/browser.cjs');
+require('../../ui/tests/support/browser.cts');
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const path: typeof import('node:path') = require('node:path');

@@ -1,9 +1,11 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // A subtask opened from its parent in the peek stays open after a save takes it out of the filtered list: the peek
 // never moves on to its neighbour (a declined sibling), so the next edit lands on the task that was saved (Dev 283).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
 const at = (mins: number) => new Date(Date.now() - mins * 60000).toISOString();
 const t = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,

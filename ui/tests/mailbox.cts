@@ -1,5 +1,5 @@
 // Offline browser regression: one Google mailbox's page under Tools (ui/app/inboxes-email.ts,
-// #/tools/mailbox/<id>) over a fake GET /v2/mailboxes/<id> (ui/tests/support/mailboxes-fake.cjs). Whoever
+// #/tools/mailbox/<id>) over a fake GET /v2/mailboxes/<id> (ui/tests/support/mailboxes-fake.cts). Whoever
 // manages it (an admin for a shared inbox, the owner for a personal mailbox) adds access, switches Read / Read and write
 // and removes it; the implicit row (Admins, or the owner) has no controls. Automations switch on and off from here.
 // Stop using in Tico confirms in the page and returns to Tools. Anyone else reads the page with no controls. A
@@ -7,11 +7,11 @@
 // mailbox and reads the page again; Recent lists its newest mail. A card another file registers with inboxesPanel
 // shows under the mailbox's own.
 import type {Browser, Page} from 'playwright';
-import type {MailboxesFake} from './support/mailboxes-fake.cjs';
+import type {MailboxesFake} from './support/mailboxes-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
-const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
+const {googleFake} = require('./support/google-fake.cts') as import('./support/google-fake.cts').Api;
+const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cts') as import('./support/mailboxes-fake.cts').Api;
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 declare function inboxesPanel(id: string, options: {kinds: string[]; order: number; render: (host: HTMLElement, inbox: {kind: string; address: string; can_manage: boolean}) => void}): void;
 declare function inboxesRender(): void;

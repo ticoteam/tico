@@ -1,16 +1,16 @@
 // Links in a task body read as what they are: an s3:// URI whose bucket the server maps (TICO_S3_VIEW_URLS) links
 // to its view URL, an unmapped one is a file chip with Copy, an image link gets a thumbnail that opens the viewer,
 // a PDF is a card, a long address is shortened, and nothing overflows a phone. Fixtures only.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as ThreadsFake from './support/threads-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as ThreadsFake from './support/threads-fake.cts';
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
 declare function safeMd(text: string, opts?: {shortLinks: boolean}): string;
 interface Vectors {mapping: Record<string, string>; cases: {text: string; view: string[]; unmapped: string[]}[]}
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082','hex');

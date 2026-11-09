@@ -2,9 +2,9 @@
 // writes it for Builder Claude, whose rights do not reach it: the PATCH leaves a pending version; no model runs). Dana
 // sees "Proposed" on its version chip, opens Versions, reads the proposal's diff and turns it on; the hub's live flow
 // then archives receipts first and no proposal is left. Phone only (Versions is a sheet there).
-import type * as RE from './support/redesign-e2e.cjs';
+import type * as RE from './support/redesign-e2e.cts';
 const assert = require('node:assert/strict');
-const {run, open, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cjs') as typeof RE;
+const {run, open, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cts') as RE.Api;
 
 interface Version {
   n: number;
@@ -49,4 +49,4 @@ run('redesign-e2e-bot', ['org', 'toured', 'automations', 'bot_proposal'], async 
   await shot(page, `${tag}-03-flow`);
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-}, {only: 'phone'});   // the Versions sheet is the phone's; the computer's proposals are checked by automations-proposals.cjs
+}, {only: 'phone'});   // the Versions sheet is the phone's; the computer's proposals are checked by automations-proposals.cts

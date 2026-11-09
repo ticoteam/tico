@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 import type {Page} from 'playwright';
 // A review or QA subtask's verdict (ui/app/task-code.ts taskVerdictHTML) and refusals said where they were tried.
 // Guards: the chip shows on the row, in the parent's Subtasks and in the subtask's own properties, with the judged head
@@ -7,7 +7,10 @@ import type {Page} from 'playwright';
 // also in a narrow list where row notes hide; a person's QA waiver reads "QA waived", never as a pass. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var taskModalShow: Tasks.Globals['taskModalShow'];
 const at = (mins: number) => new Date(Date.now() - mins * 60000).toISOString();
 const t = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,

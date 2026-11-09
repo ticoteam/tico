@@ -1,15 +1,15 @@
 // Offline browser regression: what moved off the Help page has its own home. Settings shows the version lines and,
 // inside the desktop app, Show the app's log; Settings > Health runs the Setup check with each fix, keeps the result
 // through Health's redraw and sends it to the Tico team attached; What's new opens with the Beta features and the known
-// issues in this version. (Take the tour in the account menu is in getting-started.cjs.)
+// issues in this version. (Take the tour in the account menu is in getting-started.cts.)
 import type {LaunchOptions, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile, beta} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile, beta} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 interface PageWin {
     __posted: string[];
     ticoNative: (name: string) => {postMessage: (body: unknown) => void};

@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-held.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-held.cts
 // ▶ walks everything the pipeline waits on this person for, in one queue: two reviews, then a question (answered on its card,
 // the question card Decide draws), then two subtasks (one Done, one Sent back with a note). Each answer or finish takes its
 // item out: the next one comes up, "For you · i of N" and the header's count drop at once. At a phone's 390 by 844, dark and
@@ -8,8 +8,8 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {install} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+const {install} = require('./support/pipeline-fixture.cts');
+const {t} = (() => { try { return require('./support/load.cts'); } catch { return {t: (ms: number) => ms}; } })();
 
 const SHOTS = process.env.GC_SHOTS || '';
 const PHONE = {width: 390, height: 844};

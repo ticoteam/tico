@@ -1,10 +1,10 @@
-import type * as PageSupport from './support/page.cjs';
+import type * as PageSupport from './support/page.cts';
 // A sign-in begins empty and receives its provider instructions on a later poll. Intrinsic dialog sizing must
 // give that content space in WebKit, and keep Cancel reachable when the content must scroll.
 const {webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 
 // Browser-side state the fixture sets on window; the app's model-login script reads and writes the same row.
 interface LoginRow {
@@ -22,7 +22,7 @@ interface LoginWrite {
   body: {code?: string};
 }
 declare const window: Window & typeof globalThis & {
-  S: {config: {hosted: boolean}};
+  S: {config: {hosted: boolean}; me: {id: string}; v2: {needs: unknown[]}; route: string};
   writes: LoginWrite[];
   row: LoginRow;
   // Shared with other specs' Window augmentations, so the signatures must match theirs exactly.
@@ -48,7 +48,7 @@ async function check(engine: import('playwright').BrowserType) {
       await page.setContent('<!doctype html><html><head></head><body></body></html>');
       await page.addStyleTag({content: css});
       await page.evaluate(() => {
-        // The shared S type (tasks-page.d.cts) also requires me, v2 and route. The sign-in dialog reads only config.
+        // A minimal app S; the sign-in dialog reads only config.
         window.S = {config: {hosted: false}, me: {id: 'fixture'}, v2: {needs: []}, route: '/'};
         window.writes = [];
         window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};

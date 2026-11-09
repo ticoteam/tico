@@ -18,19 +18,19 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 declare function settingsShow(tab: string): void;
 declare var SETTINGS_TAB: string;
 
 // Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.ts, settingsShow).
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
-// Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.ts; redesign-shell.cjs checks it),
+// Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.ts; redesign-shell.cts checks it),
 // the old Strategy Bot address only redirects to its tab (ui/app/router.ts), so no link is drawn to it, and Inboxes'
 // old addresses redirect to Tools (ui/app/tools.ts toolsRoute; checked below), System's (Rules and Routines before it)
 // leave for Automations (ui/app/settings.ts settingsMovedOut; checked below), and Webhooks (once Triggers) went to
-// Automations, Tools and Models (ui/app/settings-webhooks.ts whOldAddress; settings-webhooks.cjs checks them).
+// Automations, Tools and Models (ui/app/settings-webhooks.ts whOldAddress; settings-webhooks.cts checks them).
 const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', 'triggers'];
 
 // Every #/settings/<name> address written in the UI's sources, .js or .ts (a script converted to TypeScript keeps its links).

@@ -1,13 +1,13 @@
-import type {ThreadsMessage} from './support/threads-fake.cjs';
+import type {ThreadsMessage} from './support/threads-fake.cts';
 // Visuals with inline serving off (hosted, no visual origin: every attachment's `src` is null) fall back to the usual
 // file chips and thumbnails in chat and task comments. Those show the title the sender gave the file, not its file
 // name (Dev 245 QA); the name stays in data-name for the viewer and the download. Fixtures only.
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {threadsFake} = require('./support/threads-fake.cts') as import('./support/threads-fake.cts').Api;
 
 declare const TASKS_ST: {tasks: {id: string}[]; loading?: boolean};
 declare function taskModalShow(task: {id: string} | undefined): void;

@@ -1,10 +1,15 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // Needs you: a question to me is delivered once my list holds it (sent once, never again for the same list) and read
 // once its card shows me it, option cards included (decide.js decideAskRead); a question to someone else, or one already
 // delivered, is not sent (hub-v2.ts needsSeen). A task's questions are read on each open of the full task.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var decideOpen: Tasks.Globals['decideOpen'];
+declare var decideStop: Tasks.Globals['decideStop'];
+declare var needsTake: Tasks.Globals['needsTake'];
+declare var taskAsksRead: Tasks.Globals['taskAsksRead'];
 const at = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const ask = (id: string, to: string, delivered: string | null = null) => ({id, recipient_id: to, sender_id: 'bot:writer', body: 'Approve the venue?', delivered_at: delivered, read_at: null});
 const request = (id: string, title: string, a: unknown) => ({id, kind: 'task', title, body: 'Which venue?', owner: 'human:ana', requester: 'bot:writer', status: 'open',

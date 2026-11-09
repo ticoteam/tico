@@ -1,13 +1,13 @@
 // Imported history has no runtime credential actions; real agents retain them in their Settings tab. A human's Grok Bots
 // are ordinary org-chart rows: source sections do not override their placement or ordering.
 import type {Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 declare const S: {emps: {name: string; agent: {last_seen_at: string}}[]; route: string};
 declare function settingsBotProblem(bot: unknown): string;
 declare function orgDrop(from: string, to: string): void;

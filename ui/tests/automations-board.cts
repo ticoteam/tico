@@ -7,12 +7,12 @@
 // an action's label or reply text shows and saves under the name that runs;
 // a phone stacks the board with no sideways scroll.
 import type {Browser, Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 type Action = {do: string; args: Record<string, unknown>};
 type Rule = {when: unknown[]; match: string; then: Action[]; next: string; stop?: boolean; to?: string};

@@ -1,13 +1,13 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // Offline browser regression: a person's message to a bot (their DM thread) that an org rule holds is not a failed
 // send. Nothing is posted, no error shows, and the DM shows the held message with its rule. A reopened DM lists what is
 // still held; Edit withdraws the hold and puts the text back in the box to send again.
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
 const TEXT = 'Our favorite color is gold.';
 const HOLD = {id: 'h-own', operation: 'threads', author: 'human:ana', author_name: 'Ana', state: 'held', outcome: 'blocked',

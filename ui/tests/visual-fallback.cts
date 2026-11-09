@@ -3,13 +3,13 @@
 // card with its title, its still preview when it has one, and Open, which shows it in the file viewer (test 2); a
 // page or SVG never loads in a frame or picture from the app's own address. Settings shows one read-only line, no
 // switch, for either setup (test 7). Fixtures only.
-import type {ThreadsMessage} from './support/threads-fake.cjs';
+import type {ThreadsMessage} from './support/threads-fake.cts';
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {threadsFake} = require('./support/threads-fake.cts') as import('./support/threads-fake.cts').Api;
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 const ORIGIN = 'https://tico-ui.test';

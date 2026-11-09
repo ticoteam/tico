@@ -1,16 +1,16 @@
 // The Assistant's chat on a computer that is not cloud follows the page's one live stream (GET /api/v2/events), as a cloud chat does:
 // no page holds a stream of its own (the retired /api/v2/stream), a change to the conversation reads its snapshot once,
 // and the 15-second poll stops while the stream carries it.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as AssistantChat from './support/assistant-chat.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as AssistantChat from './support/assistant-chat.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
-const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {assistantView} = require('./support/assistant-chat.cts') as AssistantChat.Api;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 declare const V2C: {rendered: boolean; liveOff: boolean; reading: boolean; readAgain: boolean};
 declare const LIVE_SOON: Set<string>;
 

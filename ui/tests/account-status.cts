@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // The account button's one status dot and its menu (Amendment v3, _plan-maintenance.md, Chris Nov 4): two states only.
 // "Can't reach Tico" is amber, clears by itself and offers Retry. "Bots aren't running" is red: the cloud scheduler or
 // Tico on this computer stopped, or no computer is online at all. Health's checks, the person's operation issues,
@@ -8,8 +8,8 @@ import type * as Routes from './support/routes.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 declare const S: {me: {role: string; bot_admin: boolean}};
 declare function refresh(force: boolean): Promise<void>;
 declare function hlRefresh(): Promise<void>;

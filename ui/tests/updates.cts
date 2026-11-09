@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/updates.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/updates.cts
 // Every request is intercepted; this test never contacts the hub or a bot.
 // Updates is a feed with Daily and Weekly toggles; each bot reports in once a day
 // (Friday: the week in review); read state is per person and marked as cards are seen; a reply shows
@@ -9,12 +9,12 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as LoadSupport from './support/load.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = require('./support/load.cjs') as typeof LoadSupport;
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as LoadSupport from './support/load.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = require('./support/load.cts') as LoadSupport.Api;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 type Body = {ids: string[]; all?: boolean; read?: boolean; text?: string; archived?: boolean};
 type Msg = {id: string; sender_id: string; body: string; created_at: string; conversation_id?: string};
@@ -67,7 +67,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     page.on('pageerror', e => errors.push(e.message));
     // Every value the rail badge shows, in order: seen-is-read can lower it within a second of the first paint.
     await page.addInitScript(() => {
-      localStorage.setItem('tico.updates.layout', 'list');   // the flat feed; the org-chart tree is updates-tree.cjs
+      localStorage.setItem('tico.updates.layout', 'list');   // the flat feed; the org-chart tree is updates-tree.cts
       (window as unknown as PageWin).__badges = [];
       new MutationObserver(() => {
         const b = document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null;
