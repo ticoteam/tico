@@ -1484,6 +1484,10 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         first |= set(graph.run_by.get(name, ())) | graph.readers(name, added) | graph.fixture_users(name, True)
         if owned := owned_data(name):
             first |= set(owned[1])
+        if name == "backend/openapi_v2.py" or (name.startswith("backend/") and name.endswith("_routes.py")):
+            # The contract test reads every route through the app's imports (a hub, not followed within a depth) and
+            # no longer reads a committed spec file, so a route or generator change names it directly.
+            first.add("backend/tests/test_openapi_v2.py")
         if Path(name).name == "conftest.py":  # rule 2: the tests below it while they are few, and its fixtures' users
             below = graph.below(name)
             fixtures = set(graph.fixtures.get(name, {}))
