@@ -84,7 +84,7 @@ def test_health_keeps_a_resting_bots_reason_when_another_bot_is_stuck(cloud):
     body = get(cloud.api, 'health')
     queue = next(row for row in body['checks'] if row['id'] == 'queue')
     assert {row['bot']: row['reason'] for row in queue['items']} == {'ops': 'task_wait', 'cpo': 'paused'}
-    assert [row['bot'] for row in body['stuck']] == ['cpo']
+    assert body['stuck'] == []  # a paused bot is paused, not stuck (spec T12)
 
 
 @pytest.mark.parametrize('company_stopped', [False, True], ids=['task-wait', 'ready-chat-at-company-limit'])
