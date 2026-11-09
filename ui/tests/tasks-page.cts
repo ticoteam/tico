@@ -12,40 +12,259 @@
 //  - a phone: full-screen modal peek that Back closes, Select mode, stacked properties.
 // Board columns, selection and card behavior live in task-board.cjs.
 // TASKS_SHOTS=<dir> also saves the screenshots for the owner (dark and light).
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+import type {Browser, Page, Route} from 'playwright';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {t} = require('./support/load.cjs') as typeof import('./support/load.cjs');
 const SHOTS = process.env.TASKS_SHOTS || '';
 
+// The fixtures are the fake server's rows: the fields the scripts read are typed, the rest stay unknown.
+export interface Task {
+  id: string;
+  title: string;
+  body?: string;
+  status?: string;
+  owner_id?: string | null;
+  requester_id?: string | null;
+  updated_at?: string;
+  created_at?: string;
+  closed_at?: string;
+  done_at?: string;
+  version: number;
+  labels?: string[];
+  links?: unknown[];
+  holds?: {kind: string; reason?: string | null; since?: string | null; until?: string; by?: string}[];
+  note?: string | null;
+  due_at?: string | null | undefined;
+  ask?: {id: string; body: string; sender_id: string; recipient_id: string; older?: boolean} | null;
+  person_ask?: string | null;
+  waiting_on?: string | null;
+  relations?: Record<string, unknown[]>;
+  type_id?: string;
+  type?: {id: string; name: string} | null;
+  step_id?: string | null;
+  step?: TaskStep | null;
+  // The fake server's own links, answered as `relations` (see withRelations).
+  _parent?: string | undefined;
+  _blocked?: string[];
+  _privateParent?: boolean;
+  // A Needs you item's tasks folded into it.
+  folded?: {id: string}[];
+  merged?: string[];
+  [field: string]: unknown;
+}
+interface TaskStep {id: string; name: string; status: string}
+export interface TaskType {id: string; name: string; steps: TaskStep[]}
+// A write the fake server saw: its path and JSON body (the fields the scripts read are typed).
+export interface Posted {
+  p: string;
+  body: {version?: number; status?: string; owner?: string; due?: string; labels?: string[]; until?: string; note?: string; type?: string;
+    task?: string; kind?: string; remove?: boolean; close?: boolean; step?: string; check_back_at?: string; check_back_note?: string; [field: string]: unknown};
+}
+type PostBody = Posted['body'];
+export interface OpenOptions {
+  viewport?: {width: number; height: number};
+  theme?: string;
+  hash?: string;
+  failIds?: string[];
+  prefs?: unknown;
+  mover?: boolean;
+  types?: TaskType[];
+  local?: Record<string, string>;
+  people?: unknown;
+  baseTasks?: Task[] | null;
+  extraTasks?: Task[];
+  byNeed?: boolean;
+  clock?: number | string | Date | null;
+  activePage?: ((route: Route, rows: Task[], offset: number, limit: number) => unknown) | null;
+  bots?: unknown[];
+  beforeGoto?: ((page: Page) => unknown) | null;
+  needsLive?: boolean;
+  waitForNeeds?: boolean;
+}
+
+// The app's classic-script globals, read inside page.evaluate. A script declares the ones it reads itself
+// (`declare var TASKS_ST: Tasks.Globals['TASKS_ST'];`); their types live here, since several scripts read the same ones.
+// Each is typed by the fields a script reads; a function the app defines takes its arguments loosely (unknown).
+interface TaskLiveDraft {
+  base: Task;
+  patch: Record<string, unknown>;
+  flight?: unknown;
+  error?: string | null;
+  timer?: number;
+}
+export interface TaskLive {
+  id: string;
+  identity?: string;
+  owner?: string;
+  shared?: boolean;
+  reading?: boolean;
+  draft: TaskLiveDraft;
+  fields: Record<string, {version: number}>;
+}
+// The task modal (and the peek): an element with the app's expando properties on it.
+export interface TaskModalElement extends HTMLDialogElement {
+  drawSeq?: number;
+  liveTask?: Task;
+  taskRail?: unknown;
+  taskLive?: TaskLive;
+  saving?: boolean;
+  close(): void;
+}
+interface NeedsDecideState {
+  busy?: boolean;
+  lockUntil?: number;
+  pending?: unknown;
+  data: Map<string, {comments?: unknown[]}>;
+}
+export interface TasksState {
+  view: string;
+  type: string;
+  tasks: Task[];
+  peek: string;
+  cursor: string;
+  loading: boolean;
+  group: Record<string, string>;
+  filters: Record<string, string[]>;
+  bulkBusy: boolean;
+  typesLoaded: boolean;
+  doneLoaded: boolean;
+  doneLoading: boolean;
+  doneNext: number | null;
+  side?: string;
+  pendingFinish?: unknown;
+  peekVia?: unknown;
+  [field: string]: unknown;
+}
+export interface Globals {
+  TASKS_ST: TasksState;
+  tasksLoad: (state: unknown, opts?: unknown) => Promise<unknown>;
+  tasksRender: (state: unknown) => void;
+  tasksNeedsQueue: (state: unknown) => boolean;
+  tasksHeadFit: (state: unknown) => void;
+  tasksArchived: (view: string) => boolean;
+  tasksPrefsValue: (state: unknown) => Record<string, unknown>;
+  taskPeekOpen: (state: unknown, key: string) => unknown;
+  taskPeekClose: (state: unknown) => void;
+  taskDueInfo: (task: unknown) => {words: string};
+  snoozeDay: (task: unknown) => string;
+  refresh: (full?: boolean) => Promise<unknown>;
+  liveEmit: (kind: string, data: unknown) => void;
+  v2Refresh: () => Promise<unknown>;
+  v2MessageHTML: (message: unknown) => string;
+  myActor: () => string;
+  needsFirstIn: () => boolean;
+  needsTake: (...args: unknown[]) => unknown;
+  taskAsksRead: (...args: unknown[]) => unknown;
+  taskSaveQueued: (...args: unknown[]) => unknown;
+  taskModal: () => TaskModalElement;
+  taskModalShow: (task: unknown, ...rest: unknown[]) => Promise<unknown>;
+  taskLiveStop: (...args: unknown[]) => unknown;
+  taskLiveStorageKey: (...args: unknown[]) => string;
+  TASK_EDIT_DRAFTS: Map<string, TaskLiveDraft>;
+  TASK_EDIT_STORAGE: string;
+  TASK_DRAFTS: Map<string, unknown>;
+  TASK_MODAL_BACK: boolean;
+  TASK_TYPES: unknown[];
+  TASK_TYPES_READ: boolean;
+  PEEK_BACK: boolean;
+  DEC: NeedsDecideState | null;
+  DEC_OUTBOX: Set<unknown>;
+  DEC_BACK: boolean;
+  decideOpen: (key?: string) => boolean;
+  decideStop: () => void;
+  decideAct: (...args: unknown[]) => unknown;
+  decideCards: (items: unknown) => {key: string; [field: string]: unknown}[];
+  decideCardKey: (item: unknown) => string;
+  decideFromPerson: (...args: unknown[]) => unknown;
+  decideWriteBody: (card: unknown, what: string | undefined, index: number | undefined, note: string | undefined) => {writes: {path: string; body: Record<string, unknown>}[]};
+  decideStepsOnly: (card: unknown) => boolean;
+  approvalPayloadNode: (item: unknown) => HTMLElement;
+  staleDecide: (...args: unknown[]) => Promise<unknown>;
+  qcardQuestion: (item: unknown) => string;
+  qcardSub: (item: unknown) => string;
+  qcardBoxHTML: (task: unknown) => string;
+  qcardBodyHTML: (...args: unknown[]) => string;
+  qcardActionsHTML: (...args: unknown[]) => string;
+  qcardFallbackHTML: (item: unknown) => string;
+  S: {
+    me: {id: string; mover?: boolean; role?: string};
+    v2: {needs: {id: string; kind: string; rows: unknown[]; ask?: {refs: {questions: {options?: {label: string}[]; [field: string]: unknown}[]}}; [field: string]: unknown}[]; [field: string]: unknown};
+    route: string;
+    config?: {environment_id?: string};
+    v?: unknown;
+    [field: string]: unknown;
+  };
+  SESSION: {out: boolean; seen: boolean; identity: string; [field: string]: unknown};
+  SESSION_RETURN: string;
+  sessionKeep: () => void;
+  sessionReturn: () => void;
+  signedOut: (...args: unknown[]) => unknown;
+  get: (path: string, opts?: unknown) => Promise<unknown>;
+}
+// Expandos a script sets on window (or on a drawn element) for the page to read back.
+export interface WindowMarks {
+  pwned?: number;
+  taskSources?: (EventTarget & {closed?: boolean; url?: string})[];
+  taskSafety?: (() => void)[];
+  propertySave?: unknown;
+  oldView?: TaskLive | undefined;
+  leavingLive?: TaskLive | undefined;
+  __staleAnswer?: unknown;
+  copied?: string;
+  kept?: unknown;
+}
+// Marks a script sets on a drawn element to see later whether the same element is still on screen.
+export interface MarkedElement extends Element {
+  __drawn?: boolean;
+  __kept?: boolean;
+}
+declare var TASKS_ST: Globals['TASKS_ST'];
+declare var tasksLoad: Globals['tasksLoad'];
+declare var tasksRender: Globals['tasksRender'];
+declare var tasksArchived: Globals['tasksArchived'];
+declare var tasksPrefsValue: Globals['tasksPrefsValue'];
+declare var taskPeekOpen: Globals['taskPeekOpen'];
+declare var taskDueInfo: Globals['taskDueInfo'];
+declare var snoozeDay: Globals['snoozeDay'];
+declare var refresh: Globals['refresh'];
+declare var liveEmit: Globals['liveEmit'];
+declare var needsFirstIn: Globals['needsFirstIn'];
+declare var TASK_DRAFTS: Globals['TASK_DRAFTS'];
+declare var PEEK_BACK: Globals['PEEK_BACK'];
+declare var S: Globals['S'];
+declare const window: Window & typeof globalThis & WindowMarks & {tasksLoad: Globals['tasksLoad']};
+
 const NOW = Date.now();
-const at = minutes => new Date(NOW - minutes * 60000).toISOString();
-const inDays = days => new Date(NOW + days * 86400000).toISOString();
+const at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
+const inDays = (days: number) => new Date(NOW + days * 86400000).toISOString();
 // The mock server keeps each task's parent (`_parent`) and blockers (`_blocked`) and answers with `relations`, as the
 // hub does: by kind, each {id, title, status, owner, direction}; a task's subtasks are its children, not relations.
-function withRelations(task, tasks) {
-  const brief = (x, direction) => ({id: x.id, title: x.title, status: x.status, owner_id: x.owner_id, direction});
-  const byId = id => tasks.find(x => x.id === id);
-  const relations = {};
-  const add = (kind, row) => { if (row) (relations[kind] ||= []).push(row); };
-  if (task._parent && byId(task._parent)) add('parent', brief(byId(task._parent), 'out'));
+interface Relation {id: string | null; title: string | null; status: string | null | undefined; owner_id: string | null | undefined; direction: string; private?: boolean}
+function withRelations(task: Task, tasks: Task[]) {
+  const brief = (x: Task, direction: string): Relation => ({id: x.id, title: x.title, status: x.status, owner_id: x.owner_id, direction});
+  const byId = (id: string) => tasks.find(x => x.id === id);
+  const relations: Record<string, Relation[]> = {};
+  const add = (kind: string, row: Relation) => { if (row) (relations[kind] ||= []).push(row); };
+  if (task._parent && byId(task._parent)) add('parent', brief(byId(task._parent)!, 'out'));
   // A private parent this reader cannot open, as the hub sends it for a task filed from private work.
   if (task._privateParent) add('parent', {id: null, title: 'a private task', status: null, owner_id: null, direction: 'out', private: true});
-  for (const id of task._blocked || []) if (byId(id)) add('blocks', brief(byId(id), 'in'));
+  for (const id of task._blocked || []) if (byId(id)) add('blocks', brief(byId(id)!, 'in'));
   for (const x of tasks) if ((x._blocked || []).includes(task.id)) add('blocks', brief(x, 'out'));
   const {_parent, _blocked, _privateParent, ...rest} = task;
   return {...rest, relations};
 }
-function fixtures() {
-  const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:engineer', requester_id: 'human:ana', status: 'doing',
+function fixtures(): Task[] {
+  const t = (id: string, title: string, over: Partial<Task> = {}): Task => ({id, title, body: 'Details.', owner_id: 'bot:engineer', requester_id: 'human:ana', status: 'doing',
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
     created_at: at(60 * 30), updated_at: at(30), ...over});
-  const ask = (from, body, pick) => ({ask: {id: 'q-' + from, body, sender_id: from, recipient_id: 'human:ana'},
+  const ask = (from: string, body: string, pick: string) => ({ask: {id: 'q-' + from, body, sender_id: from, recipient_id: 'human:ana'},
     recommend: {ask: 'q-' + from, do: pick, option: pick, kind: 'reversible'}});
-  const pr = (repo, n, title, state = 'open') => ({id: `pr-${repo}-${n}`, kind: 'pr', repo, number: n, url: `https://github.com/${repo}/pull/${n}`, title, state,
+  const pr = (repo: string, n: number, title: string, state = 'open') => ({id: `pr-${repo}-${n}`, kind: 'pr', repo, number: n, url: `https://github.com/${repo}/pull/${n}`, title, state,
     checks: state === 'merged' ? 'passing' : 'pending'});
   return [
     // Needs you
@@ -89,14 +308,14 @@ const BOTS = [['engineer', 'Engineer', 'engineering'], ['support', 'Support', 's
   ['analyst', 'Analyst', 'operations'], ['botops', 'BotOps', '']].map(([name, display_name, team]) =>
   ({name, display_name, team, host: 'keeper', status: 'active', state: 'active', can_chat: true}));
 
-async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
-  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null, needsLive = false, waitForNeeds = true} = {}) {
+async function open(browser: Browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/issues', failIds = [], prefs = null, mover = true,
+  types = [], local = {}, people = null, baseTasks = null, extraTasks = [], byNeed = false, clock = null, activePage = null, bots = BOTS, beforeGoto = null, needsLive = false, waitForNeeds = true}: OpenOptions = {}) {
   const tasks = [...(baseTasks ?? fixtures()), ...extraTasks];
   const needsSnapshot = () => {
-    const items = tasks.filter(t => !['done', 'closed'].includes(t.status)
+    const items = tasks.filter(t => !['done', 'closed'].includes(t.status!)
       && !(t.holds || []).some(h => h.kind === 'snoozed')
       && (t.status === 'declined' ? t.requester_id === 'human:ana' && !t.owner_id?.startsWith('human:')
-        && Date.now() - Date.parse(t.updated_at) < 24 * 3600e3
+        && Date.now() - Date.parse(t.updated_at!) < 24 * 3600e3
         : t.owner_id === 'human:ana' || t.waiting_on === 'human:ana' || t.ask?.recipient_id === 'human:ana'))
       .sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)))
       .map(t => ({...withRelations(t, tasks), kind: t.status === 'declined' ? 'declined' : t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
@@ -106,13 +325,13 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   };
   // These scripts read Needs you grouped by who asks; `byNeed` keeps the default, What it takes.
   if (!byNeed && !('hub.tasks.layout' in local)) local = {...local, 'hub.tasks.layout': JSON.stringify({group: {foryou: 'requester'}})};
-  const posts = [];
-  const conflictNextUpdate = new Set();
+  const posts: Posted[] = [];
+  const conflictNextUpdate = new Set<string>();
   let pref = prefs;
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [];
-  page.on('pageerror', e => errors.push(process.env.TASKS_DEBUG ? e.stack : e.message));
-  await page.addInitScript(({theme, local}) => {
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(process.env.TASKS_DEBUG ? e.stack! : e.message));
+  await page.addInitScript(({theme, local}: {theme: string; local: Record<string, string>}) => {
     try {
       if (!sessionStorage.getItem('seeded')) { for (const [k, v] of Object.entries(local)) localStorage.setItem(k, v); sessionStorage.setItem('seeded', '1'); }
       localStorage.setItem('tico.theme', theme);
@@ -122,11 +341,11 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: mover ? 'owner' : 'member', mover, cloud: true, registered: true};
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -147,7 +366,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     }
     if (p === '/api/v2/tasks' && method === 'GET') {
       const wanted = (url.searchParams.get('status') || '').split(',').filter(Boolean);
-      const rows = tasks.filter(x => !wanted.length || wanted.includes(x.status));
+      const rows = tasks.filter(x => !wanted.length || wanted.includes(x.status!));
       const donePage = url.searchParams.get('sort') === 'finished';
       if (donePage) rows.sort((a, b) => String(b.closed_at || b.updated_at).localeCompare(String(a.closed_at || a.updated_at)));
       const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || rows.length);
@@ -160,27 +379,27 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (tree) return json(tasks.filter(x => x._parent === tree[1]).map(x => ({...withRelations(x, tasks), children: []})));
     const rel = p.match(/^\/api\/v2\/tasks\/([^/]+)\/relations$/);
     if (rel && method === 'POST') {
-      const id = decodeURIComponent(rel[1]), task = tasks.find(x => x.id === id), body = req.postDataJSON();
+      const id = decodeURIComponent(rel[1]!), task = tasks.find(x => x.id === id)!, body = req.postDataJSON() as {task: string; kind: string; remove?: boolean};
       posts.push({p, body});
       if (body.kind === 'parent') task._parent = body.remove ? undefined : body.task;
       else if (body.kind === 'blocked_by') task._blocked = body.remove ? (task._blocked || []).filter(x => x !== body.task) : [...(task._blocked || []), body.task];
-      else if (body.kind === 'blocks') { const other = tasks.find(x => x.id === body.task);
+      else if (body.kind === 'blocks') { const other = tasks.find(x => x.id === body.task)!;
         other._blocked = body.remove ? (other._blocked || []).filter(x => x !== id) : [...(other._blocked || []), id]; }
       return json({task: withRelations(task, tasks)});
     }
     const snooze = p.match(/^\/api\/v2\/tasks\/([^/]+)\/(snooze|unsnooze)$/);
     if (snooze && method === 'POST') {
-      const task = tasks.find(x => x.id === decodeURIComponent(snooze[1])), body = req.postDataJSON();
+      const task = tasks.find(x => x.id === decodeURIComponent(snooze[1]!))!, body = req.postDataJSON() as {until?: string};
       posts.push({p, body});
       Object.assign(task, {holds: snooze[2] === 'snooze' ? [{kind: 'snoozed', reason: null, since: null, until: body.until, by: 'human:ana'}] : []});
       return json({task: withRelations(task, tasks)});
     }
     const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
     if (one) {
-      const id = decodeURIComponent(one[1]), task = tasks.find(x => x.id === id);
+      const id = decodeURIComponent(one[1]!), task = tasks.find(x => x.id === id);
       if (!task) return json({error: {detail: 'Not found'}}, 404);
       if (method === 'POST') {
-        const body = req.postDataJSON(); posts.push({p, body});
+        const body = req.postDataJSON() as PostBody; posts.push({p, body});
         if (failIds.includes(id) || conflictNextUpdate.delete(id) || body.version !== task.version)
           return json({error: {code: 'version_conflict', detail: 'Task changed; fetch it and retry your update'}}, 409);
         const {version, close, note, ...fields} = body;
@@ -206,81 +425,81 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   await beforeGoto?.(page);
   await page.goto('https://tico-ui.test/' + hash);
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'))
-    .catch(e => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
+    .catch((e: Error) => { throw new Error(`${e.message}\npage errors: ${errors.join(' | ')}`); });
   if (waitForNeeds) await page.waitForFunction(() => needsFirstIn());
   await page.evaluate(() => tasksRender(TASKS_ST));
-  return {page, errors, posts, tasks, pref: () => pref, conflictNextUpdate: id => conflictNextUpdate.add(id)};
+  return {page, errors, posts, tasks, pref: () => pref, conflictNextUpdate: (id: string) => conflictNextUpdate.add(id)};
 }
-const shot = async (page, name) => {
+const shot = async (page: Page, name: string) => {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   // fonts in, and any finite animation or transition finished
   await page.evaluate(() => document.fonts.ready.then(() => Promise.all(document.getAnimations()
-    .filter(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime)).map(a => a.finished_at.catch(() => {})))));
+    .filter(a => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming().endTime)).map(a => a.finished.catch(() => {})))));
   await page.screenshot({path: path.join(SHOTS, name + '.png')});
 };
-const rowKeys = page => page.locator('#task-body .tl-row').evaluateAll(rows => rows.map(r => r.dataset.taskKey));
-const groupNames = page => page.locator('#task-body .tl-gname').allInnerTexts();
-const taskWrites = posts => posts.filter(x => /\/api\/v2\/tasks\/t-/.test(x.p));
+const rowKeys = (page: Page) => page.locator('#task-body .tl-row').evaluateAll(rows => rows.map(r => r.dataset.taskKey));
+const groupNames = (page: Page) => page.locator('#task-body .tl-gname').allInnerTexts();
+const taskWrites = (posts: Posted[]) => posts.filter(x => /\/api\/v2\/tasks\/t-/.test(x.p));
 // Group is at the top of the filter menu.
-const groupBy = async (page, by) => {
+const groupBy = async (page: Page, by: string) => {
   await page.locator('#task-filter').click();
   await page.locator(`#task-filter-pop [data-pick-group="${by}"]`).click();
-  await page.waitForFunction(by => document.querySelector('#task-body .tl')?.dataset.groupBy === by, by);
+  await page.waitForFunction(by => document.querySelector<HTMLElement>('#task-body .tl')?.dataset.groupBy === by, by);
 };
 // Snoozed, Done and Closed are behind the archive button.
-const moreView = async (page, view) => {
+const moreView = async (page: Page, view: string) => {
   if (!await page.evaluate(() => tasksArchived(TASKS_ST.view))) await page.locator('#task-archive').click();
   await page.locator(`#task-finished [data-view="${view}"]`).click();
   await page.waitForFunction(view => TASKS_ST.view === view, view);
 };
 // The scope menu: 'you', or a type's id.
-const scope = async (page, pick) => {
+const scope = async (page: Page, pick: string) => {
   await page.locator('#task-scope').click();
   await page.locator(pick === 'you' ? '#task-filter-pop [data-scope="you"]' : `#task-filter-pop [data-task-type="${pick}"]`).click();
   await page.waitForFunction(pick => pick === 'you' ? TASKS_ST.view === 'foryou' : TASKS_ST.view !== 'foryou' && TASKS_ST.type === pick, pick);
 };
-const layout = async (page, view) => {
+const layout = async (page: Page, view: string) => {
   await page.locator(`#task-layout [data-layout="${view}"]`).click();
   await page.waitForFunction(view => TASKS_ST.view === view, view);
 };
 // The header's visible controls, by the middle of each box, and whether the page scrolls sideways.
-const headRows = page => page.evaluate(() => {
-  const head = document.querySelector('#tasks-pane .tl-head');
+const headRows = (page: Page) => page.evaluate(() => {
+  const head = document.querySelector('#tasks-pane .tl-head')!;
   const shown = [...head.querySelectorAll('h1, button, .tl-search')].filter(el => el.getBoundingClientRect().width > 2 && !el.closest('[hidden]'));
   const mids = shown.map(el => { const r = el.getBoundingClientRect(); return Math.round(r.top + r.height / 2); });
-  const rows = [];
-  for (const m of mids.sort((a, b) => a - b)) if (!rows.length || m - rows[rows.length - 1] > 6) rows.push(m);
+  const rows: number[] = [];
+  for (const m of mids.sort((a, b) => a - b)) if (!rows.length || m - rows[rows.length - 1]! > 6) rows.push(m);
   return {rows: rows.length, spread: Math.max(...mids) - Math.min(...mids), ids: shown.map(el => el.id || el.className),
-    scroll: document.documentElement.scrollWidth > innerWidth + 1, fold: head.classList.contains('s-fold'), bar: !document.querySelector('#task-bar').hidden};
+    scroll: document.documentElement.scrollWidth > innerWidth + 1, fold: head.classList.contains('s-fold'), bar: !document.querySelector<HTMLElement>('#task-bar')!.hidden};
 });
-const peekTitle = (page, text) => page.locator('#task-peek .tmodal-title', {hasText: text}).waitFor();
-const focusedKey = page => page.evaluate(() => document.activeElement?.closest('[data-task-key]')?.dataset.taskKey || document.activeElement?.className);
+const peekTitle = (page: Page, text: string) => page.locator('#task-peek .tmodal-title', {hasText: text}).waitFor();
+const focusedKey = (page: Page) => page.evaluate(() => document.activeElement?.closest<HTMLElement>('[data-task-key]')?.dataset.taskKey || document.activeElement?.className);
 // Runs the poll n times (refresh(false)) and waits for every list load it starts to finish drawing.
-const polls = (page, n = 1) => page.evaluate(async n => {
-  const load = window.tasksLoad, runs = [];
+const polls = (page: Page, n = 1) => page.evaluate(async n => {
+  const load = window.tasksLoad, runs: Promise<unknown>[] = [];
   window.tasksLoad = (...a) => { const p = load(...a); runs.push(p); return p; };
   try { for (let i = 0; i < n; i++) await refresh(false); } finally { window.tasksLoad = load; }
   await Promise.all(runs);
 }, n);
-const until = async (cond, ms = 10000) => { for (const end = Date.now() + t(ms); !cond() && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
+const until = async (cond: () => boolean, ms = 10000) => { for (const end = Date.now() + t(ms); !cond() && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
 
 // Polls until the account copy matches what the page would save now (it is posted after a short pause).
-async function prefSaved(page, pref) {
+async function prefSaved(page: Page, pref: () => unknown) {
   const want = await page.evaluate(() => JSON.stringify({type: TASKS_ST.type, view: TASKS_ST.view, views: 2, ...tasksPrefsValue(TASKS_ST)}));
   const savedBy = Date.now() + t(10000);
   while (JSON.stringify(pref()) !== want && Date.now() < savedBy) await new Promise(r => setTimeout(r, 50));
   assert.equal(JSON.stringify(pref()), want, 'the preference is saved with the account');
 }
-async function listAndTabs(browser) {
+async function listAndTabs(browser: Browser) {
   const {page, errors, pref} = await open(browser);
   // The scope button names the type in view; its menu is You with its count, then the types. The layout pair says
   // which layout is on.
   assert.equal(await page.locator('#task-scope').getAttribute('aria-label'), 'General');
-  assert.deepEqual(await page.locator('#task-layout [data-layout]').evaluateAll(bs => bs.map(b => [b.dataset.layout, b.getAttribute('aria-pressed'), b.getAttribute('aria-label'), b.title])),
+  assert.deepEqual(await page.locator('#task-layout [data-layout]').evaluateAll(bs => bs.map(b => [b.dataset.layout, b.getAttribute('aria-pressed'), b.getAttribute('aria-label'), (b as HTMLElement).title])),
     [['list', 'true', 'List', 'List'], ['board', 'false', 'Board', 'Board']]);
   await page.locator('#task-scope').click();
-  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild.textContent, b.querySelector('.tl-mi-n')?.textContent ?? null, b.getAttribute('aria-checked')])),
+  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild!.textContent, b.querySelector('.tl-mi-n')?.textContent ?? null, b.getAttribute('aria-checked')])),
     [['you', 'You', String(NEEDS_YOU), 'false'], ['general', 'General', null, 'true']]);
   await page.keyboard.press('Escape');
   // Done and Closed are behind the archive button; Snoozed joins them only while something is snoozed.
@@ -297,7 +516,7 @@ async function listAndTabs(browser) {
   assert.equal(keys.length, OPEN_COUNT, 'every open task once');
   assert.equal(new Set(keys).size, keys.length, 'no task twice');
   // A subtask nests only inside its parent's own group; elsewhere it stays in its group with a "↳ parent" hint.
-  const depth = key => page.locator(`[data-task-key="${key}"]`).evaluate(r => [r.closest('[data-group]').dataset.group, r.getAttribute('aria-level'), (r.querySelector('.tl-parent')?.innerText || '').replace(/\s+/g, ' ')]);
+  const depth = (key: string) => page.locator(`[data-task-key="${key}"]`).evaluate(r => [r.closest<HTMLElement>('[data-group]')!.dataset.group, r.getAttribute('aria-level'), (r.querySelector<HTMLElement>('.tl-parent')?.innerText || '').replace(/\s+/g, ' ')]);
   assert.deepEqual(await depth('tt-img'), ['doing', '2', ''], 'the newsletter image nests under the newsletter (both Doing)');
   assert.deepEqual(await depth('tt-idem'), ['doing', '1', '↳ Ship the checkout redesign'], 'a Doing subtask of a Waiting task stays in Doing');
   assert.deepEqual(await depth('tt-terms'), ['needsme', '1', '↳ Ship the checkout redesign']);
@@ -309,7 +528,7 @@ async function listAndTabs(browser) {
   const heights = await page.locator('#task-body .tl-row').evaluateAll(rows => rows.map(r => Math.round(r.getBoundingClientRect().height)));
   assert.ok(heights.every(h => h >= 30 && h <= 36), 'rows are one 32px line: ' + heights);
   assert.doesNotMatch(await page.locator('#task-body').innerText(), /Added by/);
-  assert.match(await page.locator('[data-task-key="tt-copy"]').getAttribute('title'), /Added by Writer \(bot\)/);
+  assert.match((await page.locator('[data-task-key="tt-copy"]').getAttribute('title'))!, /Added by Writer \(bot\)/);
   // The section supplies status context, including derived Needs-you groups.
   assert.equal(await page.locator('#task-body .tl-row > .task-status').count(), 0);
   // Chips: tags (two, then +N), the PR badge, the subtask ring; dates: a person's deadline, or a parked bot task's wake.
@@ -326,7 +545,7 @@ async function listAndTabs(browser) {
   assert.match(await wake.innerText(), /^Wakes /, 'a parked bot task says when it wakes');
   assert.equal(await wake.evaluate(el => el.classList.contains('late')), false);
   // A note is one muted line; amber only when it waits on you.
-  const color = async sel => page.locator(sel).evaluate(n => getComputedStyle(n).color);
+  const color = async (sel: string) => page.locator(sel).evaluate(n => getComputedStyle(n).color);
   const tokens = await page.evaluate(() => ['--muted', '--wait'].map(v => { const d = document.createElement('i'); d.style.color = `var(${v})`; document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; }));
   assert.equal(await color('[data-task-key="tt-inbox"] .tl-note'), tokens[0], 'a waiting note is muted');
   assert.equal(await color('[data-task-key="tt-copy"] .tl-note'), tokens[1], 'a note that waits on you is amber');
@@ -366,13 +585,13 @@ async function listAndTabs(browser) {
 
   // Group is the top of the filter menu (↑/↓, Enter), then the fields. Owner: You first; subtasks nest under a parent of the same owner.
   await page.locator('#task-filter').click();
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.pickGroup), 'status', 'the menu opens on the current grouping');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.pickGroup), 'status', 'the menu opens on the current grouping');
   assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => b.dataset.pickGroup || b.dataset.pickField)),
     ['status', 'owner', 'team', 'parent', 'tag', 'requester', 'owner', 'team', 'tag', 'repo', 'pr', 'due', 'asked']);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.querySelector('#task-body .tl')?.dataset.groupBy === 'owner');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter', 'the focus comes back to Filter');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-body .tl')?.dataset.groupBy === 'owner');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).id), 'task-filter', 'the focus comes back to Filter');
   assert.deepEqual(await groupNames(page), ['YOU', 'JO', 'SAM', 'ANALYST', 'BOTOPS', 'ENGINEER', 'SUPPORT', 'WRITER']);
   assert.equal(await page.locator('[data-task-key="tt-checkout"] > .task-status').getAttribute('data-status'), 'waiting', 'owner groups still need task status');
   assert.equal(new Set(await rowKeys(page)).size, OPEN_COUNT);
@@ -389,7 +608,7 @@ async function listAndTabs(browser) {
   await groupBy(page, 'owner');
   await prefSaved(page, pref);
   await page.reload();
-  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl')?.dataset.groupBy === 'owner');
+  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector<HTMLElement>('#task-body .tl')?.dataset.groupBy === 'owner');
   await groupBy(page, 'status');
   assert.equal(await page.locator('[data-group-toggle="list:status:waiting"]').getAttribute('aria-expanded'), 'false', 'a folded group stays folded');
   await page.locator('[data-group-toggle="list:status:waiting"]').click();
@@ -398,19 +617,19 @@ async function listAndTabs(browser) {
   await page.close();
 }
 
-async function filters(browser) {
+async function filters(browser: Browser) {
   const {page, errors} = await open(browser);
   await page.locator('#task-filter').click();
   await page.locator('#task-filter-pop [data-pick-field="owner"]').click();
   await page.locator('#task-filter-pop input[value="bot:engineer"]').check();
   await page.waitForFunction(() => location.hash.includes('owner=bot:engineer'));
   assert.equal(new URL(page.url()).hash, '#/tasks?owner=bot:engineer&type=general&view=list', 'one address per view');
-  const owners = await page.locator('#task-body .tl-row .tl-face').evaluateAll(fs => fs.map(f => f.title));
+  const owners = await page.locator('#task-body .tl-row .tl-face').evaluateAll(fs => fs.map(f => (f as HTMLElement).title));
   assert.ok(owners.length === 4 && owners.every(o => o === 'Engineer'), 'only Engineer: ' + owners);
   // ↑/↓ move through a menu's values.
   await page.locator('#task-filter-pop input[value="bot:engineer"]').focus();
   await page.keyboard.press('ArrowDown');
-  assert.equal(await page.evaluate(() => document.activeElement.value), 'bot:support');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLInputElement).value), 'bot:support');
   await page.keyboard.press('Space');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#task-filter-pop').evaluate(p => p.matches(':popover-open')), false);
@@ -432,7 +651,7 @@ async function filters(browser) {
   await page.locator('[data-chip-drop="owner"]').click();
   await page.waitForFunction(() => !location.hash.includes('owner='));
   assert.equal(await page.locator('[data-chip="owner"]').count(), 0);
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter', 'focus lands on Filter');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).id), 'task-filter', 'focus lands on Filter');
   // A Needs-you link made on the board reopens as the complete personal queue, retaining the board's filters.
   await page.goto('https://tico-ui.test/#/board');
   await page.waitForFunction(() => TASKS_ST?.view === 'board' && !TASKS_ST.loading);
@@ -469,14 +688,14 @@ async function filters(browser) {
   await page.close();
 }
 
-async function typeSelection(browser) {
+async function typeSelection(browser: Browser) {
   const types = [
     {id: 'general', name: 'General', steps: [{id: 'general-open', name: 'Open', status: 'open'}]},
     {id: 'dev-123', name: 'Dev ticket', steps: [{id: 'dev-backlog', name: 'Backlog', status: 'open'}]},
     {id: 'marketing', name: 'Marketing', steps: [{id: 'draft', name: 'Draft', status: 'open'}]},
   ];
-  const extraTasks = types.slice(1).map(type => ({...fixtures()[0], id: type.id + '-task', title: type.name + ' only',
-    type_id: type.id, type: {id: type.id, name: type.name}, step_id: type.steps[0].id, status: 'open'}));
+  const extraTasks = types.slice(1).map(type => ({...fixtures()[0]!, id: type.id + '-task', title: type.name + ' only',
+    type_id: type.id, type: {id: type.id, name: type.name}, step_id: type.steps[0]!.id, status: 'open'}));
   const {page, errors, posts, pref} = await open(browser, {types, extraTasks});
   assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'General');
   assert.equal(await page.locator('[data-task-key="tdev-123-task"]').count(), 0);
@@ -484,7 +703,7 @@ async function typeSelection(browser) {
   assert.equal(await page.locator('[data-pick-field=type]').count(), 0);
   await page.keyboard.press('Escape');
   await page.locator('#task-scope').click();
-  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild.textContent])),
+  assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild!.textContent])),
     [['you', 'You'], ['general', 'General'], ['dev-123', 'Dev ticket'], ['marketing', 'Marketing']]);
   await page.keyboard.press('Escape');
   await scope(page, 'dev-123');
@@ -527,7 +746,7 @@ async function typeSelection(browser) {
   await page.locator('#task-create [name=body]').fill('Launch details');
   await page.locator('#task-create button[type=submit]').click();
   await page.locator('#task-create').waitFor({state: 'hidden'});
-  assert.equal(posts.find(x => x.p === '/api/v2/tasks').body.type, 'marketing');
+  assert.equal(posts.find(x => x.p === '/api/v2/tasks')!.body.type, 'marketing');
   await prefSaved(page, pref);                // Marketing is saved with the account before the page opens again
   await page.goto('https://tico-ui.test/#/issues');
   await page.waitForFunction(() => !TASKS_ST.loading && TASKS_ST.type === 'marketing');
@@ -540,7 +759,7 @@ async function typeSelection(browser) {
   assert.equal(fits, true, 'the scope and the icons fit the phone header');
   // A late saved preference must not replace the choice just made in the header. The read is held until the choice is
   // made; its Owner grouping shows when the page has applied it.
-  let releasePref;
+  let releasePref!: (value?: unknown) => void;
   const prefHeld = new Promise(resolve => { releasePref = resolve; });
   await page.route('**/api/v2/preferences/tasks.view', async route => {
     if (route.request().method() !== 'GET') return route.fallback();
@@ -566,7 +785,7 @@ async function typeSelection(browser) {
   console.log('required task type, persistence, search, creation and filter clearing: ok');
 }
 
-async function carriedOver(browser) {
+async function carriedOver(browser: Browser) {
   // Filters an older page saved ("Mine" here, "Asked by me" in the saved preference) come over once as chips.
   const {page, errors, pref} = await open(browser, {local: {'hub.tasks.filter': 'mine'}, prefs: {filter: 'asked', view: 'list', views: 2}});
   await page.waitForFunction(() => location.hash.includes('owner=me') && location.hash.includes('asked=me'));
@@ -574,9 +793,9 @@ async function carriedOver(browser) {
   assert.match(await page.locator('[data-chip="asked"]').innerText(), /Asked by\s*You/);
   assert.equal(await page.evaluate(() => localStorage.getItem('hub.tasks.filter')), null, 'the old key is gone');
   const preferenceDeadline = Date.now() + t(10000);
-  while (pref().filter !== undefined && Date.now() < preferenceDeadline)
+  while ((pref() as {filter?: unknown}).filter !== undefined && Date.now() < preferenceDeadline)
     await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(pref().filter, undefined, 'the saved preference no longer carries it');
+  assert.equal((pref() as {filter?: unknown}).filter, undefined, 'the saved preference no longer carries it');
   assert.deepEqual(errors, []);
   await page.close();
   // A type that does not exist (deleted, or from another install) falls back to General.
@@ -593,13 +812,13 @@ async function carriedOver(browser) {
   console.log('old filters and unknown types: ok');
 }
 
-async function peekAndKeys(browser) {
+async function peekAndKeys(browser: Browser) {
   const {page, errors, posts} = await open(browser);
   const peek = page.locator('#task-peek');
   await page.locator('[data-task-key="tt-inbox"] .tl-title').click();
   await peekTitle(page, 'Migrate the support inbox');
   assert.equal(await page.locator('#task-modal[open]').count(), 0, 'no covering modal');
-  const list = await page.locator('#tasks-pane').boundingBox(), side = await peek.boundingBox();
+  const list = (await page.locator('#tasks-pane').boundingBox())!, side = (await peek.boundingBox())!;
   assert.ok(side.x >= list.x + list.width - 1 && side.width >= 380 && list.width >= 600, `list and peek side by side: ${JSON.stringify([list, side])}`);
   assert.equal(await page.locator('[data-task-key="tt-inbox"]').evaluate(r => r.classList.contains('peeked')), true);
   assert.equal(await peek.locator('[data-prop-row="status"] .prop-txt').innerText(), 'Waiting');
@@ -623,7 +842,7 @@ async function peekAndKeys(browser) {
   // A subtask opened from the peek moves the list's place too.
   await peek.locator('[data-sub-open="t-summary"]').click();
   await peekTitle(page, 'Checkout summary step');
-  await page.waitForFunction(() => TASKS_ST.peek === 'tt-summary' && document.querySelector('[data-task-key="tt-summary"]').classList.contains('peeked'));
+  await page.waitForFunction(() => TASKS_ST.peek === 'tt-summary' && document.querySelector('[data-task-key="tt-summary"]')!.classList.contains('peeked'));
   // Esc closes the peek and keeps the place in the list.
   await page.keyboard.press('Escape');
   await peek.waitFor({state: 'hidden'});
@@ -632,7 +851,7 @@ async function peekAndKeys(browser) {
   await page.keyboard.press('Enter');
   await peekTitle(page, 'Checkout summary step');
   await page.keyboard.press('Enter');
-  assert.equal(await page.evaluate(() => document.activeElement.matches('#task-peek .tmodal-title')), true);
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).matches('#task-peek .tmodal-title')), true);
   await peek.locator('[data-task-more]').click();
   await peek.locator('.prop-pop .tl-mi', {hasText: 'Open full'}).click();
   await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Checkout summary step'}).waitFor();
@@ -640,17 +859,17 @@ async function peekAndKeys(browser) {
   await page.keyboard.press('j');
   assert.equal(await page.locator('#task-modal .tmodal-title').innerText(), 'Checkout summary step', 'keys stay quiet under a modal');
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#task-modal')?.open);
+  await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#task-modal')?.open);
   // / searches; typing never moves the list; Esc leaves the field.
   await page.locator('body').click({position: {x: 5, y: 5}});
   await page.keyboard.press('/');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'task-q');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).id), 'task-q');
   await page.keyboard.type('jk x');
   assert.equal(await page.locator('#task-q').inputValue(), 'jk x');
   assert.equal(await page.locator('#task-peek[open]').count(), 0);
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
-  assert.notEqual(await page.evaluate(() => document.activeElement.id), 'task-q');
+  assert.notEqual(await page.evaluate(() => (document.activeElement as HTMLElement).id), 'task-q');
   // x selects the row under the cursor; Esc clears.
   await page.locator('[data-task-key="tt-triage"] .tl-open').focus();
   await page.keyboard.press('x');
@@ -662,7 +881,7 @@ async function peekAndKeys(browser) {
   await page.keyboard.press('c');
   await page.locator('#task-create[open]').waitFor();
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#task-create')?.open);
+  await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#task-create')?.open);
   // Done in the peek: the list moves on to the next row and the peek follows it.
   await page.locator('[data-task-key="tt-triage"] .tl-title').click();
   await peekTitle(page, 'Triage new bug reports');
@@ -683,14 +902,14 @@ async function peekAndKeys(browser) {
   await page.close();
 }
 
-async function properties(browser) {
+async function properties(browser: Browser) {
   const {page, errors, posts, tasks, conflictNextUpdate} = await open(browser);
   const peek = page.locator('#task-peek'), props = peek.locator('[data-task-props]');
   await page.locator('[data-task-key="tt-checkout"] .tl-title').click();
   await peek.locator('.task-comments .tcomment').first().waitFor();
   // One row each: a muted label, then an icon and a value; empty ones read "Add …". In the peek they sit at the top.
   await peek.locator('.task-subs .sub-bar').waitFor();
-  const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
+  const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k')!.textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
   assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Who can see', 'Public'], ['Due', 'Add due date'], ['Tags', 'checkout'],
     ['Part of', 'Add parent']]);
@@ -700,16 +919,16 @@ async function properties(browser) {
   assert.equal(await peek.locator('.tmodal-head .tstatus, .tmodal-head .tchip-blocked, .tmodal-head .tl-waiting').count(), 0, 'the header has no state');
   assert.equal(await page.locator('[data-task-key="tt-checkout"] > .task-status').count(), 0);
   // Blockers, and every other relation but the parent, are in Related, by kind.
-  assert.deepEqual(await peek.locator('.task-related .trel').evaluateAll(gs => gs.map(g => [g.querySelector('.trel-k').textContent,
+  assert.deepEqual(await peek.locator('.task-related .trel').evaluateAll(gs => gs.map(g => [g.querySelector('.trel-k')!.textContent,
     [...g.querySelectorAll('.tlink .linkish')].map(b => b.textContent.trim())])), [['Blocked by', ['Doing Add idempotency keys to the payments API']]]);
   // The header: position · age · Done/Close (here Close: a bot owns it) · … · ✕. Actions only, and no unexplained arrows.
   assert.equal(await peek.locator('.tmodal-head button:not([data-task-finish])').count(), 2);
   assert.deepEqual(await peek.locator('.tmodal-head [data-task-finish]').evaluateAll(bs => bs.map(b => b.dataset.taskFinish)), ['close']);
   assert.match(await peek.locator('.tmodal-head .peek-pos').innerText(), /^\d+ \/ \d+$/);
   // Who added it and when is the age's tooltip, not a line under the title; the owner is a property, not in the header.
-  assert.match(await peek.locator('.tmodal-age').getAttribute('title'), /^Added by you .* · Updated /);
+  assert.match((await peek.locator('.tmodal-age').getAttribute('title'))!, /^Added by you .* · Updated /);
   assert.equal(await peek.locator('.tmeta, .tmodal-head .tmodal-owner').count(), 0);
-  const top = await props.boundingBox(), main = await peek.locator('.tmodal-main').boundingBox();
+  const top = (await props.boundingBox())!, main = (await peek.locator('.tmodal-main').boundingBox())!;
   assert.ok(top.y < main.y, 'properties first in the peek');
   assert.equal(await peek.locator('.tmodal-main select, [data-task-props] select, [data-modal-task], .tcontrols').count(), 0, 'no boxed form, no Done/Close links');
   assert.equal(await peek.locator('.task-ask').count(), 0, 'the blocker is in Related, not a second box');
@@ -721,48 +940,48 @@ async function properties(browser) {
   await page.keyboard.press('Enter');
   const menu = peek.locator('.prop-pop');
   await menu.locator('[data-prop-pick="waiting"]').waitFor();
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.propPick), 'waiting', 'opens on the current status');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.propPick), 'waiting', 'opens on the current status');
   assert.equal(await props.locator('[data-prop="status"]').getAttribute('aria-expanded'), 'true');
   await shot(page, 'peek-status-menu-dark');
   await page.keyboard.press('j');
   assert.equal(await page.evaluate(() => TASKS_ST.cursor), 'tt-checkout', 'j does not move the list while the menu is open');
   await page.keyboard.press('ArrowDown');
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.propPick), 'review');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.propPick), 'review');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="status"]')?.textContent.includes('In review'));
-  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 3, status: 'review'});
-  await page.waitForFunction(() => document.activeElement?.dataset.prop === 'status');
+  assert.deepEqual(taskWrites(posts).at(-1)!.body, {version: 3, status: 'review'});
+  await page.waitForFunction(() => (document.activeElement as HTMLElement | null)?.dataset.prop === 'status');
   // Esc closes a menu without changing anything; the focus goes back to its row.
   await page.keyboard.press('Enter');
   await menu.locator('.tl-mi').first().waitFor();
   await page.keyboard.press('Escape');
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.prop), 'status');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.prop), 'status');
   assert.equal(await peek.isVisible(), true, 'Esc in a menu leaves the peek open');
   // Owner: an avatar picker with a find box.
   await props.locator('[data-prop="owner"]').click();
   await page.keyboard.type('supp');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Support'));
-  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 4, owner: 'bot:support'});
+  assert.deepEqual(taskWrites(posts).at(-1)!.body, {version: 4, owner: 'bot:support'});
   // Due: a date picker; × clears it.
   await props.locator('[data-prop-date]').fill('2026-10-09');
   await page.waitForFunction(() => /Oct 9/.test(document.querySelector('#task-peek [data-prop="due"]')?.textContent || ''));
-  assert.match(taskWrites(posts).at(-1).body.due, /^2026-10-\d\dT\d\d:00:00\.000Z$/);
+  assert.match(taskWrites(posts).at(-1)!.body.due!, /^2026-10-\d\dT\d\d:00:00\.000Z$/);
   await props.locator('[data-prop-row="due"]').hover();
   await props.locator('[data-prop-clear="due"]').click();
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="due"]')?.textContent.includes('Add due date'));
-  assert.equal(taskWrites(posts).at(-1).body.due, '');
+  assert.equal(taskWrites(posts).at(-1)!.body.due, '');
   // Tags: chips and a small + that opens an input with suggestions.
   await props.locator('[data-prop="tags"]').click();
   await page.keyboard.type('Urgent');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop-row="tags"]')?.textContent.includes('urgent'));
-  assert.deepEqual(taskWrites(posts).at(-1).body.labels, ['checkout', 'urgent']);
+  assert.deepEqual(taskWrites(posts).at(-1)!.body.labels, ['checkout', 'urgent']);
   // Part of: a task picker with a find box; × clears. A blocker: × in Related.
   await props.locator('[data-prop="parent"]').click();
   await page.keyboard.type('newsletter');
   await page.keyboard.press('ArrowDown');
-  assert.match(await page.evaluate(() => document.activeElement.textContent), /Draft the October newsletter/);
+  assert.match(await page.evaluate(() => (document.activeElement as HTMLElement).textContent), /Draft the October newsletter/);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop-row="parent"] [data-open-task="tt-news"]')?.textContent.includes('Draft the October newsletter'));
   assert.deepEqual(posts.at(-1), {p: '/api/v2/tasks/t-checkout/relations', body: {task: 't-news', kind: 'parent'}});
@@ -782,7 +1001,7 @@ async function properties(browser) {
   await page.waitForFunction(() => document.querySelector('#task-peek .task-related .trel')?.textContent.includes('Rotate the staging'));
   assert.deepEqual(posts.at(-1), {p: '/api/v2/tasks/t-checkout/relations', body: {task: 't-rotate', kind: 'blocked_by'}});
   // A change made elsewhere: the save is refused, the server's value shows, with a short line. Never the stale value.
-  Object.assign(tasks.find(x => x.id === 't-checkout'), {status: 'doing', version: 42});
+  Object.assign(tasks.find(x => x.id === 't-checkout')!, {status: 'doing', version: 42});
   conflictNextUpdate('t-checkout');
   await props.locator('[data-prop="status"]').click();
   await menu.locator('[data-prop-pick="ready"]').click();
@@ -792,7 +1011,7 @@ async function properties(browser) {
   await peek.locator('[data-task-more]').click();
   assert.deepEqual(await menu.locator('.tl-mi').allInnerTexts(), ['Open full', 'Copy link', 'Snooze…', 'Close', 'Delete task'], 'Add subtask is the rail\'s own field here');
   await menu.locator('.tl-mi', {hasText: 'Copy link'}).click();
-  assert.match(await page.evaluate(() => window.copied), /#\/task\/t-checkout$/);
+  assert.match((await page.evaluate(() => window.copied))!, /#\/task\/t-checkout$/);
   // The full task: properties at the top of the side column, then Code, then Subtasks.
   await peek.locator('[data-task-more]').click();
   await menu.locator('.tl-mi', {hasText: 'Open full'}).click();
@@ -801,7 +1020,7 @@ async function properties(browser) {
   // The rail re-renders as its links load, so four separate boundingBox calls could catch one replaced or not yet
   // shown; the layout is read in one pass once all four are rendered.
   const layout = () => page.evaluate(() => {
-    const box = sel => { const el = document.querySelector('#task-modal ' + sel); const r = el?.getBoundingClientRect();
+    const box = (sel: string) => { const el = document.querySelector('#task-modal ' + sel); const r = el?.getBoundingClientRect();
       return r && r.width && r.height ? {x: r.x, y: r.y, width: r.width} : null; };
     const [p, c, s, m] = ['[data-task-props]', '.task-code', '.task-subs', '.tmodal-main'].map(box);
     return p && c && s && m ? p.y < c.y && c.y < s.y && p.x > m.x + m.width - 1 : null;
@@ -813,15 +1032,15 @@ async function properties(browser) {
   await modal.locator('[data-task-more]').click();
   await modal.locator('.prop-pop .tl-mi', {hasText: /^Close$/}).click();
   await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="status"]')?.textContent.includes('Closed'));
-  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 42, close: true});
+  assert.deepEqual(taskWrites(posts).at(-1)!.body, {version: 42, close: true});
   assert.deepEqual(errors, []);
   console.log('properties: ok');
   await page.close();
 }
 
-async function bulk(browser) {
+async function bulk(browser: Browser) {
   const {page, errors, posts, tasks} = await open(browser, {failIds: ['t-news']});
-  const box = key => page.locator(`[data-task-key="${key}"] .tl-check`);
+  const box = (key: string) => page.locator(`[data-task-key="${key}"] .tl-check`);
   // Only what can be seen selected is acted on: a search that hides selected rows drops them.
   await box('tt-triage').click();
   await box('tt-rotate').click();
@@ -834,7 +1053,7 @@ async function bulk(browser) {
   assert.deepEqual(taskWrites(posts).map(x => [x.p, x.body]), [['/api/v2/tasks/t-rotate', {version: 3, close: true}]], 'only the visible task');
   // Close can be undone for ten seconds.
   // Hold the reopen write so the busy-state check cannot race a fast successful Undo.
-  let releaseUndo;
+  let releaseUndo!: (value?: unknown) => void;
   const undoHeld = new Promise(resolve => { releaseUndo = resolve; });
   await page.route('**/api/v2/tasks/t-rotate', async route => {
     if (route.request().method() === 'POST' && route.request().postDataJSON().status === 'doing') await undoHeld;
@@ -851,12 +1070,12 @@ async function bulk(browser) {
   assert.deepEqual(taskWrites(posts).at(-1), {p: '/api/v2/tasks/t-rotate', body: {version: 4, status: 'doing'}}, 'back to what it was, not just Open');
   await page.locator('#task-q').fill('');
   await page.locator('#task-q').press('Escape');            // leaves the search, then Esc dismisses the result line
-  await page.waitForFunction(() => document.querySelector('#task-bulk').hidden);
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-bulk')!.hidden);
   // Range + one more; the peek follows a bulk change to its task; a stale version is fetched again and retried once;
   // one task is refused and stays selected and marked.
   await page.locator('[data-task-key="tt-digest"] .tl-title').click();
   await peekTitle(page, 'Weekly metrics digest');
-  tasks.find(x => x.id === 't-idem').version = 7;                     // a bot changed it since the list loaded
+  tasks.find(x => x.id === 't-idem')!.version = 7;                     // a bot changed it since the list loaded
   await box('tt-digest').click();
   await box('tt-news').click({modifiers: ['Shift']});
   await page.locator('[data-task-key="tt-flaky"] .tl-title').click({modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control']});
@@ -868,7 +1087,7 @@ async function bulk(browser) {
   await page.locator('#task-bulk [data-bulk="status"]').click();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
-  assert.equal(await page.evaluate(() => document.activeElement.dataset.bulkStatus), 'waiting', '↑/↓ move through the bulk menu');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.bulkStatus), 'waiting', '↑/↓ move through the bulk menu');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => /not changed/.test(document.querySelector('.tl-bulk-msg')?.textContent || ''));
   const writes = taskWrites(posts).slice(before).map(x => [x.p.split('/').pop(), x.body.version]);
@@ -876,7 +1095,7 @@ async function bulk(browser) {
     'each task its own update; a stale one fetched again and retried once');
   assert.equal(await page.locator('.tl-bulk-msg').innerText(), '6 moved to Waiting, 1 not changed: Draft the October newsletter');
   assert.deepEqual(await page.locator('#task-body .tl-row.sel').evaluateAll(rs => rs.map(r => r.dataset.taskKey)), ['tt-news']);
-  assert.match(await page.locator('[data-task-key="tt-news"] .tl-failed').getAttribute('aria-label'), /Not changed: Task changed/);
+  assert.match((await page.locator('[data-task-key="tt-news"] .tl-failed').getAttribute('aria-label'))!, /Not changed: Task changed/);
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="status"]')?.textContent.includes('Waiting'));
   await page.locator('#task-bulk [data-bulk="clear"]').click();
   await page.keyboard.press('Escape');
@@ -897,7 +1116,7 @@ async function bulk(browser) {
   await page.locator('#task-bulk [data-bulk="clear"]').click();
   await box('tt-triage').click();
   await page.locator('#task-bulk [data-bulk="all"]').click();
-  const shown = await page.locator('#task-body [data-task-key]').evaluateAll(rows => rows.filter(r => r.getClientRects().length).map(r => r.dataset.taskKey).filter(k => k.startsWith('t')));
+  const shown = await page.locator('#task-body [data-task-key]').evaluateAll(rows => rows.filter(r => r.getClientRects().length).map(r => r.dataset.taskKey!).filter(k => k.startsWith('t')));
   assert(shown.length > 1);
   assert.equal(await page.locator('.tl-bulk-n').innerText(), `All ${shown.length} matching`);
   let sent = null;
@@ -926,10 +1145,10 @@ async function bulk(browser) {
   await viewer.page.close();
 }
 
-async function bulkPaging(browser) {
-  const base = fixtures().find(task => task.id === 't-triage');
+async function bulkPaging(browser: Browser) {
+  const base = fixtures().find(task => task.id === 't-triage')!;
   const baseTasks = Array.from({length: 150}, (_, i) => ({...base, id: `t-page-${i}`, title: `Draft the brief ${i}`}));
-  let release;
+  let release!: (value?: unknown) => void;
   const nextPage = new Promise(resolve => { release = resolve; });
   const {page, errors} = await open(browser, {baseTasks, activePage: async (route, rows, offset, limit) => {
     if (offset) await nextPage;
@@ -953,13 +1172,13 @@ async function bulkPaging(browser) {
   await page.locator('#task-filter-pop .tl-menu-new input').fill('q4');
   await page.locator('#task-filter-pop .tl-menu-new input').press('Enter');
   await page.waitForFunction(() => /100 tagged q4/.test(document.querySelector('.tl-bulk-msg')?.textContent || ''));
-  assert.deepEqual(sent, {filter: {ids: shown.map(key => key.slice(1))}, action: 'tags', add: ['q4']});
+  assert.deepEqual(sent, {filter: {ids: shown.map(key => key!.slice(1))}, action: 'tags', add: ['q4']});
   assert.deepEqual(errors, []);
   console.log('bulk paging: ok');
   await page.close();
 }
 
-async function snoozing(browser) {
+async function snoozing(browser: Browser) {
   // Snooze from the "…" menu: the task leaves Open for a Snoozed tab, and its chip there brings it back.
   const {page, errors, posts} = await open(browser);
   const shown = async () => (await rowKeys(page)).includes('tt-deck');
@@ -975,9 +1194,9 @@ async function snoozing(browser) {
   await menu.locator('.tl-mi', {hasText: 'Snooze…'}).click();
   await menu.locator('.tl-mi', {hasText: 'Tomorrow'}).click();
   await page.waitForFunction(() => !document.querySelector('#task-body .tl-row[data-task-key="tt-deck"]'));
-  const sent = taskWrites(posts).at(-1);
+  const sent = taskWrites(posts).at(-1)!;
   assert.equal(sent.p, '/api/v2/tasks/t-deck/snooze');
-  assert.ok(Date.parse(sent.body.until) > Date.now(), 'tomorrow, at the start of the day');
+  assert.ok(Date.parse(sent.body.until!) > Date.now(), 'tomorrow, at the start of the day');
   await moreView(page, 'snoozed');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
   assert.match(await page.locator('#task-body .tl-row .tl-due').innerText(), /^Snoozed to /);
@@ -989,10 +1208,10 @@ async function snoozing(browser) {
   console.log('snoozing: ok');
   await page.close();
 }
-async function wakeNotes(browser) {
+async function wakeNotes(browser: Browser) {
   // A snooze's note and a wait's note follow the chip's text, escaped, with the full note in the title; no note, no change.
-  const base = fixtures().find(x => x.id === 't-digest');
-  const wait = note => ({kind: 'pr_merged', target: 'acme/app#943', label: 'PR #943', url: 'https://github.com/acme/app/pull/943', met: false,
+  const base = fixtures().find(x => x.id === 't-digest')!;
+  const wait = (note?: string) => ({kind: 'pr_merged', target: 'acme/app#943', label: 'PR #943', url: 'https://github.com/acme/app/pull/943', met: false,
     sentence: 'waits for PR #943 to merge', ...(note ? {note} : {})});
   const long = 'Check the deploy finished on <b>staging</b> and the migration ran, then ask Sam to QA the checkout flow';
   const {page, errors} = await open(browser, {extraTasks: [
@@ -1000,19 +1219,19 @@ async function wakeNotes(browser) {
       milestone_waits: [wait('Check the migration')]},
     {...base, id: 't-bare', title: 'Bare snooze', holds: [{kind: 'snoozed', reason: null, since: null, until: inDays(3), by: 'human:ana'}], milestone_waits: [wait()]}]});
   await moreView(page, 'snoozed');
-  const chips = async (key, title) => {
+  const chips = async (key: string, title: string) => {
     await page.locator(`#task-body [data-task-key="${key}"] [data-open-task]`).click();
     await peekTitle(page, title);
     const snooze = page.locator('#task-peek [data-task-unsnooze]'), milestone = page.locator('#task-peek .tlink.milestone');
-    return {snooze: (await snooze.textContent()).trim(), snoozeTitle: await snooze.getAttribute('title'), milestone: (await milestone.textContent()).trim(),
+    return {snooze: (await snooze.textContent())!.trim(), snoozeTitle: await snooze.getAttribute('title'), milestone: (await milestone.textContent())!.trim(),
       milestoneTitle: await milestone.getAttribute('title'), notes: await page.locator('#task-peek .tchip-note').count(),
       bold: await page.locator('#task-peek .tmodal-head b').count()};
   };
   const day = await page.evaluate(at => snoozeDay({holds: [{kind: 'snoozed', until: at}]}), inDays(3));
   // The year shows only off this year, so a snooze two years out can't read as a date already past.
   const years = await page.evaluate(() => {
-    const y = new Date().getFullYear(), day = (yr, mo, d) => snoozeDay({holds: [{kind: 'snoozed', until: new Date(yr, mo, d, 12).toISOString()}]});
-    const due = (yr, mo, d) => taskDueInfo({status: 'open', owner_id: 'human:ana', due_at: new Date(yr, mo, d, 12).toISOString()}).words;
+    const y = new Date().getFullYear(), day = (yr: number, mo: number, d: number) => snoozeDay({holds: [{kind: 'snoozed', until: new Date(yr, mo, d, 12).toISOString()}]});
+    const due = (yr: number, mo: number, d: number) => taskDueInfo({status: 'open', owner_id: 'human:ana', due_at: new Date(yr, mo, d, 12).toISOString()}).words;
     return {y, next: day(y + 1, 9, 20), now: day(y, 5, 15), dueNext: due(y + 1, 9, 20), duePast: due(y - 1, 9, 20)};
   });
   assert.ok(years.dueNext.includes(String(years.y + 1)) && years.duePast.includes(String(years.y - 1)), `due dates off this year show the year: ${years.dueNext} / ${years.duePast}`);
@@ -1020,7 +1239,7 @@ async function wakeNotes(browser) {
   assert.ok(!/\d{4}/.test(years.now), `this year's snooze hides the year: ${years.now}`);
   const noted = await chips('tt-noted', 'Noted snooze');
   assert.equal(noted.snooze, `Snoozed to ${day} · ${long}`);
-  assert.match(noted.snoozeTitle, new RegExp(` · ${long.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\. Click to bring it back now$`));
+  assert.match(noted.snoozeTitle!, new RegExp(` · ${long.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\. Click to bring it back now$`));
   assert.equal(noted.milestone, 'PR #943 to merge · Check the migration');
   assert.equal(noted.milestoneTitle, 'waits for PR #943 to merge · Check the migration');
   assert.equal(noted.notes, 2);
@@ -1031,30 +1250,30 @@ async function wakeNotes(browser) {
   const bare = await chips('tt-bare', 'Bare snooze');
   assert.deepEqual(bare, {snooze: `Snoozed to ${day}`, snoozeTitle: bare.snoozeTitle, milestone: 'PR #943 to merge',
     milestoneTitle: 'waits for PR #943 to merge', notes: 0, bold: 0});
-  assert.doesNotMatch(bare.snoozeTitle, / · /);
+  assert.doesNotMatch(bare.snoozeTitle!, / · /);
   assert.deepEqual(errors, []);
   console.log('wake notes: ok');
   await page.close();
 }
-async function deferredWork(browser) {
+async function deferredWork(browser: Browser) {
   // Dev 257: a deferred task says where it stands: held until something (and by which run), eligible for the bot's
   // next run, or queued with a run of its own. An ordinary task says nothing. `quiet` is the field's older name.
-  const base = fixtures().find(x => x.id === 't-digest');
-  const deferred = (id, title, q, field = 'deferred') => ({...base, id, title, next_run: q.state !== 'queued', [field]: q});
+  const base = fixtures().find(x => x.id === 't-digest')!;
+  const deferred = (id: string, title: string, q: {state: string; [field: string]: unknown}, field = 'deferred'): Task => ({...base, id, title, next_run: q.state !== 'queued', [field]: q});
   const {page, errors} = await open(browser, {extraTasks: [
     deferred('t-q-held', 'Deferred held', {state: 'delivered', run: 'edec5d00-0000', at: at(120),
       resume: {kind: 'task', task: 't-idem'}, words: 'Picked up again after Add idempotency keys to the payments API is done.'}),
     deferred('t-q-eligible', 'Deferred eligible', {state: 'eligible', words: "The bot's next run carries it."}),
     deferred('t-q-queued', 'Deferred queued', {state: 'queued', job: 'j1', run: null, words: 'A run of its own is waiting.'}, 'quiet')]});
-  const line = async (key, title) => {
+  const line = async (key: string, title: string) => {
     await page.locator(`[data-task-key="${key}"] .tl-title`).click();
     await peekTitle(page, title);
     const found = page.locator('#task-peek [data-task-deferred]');
-    return (await found.count()) ? {state: await found.getAttribute('data-task-deferred'), text: (await found.textContent()).trim()} : null;
+    return (await found.count()) ? {state: await found.getAttribute('data-task-deferred'), text: (await found.textContent())!.trim()} : null;
   };
   const held = await line('tt-q-held', 'Deferred held');
-  assert.equal(held.state, 'held');
-  assert.match(held.text, /^Deferred: Held Picked up again after Add idempotency keys to the payments API is done\. \(run edec5d00, handed over 2h ago\)$/);
+  assert.equal(held!.state, 'held');
+  assert.match(held!.text, /^Deferred: Held Picked up again after Add idempotency keys to the payments API is done\. \(run edec5d00, handed over 2h ago\)$/);
   assert.deepEqual(await line('tt-q-eligible', 'Deferred eligible'), {state: 'eligible', text: "Deferred: Eligible The bot's next run carries it."});
   assert.deepEqual(await line('tt-q-queued', 'Deferred queued'), {state: 'queued', text: 'Deferred: Queued A run of its own is waiting.'},
     'the older `quiet` field still shows');
@@ -1063,9 +1282,9 @@ async function deferredWork(browser) {
   console.log('deferred work: ok');
   await page.close();
 }
-async function privateParent(browser) {
+async function privateParent(browser: Browser) {
   // A company task filed from private work: Part of names its parent only as "a private task", not a link and no ×.
-  const base = fixtures().find(x => x.id === 't-digest');
+  const base = fixtures().find(x => x.id === 't-digest')!;
   const {page, errors} = await open(browser, {extraTasks: [{...base, id: 't-from-private', title: 'Check the upload setting first',
     _privateParent: true}]});
   await page.locator('[data-task-key="tt-from-private"] .tl-title').click();
@@ -1077,7 +1296,7 @@ async function privateParent(browser) {
   console.log('private parent: ok');
   await page.close();
 }
-async function views(browser) {
+async function views(browser: Browser) {
   // You: what waits on you, grouped by kind, or by who asks. A bot's heading has a visible Chat link; a
   // person's has none.
   const {page, errors} = await open(browser, {hash: '#/tasks', byNeed: true});
@@ -1097,7 +1316,7 @@ async function views(browser) {
   await moreView(page, 'done');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['done', 'done']);
-  assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Done /);
+  assert.match((await page.locator('#task-body .tl-age').first().getAttribute('title'))!, /^Done /);
   assert.match(await page.locator('#task-body .tl-age').first().innerText(), /^\d+h$/, 'the same short ages as every other row');
   assert.equal(await page.locator('#task-archive').getAttribute('aria-pressed'), 'true');
   await page.locator('#task-filter').click();
@@ -1108,7 +1327,7 @@ async function views(browser) {
   await moreView(page, 'closed');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
   assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['closed']);
-  assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Closed /);
+  assert.match((await page.locator('#task-body .tl-age').first().getAttribute('title'))!, /^Closed /);
   assert.equal(await page.locator('#task-finished [data-view="closed"]').getAttribute('aria-pressed'), 'true');
   // Pressed again, the archive goes back to You, where it came from.
   await page.locator('#task-archive').click();
@@ -1118,10 +1337,10 @@ async function views(browser) {
   await page.close();
 }
 
-async function plates(browser) {
+async function plates(browser: Browser) {
   // The people picker: a teammate's plate with a count each, kept in the address through a reload; a task blocked by
   // an open one folds under Blocked; an unknown person is Me again; a row's status chip moves the task.
-  const held = {...fixtures().find(x => x.id === 't-demo'), id: 't-cut', title: 'Cut the demo trailer', _blocked: ['t-idem'], due_at: undefined};
+  const held = {...fixtures().find(x => x.id === 't-demo')!, id: 't-cut', title: 'Cut the demo trailer', _blocked: ['t-idem'], due_at: undefined};
   const {page, errors, posts} = await open(browser, {hash: '#/tasks', extraTasks: [held]});
   await page.click('#task-who');
   const sam = page.locator('#task-filter-pop [data-who="human:sam"]');
@@ -1138,7 +1357,7 @@ async function plates(browser) {
   assert.equal(await page.locator('#task-who').getAttribute('aria-label'), 'Showing: Sam');
   await page.click('[data-task-key="tt-demo"] [data-row-status]');
   await page.click('.prop-pop [data-prop-pick="doing"]');
-  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-demo"] .task-status')?.dataset.status === 'doing');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-task-key="tt-demo"] .task-status')?.dataset.status === 'doing');
   assert.equal(posts.find(x => x.p.endsWith('/t-demo'))?.body.status, 'doing');
   await page.evaluate(() => { location.hash = '#/tasks?who=human:zed'; });
   await page.waitForFunction(() => document.querySelector('#task-scope .tl-scope-l')?.textContent === 'You');
@@ -1148,10 +1367,10 @@ async function plates(browser) {
   await page.close();
 }
 
-async function waitingOnYou(browser) {
+async function waitingOnYou(browser: Browser) {
   // A bot's task set waiting on you (`--on`) is in You under that bot, whoever filed it: one face (the bot), what it
   // waits for as a muted line under the title, no status or "Waiting" chip, and no buttons other rows lack.
-  const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner_id: 'bot:engineer',
+  const host = {...fixtures().find(x => x.id === 't-inbox')!, id: 't-host', title: 'Restart the build host', owner_id: 'bot:engineer',
     requester_id: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', person_ask: 'Can you restart the build host?', updated_at: at(5)};
   const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
   // An old open question stays in Needs you even when it opens the full task.
@@ -1168,18 +1387,18 @@ async function waitingOnYou(browser) {
   assert.equal(await row.locator('.tl-note').count(), 0, 'not inline');
   const tokens = await page.evaluate(() => ['--muted', '--wait'].map(v => { const d = document.createElement('i'); d.style.color = `var(${v})`; document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; }));
   assert.equal(await row.locator('.tl-ask').evaluate(n => getComputedStyle(n).color), tokens[0], 'muted, not amber');
-  assert.deepEqual(await row.locator('.tl-people .tl-face').evaluateAll(f => f.map(x => x.title)), ['Engineer'], 'one face: whoever asks');
+  assert.deepEqual(await row.locator('.tl-people .tl-face').evaluateAll(f => f.map(x => (x as HTMLElement).title)), ['Engineer'], 'one face: whoever asks');
   assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your You list');
-  const buttons = r => page.locator(`[data-task-key="${r}"] button:not(.tl-status)`).evaluateAll(b => b.map(x => x.className));
+  const buttons = (r: string) => page.locator(`[data-task-key="${r}"] button:not(.tl-status)`).evaluateAll(b => b.map(x => x.className));
   assert.deepEqual(await buttons('tt-host'), await buttons('tt-access'), 'no status buttons of its own');
   assert.deepEqual(errors, []);
   console.log('Waiting on you: ok');
   await page.close();
 }
 
-async function donePagination(browser) {
+async function donePagination(browser: Browser) {
   const types = [{id: 'general', name: 'General', steps: []}, {id: 'support', name: 'Support', steps: []}];
-  const task = (id, type, updated) => ({...fixtures()[0], id, title: id, type_id: type, status: 'done', updated_at: updated, done_at: updated});
+  const task = (id: string, type: string, updated: string): Task => ({...fixtures()[0]!, id, title: id, type_id: type, status: 'done', updated_at: updated, done_at: updated});
   const firstPage = Array.from({length: 20}, (_, i) => task(`support-done-${i}`, 'support', at(i + 1)));
   const matchingOlder = task('older-general-done', 'general', at(200));
   const {page, errors} = await open(browser, {hash: '#/tasks?type=general&view=done', types, baseTasks: [],
@@ -1206,25 +1425,25 @@ async function donePagination(browser) {
   console.log('Done pagination through filtered empty pages: ok');
 }
 
-async function ages(browser) {
+async function ages(browser: Browser) {
   // Every open row reads one short age, since it last moved; the tooltip has when it was opened and updated.
-  const base = {...fixtures().find(x => x.id === 't-copy')};
+  const base = {...fixtures().find(x => x.id === 't-copy')!};
   const extraTasks = [
     {...base, id: 't-stale', title: 'Stale vendor contract', created_at: at(60 * 30), updated_at: at(65)},
     {...base, id: 't-fresh', title: 'Fresh vendor contract', created_at: at(60 * 30), updated_at: new Date().toISOString()},
     {...base, id: 't-untouched', title: 'Untouched vendor contract', created_at: at(150), updated_at: at(150)},
   ];
   const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks});
-  const age = key => page.locator(`[data-task-key="${key}"] .tl-age`);
+  const age = (key: string) => page.locator(`[data-task-key="${key}"] .tl-age`);
   assert.equal(await age('tt-stale').innerText(), '1h');
-  assert.match(await age('tt-stale').getAttribute('title'), /^Open .* · Updated /);
+  assert.match((await age('tt-stale').getAttribute('title'))!, /^Open .* · Updated /);
   assert.equal(await age('tt-fresh').innerText(), 'now', 'a just-moved item never looks stale');
   assert.equal(await age('tt-untouched').innerText(), '3h');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('ages: ok');
 }
-async function polling(browser) {
+async function polling(browser: Browser) {
   // The 30-second poll reloads the list: a changed row redraws, the others stay the same nodes, the focus and the
   // scroll stay put, and an open peek shows the newer task.
   const {page, errors, tasks} = await open(browser, {viewport: {width: 1440, height: 500}});
@@ -1232,7 +1451,7 @@ async function polling(browser) {
   await peekTitle(page, 'Migrate the support inbox');
   await page.locator('#tasks-pane').evaluate(p => { p.scrollTop = 120; });
   await page.evaluate(() => { window.kept = document.querySelector('[data-task-key="tt-flaky"]'); });
-  Object.assign(tasks.find(x => x.id === 't-inbox'), {title: 'Migrate the support inbox to Helpdesk Pro', version: 9, updated_at: new Date().toISOString()});
+  Object.assign(tasks.find(x => x.id === 't-inbox')!, {title: 'Migrate the support inbox to Helpdesk Pro', version: 9, updated_at: new Date().toISOString()});
   await page.evaluate(() => refresh(false));
   await page.waitForFunction(() => document.querySelector('[data-task-key="tt-inbox"] .tl-title')?.textContent.includes('Helpdesk Pro'));
   await peekTitle(page, 'Helpdesk Pro');
@@ -1244,17 +1463,17 @@ async function polling(browser) {
   await page.close();
 }
 
-async function phone(browser) {
+async function phone(browser: Browser) {
   const {page, errors, tasks} = await open(browser, {viewport: {width: 390, height: 844}});
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   assert.ok(overflow <= 1, 'no sideways scroll: ' + overflow);
   // Dense rows that are still a tap target; the title wraps to two lines and the note gets its own line below.
   const heights = await page.locator('#task-body .tl-row').evaluateAll(rows => rows.map(r => Math.round(r.getBoundingClientRect().height)));
   assert.ok(heights.every(h => h >= 40), 'tap-sized rows: ' + heights);
-  assert.ok((await page.locator('[data-task-key="tt-digest"]').boundingBox()).height < 44, 'a one-line row is dense');
+  assert.ok((await page.locator('[data-task-key="tt-digest"]').boundingBox())!.height < 44, 'a one-line row is dense');
   const inbox = page.locator('[data-task-key="tt-inbox"]');
   assert.equal(await inbox.locator('.tl-note-text').isVisible(), true, 'the note shows on a phone');
-  assert.ok((await inbox.locator('.tl-note').boundingBox()).y >= (await inbox.locator('.tl-title').boundingBox()).y + 16, 'below the title');
+  assert.ok((await inbox.locator('.tl-note').boundingBox())!.y >= (await inbox.locator('.tl-title').boundingBox())!.y + 16, 'below the title');
   // A lone subtask's 0/1 stays out; 1/4 stays.
   assert.equal(await page.locator('[data-task-key="tt-news"] .tl-sub').isVisible(), false);
   assert.equal(await page.locator('[data-task-key="tt-checkout"] .tl-sub').isVisible(), true);
@@ -1274,23 +1493,23 @@ async function phone(browser) {
   assert.equal(await page.locator('#task-bulk').isHidden(), true);
   // The peek is a full-screen modal sheet; Back closes it and stays on Tasks. Long titles wrap or end in "…".
   const long = 'Ship the checkout redesign with the new summary step, saved carts and the receipts email for every region';
-  Object.assign(tasks.find(x => x.id === 't-checkout'), {title: long, _blocked: ['t-idem']});
-  Object.assign(tasks.find(x => x.id === 't-idem'), {title: 'Add idempotency keys to the payments API so a retried charge never bills a customer twice'});
+  Object.assign(tasks.find(x => x.id === 't-checkout')!, {title: long, _blocked: ['t-idem']});
+  Object.assign(tasks.find(x => x.id === 't-idem')!, {title: 'Add idempotency keys to the payments API so a retried charge never bills a customer twice'});
   await page.evaluate(() => tasksLoad(TASKS_ST));
   await page.locator('[data-task-key="tt-checkout"] .tl-title', {hasText: 'saved carts'}).waitFor();
   await page.locator('[data-task-key="tt-checkout"] .tl-title').click();
   await peekTitle(page, 'saved carts');
   assert.equal(await page.locator('#task-peek').evaluate(d => d.matches(':modal')), true, 'the list behind it is inert');
-  const box = await page.locator('#task-peek').boundingBox();
+  const box = (await page.locator('#task-peek').boundingBox())!;
   assert.ok(box.x <= 0 && box.y <= 0 && box.width >= 389 && box.height >= 843, 'a full-screen sheet: ' + JSON.stringify(box));
   await page.locator('#task-peek .task-comments .tcomment').first().waitFor();
   assert.equal(await page.locator('#task-peek').evaluate(d => d.scrollWidth <= d.clientWidth + 1), true, 'no sideways scroll in the sheet');
-  assert.ok((await page.locator('#task-peek .tmodal-title').boundingBox()).height > 30, 'a long title wraps');
+  assert.ok((await page.locator('#task-peek .tmodal-title').boundingBox())!.height > 30, 'a long title wraps');
   assert.equal(await page.locator('#task-peek .task-related .tlink').evaluate(t => getComputedStyle(t).textOverflow), 'ellipsis');
   const head = await page.locator('#task-peek .tmodal-head button').evaluateAll(bs => bs.map(b => Math.round(b.getBoundingClientRect().height)));
   assert.ok(head.every(h => h >= 40), 'header buttons are 40px tap targets: ' + head);
   // Properties stack full-width.
-  const prop = await page.locator('#task-peek .prop').first().boundingBox();
+  const prop = (await page.locator('#task-peek .prop').first().boundingBox())!;
   assert.ok(prop.width >= 340 && prop.height >= 44, 'a full-width row: ' + JSON.stringify(prop));
   await shot(page, 'phone-peek-dark');
   await page.goBack();
@@ -1301,16 +1520,16 @@ async function phone(browser) {
   await page.close();
 }
 
-async function phoneViews(browser) {
+async function phoneViews(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
   // You rows on a phone: the face, the title (with its ask), the age; no chips squeeze the title.
   assert.ok(await page.locator('#task-body .tl-queue .tl-row').count() > 0);
   assert.equal(await page.locator('#task-body .tl-queue .tl-chips:visible, #task-body .tl-queue .task-status').count(), 0);
   // ...on one line: nothing in a row (an ask's row too) wraps below the title.
   assert.deepEqual(await page.locator('#task-body .tl-queue .tl-row').evaluateAll(rows => rows.filter(r => {
-    const open = r.querySelector('.tl-open').getBoundingClientRect();
+    const open = r.querySelector('.tl-open')!.getBoundingClientRect();
     return [...r.children].some(c => { const b = c.getBoundingClientRect(); return !c.matches('.tl-note') && b.height && b.top >= open.bottom - 1; });
-  }).map(r => r.querySelector('.tl-title').textContent)), []);
+  }).map(r => r.querySelector('.tl-title')!.textContent)), []);
   await shot(page, 'phone-you-dark');
   assert.deepEqual(errors, []);
   console.log('phone views: ok');
@@ -1319,12 +1538,12 @@ async function phoneViews(browser) {
 
 // The header is one row on a desktop at rest, whatever the scope; a phone takes at most two, and nothing scrolls
 // sideways. Old ?view= addresses open the scope, layout or finished view they named.
-async function header(browser) {
+async function header(browser: Browser) {
   const {page, errors, tasks} = await open(browser, {hash: '#/tasks?view=list', types: [{id: 'general', name: 'General', steps: []}, {id: 'support', name: 'Support', steps: []}]});
-  const go = async hash => { await page.evaluate(h => { location.hash = h; }, hash); await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading); };
+  const go = async (hash: string) => { await page.evaluate(h => { location.hash = h; }, hash); await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading); };
   for (const width of [1440, 1024]) {
     await page.setViewportSize({width, height: 900});
-    for (const [hash, view] of [['#/tasks?view=list', 'list'], ['#/tasks?view=foryou', 'foryou'], ['#/tasks?view=board', 'board'], ['#/tasks?view=done', 'done']]) {
+    for (const [hash, view] of [['#/tasks?view=list', 'list'], ['#/tasks?view=foryou', 'foryou'], ['#/tasks?view=board', 'board'], ['#/tasks?view=done', 'done']] as [string, string][]) {
       await go(hash);
       await page.waitForFunction(view => TASKS_ST.view === view, view);
       await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
@@ -1336,8 +1555,8 @@ async function header(browser) {
   }
   // Old addresses: the scope, the layout and the archive follow what they named.
   await go('#/tasks?view=board');
-  assert.deepEqual(await page.evaluate(() => [TASKS_ST.view, document.querySelector('#task-scope .tl-scope-l').textContent,
-    document.querySelector('#task-layout [data-layout="board"]').getAttribute('aria-pressed'), document.querySelector('#task-archive').getAttribute('aria-pressed')]),
+  assert.deepEqual(await page.evaluate(() => [TASKS_ST.view, document.querySelector<HTMLElement>('#task-scope .tl-scope-l')!.textContent,
+    document.querySelector('#task-layout [data-layout="board"]')!.getAttribute('aria-pressed'), document.querySelector('#task-archive')!.getAttribute('aria-pressed')]),
     ['board', 'General', 'true', 'false']);
   await go('#/tasks?view=foryou');
   assert.equal(await page.locator('#task-layout').isHidden(), true, 'no layout on You');
@@ -1345,11 +1564,11 @@ async function header(browser) {
   for (const view of ['done', 'closed', 'snoozed']) {
     await go(`#/tasks?view=${view}&type=support`);
     await page.waitForFunction(view => TASKS_ST.view === view, view);
-    assert.deepEqual(await page.evaluate(() => [TASKS_ST.type, document.querySelector('#task-archive').getAttribute('aria-pressed'),
-      document.querySelector('#task-finished [aria-pressed=true]')?.dataset.view, document.querySelector('#task-layout').hidden]), ['support', 'true', view, true], view);
+    assert.deepEqual(await page.evaluate(() => [TASKS_ST.type, document.querySelector('#task-archive')!.getAttribute('aria-pressed'),
+      document.querySelector<HTMLElement>('#task-finished [aria-pressed=true]')?.dataset.view, document.querySelector<HTMLElement>('#task-layout')!.hidden]), ['support', 'true', view, true], view);
   }
   // The archive toggle reaches Done, Closed and Snoozed (listed while something is snoozed), and goes back.
-  tasks.find(x => x.id === 't-deck').holds = [{kind: 'snoozed', until: new Date(Date.now() + 86400e3).toISOString()}];
+  tasks.find(x => x.id === 't-deck')!.holds = [{kind: 'snoozed', until: new Date(Date.now() + 86400e3).toISOString()}];
   await go('#/tasks?view=list&type=general');
   await page.evaluate(() => tasksLoad(TASKS_ST));
   await layout(page, 'board');
@@ -1378,23 +1597,23 @@ async function header(browser) {
   assert.equal(await page.locator('#task-bar').isHidden(), true);
   // A narrow list (the peek open, a small window): the search folds to its icon first; / opens it over the row.
   await go('#/tasks?view=list');
-  await page.evaluate(() => { document.querySelector('#tasks-pane').style.maxWidth = '560px'; });
-  await page.waitForFunction(() => document.querySelector('#tasks-pane .tl-head').classList.contains('s-fold'));
-  assert.ok((await page.locator('.tl-search').boundingBox()).width <= 34, 'the search is an icon');
+  await page.evaluate(() => { document.querySelector<HTMLElement>('#tasks-pane')!.style.maxWidth = '560px'; });
+  await page.waitForFunction(() => document.querySelector('#tasks-pane .tl-head')!.classList.contains('s-fold'));
+  assert.ok((await page.locator('.tl-search').boundingBox())!.width <= 34, 'the search is an icon');
   assert.equal((await headRows(page)).rows, 1);
-  await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('/');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'task-q');
-  assert.ok((await page.locator('.tl-search').boundingBox()).width > 300, '/ opens it over the row');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).id), 'task-q');
+  assert.ok((await page.locator('.tl-search').boundingBox())!.width > 300, '/ opens it over the row');
   await page.keyboard.press('Escape');
-  await page.evaluate(() => { document.querySelector('#tasks-pane').style.maxWidth = ''; });
+  await page.evaluate(() => { document.querySelector<HTMLElement>('#tasks-pane')!.style.maxWidth = ''; });
   // A phone: at most two rows (the chips row counted), no sideways scroll, the search an icon.
   await page.setViewportSize({width: 390, height: 844});
   for (const hash of ['#/tasks?view=list', '#/tasks?view=foryou', '#/tasks?view=board', '#/tasks?view=done', '#/tasks?view=snoozed']) {
     await go(hash);
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
     const r = await headRows(page);
-    assert.ok(r.rows + r.bar <= 2 && !r.scroll, `phone ${hash}: ${JSON.stringify(r)}`);
+    assert.ok(r.rows + Number(r.bar) <= 2 && !r.scroll, `phone ${hash}: ${JSON.stringify(r)}`);
     assert.ok((await page.locator('.tl-search').boundingBox() || {width: 0}).width <= 34, `phone ${hash}: the search is an icon`);
   }
   await go('#/tasks?view=list');
@@ -1409,12 +1628,12 @@ async function header(browser) {
 }
 
 // ---- the re-check (scratchpad/r2/recheck/probe.cjs, as tests)
-async function recheckSaves(browser) {
+async function recheckSaves(browser: Browser) {
   // N1: a quick second edit is never lost. Saves queue per task, each with the version the last one returned; the
   // panel redraws at once from the server's answer while the (slow) list reload runs behind it.
   const {page, errors, posts, tasks, conflictNextUpdate} = await open(browser);
   // The list reloads are held until the test lets them through.
-  let releaseLists;
+  let releaseLists!: (value?: unknown) => void;
   const listsHeld = new Promise(r => { releaseLists = r; });
   await page.route('**/api/v2/tasks?*', async route => {
     if (new URL(route.request().url()).pathname === '/api/v2/tasks') await listsHeld;
@@ -1432,17 +1651,17 @@ async function recheckSaves(browser) {
   await page.waitForFunction(() => /Writer/.test(document.querySelector('#task-peek [data-prop="owner"]')?.textContent || ''));
   const writes = () => taskWrites(posts).filter(x => x.p.endsWith('/t-triage')).map(x => x.body);
   assert.deepEqual(writes(), [{version: 3, status: 'waiting'}, {version: 4, owner: 'bot:writer'}], 'one at a time, each with the newest version');
-  assert.equal(tasks.find(x => x.id === 't-triage').owner_id, 'bot:writer');
+  assert.equal(tasks.find(x => x.id === 't-triage')!.owner_id, 'bot:writer');
   releaseLists();
   // the last reload has drawn the list (the row shows the new owner)
-  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-triage"] .tl-face')?.title === 'Writer');
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-task-key="tt-triage"] .tl-face')?.title === 'Writer');
   assert.equal(await props.locator('[data-props-msg]').innerText(), '');
   assert.match(await props.locator('[data-prop="owner"]').innerText(), /Writer/, 'the slow reload does not draw an older copy');
   // A refused save's reason stays until that property saves; another property's save does not wipe it.
   // The server refuses the next save itself: the Writer save's own detail read may still be on its way, and if it
   // lands after the bump it hands the panel the new version, so a refusal judged by version alone would not come
   // (the Nov 8 queue flake, a 30 s wait for the message).
-  tasks.find(x => x.id === 't-triage').version += 5;                     // changed elsewhere
+  tasks.find(x => x.id === 't-triage')!.version += 5;                     // changed elsewhere
   conflictNextUpdate('t-triage');
   await props.locator('[data-prop="owner"]').click();
   await peek.locator('.prop-pop [data-prop-pick="support"]').click();
@@ -1456,7 +1675,7 @@ async function recheckSaves(browser) {
   await page.waitForFunction(() => /Support/.test(document.querySelector('#task-peek [data-prop="owner"]')?.textContent || '') && !document.querySelector('#task-peek [data-props-msg]')?.textContent);
   // N11: one menu at a time, and only its anchor is marked expanded.
   await props.locator('[data-prop="status"]').click();
-  await props.locator('[data-prop="owner"]').evaluate(b => b.click());   // a second menu opened while the first is up
+  await props.locator('[data-prop="owner"]').evaluate(b => (b as HTMLElement).click());   // a second menu opened while the first is up
   assert.equal(await props.locator('[data-prop="status"]').getAttribute('aria-expanded'), 'false');
   assert.equal(await props.locator('[data-prop="owner"]').getAttribute('aria-expanded'), 'true');
   await page.keyboard.press('Escape');
@@ -1468,7 +1687,7 @@ async function recheckSaves(browser) {
   // N2: an unsent comment survives a property save and the poll's redraw.
   await peek.locator('.task-chat textarea').fill('Half a thought');
   await page.locator('#task-q').click();
-  Object.assign(tasks.find(x => x.id === 't-triage'), {title: 'Triage the widget bug reports', version: tasks.find(x => x.id === 't-triage').version + 1});
+  Object.assign(tasks.find(x => x.id === 't-triage')!, {title: 'Triage the widget bug reports', version: tasks.find(x => x.id === 't-triage')!.version + 1});
   await page.evaluate(() => refresh(false));
   await peekTitle(page, 'Triage the widget bug reports');
   await peek.locator('.task-chat textarea').waitFor();
@@ -1477,7 +1696,7 @@ async function recheckSaves(browser) {
   console.log('re-check: saves, errors, menus, dates, drafts: ok');
   await page.close();
 }
-async function recheckLists(browser) {
+async function recheckLists(browser: Browser) {
   // N6: the pickers never offer a loop: Part of leaves out the task and everything under it; Blocked by leaves out
   // every task that already waits on it.
   const {page, errors, tasks} = await open(browser);
@@ -1503,7 +1722,7 @@ async function recheckLists(browser) {
   await page.locator('[data-task-key="tt-rotate"] .tl-open').focus();
   await page.evaluate(() => { window.kept = [...document.querySelectorAll('[data-task-key="tt-flaky"], [data-task-key="tt-rotate"]')]; });
   await polls(page, 2);
-  assert.equal(await page.evaluate(() => window.kept.every(el => el.isConnected)), true, 'not redrawn');
+  assert.equal(await page.evaluate(() => (window.kept as Element[]).every(el => el.isConnected)), true, 'not redrawn');
   assert.equal(await page.locator('[data-task-key="tt-flaky"]').evaluate(r => r.classList.contains('sel')), true);
   assert.equal(await focusedKey(page), 'tt-rotate');
   // N4 / R2-4: Done keeps its own paging. While it shows, the poll fetches only its first page (picking up newly finished
@@ -1512,9 +1731,9 @@ async function recheckLists(browser) {
   await moreView(page, 'done');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   await page.locator('[data-task-key="tt-sso"] .tl-check').click();
-  const doneAsks = [];
+  const doneAsks: URLSearchParams[] = [];
   page.on('request', r => { if (/status=done/.test(r.url())) doneAsks.push(new URL(r.url()).searchParams); });
-  Object.assign(tasks.find(x => x.id === 't-flaky'), {status: 'done', done_at: new Date().toISOString(), version: 9});   // a bot finished it
+  Object.assign(tasks.find(x => x.id === 't-flaky')!, {status: 'done', done_at: new Date().toISOString(), version: 9});   // a bot finished it
   await page.evaluate(() => refresh(false));
   await page.evaluate(() => refresh(false));
   await page.locator('#task-body [data-task-key="tt-flaky"]').waitFor();
@@ -1534,14 +1753,14 @@ async function recheckLists(browser) {
   await second.page.close();
   // N5: two people with one first name get two different group names.
   const third = await open(browser, {people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam Ortiz'}, {id: 'sam2', name: 'Sam Lee'}],
-    extraTasks: [{...fixtures().find(x => x.id === 't-demo'), id: 't-demo2', title: 'Record the onboarding walkthrough', owner_id: 'human:sam2'}]});
+    extraTasks: [{...fixtures().find(x => x.id === 't-demo')!, id: 't-demo2', title: 'Record the onboarding walkthrough', owner_id: 'human:sam2'}]});
   const names = await groupNames(third.page);
   assert.ok(names.includes('NEEDS SAM O.') && names.includes('NEEDS SAM L.'), 'distinct: ' + names);
   assert.deepEqual(third.errors, []);
   await third.page.close();
   console.log('re-check: pickers, polls, Done, next row, names: ok');
 }
-async function recheckPhone(browser) {
+async function recheckPhone(browser: Browser) {
   // Closing the phone sheet (✕ or Esc) stays on Tasks: no extra step back through history.
   for (const how of ['x', 'esc']) {
     const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/issues'});
@@ -1562,12 +1781,12 @@ async function recheckPhone(browser) {
 }
 
 // ---- re-check 2 (scratchpad/r2/recheck/probe2.cjs, and the four other lows)
-async function recheckFinal(browser) {
+async function recheckFinal(browser: Browser) {
   // R2-1: a menu opened while a save is on its way stays open when the save lands; the panel redraws once it closes.
-  const {page, errors, posts, tasks} = await open(browser);
+  const {page, errors, tasks} = await open(browser);
   const peek = page.locator('#task-peek'), props = peek.locator('[data-task-props]');
   // The save is held until the Owner menu is open.
-  let saving = false, releaseSave;
+  let saving = false, releaseSave!: (value?: unknown) => void;
   const saveHeld = new Promise(r => { releaseSave = r; });
   await page.route('**/api/v2/tasks/t-triage', async route => { if (route.request().method() === 'POST') { saving = true; await saveHeld; } await route.fallback(); });
   await page.locator('[data-task-key="tt-triage"] .tl-title').click();
@@ -1580,13 +1799,13 @@ async function recheckFinal(browser) {
   await page.waitForFunction(() => !!document.querySelector('#task-peek .prop-pop:popover-open'));
   releaseSave();
   // the save lands meanwhile: it is done and the list reloaded (the row is under Waiting)
-  await page.waitForFunction(() => !document.querySelector('#task-peek').saving && document.querySelector('#task-peek').liveTask?.version === 4
+  await page.waitForFunction(() => !document.querySelector<TaskModalElement>('#task-peek')!.saving && document.querySelector<TaskModalElement>('#task-peek')!.liveTask?.version === 4
     && document.querySelector('[data-group="waiting"] [data-task-key="tt-triage"]'));
   assert.equal(await page.evaluate(() => !!document.querySelector('#task-peek .prop-pop:popover-open')), true, 'the menu is still open');
   assert.equal(await page.evaluate(() => document.activeElement?.closest('.prop-pop') != null), true, 'and keeps the focus');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => /Waiting/.test(document.querySelector('#task-peek [data-prop="status"]')?.textContent || ''));
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.prop), 'owner');
+  assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.prop), 'owner');
   await page.unroute('**/api/v2/tasks/t-triage');
   // R2-3: Undo says how many it could not reopen, and names them.
   await page.keyboard.press('Escape');
@@ -1599,13 +1818,13 @@ async function recheckFinal(browser) {
   await page.locator('#task-bulk [data-bulk="undo"]').click();
   await page.waitForFunction(() => /not reopened/.test(document.querySelector('.tl-bulk-msg')?.textContent || ''));
   assert.equal(await page.locator('.tl-bulk-msg').innerText(), '1 of 2 reopened; bots were already told; 1 not reopened: Fix the flaky login test on CI');
-  assert.equal(tasks.find(x => x.id === 't-rotate').status, 'doing');
+  assert.equal(tasks.find(x => x.id === 't-rotate')!.status, 'doing');
   assert.deepEqual(errors, []);
   await page.close();
   // R2-2: a poll that overtakes a save's reload still moves the list and the peek on when the task leaves the view.
   const second = await open(browser, {hash: '#/tasks', needsLive: true});
   // List reads are held, then let through in the order they were asked.
-  const held = [];
+  const held: ((value?: unknown) => void)[] = [];
   let holding = true;
   await second.page.route('**/api/v2/tasks?*', async route => {
     if (holding && new URL(route.request().url()).pathname === '/api/v2/tasks') await new Promise(r => held.push(r));
@@ -1627,7 +1846,7 @@ async function recheckFinal(browser) {
   // R2-5: as much of the last name as tells people apart.
   const third = await open(browser, {people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam Ortiz'}, {id: 'sam2', name: 'Sam Lee'}, {id: 'sam3', name: 'Sam Long'},
     {id: 'sam4', name: 'Sam', email: 'sam.k@acme.example'}],
-    extraTasks: ['sam2', 'sam3', 'sam4'].map((who, i) => ({...fixtures().find(x => x.id === 't-demo'), id: 't-demo-' + i, title: 'Demo ' + i, owner_id: 'human:' + who}))});
+    extraTasks: ['sam2', 'sam3', 'sam4'].map((who, i) => ({...fixtures().find(x => x.id === 't-demo')!, id: 't-demo-' + i, title: 'Demo ' + i, owner_id: 'human:' + who}))});
   const names = await groupNames(third.page);
   for (const want of ['NEEDS SAM O.', 'NEEDS SAM LE.', 'NEEDS SAM LO.', 'NEEDS SAM.K']) assert.ok(names.includes(want), `${want} in ${names}`);
   assert.deepEqual(third.errors, []);
@@ -1637,10 +1856,10 @@ async function recheckFinal(browser) {
 
 // A bot made since bots got ids: its id is a UUID and its slug only a label. Filters, faces and the owner picker use the
 // id; an old link that names it by slug still finds it.
-async function renamedBot(browser) {
+async function renamedBot(browser: Browser) {
   const id = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
   const helper = {id, slug: 'sales-helper', name: 'sales-helper', display_name: 'Sales Helper', team: 'support', host: 'keeper', status: 'active', state: 'active', can_chat: true};
-  const call = {...fixtures().find(x => x.id === 't-demo'), id: 't-call', title: 'Call the Acme lead', owner_id: 'bot:' + id};
+  const call = {...fixtures().find(x => x.id === 't-demo')!, id: 't-call', title: 'Call the Acme lead', owner_id: 'bot:' + id};
   const {page, errors, posts} = await open(browser, {bots: [...BOTS, helper], extraTasks: [call], hash: '#/tasks?owner=bot:sales-helper&view=list'});
   assert.deepEqual(await page.evaluate(() => TASKS_ST.filters.owner), ['bot:' + id], 'an old link\'s slug becomes the id');
   assert.deepEqual(await rowKeys(page), ['tt-call']);
@@ -1653,33 +1872,36 @@ async function renamedBot(browser) {
   await page.locator('#task-peek [data-prop="owner"]').click();
   await page.locator(`#task-peek .prop-pop [data-prop-pick="${id}"]`).click();
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Sales Helper'));
-  assert.equal(posts.filter(x => x.p === '/api/v2/tasks/t-checkout').at(-1).body.owner, 'bot:' + id);
+  assert.equal(posts.filter(x => x.p === '/api/v2/tasks/t-checkout').at(-1)!.body.owner, 'bot:' + id);
   assert.deepEqual(errors, []);
   await page.close();
   console.log('a bot whose id is not its slug: ok');
 }
 
-async function taskCheckBack(browser) {
-  const extra = {...fixtures().find(x => x.id === 't-checkout'), id: 't-followup', title: 'Inspect the review result',
+async function taskCheckBack(browser: Browser) {
+  const extra = {...fixtures().find(x => x.id === 't-checkout')!, id: 't-followup', title: 'Inspect the review result',
     check_back_at: new Date(Date.now() + 3600000).toISOString(), check_back_note: 'Verify the reviewer was assigned.'};
   const {page, errors, posts} = await open(browser, {extraTasks: [extra]});
   await page.locator('[data-task-key="tt-followup"] .tl-title').click();
   const peek = page.locator('#task-peek');
   await peek.locator('[data-prop="check_back"]').click();
   await peek.locator('.prop-pop [data-prop-pick="2h"]').click();
-  await page.waitForFunction(() => !document.querySelector('#task-peek').saving);
-  assert.equal(taskWrites(posts).at(-1).body.check_back_at, '2h');
+  await page.waitForFunction(() => !document.querySelector<TaskModalElement>('#task-peek')!.saving);
+  assert.equal(taskWrites(posts).at(-1)!.body.check_back_at, '2h');
   await peek.locator('[data-prop="check_back_note"]').click();
   await peek.locator('.prop-pop input').fill('Inspect the returned review.');
   await peek.locator('.prop-pop input').press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="check_back_note"]')?.textContent.includes('returned review'));
-  assert.equal(taskWrites(posts).at(-1).body.check_back_note, 'Inspect the returned review.');
+  assert.equal(taskWrites(posts).at(-1)!.body.check_back_note, 'Inspect the returned review.');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('task follow-up date and expected result: ok');
 }
 
-module.exports = {open, fixtures, moreView};
+const api = {open, fixtures, moreView};
+export type Api = typeof api;
+export type Opened = Awaited<ReturnType<typeof open>>;
+module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {

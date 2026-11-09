@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 import type {Browser} from 'playwright';
 // The Stale tickets card in Needs you (backend/stale_review.py): one line in the list; a tap opens its card, a row per
 // task with its reason and suggestion; a row with nothing to accept has only Skip. Accept sends the task version its
@@ -6,7 +6,14 @@ import type {Browser} from 'playwright';
 // drawn is never applied unseen.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var S: Tasks.Globals['S'];
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var staleDecide: Tasks.Globals['staleDecide'];
+declare var tasksRender: Tasks.Globals['tasksRender'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
+declare const window: Window & typeof globalThis & Pick<Tasks.WindowMarks, '__staleAnswer'>;
 const row = (id: string, task: string, title: string, action: string | null, version: number) => ({id, task, title, status: 'open', reason: 'Nothing happened on it for 9 days',
   suggest: action === 'done' ? 'Mark done' : 'Check it is still needed', action, version});
 const card = {kind: 'stale', id: 'stale:human:ana', title: 'Stale tickets: 3 suggestions', first_line: '',
@@ -49,11 +56,11 @@ async function answered(browser: Browser, viewport: {width: number; height: numb
   await page.locator(`[data-need-card="${KEY}"]`).click();
   const shown = page.locator('#need-card [data-stale-card]');
   await shown.first().waitFor();
-  await shown.evaluate(el => { el.__drawn = true; });
+  await shown.evaluate(el => { (el as Tasks.MarkedElement).__drawn = true; });
   const look = () => page.evaluate(key => {
     const el = document.querySelector('#need-card [data-stale-card]');
     const all = [...document.querySelectorAll<HTMLElement>('#need-card [data-stale-all]')];
-    return el! && {same: !!el.__drawn, title: document.querySelector<HTMLElement>('#need-card .dc-q')!.textContent.trim(),
+    return el! && {same: !!(el as Tasks.MarkedElement).__drawn, title: document.querySelector<HTMLElement>('#need-card .dc-q')!.textContent.trim(),
       count: document.querySelector(`[data-need-card="${key}"] .tl-folded`)?.textContent.trim() ?? null,
       rows: [...el.querySelectorAll<HTMLElement>('[data-stale-row]')].map(li => `${li.dataset.staleRow}@${li.dataset.staleVersion}`),
       busy: [...el.querySelectorAll<HTMLElement>('button'), ...all].filter(b => (b as HTMLButtonElement).disabled || b.textContent === '…').length,
@@ -87,7 +94,7 @@ async function answered(browser: Browser, viewport: {width: number; height: numb
   // One row goes and another comes in the same redraw, so the count stays: the row with the focus is the same
   // element, and the same button still has the focus.
   await button('s-3', 'accept').focus();
-  await shown.evaluate(el => { const li = el.querySelector('[data-stale-row="s-3"]')!; li.__kept = true; li.querySelector<HTMLElement>('[data-stale-decision="accept"]')!.__kept = true; });
+  await shown.evaluate(el => { const li = el.querySelector('[data-stale-row="s-3"]')!; (li as Tasks.MarkedElement).__kept = true; (li.querySelector('[data-stale-decision="accept"]') as Tasks.MarkedElement).__kept = true; });
   take('s-1');
   server.rows.push(row('s-7', 't-7', 'Old chore seven', 'done', 1));
   await poll();
@@ -95,7 +102,7 @@ async function answered(browser: Browser, viewport: {width: number; height: numb
   assert.deepEqual([now.same, now.title, now.count, now.rows], [true, 'Stale tickets: 3 suggestions', '3', ['s-3@9', 's-5@3', 's-7@1']]);
   assert.deepEqual(await page.evaluate(() => {
     const li = document.querySelector('#need-card [data-stale-row="s-3"]')!, f = document.activeElement as HTMLElement;
-    return {row: !!li.__kept, button: !!f.__kept, focused: [(f.closest('[data-stale-row]') as HTMLElement | null)?.dataset.staleRow, f.dataset.staleDecision]};
+    return {row: !!(li as Tasks.MarkedElement).__kept, button: !!(f as Tasks.MarkedElement).__kept, focused: [(f.closest('[data-stale-row]') as HTMLElement | null)?.dataset.staleRow, f.dataset.staleDecision]};
   }), {row: true, button: true, focused: ['s-3', 'accept']}, 'an equal-count update keeps the focused row and button');
 
   await button('s-7', 'accept').click();

@@ -5,40 +5,68 @@
 // keeping what a row sits in; Near limit; the editor as a panel (a sheet on a phone) whose save sends only what changed,
 // task caps both ways, and read only for whoever may not edit. Then Acme at 5 people and 200 bots in nested groups:
 // folded by default, quick to draw, expand and collapse all, search and Near limit. TICO_UI_SHOTS=<dir> saves screenshots.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+import type {Browser, Page} from 'playwright';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+// The fake hub's team, as fixtures/redesign-*.json and big() give it.
+interface Person {id: string; name: string; role: string; org_parent: string; team: string}
+interface Emp {name: string; display_name: string; role?: string; org_parent: string; team?: string; status: string; host: string; can_chat: boolean}
+interface Group {id: string; name: string; parent: string; lead: string; people: string[]; bots: string[]; order: number; bet_id: string | null}
+interface OrgGroup {id: string; name: string; parent: string; org_parent: string; order: number}
+interface Cap {sender: string; receiver: string; per_day: number; count: number; closed: number; rejected: number}
+// A limits row (a bot or a pool): an amount per window, what it spent in each window, and the rest the hub sends.
+interface LimitRow {spent: Record<string, number>; may_edit?: boolean; [field: string]: unknown}
+interface Limits {
+  default: Record<string, unknown>; may_edit_default: boolean; leads: string[];
+  pools: {company: LimitRow; groups: Record<string, LimitRow>}; bots: Record<string, LimitRow>;
+}
+interface Team {people: Person[]; emps: Emp[]; groups: Group[]; orgGroups: OrgGroup[]; limits: Limits; caps: Cap[]}
+// big()'s groups before they become the hub's: the person who leads a top group, and the bots in each.
+interface BigGroup {id: string; name: string; parent: string; person?: string; role: string; order: number; bots?: string[]}
+// A write's JSON: a limits row's amounts, or a task cap (sender, receiver, per_day).
+type CapBody = Pick<Cap, 'sender' | 'receiver' | 'per_day'>;
+type Body = Partial<CapBody> & {[field: string]: unknown};
+interface UsageRead {group: string | null; from: string; to: string; bots: string[] | null}
+interface OpenOptions {team?: Team; viewport?: {width: number; height: number}; viewer?: string; hash?: string; capsStatus?: number; usageStatus?: number}
+// Page globals (ui/app/strategy-budget.ts, state.ts), as far as this spec reads them.
+interface BudgetNode {kids: BudgetNode[]; period?: number | null}
+declare var BUDGET: {tree: {nodes: Map<string, BudgetNode>}; limits: unknown};
+declare var budgetTree: (limits: unknown) => {nodes: Map<string, BudgetNode>};
+declare var S: {me?: unknown; emps?: unknown[]};
+
 const uiDir = path.join(__dirname, '..');
-const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
+const fixture = (name: string): unknown => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8'));
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const WINDOWS = {per_30m_usd: '30m', hourly_usd: 'hour', daily_usd: 'day', weekly_usd: 'week', monthly_usd: 'month'};
 
 // ----------------------------------------------------------------- the teams
-function small() {
-  const fx = fixture('redesign-org.json');
+function small(): Team {
+  const fx = fixture('redesign-org.json') as {people: Person[]; employees: Emp[]; groups: Group[]; org_groups: OrgGroup[]};
   return {people: fx.people, emps: fx.employees, groups: fx.groups, orgGroups: fx.org_groups,
-    limits: fixture('redesign-usage-limits.json'), caps: fixture('redesign-task-caps.json').caps};
+    limits: fixture('redesign-usage-limits.json') as Limits, caps: (fixture('redesign-task-caps.json') as {caps: Cap[]}).caps};
 }
 
 // Acme at the target size: 5 people, 16 groups (5 on top, 11 inside them), a lead bot in each and 184 more under the leads,
 // 200 bots, plus the helpers. Every bot has a day limit of $10; a few are near it and a few over it (paused).
-function big() {
-  const people = [['ana', 'Ana Silva', ''], ['ben', 'Ben Ortiz', 'sales'], ['cara', 'Cara Lee', 'eng'],
-    ['dana', 'Dana Kim', 'mkt'], ['eli', 'Eli Park', 'support']].map(([id, name, team]) =>
+function big(): Team {
+  const people = ([['ana', 'Ana Silva', ''], ['ben', 'Ben Ortiz', 'sales'], ['cara', 'Cara Lee', 'eng'],
+    ['dana', 'Dana Kim', 'mkt'], ['eli', 'Eli Park', 'support']] as [string, string, string][]).map(([id, name, team]) =>
     ({id, name, role: id === 'ana' ? 'owner' : 'member', org_parent: id === 'ana' ? '' : 'p:ana', team}));
-  const tops = [['eng', 'Engineering', 'cara', 'Engineer'], ['sales', 'Sales', 'ben', 'Account Exec'],
+  const tops: [string, string, string, string][] = [['eng', 'Engineering', 'cara', 'Engineer'], ['sales', 'Sales', 'ben', 'Account Exec'],
     ['mkt', 'Marketing', 'dana', 'Marketer'], ['support', 'Support', 'eli', 'Support Lead'], ['ops', 'Operations', 'ana', 'Ops Analyst']];
-  const inner = [['platform', 'Platform', 'eng', 'Platform Engineer'], ['web', 'Web', 'eng', 'Web Developer'],
+  const inner: [string, string, string, string][] = [['platform', 'Platform', 'eng', 'Platform Engineer'], ['web', 'Web', 'eng', 'Web Developer'],
     ['mobile', 'Mobile', 'eng', 'Mobile Developer'], ['data', 'Data', 'eng', 'Data Analyst'], ['outbound', 'Outbound', 'sales', 'SDR'],
     ['partners', 'Partners', 'sales', 'Partner Manager'], ['content', 'Content', 'mkt', 'Writer'], ['growth', 'Growth', 'mkt', 'Growth Analyst'],
     ['tier1', 'Tier 1', 'support', 'Support Agent'], ['tier2', 'Tier 2', 'support', 'Support Engineer'], ['finance', 'Finance', 'ops', 'Bookkeeper']];
-  const all = [...tops.map(([id, name, lead, role], order) => ({id, name, parent: '', person: lead, role, order})),
+  const all: BigGroup[] = [...tops.map(([id, name, lead, role], order) => ({id, name, parent: '', person: lead, role, order})),
     ...inner.map(([id, name, parent, role], order) => ({id, name, parent, role, order}))];
-  const emps = [], bots = {};
-  const spend = (slug, i) => {
+  const emps: Emp[] = [], bots: Record<string, LimitRow> = {};
+  const spend = (slug: string, i: number) => {
     const day = i % 41 === 7 ? 10.5 : i % 23 === 5 ? 9 : ((i * 37) % 60) / 10;
     bots[slug] = {...none(), daily_usd: 10, own_daily_usd: 10, monthly_usd: 200, own_monthly_usd: 200, source: 'bot',
       day_spent: day, month_spent: day * 12, percent: Math.round(day * 10), blocked: day >= 10 ? 'daily' : null,
@@ -59,22 +87,23 @@ function big() {
       g.bots.push(slug);
     }
   }
-  for (const [name, display_name] of [['coo', 'Assistant'], ['botops', 'BotOps'], ['librarian', 'Librarian']]) {
+  for (const [name, display_name] of [['coo', 'Assistant'], ['botops', 'BotOps'], ['librarian', 'Librarian']] as [string, string][]) {
     emps.push({name, display_name, org_parent: '', status: 'active', host: 'keeper', can_chat: true});
     spend(name, n++);
   }
   const groups = all.map(g => ({id: g.id, name: g.name, parent: g.parent, lead: g.person ? 'person:' + g.person : 'bot:' + g.id + '-lead',
-    people: people.filter(p => p.team === g.id).map(p => p.id), bots: g.bots, order: g.order, bet_id: null}));
+    people: people.filter(p => p.team === g.id).map(p => p.id), bots: g.bots!, order: g.order, bet_id: null}));
   const orgGroups = all.map(g => ({id: g.id, name: g.name, parent: g.parent, org_parent: '', order: g.order}));
   // A group's spend is everyone's in it and the groups inside it.
-  const under = gid => [gid, ...all.filter(g => g.parent === gid).flatMap(g => under(g.id))];
-  const pool = (cap, slugs) => {
-    const spent = {};
-    for (const s of slugs) for (const [w, v] of Object.entries(bots[s].spent)) spent[w] = (spent[w] || 0) + v;
+  // (Typed wide so a helper's missing team can be asked for.)
+  const under = (gid: string): (string | undefined)[] => [gid, ...all.filter(g => g.parent === gid).flatMap(g => under(g.id))];
+  const pool = (cap: number | null, slugs: string[]) => {
+    const spent: Record<string, number> = {};
+    for (const s of slugs) for (const [w, v] of Object.entries(bots[s]!.spent)) spent[w] = (spent[w] || 0) + v;
     return {per_30m_usd: null, daily_usd: cap, weekly_usd: null, monthly_usd: null, '30m_spent': null, day_spent: cap == null ? null : spent.day,
       week_spent: null, month_spent: null, blocked: null, spent};
   };
-  const caps = {eng: 600, sales: 300, mkt: 300, support: 300, ops: 100};
+  const caps: Record<string, number> = {eng: 600, sales: 300, mkt: 300, support: 300, ops: 100};
   const pools = {company: pool(1500, Object.keys(bots)), groups: Object.fromEntries(all.map(g => [g.id,
     {name: g.name, parent: g.parent || null, ...pool(caps[g.id] ?? null, emps.filter(e => under(g.id).includes(e.team)).map(e => e.name))}]))};
   const capRows = [...tops.map(([id, , person]) => ({sender: 'bot:' + id + '-lead', receiver: 'person:' + person, per_day: 10, count: 4, closed: 0, rejected: 0})),
@@ -89,10 +118,10 @@ function none() {
 // What GET /api/v2/usage/limits answers this viewer (backend/usage.py limits): the owner everything; a person who leads
 // groups the bots and pools of those groups and the groups inside them, each editable, listed in `leads`; anyone else
 // the bots it runs (none here).
-function limitsFor(team, viewer) {
+function limitsFor(team: Team, viewer: string) {
   if (viewer === 'ana') return team.limits;
-  const led = new Set();
-  const add = gid => { led.add(gid); team.groups.filter(g => g.parent === gid).forEach(g => add(g.id)); };
+  const led = new Set<string | undefined>();
+  const add = (gid: string): void => { led.add(gid); team.groups.filter(g => g.parent === gid).forEach(g => add(g.id)); };
   team.groups.filter(g => g.lead === 'person:' + viewer).forEach(g => add(g.id));
   const bots = Object.fromEntries(Object.entries(team.limits.bots)
     .filter(([slug]) => led.has(team.emps.find(e => e.name === slug)?.team)).map(([slug, row]) => [slug, {...row, may_edit: true}]));
@@ -102,24 +131,24 @@ function limitsFor(team, viewer) {
 }
 
 // ----------------------------------------------------------------- the fake hub
-async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana', hash = '#/strategy/budget', capsStatus = 200, usageStatus = 200} = {}) {
+async function open(browser: Browser, {team = small(), viewport = DESKTOP, viewer = 'ana', hash = '#/strategy/budget', capsStatus = 200, usageStatus = 200}: OpenOptions = {}) {
   const person = team.people.find(p => p.id === viewer);
-  const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: viewer === 'ana' ? 'owner' : 'member',
+  const me = {id: viewer, name: person!.name, email: viewer + '@acme.example', role: viewer === 'ana' ? 'owner' : 'member',
     company_role: viewer === 'ana' ? 'owner' : 'member', cloud: true};
   const config = {company_name: 'Acme'};
-  const writes = [], usage = [];
+  const writes: [string, string, Body | null][] = [], usage: UsageRead[] = [];
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
     if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
-    const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
+    const body: Body | null = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push([method, p + url.search, body]);
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
@@ -136,11 +165,11 @@ async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana'
     if (p === '/api/v2/usage' && usageStatus !== 200) return json({error: {code: 'down', detail: 'Usage is down'}}, usageStatus);
     if (p === '/api/v2/usage') {
       const q = url.searchParams, group = q.get('group'), only = q.get('bots')?.split(',');
-      usage.push({group, from: q.get('from'), to: q.get('to'), bots: only || null});
-      const days = (Date.parse(q.get('to')) - Date.parse(q.get('from'))) / 864e5 + 1, w = days <= 7 ? 'week' : 'month';
+      usage.push({group, from: q.get('from')!, to: q.get('to')!, bots: only || null});
+      const days = (Date.parse(q.get('to')!) - Date.parse(q.get('from')!)) / 864e5 + 1, w = days <= 7 ? 'week' : 'month';
       const slugs = Object.keys(team.limits.bots).filter(s => !only || only.includes(s));
-      const spent = s => team.limits.bots[s].spent[w] || 0, total = slugs.reduce((t, s) => t + spent(s), 0);
-      const split = names => names.map(([name, share]) => ({value: name, name: name || 'Chats and other runs', est_cost_usd: total * share, subscription_equiv_usd: 0}));
+      const spent = (s: string) => team.limits.bots[s]!.spent[w] || 0, total = slugs.reduce((t, s) => t + spent(s), 0);
+      const split = (names: [string, number][]) => names.map(([name, share]) => ({value: name, name: name || 'Chats and other runs', est_cost_usd: total * share, subscription_equiv_usd: 0}));
       const rows = group === 'bot' ? slugs.map(s => ({bot: s, name: s, est_cost_usd: spent(s) * 0.75, subscription_equiv_usd: spent(s) * 0.25}))
         : group === 'model' ? split([['claude-sonnet-4-5', 0.7], ['gpt-5.1', 0.3]])
         : split([['Ship the release', 0.4], ['', 0.3], ['Triage new issues', 0.2], ['Weekly report', 0.1], ['Idle', 0]]);
@@ -151,20 +180,20 @@ async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana'
     if (p === '/api/v2/usage/limits') { Object.assign(team.limits.default, body); return json(team.limits.default); }
     let m = p.match(/^\/api\/v2\/usage\/limits\/([^/]+)$/);
     if (m) {
-      const row = team.limits.bots[decodeURIComponent(m[1])];
-      for (const [k, v] of Object.entries(body)) { row[k] = v; row['own_' + k] = v; }
+      const row = team.limits.bots[decodeURIComponent(m[1]!)]!;
+      for (const [k, v] of Object.entries(body!)) { row[k] = v; row['own_' + k] = v; }
       return json(row);
     }
     if (p === '/api/v2/usage/pools/company') { Object.assign(team.limits.pools.company, body); return json(team.limits.pools.company); }
     m = p.match(/^\/api\/v2\/usage\/pools\/groups\/([^/]+)$/);
-    if (m) { const row = team.limits.pools.groups[decodeURIComponent(m[1])]; Object.assign(row, body); return json(row); }
+    if (m) { const row = team.limits.pools.groups[decodeURIComponent(m[1]!)]!; Object.assign(row, body); return json(row); }
     // Task caps (CONTRACT §1).
     if (p === '/api/v2/task-caps') {
       if (method === 'GET') return capsStatus === 200 ? json({caps: team.caps}) : json({error: {code: 'not_found', detail: 'Not found'}}, capsStatus);
       const sender = body?.sender || url.searchParams.get('sender'), receiver = body?.receiver || url.searchParams.get('receiver');
       const at = team.caps.findIndex(c => c.sender === sender && c.receiver === receiver);
       if (method === 'DELETE') { if (at >= 0) team.caps.splice(at, 1); return json({ok: true}); }
-      if (at >= 0) team.caps[at].per_day = body.per_day; else team.caps.push({...body, count: 0, closed: 0, rejected: 0});
+      if (at >= 0) team.caps[at]!.per_day = (body as CapBody).per_day; else team.caps.push({...body as CapBody, count: 0, closed: 0, rejected: 0});
       return json(body);
     }
     return json(unrouted(p));
@@ -176,31 +205,31 @@ async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana'
 }
 
 // ----------------------------------------------------------------- helpers
-const row = key => `.bt-r:has([data-bt-open="${key}"])`;
-const amount = (page, key) => page.locator(row(key) + ' .bt-amt').innerText();
-const limit = async (page, key) => (await page.locator(row(key) + ' .bt-lim').count()) ? page.locator(row(key) + ' .bt-lim').innerText() : '';
+const row = (key: string) => `.bt-r:has([data-bt-open="${key}"])`;
+const amount = (page: Page, key: string) => page.locator(row(key) + ' .bt-amt').innerText();
+const limit = async (page: Page, key: string) => (await page.locator(row(key) + ' .bt-lim').count()) ? page.locator(row(key) + ' .bt-lim').innerText() : '';
 // Under every row, its rows by the period's spend, most first.
-const bySpend = page => page.evaluate(() => [...BUDGET.tree.nodes.values()].every(n => n.kids.every((k, i) => !i || (n.kids[i - 1].period || 0) >= (k.period || 0))));
-const keys = page => page.locator('[data-bt-open]').evaluateAll(els => els.map(el => el.dataset.btOpen));
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
-async function shot(page, name) {
+const bySpend = (page: Page) => page.evaluate(() => [...BUDGET.tree.nodes.values()].every(n => n.kids.every((k, i) => !i || (n.kids[i - 1]!.period || 0) >= (k.period || 0))));
+const keys = (page: Page) => page.locator('[data-bt-open]').evaluateAll(els => els.map(el => el.dataset.btOpen!));
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
   await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
-async function edit(page, key) {
+async function edit(page: Page, key: string) {
   await page.locator(`[data-bt-open="${key}"]`).click();
   await page.locator('dialog.bt-panel[open]').waitFor();
 }
-async function save(page) {
+async function save(page: Page) {
   await page.click('dialog.bt-panel[open] [data-save]');
   await page.locator('dialog.bt-panel').waitFor({state: 'detached'});
 }
 // Every row is one line, and nothing in the open editor runs past its edge.
-const oneLine = page => page.locator('.bt-main').evaluateAll(els => els.every(el => el.getBoundingClientRect().height <= 48));
-const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [...d.querySelectorAll('.bt-win,.bt-cap,.bt-line,.bt-foot,.tmodal-head')]
+const oneLine = (page: Page) => page.locator('.bt-main').evaluateAll(els => els.every(el => el.getBoundingClientRect().height <= 48));
+const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluate(d => [...d.querySelectorAll('.bt-win,.bt-cap,.bt-line,.bt-foot,.tmodal-head')]
   .every(el => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= innerWidth + 1));
 
 (async () => {
@@ -217,7 +246,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       assert.equal(await page.locator('.bt-r:has([data-bt-fold="helpers"]) .bt-name').innerText(), 'Helpers', tag + ': helpers in a branch of their own');
       assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '30 days', tag + ': 30 days to start');
       const span = usage.find(u => u.group === 'bot');
-      assert.equal((Date.parse(span.to) - Date.parse(span.from)) / 864e5, 29, tag + ': 30 days, today too');
+      assert.equal((Date.parse(span!.to) - Date.parse(span!.from)) / 864e5, 29, tag + ': 30 days, today too');
       assert.equal(await amount(page, 'bot:builder'), '$150', tag + ': a bot, what it spent (billed and on subscriptions)');
       assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', tag + ': and the window that binds');
       assert.equal(await limit(page, 'bot:goal-manager'), '70% · $20/day', tag + ': a day window binding says day');
@@ -273,11 +302,11 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       await page.click('[data-bt-span="7d"]');
       await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-amt')?.textContent === '$60.00');
       const week = usage.filter(u => u.group === 'bot').at(-1);
-      assert.equal((Date.parse(week.to) - Date.parse(week.from)) / 864e5, 6, tag + ': 7 days, today too');
+      assert.equal((Date.parse(week!.to) - Date.parse(week!.from)) / 864e5, 6, tag + ': 7 days, today too');
       assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '7 days', tag + ': 7 days picked');
       assert.ok(await bySpend(page), tag + ': still most spend first');
       assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', tag + ': a limit does not move with the period');
-      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.budget')).span), '7d', tag + ': kept');
+      assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem('tico.budget')!) as {span: string}).span), '7d', tag + ': kept');
       await page.click('[data-bt-span="30d"]');
       await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-amt')?.textContent === '$150');
 
@@ -290,12 +319,12 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       assert.deepEqual(await page.locator('dialog[open] [data-went="tasks"] .bt-line > span:first-child').allInnerTexts(),
         ['Ship the release', 'Chats and other runs', 'Triage new issues', 'Weekly report'], tag + ': the top tasks, none that cost nothing');
       assert.deepEqual(usage.filter(u => u.group !== 'bot').map(u => [u.group, u.bots]), [['model', ['builder']], ['task', ['builder']]], tag + ': for that bot alone');
-      const panel = await page.locator('dialog.bt-panel[open]').boundingBox();
+      const panel = (await page.locator('dialog.bt-panel[open]').boundingBox())!;
       assert.ok(Math.abs(panel.x + panel.width - DESKTOP.width) < 2 && panel.width <= 440 && panel.height >= DESKTOP.height - 2, tag + ': a panel on the right');
       assert.deepEqual(await page.locator('dialog[open] [data-scope="bot"] .bt-win > span:first-child').allInnerTexts(), ['30 min', 'Day', 'Week', 'Month'], tag + ': four windows');
       assert.deepEqual(await page.locator('dialog[open] [data-scope="bot"] .bt-spent').allInnerTexts(), ['$5.70', '$20', '$60', '$150'], tag + ': spent in each');
       assert.equal(await page.inputValue('dialog[open] input[name="bot.per_30m_usd"]'), '6', tag + ': its own limit');
-      assert.deepEqual(await page.locator('dialog[open] [data-cap-add="out"] option').evaluateAll(o => o.map(x => x.value)), ['', 'bot:eng-lead'], tag + ': caps to the managers above, not yet capped');
+      assert.deepEqual(await page.locator('dialog[open] [data-cap-add="out"] option').evaluateAll((o: HTMLOptionElement[]) => o.map(x => x.value)), ['', 'bot:eng-lead'], tag + ': caps to the managers above, not yet capped');
       await shot(page, 'small-desktop-bot');
       await page.fill('dialog[open] input[name="bot.per_30m_usd"]', 'lots');
       await page.click('dialog[open] [data-save]');
@@ -319,7 +348,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       await edit(page, 'group:eng');
       assert.equal(await page.locator('dialog[open] [data-scope="pool"] h3').innerText(), 'POOL', tag + ': a group edits its pool');
       await page.locator('dialog[open] [data-went="models"]').waitFor();
-      assert.deepEqual(usage.find(u => u.group === 'model').bots.sort(), ['builder', 'eng-lead', 'reviewer', 'web-dev'], tag + ': where a group\'s went covers everyone under it');
+      assert.deepEqual(usage.find(u => u.group === 'model')!.bots!.sort(), ['builder', 'eng-lead', 'reviewer', 'web-dev'], tag + ': where a group\'s went covers everyone under it');
       await page.fill('dialog[open] input[name="pool.daily_usd"]', '250');
       await save(page);
       await edit(page, 'company');
@@ -360,7 +389,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       assert.ok(await page.locator('.bt-amt').evaluateAll(els => els.every(el => el.getBoundingClientRect().right <= innerWidth)), tag + ': amounts not clipped');
       await shot(page, 'small-phone');
       await edit(page, 'bot:builder');
-      const sheet = await page.locator('dialog.bt-panel[open]').boundingBox();
+      const sheet = (await page.locator('dialog.bt-panel[open]').boundingBox())!;
       assert.ok(Math.abs(sheet.y + sheet.height - PHONE.height) < 2 && Math.abs(sheet.width - PHONE.width) < 2, tag + ': a sheet from the bottom');
       assert.ok(await editorFits(page), tag + ': the sheet\'s rows fit');
       await shot(page, 'small-phone-bot');
@@ -443,7 +472,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       const ms = await page.evaluate(() => {
         const t = performance.now();
         BUDGET.tree = budgetTree(BUDGET.limits);
-        document.querySelector('[data-bt-all]').click();
+        document.querySelector<HTMLElement>('[data-bt-all]')!.click();
         void document.body.offsetHeight;
         return performance.now() - t;
       });
@@ -462,7 +491,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       await page.fill('#bt-q', '');
       await page.waitForFunction(n => document.querySelectorAll('[data-bt-open]').length === n, folded.length);
       // Near limit: the paused and near bots, wherever they sit.
-      const hot = Object.entries(team.limits.bots).filter(([, r]) => r.spent.day >= 8).map(([slug]) => 'bot:' + slug);
+      const hot = Object.entries(team.limits.bots).filter(([, r]) => r.spent.day! >= 8).map(([slug]) => 'bot:' + slug);
       const full = team.caps.filter(c => c.count >= c.per_day).map(c => c.sender);
       await page.click('[data-bt-hot]');
       const shown = await keys(page);
@@ -487,7 +516,7 @@ const editorFits = page => page.locator('dialog.bt-panel[open]').evaluate(d => [
       assert.equal(await sideways(page), false, tag + ': none with everything open');
       assert.ok(await oneLine(page), tag + ': one-line rows, the deepest too');
       assert.ok(await page.locator('.bt-amt').evaluateAll(els => els.every(el => el.getBoundingClientRect().right <= innerWidth)), tag + ': amounts not clipped');
-      await page.evaluate(() => document.querySelector('[data-bt-open="bot:tier1-lead"]').scrollIntoView({block: 'start'}));
+      await page.evaluate(() => document.querySelector('[data-bt-open="bot:tier1-lead"]')!.scrollIntoView({block: 'start'}));
       await shot(page, 'big-phone-expanded');
       await page.click('[data-bt-all]');
       await page.fill('#bt-q', 'sdr');

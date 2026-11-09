@@ -1,10 +1,16 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // The Needs you card: Done on a bot's request is one tap. With the card's box empty the card goes and Done carries no
 // note; with words in it, they go with Done as the outcome. Nothing asks what was decided first. A comment typed
 // earlier in the task window (an unsent draft there) never goes with the card's Done and stays for its task.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var DEC: Tasks.Globals['DEC'];
+declare var DEC_OUTBOX: Tasks.Globals['DEC_OUTBOX'];
+declare var TASK_DRAFTS: Tasks.Globals['TASK_DRAFTS'];
+declare var decideOpen: Tasks.Globals['decideOpen'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const at = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 // The bot says what it would do, so the request is answered on a card (a request with nothing to pick opens whole).
 const request = (id: string, title: string, created: number) => ({id, kind: 'task', title, body: '', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',

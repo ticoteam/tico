@@ -1,3 +1,4 @@
+import type * as Tasks from './tasks-page.cts';
 // Visuals in replies (Visual replies 2/4): pictures, SVG and visual pages show as cards under a chat message and a
 // task comment, from the sign-in-free visual address only; pages run in the agreed sandbox with the server's real
 // content policy and height reporter (backend/visuals.py); cap of 4, removed, newer version, failure, Expand, phone.
@@ -10,6 +11,9 @@ const {html, uiFile} = require('./support/page.cjs') as typeof import('./support
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
 const fs: typeof import('node:fs') = require('node:fs');
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var taskModalShow: Tasks.Globals['taskModalShow'];
 // Element.prototype.moveBefore is newer than the DOM lib: a file-local view of the Element constructor.
 declare const Element: typeof globalThis.Element & {prototype: {moveBefore?(node: Node, child: Node | null): void}};
 

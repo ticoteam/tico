@@ -19,7 +19,7 @@ const {html, uiFile} = require('./support/page.cjs') as typeof import('./support
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const {assistantView} = require('./support/assistant-chat.cjs') as typeof import('./support/assistant-chat.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
-const {open} = require('./tasks-page.cjs') as typeof import('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
 
 interface Row {id: string; subject_type: string; subject_id: string; rating?: string; reason?: string; [key: string]: unknown}
 interface Write {method: string; p: string; body: {subject_type?: string; [key: string]: unknown} | null}
