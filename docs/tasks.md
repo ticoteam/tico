@@ -83,6 +83,7 @@ Changing a task's type preserves its status and finds a matching step in the new
 empty step to clear just the step. Status permissions, completion notes, closing and reopening
 work the same way for step changes. Moving between two steps with the same status changes only
 the step, without another completion note or notice. Step changes appear in the task history.
+Closing or declining a task stops the bot work on it: its queued runs are canceled and its running turns are asked to stop, except the turn that makes the close. A stopped turn's answer is kept on its run rather than posted into the closed task, and the history records how many runs were stopped or canceled.
 
 Movers (the owner and humans on the leadership, product or engineering teams) create, rename,
 reorder and delete types and steps. Move every task off a step before deleting it, including
@@ -960,15 +961,17 @@ changed one update each, as before. Close can be undone for ten seconds either w
 ```sh
 hub task bulk step "Legal review" --where-type idea --where-step Draft --where-label launch --dry-run
 hub task bulk close --where-owner me --where-status waiting --note "Not needed this quarter"
+hub task bulk close --where-not-owner me --where-status open --where-status doing --dry-run
 hub task bulk tags --add q4 --remove backlog --where-label backlog
 hub task bulk status open --where-label q4 --where-status closed
 ```
 
 `POST /api/v2/task-bulk` takes a `filter` with the filters of `GET /api/v2/tasks` (`owner`, `requester`, `status`,
 `lane`, `label`, `type`, `step`, `number`, `updated_since`, `member`, `role`, `snoozed`, and `ids`, a list of up to
-100 task ids or numbers), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
+100 task ids or numbers), `exclude_owner` (everything not that owner's, the caller's own included only when it is
+named; `--where-not-owner` in the CLI), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
 optional `note` and `dry_run`. `hub_task_bulk` takes the same. The filter must name something: an empty one, or an
-owner or requester who is nobody, is refused rather than read as every task. Each matching task is changed by the
+owner, exclude owner or requester who is nobody, is refused rather than read as every task. Each matching task is changed by the
 same update a single change makes, with the caller's own rights: its events, wakes and refusals are that task's.
 A task the caller may not change is skipped with the reason and the rest still change; a task already that way
 counts as `unchanged`. The answer gives `matched`, `changed`, `unchanged` and `skipped`, and names the tasks changed

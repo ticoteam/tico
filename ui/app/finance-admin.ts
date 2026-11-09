@@ -103,7 +103,7 @@ function finSrcDraw() {
       const c = finSrcCols(r), k = finSrcKey(r);
       out.push(`<tr data-fin-src="${esc(k)}"${s.sel === k ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link fin-src-name">${esc(r.name || r.provider || '')}${r.last4 ? ` <span class="muted">••${esc(r.last4)}</span>` : ''}</button></td>
         <td>${c.has === '—' || !c.has ? '<span class="muted">—</span>' : esc(c.has)}</td><td>${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td>${esc(c.how)}</td><td class="fin-nowrap">${esc(c.last)}</td>
-        <td>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</td></tr>`);
+        <td>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}${finSrcMoney(r) && r.off_by ? ` <span class="pill needs">Off by ${finStmtUsd(Math.abs(r.off_by))}</span>` : ''}</td></tr>`);
     }
   }
   box.innerHTML = `<table class="fin-t fin-src-t"><thead><tr><th>Source</th><th>Has</th><th>Feeds</th><th>Sync</th><th>Last</th><th>Status</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
@@ -118,6 +118,7 @@ function finSrcRail() {
   const books = r.kind === 'connection' && !!FIN_BOOKS[r.provider];
   const stripe = r.provider === 'stripe' && (r.kind === 'connection' || r.kind === 'stripe');
   const money = finSrcMoney(r), mine = r.kind === 'connection' ? state.groups.flatMap(g => g.rows).filter(x => finSrcMoney(x) && x.sync?.connection_id === r.id) : [];
+  const upload = !!money && ['bank', 'card_program'].includes(r.kind) && !!finCaps()?.may('finance.book');
   finRail(`<div class="fin-rail-title"><h2>${esc(r.name || r.provider || '')}</h2>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</div>
     ${r.provider ? finKv('Provider', esc(r.provider)) : ''}${r.address ? finKv('Address', esc(r.address)) : ''}${r.last4 ? finKv('Account', '••' + esc(r.last4)) : ''}
     ${r.kind !== 'connection' && 'balance' in r ? finKv('Balance', finUsd(r.balance) + (r.balance_as_of ? ` <span class="muted">${esc(finDayLabel(r.balance_as_of))}</span>` : '')) : ''}
@@ -131,6 +132,7 @@ function finSrcRail() {
     ${r.payments && r.provider !== 'stripe' ? finMercuryPayments(r.payments) : ''}
     ${stripe && admin ? `<h3 class="fin-h">Webhook</h3><div data-fin-hook>${finKv('Status', '<span class="muted">…</span>')}</div>` : ''}
     ${access.length ? `<h3 class="fin-h">Access</h3>${access.map(a => finKv(finWho(a.who), esc(a.via === 'default' ? 'Default' : a.via || ''))).join('')}` : ''}
+    ${upload ? '<div class="fin-foot"><button type="button" class="ghost" data-fin-statement>Upload statement</button></div>' : ''}
     ${admin && (live || books) ? `<div class="fin-foot">${r.kind === 'connection' && live ? '<button type="button" class="ghost" data-fin-disconnect>Disconnect</button>' : ''}${
       books && sync?.status === 'reconnect' ? '<button type="button" class="primary" data-fin-reconnect>Reconnect</button>' : live ? '<button type="button" class="primary" data-fin-sync>Sync now</button>' : ''}</div>` : ''}`);
   const rail = $('#fin-rail'); if (!rail) return;
@@ -144,6 +146,7 @@ function finSrcRail() {
       void finSrcLoad();
     });
   });
+  rail.querySelector('[data-fin-statement]')?.addEventListener('click', () => finStatementUpload({id: String(r.id), name: String(r.name || ''), last4: r.last4 || null, kind: String(r.kind)}));
   if (stripe && admin) void finStripeHook();
   rail.querySelector('[data-fin-sync]')?.addEventListener('click', async ev => {
     const btn = ev.currentTarget; btn.disabled = true;
