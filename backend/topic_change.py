@@ -9,7 +9,7 @@ would continue (its `bot_sessions` row); its last turn is the newest finished tu
   is not listed) and read at least WARM_SHARE of its input from the cache (`cached_tokens` over `input_tokens +
   cached_tokens`). Anything else is cold: no turn, an older one, a small cache hit, or a harness that reports no cache
   use (Grok, today).
-- Context size: that turn's newest request of the bot's own (not a subagent's) whole prompt (`turns.prompt_tokens`,
+- Context size: that turn's newest request of the bot's own (not a subagent's) whole prompt (`attempts.prompt_tokens`,
   uncached + cached), when its runner marked its requests. The turn's summed `input_tokens + cached_tokens` count every
   request of the turn again and are not a context size; without `prompt_tokens` (an older runner, a harness that does
   not mark them) the size is unknown and never triggers a check.
@@ -40,6 +40,7 @@ from clients import judge as J
 from . import rooms, team_rules
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .store import H, encode
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.topic_change")
 _clock = time.monotonic
@@ -87,7 +88,7 @@ TRIM = 1500
 
 def _trim(text):
     text = " ".join(str(text or "").split())
-    return text if len(text) <= TRIM else text[:TRIM - 1].rstrip() + "…"
+    return text if len(text) <= TRIM else text[: TRIM - 1].rstrip() + "…"
 
 
 def last_turn(c, settings, bot):
@@ -95,15 +96,20 @@ def last_turn(c, settings, bot):
     just cleared)."""
     from .shared_bots import follow
     from . import providers
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     cfg = follow(c, bot, H._json(config[0], {}) or {}) if config else {}
     runtime, model = providers.bot_choice(c, settings, cfg)
-    session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
-                        (bot, runtime, model)).fetchone()
+    session = c.execute(
+        "SELECT thread_id FROM bot_sessions WHERE bot=? AND runtime=? AND model=?", (bot, runtime, model)
+    ).fetchone()
     if not session or not session[0]:
         return None
-    row = c.execute("SELECT finished,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
-                    "AND finished IS NOT NULL ORDER BY finished DESC LIMIT 1", (bot, session[0])).fetchone()
+    row = c.execute(
+        "SELECT settled_at AS finished_at,input_tokens,cached_tokens,prompt_tokens FROM attempts "
+        "WHERE bot_id=? AND thread_id=? AND settled_at IS NOT NULL ORDER BY settled_at DESC LIMIT 1",
+        (bot, session[0]),
+    ).fetchone()
     return {**dict(row), "runtime": runtime} if row else None
 
 
@@ -115,7 +121,7 @@ def warmth(turn, now=None):
     lifetime = CACHE_LIFETIME.get(turn.get("runtime"), WARM_SECONDS)
     context = turn.get("prompt_tokens")
     context = int(context) if context is not None else None
-    finished, at = H.parse_ts(turn.get("finished")), H.parse_ts(now or H.now())
+    finished, at = H.parse_ts(turn.get("finished_at")), H.parse_ts(now or H.now())
     age = (at - finished).total_seconds() if finished and at else None
     # An unknown fresh count (an older row, a runner that sent none) is cold: counting it as 0 would read 100% cached.
     share = cached / (cached + int(fresh)) if cached > 0 and fresh is not None else 0.0
@@ -124,15 +130,17 @@ def warmth(turn, now=None):
 
 def epoch_since(c, conversation_id):
     """When the chat's session was last cleared, or None."""
-    row = c.execute("SELECT updated FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
+    row = c.execute("SELECT updated_at FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
     return row[0] if row else None
 
 
 def turns_since(c, bot, conversation_id, since):
     """The bot's finished turns on this chat since its last clear."""
-    return c.execute("SELECT count(*) FROM turns t JOIN messages m ON m.id=t.message_id WHERE t.bot=? "
-                     "AND m.conversation_id=? AND t.finished IS NOT NULL AND t.started>?",
-                     (bot, conversation_id, since or "")).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM attempts t JOIN messages m ON m.id=t.message_id WHERE t.bot_id=? "
+        "AND m.conversation_id=? AND t.settled_at IS NOT NULL AND t.created_at>?",
+        (bot, conversation_id, since or ""),
+    ).fetchone()[0]
 
 
 def _held(c, conv):
@@ -140,6 +148,7 @@ def _held(c, conv):
     active goal or a turn is running."""
     from .chat_goals import current
     from .views import chat_running
+
     if not team_rules.load(c)[RULE]:
         return "off"
     if conv.get("scope") == rooms.SHARED:
@@ -155,8 +164,9 @@ def _held(c, conv):
 def snapshot(c, conversation_id):
     """What a decision was made on: the session's epoch and the chat's newest message."""
     epoch = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
-    newest = c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created DESC, id DESC LIMIT 1",
-                       (conversation_id,)).fetchone()
+    newest = c.execute(
+        "SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at DESC, id DESC LIMIT 1", (conversation_id,)
+    ).fetchone()
     return {"epoch": epoch[0] if epoch else 0, "newest": newest[0] if newest else None}
 
 
@@ -181,7 +191,7 @@ def gate(c, settings, bot, conv):
 def _refs(message):
     refs = message.get("refs")
     if refs is None:
-        refs = H._json(message.get("refs_json"), {})
+        refs = H._json(message.get("refs"), {})
     return refs if isinstance(refs, dict) else {}
 
 
@@ -190,14 +200,21 @@ def recent(c, who, bot, conversation_id):
     answered, each trimmed. Only the person's and the bot's own words: task lines, goal actions and maintenance notes
     are left out, as is anything the person may not read."""
     from . import task_privacy as privacy
+
     rows = privacy.page(c, who, conversation_id, limit=60, since=epoch_since(c, conversation_id))["messages"]
     turns = []
-    for message in rows:                      # oldest first
+    for message in rows:  # oldest first
         refs = _refs(message)
-        if (refs.get("goal_action") or refs.get("maintenance") or refs.get("task") or refs.get("task_id")
-                or refs.get("task_started") or refs.get("task_report")):
+        if (
+            refs.get("goal_action")
+            or refs.get("maintenance")
+            or refs.get("task")
+            or refs.get("task_id")
+            or refs.get("task_started")
+            or refs.get("task_report")
+        ):
             continue
-        sender = message.get("from_actor")
+        sender = message.get("sender_id")
         if sender == who.actor:
             turns.append({"person": _trim(message.get("body")), "bot": ""})
         elif sender == "bot:" + bot and turns:
@@ -278,13 +295,13 @@ def check(store, primary, who, bot, body, admit=None, *, uploads):
                 out["delay_ms"] = int((_clock() - started) * 1000)
                 if hand_over(out):
                     detail["delay_ms"] = out["delay_ms"]
-                else:                         # the send went on without it: its delay was the whole wait
+                else:  # the send went on without it: its delay was the whole wait
                     detail.update(clear=False, error="timeout", delay_ms=box.get("waited_ms") or int(BUDGET * 1000))
                 _audit(store, who, detail)
             finally:
                 if reserved:
                     _release(who)
-        except Exception as exc:              # a send never breaks on the check
+        except Exception as exc:  # a send never breaks on the check
             LOG.warning("Topic check failed: %s", type(exc).__name__)
             ready.set()
         finally:
@@ -296,7 +313,7 @@ def check(store, primary, who, bot, body, admit=None, *, uploads):
     ready.wait(max(0.0, deadline - _clock()))
     with lock:
         box["late"], box["waited_ms"] = True, int((_clock() - started) * 1000)
-        out = box.get("out")                  # handed over before the deadline, or not at all
+        out = box.get("out")  # handed over before the deadline, or not at all
     if out:
         out["delay_ms"] = int((_clock() - started) * 1000)
     return out
@@ -306,10 +323,11 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
     """The check itself, on the worker: (outcome, audit detail, whether it holds a reserved daily call), or None when
     the gate said no or the send stopped waiting before a call was made."""
     settings = store.settings
-    with store.read_transaction() as c:      # one snapshot: what the gate admitted is what history and the marker read
+    with store.read_transaction() as c:  # one snapshot: what the gate admitted is what history and the marker read
         if admit and not admit(c):
             return None
         from .views import direct_chat
+
         conv = direct_chat(c, who.actor, bot)
         if not conv:
             return None
@@ -321,13 +339,18 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
         capped = engine is None and over_spend_cap(c, settings)
         turns = recent(c, who, bot, conv["id"])
         held = snapshot(c, conv["id"])
-    out = {"clear": False, "conversation_id": conv["id"], "context_tokens": facts.get("context_tokens"),
-           "gate": reason, "snapshot": held}
+    out = {
+        "clear": False,
+        "conversation_id": conv["id"],
+        "context_tokens": facts.get("context_tokens"),
+        "gate": reason,
+        "snapshot": held,
+    }
     questions = {"topic": qset["questions"]["topic"]}
     result = error = None
     left = deadline - _clock()
     if box.get("late") or left <= 0:
-        return None                           # nothing asked: no call to pay for or count
+        return None  # nothing asked: no call to pay for or count
     reserved = engine is not None and _reserve(store, who)
     try:
         if engine is None:
@@ -340,7 +363,7 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
                     result = engine({"recent": turns, "message": _trim(text)}, questions, qset["label"])
             except J.JudgeError as exc:
                 error = J.error_code(exc)
-            except Exception as exc:          # a fake, a provider bug
+            except Exception as exc:  # a fake, a provider bug
                 LOG.warning("Topic check failed: %s", type(exc).__name__)
                 error = "error"
             if result is not None and not isinstance(result, dict):
@@ -355,8 +378,15 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
             out["answer"] = answer[0]
             out["clear"] = answer[0] == "new_topic" and answer[1] >= qset["thresholds"].get("new_topic", 1.01)
         out["reason"] = error or ("new_topic" if out["clear"] else (answer or ("none",))[0])
-        detail = {"label": qset["label"], "questions": 1, "types": ["choice"], "gate": reason,
-                  "context_tokens": out["context_tokens"], "warm": facts.get("warm", False), "clear": out["clear"]}
+        detail = {
+            "label": qset["label"],
+            "questions": 1,
+            "types": ["choice"],
+            "gate": reason,
+            "context_tokens": out["context_tokens"],
+            "warm": facts.get("warm", False),
+            "clear": out["clear"],
+        }
         if result is not None:
             detail.update(audit_detail(result))
             if answer:
@@ -371,10 +401,23 @@ def _decide(store, primary, who, bot, text, admit, deadline, box):
 
 
 def _audit(store, who, detail):
-    """The check's `judge.call` row, written by the worker once the send has its answer."""
+    """The check's `judge.call` row, written by the worker once the send has its answer, and its run of Fresh start on
+    new topic (Settings > Routines, Automations); a kept chat is a quiet run that folds."""
+    from . import system_routines as SR
+
+    run = SR.Run("topic_fresh")
+    if detail.get("error"):
+        run.did(
+            "Kept the chat: the check took too long"
+            if detail["error"] == "timeout"
+            else "Kept the chat: the check failed"
+        )
+    else:
+        run.did("New topic: started fresh" if detail.get("clear") else "Same topic", quiet=not detail.get("clear"))
     try:
         with store.transaction() as c:
             H.event(c, who.actor, "judge.call", detail["label"], detail)
+            SR.keep(c, run)
     except Exception as exc:
         LOG.warning("Topic check audit failed: %s", type(exc).__name__)
 
@@ -384,6 +427,7 @@ def apply(c, settings, who, bot, outcome):
     and the chat is still as it was read (`_held`, `snapshot`). True when it cleared; a refused decision is one
     `chat.topic_kept` event."""
     from .views import clear_chat_session, direct_chat
+
     if not outcome or not outcome.get("clear"):
         return False
     conv = direct_chat(c, who.actor, bot)
@@ -401,8 +445,16 @@ def apply(c, settings, who, bot, outcome):
 def record(c, who, message, outcome):
     """Mark the message that opened the new session (the chat's quiet "Topic changed" line) and write the measures."""
     refs = {**_refs(message), "topic_changed": True}
-    c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
-    H.event(c, who.actor, "chat.topic_changed", message["conversation_id"],
-            {"message_id": message["id"], "tokens_before": outcome.get("context_tokens"),
-             "delay_ms": outcome.get("delay_ms", 0)})
+    c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
+    H.event(
+        c,
+        who.actor,
+        "chat.topic_changed",
+        message["conversation_id"],
+        {
+            "message_id": message["id"],
+            "tokens_before": outcome.get("context_tokens"),
+            "delay_ms": outcome.get("delay_ms", 0),
+        },
+    )
     return H.message(c, message["id"])

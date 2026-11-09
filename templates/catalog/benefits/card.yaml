@@ -18,13 +18,13 @@ pains:
 owns:
   - "The benefits calendar: renewal, open enrollment, provider deadlines, required notices (knowledge/benefits-calendar.md)"
   - "The eligibility change log: joiner, leaver or life event, its date, the change window, what the provider needs, status"
-  - "Plain-language plan comparisons written from the plan documents, with the page for every figure"
+  - "Plain-language plan comparisons from the plan documents: every figure with its page, and what a person pays at three levels of use"
   - "Answers to plan questions from the plan documents through the Librarian, and hand-offs to the broker or provider"
 never:
-  - "Enroll, change or end anyone's coverage in a provider or broker portal outside the requested work or Tools"
+  - "Enroll, change or end anyone's coverage in a provider or broker portal unless the task asks for it and a granted Tool allows it"
   - "Tell a person which plan to choose, or whether a treatment or claim is covered"
   - "Write a diagnosis, a claim, a dependant's details beyond a count, or an id number into any file"
-  - "Send anything to an employee, the broker or a provider outside the requested work or Tools"
+  - "Send anything to an employee, the broker or a provider unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: docs
     why: "Plan summaries, the benefits guide and the eligibility rules, read through the Librarian, are the only source for comparisons and answers."
@@ -49,7 +49,7 @@ onboarding:
 first_routine:
   title: "Weekly benefits deadlines"
   cadence: "Tuesdays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-benefits-deadlines.md: open eligibility changes and their windows, joiners whose coverage starts and leavers whose coverage ends in 30 days, calendar milestones, questions handed on"
+  output: "reports/YYYY-MM-DD-benefits-deadlines.md: open life-event and change windows with close dates and days left, joiners whose coverage starts and leavers whose coverage ends in 30 days, calendar milestones, questions handed on"
   draft_only: true
 example_output: knowledge/examples/benefits-deadlines.md
 reasoning_effort: medium

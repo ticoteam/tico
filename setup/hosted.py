@@ -7,6 +7,7 @@ computer: it goes only into a 0600 file for our team, and the server gets its sh
 `scripts/install.sh --recommended` and adds the server's own computer, the Docker runner on the server's network.
 `python3 -m setup owner-link --domain D [--sign-out]` makes a new link and puts it in place of the old one.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -19,7 +20,7 @@ from .settings import Settings
 from .ui import IO, MissingInput
 
 SERVER_COMPUTER = "Server computer"
-SERVER_NETWORK = "tico_default"   # compose.yaml in /opt/tico: the project is tico
+SERVER_NETWORK = "tico_default"  # compose.yaml in /opt/tico: the project is tico
 # Inside the server container `docker compose exec` has no entrypoint, so the offline commands name their paths.
 _EXEC_ENV = f"-e TICO_REGISTRY_DIR={contract.DATA_DIR}/registry"
 # Docker as the shell's user, else through sudo without a password (the SSH user), the same as the checks.
@@ -34,14 +35,30 @@ def check_dns_identity(args, dns_name: str, dns_zone: str) -> None:
             raise MissingInput(f"--{field.replace('_', '-')} conflicts with saved DNS identity; omit it or use {saved}")
 
 
+def read_handoff(s: Settings) -> None:
+    """TICO_SETUP_HANDOFF, from the environment only (never a flag, so never in a command line or a process list, like
+    TICO_GATEWAY_INVITE): the one-time secret the owner's coding agent trades for a personal token of the owner
+    (backend/setup_handoff.py). HQ makes it and keeps it; this run keeps only its sha256, in the settings and the server's
+    .env. A re-run without it keeps the hash the first run saved."""
+    secret = os.environ.get("TICO_SETUP_HANDOFF", "")
+    if not secret:
+        return
+    if not st.HANDOFF_RE.fullmatch(secret):
+        raise MissingInput(
+            "TICO_SETUP_HANDOFF is not a setup handoff secret (32 to 128 letters, digits, - and _). It is not shown here."
+        )
+    s.setup_handoff_hash = hashlib.sha256(secret.encode()).hexdigest()
+
+
 def gather(args, s: Settings, dry: bool) -> None:
     """Our operator's flags, checked before anything is asked or created. A self-hosted install leaves all of it unset."""
     check_dns_identity(args, s.dns_name, s.dns_zone)
+    read_handoff(s)
     hosted = (getattr(args, "hosted", None) or s.hosted or "").strip().lower()
     preset = (getattr(args, "preset", None) or s.preset or "").strip().lower()
     auth = getattr(args, "auth", None) or ""
     if not auth and hosted and s.hosted and s.auth == "oidc":
-        auth = "oidc"                   # a re-run keeps the OIDC sign-in the first run chose
+        auth = "oidc"  # a re-run keeps the OIDC sign-in the first run chose
     if hosted and hosted not in st.HOSTED:
         raise MissingInput("--hosted is own or invited")
     if preset and preset not in st.PRESETS:
@@ -49,19 +66,24 @@ def gather(args, s: Settings, dry: bool) -> None:
     if auth == st.OWNER_LINK and not hosted:
         raise MissingInput("--auth owner-link is for a server Tico hosts: pass --hosted own or --hosted invited")
     if hosted and auth and auth not in (st.OWNER_LINK, "oidc"):
-        raise MissingInput("--hosted signs people in with the owner sign-in link, or with --auth oidc (the link then stays "
-                           "as break-glass): leave out --auth, or pass --auth owner-link or --auth oidc")
+        raise MissingInput(
+            "--hosted signs people in with the owner sign-in link, or with --auth oidc (the link then stays "
+            "as break-glass): leave out --auth, or pass --auth owner-link or --auth oidc"
+        )
     if preset and not hosted:
-        raise MissingInput("--preset recommended is for a server Tico hosts (--hosted); on your own server run "
-                           "scripts/install.sh --recommended")
+        raise MissingInput(
+            "--preset recommended is for a server Tico hosts (--hosted); on your own server run "
+            "scripts/install.sh --recommended"
+        )
     s.hosted, s.preset = hosted, preset
     dns_name = (getattr(args, "dns_name", None) or s.dns_name or "").lower()
     dns_zone = (getattr(args, "dns_zone", None) or s.dns_zone or "").lower()
     if dns_name or dns_zone:
         if not (hosted and s.target == "aws" and s.front_door == "caddy"):
             raise MissingInput("--dns-name/--dns-zone require --hosted with AWS and Caddy")
-        if not (st.DOMAIN_RE.fullmatch(dns_name) and st.DOMAIN_RE.fullmatch(dns_zone)
-                and dns_name.endswith("." + dns_zone)):
+        if not (
+            st.DOMAIN_RE.fullmatch(dns_name) and st.DOMAIN_RE.fullmatch(dns_zone) and dns_name.endswith("." + dns_zone)
+        ):
             raise MissingInput("--dns-name must be an exact hostname beneath --dns-zone (both are required)")
         s.dns_name, s.dns_zone = dns_name, dns_zone
     if not hosted:
@@ -78,7 +100,9 @@ def gather(args, s: Settings, dry: bool) -> None:
         # Only from the environment: setup's saved copy of the .env never holds it (contract.SERVER_ONLY_KEYS).
         invite = os.environ.get("TICO_GATEWAY_INVITE", "")
         if invite and not st.INVITE_RE.fullmatch(invite):
-            raise MissingInput("TICO_GATEWAY_INVITE is not an invite code (8 to 200 letters, digits, - and _). It is not shown here.")
+            raise MissingInput(
+                "TICO_GATEWAY_INVITE is not an invite code (8 to 200 letters, digits, - and _). It is not shown here."
+            )
         s.gateway_invite = invite
 
 
@@ -86,69 +110,101 @@ def link_file(domain: str):
     return state.home() / domain / "owner-link.txt"
 
 
-def new_link(s: Settings) -> str:
-    """A new link in its 0600 file; returns the hash the server is given. Nothing here prints it."""
+def new_link(s: Settings, path=None) -> str:
+    """A new link in its 0600 file (link_file, or `path`: a cell company's folder); returns the hash the server is
+    given. Nothing here prints it."""
     token = secrets.token_urlsafe(32)
-    state.write_private(link_file(s.domain), f"https://{s.domain}{contract.OWNER_LINK_PATH}#{token}\n")
+    state.write_private(path or link_file(s.domain), f"https://{s.domain}{contract.OWNER_LINK_PATH}#{token}\n")
     return hashlib.sha256(token.encode()).hexdigest()
 
 
 def plan_lines(s: Settings) -> list[str]:
     if s.auth == st.OWNER_LINK:
-        out = [f"Sign-in: the owner's single-use sign-in link (a week at most), written to {link_file(s.domain)} (0600) for "
-               f"our team to send; never printed. Hosted install: {s.hosted}, under {s.hosted_zone}"]
+        out = [
+            f"Sign-in: the owner's single-use sign-in link (a week at most), written to {link_file(s.domain)} (0600) for "
+            f"our team to send; never printed. Hosted install: {s.hosted}, under {s.hosted_zone}"
+        ]
     else:
-        out = [f"Break-glass: the owner's single-use sign-in link (a week at most), for when the issuer is down, written to "
-               f"{link_file(s.domain)} (0600) for our team only; never printed, and not for the ready email. Hosted install: "
-               f"{s.hosted}, under {s.hosted_zone}"]
+        out = [
+            f"Break-glass: the owner's single-use sign-in link (a week at most), for when the issuer is down, written to "
+            f"{link_file(s.domain)} (0600) for our team only; never printed, and not for the ready email. Hosted install: "
+            f"{s.hosted}, under {s.hosted_zone}"
+        ]
     if s.preset:
         team = "the selected company file" if s.company_file_data else "the sample company"
-        out.append(f"Recommended setup: {team}, your Claude and ChatGPT subscriptions plus Tico Gateway, "
-                   f"Tico Support {s.support or 'on'}, and a computer on the server (the Docker runner). "
-                   + ("The Gateway invite is in the environment; it connects on the first start."
-                      if s.gateway_invite else "No Gateway invite in the environment (TICO_GATEWAY_INVITE): the Gateway is not set up by this run."))
+        out.append(
+            f"Recommended setup: {team}, your Claude and ChatGPT subscriptions plus Tico Gateway, "
+            f"Tico Support {s.support or 'on'}, and a computer on the server (the Docker runner). "
+            + (
+                "The Gateway invite is in the environment; it connects on the first start."
+                if s.gateway_invite
+                else "No Gateway invite in the environment (TICO_GATEWAY_INVITE): the Gateway is not set up by this run."
+            )
+        )
+    if s.setup_handoff_hash:
+        out.append(
+            "Setup handoff: the server keeps only the hash of the one-time secret in TICO_SETUP_HANDOFF. Whoever holds "
+            "the secret trades it once, within a week of the first start, for a personal token of the owner "
+            "(POST /api/v2/setup/handoff); it is never printed or saved here."
+        )
     return out
 
 
 def replace_command(token_hash: str, sign_out: bool) -> str:
-    return (f"cd {contract.REMOTE_DIR} && {_DOCKER}; $dk compose exec -T {_EXEC_ENV} {contract.SERVICE_SERVER} "
-            f"python -m backend.owner_link replace {contract.DATABASE} {token_hash}" + (" --sign-out" if sign_out else ""))
+    return (
+        f"cd {contract.REMOTE_DIR} && {_DOCKER}; $dk compose exec -T {_EXEC_ENV} {contract.SERVICE_SERVER} "
+        f"python -m backend.owner_link replace {contract.DATABASE} {token_hash}" + (" --sign-out" if sign_out else "")
+    )
 
 
 def server_computer_script(s: Settings) -> str:
     """The server's own computer: a code from the server (written to a private file in its volume and read back, never
     printed), then install.sh --runner on the server's network, as scripts/install.sh --recommended does."""
     from .runner_setup import installer_url
+
     q = shlex.quote
     tag = s.tag if s.tag not in ("", "latest") else "latest"
     server = f"$dk compose exec -T {_EXEC_ENV} {contract.SERVICE_SERVER}"
-    return "\n".join([
-        "set -eu",
-        f"cd {contract.REMOTE_DIR}",
-        _DOCKER,
-        f"if $dk ps -a --format '{{{{.Names}}}}' | grep -qx {contract.RUNNER_CONTAINER}; then echo 'server computer already there'; exit 0; fi",
-        f"code_file={contract.DATA_DIR}/enrollment-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \\n')",
-        f'trap \'{server} rm -f "$code_file" >/dev/null 2>&1 || true\' EXIT',
-        f'{server} python -m backend.manage enrollment {contract.DATABASE} --owner {q(s.owner_email)} --out "$code_file" >/dev/null',
-        f"TICO_JOIN_CODE=$({server} python -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"code\"])' \"$code_file\")",
-        "export TICO_JOIN_CODE",
-        remote.fetch_and_run(installer_url(tag), f"--runner --dir {contract.RUNNER_DIR} --url http://{contract.SERVICE_SERVER}:"
-                             f"{contract.SERVER_PORT} --code \"$TICO_JOIN_CODE\" --label {q(SERVER_COMPUTER)} "
-                             f"--server-network {SERVER_NETWORK}"),
-    ]) + "\n"
+    return (
+        "\n".join(
+            [
+                "set -eu",
+                f"cd {contract.REMOTE_DIR}",
+                _DOCKER,
+                f"if $dk ps -a --format '{{{{.Names}}}}' | grep -qx {contract.RUNNER_CONTAINER}; then echo 'server computer already there'; exit 0; fi",
+                f"code_file={contract.DATA_DIR}/enrollment-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \\n')",
+                f'trap \'{server} rm -f "$code_file" >/dev/null 2>&1 || true\' EXIT',
+                f'{server} python -m backend.manage enrollment {contract.DATABASE} --owner {q(s.owner_email)} --out "$code_file" >/dev/null',
+                f"TICO_JOIN_CODE=$({server} python -c 'import json, sys; print(json.load(open(sys.argv[1]))[\"code\"])' \"$code_file\")",
+                "export TICO_JOIN_CODE",
+                remote.fetch_and_run(
+                    installer_url(tag),
+                    f"--runner --dir {contract.RUNNER_DIR} --url http://{contract.SERVICE_SERVER}:"
+                    f"{contract.SERVER_PORT} --code \"$TICO_JOIN_CODE\" --label {q(SERVER_COMPUTER)} "
+                    f"--server-network {SERVER_NETWORK}",
+                ),
+            ]
+        )
+        + "\n"
+    )
 
 
 def add_server_computer(io: IO, s: Settings, shell: remote.Shell | None) -> bool:
     """The preset's computer. A failure leaves the server running and says how to add it by hand."""
-    later = ("Add it later: Settings > Computers > Add computer, then the --runner command it shows, run on the server "
-             "with --server-network tico_default.")
+    later = (
+        "Add it later: Settings > Computers > Add computer, then the --runner command it shows, run on the server "
+        "with --server-network tico_default."
+    )
     io.say("\nServer computer")
     if shell is None:
         io.say("  This target gives setup no shell on the server, so the computer is not added. " + later)
         return False
     res = shell.run(server_computer_script(s))
     if res.returncode:
-        io.say("  The server computer did not start: " + envfile.scrub((res.stderr or res.stdout)[-300:], s.secrets()).strip())
+        io.say(
+            "  The server computer did not start: "
+            + envfile.scrub((res.stderr or res.stdout)[-300:], s.secrets()).strip()
+        )
         io.say("  " + later)
         return False
     io.say(f"  {SERVER_COMPUTER} added: the Docker runner on the server, shown in Settings > Computers in a minute.")
@@ -182,21 +238,30 @@ def rotate(args, io: IO, deps) -> int:
         raise MissingInput(f"{domain} does not use the owner sign-in link (it was set up with --auth {s.auth}).")
     what = "a new owner sign-in link" + (" and sign the owner out everywhere" if args.sign_out else "")
     if args.dry_run:
-        io.say(f"Dry run: would make {what} for {domain}, write it to {link_file(domain)} (0600) and give the server its hash.")
+        io.say(
+            f"Dry run: would make {what} for {domain}, write it to {link_file(domain)} (0600) and give the server its hash."
+        )
         return 0
     shell = shell_for(s, deps)
     if shell is None:
-        raise MissingInput(f"Setup has no shell on the {s.target} server for {domain}; run the command there by hand "
-                           "(`python -m backend.owner_link replace` in the server container).")
+        raise MissingInput(
+            f"Setup has no shell on the {s.target} server for {domain}; run the command there by hand "
+            "(`python -m backend.owner_link replace` in the server container)."
+        )
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     res = shell.run(replace_command(token_hash, args.sign_out))
     if res.returncode:
-        io.say("The server did not take the new link; the old one still works. " + envfile.scrub((res.stderr or res.stdout)[-300:], s.secrets()).strip())
+        io.say(
+            "The server did not take the new link; the old one still works. "
+            + envfile.scrub((res.stderr or res.stdout)[-300:], s.secrets()).strip()
+        )
         return 1
     state.write_private(link_file(domain), f"https://{domain}{contract.OWNER_LINK_PATH}#{token}\n")
     s.owner_link_hash = token_hash
     state.save(domain, s.public(), s.private_env(envfile.render(s.to_env())))
-    io.say(f"A new owner sign-in link is in {link_file(domain)} (0600): send it to {s.owner_email}. It works once, for a week. "
-           "The old unused link no longer works" + (", and the owner is signed out everywhere." if args.sign_out else "."))
+    io.say(
+        f"A new owner sign-in link is in {link_file(domain)} (0600): send it to {s.owner_email}. It works once, for a week. "
+        "The old unused link no longer works" + (", and the owner is signed out everywhere." if args.sign_out else ".")
+    )
     return 0

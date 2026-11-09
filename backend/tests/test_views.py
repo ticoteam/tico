@@ -1,7 +1,17 @@
-
-
 from backend.store import H
-from backend.tests.test_api import api, as_member, headers, get, post, restrict, setup_attempt, runner, ready, assign, claim
+from backend.tests.test_api import (
+    api,
+    as_member,
+    headers,
+    get,
+    post,
+    restrict,
+    setup_attempt,
+    runner,
+    ready,
+    assign,
+    claim,
+)
 
 
 def test_revocation_invalidates_running_bot_credential(api):
@@ -23,19 +33,22 @@ def test_bot_execution_cannot_read_another_humans_personal_chat(api):
     own = post(api, "chat/ops", {"text": "Ben work"}, "ben-test")
     attempt = claim(api, r)
     assert attempt["message"]["id"] == own["id"]
-    get(api, f"conversations/{secret['conversation_id']}/messages", attempt["token"], expected=403)
+    get(api, f"conversations/{secret['conversation_id']}/messages", attempt["token"], expected=404)
     assert secret["id"] not in {row["id"] for row in get(api, "inbox", attempt["token"])["messages"]}
-    post(api, "messages", {"to": "human:ana", "text": "Use an old private chat"}, attempt["token"], expected=403)
-    question = post(api, "messages", {"to": "finance", "text": "What is the budget?", "kind": "ask"}, attempt["token"])
+    post(api, "messages", {"to": "human:ana", "text": "Use an old private chat"}, attempt["token"], expected=404)
+    question = post(
+        api, "messages", {"to": "finance", "text": "What is the budget?", "needs_action": True}, attempt["token"]
+    )
     assert get(api, f"conversations/{question['conversation_id']}/messages", attempt["token"])
 
 
 def test_tico_fleet_snapshot_is_bound_to_the_initiating_human(api):
     as_member(api, "ben@acme.example")
-    with api.app.state.store.transaction() as c:      # finance takes requests from Ana alone
+    with api.app.state.store.transaction() as c:  # finance takes requests from Ana alone
         restrict(c, "finance", people=["ana"])
-    post(api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner": "cpo"},
-         "ben-test")
+    post(
+        api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner": "cpo"}, "ben-test"
+    )
     post(api, "tasks", {"title": "What is blocked?", "body": "List it", "owner": "coo"}, "ben-test")
     machine = runner(api)
     assign(api, machine, "coo")
@@ -65,7 +78,7 @@ def test_message_pagination_preserves_all_history_with_timestamp_ties(api):
     with api.app.state.store.transaction() as c:
         for n in range(240):
             H.say(c, "human:ana", "bot:ops", f"Message {n}", conversation_id=msg["conversation_id"])
-        c.execute("UPDATE messages SET created='2026-09-10T10:00:00Z'")
+        c.execute("UPDATE messages SET created_at='2026-09-10T10:00:00Z'")
     path = f"/api/v2/conversations/{msg['conversation_id']}/messages"
     newest = api.get(path, headers=headers()).json()
     assert newest["messages"][-1]["body"] == "Message 239"
@@ -74,4 +87,3 @@ def test_message_pagination_preserves_all_history_with_timestamp_ties(api):
     assert len(older["messages"]) == 41 and not older["has_more"]
     assert older["messages"][0]["id"] == msg["id"]
     assert len({m["id"] for m in older["messages"] + newest["messages"]}) == 241
-

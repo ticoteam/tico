@@ -4,7 +4,9 @@
       "Read",
       "Edit",
       "Write",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr view *)"
     ],
     "deny": [
       "Bash(gh repo delete *)",

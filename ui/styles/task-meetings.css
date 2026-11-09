@@ -1,0 +1,4 @@
+.task-meetings-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.task-meetings-list li{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:baseline;font-size:var(--t-sm)}
+.task-meetings-list .title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-meetings-list time{font-size:var(--t-xs);color:var(--muted)}

@@ -1,0 +1,25 @@
+{
+  "id": "01-mail-cold-pitch",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "ren.okafor@acme.example",
+    "from_name": "Ren Okafor, Lumen Gate Labs",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T07:42:00Z",
+    "subject": "Quick question about your sales pipeline",
+    "snippet": "Hi Dana, I help B2B teams double their outbound reply rate with a three-step sequence. Worth 15 minutes next week?",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX",
+      "UNREAD"
+    ]
+  },
+  "note": "Cold vendor pitch with no earlier thread: archive, nothing is asked of the owner."
+}

@@ -1,0 +1,14 @@
+month,line,amount,team
+2026-01,Software subscriptions,48000,web
+2026-01,Office rent,250000,
+2026-01,Sales revenue,410000,sales
+2026-01,Cash at bank,300000,
+2026-02,Software subscriptions,52000,web
+2026-02,Office rent,250000,
+2026-02,Sales revenue,395000,sales
+2026-02,Cash at bank,120000,
+2026-02,Miscellaneous,0,
+2026-03,Software subscriptions,51000,web
+2026-03,Office rent,250000,
+2026-03,Sales revenue,430000,sales
+2026-03,Cash at bank,-80000,

@@ -54,6 +54,16 @@ pub struct Rejection {
     pub reason: String,
 }
 
+/// Where a refusal is kept: the runtime, its profile ("" = the operator's own), the credentials it was refused under,
+/// and the bot whose own key it refused ("" when the refusal is the runtime's). See `SignIn::refusal_key`.
+type RefusalKey = (String, String, String, String);
+
+/// Whether `runtime` signs each bot in with that bot's own key grant (its manifest's `sign_in_status.check` is
+/// "bot-key", pi and the Gemini CLI). A provider's refusal of such a key is that bot's, not the runtime's.
+pub fn bot_keyed(runtime: &str) -> bool {
+    crate::harness_tools::caps(runtime, "").sign_in_status.check == "bot-key"
+}
+
 /// The keys that sign `runtime` in on this computer for every bot: its manifest's `auth.api_key_env` when the
 /// computer holds them (`api_keys = "computer"`). Keys each bot holds itself are never a computer's sign-in.
 pub fn headless_names(runtime: &str) -> Vec<String> {
@@ -82,7 +92,7 @@ pub struct SignIn {
     secrets: PathBuf,
     asked: Mutex<HashMap<String, Instant>>,
     key_tried: Mutex<HashMap<(String, u64), Instant>>,
-    rejected: Mutex<HashMap<(String, String, String), Rejection>>,
+    rejected: Mutex<HashMap<RefusalKey, Rejection>>,
     /// Set when a rejection is recorded or cleared: the loop sends a heartbeat at once.
     dirty: std::sync::atomic::AtomicBool,
     /// Held for every read-modify-write of SIGNED_OUT_FILE and the key files, so two runtimes signed out (or in)
@@ -94,6 +104,8 @@ pub struct SignIn {
     /// while it runs the regular key fetch and key login leave the runtime's key alone, and a fetch that began
     /// before it writes nothing. Locked after `keys`, never before.
     changes: Mutex<HashMap<String, (u64, bool)>>,
+    /// This process's environment as it started: the terminal's keys, read by `hand`. A test replaces it.
+    pub(crate) process_env: Env,
 }
 
 /// What a Switch to API key may change for one runtime on this computer, as it was before it began: its marks and
@@ -114,7 +126,13 @@ pub struct KeyChange<'a> {
 
 impl Drop for KeyChange<'_> {
     fn drop(&mut self) {
-        if let Some(c) = self.sign.changes.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&self.runtime) {
+        if let Some(c) = self
+            .sign
+            .changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(&self.runtime)
+        {
             c.1 = false;
         }
     }
@@ -147,24 +165,42 @@ impl SignIn {
             keys: Mutex::new(HashMap::new()),
             key_login_ended: Condvar::new(),
             changes: Mutex::new(HashMap::new()),
+            process_env: std::env::vars().collect(),
         }
     }
 
     /// Changes when a key or sign-in might have (service.py credential_fingerprint); never holds a secret.
     pub fn credential_fingerprint(&self, profile: Option<&crate::profiles::Profile>) -> String {
         use std::os::unix::fs::MetadataExt;
-        let mut env: Vec<(String, String)> = std::env::vars().filter(|(k, _)| k.contains("API_KEY") || k.contains("OAUTH_TOKEN")).collect();
+        let mut env: Vec<(String, String)> = std::env::vars()
+            .filter(|(k, _)| k.contains("API_KEY") || k.contains("OAUTH_TOKEN"))
+            .collect();
         env.sort();
         let mut seen: Vec<String> = env.into_iter().map(|(k, v)| format!("{k}={v}")).collect();
         let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        let codex = std::env::var("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".codex"));
-        let mut files = vec![codex.join("auth.json"), home.join(".claude.json"), home.join(".claude/.credentials.json")];
+        let codex = std::env::var("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| home.join(".codex"));
+        let mut files = vec![
+            codex.join("auth.json"),
+            home.join(".claude.json"),
+            home.join(".claude/.credentials.json"),
+        ];
         let mut secrets: Vec<PathBuf> = std::fs::read_dir(&self.secrets)
-            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "env")).collect())
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|x| x == "env"))
+                    .collect()
+            })
             .unwrap_or_default();
         secrets.sort();
         files.extend(secrets);
-        files.push(crate::hosts::musecode::config_home(None).join("muse").join("auth.json"));
+        files.push(
+            crate::hosts::musecode::config_home(None)
+                .join("muse")
+                .join("auth.json"),
+        );
         if let Some(p) = profile {
             seen.push(format!("{}:{}", p.directory.display(), p.share_operator));
             files = vec![
@@ -176,39 +212,98 @@ impl SignIn {
         }
         for path in files {
             if let Ok(m) = std::fs::metadata(&path) {
-                seen.push(format!("{}:{}:{}:{}", path.display(), m.mtime(), m.mtime_nsec(), m.size()));
+                seen.push(format!(
+                    "{}:{}:{}:{}",
+                    path.display(),
+                    m.mtime(),
+                    m.mtime_nsec(),
+                    m.size()
+                ));
             }
         }
         crate::profiles::sha256_hex(seen.join("\n").as_bytes())
     }
 
-    /// The live refusal of `runtime` on `profile` while its credentials are unchanged, or None.
-    pub fn rejection(&self, runtime: &str, profile: Option<&crate::profiles::Profile>) -> Option<Rejection> {
-        let key = (runtime.to_string(), profile.map(|p| p.name.clone()).unwrap_or_default(), self.credential_fingerprint(profile));
+    /// The live refusal of `runtime` on `profile` while its credentials are unchanged, or None. `bot` is the bot the
+    /// answer is for: a bot-keyed runtime's own key (no profile) is refused per bot (`refusal_key`), so a caller with
+    /// no bot in hand passes "" and gets only the runtime's refusal, which such a key never leaves.
+    pub fn rejection(
+        &self,
+        runtime: &str,
+        profile: Option<&crate::profiles::Profile>,
+        bot: &str,
+    ) -> Option<Rejection> {
+        let key = self.refusal_key(runtime, profile, bot);
         let mut rows = self.rejected.lock().unwrap();
-        if rows.get(&key).is_some_and(|r| r.mono.elapsed() >= REJECT_RECHECK) {
+        if rows
+            .get(&key)
+            .is_some_and(|r| r.mono.elapsed() >= REJECT_RECHECK)
+        {
             rows.remove(&key);
         }
         rows.get(&key).cloned()
     }
 
     /// Record that the provider refused `runtime`'s key or sign-in (service.py reject): the runtime stops taking
-    /// work here until a credential changes, a sign-in succeeds, or REJECT_RECHECK passes.
-    pub fn reject(&self, runtime: &str, text: &str, profile: Option<&crate::profiles::Profile>) {
-        let key = (runtime.to_string(), profile.map(|p| p.name.clone()).unwrap_or_default(), self.credential_fingerprint(profile));
+    /// work here until a credential changes, a sign-in succeeds, or REJECT_RECHECK passes. On a bot-keyed runtime with
+    /// no profile only `bot`, whose key it was, stops (`refusal_key`).
+    pub fn reject(
+        &self,
+        runtime: &str,
+        text: &str,
+        profile: Option<&crate::profiles::Profile>,
+        bot: &str,
+    ) {
+        let key = self.refusal_key(runtime, profile, bot);
         let at = crate::util::iso(&serde_json::json!(crate::util::epoch_s().floor()));
         let at = text_of(&at).chars().take(19).collect::<String>() + "Z";
         let mut rows = self.rejected.lock().unwrap();
         rows.retain(|_, r| r.mono.elapsed() < REJECT_RECHECK);
-        rows.insert(key, Rejection { at, mono: Instant::now(), reason: crate::hosts::rejection_reason(text) });
+        rows.insert(
+            key,
+            Rejection {
+                at,
+                mono: Instant::now(),
+                reason: crate::hosts::rejection_reason(text),
+            },
+        );
         drop(rows);
         crate::profiles::forget_report();
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// A sign-in succeeded: forget the refusals of `runtime` on `profile` ("" = the operator's own).
+    /// What a refusal is kept under. A bot-keyed runtime's key is each bot's own grant, so its refusal is that bot's,
+    /// and a change to the bot's granted names is a credential change that clears it (a changed value is only read
+    /// when a turn runs, so that one clears at REJECT_RECHECK). A subscription profile's login and a computer-level
+    /// runtime are shared by their bots, so their refusal is the runtime's and the bot is left out.
+    fn refusal_key(
+        &self,
+        runtime: &str,
+        profile: Option<&crate::profiles::Profile>,
+        bot: &str,
+    ) -> RefusalKey {
+        let own = bot_keyed(runtime) && profile.is_none();
+        let mut credentials = self.credential_fingerprint(profile);
+        if own {
+            let names = crate::readiness_extra::held(bot).join("\n");
+            credentials = crate::profiles::sha256_hex(format!("{credentials}\n{names}").as_bytes());
+        }
+        let profile = profile.map(|p| p.name.clone()).unwrap_or_default();
+        (
+            runtime.to_string(),
+            profile,
+            credentials,
+            if own { bot.to_string() } else { String::new() },
+        )
+    }
+
+    /// A sign-in succeeded: forget the refusals of `runtime` on `profile` ("" = the operator's own), every bot's on a
+    /// bot-keyed runtime.
     pub fn clear_rejection(&self, runtime: &str, profile: &str) {
-        self.rejected.lock().unwrap().retain(|k, _| !(k.0 == runtime && k.1 == profile));
+        self.rejected
+            .lock()
+            .unwrap()
+            .retain(|k, _| !(k.0 == runtime && k.1 == profile));
         crate::profiles::forget_report();
         self.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -245,16 +340,27 @@ impl SignIn {
     }
 
     fn write_signed_out(&self, list: &[String]) -> std::io::Result<()> {
-        self.write_file(SIGNED_OUT_FILE, serde_json::to_string(list).unwrap_or_default().as_bytes())
+        self.write_file(
+            SIGNED_OUT_FILE,
+            serde_json::to_string(list).unwrap_or_default().as_bytes(),
+        )
     }
 
     /// Write `file` in the secrets folder owner-only, whole or not at all (a temporary file renamed over it).
     fn write_file(&self, file: &str, text: &[u8]) -> std::io::Result<()> {
         use std::io::Write;
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-        std::fs::DirBuilder::new().recursive(true).mode(0o770).create(&self.secrets)?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o770)
+            .create(&self.secrets)?;
         let temp = self.secrets.join(format!("{file}.tmp"));
-        let mut out = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&temp)?;
+        let mut out = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temp)?;
         out.write_all(text)?;
         out.sync_all()?;
         std::fs::rename(&temp, self.secrets.join(file))
@@ -283,7 +389,12 @@ impl SignIn {
     /// nothing to fetch.
     pub fn mark_key_off(&self, runtime: &str) -> Result<(), KeyOffFailed> {
         let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-        let files = [KEY_OFF_FILE, TEAM_KEYS_FILE, COMPUTER_KEYS_FILE, HAND_KEYS_FILE];
+        let files = [
+            KEY_OFF_FILE,
+            TEAM_KEYS_FILE,
+            COMPUTER_KEYS_FILE,
+            HAND_KEYS_FILE,
+        ];
         let mut before = Vec::new();
         for file in files {
             match std::fs::read(self.secrets.join(file)) {
@@ -298,7 +409,10 @@ impl SignIn {
             if !list.iter().any(|r| r == runtime) {
                 list.push(runtime.into());
                 list.sort();
-                self.write_file(KEY_OFF_FILE, serde_json::to_string(&list).unwrap_or_default().as_bytes())?;
+                self.write_file(
+                    KEY_OFF_FILE,
+                    serde_json::to_string(&list).unwrap_or_default().as_bytes(),
+                )?;
             }
             for file in [TEAM_KEYS_FILE, COMPUTER_KEYS_FILE, HAND_KEYS_FILE] {
                 self.drop_names(file, &names)?;
@@ -344,10 +458,19 @@ impl SignIn {
                 Ok(_) => {}
             }
             std::fs::read_to_string(self.secrets.join(file))?;
-            Ok(read_env(&self.secrets.join(file)).into_iter().filter(|(k, _)| names.contains(k)).collect())
+            Ok(read_env(&self.secrets.join(file))
+                .into_iter()
+                .filter(|(k, _)| names.contains(k))
+                .collect())
         };
         let (computer, hand) = (read(COMPUTER_KEYS_FILE)?, read(HAND_KEYS_FILE)?);
-        Ok(KeysBefore { runtime: runtime.into(), signed_out: self.signed_out(runtime), key_off: self.key_off(runtime), computer, hand })
+        Ok(KeysBefore {
+            runtime: runtime.into(),
+            signed_out: self.signed_out(runtime),
+            key_off: self.key_off(runtime),
+            computer,
+            hand,
+        })
     }
 
     /// Put `before` back: the runtime's keys first (each file's other lines and runtimes as they are now), its marks
@@ -356,12 +479,18 @@ impl SignIn {
         let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
         let names = headless_names(&before.runtime);
         let mut first = None;
-        for (file, keys) in [(COMPUTER_KEYS_FILE, &before.computer), (HAND_KEYS_FILE, &before.hand)] {
+        for (file, keys) in [
+            (COMPUTER_KEYS_FILE, &before.computer),
+            (HAND_KEYS_FILE, &before.hand),
+        ] {
             if let Err(e) = self.set_names(file, &names, keys) {
                 first.get_or_insert(e);
             }
         }
-        for (file, marked) in [(SIGNED_OUT_FILE, before.signed_out), (KEY_OFF_FILE, before.key_off)] {
+        for (file, marked) in [
+            (SIGNED_OUT_FILE, before.signed_out),
+            (KEY_OFF_FILE, before.key_off),
+        ] {
             let mut list = self.list(file);
             if list.iter().any(|r| *r == before.runtime) == marked {
                 continue;
@@ -371,7 +500,10 @@ impl SignIn {
                 list.push(before.runtime.clone());
                 list.sort();
             }
-            if let Err(e) = self.write_file(file, serde_json::to_string(&list).unwrap_or_default().as_bytes()) {
+            if let Err(e) = self.write_file(
+                file,
+                serde_json::to_string(&list).unwrap_or_default().as_bytes(),
+            ) {
                 first.get_or_insert(e);
             }
         }
@@ -410,7 +542,10 @@ impl SignIn {
             let mut list = self.list(KEY_OFF_FILE);
             if list.iter().any(|r| r == runtime) {
                 list.retain(|r| r != runtime);
-                self.write_file(KEY_OFF_FILE, serde_json::to_string(&list).unwrap_or_default().as_bytes())?;
+                self.write_file(
+                    KEY_OFF_FILE,
+                    serde_json::to_string(&list).unwrap_or_default().as_bytes(),
+                )?;
             }
         }
         self.refresh_now(runtime);
@@ -458,12 +593,20 @@ impl SignIn {
             return None;
         }
         *c = (c.0 + 1, true);
-        Some(KeyChange { sign: self, runtime: runtime.to_string() })
+        Some(KeyChange {
+            sign: self,
+            runtime: runtime.to_string(),
+        })
     }
 
     /// (key changes begun for `runtime`, whether one is running).
     fn key_changes(&self, runtime: &str) -> (u64, bool) {
-        self.changes.lock().unwrap_or_else(|e| e.into_inner()).get(runtime).copied().unwrap_or_default()
+        self.changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(runtime)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Wait until no key login for `runtime` is running, at most `limit`. After `mark_signed_out` none starts, so
@@ -478,7 +621,7 @@ impl SignIn {
     }
 
     fn hand(&self) -> Env {
-        let mut env: Env = std::env::vars().collect();
+        let mut env: Env = self.process_env.clone();
         env.extend(read_env(&self.secrets.join(HAND_KEYS_FILE)));
         env
     }
@@ -496,7 +639,13 @@ impl SignIn {
     /// "shared"), signed out or not.
     fn key_in_use(&self, runtime: &str) -> Option<(String, String, &'static str)> {
         let names = headless_names(runtime);
-        [(self.computer(), "computer"), (self.hand(), "terminal"), (self.team(), "shared")].into_iter().find_map(|(env, source)| {
+        [
+            (self.computer(), "computer"),
+            (self.hand(), "terminal"),
+            (self.team(), "shared"),
+        ]
+        .into_iter()
+        .find_map(|(env, source)| {
             names.iter().find_map(|n| {
                 let value = env.get(n)?.trim_matches(|c| c == '"' || c == '\'');
                 (!value.is_empty()).then(|| (n.to_string(), value.to_string(), source))
@@ -510,7 +659,8 @@ impl SignIn {
         if self.no_key(runtime) {
             return None;
         }
-        self.key_in_use(runtime).map(|(name, value, _)| (name, value))
+        self.key_in_use(runtime)
+            .map(|(name, value, _)| (name, value))
     }
 
     /// Which key signs `runtime` in: its name and where it is kept ("computer", "terminal" or "shared"), never its
@@ -519,12 +669,14 @@ impl SignIn {
         if self.no_key(runtime) {
             return None;
         }
-        self.key_in_use(runtime).map(|(name, _, source)| (name, source))
+        self.key_in_use(runtime)
+            .map(|(name, _, source)| (name, source))
     }
 
     /// Whether the only key that signs `runtime` in is the company's.
     pub fn team_key_only(&self, runtime: &str) -> bool {
-        self.key_source(runtime).is_some_and(|(_, source)| source == "shared")
+        self.key_source(runtime)
+            .is_some_and(|(_, source)| source == "shared")
     }
 
     /// Ask the app for `runtime`'s key at the next call, not after the wait: it changed there.
@@ -534,7 +686,10 @@ impl SignIn {
 
     /// Let the next key login of `runtime` run even with a key tried a moment ago.
     pub fn retry_key_login(&self, runtime: &str) {
-        self.key_tried.lock().unwrap().retain(|(home, _), _| !home.starts_with(&format!("{runtime}:")));
+        self.key_tried
+            .lock()
+            .unwrap()
+            .retain(|(home, _), _| !home.starts_with(&format!("{runtime}:")));
     }
 
     /// Fetch `runtime`'s key from the app: the key it keeps for this computer alone into COMPUTER_KEYS_FILE, the
@@ -552,7 +707,9 @@ impl SignIn {
         }
         let wait = match self.key_source(runtime) {
             Some((_, "terminal")) => return false,
-            Some(_) if self.rejection(runtime, None).is_none() => KEY_REFRESH,
+            // No bot in hand here (the company's key is per runtime). Unreachable for a bot-keyed runtime: it has no
+            // company key (`headless_names` is empty), so this returns above.
+            Some(_) if self.rejection(runtime, None, "").is_none() => KEY_REFRESH,
             _ => TEAM_KEY_RETRY,
         };
         {
@@ -562,10 +719,23 @@ impl SignIn {
             }
             asked.insert(runtime.into(), Instant::now());
         }
-        let reply = match client.get_query("runner-model-credentials", &[("runtime", runtime.to_string())]).await {
+        let reply = match client
+            .get_query(
+                "runner-model-credentials",
+                &[("runtime", runtime.to_string())],
+            )
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
-                log(&format!("Team model key for {runtime} was not fetched: {}", if e.status != 0 { "APIError" } else { "unreachable" }));
+                log(&format!(
+                    "Team model key for {runtime} was not fetched: {}",
+                    if e.status != 0 {
+                        "APIError"
+                    } else {
+                        "unreachable"
+                    }
+                ));
                 return false;
             }
         };
@@ -575,9 +745,17 @@ impl SignIn {
             if self.signed_out(runtime) {
                 return false;
             }
-            let Some(_change) = self.key_change_after(runtime, Some(changes)) else { return false };
+            let Some(_change) = self.key_change_after(runtime, Some(changes)) else {
+                return false;
+            };
             let cli = crate::login::key_cli(runtime);
-            match blocking(|| crate::login::clear_key(self, runtime, cli.as_ref().map(|(exe, env)| (exe.as_str(), env)))) {
+            match blocking(|| {
+                crate::login::clear_key(
+                    self,
+                    runtime,
+                    cli.as_ref().map(|(exe, env)| (exe.as_str(), env)),
+                )
+            }) {
                 Ok(()) => log(&format!("Key for {runtime} cleared from the app")),
                 Err(e) => log(&format!("Key for {runtime} cleared from the app, but: {e}")),
             }
@@ -590,14 +768,18 @@ impl SignIn {
         }
         // Per file: the keys given, or None when one was unusable and the file is left as it is. An older server
         // names no source: its key is the company's.
-        let mut given: HashMap<&str, Option<Env>> = [("computer", Some(Env::new())), ("shared", Some(Env::new()))].into();
+        let mut given: HashMap<&str, Option<Env>> =
+            [("computer", Some(Env::new())), ("shared", Some(Env::new()))].into();
         for row in reply["credentials"].as_array().cloned().unwrap_or_default() {
             let source = match text_of(&row["source"]).as_str() {
                 "" | "shared" => "shared",
                 "computer" => "computer",
                 _ => continue,
             };
-            let (k, v) = (text_of(&row["env"]), text_of(&row["value"]).trim().to_string());
+            let (k, v) = (
+                text_of(&row["env"]),
+                text_of(&row["value"]).trim().to_string(),
+            );
             if !names.contains(&k) {
                 continue;
             }
@@ -615,16 +797,26 @@ impl SignIn {
             return false;
         }
         let mut changed = false;
-        for (file, source, whose) in [(COMPUTER_KEYS_FILE, "computer", "this computer's"), (TEAM_KEYS_FILE, "shared", "the team's")] {
-            let Some(keys) = given.remove(source).flatten() else { continue };
+        for (file, source, whose) in [
+            (COMPUTER_KEYS_FILE, "computer", "this computer's"),
+            (TEAM_KEYS_FILE, "shared", "the team's"),
+        ] {
+            let Some(keys) = given.remove(source).flatten() else {
+                continue;
+            };
             match self.replace_keys(file, &names, &keys) {
                 Ok(false) => {}
                 Ok(true) if keys.is_empty() => {
-                    log(&format!("Removed {whose} model key for {runtime}: the app no longer gives it"));
+                    log(&format!(
+                        "Removed {whose} model key for {runtime}: the app no longer gives it"
+                    ));
                     changed = true;
                 }
                 Ok(true) => {
-                    log(&format!("Took {whose} model key for {}", keys.keys().cloned().collect::<Vec<_>>().join(", ")));
+                    log(&format!(
+                        "Took {whose} model key for {}",
+                        keys.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ));
                     changed = true;
                 }
                 Err(_) => log(&format!("Model key for {runtime} could not be saved")),
@@ -643,7 +835,13 @@ impl SignIn {
         if env == before {
             return Ok(false);
         }
-        self.write_file(file, env.iter().map(|(k, v)| format!("{k}={v}\n")).collect::<String>().as_bytes())?;
+        self.write_file(
+            file,
+            env.iter()
+                .map(|(k, v)| format!("{k}={v}\n"))
+                .collect::<String>()
+                .as_bytes(),
+        )?;
         Ok(true)
     }
 
@@ -654,11 +852,20 @@ impl SignIn {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         };
-        let named = |line: &&str| !line.trim_start().starts_with('#') && line.split_once('=').is_some_and(|(k, _)| names.iter().any(|n| n == k.trim()));
+        let named = |line: &&str| {
+            !line.trim_start().starts_with('#')
+                && line
+                    .split_once('=')
+                    .is_some_and(|(k, _)| names.iter().any(|n| n == k.trim()))
+        };
         if !text.lines().any(|l| named(&l)) {
             return Ok(());
         }
-        let kept: String = text.lines().filter(|l| !named(l)).map(|l| format!("{l}\n")).collect();
+        let kept: String = text
+            .lines()
+            .filter(|l| !named(l))
+            .map(|l| format!("{l}\n"))
+            .collect();
         self.write_file(file, kept.as_bytes())
     }
 
@@ -682,7 +889,8 @@ impl SignIn {
     /// Put `keys` in place of `runtime`'s keys in the computer's own key file, other runtimes' kept.
     pub fn set_computer_keys(&self, runtime: &str, keys: &Env) -> std::io::Result<()> {
         let _keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
-        self.replace_keys(COMPUTER_KEYS_FILE, &headless_names(runtime), keys).map(|_| ())
+        self.replace_keys(COMPUTER_KEYS_FILE, &headless_names(runtime), keys)
+            .map(|_| ())
     }
 
     /// Turn the computer's key for `runtime` into a stored login with the manifest's `api_key_login` command (Codex:
@@ -693,16 +901,28 @@ impl SignIn {
         if args.is_empty() {
             return false;
         }
-        let Some((name, key)) = self.headless_secret(runtime) else { return false };
+        let Some((name, key)) = self.headless_secret(runtime) else {
+            return false;
+        };
         let label = crate::harness_tools::name_for(runtime);
         let var = crate::harness_tools::caps(runtime, "").profile_home;
-        let home = format!("{runtime}:{}", if var.is_empty() { String::new() } else { std::env::var(&var).unwrap_or_default() });
+        let home = format!(
+            "{runtime}:{}",
+            if var.is_empty() {
+                String::new()
+            } else {
+                std::env::var(&var).unwrap_or_default()
+            }
+        );
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
         let attempt = (home, hasher.finish());
         {
             let mut tried = self.key_tried.lock().unwrap();
-            if tried.get(&attempt).is_some_and(|at| at.elapsed() < KEY_LOGIN_RETRY) {
+            if tried
+                .get(&attempt)
+                .is_some_and(|at| at.elapsed() < KEY_LOGIN_RETRY)
+            {
                 return false;
             }
             tried.insert(attempt, Instant::now());
@@ -716,7 +936,10 @@ impl SignIn {
                 return false;
             }
             *running.entry(runtime.to_string()).or_default() += 1;
-            KeyLoginRunning { sign: self, runtime: runtime.to_string() }
+            KeyLoginRunning {
+                sign: self,
+                runtime: runtime.to_string(),
+            }
         };
         use tokio::io::AsyncWriteExt;
         let child = crate::isolation::command(executable)
@@ -733,18 +956,34 @@ impl SignIn {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(format!("{key}\n").as_bytes()).await;
         }
-        let done = match tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await {
-            Ok(Ok(out)) => out,
-            _ => {
-                log(&format!("{label} sign-in with {name} did not run: TimeoutExpired"));
-                return false;
-            }
-        };
+        let done =
+            match tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await {
+                Ok(Ok(out)) => out,
+                _ => {
+                    log(&format!(
+                        "{label} sign-in with {name} did not run: TimeoutExpired"
+                    ));
+                    return false;
+                }
+            };
         if !done.status.success() {
-            let text = if done.stderr.is_empty() { done.stdout } else { done.stderr };
-            let first = String::from_utf8_lossy(&text).trim().lines().next().unwrap_or_default().replace(&key, "***");
+            let text = if done.stderr.is_empty() {
+                done.stdout
+            } else {
+                done.stderr
+            };
+            let first = String::from_utf8_lossy(&text)
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .replace(&key, "***");
             let reason = crate::redact::scrub_credentials(&first, std::slice::from_ref(&key));
-            log(&format!("{label} sign-in with {name} failed (exit {}): {}", done.status.code().unwrap_or(-1), reason.chars().take(200).collect::<String>()));
+            log(&format!(
+                "{label} sign-in with {name} failed (exit {}): {}",
+                done.status.code().unwrap_or(-1),
+                reason.chars().take(200).collect::<String>()
+            ));
             return false;
         }
         log(&format!("{label} signed in with {name}"));
@@ -762,7 +1001,9 @@ fn blocking<T>(work: impl FnOnce() -> T) -> T {
 
 /// Whether any assigned bot runs `runtime`.
 pub fn assigned(assignments: &[Value], runtime: &str) -> bool {
-    assignments.iter().any(|row| row["config"]["runtime"] == runtime)
+    assignments
+        .iter()
+        .any(|row| row["config"]["runtime"] == runtime)
 }
 
 #[cfg(test)]
@@ -774,7 +1015,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn projects() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("tico-signed-out-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-signed-out-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("secrets")).unwrap();
         dir
     }
@@ -782,7 +1024,14 @@ mod tests {
     /// A stand-in `codex` that records each run, so a key login that happens is seen.
     fn fake_codex(dir: &Path) -> (PathBuf, PathBuf) {
         let (exe, runs) = (dir.join("codex"), dir.join("runs"));
-        std::fs::write(&exe, format!("#!/bin/sh\necho \"$@\" >> '{}'\ncat > /dev/null\n", runs.display())).unwrap();
+        std::fs::write(
+            &exe,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> '{}'\ncat > /dev/null\n",
+                runs.display()
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         (exe, runs)
     }
@@ -798,13 +1047,17 @@ mod tests {
                 count.fetch_add(1, Ordering::SeqCst);
                 let mut buf = vec![0u8; 8192];
                 let _ = sock.read(&mut buf).await;
-                let body = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-0123456789"}]}"#;
+                let body =
+                    r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-0123456789"}]}"#;
                 let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                 let _ = sock.write_all(reply.as_bytes()).await;
                 let _ = sock.shutdown().await;
             }
         });
-        (Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap(), asked)
+        (
+            Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap(),
+            asked,
+        )
     }
 
     /// A server that answers the model key fetch with whatever `reply` holds at the time, and counts how often it
@@ -812,7 +1065,10 @@ mod tests {
     async fn key_server(reply: &str) -> (Client, Arc<AtomicUsize>, Arc<Mutex<String>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let (asked, body) = (Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(reply.to_string())));
+        let (asked, body) = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(reply.to_string())),
+        );
         let (count, answer) = (asked.clone(), body.clone());
         tokio::spawn(async move {
             while let Ok((mut sock, _)) = listener.accept().await {
@@ -825,7 +1081,11 @@ mod tests {
                 let _ = sock.shutdown().await;
             }
         });
-        (Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap(), asked, body)
+        (
+            Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap(),
+            asked,
+            body,
+        )
     }
 
     #[test]
@@ -834,31 +1094,70 @@ mod tests {
         let secrets = dir.join("secrets");
         let sign = SignIn::new(&dir);
         assert_eq!(sign.key_source("codex"), None);
-        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
-        assert_eq!(sign.headless_secret("codex"), Some(("OPENAI_API_KEY".into(), "sk-team-0123456789".into())));
-        assert_eq!(sign.key_source("codex"), Some(("OPENAI_API_KEY".into(), "shared")));
+        std::fs::write(
+            secrets.join(TEAM_KEYS_FILE),
+            "OPENAI_API_KEY=sk-team-0123456789\n",
+        )
+        .unwrap();
+        assert_eq!(
+            sign.headless_secret("codex"),
+            Some(("OPENAI_API_KEY".into(), "sk-team-0123456789".into()))
+        );
+        assert_eq!(
+            sign.key_source("codex"),
+            Some(("OPENAI_API_KEY".into(), "shared"))
+        );
         assert!(sign.team_key_only("codex"));
-        std::fs::write(secrets.join(HAND_KEYS_FILE), "OPENAI_API_KEY='sk-hand-0123456789'\n").unwrap();
-        assert_eq!(sign.headless_secret("codex"), Some(("OPENAI_API_KEY".into(), "sk-hand-0123456789".into())));
-        assert_eq!(sign.key_source("codex"), Some(("OPENAI_API_KEY".into(), "terminal")));
+        std::fs::write(
+            secrets.join(HAND_KEYS_FILE),
+            "OPENAI_API_KEY='sk-hand-0123456789'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            sign.headless_secret("codex"),
+            Some(("OPENAI_API_KEY".into(), "sk-hand-0123456789".into()))
+        );
+        assert_eq!(
+            sign.key_source("codex"),
+            Some(("OPENAI_API_KEY".into(), "terminal"))
+        );
         assert!(!sign.team_key_only("codex"));
-        std::fs::write(secrets.join(COMPUTER_KEYS_FILE), "OPENAI_API_KEY=sk-mine-0123456789\n").unwrap();
-        assert_eq!(sign.headless_secret("codex"), Some(("OPENAI_API_KEY".into(), "sk-mine-0123456789".into())));
-        assert_eq!(sign.key_source("codex"), Some(("OPENAI_API_KEY".into(), "computer")));
+        std::fs::write(
+            secrets.join(COMPUTER_KEYS_FILE),
+            "OPENAI_API_KEY=sk-mine-0123456789\n",
+        )
+        .unwrap();
+        assert_eq!(
+            sign.headless_secret("codex"),
+            Some(("OPENAI_API_KEY".into(), "sk-mine-0123456789".into()))
+        );
+        assert_eq!(
+            sign.key_source("codex"),
+            Some(("OPENAI_API_KEY".into(), "computer"))
+        );
         assert!(!sign.team_key_only("codex"));
         // The computer's own key alone, with the company's beside it: still the computer's.
         std::fs::remove_file(secrets.join(HAND_KEYS_FILE)).unwrap();
-        assert_eq!(sign.key_source("codex"), Some(("OPENAI_API_KEY".into(), "computer")));
+        assert_eq!(
+            sign.key_source("codex"),
+            Some(("OPENAI_API_KEY".into(), "computer"))
+        );
         assert!(!sign.team_key_only("codex"));
         sign.mark_signed_out("codex").unwrap();
-        assert_eq!((sign.headless_secret("codex"), sign.key_source("codex")), (None, None));
+        assert_eq!(
+            (sign.headless_secret("codex"), sign.key_source("codex")),
+            (None, None)
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
     async fn each_key_from_the_app_goes_to_its_own_file_and_one_no_longer_given_goes() {
         let dir = projects();
-        let (computer, team) = (dir.join("secrets").join(COMPUTER_KEYS_FILE), dir.join("secrets").join(TEAM_KEYS_FILE));
+        let (computer, team) = (
+            dir.join("secrets").join(COMPUTER_KEYS_FILE),
+            dir.join("secrets").join(TEAM_KEYS_FILE),
+        );
         std::fs::write(&computer, "ANTHROPIC_API_KEY=kept-computer\n").unwrap();
         std::fs::write(&team, "OTHER=kept\n").unwrap();
         let both = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-mine-0123456789","source":"computer"},
@@ -867,17 +1166,35 @@ mod tests {
         let sign = SignIn::new(&dir);
         assert!(sign.team_model_keys(&client, "codex").await);
         let (c, t) = (read_env(&computer), read_env(&team));
-        assert_eq!((c["OPENAI_API_KEY"].as_str(), c["ANTHROPIC_API_KEY"].as_str()), ("sk-mine-0123456789", "kept-computer"));
-        assert_eq!((t["OPENAI_API_KEY"].as_str(), t["OTHER"].as_str()), ("sk-team-0123456789", "kept"));
-        assert_eq!(std::fs::metadata(&computer).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(sign.key_source("codex"), Some(("OPENAI_API_KEY".into(), "computer")));
+        assert_eq!(
+            (
+                c["OPENAI_API_KEY"].as_str(),
+                c["ANTHROPIC_API_KEY"].as_str()
+            ),
+            ("sk-mine-0123456789", "kept-computer")
+        );
+        assert_eq!(
+            (t["OPENAI_API_KEY"].as_str(), t["OTHER"].as_str()),
+            ("sk-team-0123456789", "kept")
+        );
+        assert_eq!(
+            std::fs::metadata(&computer).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            sign.key_source("codex"),
+            Some(("OPENAI_API_KEY".into(), "computer"))
+        );
         // The computer's own key was taken away in the app: gone from its file, the rest kept; the company's signs in.
         *reply.lock().unwrap() = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-0123456789","source":"shared"}]}"#.into();
         sign.refresh_now("codex");
         assert!(sign.team_model_keys(&client, "codex").await);
         let c = read_env(&computer);
         assert!(!c.contains_key("OPENAI_API_KEY") && c["ANTHROPIC_API_KEY"] == "kept-computer");
-        assert_eq!(sign.key_source("codex"), Some(("OPENAI_API_KEY".into(), "shared")));
+        assert_eq!(
+            sign.key_source("codex"),
+            Some(("OPENAI_API_KEY".into(), "shared"))
+        );
         // A server that says the login was signed out changes nothing here; its own job does.
         *reply.lock().unwrap() = r#"{"credentials":[],"signed_out":true}"#.into();
         sign.refresh_now("codex");
@@ -889,18 +1206,25 @@ mod tests {
         assert!(!sign.team_model_keys(&client, "codex").await);
         assert_eq!(read_env(&team)["OPENAI_API_KEY"], "sk-team-0123456789");
         // An older server names no source: its key is the company's.
-        *reply.lock().unwrap() = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-rotated-0123"}]}"#.into();
+        *reply.lock().unwrap() =
+            r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-rotated-0123"}]}"#.into();
         sign.refresh_now("codex");
         assert!(sign.team_model_keys(&client, "codex").await);
         assert_eq!(read_env(&team)["OPENAI_API_KEY"], "sk-team-rotated-0123");
         assert!(!read_env(&computer).contains_key("OPENAI_API_KEY"));
         sign.refresh_now("codex");
-        assert!(!sign.team_model_keys(&client, "codex").await, "the same key again is no change");
+        assert!(
+            !sign.team_model_keys(&client, "codex").await,
+            "the same key again is no change"
+        );
         // The company's key taken away too: none is left.
         *reply.lock().unwrap() = r#"{"credentials":[]}"#.into();
         sign.refresh_now("codex");
         assert!(sign.team_model_keys(&client, "codex").await);
-        assert_eq!(read_env(&team).get("OTHER").map(String::as_str), Some("kept"));
+        assert_eq!(
+            read_env(&team).get("OTHER").map(String::as_str),
+            Some("kept")
+        );
         assert_eq!(sign.key_source("codex"), None);
         assert_eq!(asked.load(Ordering::SeqCst), 7);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -910,7 +1234,11 @@ mod tests {
     async fn a_key_from_the_app_is_asked_for_again_every_ten_minutes_or_at_once_when_it_changed() {
         let dir = projects();
         let secrets = dir.join("secrets");
-        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        std::fs::write(
+            secrets.join(TEAM_KEYS_FILE),
+            "OPENAI_API_KEY=sk-team-0123456789\n",
+        )
+        .unwrap();
         let (client, asked, reply) = key_server(r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-team-0123456789","source":"shared"}]}"#).await;
         let sign = SignIn::new(&dir);
         // Held from before a restart: asked once, the same key, no change.
@@ -924,9 +1252,16 @@ mod tests {
         sign.refresh_now("codex");
         assert!(sign.team_model_keys(&client, "codex").await);
         assert_eq!(asked.load(Ordering::SeqCst), 2);
-        assert_eq!(sign.headless_secret("codex").unwrap().1, "sk-team-rotated-0123");
+        assert_eq!(
+            sign.headless_secret("codex").unwrap().1,
+            "sk-team-rotated-0123"
+        );
         // A key from the terminal signs it in: the app is not asked.
-        std::fs::write(secrets.join(HAND_KEYS_FILE), "OPENAI_API_KEY=sk-hand-0123456789\n").unwrap();
+        std::fs::write(
+            secrets.join(HAND_KEYS_FILE),
+            "OPENAI_API_KEY=sk-hand-0123456789\n",
+        )
+        .unwrap();
         sign.refresh_now("codex");
         assert!(!sign.team_model_keys(&client, "codex").await);
         assert_eq!(asked.load(Ordering::SeqCst), 2);
@@ -934,30 +1269,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_login_switched_to_a_subscription_takes_no_key_even_signed_in_until_the_shared_key_is_chosen() {
+    async fn a_login_switched_to_a_subscription_takes_no_key_even_signed_in_until_the_shared_key_is_chosen(
+    ) {
         // Switch to subscription (backend/model_login.py to_subscription): once the subscription is in place no key on
         // this computer reaches the login. The turn's key comes only from headless_secret (execute.rs
         // `api_key_in_turn`), so the next turn runs on the subscription with no API key in its environment.
         let dir = projects();
         let secrets = dir.join("secrets");
-        std::fs::write(secrets.join(TEAM_KEYS_FILE), "ANTHROPIC_API_KEY=sk-ant-team-0123456789\nOPENAI_API_KEY=sk-team-0123456789\n").unwrap();
-        std::fs::write(secrets.join(COMPUTER_KEYS_FILE), "ANTHROPIC_API_KEY=sk-ant-own-0123456789\n").unwrap();
+        std::fs::write(
+            secrets.join(TEAM_KEYS_FILE),
+            "ANTHROPIC_API_KEY=sk-ant-team-0123456789\nOPENAI_API_KEY=sk-team-0123456789\n",
+        )
+        .unwrap();
+        std::fs::write(
+            secrets.join(COMPUTER_KEYS_FILE),
+            "ANTHROPIC_API_KEY=sk-ant-own-0123456789\n",
+        )
+        .unwrap();
         let (exe, runs) = fake_codex(&dir);
         let sign = SignIn::new(&dir);
-        assert!(sign.headless_secret("claude").is_some(), "before the switch the key is what it runs on");
+        assert!(
+            sign.headless_secret("claude").is_some(),
+            "before the switch the key is what it runs on"
+        );
         sign.mark_key_off("claude").unwrap();
         sign.mark_key_off("codex").unwrap();
-        assert!(sign.key_off("claude") && !sign.signed_out("claude"), "switched, not signed out");
+        assert!(
+            sign.key_off("claude") && !sign.signed_out("claude"),
+            "switched, not signed out"
+        );
         // The old keys are deleted: the company's copy and the computer's own.
         assert!(!read_env(&secrets.join(TEAM_KEYS_FILE)).contains_key("ANTHROPIC_API_KEY"));
         assert!(!read_env(&secrets.join(COMPUTER_KEYS_FILE)).contains_key("ANTHROPIC_API_KEY"));
-        assert_eq!(sign.headless_secret("claude"), None, "no API key for the turn's environment");
+        assert_eq!(
+            sign.headless_secret("claude"),
+            None,
+            "no API key for the turn's environment"
+        );
         assert!(!sign.team_key_only("claude"));
         assert!(!sign.key_login("codex", &exe).await);
-        assert!(!runs.exists(), "the 10-minute key login ran over the subscription");
+        assert!(
+            !runs.exists(),
+            "the 10-minute key login ran over the subscription"
+        );
         let (client, asked) = team_server().await;
         assert!(!sign.team_model_keys(&client, "codex").await);
-        assert_eq!(asked.load(Ordering::SeqCst), 0, "the shared key was fetched for a login switched to a subscription");
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "the shared key was fetched for a login switched to a subscription"
+        );
         // A later sign-in (Switch account) lifts a sign-out, not this; and it holds across a restart.
         sign.unmark_signed_out("claude").unwrap();
         let restarted = SignIn::new(&dir);
@@ -965,7 +1326,10 @@ mod tests {
         // Use the shared key is the person saying so.
         restarted.unmark_key_off("codex").unwrap();
         assert!(restarted.team_model_keys(&client, "codex").await);
-        assert!(restarted.headless_secret("codex").is_some() && restarted.headless_secret("claude").is_none());
+        assert!(
+            restarted.headless_secret("codex").is_some()
+                && restarted.headless_secret("claude").is_none()
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -975,18 +1339,33 @@ mod tests {
         // key still reaches turns and the company's copy stays, so when the switch fails the next turn has it at once.
         let dir = projects();
         let secrets = dir.join("secrets");
-        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        std::fs::write(
+            secrets.join(TEAM_KEYS_FILE),
+            "OPENAI_API_KEY=sk-team-0123456789\n",
+        )
+        .unwrap();
         let (exe, runs) = fake_codex(&dir);
         let sign = SignIn::new(&dir);
         {
-            let _change = sign.begin_key_change("codex", Duration::from_millis(10)).unwrap();
+            let _change = sign
+                .begin_key_change("codex", Duration::from_millis(10))
+                .unwrap();
             assert!(!sign.key_login("codex", &exe).await);
-            assert!(!runs.exists(), "a key login ran over the subscription being checked");
-            assert!(sign.headless_secret("codex").is_some(), "the key left the turns before the subscription worked");
+            assert!(
+                !runs.exists(),
+                "a key login ran over the subscription being checked"
+            );
+            assert!(
+                sign.headless_secret("codex").is_some(),
+                "the key left the turns before the subscription worked"
+            );
         }
         assert!(!sign.key_off("codex"));
         assert!(read_env(&secrets.join(TEAM_KEYS_FILE)).contains_key("OPENAI_API_KEY"));
-        assert_eq!(sign.headless_secret("codex").map(|(_, v)| v), Some("sk-team-0123456789".into()));
+        assert_eq!(
+            sign.headless_secret("codex").map(|(_, v)| v),
+            Some("sk-team-0123456789".into())
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -994,26 +1373,48 @@ mod tests {
     async fn a_signed_out_login_is_not_signed_back_in_by_the_shared_key() {
         let dir = projects();
         let secrets = dir.join("secrets");
-        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\nOTHER=kept\n").unwrap();
+        std::fs::write(
+            secrets.join(TEAM_KEYS_FILE),
+            "OPENAI_API_KEY=sk-team-0123456789\nOTHER=kept\n",
+        )
+        .unwrap();
         let (exe, runs) = fake_codex(&dir);
         let sign = SignIn::new(&dir);
         sign.mark_signed_out("codex").unwrap();
         assert!(sign.signed_out("codex") && !sign.signed_out("claude"));
         // The company's key this computer held for it is gone, and nothing else in that file.
         let team = read_env(&secrets.join(TEAM_KEYS_FILE));
-        assert!(!team.contains_key("OPENAI_API_KEY") && team.get("OTHER").map(String::as_str) == Some("kept"));
+        assert!(
+            !team.contains_key("OPENAI_API_KEY")
+                && team.get("OTHER").map(String::as_str) == Some("kept")
+        );
         // No key signs it in: not readiness's "ready with a key", not the 10-minute key login, not the next fetch.
         assert_eq!(sign.headless_secret("codex"), None);
         assert!(!sign.team_key_only("codex"));
-        std::fs::write(secrets.join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
-        assert_eq!(sign.headless_secret("codex"), None, "a key that came back still does not sign it in");
-        assert!(!sign.team_key_only("codex"), "nor counts as the company's key signing it in");
+        std::fs::write(
+            secrets.join(TEAM_KEYS_FILE),
+            "OPENAI_API_KEY=sk-team-0123456789\n",
+        )
+        .unwrap();
+        assert_eq!(
+            sign.headless_secret("codex"),
+            None,
+            "a key that came back still does not sign it in"
+        );
+        assert!(
+            !sign.team_key_only("codex"),
+            "nor counts as the company's key signing it in"
+        );
         assert!(!sign.key_login("codex", &exe).await);
         assert!(!runs.exists(), "the key login ran while signed out");
         let (client, asked) = team_server().await;
         std::fs::remove_file(secrets.join(TEAM_KEYS_FILE)).unwrap();
         assert!(!sign.team_model_keys(&client, "codex").await);
-        assert_eq!(asked.load(Ordering::SeqCst), 0, "the shared key was fetched while signed out");
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            0,
+            "the shared key was fetched while signed out"
+        );
         // It stays so across a restart: the mark is on disk.
         let restarted = SignIn::new(&dir);
         assert!(restarted.signed_out("codex") && restarted.headless_secret("codex").is_none());
@@ -1022,7 +1423,10 @@ mod tests {
         assert!(restarted.team_model_keys(&client, "codex").await);
         assert_eq!(asked.load(Ordering::SeqCst), 1);
         assert!(restarted.key_login("codex", &exe).await);
-        assert_eq!(std::fs::read_to_string(&runs).unwrap().trim(), "login --with-api-key");
+        assert_eq!(
+            std::fs::read_to_string(&runs).unwrap().trim(),
+            "login --with-api-key"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1038,13 +1442,21 @@ mod tests {
             let sign = Arc::new(SignIn::new(&dir));
             let race = |a: &'static str, b: &'static str, unmark_a: bool| {
                 let barrier = Arc::new(std::sync::Barrier::new(2));
-                let threads: Vec<_> = [(a, unmark_a), (b, false)].into_iter().map(|(runtime, unmark)| {
-                    let (sign, barrier) = (sign.clone(), barrier.clone());
-                    std::thread::spawn(move || {
-                        barrier.wait();
-                        if unmark { sign.unmark_signed_out(runtime) } else { sign.mark_signed_out(runtime) }.unwrap();
+                let threads: Vec<_> = [(a, unmark_a), (b, false)]
+                    .into_iter()
+                    .map(|(runtime, unmark)| {
+                        let (sign, barrier) = (sign.clone(), barrier.clone());
+                        std::thread::spawn(move || {
+                            barrier.wait();
+                            if unmark {
+                                sign.unmark_signed_out(runtime)
+                            } else {
+                                sign.mark_signed_out(runtime)
+                            }
+                            .unwrap();
+                        })
                     })
-                }).collect();
+                    .collect();
                 threads.into_iter().for_each(|t| t.join().unwrap());
             };
             race("codex", "claude", false);
@@ -1052,7 +1464,11 @@ mod tests {
             let again = SignIn::new(&dir); // as the runner reads them after a restart
             assert!(again.signed_out("codex") && again.signed_out("claude"));
             let team = read_env(&secrets.join(TEAM_KEYS_FILE));
-            assert!(!team.contains_key("OPENAI_API_KEY") && !team.contains_key("CLAUDE_CODE_OAUTH_TOKEN"), "{team:?}");
+            assert!(
+                !team.contains_key("OPENAI_API_KEY")
+                    && !team.contains_key("CLAUDE_CODE_OAUTH_TOKEN"),
+                "{team:?}"
+            );
             assert_eq!(team.get("OTHER").map(String::as_str), Some("kept"));
             // One signed in again while the other is signed out: each keeps its own.
             sign.unmark_signed_out("claude").unwrap();
@@ -1067,7 +1483,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_key_login_already_running_cannot_sign_a_signed_out_login_back_in() {
         let dir = projects();
-        std::fs::write(dir.join("secrets").join(TEAM_KEYS_FILE), "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
+        std::fs::write(
+            dir.join("secrets").join(TEAM_KEYS_FILE),
+            "OPENAI_API_KEY=sk-team-0123456789\n",
+        )
+        .unwrap();
         // A key login that has started and writes its login only once it is let go.
         let (exe, auth) = (dir.join("codex"), dir.join("auth.json"));
         let script = format!("#!/bin/sh\ncat > /dev/null\n: > '{d}/started'\nwhile [ ! -f '{d}/release' ]; do sleep 0.05; done\necho key > '{a}'\n",
@@ -1092,8 +1512,16 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         std::fs::write(dir.join("release"), "").unwrap();
         assert!(login.await.unwrap(), "the key login finished");
-        assert!(tokio::task::spawn_blocking(move || out.join().unwrap()).await.unwrap(), "the sign-out waited for it");
-        assert!(!auth.exists(), "the key login wrote the login back after the logout");
+        assert!(
+            tokio::task::spawn_blocking(move || out.join().unwrap())
+                .await
+                .unwrap(),
+            "the sign-out waited for it"
+        );
+        assert!(
+            !auth.exists(),
+            "the key login wrote the login back after the logout"
+        );
         assert!(sign.headless_secret("codex").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1118,7 +1546,8 @@ mod tests {
             let _ = sock.write_all(reply.as_bytes()).await;
             let _ = sock.shutdown().await;
         });
-        let client = Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap();
+        let client =
+            Client::new(&format!("http://127.0.0.1:{port}"), "runner-token", 5, 0).unwrap();
         let sign = Arc::new(SignIn::new(&dir));
         let k = sign.clone();
         let fetch = tokio::spawn(async move { k.team_model_keys(&client, "codex").await });
@@ -1126,7 +1555,10 @@ mod tests {
         sign.mark_signed_out("codex").unwrap();
         go_tx.send(()).unwrap();
         assert!(!fetch.await.unwrap());
-        assert!(!read_env(&team).contains_key("OPENAI_API_KEY"), "the key was saved after the sign-out");
+        assert!(
+            !read_env(&team).contains_key("OPENAI_API_KEY"),
+            "the key was saved after the sign-out"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1138,9 +1570,73 @@ mod tests {
         sign.mark_signed_out("claude").unwrap();
         let path = dir.join("secrets").join(SIGNED_OUT_FILE);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"["claude"]"#);
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         std::fs::write(&path, "not json").unwrap();
         assert!(!sign.signed_out("claude"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_refused_bot_key_stops_only_that_bot_on_a_bot_keyed_runtime() {
+        // pi and the Gemini CLI sign each bot in with its own key grant: one bot's refused key says nothing about the
+        // others', and the runtime's own row (no bot) is not refused.
+        let dir = projects();
+        let sign = SignIn::new(&dir);
+        assert!(
+            bot_keyed("pi") && bot_keyed("gemini") && !bot_keyed("claude") && !bot_keyed("codex")
+        );
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "signin-alpha");
+        assert!(sign.rejection("pi", None, "signin-alpha").is_some());
+        assert!(sign.rejection("pi", None, "signin-beta").is_none());
+        assert!(sign.rejection("pi", None, "").is_none());
+        // A sign-in that succeeded on the runtime forgets every bot's refusal of it, as before.
+        sign.clear_rejection("pi", "");
+        assert!(sign.rejection("pi", None, "signin-alpha").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_computer_level_refusal_still_stops_every_bot_on_its_runtime() {
+        let dir = projects();
+        let sign = SignIn::new(&dir);
+        sign.reject(
+            "claude",
+            "authentication_error: invalid x-api-key",
+            None,
+            "signin-alpha",
+        );
+        assert!(sign.rejection("claude", None, "signin-alpha").is_some());
+        assert!(sign.rejection("claude", None, "signin-beta").is_some());
+        assert!(sign.rejection("claude", None, "").is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_bot_key_refusal_clears_when_that_bots_grants_change_or_after_the_recheck() {
+        let dir = projects();
+        let sign = SignIn::new(&dir);
+        crate::readiness_extra::set_held("signin-gamma", vec!["OPENROUTER_API_KEY".into()]);
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "signin-gamma");
+        assert!(sign.rejection("pi", None, "signin-gamma").is_some());
+        // A grant added for that bot is a credential change: the refusal no longer applies.
+        crate::readiness_extra::set_held(
+            "signin-gamma",
+            vec!["OPENROUTER_API_KEY".into(), "GITHUB_TOKEN".into()],
+        );
+        assert!(sign.rejection("pi", None, "signin-gamma").is_none());
+        // Refused again under those grants, it holds until REJECT_RECHECK has passed, and then one turn tries again.
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "signin-gamma");
+        assert!(sign.rejection("pi", None, "signin-gamma").is_some());
+        let refused_long_ago = Instant::now()
+            .checked_sub(REJECT_RECHECK)
+            .expect("the clock has run for REJECT_RECHECK");
+        for row in sign.rejected.lock().unwrap().values_mut() {
+            row.mono = refused_long_ago;
+        }
+        assert!(sign.rejection("pi", None, "signin-gamma").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

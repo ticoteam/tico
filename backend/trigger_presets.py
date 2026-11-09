@@ -16,7 +16,14 @@ Unix seconds. Nothing here touches the database, so each can be tested with a pu
 - `slack`: `X-Slack-Signature: v0=<hex>`, HMAC-SHA256 over `v0:<X-Slack-Request-Timestamp>:<body>` with Slack's signing
   secret as the key. Within five minutes. Slack's `url_verification` call is answered with its challenge
   (`slack_challenge`) before it counts as a delivery.
+- `mercury`: `Mercury-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over `<t>.<body>` with the endpoint's secret (Mercury
+  returns it once when the webhook is made). Within five minutes. A Mercury trigger's deliveries go to Finance only.
+- `stripe_finance`: the `stripe` check on a Finance-owned trigger: its deliveries go to Finance only, as doorbells.
+- `intuit`: `intuit-signature: <base64>`, base64 of HMAC-SHA256 over the raw body with the app's verifier token. Finance's
+  (QuickBooks, spec §10); a relayed delivery from Tico HQ was checked there and carries no signature here.
+- `xero`: `x-xero-signature: <base64>`, base64 of HMAC-SHA256 over the raw body with the app's webhook key. Finance's.
 """
+
 import base64
 import binascii
 import hashlib
@@ -25,10 +32,21 @@ import json
 import re
 import secrets
 
-PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack")
-TOLERANCE = 300                         # seconds a timestamped signature stays good, either side of now
-TYPE_FROM = {"github": "X-GitHub-Event", "stripe": "/type", "standard": "/type",
-             "slack": "/event/type|/type"}      # a preset's default `type_from`; `a|b` tries a, then b
+PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack", "mercury", "stripe_finance", "intuit", "xero")
+# A trigger on one of these is Finance's (spec §3.4): its calls go to Finance, and only a finance admin manages it.
+FINANCE = ("mercury", "stripe_finance", "intuit", "xero")
+# Presets Tico HQ checks: it holds Intuit's and Xero's signing keys, and the install never does (spec §3.4). Such a call
+# counts only when it came over the install's own Gateway relay (`via="gateway"`); the install's address refuses it.
+HQ_CHECKED = ("intuit", "xero")
+TOLERANCE = 300  # seconds a timestamped signature stays good, either side of now
+TYPE_FROM = {
+    "github": "X-GitHub-Event",
+    "stripe": "/type",
+    "standard": "/type",
+    "slack": "/event/type|/type",
+    "mercury": "/resourceType",
+    "stripe_finance": "/type",
+}  # a preset's default `type_from`; `a|b` tries a, then b
 MAX_TYPE = 100
 PREFIX = "whsec_"
 
@@ -40,8 +58,19 @@ SECRET_HEADERS = {"cookie", "set-cookie"}
 VISIBLE_HEADERS = {"idempotency-key"}
 # Not kept at all: a cookie is the sender's session, hop-by-hop headers belong to one connection, cf-* and cdn-loop
 # are the edge's.
-HOP_BY_HOP = {"cookie", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
-              "trailers", "transfer-encoding", "upgrade", "cdn-loop"}
+HOP_BY_HOP = {
+    "cookie",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "cdn-loop",
+}
 MAX_HEADER_VALUE = 2000
 
 
@@ -83,7 +112,7 @@ def standard_key(secret):
     if not secret.startswith(PREFIX):
         return None
     try:
-        key = base64.b64decode(secret[len(PREFIX):], validate=True)
+        key = base64.b64decode(secret[len(PREFIX) :], validate=True)
     except (binascii.Error, ValueError):
         return None
     return key or None
@@ -101,13 +130,15 @@ def _stamp(value, now):
 
 
 def _standard(headers, body, secret, now):
-    ident, stamp, sent = (str(headers.get(n) or "").strip() for n in ("webhook-id", "webhook-timestamp", "webhook-signature"))
+    ident, stamp, sent = (
+        str(headers.get(n) or "").strip() for n in ("webhook-id", "webhook-timestamp", "webhook-signature")
+    )
     if not (ident and stamp and sent):
         return False, "This trigger needs webhook-id, webhook-timestamp and webhook-signature headers"
     key = standard_key(secret)
     if key is None:
         return False, "This trigger's signing secret is not a whsec_ secret"
-    if (why := _stamp(stamp, now)):
+    if why := _stamp(stamp, now):
         return False, why
     want = base64.b64encode(hmac.new(key, f"{ident}.{stamp}.".encode() + body, hashlib.sha256).digest()).decode()
     for part in sent.split():
@@ -117,15 +148,15 @@ def _standard(headers, body, secret, now):
     return False, "The signature does not match the body and this trigger's signing secret"
 
 
-def _stripe(headers, body, secret, now):
-    header = str(headers.get("stripe-signature") or "").strip()
+def _stripe(headers, body, secret, now, header_name="stripe-signature", shown="Stripe-Signature"):
+    header = str(headers.get(header_name) or "").strip()
     if not header:
-        return False, "This trigger needs a Stripe-Signature header"
+        return False, f"This trigger needs a {shown} header"
     pairs = [part.strip().partition("=") for part in header.split(",")]
     stamps = [value for name, _, value in pairs if name == "t"]
     if not stamps:
-        return False, "The Stripe-Signature header has no timestamp"
-    if (why := _stamp(stamps[0], now)):
+        return False, f"The {shown} header has no timestamp"
+    if why := _stamp(stamps[0], now):
         return False, why
     want = hmac.new(secret.encode(), f"{stamps[0]}.".encode() + body, hashlib.sha256).hexdigest()
     if any(name == "v1" and _constant(value.lower(), want) for name, _, value in pairs):
@@ -133,11 +164,35 @@ def _stripe(headers, body, secret, now):
     return False, "The signature does not match the body and this trigger's signing secret"
 
 
+def _mercury(headers, body, secret, now):
+    """Mercury signs as Stripe does, under its own header name."""
+    return _stripe(headers, body, secret, now, "mercury-signature", "Mercury-Signature")
+
+
+def _b64_signed(headers, body, secret, header, shown):
+    """A base64 HMAC-SHA256 of the raw body, as Intuit and Xero send it: the whole body is signed, no timestamp."""
+    sent = str(headers.get(header) or "").strip()
+    if not sent:
+        return False, f"This trigger needs a signed body ({shown})"
+    want = base64.b64encode(hmac.new(secret.encode(), body, hashlib.sha256).digest()).decode()
+    if _constant(sent, want):
+        return True, ""
+    return False, "The signature does not match the body and this trigger's signing secret"
+
+
+def _intuit(headers, body, secret, now):
+    return _b64_signed(headers, body, secret, "intuit-signature", "Intuit-Signature")
+
+
+def _xero(headers, body, secret, now):
+    return _b64_signed(headers, body, secret, "x-xero-signature", "X-Xero-Signature")
+
+
 def _slack(headers, body, secret, now):
     sent, stamp = (str(headers.get(n) or "").strip() for n in ("x-slack-signature", "x-slack-request-timestamp"))
     if not (sent and stamp):
         return False, "This trigger needs Slack's X-Slack-Signature and X-Slack-Request-Timestamp headers"
-    if (why := _stamp(stamp, now)):
+    if why := _stamp(stamp, now):
         return False, why
     want = "v0=" + hmac.new(secret.encode(), f"v0:{stamp}:".encode() + body, hashlib.sha256).hexdigest()
     if _constant(sent.lower(), want):
@@ -156,7 +211,17 @@ def slack_challenge(body):
     return None
 
 
-VERIFY = {"hmac": _hmac, "github": _github, "standard": _standard, "stripe": _stripe, "slack": _slack}
+VERIFY = {
+    "hmac": _hmac,
+    "github": _github,
+    "standard": _standard,
+    "stripe": _stripe,
+    "slack": _slack,
+    "mercury": _mercury,
+    "stripe_finance": _stripe,
+    "intuit": _intuit,
+    "xero": _xero,
+}
 
 
 def verify(preset, headers, body, secret, now):
@@ -169,10 +234,10 @@ def new_secret(preset):
     """A signing secret in the shape the preset's sender uses."""
     if preset == "standard":
         return PREFIX + base64.b64encode(secrets.token_bytes(24)).decode()
-    if preset == "stripe":
+    if preset in ("stripe", "stripe_finance"):
         return PREFIX + secrets.token_urlsafe(24)
     if preset == "slack":
-        return secrets.token_hex(16)            # Slack's signing secrets are 32 hex characters
+        return secrets.token_hex(16)  # Slack's signing secrets are 32 hex characters
     return secrets.token_hex(32)
 
 
@@ -198,14 +263,16 @@ def sender_id(headers):
 
 
 def body_id(preset, body):
-    """The sender's delivery id when it travels in the body: Stripe's `evt_...` at `/id`, the same for a resend."""
-    if preset != "stripe":
+    """The sender's delivery id when it travels in the body: Stripe's `evt_...` or Mercury's event id at `/id`, the
+    same for a resend."""
+    if preset not in ("stripe", "stripe_finance", "mercury"):
         return ""
     try:
         found = json.loads(body.decode("utf-8", "replace")).get("id")
     except (ValueError, AttributeError):
         return ""
-    return found if isinstance(found, str) and re.fullmatch(r"evt_[A-Za-z0-9_]{1,100}", found) else ""
+    shape = r"evt_[A-Za-z0-9_]{1,100}" if preset in ("stripe", "stripe_finance") else r"[A-Za-z0-9_-]{1,100}"
+    return found if isinstance(found, str) and re.fullmatch(shape, found) else ""
 
 
 def fallback_id(headers, body, received_at):
@@ -219,7 +286,7 @@ def type_of(spec, headers, body):
     spec = (spec or "").strip()
     if "|" in spec:
         for one in spec.split("|"):
-            if (found := type_of(one, headers, body)):
+            if found := type_of(one, headers, body):
                 return found
         return ""
     if not spec:

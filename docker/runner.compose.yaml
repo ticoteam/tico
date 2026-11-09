@@ -26,6 +26,11 @@ services:
     # covers the highest capacity a runner honours (256) with room left; at 2048 a runner at capacity 100 could not
     # start new turns ("Resource temporarily unavailable") while the host had plenty to spare.
     pids_limit: 12288
+    # The memory cap: TICO_RUNNER_MEMORY in .env ("27g"), or the installer's and updater's default for this host
+    # (docker/runner-memory.sh). Unset, empty or 0 means no limit. With no swap beyond the limit, the kernel ends bot
+    # processes inside this cgroup instead of letting the host thrash.
+    mem_limit: ${TICO_RUNNER_MEMORY:-0}
+    memswap_limit: ${TICO_RUNNER_MEMORY:-0}
     # On a host it shares with the server (compose.yaml, cpu_shares 4096), bot work yields the CPU when they compete,
     # and when memory runs out the kernel ends bot processes before the server. Raising the score needs no privilege.
     cpu_shares: 512

@@ -18,19 +18,19 @@ const SCENE = `export function createBuilding() {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [], since = '2026-10-13T10:04:00Z';
     const health = {audience: 'owner', checks: [], attention: 0, checked: since, stuck: [],
-      on_fallback: [{bot: 'writer', harness: 'codex', since: '2026-10-13T10:09:00Z'}, {bot: 'editor', harness: 'codex', since}],
-      limited: [{bot: 'vault', since}]};
+      on_fallback: [{bot: 'writer', harness: 'codex', changed_at: '2026-10-13T10:09:00Z'}, {bot: 'editor', harness: 'codex', changed_at: since}],
+      limited: [{bot: 'vault', changed_at: since}]};
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      if (p === '/tico/ui/overview/building.js') return route.fulfill({contentType: 'application/javascript', body: SCENE});
+      if (p === '/tico/ui/overview/building.ts') return route.fulfill({contentType: 'application/javascript', body: SCENE});
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
-          : name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/employees') return json([]);
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: []});
@@ -39,8 +39,8 @@ const SCENE = `export function createBuilding() {
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/');
-    await page.waitForFunction(() => location.hash === '#/updates');
-    await page.evaluate(() => location.hash = '#/overview');
+    await page.waitForFunction(() => location.hash === '#/home');
+    await page.evaluate(() => location.hash = '#/overview/campus');
     await page.frameLocator('#overview-frame').locator('body[data-scene-ready]').waitFor();
     await page.evaluate(() => hlRefresh());
     const strip = page.locator('#overview-stuck');

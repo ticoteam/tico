@@ -52,7 +52,7 @@ RESOLVED = ("accepted", "rejected", "duplicate")
 SOURCE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,39}$")
 MAX_ITEMS = 200
 MAX_JUDGE = 50
-REJUDGE_DAYS = 2              # after a question-set version bump, rescore only this recent a post
+REJUDGE_DAYS = 2  # after a question-set version bump, rescore only this recent a post
 
 # Where a post goes and when. Destinations are the company's: `<registry>/listening.yaml`
 # (`templates/environment-registry/listening.yaml` is the shape), and a company with none routes
@@ -99,7 +99,10 @@ def category_problems(dests, qset):
     questions = qset["questions"]
     problems = []
     for name, cfg in dests.items():
-        for field, category in (("category", cfg["category"]), ("unless category", (cfg.get("unless") or {}).get("category"))):
+        for field, category in (
+            ("category", cfg["category"]),
+            ("unless category", (cfg.get("unless") or {}).get("category")),
+        ):
             if category is not None and (questions.get(category) or {}).get("type") != "noul":
                 problems.append(f"{name}: {field} {category!r} needs a noul question in {QUESTION_SET}")
     return problems
@@ -141,14 +144,21 @@ def destinations(settings, conn=None, *, qset=None, check_questions=True):
     out, problems = {}, []
     for name, cfg in (found or {}).items():
         try:
-            entry = {"category": str(cfg["category"]), "threshold": float(cfg["threshold"]),
-                     "receiver": _actor(cfg["receiver"]), "what": str(cfg.get("what") or "")}
+            entry = {
+                "category": str(cfg["category"]),
+                "threshold": float(cfg["threshold"]),
+                "receiver": _actor(cfg["receiver"]),
+                "what": str(cfg.get("what") or ""),
+            }
             if not 0 < entry["threshold"] <= 1 or not entry["category"] or not entry["receiver"]:
                 raise ValueError("category, receiver and a threshold in (0, 1]")
             if cfg.get("readers"):
                 entry["readers"] = [_actor(r) for r in cfg["readers"]]
             if cfg.get("unless"):
-                entry["unless"] = {"category": str(cfg["unless"]["category"]), "threshold": float(cfg["unless"]["threshold"])}
+                entry["unless"] = {
+                    "category": str(cfg["unless"]["category"]),
+                    "threshold": float(cfg["unless"]["threshold"]),
+                }
         except (KeyError, TypeError, ValueError, AttributeError):
             problems.append(f"destination {name!r} skipped (invalid destination configuration)")
             continue
@@ -168,12 +178,16 @@ CREATE TABLE IF NOT EXISTS listening_destinations (
   unless TEXT,
   what TEXT,
   updated_by TEXT,
-  updated TEXT)
+  updated_at TEXT)
 """
 DESTINATION_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
-MARKET_SEEDED = "listening.market_seeded"    # registry_metadata: the market destination was offered once
-MARKET_DESTINATION = {"category": "market", "threshold": 0.70, "receiver": "bot:librarian",
-                      "what": "a post about the market: competitors, buyers, prices, regulation"}
+MARKET_SEEDED = "listening.market_seeded"  # registry_metadata: the market destination was offered once
+MARKET_DESTINATION = {
+    "category": "market",
+    "threshold": 0.70,
+    "receiver": "bot:librarian",
+    "what": "a post about the market: competitors, buyers, prices, regulation",
+}
 
 
 def ensure(c):
@@ -184,12 +198,16 @@ def stored(conn):
     """The destinations saved in Settings, shaped like the file's."""
     try:
         rows = H._rows(conn.execute("SELECT * FROM listening_destinations ORDER BY key"))
-    except sqlite3.OperationalError:       # a database from before the table
+    except sqlite3.OperationalError:  # a database from before the table
         return {}
     out = {}
     for row in rows:
-        entry = {"category": row["category"], "threshold": float(row["threshold"]),
-                 "receiver": row["receiver"], "what": row["what"] or ""}
+        entry = {
+            "category": row["category"],
+            "threshold": float(row["threshold"]),
+            "receiver": row["receiver"],
+            "what": row["what"] or "",
+        }
         readers = _loads(row["readers"], [])
         if readers:
             entry["readers"] = [str(r) for r in readers]
@@ -220,8 +238,11 @@ def check_destination(conn, settings, key, body):
     try:
         qset = question_set(settings)
     except J.JudgeError:
-        raise Problem("judge_questions", "The listening-item question set could not be loaded. "
-                      "Check registry/questions/listening-item.json.", 422) from None
+        raise Problem(
+            "judge_questions",
+            "The listening-item question set could not be loaded. Check registry/questions/listening-item.json.",
+            422,
+        ) from None
     category = str(body.category or "").strip()
     _noul_category(qset, category, "category")
     receiver = H.resolve_actor(conn, _actor(body.receiver))
@@ -234,8 +255,12 @@ def check_destination(conn, settings, key, body):
             raise Problem("invalid", f"reader {reader!r} is not on this team", 422)
         if actor not in readers and actor != receiver:
             readers.append(actor)
-    entry = {"category": category, "threshold": _threshold(body.threshold), "receiver": receiver,
-             "what": str(body.what or "").strip()}
+    entry = {
+        "category": category,
+        "threshold": _threshold(body.threshold),
+        "receiver": receiver,
+        "what": str(body.what or "").strip(),
+    }
     if readers:
         entry["readers"] = readers
     if body.unless:
@@ -248,14 +273,27 @@ def check_destination(conn, settings, key, body):
 def save_destination(conn, settings, who, key, body):
     key, entry = check_destination(conn, settings, key, body)
     now = H.now()
-    conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-                 "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
-                 "category=excluded.category, threshold=excluded.threshold, receiver=excluded.receiver, "
-                 "readers=excluded.readers, unless=excluded.unless, what=excluded.what, "
-                 "updated_by=excluded.updated_by, updated=excluded.updated",
-                 (key, entry["category"], entry["threshold"], entry["receiver"],
-                  json.dumps(entry.get("readers") or []), json.dumps(entry.get("unless")), entry["what"], who.actor, now))
-    H.event(conn, who.actor, "listening.destination", key, {"category": entry["category"], "receiver": entry["receiver"]})
+    conn.execute(
+        "INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
+        "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
+        "category=excluded.category, threshold=excluded.threshold, receiver=excluded.receiver, "
+        "readers=excluded.readers, unless=excluded.unless, what=excluded.what, "
+        "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+        (
+            key,
+            entry["category"],
+            entry["threshold"],
+            entry["receiver"],
+            json.dumps(entry.get("readers") or []),
+            json.dumps(entry.get("unless")),
+            entry["what"],
+            who.actor,
+            now,
+        ),
+    )
+    H.event(
+        conn, who.actor, "listening.destination", key, {"category": entry["category"], "receiver": entry["receiver"]}
+    )
     return key
 
 
@@ -281,21 +319,42 @@ def seed_market(conn, settings):
     try:
         qset = question_set(settings)
     except J.JudgeError:
-        return False                       # try again once the questions load
+        return False  # try again once the questions load
     added = False
     if (qset["questions"].get("market") or {}).get("type") == "noul" and not any(
-            d["category"] == "market" for d in destinations(settings, conn, check_questions=False).values()):
+        d["category"] == "market" for d in destinations(settings, conn, check_questions=False).values()
+    ):
         key = "market"
-        while conn.execute("SELECT 1 FROM listening_destinations WHERE key=?", (key,)).fetchone() \
-                or key in destinations(settings, None, check_questions=False):
+        while conn.execute(
+            "SELECT 1 FROM listening_destinations WHERE key=?", (key,)
+        ).fetchone() or key in destinations(settings, None, check_questions=False):
             key += "-2"
-        conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-                     "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?)",
-                     (key, "market", MARKET_DESTINATION["threshold"], MARKET_DESTINATION["receiver"], "[]", "null",
-                      MARKET_DESTINATION["what"], H.KEEPER, H.now()))
-        H.event(conn, H.KEEPER, "listening.destination", key, {"category": "market", "receiver": "bot:librarian", "seeded": True})
+        conn.execute(
+            "INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
+            "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                key,
+                "market",
+                MARKET_DESTINATION["threshold"],
+                MARKET_DESTINATION["receiver"],
+                "[]",
+                "null",
+                MARKET_DESTINATION["what"],
+                H.KEEPER,
+                H.now(),
+            ),
+        )
+        H.event(
+            conn,
+            H.KEEPER,
+            "listening.destination",
+            key,
+            {"category": "market", "receiver": "bot:librarian", "seeded": True},
+        )
         added = True
-    conn.execute("INSERT INTO registry_metadata VALUES(?,?)", (MARKET_SEEDED, json.dumps({"at": H.now(), "added": added})))
+    conn.execute(
+        "INSERT INTO registry_metadata VALUES(?,?)", (MARKET_SEEDED, json.dumps({"at": H.now(), "added": added}))
+    )
     return added
 
 
@@ -307,19 +366,36 @@ def destination_list(conn, settings):
     for key, cfg in sorted({**from_file, **saved}.items()):
         meta = {}
         if key in saved:
-            meta = H._one(conn, "SELECT updated_by, updated FROM listening_destinations WHERE key=?", (key,)) or {}
-        rows.append({"key": key, "category": cfg["category"], "threshold": cfg["threshold"], "receiver": cfg["receiver"],
-                     "readers": cfg.get("readers", []), "unless": cfg.get("unless"), "what": cfg.get("what", ""),
-                     "source": "settings" if key in saved else "yaml", "overrides_yaml": key in saved and key in from_file,
-                     **meta})
+            meta = H._one(conn, "SELECT updated_by, updated_at FROM listening_destinations WHERE key=?", (key,)) or {}
+        rows.append(
+            {
+                "key": key,
+                "category": cfg["category"],
+                "threshold": cfg["threshold"],
+                "receiver": cfg["receiver"],
+                "readers": cfg.get("readers", []),
+                "unless": cfg.get("unless"),
+                "what": cfg.get("what", ""),
+                "source": "settings" if key in saved else "yaml",
+                "overrides_yaml": key in saved and key in from_file,
+                **meta,
+            }
+        )
     try:
         qset = question_set(settings)
-        categories = [{"id": qid, "label": qid.replace("_", " ")} for qid, q in qset["questions"].items()
-                      if q.get("type") == "noul"]
+        categories = [
+            {"id": qid, "label": qid.replace("_", " ")}
+            for qid, q in qset["questions"].items()
+            if q.get("type") == "noul"
+        ]
     except J.JudgeError:
         categories = []
-    bots = [{"actor": "bot:" + r["slug"], "name": r["display_name"] or r["slug"]} for r in H._rows(conn.execute(
-        "SELECT slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug"))]
+    bots = [
+        {"actor": "bot:" + r["id"], "name": r["display_name"] or r["slug"]}
+        for r in H._rows(
+            conn.execute("SELECT id, slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug")
+        )
+    ]
     return {"destinations": rows, "categories": categories, "receivers": bots}
 
 
@@ -376,7 +452,7 @@ def _judgment_row(row):
     if not row:
         return None
     out = dict(row)
-    out["scores"] = _loads(out.pop("scores_json"), {})
+    out["scores"] = _loads(out.pop("scores"), {})
     return out
 
 
@@ -386,8 +462,11 @@ def judgment(conn, judgment_id):
 
 def current_judgment(conn, item_id):
     """The newest judgment is the current one."""
-    return _judgment_row(conn.execute("SELECT * FROM listen_judgments WHERE item_id=? "
-                                      "ORDER BY judged_at DESC, rowid DESC LIMIT 1", (item_id,)).fetchone())
+    return _judgment_row(
+        conn.execute(
+            "SELECT * FROM listen_judgments WHERE item_id=? ORDER BY judged_at DESC, rowid DESC LIMIT 1", (item_id,)
+        ).fetchone()
+    )
 
 
 def intake_row(conn, intake_id):
@@ -395,8 +474,9 @@ def intake_row(conn, intake_id):
 
 
 # ----------------------------------------------------------------------------- writes
-def record_run(conn, actor, *, source, query, status, started_at=None, pages_read=0, items_seen=None,
-               note="", items=()):
+def record_run(
+    conn, actor, *, source, query, status, started_at=None, pages_read=0, items_seen=None, note="", items=()
+):
     """One sweep and every post it saw, in one transaction. A post already saved is not changed."""
     source = str(source or "").strip().lower()
     if not SOURCE.match(source):
@@ -412,11 +492,21 @@ def record_run(conn, actor, *, source, query, status, started_at=None, pages_rea
     if len(items) > MAX_ITEMS:
         raise Problem("invalid", f"a run saves at most {MAX_ITEMS} posts; split the sweep", 422)
     now = H.now()
-    row = {"id": H.new_id(), "source": source, "query": query, "started_at": started_at or now,
-           "status": status, "pages_read": int(pages_read or 0),
-           "items_seen": len(items) if items_seen is None else int(items_seen), "note": str(note or "")}
-    conn.execute("INSERT INTO listen_runs (id, source, query, started_at, status, pages_read, items_seen, note) "
-                 "VALUES (:id,:source,:query,:started_at,:status,:pages_read,:items_seen,:note)", row)
+    row = {
+        "id": H.new_id(),
+        "source": source,
+        "query": query,
+        "started_at": started_at or now,
+        "status": status,
+        "pages_read": int(pages_read or 0),
+        "items_seen": len(items) if items_seen is None else int(items_seen),
+        "note": str(note or ""),
+    }
+    conn.execute(
+        "INSERT INTO listen_runs (id, source, query, started_at, status, pages_read, items_seen, note) "
+        "VALUES (:id,:source,:query,:started_at,:status,:pages_read,:items_seen,:note)",
+        row,
+    )
     saved, seen = [], set()
     for raw in items:
         native_id = str(raw.get("native_id") or "").strip()
@@ -427,22 +517,39 @@ def record_run(conn, actor, *, source, query, status, started_at=None, pages_rea
         if native_id in seen:
             continue
         seen.add(native_id)
-        existing = conn.execute("SELECT id FROM listen_items WHERE source=? AND native_id=?",
-                                (source, native_id)).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM listen_items WHERE source=? AND native_id=?", (source, native_id)
+        ).fetchone()
         if existing:
             saved.append({"id": existing["id"], "native_id": native_id, "new": False})
             continue
-        new = {"id": H.new_id(), "source": source, "native_id": native_id, "url": url,
-               "author": (str(raw.get("author")).strip() or None) if raw.get("author") else None,
-               "author_url": (str(raw.get("author_url")).strip() or None) if raw.get("author_url") else None,
-               "content": content, "content_hash": content_hash(content),
-               "published_at": raw.get("published_at") or None, "first_seen_at": now, "first_run_id": row["id"]}
-        conn.execute("INSERT INTO listen_items (id, source, native_id, url, author, author_url, content, content_hash, "
-                     "published_at, first_seen_at, first_run_id) VALUES (:id,:source,:native_id,:url,:author,"
-                     ":author_url,:content,:content_hash,:published_at,:first_seen_at,:first_run_id)", new)
+        new = {
+            "id": H.new_id(),
+            "source": source,
+            "native_id": native_id,
+            "url": url,
+            "author": (str(raw.get("author")).strip() or None) if raw.get("author") else None,
+            "author_url": (str(raw.get("author_url")).strip() or None) if raw.get("author_url") else None,
+            "content": content,
+            "content_hash": content_hash(content),
+            "published_at": raw.get("published_at") or None,
+            "first_seen_at": now,
+            "first_run_id": row["id"],
+        }
+        conn.execute(
+            "INSERT INTO listen_items (id, source, native_id, url, author, author_url, content, content_hash, "
+            "published_at, first_seen_at, first_run_id) VALUES (:id,:source,:native_id,:url,:author,"
+            ":author_url,:content,:content_hash,:published_at,:first_seen_at,:first_run_id)",
+            new,
+        )
         saved.append({"id": new["id"], "native_id": native_id, "new": True})
-    H.event(conn, actor, "listen.run", row["id"], {"source": source, "status": status, "items": len(saved),
-                                                    "new": sum(1 for s in saved if s["new"])})
+    H.event(
+        conn,
+        actor,
+        "listen.run",
+        row["id"],
+        {"source": source, "status": status, "items": len(saved), "new": sum(1 for s in saved if s["new"])},
+    )
     return {"run": run(conn, row["id"]), "items": saved}
 
 
@@ -469,11 +576,14 @@ def cross_post(conn, row, destination, days=30):
     if len(key) < 40:
         return False
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    for other in conn.execute("SELECT i.id, i.author, i.content FROM intake_items k JOIN listen_items i ON i.id=k.item_id "
-                              "WHERE k.destination=? AND k.item_id<>? AND k.created_at>=?",
-                              (destination, row["id"], since)):
-        if (not row["author"] or not other["author"] or other["author"] == row["author"]) \
-                and text_key(other["content"]) == key:
+    for other in conn.execute(
+        "SELECT i.id, i.author, i.content FROM intake_items k JOIN listen_items i ON i.id=k.item_id "
+        "WHERE k.destination=? AND k.item_id<>? AND k.created_at>=?",
+        (destination, row["id"], since),
+    ):
+        if (not row["author"] or not other["author"] or other["author"] == row["author"]) and text_key(
+            other["content"]
+        ) == key:
             return True
     return False
 
@@ -491,10 +601,16 @@ def route(conn, row, scored, dests):
         if cross_post(conn, row, name):
             continue
         intake_id = H.new_id()
-        cur = conn.execute("INSERT OR IGNORE INTO intake_items (id, destination, item_id, judgment_id, status, created_at) "
-                           "VALUES (?,?,?,?, 'new', ?)", (intake_id, name, row["id"], scored["id"], H.now()))
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO intake_items (id, destination, item_id, judgment_id, status, created_at) "
+            "VALUES (?,?,?,?, 'new', ?)",
+            (intake_id, name, row["id"], scored["id"], H.now()),
+        )
         if cur.rowcount:
             opened.append(intake_row(conn, intake_id))
+            from . import automations
+
+            automations.on_listening(conn, opened[-1], row)
     return opened
 
 
@@ -508,11 +624,15 @@ def add_judgment(conn, actor, item_id, question_set, scores, dests, judged_at=No
         raise Problem("invalid", "name the question set and version, like listening-item@1", 422)
     scores = check_scores(scores)
     jid = H.new_id()
-    conn.execute("INSERT INTO listen_judgments (id, item_id, question_set, scores_json, judged_at) VALUES (?,?,?,?,?)",
-                 (jid, item_id, question_set, json.dumps(scores, sort_keys=True), judged_at or H.now()))
+    conn.execute(
+        "INSERT INTO listen_judgments (id, item_id, question_set, scores, judged_at) VALUES (?,?,?,?,?)",
+        (jid, item_id, question_set, json.dumps(scores, sort_keys=True), judged_at or H.now()),
+    )
     scored = judgment(conn, jid)
     opened = route(conn, row, scored, dests)
-    H.event(conn, actor, "listen.judgment", item_id, {"set": question_set, "routed": [o["destination"] for o in opened]})
+    H.event(
+        conn, actor, "listen.judgment", item_id, {"set": question_set, "routed": [o["destination"] for o in opened]}
+    )
     return {"judgment": scored, "intake": opened}
 
 
@@ -534,18 +654,30 @@ def resolve(conn, who, intake_id, status, dests, receiver_ref="", reason=""):
         if (row["status"], row["receiver_ref"] or "", row["reason"] or "") == (status, receiver_ref, reason):
             return row
         raise Problem("conflict", f"{intake_id} is already {row['status']}", 409)
-    conn.execute("UPDATE intake_items SET status=?, receiver_ref=?, reason=?, decided_at=? WHERE id=?",
-                 (status, receiver_ref or None, reason or None, H.now(), intake_id))
-    H.event(conn, who.actor, "intake.resolve", intake_id, {"destination": row["destination"], "status": status,
-                                                           "receiver_ref": receiver_ref})
+    conn.execute(
+        "UPDATE intake_items SET status=?, receiver_ref=?, reason=?, decided_at=? WHERE id=?",
+        (status, receiver_ref or None, reason or None, H.now(), intake_id),
+    )
+    H.event(
+        conn,
+        who.actor,
+        "intake.resolve",
+        intake_id,
+        {"destination": row["destination"], "status": status, "receiver_ref": receiver_ref},
+    )
     return intake_row(conn, intake_id)
 
 
 # ----------------------------------------------------------------------------- reads
 def state_for(row):
     """What the decision model reads: the post as the agent saw it."""
-    return {"source": row["source"], "url": row["url"], "author": row["author"] or "",
-            "published_at": row["published_at"] or "", "content": row["content"]}
+    return {
+        "source": row["source"],
+        "url": row["url"],
+        "author": row["author"] or "",
+        "published_at": row["published_at"] or "",
+        "content": row["content"],
+    }
 
 
 def unjudged(conn, label, limit=MAX_JUDGE):
@@ -553,11 +685,14 @@ def unjudged(conn, label, limit=MAX_JUDGE):
     by an older version only while it is recent. A version bump rescores the last two days, not the
     whole archive, so new sweeps never queue behind old posts and receivers are not re-sent them."""
     since = H.shift(H.now(), days=-REJUDGE_DAYS)
-    return H._rows(conn.execute(
-        "SELECT * FROM listen_items i WHERE NOT EXISTS (SELECT 1 FROM listen_judgments j "
-        "WHERE j.item_id=i.id AND j.question_set=?) AND (i.first_seen_at>=? OR NOT EXISTS "
-        "(SELECT 1 FROM listen_judgments o WHERE o.item_id=i.id)) ORDER BY first_seen_at, rowid LIMIT ?",
-        (label, since, int(limit))))
+    return H._rows(
+        conn.execute(
+            "SELECT * FROM listen_items i WHERE NOT EXISTS (SELECT 1 FROM listen_judgments j "
+            "WHERE j.item_id=i.id AND j.question_set=?) AND (i.first_seen_at>=? OR NOT EXISTS "
+            "(SELECT 1 FROM listen_judgments o WHERE o.item_id=i.id)) ORDER BY first_seen_at, rowid LIMIT ?",
+            (label, since, int(limit)),
+        )
+    )
 
 
 def inbox(conn, who, dests, destination=None, status="new", limit=100):
@@ -565,7 +700,9 @@ def inbox(conn, who, dests, destination=None, status="new", limit=100):
     if status and status not in INTAKE_STATUSES:
         raise Problem("invalid", f"a status is {'|'.join(INTAKE_STATUSES)}", 422)
     if destination and destination not in dests:
-        raise Problem("invalid", f"a destination is {'|'.join(dests) or 'not configured (registry/listening.yaml)'}", 422)
+        raise Problem(
+            "invalid", f"a destination is {'|'.join(dests) or 'not configured (registry/listening.yaml)'}", 422
+        )
     allowed = list(dests) if sees_everything(who) else destinations_of(who.actor, dests)
     if destination:
         if destination not in allowed:
@@ -586,9 +723,15 @@ def inbox(conn, who, dests, destination=None, status="new", limit=100):
         post = item(conn, row["item_id"])
         scored = judgment(conn, row["judgment_id"])
         cfg = dests.get(row["destination"]) or {"category": "?", "threshold": 0}
-        out.append({**row, "post": post, "scores": scored["scores"] if scored else {},
-                    "question_set": scored["question_set"] if scored else None,
-                    "routed_because": f"{cfg['category']} >= {cfg['threshold']}"})
+        out.append(
+            {
+                **row,
+                "post": post,
+                "scores": scored["scores"] if scored else {},
+                "question_set": scored["question_set"] if scored else None,
+                "routed_because": f"{cfg['category']} >= {cfg['threshold']}",
+            }
+        )
     return out
 
 
@@ -597,11 +740,20 @@ def trace(conn, item_id):
     row = item(conn, item_id)
     if not row:
         raise Problem("not_found", f"no saved post {item_id}", 404)
-    judgments = [_judgment_row(r) for r in conn.execute(
-        "SELECT * FROM listen_judgments WHERE item_id=? ORDER BY judged_at, rowid", (item_id,)).fetchall()]
+    judgments = [
+        _judgment_row(r)
+        for r in conn.execute(
+            "SELECT * FROM listen_judgments WHERE item_id=? ORDER BY judged_at, rowid", (item_id,)
+        ).fetchall()
+    ]
     intake = H._rows(conn.execute("SELECT * FROM intake_items WHERE item_id=? ORDER BY created_at, rowid", (item_id,)))
-    return {"item": row, "run": run(conn, row["first_run_id"]) if row["first_run_id"] else None,
-            "judgments": judgments, "current": judgments[-1] if judgments else None, "intake": intake}
+    return {
+        "item": row,
+        "run": run(conn, row["first_run_id"]) if row["first_run_id"] else None,
+        "judgments": judgments,
+        "current": judgments[-1] if judgments else None,
+        "intake": intake,
+    }
 
 
 def runs(conn, since=None, source=None, limit=200):
@@ -621,19 +773,69 @@ def stats(conn, since=None):
     """Coverage by source and status, and precision by destination from the receivers' verdicts."""
     since = since or (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
     coverage = {}
-    for r in conn.execute("SELECT source, status, count(*) n, sum(items_seen) seen FROM listen_runs "
-                          "WHERE started_at>=? GROUP BY source, status", (since,)):
+    for r in conn.execute(
+        "SELECT source, status, count(*) n, sum(items_seen) seen FROM listen_runs "
+        "WHERE started_at>=? GROUP BY source, status",
+        (since,),
+    ):
         coverage.setdefault(r["source"], {})[r["status"]] = {"runs": r["n"], "items_seen": r["seen"] or 0}
     verdicts = {}
-    for r in conn.execute("SELECT destination, status, count(*) n FROM intake_items WHERE created_at>=? "
-                          "GROUP BY destination, status", (since,)):
+    for r in conn.execute(
+        "SELECT destination, status, count(*) n FROM intake_items WHERE created_at>=? GROUP BY destination, status",
+        (since,),
+    ):
         verdicts.setdefault(r["destination"], {s: 0 for s in INTAKE_STATUSES})[r["status"]] = r["n"]
     for counts in verdicts.values():
         decided = counts["accepted"] + counts["rejected"]
         counts["precision"] = round(counts["accepted"] / decided, 3) if decided else None
     saved = conn.execute("SELECT count(*) FROM listen_items WHERE first_seen_at>=?", (since,)).fetchone()[0]
-    routed = conn.execute("SELECT count(DISTINCT item_id) FROM intake_items WHERE created_at>=?", (since,)).fetchone()[0]
+    routed = conn.execute("SELECT count(DISTINCT item_id) FROM intake_items WHERE created_at>=?", (since,)).fetchone()[
+        0
+    ]
     return {"since": since, "coverage": coverage, "destinations": verdicts, "saved": saved, "routed": routed}
+
+
+RECENT_MAX = 25
+RECENT_TEXT = 240
+
+
+def timeline(conn, who, dests, since):
+    """The Market page's What are buyers saying? chart and list: posts first seen each UTC day by source, and the newest
+    posts routed to a destination the caller reads, one row per post, its text clipped."""
+    days = {}
+    for r in conn.execute(
+        "SELECT substr(first_seen_at,1,10) day, source, count(*) n FROM listen_items "
+        "WHERE first_seen_at>=? GROUP BY day, source",
+        (since,),
+    ):
+        days.setdefault(r["day"], {})[r["source"]] = r["n"]
+    allowed = list(dests) if sees_everything(who) else destinations_of(who.actor, dests)
+    recent = []
+    if allowed:
+        marks = ",".join("?" * len(allowed))
+        for r in conn.execute(
+            f"SELECT item_id, group_concat(destination) dests, max(created_at) at FROM intake_items "
+            f"WHERE destination IN ({marks}) AND created_at>=? GROUP BY item_id "
+            f"ORDER BY at DESC LIMIT ?",
+            (*allowed, since, RECENT_MAX),
+        ):
+            post = item(conn, r["item_id"])
+            if not post:
+                continue
+            text = " ".join(str(post["content"] or "").split())
+            recent.append(
+                {
+                    "item_id": post["id"],
+                    "source": post["source"],
+                    "url": post["url"],
+                    "author": post["author"] or "",
+                    "published_at": post["published_at"],
+                    "text": text if len(text) <= RECENT_TEXT else text[: RECENT_TEXT - 1] + "…",
+                    "destinations": sorted(set(r["dests"].split(","))),
+                    "at": r["at"],
+                }
+            )
+    return {"daily": [{"day": d, "sources": days[d]} for d in sorted(days)], "recent": recent}
 
 
 # ----------------------------------------------------------------------------- Decisions
@@ -645,11 +847,15 @@ def judge_pending(store, engine, who, limit=MAX_JUDGE, item_ids=None):
     """Score posts that have no judgment from the current set and route them. One decision call a post,
     each audited as a `judge.call` the way `/api/v2/decisions` audits, so the caller's budget counts it."""
     from .judge import audit_detail, daily_cap, used_today
+
     try:
         qset = question_set(store.settings)
     except J.JudgeError:
-        raise Problem("judge_questions", "The listening-item question set could not be loaded. "
-                      "Check registry/questions/listening-item.json.", 422) from None
+        raise Problem(
+            "judge_questions",
+            "The listening-item question set could not be loaded. Check registry/questions/listening-item.json.",
+            422,
+        ) from None
     with store.read() as c:
         dests = destinations(store.settings, c, qset=qset)
     questions = qset["questions"]
@@ -672,20 +878,37 @@ def judge_pending(store, engine, who, limit=MAX_JUDGE, item_ids=None):
             answer = engine(state_for(row), questions, qset["label"])
         except J.JudgeError as exc:
             with store.transaction() as c:
-                H.event(c, who.actor, "judge.call", qset["label"], {"questions": len(questions), "error": J.error_code(exc)})
+                H.event(
+                    c, who.actor, "judge.call", qset["label"], {"questions": len(questions), "error": J.error_code(exc)}
+                )
             errors.append({"item_id": row["id"], "error": J.error_code(exc)})
-            if exc.retryable or exc.code == "spend_cap":    # the rest stay unjudged for the next call
+            if exc.retryable or exc.code == "spend_cap":  # the rest stay unjudged for the next call
                 break
             continue
         used += 1
         with store.transaction() as c:
-            H.event(c, who.actor, "judge.call", qset["label"], {
-                "questions": len(questions), "types": ["noul"], **audit_detail(answer),
-                "answers": J.summary(answer["answers"])})
-            results.append(add_judgment(c, who.actor, row["id"], qset["label"],
-                                        scores_from(answer["answers"], questions), dests))
-    return {"question_set": qset["label"], "judged": len(results),
-            "routed": sum(len(r["intake"]) for r in results), "results": results, "errors": errors}
+            H.event(
+                c,
+                who.actor,
+                "judge.call",
+                qset["label"],
+                {
+                    "questions": len(questions),
+                    "types": ["noul"],
+                    **audit_detail(answer),
+                    "answers": J.summary(answer["answers"]),
+                },
+            )
+            results.append(
+                add_judgment(c, who.actor, row["id"], qset["label"], scores_from(answer["answers"], questions), dests)
+            )
+    return {
+        "question_set": qset["label"],
+        "judged": len(results),
+        "routed": sum(len(r["intake"]) for r in results),
+        "results": results,
+        "errors": errors,
+    }
 
 
 # ----------------------------------------------------------------------------- HTTP
@@ -765,7 +988,9 @@ def install(app, store, auth, mutate):
             if who.role != "owner":
                 raise Problem("forbidden", "Only the owner changes Listening destinations", 403)
             saved = save_destination(c, store.settings, who, key, body)
-            return {"destination": next(d for d in destination_list(c, store.settings)["destinations"] if d["key"] == saved)}
+            return {
+                "destination": next(d for d in destination_list(c, store.settings)["destinations"] if d["key"] == saved)
+            }
 
         return mutate(request, body, work)
 
@@ -788,9 +1013,18 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             require_listener(who)
-            return record_run(c, who.actor, source=body.source, query=body.query, status=body.status,
-                              started_at=body.started_at, pages_read=body.pages_read, items_seen=body.items_seen,
-                              note=body.note, items=[i.model_dump() for i in body.items])
+            return record_run(
+                c,
+                who.actor,
+                source=body.source,
+                query=body.query,
+                status=body.status,
+                started_at=body.started_at,
+                pages_read=body.pages_read,
+                items_seen=body.items_seen,
+                note=body.note,
+                items=[i.model_dump() for i in body.items],
+            )
 
         return mutate(request, body, work)
 
@@ -808,8 +1042,11 @@ def install(app, store, auth, mutate):
             auth.domain(who)
             require_listener(who)
             dests = destinations(store.settings, c)
-            return {"results": [add_judgment(c, who.actor, j.item_id, j.question_set, j.scores, dests)
-                                for j in body.judgments]}
+            return {
+                "results": [
+                    add_judgment(c, who.actor, j.item_id, j.question_set, j.scores, dests) for j in body.judgments
+                ]
+            }
 
         return mutate(request, body, work)
 
@@ -819,12 +1056,16 @@ def install(app, store, auth, mutate):
         auth.domain(who)
         require_listener(who)
         from .judge import over_spend_cap, server_engine
+
         with store.read() as c:
             capped = over_spend_cap(c, store.settings)
             engine = None if capped else server_engine(store, c, getattr(app.state, "judge", None))
         if capped:
-            raise Problem("spend_cap", "Decide has reached the team's monthly spend cap; posts stay unjudged "
-                          "until the 1st (UTC)", 429)
+            raise Problem(
+                "spend_cap",
+                "Decide has reached the team's monthly spend cap; posts stay unjudged until the 1st (UTC)",
+                429,
+            )
         if engine is None:
             raise Problem("judge_unconfigured", "No decision model is configured on this server", 503)
         return judge_pending(store, engine, who, body.limit, body.item_ids or None)
@@ -849,8 +1090,11 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            require_reader(who, destinations(store.settings, c))
-            return stats(c, since)
+            dests = destinations(store.settings, c)
+            require_reader(who, dests)
+            out = stats(c, since)
+            out.update(timeline(c, who, dests, out["since"]))
+            return out
 
     @app.get("/api/v2/intake")
     def intake_list(request: Request, destination: str | None = None, status: str | None = "new", limit: int = 100):
@@ -859,8 +1103,7 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             dests = destinations(store.settings, c)
             require_reader(who, dests)
-            return {"items": inbox(c, who, dests, destination, status or None, limit),
-                    "destinations": dests}
+            return {"items": inbox(c, who, dests, destination, status or None, limit), "destinations": dests}
 
     @app.post("/api/v2/intake/{intake_id}/resolve")
     def intake_resolve(request: Request, intake_id: str, body: IntakeResolve):
@@ -868,6 +1111,10 @@ def install(app, store, auth, mutate):
 
         def work(c):
             auth.domain(who)
-            return {"intake": resolve(c, who, intake_id, body.status, destinations(store.settings, c), body.receiver_ref, body.reason)}
+            return {
+                "intake": resolve(
+                    c, who, intake_id, body.status, destinations(store.settings, c), body.receiver_ref, body.reason
+                )
+            }
 
         return mutate(request, body, work)

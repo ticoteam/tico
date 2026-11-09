@@ -1,8 +1,12 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 20 minutes. The outcome is six recorded answers, a first onboarding board from the
+finished. Budget 20 minutes. The outcome is five recorded answers, a first onboarding board from the
 customers in onboarding today, and the first routine checked.
+
+Inputs: the task, `hub team show`, the open tasks, the kickoff calls, and the CRM closed-won deals in your access.
+
+Done when: the five answers are in `state.md`, the milestones file and the first board are on the task, the routine is checked, and `hub bot setup-done` has run.
 
 ---
 
@@ -23,12 +27,11 @@ What you do (a plan per new customer, kickoff prep, milestone tracking, a weekly
 
 Numbered, each with its one-line why, offering the defaults so a human can answer "fine".
 
-1. What has to be true for a customer to be live, and what is their first moment of real value?
-2. What are the usual onboarding steps, in order, and who does each on both sides?
-3. How long should onboarding take for small, mid-size and large customers? (Default: 3, 6, 10 weeks.)
-4. How do you learn a deal has closed, and where does sales write what it promised?
-5. After how many days without progress is a customer stuck, and who hears? (Default: 7 days; you.)
-6. Who owns customer messages, and who runs the kickoff calls?
+1. What has to be true for a customer to be live (their first moment of real value), and what are the usual onboarding steps, in order, with who does each on both sides?
+2. How long should onboarding take for small, mid-size and large customers? (Default: 3, 6, 10 weeks.)
+3. How do you learn a deal has closed, and where does sales write what it promised?
+4. After how many days without progress is a customer stuck, and who hears? (Default: 7 days; you.)
+5. Who owns customer messages, and who runs the kickoff calls?
 
 ## 4. Record
 
@@ -43,13 +46,13 @@ read, marking every gap. Then follow `playbooks/weekly-onboarding-board.md` and 
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will update this board every Monday at 10:00." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will update this board every Monday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

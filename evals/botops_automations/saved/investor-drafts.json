@@ -1,0 +1,74 @@
+{
+  "created": [
+    {
+      "name": "Draft replies to investors, leave money for the owner",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "message",
+        "inbox": "dana@acme.example"
+      },
+      "steps": [
+        {
+          "id": "triage",
+          "type": "decide",
+          "enabled": true,
+          "set": "mail-triage@1",
+          "level": "low",
+          "out": "d1"
+        },
+        {
+          "id": "route",
+          "type": "paths",
+          "enabled": true,
+          "paths": [
+            {
+              "name": "money",
+              "when": [
+                {
+                  "field": "d1.money",
+                  "op": "is",
+                  "value": "yes",
+                  "min": 0.8
+                }
+              ],
+              "steps": [
+                {
+                  "id": "leave",
+                  "type": "action",
+                  "enabled": true,
+                  "do": "leave_for_you",
+                  "args": {}
+                }
+              ]
+            },
+            {
+              "name": "investor reply",
+              "when": [
+                {
+                  "field": "d1.bucket",
+                  "op": "is",
+                  "value": "needs-owner"
+                },
+                {
+                  "field": "d1.money",
+                  "op": "is",
+                  "value": "no"
+                }
+              ],
+              "steps": [
+                {
+                  "id": "draft",
+                  "type": "action",
+                  "enabled": true,
+                  "do": "draft_reply",
+                  "args": {}
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

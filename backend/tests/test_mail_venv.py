@@ -31,10 +31,15 @@ def run(tmp_path, minor):
         bin_dir.mkdir()
         (bin_dir / "python3").write_text(FAKE_PYTHON3)
         (bin_dir / "python3").chmod(0o755)
-    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "TICO_MAIL_VENV": str(tmp_path / "venv"),
-           "FAKE_MINOR": minor}
-    return subprocess.run(["bash", str(hub / "scripts/mail.sh"), "doctor"], env=env, capture_output=True, text=True,
-                          check=True)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin",
+        "TICO_MAIL_VENV": str(tmp_path / "venv"),
+        "FAKE_MINOR": minor,
+    }
+    return subprocess.run(
+        ["bash", str(hub / "scripts/mail.sh"), "doctor"], env=env, capture_output=True, text=True, check=True
+    )
 
 
 def test_mail_venv_is_rebuilt_for_a_new_python_and_kept_otherwise(tmp_path):

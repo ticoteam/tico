@@ -30,10 +30,16 @@ HARNESS_CATALOG = (
     {"id": "muse", "label": "muse", "runtime": "muse", "external": True},
 )
 HARNESS_BY_ID = {row["id"]: row for row in HARNESS_CATALOG}
-# Each CLI's short name and capabilities come from its manifest (runner/harnesses/*.toml); an external agent has
+# Each CLI's short name and capabilities come from its manifest (runner-rs/harnesses/*.toml); an external agent has
 # none, so every capability reads as unknown for it.
-HARNESS_CATALOG = tuple({**row, "name": (manifests.get(row["id"]) or {}).get("name", row["label"]),
-                         "capabilities": dict(manifests.caps(row["id"]))} for row in HARNESS_CATALOG)
+HARNESS_CATALOG = tuple(
+    {
+        **row,
+        "name": (manifests.get(row["id"]) or {}).get("name", row["label"]),
+        "capabilities": dict(manifests.caps(row["id"])),
+    }
+    for row in HARNESS_CATALOG
+)
 # External agents a person syncs in (backend/external_sync.py): they read only their own chat, never a task.
 SYNCED_HARNESSES = ("grokbot", "dots", "muse")
 SYNCED_SQL = ",".join(f"'{h}'" for h in SYNCED_HARNESSES)
@@ -44,6 +50,12 @@ def reports_tool_calls(config, runtime=None):
     """True when this bot's host tells the hub about each tool call (`tool_events`), so that the absence of one
     is a fact worth acting on. A host that streams text and never names a tool leaves no evidence either way."""
     return bool(manifests.caps(resolve_harness(config, runtime)).get("tool_events"))
+
+
+def reports_skill_uses(config, runtime=None):
+    """True when this bot's host reports each skill its model uses (`skill_events`), so that a bot with no use is a
+    bot that used none. A host that reports only some (Codex: the skills its input names) proves nothing by silence."""
+    return bool(manifests.caps(resolve_harness(config, runtime)).get("skill_events"))
 
 
 def steers(config, runtime=None):
@@ -70,6 +82,14 @@ def runtime_of(harness):
 def harness_caps(harness, runtime=None):
     """The capabilities of `harness`, else of `runtime`'s own CLI; empty when neither has a manifest."""
     return manifests.caps(harness) or manifests.caps(runtime)
+
+
+def bot_keyed(runtime):
+    """Whether `runtime` signs each bot in with that bot's own key (`api_keys = "bot"`: pi and the Gemini CLI). A
+    provider's refusal of such a key is that bot's alone, as the runner's signin.bot_keyed decides it."""
+    return bool(runtime) and any(
+        row["runtime"] == runtime and row["capabilities"].get("api_keys") == "bot" for row in HARNESS_CATALOG
+    )
 
 
 def bot_key(config, runtime=None):
@@ -108,8 +128,7 @@ def normalize_fallback(value):
     if not harness or not model:
         return None
     effort = str(value.get("reasoning_effort") or value.get("effort") or "").strip()
-    return {"harness": harness, "model": model, "reasoning_effort": effort,
-            "runtime": runtime_of(harness)}
+    return {"harness": harness, "model": model, "reasoning_effort": effort, "runtime": runtime_of(harness)}
 
 
 def backfill_config(config, slug=None, runtime=None):
@@ -126,6 +145,7 @@ def backfill_config(config, slug=None, runtime=None):
     # A bot on a runtime's second host (Antigravity) falls back to that runtime's own CLI.
     if slug == "coo" and harness and runtime_of(harness) != harness and "fallback" not in config:
         from .providers import PROVIDER_BY_RUNTIME, recommended
+
         config["fallback"] = {
             "harness": runtime_of(harness),
             "model": config.get("model") or recommended(PROVIDER_BY_RUNTIME[runtime_of(harness)]["id"])["id"],

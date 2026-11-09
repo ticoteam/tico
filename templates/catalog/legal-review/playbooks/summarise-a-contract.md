@@ -55,9 +55,16 @@ advice. Have counsel review anything that matters before you sign or rely on it.
 ## 6. Finish
 
 Add the contract to `knowledge/contracts.md`. `hub task update <id> --status done --note`: the five lines,
-the path, and any deadline inside 14 days first. Reply to the counterparty within the requested work and your Tools when a person has turned mail sending on in Tico; otherwise keep the draft on the task.
+the path, and any deadline inside 14 days first. A reply to the counterparty is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it, within the granted Tools.
 
 ## When a source fails
 
 A scanned page you cannot read, or a missing schedule, is named at the top and its clauses marked
 "not read". Never summarise a page you did not read.
+
+## Done when
+- The summary is saved in `reports/summaries/`, published, and attached to the task, with the five lines first.
+- Every table row has a clause number or "not found in the text".
+- Every flag names a playbook line, or says "no team position; ask counsel".
+- `knowledge/contracts.md` has the contract's row, with the date it was read.
+- The task is closed with the five lines, the path, and any deadline inside 14 days first.

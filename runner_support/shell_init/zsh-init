@@ -1,0 +1,14 @@
+__tico_turn_startup() {
+  local startup="$1" hook_dir="$ZDOTDIR"
+  ZDOTDIR="${TICO_TURN_ZDOTDIR:-$HOME}"
+  if [[ -r "$ZDOTDIR/$startup" ]]; then
+    . "$ZDOTDIR/$startup"
+  fi
+  export TICO_TURN_ZDOTDIR="${ZDOTDIR:-$HOME}"
+  export ZDOTDIR="$hook_dir"
+  if [[ -n "${TICO_TURN_PATH:-}" ]]; then
+    export PATH="$TICO_TURN_PATH"
+  fi
+}
+__tico_turn_startup "$1"
+unfunction __tico_turn_startup

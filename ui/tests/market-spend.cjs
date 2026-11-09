@@ -1,10 +1,11 @@
-// The Market tab's views (ui/market-spend.js, ui/market-page.js) against a stand-in for GET /api/v2/market/spend and
-// /market/value-chain and their writes (fixtures only, the Acme example): a bare Market tab opens Spend once anything is
-// sized and the graph otherwise; treemap areas follow the sizes; the segment panel shows each estimate with its
-// params, and the owner's param edit posts and reads again while a member sees no edit, research or cite; the basis
-// switch asks for the other basis; the empty state files the research once; the value chain draws its five layers; the
-// growth chart draws a dot per segment; a phone never scrolls sideways; old #/strategy/market links still open the graph.
-// TICO_SCREENSHOT_DIR=<dir> saves review screenshots (Spend on desktop in light, on a phone in dark).
+// Market's money, players and value chain (ui/app/redesign-market.ts, ui/market-spend.ts, ui/market-page.ts) against a
+// stand-in for GET /api/v2/market/spend and /market/value-chain and their writes (fixtures only, the Acme example): the
+// tiles; treemap areas follow the sizes; the segment panel shows each estimate with its params, and the owner's param
+// edit posts and reads again while a member sees no edit, research or cite; the Offering/Buyer and basis switches ask
+// for the other read; an unsized market offers the owner the sizing form and leaves the money out for anyone else; the value chain draws its layers with their spend; the
+// growth chart draws a dot per segment; old view links scroll to their question; a phone never scrolls sideways; note
+// links and old #/market note links open the map.
+// TICO_SCREENSHOT_DIR=<dir> saves review screenshots (the page on desktop in light, on a phone in dark).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -67,9 +68,9 @@ const buildData = (dimension = 'offering', basis = 'product') => {
     seg('eco', 'Eco products', null, null)]};
 };
 const chain = {layers: [
-  {key: 'suppliers', title: 'Suppliers', nodes: [{id: 'company/soapco', name: 'SoapCo', type: 'company', self: false}]},
-  {key: 'platforms', title: 'Platforms', nodes: [{id: 'company/bookit', name: 'BookIt', type: 'company', self: false}, {id: 'company/payly', name: 'Payly', type: 'company', self: false}]},
-  {key: 'rivals', title: 'Us and rivals', nodes: [{id: 'company/self', name: 'Acme', type: 'company', self: true}, {id: 'company/cleanco', name: 'CleanCo', type: 'company', self: false}]},
+  {key: 'suppliers', title: 'Suppliers', nodes: [{id: 'company/soapco', name: 'SoapCo', type: 'organization', self: false}]},
+  {key: 'platforms', title: 'Platforms', nodes: [{id: 'company/bookit', name: 'BookIt', type: 'organization', self: false}, {id: 'company/payly', name: 'Payly', type: 'organization', self: false}]},
+  {key: 'rivals', title: 'Us and rivals', nodes: [{id: 'company/self', name: 'Acme', type: 'organization', self: true}, {id: 'company/cleanco', name: 'CleanCo', type: 'organization', self: false}]},
   {key: 'channels', title: 'Channels', nodes: [{id: 'channel/managers', name: 'Property managers', type: 'channel', self: false}]},
   {key: 'buyers', title: 'Buyers', nodes: [{id: 'segment/offices', name: 'Small offices', type: 'segment', self: false}]}],
   edges: [{src: 'company/self', rel: 'integrates_with', dst: 'company/bookit'}, {src: 'company/self', rel: 'sells_to', dst: 'segment/offices'}]};
@@ -87,7 +88,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/market', viewp
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
     if (p === '/api/employees') return json([]);
@@ -120,15 +121,16 @@ async function open(browser, {role = 'owner', route = '#/strategy/market', viewp
     }
     const decide = p.match(/^\/api\/v2\/market\/sizes\/([^/]+)\/(accept|reject)$/);
     if (decide) { sent.push(['POST', p, req.postDataJSON()]); return json({size: {id: decide[1]}}); }
-    if (p === '/api/v2/market/value-chain') return json(chain);
+    if (p === '/api/v2/market/value-chain') return json(live.data?.chain || chain);
     if (p === '/api/v2/strategy' && method === 'GET') return json({bets, draft: {revision: 7}, current: null, may_edit: role === 'owner'});
     const bet = p.match(/^\/api\/v2\/strategy\/bets\/([^/]+)$/);
     if (bet && method === 'POST') { sent.push(['POST', p, req.postDataJSON()]); return json({bet: bets.find(b => b.id === bet[1]), revision: 8}); }
     if (p === '/api/v2/librarian/research') { sent.push(['POST', p, req.postDataJSON()]); return json({task_id: 'task-r'}); }
-    if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], edges: []});
-    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'company', name: 'Acme'}], total: 1});
+    if (p === '/api/v2/market/graph') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], edges: []});
+    if (p === '/api/v2/market/entities') return json({entities: [{id: 'company/self', type: 'organization', name: 'Acme'}], total: 1});
     if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: null});
+    if (p === '/api/v2/listening/stats') return json({error: {code: 'forbidden', detail: 'Not yours'}}, 403);
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + route);
@@ -153,13 +155,20 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // A bare Market tab opens Spend once anything is sized; boxes are drawn to scale, and the map marks what it should.
+    // Spend: boxes are drawn to scale, and the map marks what it should.
     {
       const {page, errors} = await open(browser);
       await page.locator('.mkt-map .mkt-box').first().waitFor();
-      assert.equal(await page.locator('.mkt-views a[aria-current=page]').innerText(), 'Spend');
-      assert.deepEqual(await page.locator('.mkt-views a').allInnerTexts(), ['Players', 'Spend', 'Buyers', 'Value chain', 'Size vs growth']);
-      assert.equal(await page.locator('.mkt-total strong').innerText(), '$16.8B');
+      // No briefing and no listening here: those questions are left out.
+      assert.deepEqual(await page.locator('.mkt-q h3').allInnerTexts(), ['Where is the money going?', 'Who are we up against?', 'How does it reach buyers?']);
+      assert.equal(await page.locator('.mkt-ans').count(), 0, 'no briefing, no answer lines');
+      assert.deepEqual(await page.locator('.mkt-tile-k .mkt-lab').allInnerTexts(), ['YEARLY SPEND', 'FASTEST GROWING']);
+      assert.equal(await page.locator('.mkt-tile-k .mkt-big').first().innerText(), '$16.8B');
+      assert.equal(await page.locator('.mkt-tile-k .mkt-big').nth(1).innerText(), 'Specialty cleaning');
+      assert.equal(await page.locator('.mkt-tile-k .mkt-sure').innerText(), 'Estimated', 'how sure, once, on the spend tile');
+      assert.equal(await page.locator('.mkt-sure').count(), 1);
+      assert.equal(await page.locator('.mkt-pl tbody tr').count(), 1);
+      assert.equal(await page.locator('#mkt-q-players .mkt-more').innerText(), '1 tracked');
       within(await areaRatios(page.locator('.mkt-map > .mkt-box')), 'top level');
       within(await areaRatios(page.locator('.mkt-group:has([data-seg="segment/day"]) .mkt-tile')), 'Office parts');
       within(await areaRatios(page.locator('.mkt-group:has([data-seg="segment/weekly"]) .mkt-tile')), 'Home parts');
@@ -167,9 +176,7 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       assert.match(await page.locator('[data-seg="segment/carpet"]').first().getAttribute('aria-label'), /estimates disagree/);
       assert.equal(await page.locator('.mkt-box.self').count(), 2, 'our segments are ringed (Office group, Night cleaning)');
       assert.equal(await page.locator('.mkt-map [data-seg="segment/eco"]').count(), 0, 'a segment with no size is not drawn');
-      assert.deepEqual(await page.locator('.mkt-sec:has(h2:text("Not sized yet")) .mkt-pick').allInnerTexts(), ['Eco products']);
-      assert.equal((await page.locator('.mkt-sure .mkt-row .mkt-lab').allInnerTexts())[0], 'Office cleaning', 'How sure are we is sorted by spend');
-      assert.equal(await page.locator('.mkt-sure .mkt-row').count(), 7);
+      assert.deepEqual(await page.locator('.mkt-sec:has(h4:text("Not sized yet")) .mkt-pick').allInnerTexts(), ['Eco products']);
       assert.deepEqual(await noSideScroll(page), {page: 0, host: 0});
       await shot(page, 'desktop', 'light');
       assert.deepEqual(errors, []);
@@ -193,37 +200,82 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       const gb = await group.evaluate(el => { const r = el.getBoundingClientRect(); return r.width * (r.height - 26); });
       [0.3, 0.2, 0.5].forEach(share => assert.ok(area.some(a => Math.abs(a / gb - share) < 0.02 * share), `an area is ${share} of the box`));
       assert.equal(await page.locator('.mkt-map > .mkt-box[data-value="' + 4 * B + '"]').count(), 1, 'an unsized segment is drawn at its rolled-up spend');
-      assert.equal(await page.locator('.mkt-total strong').innerText(), '$19B');
+      assert.equal(await page.locator('.mkt-tile-k .mkt-big').first().innerText(), '$19B');
       await shot(page, 'rest', 'light');
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Nothing sized: the bare tab opens the graph; the view routes still open the views; the graph links keep working.
-    {
-      const {page, errors} = await open(browser, {empty: true});
-      await page.locator('.market-shell').waitFor();
-      assert.equal(await page.locator('.mkt-views a[aria-current=page]').innerText(), 'Players');
-      assert.equal(await page.locator('.mkt-map').count(), 0);
-      await page.locator('.mkt-views a', {hasText: 'Spend'}).click();
-      await page.locator('[data-mkt-size]').waitFor();
+    // Nothing sized: the tiles are left out, the players fall back to the tracked companies, and an old Spend link
+    // lands on the page. The owner sizes the market from Where is the money going? (one request, an empty sentence
+    // refused); for anyone else the question is left out.
+    for (const role of ['owner', 'member']) {
+      const {page, errors, sent} = await open(browser, {role, route: '#/strategy/market/spend', empty: true});
+      await page.locator('#mkt-q-players').waitFor();
+      assert.equal(await page.locator('.mkt-tiles').count(), 0, role);
+      if (role === 'owner') {
+        const form = page.locator('#mkt-q-money [data-mkt-size]');
+        await form.waitFor();
+        await form.locator('button').click();
+        assert.equal(await form.locator('[data-mkt-error]').isVisible(), true, 'an empty sentence is not sent');
+        await form.locator('#mkt-describe').fill('What offices spend on cleaning');
+        await form.locator('button').dblclick();
+        await page.locator('#mkt-q-money [data-mkt-researching]').waitFor();
+        assert.deepEqual(sent, [['POST', '/api/v2/market/spend/research', {description: 'What offices spend on cleaning'}]], 'one research request');
+        assert.equal(await page.locator('[data-mkt-researching] a').getAttribute('href'), '#/task/task-size');
+      } else assert.equal(await page.locator('#mkt-q-money').count(), 0, role);
+      assert.deepEqual(await page.locator('.mkt-pl tbody tr button').allInnerTexts(), ['Acme'], role);
+      assert.equal(await page.locator('.mkt-pl tr.us').count(), 1, role + ': our row is marked');
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/spend');
-      assert.deepEqual(errors, []);
+      assert.deepEqual(errors, [], role);
       await page.close();
     }
-    // A link to a note, a note id route and an old #/market link open the graph even when Spend is sized.
+    // A link to a note, a note id route, an old #/market link, the old Players view and Open map open the map, with a
+    // way back to the page.
     for (const [route, hash] of [['#/strategy/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/company/self', '#/strategy/market/company/self'],
-      ['#/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/players', '#/strategy/market/players']]) {
+      ['#/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/players', '#/strategy/market/players'], ['#/strategy/market/map', '#/strategy/market/map']]) {
       const {page, errors} = await open(browser, {route});
       await page.locator('.market-shell .market-graph').waitFor();
       assert.equal(await page.evaluate(() => location.hash), hash);
       assert.equal(await page.locator('.mkt-map').count(), 0, route);
-      assert.equal(await page.locator('.mkt-views a[aria-current=page]').innerText(), 'Players');
+      assert.equal(await page.locator('[data-market-close]').getAttribute('href'), '#/strategy/market', route);
       assert.deepEqual(errors, [], route);
+      await page.close();
+    }
+    // Open map goes to the map, and Close map comes back to the page.
+    {
+      const {page, errors} = await open(browser);
+      await page.locator('.mkt-map .mkt-box').first().waitFor();
+      await page.locator('.mkt-top a', {hasText: 'Open map'}).click();
+      await page.locator('.market-shell .market-graph').waitFor();
+      assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/map');
+      await page.locator('[data-market-close]').click();
+      await page.locator('.mkt-map .mkt-box').first().waitFor();
+      assert.equal(await page.locator('[data-market-close]').count(), 0);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // An old view's address lands on the page scrolled to its question; Buyers shows the buyer side of the money.
+    for (const [view, section] of [['value-chain', 'reach'], ['growth', 'money'], ['buyers', 'money']]) {
+      const {page, errors, reads} = await open(browser, {route: '#/strategy/market/' + view, viewport: {width: 1280, height: 560}});
+      await page.locator('#mkt-q-' + section).waitFor();
+      await page.waitForFunction(() => document.querySelector('#market-shell').scrollTop > 0);
+      // At the top, or as far as the page goes when the question is the last one.
+      const at = await page.evaluate(s => {
+        const shell = document.querySelector('#market-shell'), top = document.querySelector('#mkt-q-' + s).getBoundingClientRect().top - shell.getBoundingClientRect().top;
+        return {top, end: shell.scrollTop >= shell.scrollHeight - shell.clientHeight - 1, seen: top < shell.clientHeight};
+      }, section);
+      assert.ok(Math.abs(at.top) <= 30 || (at.end && at.seen), `${view}: ${section} is scrolled to (${JSON.stringify(at)})`);
+      if (view === 'buyers') {
+        await page.locator('.mkt-map [data-seg="segment/tiny-firms"]').waitFor();
+        assert.equal(await page.locator('[data-dim="buyer"]').getAttribute('aria-pressed'), 'true');
+        assert.equal(reads.length, 2, 'the page\'s two reads serve the switch');
+      }
+      assert.deepEqual(errors, [], view);
       await page.close();
     }
     // The panel: each estimate by method with its arithmetic, params, sources, players; the owner edits a param, which posts and reads again.
     {
-      const {page, errors, sent, reads} = await open(browser, {route: '#/strategy/market/spend'});
+      const {page, errors, sent, reads} = await open(browser);
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       await page.locator('.mkt-gh[data-seg="segment/office"]').click();
       const panel = page.locator('.mkt-panel[open]');
@@ -261,7 +313,7 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
     }
     // A member reads the same panel with nothing to change.
     {
-      const {page, errors} = await open(browser, {role: 'member', route: '#/strategy/market/spend'});
+      const {page, errors} = await open(browser, {role: 'member'});
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       await page.locator('.mkt-gh[data-seg="segment/office"]').click();
       const panel = page.locator('.mkt-panel[open]');
@@ -276,75 +328,56 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
     }
     // The Definition panel, and the basis switch asking for the other basis.
     {
-      const {page, errors, reads} = await open(browser, {route: '#/strategy/market/spend'});
+      const {page, errors, reads} = await open(browser);
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       await page.locator('[data-mkt-def]').click();
       const panel = page.locator('.mkt-panel[open]');
       await panel.waitFor();
       assert.match(await panel.innerText(), /Includes[\s\S]*Recurring cleaning[\s\S]*Excludes[\s\S]*In-house staff[\s\S]*Counting rules[\s\S]*One vendor per segment[\s\S]*smb_share[\s\S]*Judgement/i);
       await page.keyboard.press('Escape');
-      assert.deepEqual(await page.locator('.mkt-seg button').allInnerTexts(), ['Product', 'Platform']);
-      await page.locator('.mkt-seg button', {hasText: 'Platform'}).click();
+      assert.deepEqual(await page.locator('.mkt-seg[aria-label=Basis] button').allInnerTexts(), ['Product', 'Platform']);
+      await page.locator('.mkt-seg[aria-label=Basis] button', {hasText: 'Platform'}).click();
       await page.waitForFunction(() => document.querySelector('.mkt-gh[data-seg="segment/office"] b')?.textContent === '$6B');
       assert.deepEqual(reads.at(-1), ['offering', 'platform']);
-      assert.equal(await page.locator('.mkt-seg button[aria-pressed=true]').innerText(), 'Platform');
+      assert.equal(await page.locator('.mkt-seg[aria-label=Basis] button[aria-pressed=true]').innerText(), 'Platform');
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // The view switch: Buyers asks for the buyer dimension.
+    // The Offering/Buyer switch shows the buyer side, from the page's own read, without leaving the page.
     {
-      const {page, errors, reads} = await open(browser, {route: '#/strategy/market/spend'});
+      const {page, errors, reads} = await open(browser);
       await page.locator('.mkt-map .mkt-box').first().waitFor();
-      await page.locator('.mkt-views a', {hasText: 'Buyers'}).click();
+      assert.deepEqual(await page.locator('.mkt-seg[aria-label="Spend by"] button').allInnerTexts(), ['Offering', 'Buyer']);
+      await page.locator('[data-dim="buyer"]').click();
       await page.locator('.mkt-map [data-seg="segment/tiny-firms"]').waitFor();
-      assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/buyers');
-      assert.deepEqual(reads.at(-1), ['buyer', 'product']);
+      assert.equal(await page.evaluate(() => location.hash), '#/strategy/market');
+      assert.equal(reads.length, 2, 'no read beyond the page\'s own two');
       assert.equal(await page.locator('.mkt-map [data-seg="segment/office"]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Empty: the owner describes the market once; a member is told it is not sized.
+    // The value chain: five layers, ours emphasized, each node a link to its entity, a segment with its spend.
     {
-      const {page, errors, sent} = await open(browser, {route: '#/strategy/market/spend', empty: true});
-      await page.locator('[data-mkt-size]').waitFor();
-      await page.locator('[data-mkt-size] button').click();
-      assert.equal(await page.locator('[data-mkt-error]').isVisible(), true, 'an empty sentence is not sent');
-      assert.equal(sent.length, 0);
-      await page.locator('#mkt-describe').fill('What offices spend on cleaning');
-      await page.locator('[data-mkt-size] button').dblclick();
-      await page.locator('[data-mkt-researching]').waitFor();
-      assert.equal(sent.length, 1, 'one research request');
-      assert.deepEqual(sent[0], ['POST', '/api/v2/market/spend/research', {description: 'What offices spend on cleaning'}]);
-      assert.equal(await page.locator('[data-mkt-researching] a').getAttribute('href'), '#/task/task-size');
-      assert.deepEqual(errors, []);
-      await page.close();
-      const member = await open(browser, {role: 'member', route: '#/strategy/market/buyers', empty: true});
-      await member.page.locator('.mkt-host .market-none').waitFor();
-      assert.equal(await member.page.locator('.mkt-host').innerText(), 'Not sized yet.');
-      assert.equal(await member.page.locator('[data-mkt-size]').count(), 0);
-      await member.page.close();
-    }
-    // The value chain: five layers, ours emphasized, each node a link to its entity.
-    {
-      const {page, errors} = await open(browser, {route: '#/strategy/market/value-chain'});
+      const chained = {...chain, layers: chain.layers.map(l => l.key === 'buyers' ? {...l, nodes: [...l.nodes, {id: 'segment/home', name: 'Home cleaning', type: 'segment', self: false}]} : l)};
+      const {page, errors} = await open(browser, {data: {chain: chained}});
       await page.locator('.mkt-chain').waitFor();
-      assert.deepEqual(await page.locator('.mkt-layer h2').allInnerTexts(), ['SUPPLIERS', 'PLATFORMS', 'US AND RIVALS', 'CHANNELS', 'BUYERS']);
+      assert.deepEqual(await page.locator('.mkt-layer h4').allInnerTexts(), ['SUPPLIERS', 'PLATFORMS', 'US AND RIVALS', 'CHANNELS', 'BUYERS']);
       assert.equal(await page.locator('.mkt-node.self').innerText(), 'Acme');
+      assert.equal(await page.locator('.mkt-node[data-node="segment/home"] b').innerText(), '$3.1B');
       await shot(page, 'chain', 'light');
       assert.equal(await page.locator('.mkt-node.self').getAttribute('href'), '#/strategy/market?note=company%2Fself');
       await page.locator('.mkt-node.self').hover();
-      assert.deepEqual(await page.locator('.mkt-node.near').allInnerTexts(), ['BookIt', 'Acme', 'Small offices']);
+      assert.deepEqual(await page.locator('.mkt-node.near .mkt-nn').allInnerTexts(), ['BookIt', 'Acme', 'Small offices']);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Size vs growth: a dot per sized segment with a growth figure, ours filled; the rest listed.
+    // Size vs growth: a dot per sized segment with a growth figure, ours filled.
     {
-      const {page, errors} = await open(browser, {route: '#/strategy/market/growth'});
+      const {page, errors} = await open(browser);
       await page.locator('.mkt-svg').waitFor();
       assert.equal(await page.locator('.mkt-dot').count(), 6);
       await shot(page, 'growth', 'dark');
       assert.deepEqual(await page.locator('.mkt-dot.self text').evaluateAll(els => els.map(e => e.textContent)), ['Office cleaning']);
-      assert.deepEqual(await page.locator('.mkt-sec:has(h2:text("No growth figure")) .mkt-pick').allInnerTexts(), ['Move-out cleaning']);
       await page.locator('.mkt-dot', {hasText: 'Home cleaning'}).click();
       await page.locator('.mkt-panel[open] h2', {hasText: 'Home cleaning'}).waitFor();
       assert.equal(await page.locator('.mkt-svg text:text("log scale")').count(), 0, 'a narrow range stays linear');
@@ -353,16 +386,19 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       // A range wider than 20x goes on a log scale.
       const wide = buildData();
       wide.segments.find(s => s.id === 'segment/specialty').size.spend_usd = 0.1 * B;
-      const log = await open(browser, {route: '#/strategy/market/growth', data: {offering: wide}});
+      const log = await open(browser, {data: {offering: wide}});
       await log.page.locator('.mkt-svg').waitFor();
       assert.equal(await log.page.locator('.mkt-svg text:text("log scale")').count(), 1);
       await log.page.close();
     }
-    // A phone: nothing scrolls sideways in any view, with the panel open, and the map keeps its boxes.
+    // A phone: one column, nothing scrolls sideways (the players table scrolls in its own box), with the panel open,
+    // and the map keeps its boxes.
     {
-      const {page, errors} = await open(browser, {viewport: PHONE, route: '#/strategy/market/spend'});
+      const {page, errors} = await open(browser, {viewport: PHONE});
       await page.locator('.mkt-map .mkt-box').first().waitFor();
-      assert.deepEqual(await noSideScroll(page), {page: 0, host: 0}, 'spend');
+      assert.deepEqual(await noSideScroll(page), {page: 0, host: 0}, 'page');
+      assert.equal(await page.locator('.mkt-two').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 1, 'one column');
+      assert.equal(await page.locator('.mkt-tbl').evaluate(el => getComputedStyle(el).overflowX), 'auto');
       within(await areaRatios(page.locator('.mkt-map > .mkt-box')), 'phone top level');
       await shot(page, 'phone', 'dark');
       await page.locator('.mkt-map .mkt-tile').first().click();
@@ -371,12 +407,6 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       assert.ok(sheet.right <= PHONE.width && sheet.width <= 0, 'the sheet fits');
       await shot(page, 'phone-panel', 'dark');
       await page.keyboard.press('Escape');
-      for (const view of ['buyers', 'value-chain', 'growth']) {
-        await page.locator('.mkt-views a[data-market-view="' + view + '"]').click();
-        await page.waitForFunction(v => location.hash === '#/strategy/market/' + v, view);
-        await page.waitForTimeout(250);
-        assert.deepEqual(await noSideScroll(page), {page: 0, host: 0}, view);
-      }
       assert.deepEqual(errors, []);
       await page.close();
     }

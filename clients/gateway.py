@@ -1,7 +1,7 @@
 """The Tico AI Gateway, as the app sees it: one base URL and one gateway key, for Decide and for the Tico models.
 
     <base>/decisions          Tico Decide 1.0 (clients/judge.py, the server's decisions)
-    <base>/chat/completions   Tico Cheap / Mid / Power 1.0, OpenAI chat shape with streaming (bots, through pi)
+    <base>/chat/completions   the Tico levels (X-Low to X-High), OpenAI chat shape with streaming (bots, through pi)
     <base>/key                the key's own state this month: active or revoked, and how much of its cap is used
 
 `enroll` and `rotate` are how an install gets and renews its own key (backend/gateway_connection.py `auto_tick`), by the
@@ -20,6 +20,7 @@ minute per key, so the server asks it gently (backend/gateway_connection.py `che
 import datetime
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
@@ -47,23 +48,24 @@ TRANSIENT = ("unreachable", "busy")
 # States where the connection is not working: the Gateway refuses the key, or the key may not go to its URL.
 REFUSED = ("revoked", "unknown", "bad_url")
 CAP_MESSAGE = "Gateway cap reached"
+IMAGE_MODEL = "tico-images-1.0"
 # What each state says to the people who own the connection.
 MESSAGES = {
     "connected": "Connected.",
     "warning": "This key has used {percent}% of its monthly Gateway cap. Bots stop at 100% until next month.",
     "cap_reached": "Gateway cap reached: this key has used its monthly cap. Bots on Tico models stop until next "
-                   "month, or until Tico raises the cap.",
+    "month, or until Tico raises the cap.",
     # One message for a revoked and an unknown key: the Gateway's answer doesn't say which keys ever existed.
     "revoked": "Not working: key not recognised. Check you pasted the whole key, or ask Tico for a new one and save it "
-               "here.",
+    "here.",
     "unknown": "Not working: key not recognised. Check you pasted the whole key, or ask Tico for a new one and save it "
-               "here.",
+    "here.",
     "unreachable": "Not checked: the Gateway did not answer. Bots keep trying; check again later.",
     "busy": "Not checked: the Gateway asked to slow down. Checking again in a minute.",
     "bad_url": "Not working: the Gateway URL must start with https:// (plain http:// only for localhost). Fix it where "
-               "it is set; the key is not sent until then.",
+    "it is set; the key is not sent until then.",
     "not_ready": "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait "
-                 "until Tico turns them on.",
+    "until Tico turns them on.",
 }
 # What a bot says when the Gateway answered its model call with 404: no chat endpoint there (yet), or a wrong URL.
 NOT_SERVED = "The Tico AI Gateway doesn't serve Tico models at its URL yet"
@@ -78,8 +80,20 @@ NOT_ISOLATED = "not_isolated"
 FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused", "no_route", NOT_FOUND, NOT_ISOLATED)
 # Every code a bot's model call can end with, as the runner names it at the end of its error
 # (runner-rs/src/hosts/pi.rs `plain_error`).
-CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, OUT_OF_CREDIT, "unknown_model", "unsupported_field",
-         "bad_request", "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
+CODES = (
+    CAP_REACHED,
+    REVOKED_KEY,
+    UNKNOWN_KEY,
+    RATE_LIMITED,
+    OUT_OF_CREDIT,
+    "unknown_model",
+    "unsupported_field",
+    "bad_request",
+    "upstream_refused",
+    "no_route",
+    UNAVAILABLE,
+    NOT_ISOLATED,
+)
 # How an install gets its own key (the contract's "enroll" and "rotate"), and how it names a bot to the Gateway.
 ENROLL, ROTATE = "/enroll", "/rotate"
 BOT_HEADER = "X-Tico-Bot"
@@ -137,10 +151,9 @@ def _code(body):
 
 
 def state_of(payload):
-    """(state, used share or None) from a 200 answer of `<base>/key`."""
+    """(state, used share or None) from a 200 answer of `<base>/key`. A revoked key never gets one: it is a 401
+    `revoked_key` (state_of_error)."""
     payload = payload if isinstance(payload, dict) else {}
-    if str(payload.get("status") or "active") == "revoked":
-        return "revoked", None
     try:
         used = float(payload.get("used")) if payload.get("used") is not None else None
     except (TypeError, ValueError):
@@ -179,6 +192,61 @@ def branded_opener(*handlers):
     opener = urllib.request.build_opener(*handlers)
     opener.addheaders = [("User-Agent", user_agent())]
     return opener
+
+
+class LettersError(Exception):
+    """A fixed Gateway code, never a provider's text or letter contents."""
+
+    def __init__(self, status, code):
+        self.status, self.code = status, code
+        super().__init__(code)
+
+
+def letters(key, base, path="", *, body=None, idempotency_key=None, pdf=False):
+    """The install Letters API through the same key, safe URL and branded transport as other Gateway calls."""
+    headers = {"Authorization": "Bearer " + key, "Accept": "application/pdf" if pdf else "application/json"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        safe_base(base) + "/letters" + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers=headers,
+    )
+    cap = 8 * 1024 * 1024 if pdf else 128 * 1024
+    try:
+        with branded_opener(_Unredirected()).open(request, timeout=60) as response:
+            data = response.read(cap + 1)
+            if len(data) > cap:
+                raise LettersError(502, "response_too_large")
+            return data if pdf else json.loads(data)
+    except urllib.error.HTTPError as exc:
+        with exc:
+            code = _code(exc.read(4096))
+            allowed = {
+                "unconfigured",
+                "cannot_cancel",
+                "quote_changed",
+                "quote_expired",
+                "idempotency_conflict",
+                "quote_already_used",
+                "invalid",
+                "provider_rejected",
+                "provider_error",
+                "address_pending",
+                "out_of_credit",
+                "cap_reached",
+                "billing_required",
+                "rate_limited",
+                "not_found",
+                "revoked_key",
+                "unknown_key",
+                "idempotency_key_abandoned",
+            }
+            raise LettersError(exc.code, code if code in allowed else "gateway_error") from None
+    except (OSError, ValueError, urllib.error.URLError):
+        raise LettersError(502, "gateway_unavailable") from None
 
 
 def _send(request, timeout):
@@ -222,26 +290,38 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
     except ValueError:
         return {"state": "bad_url", "working": False, "message": describe("bad_url"), "used": None}
     opener = opener or _send
-    request = urllib.request.Request(base + "/key", method="GET", headers={
-        "Authorization": "Bearer " + key, "Accept": "application/json"})
+    request = urllib.request.Request(
+        base + "/key", method="GET", headers={"Authorization": "Bearer " + key, "Accept": "application/json"}
+    )
     amounts = {}
     try:
         with opener(request, timeout=timeout) as response:
             payload = json.load(response)
         state, used = state_of(payload)
-        amounts = {k: round(float(payload[k]), 2) for k in ("spent_usd", "cap_usd")
-                   if isinstance(payload, dict) and isinstance(payload.get(k), (int, float))
-                   and not isinstance(payload.get(k), bool) and payload[k] >= 0}
+        amounts = {
+            k: round(float(payload[k]), 2)
+            for k in ("spent_usd", "cap_usd")
+            if isinstance(payload, dict)
+            and isinstance(payload.get(k), (int, float))
+            and not isinstance(payload.get(k), bool)
+            and payload[k] >= 0
+        }
     except urllib.error.HTTPError as exc:
-        try:
-            code = _code(exc.read())
-        except Exception:
-            code = ""
-        state, used = state_of_error(exc.code, code), None
+        with exc:
+            try:
+                code = _code(exc.read())
+            except (OSError, http.client.HTTPException, ValueError):
+                code = ""
+            state, used = state_of_error(exc.code, code), None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         state, used = "unreachable", None
-    return {"state": state, "working": state not in REFUSED, "message": describe(state, used),
-            "used": round(used, 4) if used is not None else None, **amounts}
+    return {
+        "state": state,
+        "working": state not in REFUSED,
+        "message": describe(state, used),
+        "used": round(used, 4) if used is not None else None,
+        **amounts,
+    }
 
 
 def month_after(moment):
@@ -276,7 +356,7 @@ def run_code(text):
 def run_status(code, text=""):
     """What a bot's status says about a run the Gateway refused with `code`, before what happens to the run."""
     if code == "unknown_model":
-        return "The Tico AI Gateway doesn't offer this model; Settings > Gateway lists the picks"
+        return "The Tico AI Gateway doesn't offer this model; Settings > Models lists the picks"
     if code == "no_route":
         return "No Tico route for this request"
     if code == NOT_FOUND:
@@ -284,8 +364,10 @@ def run_status(code, text=""):
     if code == UNAVAILABLE:
         return "Tico AI Gateway is unavailable, try again"
     if code == NOT_ISOLATED:
-        return ("Tico models need a runner that runs bots as their own user (Tico's Docker runner). This computer "
-                "can't, so pick another model or move the bot")
+        return (
+            "Tico models need a runner that runs bots as their own user (Tico's Docker runner). This computer "
+            "can't, so pick another model or move the bot"
+        )
     # unsupported_field, bad_request, upstream_refused: the Gateway's own (fixed) words on what it refused.
     said = re.search(r"refused the request as sent: (.+?) \(" + re.escape(code) + r"\)", str(text or ""))
     return "The Tico AI Gateway refused the request as sent" + (f": {said[1][:200]}" if said else "")
@@ -319,18 +401,23 @@ def bot_id(secret, slug):
 def _post(url, body, headers, timeout, opener):
     """(status, payload, code) for a POST to the Gateway: payload is the 2xx answer, code the error's. An unreachable
     Gateway is status 0."""
-    request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
-        **headers, "Content-Type": "application/json", "Accept": "application/json"})
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={**headers, "Content-Type": "application/json", "Accept": "application/json"},
+    )
     try:
         with (opener or _send)(request, timeout=timeout) as response:
             payload = json.load(response)
         return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
     except urllib.error.HTTPError as exc:
-        try:
-            code = _code(exc.read())
-        except Exception:
-            code = ""
-        return exc.code, {}, code or str(exc.code)
+        with exc:
+            try:
+                code = _code(exc.read())
+            except (OSError, http.client.HTTPException, ValueError):
+                code = ""
+            return exc.code, {}, code or str(exc.code)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return 0, {}, "unreachable"
 
@@ -339,8 +426,12 @@ def enroll(url, install, secret, invite="", version="", timeout=TIMEOUT, opener=
     """Ask the Gateway for this install's key: (status, {key, key_id, rotate_after} or {}, error code). With `invite`
     the first time; without it an install that lost its key gets a new one by its secret."""
     base = safe_base(url)
-    body = {"install": install, "secret": secret, **({"invite": invite} if invite else {}),
-            **({"version": version} if version else {})}
+    body = {
+        "install": install,
+        "secret": secret,
+        **({"invite": invite} if invite else {}),
+        **({"version": version} if version else {}),
+    }
     return _post(base + ENROLL, body, {}, timeout, opener)
 
 
@@ -353,28 +444,357 @@ def search(url, key, query, max_results=5, headers=None, timeout=25, opener=None
     """Tico HQ's web search (`POST <base>/search`, the gateway key): (status, {results: [{title, url, snippet}], answer,
     usage: {cost_usd}} or {}, error code). Only the fields the Gateway documents are kept, each cut to a sensible
     length, because the pages behind them are other people's text."""
-    status, payload, code = _post(safe_base(url) + "/search", {"query": str(query)[:500], "max_results": max(1, min(10, int(max_results)))},
-                                  {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener)
+    status, payload, code = _post(
+        safe_base(url) + "/search",
+        {"query": str(query)[:500], "max_results": max(1, min(10, int(max_results)))},
+        {"Authorization": "Bearer " + key, **(headers or {})},
+        timeout,
+        opener,
+    )
     if status != 200:
         return status, {}, code
-    results = [{"title": str(r.get("title") or "")[:200], "url": str(r.get("url") or "")[:500],
-                "snippet": str(r.get("snippet") or "")[:1000]}
-               for r in payload.get("results") or [] if isinstance(r, dict)][:20]
+    results = [
+        {
+            "title": str(r.get("title") or "")[:200],
+            "url": str(r.get("url") or "")[:500],
+            "snippet": str(r.get("snippet") or "")[:1000],
+        }
+        for r in payload.get("results") or []
+        if isinstance(r, dict)
+    ][:20]
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     cost = usage.get("cost_usd")
-    return 200, {"results": results, "answer": str(payload.get("answer") or "")[:4000],
-                 "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
+    return (
+        200,
+        {
+            "results": results,
+            "answer": str(payload.get("answer") or "")[:4000],
+            "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+        },
+        "",
+    )
+
+
+def image(
+    url,
+    key,
+    prompt,
+    category=None,
+    images=(),
+    size=None,
+    count=1,
+    headers=None,
+    timeout=130,
+    opener=None,
+    model=IMAGE_MODEL,
+    quality=None,
+):
+    """Tico HQ's image maker (`POST <base>/images`, the gateway key): (status, {model, category or quality, images:
+    [{mime, b64}], usage: {cost_usd}} or {}, error code). `model` is HQ's id (tico-images-low, tico-images-high, tico-svg,
+    or the alias tico-images-1.0 that takes a `category`); a chat model takes `category`, the SVG model `quality`. The
+    references are base64 data URLs the caller has checked; the images come back as the Gateway sent them. A count the
+    Gateway gives less than asked for is the answer's own."""
+    body = {"model": str(model), "prompt": str(prompt)[:4000], "count": max(1, min(4, int(count)))}
+    if category:
+        body["category"] = str(category)
+    if quality:
+        body["quality"] = str(quality)
+    if images:
+        body["images"] = [str(ref) for ref in images][:4]
+    if size:
+        body["size"] = str(size)[:20]
+    status, payload, code = _post(
+        safe_base(url) + "/images", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 200:
+        return status, {}, code
+    made = [
+        {"mime": str(i.get("mime") or "")[:40], "b64": str(i.get("b64") or "")}
+        for i in payload.get("images") or []
+        if isinstance(i, dict) and i.get("b64")
+    ][:4]
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    answer = {
+        "model": str(payload.get("model") or model)[:60],
+        "images": made,
+        "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+    }
+    if category:
+        answer["category"] = str(payload.get("category") or category)[:20]
+    if quality:
+        answer["quality"] = str(payload.get("quality") or quality)[:20]
+    return 200, answer, ""
+
+
+# A video job's answer keys the caller may see (HQ's public view: no provider id, no request, no content path).
+VIDEO_FIELDS = ("id", "status", "seconds", "resolution", "aspect", "audio", "cost_usd")
+VIDEO_MODEL = "tico-video"
+# The most one video's MP4 the computer takes from HQ (a 4k, 15-second clip is well under this).
+VIDEO_MAX_BYTES = 150 * 1024 * 1024
+VIDEO_TIMEOUT = 120
+_JOB = re.compile(r"gv_[0-9a-f]{24}")
+
+
+def job_path(job_id):
+    """`/videos/<id>` for a job id HQ made (`gv_` and 24 hex digits); None for anything else."""
+    return "/videos/" + job_id if _JOB.fullmatch(str(job_id)) else None
+
+
+def video_submit(url, key, body, headers=None, timeout=TIMEOUT, opener=None):
+    """Tico HQ's video maker (`POST <base>/videos`, the gateway key): (202, {id, status}, "") for a queued job, or
+    (status, {}, error code). `body` is the request as the door takes it (model, prompt, seconds, resolution, aspect,
+    audio and the frames that are given)."""
+    status, payload, code = _post(
+        safe_base(url) + "/videos", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 202:
+        return status, {}, code
+    if not _JOB.fullmatch(str(payload.get("id") or "")):
+        return 502, {}, "unreadable"
+    return 202, {"id": str(payload["id"]), "status": str(payload.get("status") or "queued")[:20]}, ""
+
+
+def video_status(url, key, job_id, headers=None, timeout=TIMEOUT, opener=None):
+    """Tico HQ's view of a video job (`GET <base>/videos/<id>`): (200, the VIDEO_FIELDS of the job, ""), or (status, {},
+    error code). An id that is not a job id is 404 here, as HQ answers an unknown one."""
+    path = job_path(job_id)
+    if path is None:
+        return 404, {}, NOT_FOUND
+    status, payload, code = _get(
+        safe_base(url) + path, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 200:
+        return status, {}, code
+    job = {field: payload[field] for field in VIDEO_FIELDS if field in payload}
+    if "cost_usd" in job and (isinstance(job["cost_usd"], bool) or not isinstance(job["cost_usd"], (int, float))):
+        job["cost_usd"] = None
+    return 200, job, ""
+
+
+def video_content(url, key, job_id, headers=None, timeout=VIDEO_TIMEOUT, opener=None, limit=VIDEO_MAX_BYTES):
+    """The MP4 of a done job (`GET <base>/videos/<id>/content`): (200, bytes, ""), or (status, b"", code) -- 409 not_ready
+    or failed, 410 expired. A video longer than `limit` is (200, b"", "too_large")."""
+    path = job_path(job_id)
+    if path is None:
+        return 404, b"", NOT_FOUND
+    return _get_bytes(
+        safe_base(url) + path + "/content",
+        {"Authorization": "Bearer " + key, **(headers or {})},
+        timeout,
+        opener,
+        limit,
+    )
+
+
+def _get(url, headers, timeout, opener):
+    """(status, payload, code) for a GET to the Gateway, as `_post` answers a POST."""
+    status, body, code = _exchange(url, headers, "application/json", timeout, opener, None)
+    if status != 200:
+        return status, {}, code
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return 0, {}, "unreadable"
+    return 200, payload if isinstance(payload, dict) else {}, ""
+
+
+def _get_bytes(url, headers, timeout, opener, limit):
+    """(status, bytes, code) for a GET of a binary answer, at most `limit` bytes."""
+    return _exchange(url, headers, "video/mp4", timeout, opener, limit)
+
+
+def _exchange(url, headers, accept, timeout, opener, limit):
+    """(status, body, code) for one GET: the body of a 2xx answer (at most `limit` bytes, when given), else the Gateway's
+    error code. An unreachable Gateway is status 0."""
+    request = urllib.request.Request(url, method="GET", headers={**headers, "Accept": accept})
+    try:
+        with (opener or _send)(request, timeout=timeout) as response:
+            body = response.read(limit + 1) if limit else response.read()
+        if limit and len(body) > limit:
+            return 200, b"", "too_large"
+        return getattr(response, "status", 200), body, ""
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                code = _code(exc.read())
+            except (OSError, ValueError, AttributeError):
+                code = ""
+            return exc.code, b"", code or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, b"", "unreachable"
 
 
 def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=None):
     """Tico HQ's page reader (`POST <base>/fetch`, the gateway key): (status, {url, title, content, usage: {cost_usd}} or {},
     error code). Only the fields the Gateway documents are kept; the content is another site's text."""
-    status, payload, code = _post(safe_base(url) + "/fetch", {"url": str(page)[:2000], "max_tokens": max(1000, min(50000, int(max_tokens)))},
-                                  {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener)
+    status, payload, code = _post(
+        safe_base(url) + "/fetch",
+        {"url": str(page)[:2000], "max_tokens": max(1000, min(50000, int(max_tokens)))},
+        {"Authorization": "Bearer " + key, **(headers or {})},
+        timeout,
+        opener,
+    )
     if status != 200:
         return status, {}, code
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     cost = usage.get("cost_usd")
-    return 200, {"url": str(payload.get("url") or page)[:2000], "title": str(payload.get("title") or "")[:300],
-                 "content": str(payload.get("content") or "")[:250000],
-                 "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
+    return (
+        200,
+        {
+            "url": str(payload.get("url") or page)[:2000],
+            "title": str(payload.get("title") or "")[:300],
+            "content": str(payload.get("content") or "")[:250000],
+            "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+        },
+        "",
+    )
+
+
+def digest(url, key, items, focus=None, style="brief", headers=None, timeout=130, opener=None):
+    """Tico HQ's digest (`POST <base>/digest`, the gateway key): (status, {summary, groups: [{title, why, item_ids}],
+    dropped, usage: {cost_usd}} or {}, error code). The items are the caller's text, read by the Gateway; the answer keeps
+    only the fields the Gateway documents, each cut to a sensible length."""
+    body = {"items": list(items)[:300], "style": style if style in ("brief", "full") else "brief"}
+    if focus:
+        body["focus"] = str(focus)[:500]
+    status, payload, code = _post(
+        safe_base(url) + "/digest", body, {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener
+    )
+    if status != 200:
+        return status, {}, code
+    groups = [
+        {
+            "title": str(g.get("title") or "")[:200],
+            "why": str(g.get("why") or "")[:600],
+            "item_ids": [str(i) for i in g.get("item_ids") or []][:300],
+        }
+        for g in payload.get("groups") or []
+        if isinstance(g, dict)
+    ][:100]
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    return (
+        200,
+        {
+            "summary": str(payload.get("summary") or "")[:12000],
+            "groups": groups,
+            "dropped": [str(i) for i in payload.get("dropped") or []][:300],
+            "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None},
+        },
+        "",
+    )
+
+
+def _call(method, url, body=None, headers=None, timeout=TIMEOUT, opener=None):
+    """(status, payload, error code) for a call to the Gateway that is not a POST: a GET, or a DELETE that answers no
+    body (its payload is {}). An unreachable Gateway is status 0, and an answer too large to keep is `too_large`."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method,
+        headers={
+            **(headers or {}),
+            "Accept": "application/json",
+            **({"Content-Type": "application/json"} if body is not None else {}),
+        },
+    )
+    cap = 4 * 1024 * 1024
+    try:
+        with (opener or _send)(request, timeout=timeout) as response:
+            raw = response.read(cap + 1)
+            if len(raw) > cap:
+                return 0, {}, "too_large"
+            payload = json.loads(raw) if raw else {}
+        return getattr(response, "status", 200), payload if isinstance(payload, dict) else {}, ""
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                code = _code(exc.read(4096))
+            except (OSError, http.client.HTTPException, ValueError):
+                code = ""
+            return exc.code, {}, code or str(exc.code)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, {}, "unreachable"
+
+
+def signals_watches(base, key, timeout=TIMEOUT, opener=None):
+    """This install's Signals watches at Tico HQ (`GET <base>/signals/watches`): (status, {watches: [...]}, code)."""
+    return _call(
+        "GET",
+        safe_base(base) + "/signals/watches",
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def signals_watch(base, key, kind, target, timeout=TIMEOUT, opener=None):
+    """Watch `target` (a page's https address, or a release's `github:owner/repo` or feed) at Tico HQ, `kind` page or
+    release (`POST <base>/signals/watches`): (status, {id, kind, target, ...}, code). HQ answers the same watch again
+    for the same target, so a retry is safe."""
+    return _call(
+        "POST",
+        safe_base(base) + "/signals/watches",
+        {"kind": kind, "target": target},
+        {"Authorization": "Bearer " + key},
+        timeout,
+        opener,
+    )
+
+
+def signals_end(base, key, watch_id, timeout=TIMEOUT, opener=None):
+    """End one of this install's watches at Tico HQ (`DELETE <base>/signals/watches/<id>`): (status, {}, code); 204 when
+    ended, 404 when HQ does not hold it."""
+    return _call(
+        "DELETE",
+        safe_base(base) + "/signals/watches/" + urllib.parse.quote(str(watch_id), safe=""),
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+def signals_changes(base, key, since="", limit=200, timeout=TIMEOUT, opener=None):
+    """What Signals found on this install's watches after the cursor `since` (`GET <base>/signals/changes`):
+    (status, {changes: [...], next: cursor}, code). Pass `next` back as `since`."""
+    query = urllib.parse.urlencode({"since": since, "limit": int(limit)} if since else {"limit": int(limit)})
+    return _call(
+        "GET",
+        safe_base(base) + "/signals/changes?" + query,
+        headers={"Authorization": "Bearer " + key},
+        timeout=timeout,
+        opener=opener,
+    )
+
+
+# The most an answer the recorder's speech relay passes on may be: a transcript of a clip, never a whole file.
+RELAY_LIMIT = 30 * 1024 * 1024
+
+
+def relay(method, url, body=None, headers=None, timeout=TIMEOUT):
+    """(status, body bytes) for a call the recorder's speech relay passes on, the Gateway's answer kept as it is. An
+    error answer keeps its status and body; status 0 means the Gateway could not be reached. The key goes only where
+    `safe_base` allows it, and never through a redirect."""
+    try:
+        safe_base(url)
+        request = urllib.request.Request(
+            url,
+            data=body,
+            method=method,
+            headers={
+                **(headers or {}),
+                "Accept": "application/json",
+                **({"Content-Type": "application/json"} if body is not None else {}),
+            },
+        )
+        with _send(request, timeout=timeout) as response:
+            return response.status, response.read(RELAY_LIMIT)
+    except urllib.error.HTTPError as exc:
+        with exc:
+            try:
+                return exc.code, exc.read(RELAY_LIMIT)
+            except OSError:
+                return exc.code, b""
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return 0, b""

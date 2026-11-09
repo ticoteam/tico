@@ -1,0 +1,63 @@
+{
+  "created": [
+    {
+      "name": "Slack support: bugs to Engineering Lead, the rest answered",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "message",
+        "inbox": "slack:#support"
+      },
+      "steps": [
+        {
+          "id": "triage",
+          "type": "decide",
+          "enabled": true,
+          "set": "support-triage@2",
+          "level": "low",
+          "out": "d1"
+        },
+        {
+          "id": "route",
+          "type": "paths",
+          "enabled": true,
+          "paths": [
+            {
+              "name": "bug",
+              "when": [
+                {
+                  "field": "d1.kind",
+                  "op": "is",
+                  "value": "bug"
+                }
+              ],
+              "steps": [
+                {
+                  "id": "task",
+                  "type": "action",
+                  "enabled": true,
+                  "do": "create_task",
+                  "args": {
+                    "owner": "bot:engineering-lead",
+                    "title": "Bug from #support"
+                  }
+                }
+              ]
+            }
+          ],
+          "otherwise": {
+            "steps": [
+              {
+                "id": "reply",
+                "type": "action",
+                "enabled": true,
+                "do": "send_reply",
+                "args": {}
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

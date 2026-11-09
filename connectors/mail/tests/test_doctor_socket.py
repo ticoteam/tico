@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from connectors.mail import Failure, auth
 from connectors.mail import __main__ as cli
-from runner import credential_socket
+from runner_support import credential_socket
 
 
 class DoctorSocket(unittest.TestCase):
@@ -23,11 +23,14 @@ class DoctorSocket(unittest.TestCase):
         }
         self.env = patch.dict(os.environ, {}, clear=True)
         self.env.start()
-        self.google_modules = patch.dict(sys.modules, {
-            "google": types.ModuleType("google"),
-            "google.oauth2": types.ModuleType("google.oauth2"),
-            "googleapiclient": types.ModuleType("googleapiclient"),
-        })
+        self.google_modules = patch.dict(
+            sys.modules,
+            {
+                "google": types.ModuleType("google"),
+                "google.oauth2": types.ModuleType("google.oauth2"),
+                "googleapiclient": types.ModuleType("googleapiclient"),
+            },
+        )
         self.google_modules.start()
 
     def tearDown(self):
@@ -54,16 +57,21 @@ class DoctorSocket(unittest.TestCase):
         class Gmail:
             def profile(self):
                 return {"emailAddress": "ana@example.com", "messagesTotal": 3}
+
             def label_ids(self):
                 return existing_labels or {}
+
         class CalendarList:
             def list(self, **_kwargs):
                 return self
+
             def execute(self):
                 return {}
+
         class Calendar:
             def calendarList(self):
                 return CalendarList()
+
         cli.access.mailbox_holders = lambda: {"ana@example.com": ["influencer"]}
         cli.open_gmail = gmail or (lambda _box: Gmail())
         cli.open_calendar = lambda _box: Calendar()
@@ -95,11 +103,14 @@ class DoctorSocket(unittest.TestCase):
 
     def test_labels_read_failure_is_a_clear_non_crashing_check(self):
         self.use_socket_mode()
+
         class BrokenGmail:
             def profile(self):
                 return {"emailAddress": "ana@example.com", "messagesTotal": 3}
+
             def label_ids(self):
                 raise RuntimeError("private service detail")
+
         self.configure_doctor(gmail=lambda _box: BrokenGmail(), wanted=["hub/drafted"])
         result, output = self.run_doctor()
         self.assertEqual(result, 1)
@@ -110,8 +121,10 @@ class DoctorSocket(unittest.TestCase):
     def test_denied_mailbox_and_unexpected_socket_failure_are_clear_and_non_crashing(self):
         os.environ[auth.SOCKET_ENV] = "/tmp/credential.sock"
         os.environ["HUB_TOKEN"] = "synthetic-token"
+
         def denied(_box):
             raise Failure("runner denied this mailbox", "Ask an owner to grant it.")
+
         self.configure_doctor(gmail=denied)
         result, output = self.run_doctor("outsider@example.com")
         self.assertEqual(result, 1)
@@ -125,14 +138,19 @@ class DoctorSocket(unittest.TestCase):
     def test_supervisor_token_is_scoped_and_denial_names_only_allowed_mailboxes(self):
         os.environ[auth.SOCKET_ENV] = "/tmp/credential.sock"
         os.environ["HUB_TOKEN"] = "synthetic-token"
-        with patch.object(credential_socket, "request_mail",
-                          return_value={"token": "synthetic-access-token"}) as request:
-            self.assertEqual(auth.supervisor_token("ana@example.com", auth.SERVICE_SCOPES["gmail"]),
-                             {"token": "synthetic-access-token"})
+        with patch.object(
+            credential_socket, "request_mail", return_value={"token": "synthetic-access-token"}
+        ) as request:
+            self.assertEqual(
+                auth.supervisor_token("ana@example.com", auth.SERVICE_SCOPES["gmail"]),
+                {"token": "synthetic-access-token"},
+            )
         request.assert_called_once_with("/tmp/credential.sock", "synthetic-token", "gmail", "ana@example.com")
-        with patch.object(credential_socket, "request_mail",
-                          side_effect=credential_socket.MailRefused("not this bot's mailbox",
-                                                                     ["ana@example.com"])):
+        with patch.object(
+            credential_socket,
+            "request_mail",
+            side_effect=credential_socket.MailRefused("not this bot's mailbox", ["ana@example.com"]),
+        ):
             with self.assertRaisesRegex(Failure, "may use ana@example.com"):
                 auth.supervisor_token("outsider@example.com", auth.SERVICE_SCOPES["gmail"])
 

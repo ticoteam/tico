@@ -1,39 +1,36 @@
 # Process a bill
 
-Triggered by a bill attached to a task, forwarded to the bills mailbox, or a question "did we get /
-pay the invoice from X?". Budget 10 minutes per bill. The outcome is a register line with its match and
-owner, and any flag raised the same day.
+Triggered by a bill attached to a task, forwarded to the bills mailbox, or a question "did we get or pay the invoice from X?".
+Budget 10 minutes per bill. The outcome is a register line with its match and owner, and any flag raised the same day.
 
 ---
 
 ## 1. Read it
 
-Vendor legal name, bill number, date, due date, currency, amount, tax, line items, the payment details
-printed on it (last four digits only), and the sender's address. A lookalike address or a bill that
-differs from the vendor's usual layout is a flag.
+Vendor legal name, bill number, date, due date, currency, amount, tax, line items, the payment details printed on it (last four
+digits only), and the sender's address. A lookalike address, or a layout that differs from the vendor's usual one, is a flag.
 
 ## 2. Check for a duplicate
 
-Search `knowledge/bills.md` for the same vendor and amount in the last 60 days, and for the bill number
-with spaces, dashes and leading zeros removed. A hit is held and named.
+Run `skills/find-a-duplicate-bill/SKILL.md`. A probable duplicate is held and the bill it repeats is named.
 
 ## 3. Check the payment details
 
-Compare the printed bank details with `knowledge/vendor-details.md`. Any difference, or any message
-asking to update them, is a bank-detail change: log it, hold every bill from the vendor, and create the
-callback task for the human named in setup with the number on file, never the number in the bill
-or email. Record who verified it and when once they report back.
+Compare the printed bank details with `knowledge/vendor-details.md`. Any difference, and any message asking to change them, is a
+bank-detail change: run `skills/check-a-bank-detail-change/SKILL.md`. Hold every bill from the vendor until a callback on a number
+already on file confirms the details.
 
 ## 4. Match
 
-Against the purchase order, contract or delivery the rule requires: vendor, quantity, unit price,
-total, terms. List each difference. A bill with no required order is held for the owner.
+Run `skills/match-a-bill-to-its-order/SKILL.md` against the order, contract or receipt the rule requires. A bill with no order where
+one is required is held for its owner.
 
-## 5. Apply or route
+## 5. Route
 
-Use the spending rules in `knowledge/approvals.md` for requested payment actions with your Tools. Name missing facts or access on the task, batching questions per owner. A
-question from a vendor about payment gets a reply prepared on the task, sent only when a person has turned mail sending on in Tico.
+Route by the approval rules in `knowledge/approvals.md`. A payment goes into a run only after its approver has approved it. Ask for
+missing facts or access on the task, one batched question per owner. A vendor's question about payment is answered as a draft on
+the task. It is sent only when the task asks for it and mail sending is on in Tico.
 
 ## 6. Register
 
-Add the line to `knowledge/bills.md`: received, matched or held (why), owner, due, status.
+Add the line to `knowledge/bills.md`: received, matched or held (and why), owner, due date, status.

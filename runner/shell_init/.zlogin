@@ -1,1 +1,1 @@
-. "$ZDOTDIR/zsh-init" .zlogin
+. "${ZDOTDIR:h:h}/runner_support/shell_init/zsh-init" .zlogin

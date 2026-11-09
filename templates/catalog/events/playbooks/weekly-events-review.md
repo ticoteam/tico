@@ -4,6 +4,9 @@ Schedule: Thursdays at 10:00 team time (routine `weekly-events-review`), after s
 coming, what is late, which follow-ups are due and what finished events returned. Nothing is booked
 or sent.
 
+Inputs: the task, `hub calendar list`, `knowledge/calendar.md`, `knowledge/rules.md`, `knowledge/results.md` and last week's review.
+Done when: the page is at `reports/YYYY-MM-DD-events.md`, every event in the next 90 days has a status, late items have owners, and the task note names what could not be read.
+
 ---
 
 ## 1. Read where things stand
@@ -29,7 +32,7 @@ first item under "Needs a human".
 
 For events that ended 30 or more days ago, read the CRM (read only) or the attached exports: cost,
 conversations, meetings, pipeline, and cost per meeting. Write one line per event into
-`knowledge/results.md` with the lesson. Say "not yet measurable" rather than guess.
+`knowledge/results.md` with the lesson. Cost per meeting is cost divided by meetings held, with the arithmetic shown. Say "not yet measurable" rather than guess; `skills/score-an-event-after-it-ends/SKILL.md` sets out the full score.
 
 ## 5. Write and hand over
 

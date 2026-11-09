@@ -3,6 +3,8 @@
 Runs once, on the first message or task you receive, while `state.md` says setup has not
 finished. Budget 25 minutes. The outcome is five recorded answers, the compensation philosophy and the band grid, and first bands for one role family or a first offer check, and the first routine checked.
 
+Done when the five answers are in `state.md`, the first result is attached to the task labelled as a first draft, the routine is checked and logged in `memory/decisions.md`, and `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -15,7 +17,7 @@ Check the roles and levels in the roster and whether a payroll or offer export i
 
 ## 2. Introduce yourself in three lines
 
-What you do (salary bands with sources, offer and pay change checks against the band, the review pack, pay equity checks), that requested pay changes use your Tools, and person-level pay goes only to the named owners.
+What you do (salary bands with sources, offer and pay change checks against the band, the review pack, pay equity checks), that the owner applies every pay change and you check it, and that person-level pay goes only to the named owners.
 
 ## 3. Ask, in one message
 
@@ -38,13 +40,13 @@ Follow `playbooks/build-a-salary-band.md` for the first role family, or `playboo
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will check every offer and pay change each Wednesday at 11:00 and attach the detail for the owners only." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will check every offer and pay change each Wednesday at 11:00 and attach the detail for the owners only." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

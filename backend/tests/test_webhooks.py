@@ -1,5 +1,6 @@
 """Outgoing webhooks (backend/webhooks.py, backend/webhook_delivery.py, backend/egress.py): who hears of what, the exact
 bytes and signature that leave, how a failure is retried, and what the network guard refuses."""
+
 import base64
 import hashlib
 import hmac
@@ -27,15 +28,22 @@ def verify(secret, headers_, body, now=None, tolerance=300):
     sent = int(headers_["webhook-timestamp"])
     assert abs((now or time.time()) - sent) <= tolerance
     key = base64.b64decode(secret.split("_", 1)[1])
-    want = base64.b64encode(hmac.new(key, f"{headers_['webhook-id']}.{headers_['webhook-timestamp']}.".encode() + body,
-                                     hashlib.sha256).digest()).decode()
-    return any(hmac.compare_digest(want, sig.split(",", 1)[1]) for sig in headers_["webhook-signature"].split(" ")
-               if sig.startswith("v1,"))
+    want = base64.b64encode(
+        hmac.new(
+            key, f"{headers_['webhook-id']}.{headers_['webhook-timestamp']}.".encode() + body, hashlib.sha256
+        ).digest()
+    ).decode()
+    return any(
+        hmac.compare_digest(want, sig.split(",", 1)[1])
+        for sig in headers_["webhook-signature"].split(" ")
+        if sig.startswith("v1,")
+    )
 
 
 @pytest.fixture
 def net(monkeypatch):
     """The network: every name resolves to a public address, and each request goes to `net.answer` and is kept."""
+
     class Net:
         seen = []
         reply = staticmethod(lambda request: httpx.Response(200))
@@ -46,6 +54,7 @@ def net(monkeypatch):
     def handler(request):
         state.seen.append(request)
         return state.reply(request)
+
     state.transport = httpx.MockTransport(handler)
     monkeypatch.setattr(egress, "resolve", lambda host: PUBLIC)
     return state
@@ -62,7 +71,9 @@ def post(api, path, body, token="ana-test", expected=200, key=None):
 
 
 def make(api, url=URL, events=("*",), token="ana-test", **more):
-    return post(api, "webhooks", {"name": "Acme hook", "url": url, "events": list(events), **more}, token=token)["webhook"]
+    return post(api, "webhooks", {"name": "Acme hook", "url": url, "events": list(events), **more}, token=token)[
+        "webhook"
+    ]
 
 
 def run(api, net, rehearsal=False):
@@ -76,12 +87,12 @@ def run(api, net, rehearsal=False):
 
 def due(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE webhook_sends SET next_attempt='1970-01-01T00:00:00.000000Z' WHERE state='ready'")
+        c.execute("UPDATE webhook_sends SET next_attempt_at='1970-01-01T00:00:00.000000Z' WHERE state='ready'")
 
 
 def sends(api, hook_id=None):
     with api.app.state.store.read() as c:
-        sql = "SELECT * FROM webhook_sends" + (" WHERE webhook_id=?" if hook_id else "") + " ORDER BY created, id"
+        sql = "SELECT * FROM webhook_sends" + (" WHERE webhook_id=?" if hook_id else "") + " ORDER BY created_at, id"
         return [dict(r) for r in c.execute(sql, (hook_id,) if hook_id else ())]
 
 
@@ -91,8 +102,11 @@ def publish(api, *args, **kw):
 
 
 def test_the_standard_webhooks_vector_and_our_signature_verify_with_an_independent_verifier():
-    published = {"webhook-id": "msg_p5jXN8AQM9LWM0D4loKWxJek", "webhook-timestamp": "1614265330",
-                 "webhook-signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="}
+    published = {
+        "webhook-id": "msg_p5jXN8AQM9LWM0D4loKWxJek",
+        "webhook-timestamp": "1614265330",
+        "webhook-signature": "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=",
+    }
     secret, body = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", b'{"test": 2432232314}'
     assert verify(secret, published, body, now=1614265330)
     assert D.signature(secret, published["webhook-id"], 1614265330, body) == published["webhook-signature"]
@@ -107,7 +121,7 @@ def test_a_delivery_carries_a_fresh_timestamp_a_stable_id_and_a_signature_the_re
     assert run(api, net) == 1
     first = net.seen[0]
     due(api)
-    time.sleep(1.1)                                         # a second tick of the clock the timestamp reads
+    time.sleep(1.1)  # a second tick of the clock the timestamp reads
     assert run(api, net) == 1
     second = net.seen[1]
     assert first.headers["webhook-id"] == second.headers["webhook-id"] == sends(api)[0]["id"]
@@ -135,13 +149,17 @@ def test_the_secret_is_shown_once_and_a_rotation_signs_with_both_for_a_day(api, 
     run(api, net)
     request = net.seen[-1]
     assert request.headers["webhook-signature"].count("v1,") == 2
-    assert verify(new, dict(request.headers), request.content) and verify(made["secret"], dict(request.headers), request.content)
-    with api.app.state.store.transaction() as c:                      # past the day, only the new one signs
+    assert verify(new, dict(request.headers), request.content) and verify(
+        made["secret"], dict(request.headers), request.content
+    )
+    with api.app.state.store.transaction() as c:  # past the day, only the new one signs
         c.execute("UPDATE webhooks SET secret_prev_until=? WHERE id=?", (H.shift(H.now(), hours=-1), made["id"]))
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.y"})
     run(api, net)
     late = net.seen[-1]
-    assert late.headers["webhook-signature"].count("v1,") == 1 and not verify(made["secret"], dict(late.headers), late.content)
+    assert late.headers["webhook-signature"].count("v1,") == 1 and not verify(
+        made["secret"], dict(late.headers), late.content
+    )
 
 
 def test_retries_follow_the_schedule_then_give_up_once_and_say_so_once_a_day(api, net):
@@ -149,7 +167,7 @@ def test_retries_follow_the_schedule_then_give_up_once_and_say_so_once_a_day(api
         low, high = D.RETRY_AFTER[failed - 1] * 0.9, D.RETRY_AFTER[failed - 1] * 1.1
         assert all(low <= D.retry_delay(failed) <= high for _ in range(20))
     assert D.retry_delay(8) is None and D.RETRY_AFTER == (5, 300, 1800, 7200, 18000, 36000, 36000)
-    made = make(api, events=["custom.*"])     # not "*": the give-up notice is itself a task event
+    made = make(api, events=["custom.*"])  # not "*": the give-up notice is itself a task event
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.a"})
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.b"})
     net.reply = lambda request: httpx.Response(302, headers={"location": "https://elsewhere.example/"})
@@ -158,10 +176,10 @@ def test_retries_follow_the_schedule_then_give_up_once_and_say_so_once_a_day(api
         due(api)
     rows = sends(api)
     assert [r["state"] for r in rows] == ["failed", "failed"] and all(r["attempts"] == 8 for r in rows)
-    assert all(r["last_status"] == 302 for r in rows)                 # a redirect is a failed try and is never followed
+    assert all(r["last_status"] == 302 for r in rows)  # a redirect is a failed try and is never followed
     assert {r.url.host for r in net.seen} == {"93.184.216.34"}
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT detail_json FROM events WHERE action='webhook.exhausted'").fetchall()
+        events = c.execute("SELECT detail FROM events WHERE action='webhook.exhausted'").fetchall()
         notices = c.execute("SELECT id FROM tasks WHERE title LIKE 'Webhook % is not receiving events'").fetchall()
     assert len(events) == 2 and "order" not in events[0][0] and len(notices) == 1
     health = get(api, "health")["checks"]
@@ -179,29 +197,51 @@ def test_an_abort_answer_cancels_and_a_server_error_does_not(api, net):
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.a"})
     net.reply = lambda request: httpx.Response(410, headers={"webhook-delivery": "abort-message"})
     run(api, net)
-    assert sends(api)[0]["state"] == "cancelled"
+    assert sends(api)[0]["state"] == "canceled"
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.b"})
     net.reply = lambda request: httpx.Response(503)
     run(api, net)
     assert sends(api)[1]["state"] == "ready" and sends(api)[1]["attempts"] == 1
 
 
-@pytest.mark.parametrize("url", ["http://hooks.acme.example/x", "https://user:pw@hooks.acme.example/x", "ftp://hooks.acme.example/x"])
-def test_an_address_the_guard_refuses_cannot_be_saved(api, url):
-    post(api, "webhooks", {"name": "Bad", "url": url, "events": ["*"]}, expected=422)
+REFUSED_BY_THE_GUARD = [
+    "http://hooks.acme.example/x",
+    "https://user:pw@hooks.acme.example/x",
+    "ftp://hooks.acme.example/x",
+]
+NOT_PUBLIC_BY_ITS_SPELLING = [
+    "https://10.0.0.1/",
+    "https://169.254.169.254/latest",
+    "https://192.168.1.10/x",
+    "https://localhost/x",
+    "https://[::1]/x",
+    "https://[::ffff:10.0.0.5]/x",
+    "https://2130706433/x",
+    "https://127.1/x",
+    "https://api.localhost/x",
+    "https://printer.local/x",
+    "https://db.internal/x",
+    "https://localhost./x",
+]
 
 
-@pytest.mark.parametrize("url", ["https://10.0.0.1/", "https://169.254.169.254/latest", "https://192.168.1.10/x", "https://localhost/x",
-                                 "https://[::1]/x", "https://[::ffff:10.0.0.5]/x", "https://2130706433/x", "https://127.1/x",
-                                 "https://api.localhost/x", "https://printer.local/x", "https://db.internal/x", "https://localhost./x"])
-def test_an_https_address_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api, url):
+def test_an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api):
     """No name lookup at save: an IP literal outside public space, or a local name, is refused like its http twin."""
-    post(api, "webhooks", {"name": "Bad", "url": url, "events": ["*"]}, expected=422)
-    post(api, "webhooks", {"name": "Bad", "url": url, "events": ["*"], "allow_http": True}, expected=422)
+
+    def refused(url, path, body):
+        reply = api.post("/api/v2/" + path, json=body, headers=headers("ana-test"))
+        assert reply.status_code == 422, (url, path, reply.status_code, reply.text)
+        return reply.json()
+
+    for url in REFUSED_BY_THE_GUARD:
+        refused(url, "webhooks", {"name": "Bad", "url": url, "events": ["*"]})
     made = make(api)
-    refused = post(api, f"webhooks/{made['id']}/update", {"url": url}, expected=422)
-    assert "public" in refused["error"]["detail"] or "local" in refused["error"]["detail"]
-    assert get(api, f"webhooks/{made['id']}")["webhook"]["url"] == made["url"]
+    for url in NOT_PUBLIC_BY_ITS_SPELLING:
+        refused(url, "webhooks", {"name": "Bad", "url": url, "events": ["*"]})
+        refused(url, "webhooks", {"name": "Bad", "url": url, "events": ["*"], "allow_http": True})
+        detail = refused(url, f"webhooks/{made['id']}/update", {"url": url})["error"]["detail"]
+        assert "public" in detail or "local" in detail, (url, detail)
+        assert get(api, f"webhooks/{made['id']}")["webhook"]["url"] == made["url"], url
 
 
 def test_a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved(api):
@@ -211,9 +251,19 @@ def test_a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved(api):
 
 def test_plain_http_is_for_localhost_and_the_owner_switch_alone(api, net):
     post(api, "webhooks", {"name": "Dev", "url": "http://localhost:9000/x", "events": ["*"]}, expected=422)
-    post(api, "webhooks", {"name": "Dev", "url": "http://localhost:9000/x", "events": ["*"], "allow_http": True},
-         token="ben-test", expected=403)
-    post(api, "webhooks", {"name": "Dev", "url": "http://hooks.acme.example/x", "events": ["*"], "allow_http": True}, expected=422)
+    post(
+        api,
+        "webhooks",
+        {"name": "Dev", "url": "http://localhost:9000/x", "events": ["*"], "allow_http": True},
+        token="ben-test",
+        expected=403,
+    )
+    post(
+        api,
+        "webhooks",
+        {"name": "Dev", "url": "http://hooks.acme.example/x", "events": ["*"], "allow_http": True},
+        expected=422,
+    )
     made = make(api, "http://localhost:9000/x", allow_http=True)
     assert made["allow_http"] is True
     post(api, f"webhooks/{made['id']}/update", {"allow_http": False}, token="ben-test", expected=403)
@@ -226,6 +276,7 @@ def test_the_guard_refuses_private_addresses_proxies_and_follows_no_redirect(mon
     def spy(*args, **kw):
         seen.update(kw)
         return real(*args, **kw)
+
     monkeypatch.setattr(httpx, "Client", spy)
     transport = httpx.MockTransport(lambda request: httpx.Response(307, headers={"location": "http://127.0.0.1/"}))
     for address in ("10.0.0.5", "127.0.0.1", "169.254.169.254", "::1", "::ffff:10.0.0.5", "fd00::1"):
@@ -267,18 +318,34 @@ def test_a_private_task_is_never_published_to_an_endpoint_whose_owner_cannot_rea
     ben, priya = make(api, events=["task.*"], token="ben-test"), make(api, events=["task.*"], token="priya-test")
     ana = make(api, events=["task.*"])
     with api.app.state.store.transaction() as c:
-        private = H.task_create(c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False)
+        private = H.task_create(
+            c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False
+        )
         public = H.task_create(c, "human:ben", "Plan the launch", "Details.", "bot:cpo", lint=False)
-    by_endpoint = {hook["id"]: {s["subject"] for s in sends(api, hook["id"]) if s["type"] == "task.created"}
-                   for hook in (ben, priya, ana)}
+    by_endpoint = {
+        hook["id"]: {s["subject"] for s in sends(api, hook["id"]) if s["type"] == "task.created"}
+        for hook in (ben, priya, ana)
+    }
     assert by_endpoint[ben["id"]] == {private["id"], public["id"]}
     assert by_endpoint[priya["id"]] == {public["id"]}
     assert by_endpoint[ana["id"]] == {private["id"], public["id"]}  # The bot party's manager is a reader.
     for row in sends(api, priya["id"]):
         assert "sensitive" not in row["body"]
-    envelope = json.loads(next(s for s in sends(api, ben["id"]) if s["subject"] == public["id"] and s["type"] == "task.created")["body"])
+    envelope = json.loads(
+        next(s for s in sends(api, ben["id"]) if s["subject"] == public["id"] and s["type"] == "task.created")["body"]
+    )
     assert envelope["type"] == "task.created" and envelope["data"]["title"] == "Plan the launch"
     assert envelope["links"]["app"].endswith("#/task/" + public["id"])
+
+
+def test_a_task_event_names_its_owner_and_requester_as_the_api_does_with_real_values(api, net):
+    hook = make(api, events=["task.*"])
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Plan the launch", "Details.", "bot:cpo", lint=False)
+    data = json.loads(next(s for s in sends(api, hook["id"]) if s["type"] == "task.created")["body"])["data"]
+    assert data["id"] == task["id"]
+    assert data["owner_id"] == "bot:cpo" and data["requester_id"] == "human:ben"
+    assert "owner" not in data and "requester" not in data  # the API names, nothing beside them
 
 
 def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sends_nothing_twice(api, net):
@@ -295,34 +362,47 @@ def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sen
 
 def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net):
     from backend import event_catalog as catalog
+
     made = make(api, events=["task.*", "approval.*"])
     task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
     _post(api, f"tasks/{task['id']}/comments", {"text": "Soon."})
     doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
     _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
     with api.app.state.store.transaction() as c:
-        approval = H.approval_request(c, "bot:ops", "send", {"to": "x@acme.example", "cc": "", "subject": "Hi",
-                                                            "body_sha256": "a" * 64, "mailbox": "ops"})
+        approval = H.approval_request(
+            c,
+            "bot:ops",
+            "send",
+            {"to": "x@acme.example", "cc": "", "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "ops"},
+        )
         H.approval_decide(c, "human:ana", approval["id"], "approved")
     sent = {s["type"]: json.loads(s["body"])["data"] for s in sends(api, made["id"])}
-    assert {"task.created", "task.commented", "task.state_changed", "task.done", "approval.requested",
-            "approval.decided"} <= set(sent)
+    assert {
+        "task.created",
+        "task.commented",
+        "task.state_changed",
+        "task.done",
+        "approval.requested",
+        "approval.decided",
+    } <= set(sent)
     for name, data in sent.items():
         assert set(data) == set(catalog.EVENTS[name].example), name
 
 
-def test_the_ceo_bot_and_a_bot_without_the_send_switch_are_refused(api):
+def test_the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api):
     made = make(api)
-    assert publish(api, "custom.x", "s", {}, "bot:goal-manager") == 0       # the broad path never raises, and sends nothing
+    assert publish(api, "custom.x", "s", {}, "bot:goal-manager") == 0  # the broad path never raises, and sends nothing
     with api.app.state.store.transaction() as c:
-        with pytest.raises(W.Refused, match="CEO"):
+        with pytest.raises(W.Refused, match="Strategy Bot"):
             W.publish(c, "custom.x", "s", {}, "bot:goal-manager", only=made["id"])
         with pytest.raises(W.Refused, match="switch is off"):
             W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"])
         with pytest.raises(W.Refused, match="does not exist"):
             W.publish(c, "custom.x", "s", {}, "human:ana", only="ep_missing")
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES('ops',1,'[]',?,?)",
-                  (H.now(), "human:ana"))
+        c.execute(
+            "INSERT OR REPLACE INTO email_sending_policies VALUES('bot:ops','{\"mode\":\"on_their_own\"}',?,?)",
+            (H.now(), "human:ana"),
+        )
         assert W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"]) == 1
     post(api, f"webhooks/{made['id']}/pause", {})
     with api.app.state.store.transaction() as c:
@@ -342,10 +422,10 @@ def test_a_bot_asks_a_person_approves_and_the_person_owns_the_endpoint(api, net)
     made = post(api, "webhooks", body, token=bot)["webhook"]
     assert made["created_by"] == "human:ana" and made["requested_by"] == "bot:ops" and made["url"].endswith("/…")
     assert [h["id"] for h in get(api, "webhooks")["items"]] == [made["id"]]
-    again = post(api, "webhooks", body, token=bot, key="third")             # the approval was spent: a new ask
+    again = post(api, "webhooks", body, token=bot, key="third")  # the approval was spent: a new ask
     assert again["approval"]["id"] != asked["approval"]["id"]
-    post(api, f"webhooks/{made['id']}/rotate", {}, token=bot, expected=403)     # a bot manages none
-    post(api, f"webhooks/{made['id']}/send", {"type": "custom.x"}, token=bot, expected=403)   # switch off
+    post(api, f"webhooks/{made['id']}/rotate", {}, token=bot, expected=403)  # a bot manages none
+    post(api, f"webhooks/{made['id']}/send", {"type": "custom.x"}, token=bot, expected=403)  # switch off
 
 
 def test_people_manage_their_own_endpoints_and_the_owner_all(api, net):
@@ -353,7 +433,7 @@ def test_people_manage_their_own_endpoints_and_the_owner_all(api, net):
     assert get(api, "webhooks", token="priya-test")["items"] == []
     get(api, f"webhooks/{mine['id']}", token="priya-test", expected=404)
     post(api, f"webhooks/{mine['id']}/pause", {}, token="priya-test", expected=403)
-    listed = get(api, "webhooks")["items"]                                      # the owner sees it, and may change it
+    listed = get(api, "webhooks")["items"]  # the owner sees it, and may change it
     assert [h["id"] for h in listed] == [mine["id"]] and listed[0]["can_change"] is True
     updated = post(api, f"webhooks/{mine['id']}/update", {"name": "Renamed", "events": ["task.done"]})["webhook"]
     assert updated["name"] == "Renamed" and updated["events"] == ["task.done"] and updated["revision"] == 2
@@ -363,11 +443,11 @@ def test_people_manage_their_own_endpoints_and_the_owner_all(api, net):
     post(api, f"webhooks/{mine['id']}/send", {"type": "custom.x"}, token="ben-test", expected=409)
     post(api, f"webhooks/{mine['id']}/resume", {})
     post(api, f"webhooks/{mine['id']}/send", {"type": "custom.x"}, token="ben-test")
-    post(api, f"webhooks/{mine['id']}/send", {"type": "task.done"}, token="ben-test", expected=422)   # custom names only
+    post(api, f"webhooks/{mine['id']}/send", {"type": "task.done"}, token="ben-test", expected=422)  # custom names only
     post(api, f"webhooks/{mine['id']}/example", {"type": "task.done"}, token="ben-test")
     assert {s["type"] for s in sends(api, mine["id"])} == {"custom.x", "task.done"}
     gone = post(api, f"webhooks/{mine['id']}/delete", {}, token="ben-test")
-    assert gone["cancelled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"cancelled"}
+    assert gone["canceled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"canceled"}
     get(api, f"webhooks/{mine['id']}", token="ben-test", expected=404)
 
 
@@ -381,9 +461,9 @@ def test_the_list_counts_seven_days_and_the_send_log_shows_state_attempts_and_ne
     assert listed["last_7_days"] == {"delivered": 1, "failed": 0, "pending": 2}
     log = get(api, f"webhooks/{made['id']}/sends")
     states = {row["type"]: row for row in log["items"]}
-    assert states["custom.a"]["state"] == "delivered" and states["custom.a"]["next_attempt"] is None
+    assert states["custom.a"]["state"] == "delivered" and states["custom.a"]["next_attempt_at"] is None
     assert states["custom.b"]["state"] == "ready" and states["custom.b"]["attempts"] == 1
-    assert states["custom.b"]["last_status"] == 500 and states["custom.b"]["next_attempt"]
+    assert states["custom.b"]["last_status"] == 500 and states["custom.b"]["next_attempt_at"]
     assert log["more"] is False
     only = get(api, f"webhooks/{made['id']}/sends?state=delivered")["items"]
     assert [row["type"] for row in only] == ["custom.a"]
@@ -397,7 +477,7 @@ def test_at_most_two_sends_to_one_host_are_in_flight_and_a_crashed_worker_gives_
     store = api.app.state.store
     now = H.now()
     claimed = [D.claim(store, now) for _ in range(4)]
-    assert len([c for c in claimed if c]) == 2                                  # the third waits for a free slot
+    assert len([c for c in claimed if c]) == 2  # the third waits for a free slot
     with store.transaction() as c:
         c.execute("UPDATE webhook_sends SET claimed_at=? WHERE state='sending'", (H.shift(now, seconds=-300),))
     assert D.recover(store, now) == 2
@@ -406,7 +486,10 @@ def test_at_most_two_sends_to_one_host_are_in_flight_and_a_crashed_worker_gives_
     other = make(api, "https://other.acme.example/tico")
     post(api, f"webhooks/{other['id']}/send", {"type": "custom.z"})
     with store.transaction() as c:
-        c.execute("UPDATE webhook_sends SET state='sending', claimed_at=? WHERE webhook_id IN (?,?)", (now, first["id"], second["id"]))
+        c.execute(
+            "UPDATE webhook_sends SET state='sending', claimed_at=? WHERE webhook_id IN (?,?)",
+            (now, first["id"], second["id"]),
+        )
     assert D.claim(store, H.now()) is not None and sends(api, other["id"])[0]["state"] == "sending"
 
 
@@ -416,7 +499,7 @@ def test_an_hourly_rate_makes_sends_wait_and_never_drops_them(api, net):
         post(api, f"webhooks/{made['id']}/send", {"type": f"custom.n{n}"})
     assert run(api, net) == 2
     waiting = [s for s in sends(api) if s["state"] == "ready"]
-    assert len(waiting) == 1 and waiting[0]["next_attempt"] > H.now()
+    assert len(waiting) == 1 and waiting[0]["next_attempt_at"] > H.now()
 
 
 def test_a_copy_for_rehearsal_sends_nothing_and_says_so(api, net):
@@ -443,28 +526,43 @@ def test_the_hourly_cleanup_keeps_a_month_of_sends_and_two_hundred_attempts(api,
     old = H.shift(H.now(), days=-31)
     with api.app.state.store.transaction() as c:
         for n in range(3):
-            c.execute("INSERT INTO webhook_events(id,type,subject,created) VALUES(?,?,?,?)", (f"e{n}", "custom.x", "s", old if n < 2 else H.now()))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('old','e0',?,'custom.x','{}','delivered',?,?)",
-                  (made["id"], old, old))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('new','e2',?,'custom.x','{}','delivered',?,?)",
-                  (made["id"], H.now(), H.now()))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('wait','e1',?,'custom.x','{}','ready',?,?)",
-                  (made["id"], old, old))
+            c.execute(
+                "INSERT INTO webhook_events(id,type,subject,created_at) VALUES(?,?,?,?)",
+                (f"e{n}", "custom.x", "s", old if n < 2 else H.now()),
+            )
+        c.execute(
+            "INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('old','e0',?,'custom.x','{}','delivered',?,?)",
+            (made["id"], old, old),
+        )
+        c.execute(
+            "INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('new','e2',?,'custom.x','{}','delivered',?,?)",
+            (made["id"], H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wait','e1',?,'custom.x','{}','ready',?,?)",
+            (made["id"], old, old),
+        )
         for n in range(250):
-            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent) VALUES('new',?,?,?,0)",
-                      (made["id"], n + 1, H.shift(H.now(), seconds=n)))
+            c.execute(
+                "INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent) VALUES('new',?,?,?,0)",
+                (made["id"], n + 1, H.shift(H.now(), seconds=n)),
+            )
         D.prune(c)
         assert [r[0] for r in c.execute("SELECT id FROM webhook_sends ORDER BY id")] == ["new", "wait"]
         assert c.execute("SELECT count(*) FROM webhook_events").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM webhook_attempts").fetchone()[0] == 200
-        assert c.execute("SELECT min(n) FROM webhook_attempts").fetchone()[0] == 51        # the newest 200 stay
+        assert c.execute("SELECT min(n) FROM webhook_attempts").fetchone()[0] == 51  # the newest 200 stay
 
 
 def test_the_other_events_are_published_where_they_happen(api, net):
     made = make(api, events=["approval.*", "needs_you.*", "bot.*"])
     with api.app.state.store.transaction() as c:
-        approval = H.approval_request(c, "bot:ops", "send", {"to": "x@acme.example", "cc": "", "subject": "Hi",
-                                                            "body_sha256": "a" * 64, "mailbox": "ops"})
+        approval = H.approval_request(
+            c,
+            "bot:ops",
+            "send",
+            {"to": "x@acme.example", "cc": "", "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "ops"},
+        )
         H.approval_decide(c, "human:ana", approval["id"], "approved")
     kinds = {s["type"] for s in sends(api, made["id"])}
     assert {"approval.requested", "approval.decided"} <= kinds
@@ -474,25 +572,28 @@ def test_the_other_events_are_published_where_they_happen(api, net):
 
 def test_an_endpoint_cannot_subscribe_to_events_only_rules_see(api):
     for name in ("webhook.received", "tico.notice"):
-        assert "rule with forward" in json.dumps(post(api, "webhooks", {"name": "x", "url": URL, "events": [name]},
-                                                      expected=422))
-    make(api, events=["*"])                                            # a star still works: it means what is sent
+        assert "rule with forward" in json.dumps(
+            post(api, "webhooks", {"name": "x", "url": URL, "events": [name]}, expected=422)
+        )
+    make(api, events=["*"])  # a star still works: it means what is sent
 
 
 def test_publish_to_one_endpoint_checks_the_actor_against_that_endpoint(api):
     bens = make(api, events=["custom.*"], token="ben-test")
-    api.app.state.auth.owner_email = "ana@acme.example"        # the roster's owner, as a rule's maker is rebuilt from it
+    api.app.state.auth.owner_email = "ana@acme.example"  # the roster's owner, as a rule's maker is rebuilt from it
     with api.app.state.store.transaction() as c:
         with pytest.raises(W.Refused, match="may send to it"):
             W.publish(c, "custom.x", "s", {}, "human:priya", only=bens["id"])
         assert W.publish(c, "custom.x", "s", {}, "human:ben", only=bens["id"]) == 1
-        assert W.publish(c, "custom.y", "s", {}, "human:ana", only=bens["id"]) == 1     # an admin may
+        assert W.publish(c, "custom.y", "s", {}, "human:ana", only=bens["id"]) == 1  # an admin may
         assert W.publish(c, "custom.z", "s", {}, H.KEEPER, only=bens["id"]) == 1
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES('ops',1,'[]',?,?)",
-                  (H.now(), "human:ana"))
+        c.execute(
+            "INSERT OR REPLACE INTO email_sending_policies VALUES('bot:ops','{\"mode\":\"on_their_own\"}',?,?)",
+            (H.now(), "human:ana"),
+        )
         narrow = W.publish(c, "custom.w", "s", {}, "bot:ops", only=bens["id"])
         assert narrow == 1
-        c.execute("UPDATE webhooks SET events_json='[\"task.*\"]' WHERE id=?", (bens["id"],))
+        c.execute("UPDATE webhooks SET events='[\"task.*\"]' WHERE id=?", (bens["id"],))
         with pytest.raises(W.Refused, match="does not listen"):
             W.publish(c, "custom.v", "s", {}, "bot:ops", only=bens["id"])
 
@@ -501,7 +602,9 @@ def test_a_custom_event_about_a_private_task_is_refused_to_an_endpoint_whose_own
     priyas = make(api, events=["custom.*"], token="priya-test")
     bens = make(api, events=["custom.*"], token="ben-test")
     with api.app.state.store.transaction() as c:
-        private = H.task_create(c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False)
+        private = H.task_create(
+            c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False
+        )
         with pytest.raises(W.Refused, match="may not read this"):
             W.publish(c, "custom.x", private["id"], {"text": "sensitive"}, H.KEEPER, only=priyas["id"])
         assert W.publish(c, "custom.x", private["id"], {"text": "sensitive"}, H.KEEPER, only=bens["id"]) == 1
@@ -515,12 +618,14 @@ def test_a_server_that_drips_its_answer_is_cut_off_at_the_total_deadline(monkeyp
     def slow(request):
         time.sleep(0.5)
         return httpx.Response(200)
+
     with pytest.raises(egress.Blocked, match="took longer"):
         egress.post("https://hooks.acme.example/x", b"{}", {}, transport=httpx.MockTransport(slow))
 
     def hang(host):
         time.sleep(1)
         return PUBLIC
+
     monkeypatch.setattr(egress, "resolve", hang)
     with pytest.raises(egress.Blocked, match="name lookup"):
         egress.post("https://hooks.acme.example/x", b"{}", {}, transport=httpx.MockTransport(slow))
@@ -528,10 +633,13 @@ def test_a_server_that_drips_its_answer_is_cut_off_at_the_total_deadline(monkeyp
 
 def test_an_endpoint_whose_owner_has_left_hears_nothing(api, net, monkeypatch):
     from backend import auth as A
+
     ben, ana = make(api, events=["task.*", "custom.*"], token="ben-test"), make(api, events=["task.*", "custom.*"])
     monkeypatch.setattr(A, "standing", lambda c, pid: "left" if pid == "ben" else "")
     with api.app.state.store.transaction() as c:
-        public = H.task_create(c, "human:ben", "Plan the launch", "Details.", "bot:cpo", lint=False)     # Ben is still a party
+        public = H.task_create(
+            c, "human:ben", "Plan the launch", "Details.", "bot:cpo", lint=False
+        )  # Ben is still a party
     publish(api, "custom.note", "n1", {"text": "company news"}, H.KEEPER)
     assert sends(api, ben["id"]) == []
     assert {s["subject"] for s in sends(api, ana["id"])} >= {public["id"], "n1"}
@@ -545,7 +653,7 @@ def test_a_paused_endpoint_has_the_events_of_its_pause_kept_for_send_missed(api,
     assert sends(api, only["id"]) == []
     assert post(api, f"webhooks/{only['id']}/replay", {"since": "2020-01-01"})["queued"] == 1
     assert [s["subject"] for s in sends(api, only["id"])] == ["during"]
-    with api.app.state.store.transaction() as c:                    # no endpoint at all: nothing is journaled
+    with api.app.state.store.transaction() as c:  # no endpoint at all: nothing is journaled
         c.execute("UPDATE webhooks SET deleted_at=?", (H.now(),))
         before = c.execute("SELECT count(*) FROM webhook_events").fetchone()[0]
         W.publish(c, "custom.a", "none", {"n": 2}, "human:ana")
@@ -554,9 +662,81 @@ def test_a_paused_endpoint_has_the_events_of_its_pause_kept_for_send_missed(api,
 
 def test_endpoints_that_cannot_read_an_event_do_not_use_up_its_fan_out_places(api, net, monkeypatch):
     monkeypatch.setattr(W, "MAX_PER_EVENT", 2)
-    blind = [make(api, events=["task.*"], token="priya-test") for _ in range(2)]       # older, and cannot read a private task
+    blind = [
+        make(api, events=["task.*"], token="priya-test") for _ in range(2)
+    ]  # older, and cannot read a private task
     ben = make(api, events=["task.*"], token="ben-test")
     with api.app.state.store.transaction() as c:
-        private = H.task_create(c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False)
+        private = H.task_create(
+            c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False
+        )
     assert [s["subject"] for s in sends(api, ben["id"]) if s["type"] == "task.created"] == [private["id"]]
     assert all(sends(api, b["id"]) == [] for b in blind)
+
+
+def test_a_held_message_reaches_only_the_people_who_can_read_its_thread(api):
+    """An owner or admin hears of a held message only where they could read its thread. Ana owns the company and is in
+    neither the room nor the DM, so she hears of neither; the members and the DM's two people do."""
+    from backend import threads
+
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Launch", audience="members", members=["human:priya"])
+        dm = threads.dm(c, "human:ben", ["human:priya"], title="")
+        for thread in (room, dm):
+            data = {
+                "thread_id": thread["id"],
+                "id": "m-held",
+                "from_actor": "human:ben",
+                "rule": "no-prices",
+                "hold": "h-1",
+            }
+            heard = {
+                who: W.view_for(c, who, "message.held", "m-held", data, {}) is not None
+                for who in ("human:ana", "human:ben", "human:priya")
+            }
+            assert heard == {"human:ana": False, "human:ben": True, "human:priya": True}, thread["audience"]
+
+
+# ----------------------------------------------------------------------------- thread producers (backend/thread_webhooks.py)
+def test_a_committed_thread_write_queues_its_event_once_and_a_rolled_back_one_queues_none(api, net):
+    from backend import threads
+
+    ben = make(api, events=["thread.*", "message.*"], token="ben-test")
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Launch", audience="members", members=["human:priya"])
+        said = threads.post(c, "human:ben", room["id"], "Kickoff at noon")
+    kinds = [(s["type"], s["subject"]) for s in sends(api, ben["id"])]
+    assert kinds == [("thread.created", room["id"]), ("message.created", said["id"])]
+    with pytest.raises(RuntimeError):
+        with api.app.state.store.transaction() as c:
+            threads.post(c, "human:ben", room["id"], "Never sent")
+            threads.create(c, "human:ben", title="Gone", audience="members", members=[])
+            raise RuntimeError("rolled back")
+    assert len(sends(api, ben["id"])) == 2, "a rolled-back write queues nothing"
+
+
+def test_a_held_post_tells_only_the_people_who_can_read_its_thread(api, net, monkeypatch):
+    from backend import org_rule_check, threads
+
+    ben = make(api, events=["message.*"], token="ben-test")
+    owner = make(api, events=["message.*"])  # Ana owns the company and is not in the thread
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Pricing", audience="members", members=["human:priya"])
+    gate = {"held": {"id": "hold-1"}, "rule": {"id": "no-prices", "text": "No prices"}, "hold_id": "hold-1"}
+    monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: gate)
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "human:ben", room["id"], "The price is $10", checked={"outcome": "broken"})
+        threads.post(
+            c,
+            "human:ben",
+            None,
+            "$10",
+            checked={"outcome": "broken"},
+            start={"title": "New", "audience": "members", "members": ["human:priya"]},
+        )
+    held = [s for s in sends(api, ben["id"]) if s["type"] == "message.held"]
+    assert [s["subject"] for s in held] == ["hold-1"], "a held first message has no thread readers to tell"
+    body = json.loads(held[0]["body"])
+    assert body["data"]["rule"] == "no-prices" and body["data"]["thread_id"] == room["id"]
+    assert "$10" not in held[0]["body"], "a held event never carries the words"
+    assert [s for s in sends(api, owner["id"]) if s["type"] == "message.held"] == []

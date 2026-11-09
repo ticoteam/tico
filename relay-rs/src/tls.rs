@@ -38,20 +38,30 @@ fn provider() -> Arc<CryptoProvider> {
 
 /// The platform verifier when the OS has a usable store, else WebPKI over the bundled list. On Linux the platform
 /// verifier refuses to start with no system certificates; macOS and Windows always have a store.
-fn choose(provider: &Arc<CryptoProvider>, system: Result<rustls_platform_verifier::Verifier, rustls::Error>) -> (Source, Arc<dyn ServerCertVerifier>) {
+fn choose(
+    provider: &Arc<CryptoProvider>,
+    system: Result<rustls_platform_verifier::Verifier, rustls::Error>,
+) -> (Source, Arc<dyn ServerCertVerifier>) {
     match system {
         Ok(verifier) => (Source::System, Arc::new(verifier)),
         Err(_) => {
-            let roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-            let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
-                .build()
-                .expect("the bundled trust list is not empty");
+            let roots = RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
+            let verifier =
+                WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
+                    .build()
+                    .expect("the bundled trust list is not empty");
             (Source::Bundled, verifier)
         }
     }
 }
 
-fn config(provider: &Arc<CryptoProvider>, verifier: Arc<dyn ServerCertVerifier>, alpn: &[&[u8]]) -> ClientConfig {
+fn config(
+    provider: &Arc<CryptoProvider>,
+    verifier: Arc<dyn ServerCertVerifier>,
+    alpn: &[&[u8]],
+) -> ClientConfig {
     let mut config = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .expect("ring supports the default TLS versions")
@@ -66,7 +76,10 @@ fn trust() -> &'static Trust {
     static TRUST: OnceLock<Trust> = OnceLock::new();
     TRUST.get_or_init(|| {
         let provider = provider();
-        let (source, verifier) = choose(&provider, rustls_platform_verifier::Verifier::new(provider.clone()));
+        let (source, verifier) = choose(
+            &provider,
+            rustls_platform_verifier::Verifier::new(provider.clone()),
+        );
         Trust {
             source,
             http: config(&provider, verifier, &[b"http/1.1"]),
@@ -82,7 +95,12 @@ pub fn http_builder() -> reqwest::ClientBuilder {
 /// Says once per process which roots verify certificates, so support can tell from the relay log.
 pub fn announce(log: impl FnOnce(&str)) {
     static ONCE: Once = Once::new();
-    ONCE.call_once(|| log(&format!("screen relay: TLS certificates verified with the {}", trust().source.label())));
+    ONCE.call_once(|| {
+        log(&format!(
+            "screen relay: TLS certificates verified with the {}",
+            trust().source.label()
+        ))
+    });
 }
 
 #[cfg(test)]
@@ -92,10 +110,18 @@ mod tests {
     #[test]
     fn no_system_store_falls_back_to_the_bundled_list() {
         let provider = provider();
-        let (source, verifier) = choose(&provider, Err(rustls::Error::General("No CA certificates were loaded from the system".into())));
+        let (source, verifier) = choose(
+            &provider,
+            Err(rustls::Error::General(
+                "No CA certificates were loaded from the system".into(),
+            )),
+        );
         assert_eq!(source, Source::Bundled);
         // A usable verifier, not a refusal of everything: it builds a client config and a client.
         let built = config(&provider, verifier, &[b"http/1.1"]);
-        assert!(reqwest::Client::builder().use_preconfigured_tls(built).build().is_ok());
+        assert!(reqwest::Client::builder()
+            .use_preconfigured_tls(built)
+            .build()
+            .is_ok());
     }
 }

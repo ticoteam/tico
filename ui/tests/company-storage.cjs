@@ -23,10 +23,10 @@ const {unrouted} = require('./support/routes.cjs');
       await page.route('**/*', route => {
         const req = route.request(), p = new URL(req.url()).pathname;
         const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.3.0', update: null, app_name: 'Tico'};
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -38,7 +38,7 @@ const {unrouted} = require('./support/routes.cjs');
             if (sent.access_key_id === 'AKIAEXAMPLEDENY0001')
               return json({error: {code: 'storage_check', detail: "S3 storage can't write: AccessDenied on acme-files/tico (s3:PutObject)"}}, 422);
             storage = {...storage, active: {bucket: sent.bucket, prefix: sent.prefix, region: sent.region, location: sent.bucket + '/' + sent.prefix,
-              access_key_id: '…0001', created: new Date().toISOString(), created_by: 'human:ana'}};
+              access_key_id: '…0001', created_at: new Date().toISOString(), created_by: 'human:ana'}};
           }
           if (req.method() === 'DELETE') storage = {...storage, active: null, earlier: [{...storage.active, retired: new Date().toISOString()}]};
           return json(storage);

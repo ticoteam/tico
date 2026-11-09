@@ -8,6 +8,8 @@ it. You never create the KPI record yourself.
 3. Write `definition.md` from Tico's definition in your own precise terms: numerator, denominator, period,
    exclusions. If the definition cannot be computed as written, do not bend it: propose a clearer one
    (`hub proposal create --kind kpi_definition --kpi <id> --payload-file f.json --reason "..."`) and stop.
+   Check the measure too: a rate names its denominator, the period has an exact boundary and time zone, and each input
+   comes from the system of record for it, with its lag written in `sources.md`.
 4. Write `sources.md`, then the computation. Read-only queries only: `hub sql` for Tico's own data, or a tool the
    owner declared in `tools:`. No declared tool for the source: file one task for the owner naming the source
    you need, and leave the KPI reported as missing.
@@ -18,3 +20,6 @@ it. You never create the KPI record yourself.
    `--definition-version`. Earlier readings keep the version they used.
 7. Never edit a known value so that a number passes. A mismatch means the computation or the source is wrong, or
    the known value is: ask the owner which.
+
+**Done when:** `definition.md`, `sources.md`, the computation and `known-values.md` are in `kpis/<slug>/`, the known values pass,
+and the first reading is posted or reported as missing.

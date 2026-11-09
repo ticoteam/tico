@@ -29,12 +29,21 @@ def client_options(monkeypatch):
             monkeypatch.delenv(key)
     calls = []
     result = object()
-    monkeypatch.setattr(boto3, "client", lambda service, **options: calls.append((service, recorded(options))) or result)
+    monkeypatch.setattr(
+        boto3, "client", lambda service, **options: calls.append((service, recorded(options))) or result
+    )
     return calls, result
 
 
-@pytest.mark.parametrize("storage,aws", [
-    (Blobs, {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing", "AWS_SESSION_TOKEN": "testing-token"})])
+@pytest.mark.parametrize(
+    "storage,aws",
+    [
+        (
+            Blobs,
+            {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing", "AWS_SESSION_TOKEN": "testing-token"},
+        )
+    ],
+)
 def test_auto_tries_backup_first_even_with_aws_credential_source(storage, aws, client_options, monkeypatch):
     calls, result = client_options
     monkeypatch.setenv("LITESTREAM_ACCESS_KEY_ID", "testing-backup")
@@ -68,9 +77,12 @@ def test_no_file_bucket_does_not_use_backup_keys(client_options, monkeypatch):
 
 
 @pytest.mark.parametrize("storage", [Blobs])
-@pytest.mark.parametrize("env,expected", [
-    ({"TICO_BLOB_REGION": "us-west-2", "TICO_BACKUP_REGION": "us-east-1", "AWS_REGION": "eu-west-1"}, "us-west-2"),
-])
+@pytest.mark.parametrize(
+    "env,expected",
+    [
+        ({"TICO_BLOB_REGION": "us-west-2", "TICO_BACKUP_REGION": "us-east-1", "AWS_REGION": "eu-west-1"}, "us-west-2"),
+    ],
+)
 def test_region_resolution(storage, env, expected, client_options, monkeypatch):
     calls, _ = client_options
     monkeypatch.setenv("TICO_DB", "/example/hub.db")
@@ -84,15 +96,29 @@ def test_region_resolution(storage, env, expected, client_options, monkeypatch):
 @pytest.mark.parametrize("storage", [Blobs])
 def test_dedicated_file_keys_override_aws_and_backup_without_export(storage, client_options, monkeypatch):
     calls, result = client_options
-    for key, value in {"TICO_BLOB_ACCESS_KEY_ID": "testing-files", "TICO_BLOB_SECRET_ACCESS_KEY": "testing-files-secret",
-                       "LITESTREAM_ACCESS_KEY_ID": "testing-backup", "LITESTREAM_SECRET_ACCESS_KEY": "testing-backup-secret",
-                       "AWS_ACCESS_KEY_ID": "testing-aws", "AWS_SECRET_ACCESS_KEY": "testing-aws-secret",
-                       "AWS_SESSION_TOKEN": "testing-token"}.items():
+    for key, value in {
+        "TICO_BLOB_ACCESS_KEY_ID": "testing-files",
+        "TICO_BLOB_SECRET_ACCESS_KEY": "testing-files-secret",
+        "LITESTREAM_ACCESS_KEY_ID": "testing-backup",
+        "LITESTREAM_SECRET_ACCESS_KEY": "testing-backup-secret",
+        "AWS_ACCESS_KEY_ID": "testing-aws",
+        "AWS_SECRET_ACCESS_KEY": "testing-aws-secret",
+        "AWS_SESSION_TOKEN": "testing-token",
+    }.items():
         monkeypatch.setenv(key, value)
     before = dict(os.environ)
     assert storage(Settings(db_path=Path("/example/hub.db"), blob_bucket="acme-files")).s3 is result
-    assert calls == [("s3", {"region_name": None, "endpoint_url": None,
-                             "aws_access_key_id": "testing-files", "aws_secret_access_key": "testing-files-secret"})]
+    assert calls == [
+        (
+            "s3",
+            {
+                "region_name": None,
+                "endpoint_url": None,
+                "aws_access_key_id": "testing-files",
+                "aws_secret_access_key": "testing-files-secret",
+            },
+        )
+    ]
     assert dict(os.environ) == before
 
 
@@ -100,9 +126,15 @@ def test_dedicated_file_keys_override_aws_and_backup_without_export(storage, cli
 @pytest.mark.parametrize("key,secret", [("testing", "")])
 def test_empty_or_incomplete_file_keys_use_backup_pair(storage, key, secret, client_options, monkeypatch):
     calls, _ = client_options
-    for name, value in {"TICO_BLOB_ACCESS_KEY_ID": key, "TICO_BLOB_SECRET_ACCESS_KEY": secret,
-                        "LITESTREAM_ACCESS_KEY_ID": "testing-backup", "LITESTREAM_SECRET_ACCESS_KEY": "testing-secret",
-                        "AWS_ACCESS_KEY_ID": "", "AWS_SECRET_ACCESS_KEY": "", "AWS_PROFILE": ""}.items():
+    for name, value in {
+        "TICO_BLOB_ACCESS_KEY_ID": key,
+        "TICO_BLOB_SECRET_ACCESS_KEY": secret,
+        "LITESTREAM_ACCESS_KEY_ID": "testing-backup",
+        "LITESTREAM_SECRET_ACCESS_KEY": "testing-secret",
+        "AWS_ACCESS_KEY_ID": "",
+        "AWS_SECRET_ACCESS_KEY": "",
+        "AWS_PROFILE": "",
+    }.items():
         monkeypatch.setenv(name, value)
     storage(Settings(db_path=Path("/example/hub.db"), blob_bucket="acme-files")).s3
     assert calls[0][1]["aws_access_key_id"] == "testing-backup"
@@ -112,11 +144,17 @@ def test_empty_or_incomplete_file_keys_use_backup_pair(storage, key, secret, cli
 def test_empty_storage_settings_are_unset(client_options, monkeypatch):
     calls, _ = client_options
     monkeypatch.setenv("TICO_DB", "/example/hub.db")
-    for key in ("TICO_BLOB_BUCKET", "TICO_BLOB_ENDPOINT", "TICO_BLOB_REGION", "TICO_UPLOAD_MAX_BYTES",
-                "TICO_BLOB_ACCESS_KEY_ID", "TICO_BLOB_SECRET_ACCESS_KEY"):
+    for key in (
+        "TICO_BLOB_BUCKET",
+        "TICO_BLOB_ENDPOINT",
+        "TICO_BLOB_REGION",
+        "TICO_UPLOAD_MAX_BYTES",
+        "TICO_BLOB_ACCESS_KEY_ID",
+        "TICO_BLOB_SECRET_ACCESS_KEY",
+    ):
         monkeypatch.setenv(key, "")
     settings = Settings.from_env()
-    assert not settings.blob_bucket and settings.upload_max_bytes == 2 * 1024 ** 3
+    assert not settings.blob_bucket and settings.upload_max_bytes == 2 * 1024**3
     Downloads(settings).s3
     assert calls == [("s3", {"region_name": None, "endpoint_url": None})]
 
@@ -132,6 +170,7 @@ class CredentialS3:
 
     def denied(self, operation):
         from botocore.exceptions import ClientError
+
         raise ClientError({'Error': {'Code': 'AccessDenied', 'Message': 'private credential material'}}, operation)
 
     def create_multipart_upload(self, **options):
@@ -147,6 +186,7 @@ class CredentialS3:
 
     def get_object(self, **options):
         import io
+
         self.calls.append(('get', options))
         if not self.readable:
             self.denied('GetObject')
@@ -155,6 +195,7 @@ class CredentialS3:
     def head_object(self, **options):
         import hashlib
         from botocore.exceptions import ClientError
+
         self.calls.append(('head', options))
         if not self.readable:
             self.denied('HeadObject')
@@ -186,11 +227,13 @@ class CredentialS3:
 def credential_clients(client_options, monkeypatch):
     clients = {kind: CredentialS3(kind) for kind in ('keys', 'backup', 'role')}
     calls = []
+
     def make(service, **options):
         key = options.get('aws_access_key_id')
         kind = 'keys' if key == 'testing-files' else 'backup' if key == 'testing-backup' else 'role'
         calls.append((kind, recorded(options)))
         return clients[kind]
+
     monkeypatch.setattr(boto3, 'client', make)
     return clients, calls
 
@@ -204,6 +247,7 @@ def enable_pairs(monkeypatch, pairs):
 
 def storage_store(tmp_path, mode='auto'):
     from backend.store import Store
+
     settings = Settings(db_path=tmp_path / 'hub.db', blob_bucket='s3://acme-files/team', blob_credentials=mode)
     store = Store(settings)
     store.initialize()
@@ -212,16 +256,23 @@ def storage_store(tmp_path, mode='auto'):
 
 def write_health(store):
     import json
+
     with store.read() as c:
-        return json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()[0])
+        return json.loads(c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()[0])
 
 
-@pytest.mark.parametrize('pairs,allowed,expected,tried', [
-    (['backup'], ['role'], 'role', ['backup', 'role']),
-    (['keys', 'backup'], ['backup', 'role'], 'backup', ['keys', 'backup']),
-])
-def test_write_probe_selects_first_writable_source(tmp_path, monkeypatch, credential_clients, pairs, allowed, expected, tried):
+@pytest.mark.parametrize(
+    'pairs,allowed,expected,tried',
+    [
+        (['backup'], ['role'], 'role', ['backup', 'role']),
+        (['keys', 'backup'], ['backup', 'role'], 'backup', ['keys', 'backup']),
+    ],
+)
+def test_write_probe_selects_first_writable_source(
+    tmp_path, monkeypatch, credential_clients, pairs, allowed, expected, tried
+):
     from backend.health import storage_view
+
     clients, calls = credential_clients
     enable_pairs(monkeypatch, pairs)
     for kind in allowed:
@@ -260,10 +311,13 @@ def test_explicit_source_does_not_fall_back_for_writes(tmp_path, monkeypatch, cr
     assert [kind for kind, options in calls if 'config' in options] == [mode, mode]
 
 
-def test_none_writable_warns_and_retains_first_source_and_local_reads(tmp_path, monkeypatch, credential_clients, caplog):
+def test_none_writable_warns_and_retains_first_source_and_local_reads(
+    tmp_path, monkeypatch, credential_clients, caplog
+):
     import hashlib
     import io
     import json
+
     clients, _ = credential_clients
     enable_pairs(monkeypatch, ['backup'])
     storage, store = storage_store(tmp_path)
@@ -281,8 +335,11 @@ def test_none_writable_warns_and_retains_first_source_and_local_reads(tmp_path, 
 
 
 @pytest.mark.parametrize('operation', ['get_object'])
-def test_denied_read_tries_other_source_once_without_switching_writes(tmp_path, monkeypatch, credential_clients, operation):
+def test_denied_read_tries_other_source_once_without_switching_writes(
+    tmp_path, monkeypatch, credential_clients, operation
+):
     import hashlib
+
     clients, _ = credential_clients
     enable_pairs(monkeypatch, ['keys', 'backup'])
     clients['keys'].writable = True
@@ -305,6 +362,7 @@ def test_denied_read_tries_other_source_once_without_switching_writes(tmp_path, 
 
 def test_download_reads_and_signing_use_the_source_that_can_read(tmp_path, monkeypatch, credential_clients):
     import json
+
     clients, _ = credential_clients
     enable_pairs(monkeypatch, ['backup'])
     clients['role'].writable = True
@@ -312,11 +370,19 @@ def test_download_reads_and_signing_use_the_source_that_can_read(tmp_path, monke
     downloads = Downloads(store.settings, s3_source=storage)
     storage.check_write(store)
     clients['role'].readable = False
-    clients['backup'].objects[downloads.prefix + 'latest.json'] = json.dumps({
-        'version': '0.3.11', 'app_kind': 'company',
-        'platforms': {'darwin-aarch64': {'signature': 'sig',
-            'url': 'https://acme.example/download/file/0.3.11/Tico.app.tar.gz'}},
-        'installers': {'mac': {'file': 'Tico.dmg'}}}).encode()
+    clients['backup'].objects[downloads.prefix + 'latest.json'] = json.dumps(
+        {
+            'version': '0.3.11',
+            'app_kind': 'company',
+            'platforms': {
+                'darwin-aarch64': {
+                    'signature': 'sig',
+                    'url': 'https://acme.example/download/file/0.3.11/Tico.app.tar.gz',
+                }
+            },
+            'installers': {'mac': {'file': 'Tico.dmg'}},
+        }
+    ).encode()
     clients['backup'].objects[downloads.prefix + '0.3.11/Tico.dmg'] = b'installer'
     assert downloads.bucket_manifest()['version'] == '0.3.11'
     assert downloads.file_url('0.3.11', 'Tico.dmg') == 'https://s3.example.com/backup'
@@ -325,6 +391,7 @@ def test_download_reads_and_signing_use_the_source_that_can_read(tmp_path, monke
 
 def test_slow_reprobe_heals_without_restart_and_downloads_follow(tmp_path, monkeypatch, credential_clients):
     import threading
+
     clients, calls = credential_clients
     enable_pairs(monkeypatch, ['backup'])
     storage, store = storage_store(tmp_path)
@@ -332,14 +399,16 @@ def test_slow_reprobe_heals_without_restart_and_downloads_follow(tmp_path, monke
     assert downloads.s3 is clients['backup']
     stop = threading.Event()
     waits = []
+
     def wait(interval):
         waits.append(interval)
         assert storage._write_failed and write_health(store)['error']
         clients['role'].writable = True
         return False
+
     monkeypatch.setattr(stop, 'wait', wait)
     storage.storage_loop(store, stop)
-    assert waits == [1800]
+    assert waits == [30]
     assert [kind for kind, options in calls if 'config' in options] == ['backup', 'role', 'backup', 'role']
     assert not storage._write_failed and not write_health(store)['error']
     assert downloads.s3 is storage.s3 is clients['role']
@@ -373,7 +442,9 @@ def test_explicit_missing_pair_does_not_use_role(tmp_path, credential_clients, m
 
 
 @pytest.mark.parametrize('mode,method', [('auto', 'put'), ('keys', 'put_staged')])
-def test_uploads_reject_unselected_and_denied_sources_then_heal(tmp_path, monkeypatch, credential_clients, mode, method):
+def test_uploads_reject_unselected_and_denied_sources_then_heal(
+    tmp_path, monkeypatch, credential_clients, mode, method
+):
     import hashlib
     import io
     from backend.store import Problem
@@ -383,12 +454,14 @@ def test_uploads_reject_unselected_and_denied_sources_then_heal(tmp_path, monkey
     storage, store = storage_store(tmp_path, mode)
     data = b'  byte-exact\x00\xff\n'
     digest = hashlib.sha256(data).hexdigest()
+
     def upload():
         if method == 'put':
             return storage.put(data)
         if method == 'put_stream':
             return storage.put_stream(io.BytesIO(data))
         return storage.put_staged(io.BytesIO(data), digest, len(data))
+
     # Available clients alone are never evidence of write permission.
     storage.s3
     with pytest.raises(Problem, match='write check is still pending') as error:
@@ -406,18 +479,20 @@ def test_uploads_reject_unselected_and_denied_sources_then_heal(tmp_path, monkey
     assert storage.check_write(store) is True
     assert upload() == digest and storage.get(digest) == data
     assert not list(storage.directory.rglob('.upload-*'))
-    assert all(not any(op == 'put' for op, _ in source.calls)
-               for kind, source in clients.items() if kind != chosen)
+    assert all(not any(op == 'put' for op, _ in source.calls) for kind, source in clients.items() if kind != chosen)
 
 
 def test_upload_client_construction_errors_never_expose_credentials(tmp_path, monkeypatch, credential_clients, caplog):
     from backend.store import Problem
+
     clients, _ = credential_clients
     clients['role'].writable = True
     storage, store = storage_store(tmp_path)
     assert storage.check_write(store)
+
     def fail(kind):
         raise RuntimeError('private credential material')
+
     monkeypatch.setattr(storage._sources, 'client_for', fail)
     with pytest.raises(Problem) as error:
         storage.put(b'attachment')
@@ -426,7 +501,9 @@ def test_upload_client_construction_errors_never_expose_credentials(tmp_path, mo
 
 
 @pytest.mark.parametrize('fail', [False, True])
-def test_multipart_keeps_its_selected_identity_through_completion_or_abort(tmp_path, monkeypatch, credential_clients, fail):
+def test_multipart_keeps_its_selected_identity_through_completion_or_abort(
+    tmp_path, monkeypatch, credential_clients, fail
+):
     import hashlib
     import io
     from backend.store import Problem
@@ -437,20 +514,25 @@ def test_multipart_keeps_its_selected_identity_through_completion_or_abort(tmp_p
     storage, store = storage_store(tmp_path)
     assert storage.check_write(store)
     source = clients['keys']
+
     def create(**options):
         source.calls.append(('upload-create', options))
         with storage._write_lock:
             storage._sources.selected = 'backup'
         return {'UploadId': 'attachment'}
+
     def part(**options):
         source.calls.append(('part', options))
         if fail:
             raise RuntimeError('private credential material')
         return {'ETag': 'part'}
+
     monkeypatch.setattr(source, 'create_multipart_upload', create)
     monkeypatch.setattr(source, 'upload_part', part, raising=False)
-    monkeypatch.setattr(source, 'complete_multipart_upload', lambda **options: source.calls.append(('complete', options)), raising=False)
-    data = b'x' * (8 * 1024 ** 2 + 1)
+    monkeypatch.setattr(
+        source, 'complete_multipart_upload', lambda **options: source.calls.append(('complete', options)), raising=False
+    )
+    data = b'x' * (8 * 1024**2 + 1)
     if fail:
         with pytest.raises(Problem) as error:
             storage.put_stream(io.BytesIO(data))
@@ -463,7 +545,9 @@ def test_multipart_keeps_its_selected_identity_through_completion_or_abort(tmp_p
 
 
 @pytest.mark.parametrize('stage', ['create'])
-def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(tmp_path, monkeypatch, credential_clients, stage):
+def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(
+    tmp_path, monkeypatch, credential_clients, stage
+):
     import threading
     import time
     from types import SimpleNamespace
@@ -477,20 +561,24 @@ def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(
     target = blob_s3 if stage == 'client' else clients['role']
     name = 'client' if stage == 'client' else stage + '_multipart_upload'
     original = getattr(target, name)
+
     def blocked(*args, **options):
         entered.set()
         assert release.wait(10)
         return original(*args, **options)
+
     monkeypatch.setattr(target, name, blocked)
     # The deadline runs on a clock that holds still until the probe is inside the blocked call, then
     # jumps an hour, so a busy machine cannot spend the deadline before the probe gets there.
     # A probe that never gets there still times out after 30 s, and fails the entered check.
     start = time.monotonic()
+
     def monotonic():
         now = time.monotonic()
         if entered.is_set():
             return now + 3600
         return start if now - start < 30 else now
+
     monkeypatch.setattr(blobs, 'time', SimpleNamespace(monotonic=monotonic, sleep=time.sleep))
     try:
         assert storage.check_write(store, timeout=0.05) is False
@@ -509,3 +597,113 @@ def test_probe_deadline_bounds_provider_and_s3_latency_without_reselecting_late(
     assert storage.check_write(store) is True
     assert storage._sources.selected == 'role'
     assert 'upload_id' not in write_health(store) and not write_health(store)['error']
+
+
+def locked_transactions(store, failures):
+    """The store's first `failures` write transactions fail the way a write gate that waited too long does."""
+    import sqlite3
+
+    transaction, calls = store.transaction, []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) <= failures:
+            raise sqlite3.OperationalError('database is locked')
+        return transaction()
+
+    store.transaction = flaky
+    return calls
+
+
+def test_busy_database_is_not_an_s3_failure_and_never_ends_the_storage_loop(tmp_path, credential_clients):
+    import threading
+
+    clients, _ = credential_clients
+    clients['role'].writable = True
+    storage, store = storage_store(tmp_path)
+    locked_transactions(store, 2)
+    assert storage.check_write(store) is True
+    assert not storage._write_failed and not storage._write_error
+    # The unrecorded probe upload is still aborted by the same check, so none is left in the bucket.
+    assert [operation for operation, _ in clients['role'].calls] == ['create', 'abort']
+    assert storage.put(b'attachment')
+
+    storage, store = storage_store(tmp_path / 'loop')
+    locked_transactions(store, 2)
+    stop = threading.Event()
+    stop.wait = lambda interval: pytest.fail('a healthy storage loop does not wait to retry')
+    storage.storage_loop(store, stop)
+    assert not storage._write_failed and storage.put(b'attachment')
+
+
+def test_non_s3_errors_are_not_worded_as_s3():
+    import sqlite3
+    from botocore.exceptions import ClientError, EndpointConnectionError
+    from backend import blob_s3
+
+    detail = blob_s3.write_error(sqlite3.OperationalError('database is locked'), 'acme-files', cleanup=True)
+    assert 'S3 storage' not in detail and 'OperationalError' in detail
+    assert blob_s3.write_error(EndpointConnectionError(endpoint_url='https://s3.example.com'), 'acme-files').startswith(
+        'S3 storage'
+    )
+    denied = ClientError({'Error': {'Code': 'AccessDenied'}}, 'PutObject')
+    assert (
+        blob_s3.write_error(denied, 'acme-files') == "S3 storage can't write: AccessDenied on acme-files (s3:PutObject)"
+    )
+
+
+def test_refused_upload_starts_one_recheck_and_heals(tmp_path, credential_clients):
+    import threading
+    from backend.store import Problem
+
+    clients, _ = credential_clients
+    storage, store = storage_store(tmp_path)
+    assert storage.check_write(store) is False and storage._write_failed
+    storage._store, storage._loop = store, threading.Event()
+    # Within a minute of the last check, a refusal starts nothing.
+    with pytest.raises(Problem):
+        storage.put(b'attachment')
+    assert not storage._healing
+    storage._checked -= 120
+    source = clients['role']
+    source.writable = True
+    entered, release = threading.Event(), threading.Event()
+    create = source.create_multipart_upload
+
+    def blocked(**options):
+        entered.set()
+        assert release.wait(10)
+        return create(**options)
+
+    source.create_multipart_upload = blocked
+    before = len(source.calls)
+    for _ in range(3):
+        with pytest.raises(Problem, match='retry without discarding'):
+            storage.put(b'attachment')
+    assert entered.wait(10)
+    release.set()
+    assert storage._probe_task[0].wait(10)
+    # Three refusals while one check runs start one check, not three.
+    assert [operation for operation, _ in source.calls[before:]] == ['create', 'abort']
+    assert not storage._write_failed and storage.put(b'attachment')
+
+
+def test_storage_loop_backs_off_and_survives_errors(tmp_path, credential_clients, caplog):
+    import threading
+
+    storage, store = storage_store(tmp_path)
+    copy_local, passes = storage.copy_local, []
+
+    def flaky(store, stop):
+        passes.append(1)
+        if len(passes) == 1:
+            raise RuntimeError('pass failed')
+        copy_local(store, stop)
+
+    storage.copy_local = flaky
+    stop, waits = threading.Event(), []
+    stop.wait = lambda interval: waits.append(interval) or len(waits) == 8
+    storage.storage_loop(store, stop)
+    assert waits == [30, 60, 120, 240, 480, 960, 1800, 1800]
+    assert storage._write_failed and len(passes) == 8
+    assert 'pass failed' in caplog.text

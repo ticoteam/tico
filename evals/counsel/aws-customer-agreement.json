@@ -1,0 +1,37 @@
+{
+  "expected": [
+    {
+      "text": "Pay each AWS invoice by its due date; AWS may charge the default payment method.",
+      "quote": "You must pay all invoices by the due date set forth on the invoice and you authorize us to charge your default payment method for the invoiced amount.",
+      "section": "Payment",
+      "who_hint": "finance"
+    },
+    {
+      "text": "An AWS account needs a valid email address and a valid form of payment to use the services.",
+      "quote": "To access the Services, you must have an AWS account associated with a valid email address and a valid form of payment.",
+      "section": "Account",
+      "who_hint": "finance"
+    },
+    {
+      "text": "Our content is stored and transferred to the AWS regions we select.",
+      "quote": "You consent to the storage of Your Content in, and transfer of Your Content into, the AWS regions you select.",
+      "section": "Your Content",
+      "who_hint": "data"
+    }
+  ],
+  "url": "https://aws.amazon.com/agreement/",
+  "fetched_at": "2026-10-30T23:39:40Z",
+  "from": {
+    "name": "AWS Customer Agreement",
+    "kind": "vendor"
+  },
+  "truncated": true,
+  "not_ours": [
+    {
+      "text": "AWS will use our account information only as its privacy notice says.",
+      "quote": "We will only use your Account Information in accordance with the Privacy Notice",
+      "section": "Account Information",
+      "who_hint": ""
+    }
+  ]
+}

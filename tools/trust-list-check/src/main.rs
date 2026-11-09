@@ -425,8 +425,8 @@ fn scan(revision: String, pins: Vec<Pin>, registry: &mut impl Registry) -> Resul
         }
         for v in [&pin.version, new] {
             let key = (pin.package.clone(), v.clone());
-            if !bundles.contains_key(&key) {
-                bundles.insert(key, registry.roots(&pin.package, v)?);
+            if let std::collections::btree_map::Entry::Vacant(slot) = bundles.entry(key) {
+                slot.insert(registry.roots(&pin.package, v)?);
             }
         }
         let old_roots = &bundles[&(pin.package.clone(), pin.version.clone())];
@@ -494,7 +494,7 @@ fn writer_lock(hub: &mut impl Hub, path: &Path) -> Result<File> {
     if who["actor"] != "bot:upgrades"
         || who["role"] != "bot"
         || who["agent"].as_str().is_some_and(|s| !s.is_empty())
-        || who["attempt_id"].as_str().is_none_or(str::is_empty)
+        || who["run_id"].as_str().is_none_or(str::is_empty)
         || who["runner_id"].as_str().is_none_or(str::is_empty)
         || who["runner_id"] != assigned["assignment"]["runner_id"]
         || assigned["state"] != "active"

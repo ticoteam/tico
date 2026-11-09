@@ -43,6 +43,8 @@ month's fees, well below Acme's usual position. The renewal notice deadline is 2
 ## Could not read
 The "Service Schedule" (referenced in 3.1) was not attached, so scope and service levels are not read.
 
+**This is a summary for a human, not legal advice. Have counsel review anything that matters before you sign or rely on it.**
+
 ## Sources
 - contract.pdf, 14 pages, read 2026-09-28; `knowledge/playbook.md`, read 2026-09-28
 ```

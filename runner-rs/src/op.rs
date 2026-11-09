@@ -1,5 +1,5 @@
 //! 1Password references in a bot's granted credentials, resolved on this computer before the run starts
-//! (runner/op.py): a value like `op://vault/item/field` is read with `op read` and the service-account token in
+//! (runner_support/op.py): a value like `op://vault/item/field` is read with `op read` and the service-account token in
 //! `secrets/_shared.env` (OP_SERVICE_ACCOUNT_TOKEN), which never reaches the run itself.
 
 use std::collections::BTreeMap;
@@ -20,7 +20,9 @@ async fn read(program: &str, reference: &str, token: &str) -> Result<String, Str
         .kill_on_drop(true);
     match tokio::time::timeout(Duration::from_secs(OP_TIMEOUT_S), cmd.output()).await {
         Err(_) => Err(format!("op read timed out after {OP_TIMEOUT_S}s")),
-        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Err("the 1Password CLI (`op`) is not installed on PATH".into()),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err("the 1Password CLI (`op`) is not installed on PATH".into())
+        }
         Ok(Err(e)) => Err(format!("op could not run: {e}")),
         Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -28,7 +30,12 @@ async fn read(program: &str, reference: &str, token: &str) -> Result<String, Str
                 Ok(stdout)
             } else {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                Err(stderr.trim().lines().last().map(String::from).unwrap_or_else(|| format!("op exited {}", out.status.code().unwrap_or(-1))))
+                Err(stderr
+                    .trim()
+                    .lines()
+                    .last()
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("op exited {}", out.status.code().unwrap_or(-1))))
             }
         }
     }
@@ -41,17 +48,30 @@ pub async fn resolve_op_refs(env: &mut BTreeMap<String, String>) -> BTreeMap<Str
     resolve_with(env, "op").await
 }
 
-pub async fn resolve_with(env: &mut BTreeMap<String, String>, program: &str) -> BTreeMap<String, String> {
-    let refs: Vec<(String, String)> = env.iter().filter(|(_, v)| v.starts_with(OP_REF)).map(|(k, v)| (k.clone(), v.clone())).collect();
+pub async fn resolve_with(
+    env: &mut BTreeMap<String, String>,
+    program: &str,
+) -> BTreeMap<String, String> {
+    let refs: Vec<(String, String)> = env
+        .iter()
+        .filter(|(_, v)| v.starts_with(OP_REF))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     let mut out = BTreeMap::new();
     if refs.is_empty() {
         return out;
     }
-    let token = env.get(TOKEN_KEY).map(|t| t.trim().to_string()).unwrap_or_default();
+    let token = env
+        .get(TOKEN_KEY)
+        .map(|t| t.trim().to_string())
+        .unwrap_or_default();
     if token.is_empty() {
         for (k, _) in &refs {
             env.insert(k.clone(), String::new());
-            out.insert(k.clone(), "OP_SERVICE_ACCOUNT_TOKEN is not set in secrets/_shared.env".to_string());
+            out.insert(
+                k.clone(),
+                "OP_SERVICE_ACCOUNT_TOKEN is not set in secrets/_shared.env".to_string(),
+            );
         }
         log("op: OP_SERVICE_ACCOUNT_TOKEN is not set in secrets/_shared.env");
         return out;
@@ -105,15 +125,43 @@ mod tests {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
         let report = resolve_with(&mut env, fake.to_str().unwrap()).await;
-        assert_eq!((env["A"].as_str(), env["B"].as_str(), env["C"].as_str(), env["D"].as_str()), ("resolved-secret", "resolved-secret", "", "plain"));
-        assert_eq!((report["A"].as_str(), report["C"].as_str()), ("ok", "[ERROR] item not found"));
-        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().collect::<Vec<_>>(), ["op://v/good/password ops_token", "op://v/missing/password ops_token"]);
+        assert_eq!(
+            (
+                env["A"].as_str(),
+                env["B"].as_str(),
+                env["C"].as_str(),
+                env["D"].as_str()
+            ),
+            ("resolved-secret", "resolved-secret", "", "plain")
+        );
+        assert_eq!(
+            (report["A"].as_str(), report["C"].as_str()),
+            ("ok", "[ERROR] item not found")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&calls)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            [
+                "op://v/good/password ops_token",
+                "op://v/missing/password ops_token"
+            ]
+        );
 
-        let mut untokened: BTreeMap<String, String> = [("A".to_string(), "op://v/good/password".to_string())].into_iter().collect();
+        let mut untokened: BTreeMap<String, String> =
+            [("A".to_string(), "op://v/good/password".to_string())]
+                .into_iter()
+                .collect();
         let report = resolve_with(&mut untokened, fake.to_str().unwrap()).await;
         assert_eq!(untokened["A"], "");
         assert!(report["A"].contains("OP_SERVICE_ACCOUNT_TOKEN is not set"));
-        let mut absent: BTreeMap<String, String> = [("A".to_string(), "op://x".to_string()), (TOKEN_KEY.to_string(), "t".to_string())].into_iter().collect();
+        let mut absent: BTreeMap<String, String> = [
+            ("A".to_string(), "op://x".to_string()),
+            (TOKEN_KEY.to_string(), "t".to_string()),
+        ]
+        .into_iter()
+        .collect();
         let report = resolve_with(&mut absent, "/nonexistent/op").await;
         assert!(report["A"].contains("not installed"));
         std::fs::remove_dir_all(dir).ok();

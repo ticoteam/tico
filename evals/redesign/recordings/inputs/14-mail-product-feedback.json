@@ -1,0 +1,24 @@
+{
+  "id": "14-mail-product-feedback",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "rafael.costa@acme.example",
+    "from_name": "Rafael Costa, Pine Ridge Physio",
+    "to": "dana@acme.example",
+    "date": "2026-10-26T19:40:00Z",
+    "subject": "Feedback: the board is hard to read on my phone",
+    "snippet": "Love the tool, but on my phone the columns squash and I cannot read task titles. Is there a list view for mobile?",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "Customer product feedback: it goes to product, not to the owner."
+}

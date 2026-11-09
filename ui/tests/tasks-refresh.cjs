@@ -1,4 +1,4 @@
-// The open Tasks list never drifts for long (ui/app/refresh.js, tasks-page.js, pull-refresh.js). After one full read
+// The open Tasks list never drifts for long (ui/app/refresh.ts, tasks-page.js, pull-refresh.ts). After one full read
 // the page takes only what the change log names (a delta read from its cursor, live events), so a change it never
 // names stayed out until a reload, and an installed phone app has no reload button. The fixture's delta read misses
 // every change and its full read answers 304 to any tag the page holds, as the server does when the change log has
@@ -11,7 +11,10 @@
 //    rows past the first page stay, the failure shows, and a retry read to the end drops only what left the list;
 //  - coming back after more than 10 minutes away (hidden, or asleep with the timers stopped) reads in full and
 //    reconnects the live stream; a short time away reads only the delta;
-//  - a list read in full 15 minutes ago is read in full again, but not while an answer is being written in it.
+//  - a list read in full 15 minutes ago is read in full again, but not while an answer is being written in it;
+//  - one full read at a time: a save's reload or the clock asked for while one is on its way shares it (the save's then
+//    reads what changed), and its first page is short, the rest 500 at a time;
+//  - leaving Tasks keeps the list and its cursor: coming back reads only what changed, unless the stream said reset.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,11 +23,13 @@ const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const now = new Date().toISOString();
-const task = (id, title, over) => ({id, title, body: 'Details.', owner: 'human:ana', requester: 'bot:ops', status: 'open', lane: 'company',
-  labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
-const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester: 'bot:ops', origin_actor: 'bot:ops', created: now,
-  ask: {id: 'm-loose', from_actor: 'bot:ops', to_actor: 'human:ana', body: 'Is Friday fine for the summary?', created: now}};
+const task = (id, title, over) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', lane: 'company',
+  labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
+// A question to Ana outside any task is a question task now: its card is keyed by the task id.
+const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
+  body: 'Is Friday fine for the summary?', requester_id: 'bot:ops', owner_id: 'human:ana', origin_actor: 'bot:ops', created_at: now,
+  ask: {id: 'm-loose', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: now, question_task: true,
+    refs: {questions: [{id: 'friday', question: 'Is Friday fine for the summary?', options: [{label: 'Yes'}, {label: 'No'}]}]}}};
 
 (async () => {
   const browser = await chromium.launch();
@@ -33,7 +38,7 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   page.on('pageerror', e => errors.push(e.message));
   // `second`: the open tasks past the first page (null: one page); `failSecond` fails the read of that page.
   const server = {title: 'Draft the release notes', fail: false, second: null, failSecond: false};
-  const reads = {full: [], delta: 0};
+  const reads = {full: [], delta: 0, limits: []};
   await page.addInitScript(() => {
     window.__streams = 0;
     window.EventSource = class {
@@ -51,10 +56,10 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -62,7 +67,7 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     if (p === '/api/v2/tasks' && url.searchParams.get('changed_after')) { reads.delta++; return json({tasks: [], gone: [], cursor: '13.a', next_offset: null}); }
     if (p === '/api/v2/tasks' && (url.searchParams.get('status') || '').includes('open')) {
       const tag = route.request().headers()['if-none-match'] || '';
-      reads.full.push(tag);
+      reads.full.push(tag); reads.limits.push(url.searchParams.get('limit'));
       const later = url.searchParams.get('offset') !== '0';
       if (server.fail || later && server.failSecond) return route.fulfill({status: 503, contentType: 'application/json', body: '{"error":"away"}'});
       if (tag) return route.fulfill({status: 304, headers: {ETag: tag}, body: ''});
@@ -72,7 +77,11 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
     }
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
-    if (p === '/api/v2/needs-you') return json({items: [LOOSE], count: 1, version: 'v1'});
+    if (p === '/api/v2/needs-you') {
+      const items = [LOOSE, task('t1', server.title), ...Array.from({length: 40}, (_, i) => task(`r${i}`, `Check release link ${i}`)),
+        ...(server.second || [])].map(it => ({kind: 'task', ...it}));
+      return json({items, count: items.length, plate_count: items.length});
+    }
     return json(unrouted(p));
   });
   const shows = title => page.locator('#task-body', {hasText: title}).waitFor({timeout: t(8000)});
@@ -89,12 +98,17 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await page.waitForFunction(() => TASKS_ST.since === '12.a' && TASKS_ST.fullAt > 0);
   await settled();
 
-  // A question asked outside any task sits folded on For you with its answer form inside; the poll still reads.
-  assert.equal(await page.locator('#task-body details.req:not([open]) form.issue-compose[data-ask-answer]').count(), 1);
+  // A question to Ana is one line on Needs you (its answer is on its card); the poll still reads.
+  assert.equal(await page.locator('#task-body [data-need-card="task:m-loose"]').count(), 1);
   let delta = reads.delta;
   await page.evaluate(() => refresh(false));
   await page.waitForFunction(() => TASKS_ST.since === '13.a', null, {timeout: t(5000)});
-  assert.equal(reads.delta, delta + 1, 'the 2-minute refresh reads what changed while a question is folded on the page');
+  assert.equal(reads.delta, delta + 1, 'the 2-minute refresh reads what changed with a question on the page');
+  // The remaining checks deliberately omit changes from the task cursor. Open exercises that task-list fallback;
+  // Needs you reads its own current feed, which can already contain a change the task cursor missed.
+  await page.locator('#task-scope').click();
+  await page.locator(`#task-filter-pop [data-task-type="${await page.evaluate(() => TASKS_ST.type)}"]`).click();
+  await page.waitForFunction(() => TASKS_ST.view === 'list');
 
   // The task changed in a way the delta read does not bring: the list still shows the old copy.
   server.title = 'Draft the final release notes';
@@ -249,21 +263,57 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await shows('Draft the release notes, fourth pass');
   await settled();
 
-  // The 15-minute clock: a list read in full that long ago is read again, but not while an answer is being written.
+  // The 15-minute clock: a list read in full that long ago is read again. An answer half written on the question's
+  // card, over the list, keeps its words.
   server.title = 'Draft the release notes, fifth pass';
   full = reads.full.length;
-  await page.locator('#task-body details.req[data-ask] summary').click();
-  await page.locator('#task-body form[data-ask-answer] textarea').fill('Friday is fine');
+  await page.evaluate(() => decideOpen('task:m-loose'));
+  await page.locator('#need-card .dc-note textarea').fill('Friday is fine');
   await page.evaluate(() => { TASKS_ST.fullAt = Date.now() - 16 * 60e3; tasksTick(); });
-  await page.waitForTimeout(t(500));
-  assert.equal(reads.full.length, full, 'no full read while an answer is half written');
-  await page.locator('#task-body form[data-ask-answer] textarea').fill('');
-  await page.evaluate(() => { document.activeElement?.blur(); tasksTick(); });
   await shows('Draft the release notes, fifth pass');
   await settled();
+  assert.equal(await page.locator('#need-card .dc-note textarea').inputValue(), 'Friday is fine', 'the half-written answer stays');
   await page.evaluate(() => tasksTick());
   await page.waitForTimeout(t(300));
   assert.equal(reads.full.length, full + 1, 'a list just read in full is not read again on the next tick');
+
+  // One full read at a time: the clock and a save's reload asked for while it is on its way share it, and the save's
+  // reload then reads only what changed. Its first page is short, the next ones 500 at a time.
+  server.second = [task('p1', 'Renew the domain')];
+  full = reads.full.length; delta = reads.delta;
+  await page.evaluate(async () => {
+    const first = tasksReadFull(TASKS_ST);
+    TASKS_ST.fullAt = 0; tasksTick();
+    await Promise.all([first, tasksLoad(TASKS_ST), tasksLoad(TASKS_ST)]);
+  });
+  await settled();
+  assert.equal(reads.full.length, full + 2, 'one full read: its two pages');
+  assert.deepEqual(reads.limits.slice(-2), ['100', '500'], 'the first page short, the rest 500 at a time');
+  assert.equal(reads.delta, delta + 1, 'the saves\' reloads read what changed, once');
+  server.second = null;
+  await page.evaluate(() => tasksReadFull(TASKS_ST));
+  await settled();
+
+  // Leaving Tasks keeps the list with its cursor: coming back reads what changed, not the whole list again.
+  full = reads.full.length; delta = reads.delta;
+  await page.evaluate(() => { location.hash = '#/updates'; });
+  await page.waitForFunction(() => !TASKS_ST && S.lastRead.tasks?.since === '12.a');
+  await page.evaluate(() => { location.hash = '#/tasks?view=list'; });
+  await page.waitForFunction(() => TASKS_ST && TASKS_ST.since === '13.a', null, {timeout: t(5000)});
+  await settled();
+  assert.equal(reads.full.length, full, 'a return visit reads no full list');
+  assert.equal(reads.delta, delta + 1, 'a return visit catches up from the kept cursor');
+  // The stream said reset while away: the next visit reads in full.
+  await page.evaluate(() => { location.hash = '#/updates'; });
+  await page.waitForFunction(() => !TASKS_ST && S.lastRead.tasks?.since);
+  await page.evaluate(() => liveEmit('reset', {}));
+  assert.equal(await page.evaluate(() => S.lastRead.tasks.since), null, 'a reset drops the kept cursor');
+  await page.waitForFunction(() => !LIVE_SOON.has('refresh'), null, {timeout: t(5000)});   // its refresh(true) lands while away
+  await page.waitForTimeout(t(300));
+  await page.evaluate(() => { location.hash = '#/tasks?view=list'; });
+  await page.waitForFunction(() => TASKS_ST && TASKS_ST.since, null, {timeout: t(5000)});
+  await settled();
+  assert.equal(reads.full.length, full + 1, 'a kept list without a cursor is read in full');
 
   assert.deepEqual(errors, []);
   await browser.close();

@@ -1,0 +1,25 @@
+{
+  "id": "08-mail-newsletter",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "news@acme.example",
+    "from_name": "Fieldnotes Weekly",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T06:00:00Z",
+    "subject": "This week in team productivity: seven tools, three playbooks",
+    "snippet": "Plus a short interview with a founder who replaced her weekly status meeting. Read online. Unsubscribe.",
+    "unsubscribe": true,
+    "list_id": "fieldnotes-weekly.example",
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX",
+      "CATEGORY_PROMOTIONS"
+    ]
+  },
+  "note": "A newsletter the rules missed: archive."
+}

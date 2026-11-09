@@ -13,8 +13,8 @@ Nothing has been posted to GitHub.
 Checks: 1 failing (unit tests, see log). 118 changed lines, 3 files.
 
 > **Summary:** rounds each line item, not the invoice total. Blocking: no test covers the change.
-> - issue (blocking): `billing/invoice.py:88` rounds per line, so a 3 x 0.335 invoice totals 1.00 instead of 1.01.
->   Add a test for 3 items at 0.335 and 2 at 9.995 before merge.
+> - issue (blocking): `billing/invoice.py:88` rounds each line, so three lines of 3.333 total 9.99 instead of 10.00.
+>   Add a test for three lines of 3.333 before merge.
 > - question: is the previous behaviour relied on by the export in `billing/export.py:41`? I could not tell from the diff.
 > - nit: `amt` could be `amount` (line 92).
 > - praise: the migration note in the description is exactly what a reviewer needs.

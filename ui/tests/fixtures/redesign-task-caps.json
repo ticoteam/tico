@@ -1,0 +1,5 @@
+{"caps": [
+  {"sender": "bot:eng-lead", "receiver": "person:ana", "per_day": 10, "count": 10, "closed": 0, "rejected": 3},
+  {"sender": "bot:release", "receiver": "person:ana", "per_day": 5, "count": 2, "closed": 1, "rejected": 0},
+  {"sender": "bot:builder", "receiver": "person:ana", "per_day": 0, "count": 0, "closed": 0, "rejected": 0}
+]}

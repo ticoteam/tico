@@ -34,9 +34,15 @@ fn note(file: &str, line: u32) {
     // A panic in a dependency names a path outside this crate (a registry folder can name the user): it goes without one.
     let file = file.strip_prefix("runner-rs/").unwrap_or(file);
     let own = file.starts_with("src/") && file.ends_with(".rs") && !file.contains("..");
-    let at = if own { (file.to_string(), line) } else { (String::new(), 0) };
+    let at = if own {
+        (file.to_string(), line)
+    } else {
+        (String::new(), 0)
+    };
     // try_lock: a panic while a list is held must not wait on itself. A poisoned list is still a list.
-    let (Some(mut noted), Some(mut held)) = (locked(&NOTED), locked(&PENDING)) else { return };
+    let (Some(mut noted), Some(mut held)) = (locked(&NOTED), locked(&PENDING)) else {
+        return;
+    };
     let now = Instant::now();
     noted.retain(|(_, _, when)| now.duration_since(*when) < REPEAT);
     if held.len() < HELD && !noted.iter().any(|(f, l, _)| (f, *l) == (&at.0, at.1)) {
@@ -58,8 +64,11 @@ fn take() -> Vec<(String, u32)> {
 }
 
 fn body(held: &[(String, u32)]) -> Value {
-    let panics: Vec<Value> = held.iter().map(|(file, line)| json!({"file": file, "line": line})).collect();
-    json!({"version": crate::runner::RUNNER_VERSION, "panics": panics})
+    let panics: Vec<Value> = held
+        .iter()
+        .map(|(file, line)| json!({"file": file, "line": line}))
+        .collect();
+    json!({"version": crate::runner::RUNNER_RELEASE, "panics": panics})
 }
 
 /// Send what panicked since the last heartbeat. Best effort: a hub from before this route answers 404 and they are gone.
@@ -90,18 +99,27 @@ mod tests {
         note("src/runner.rs", 812);
         note("src/runner.rs", 812);
         note("runner-rs/src/hosts/mac.rs", 7);
-        note("/home/ana/.cargo/registry/src/index.crates.io-1/tokio-1.0.0/src/task.rs", 9);
+        note(
+            "/home/ana/.cargo/registry/src/index.crates.io-1/tokio-1.0.0/src/task.rs",
+            9,
+        );
         let held = take();
         assert!(take().is_empty());
         // Tests never install the hook, so nothing else lands in the list meanwhile.
-        assert_eq!(body(&held)["panics"], json!([
-            {"file": "src/runner.rs", "line": 812}, {"file": "src/hosts/mac.rs", "line": 7}, {"file": "", "line": 0}]));
-        assert_eq!(body(&held)["version"], crate::runner::RUNNER_VERSION);
+        assert_eq!(
+            body(&held)["panics"],
+            json!([
+            {"file": "src/runner.rs", "line": 812}, {"file": "src/hosts/mac.rs", "line": 7}, {"file": "", "line": 0}])
+        );
+        assert_eq!(body(&held)["version"], crate::runner::RUNNER_RELEASE);
         // A seen location stays quiet after it was sent, and a burst of new ones keeps the first five.
         note("src/runner.rs", 812);
         for line in 900..920 {
             note("src/lanes.rs", line);
         }
-        assert_eq!(take().iter().map(|(_, line)| *line).collect::<Vec<_>>(), vec![900, 901, 902, 903, 904]);
+        assert_eq!(
+            take().iter().map(|(_, line)| *line).collect::<Vec<_>>(),
+            vec![900, 901, 902, 903, 904]
+        );
     }
 }

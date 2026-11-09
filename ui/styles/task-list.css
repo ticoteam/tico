@@ -4,7 +4,7 @@
 
 /* ---- the page: the list, and the peek beside it when a task is open */
 #main.tasks-layout{max-width:none;padding:0;overflow:hidden;display:flex;flex-direction:column}
-.tasks-page{--peek-w:clamp(380px,42%,600px);--row-hover:color-mix(in srgb,var(--ink) 4.5%,transparent);--row-sel:color-mix(in srgb,var(--accent) 11%,transparent);
+.tasks-page{--peek-w:clamp(380px,42%,600px);--row-hover:var(--surface2);--row-sel:color-mix(in srgb,var(--ink) 7%,transparent);
   flex:1 1 auto;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .tasks-page.peek-open{grid-template-columns:minmax(0,1fr) var(--peek-w)}
 .tasks-pane{min-width:0;min-height:0;overflow-y:auto;padding:8px 28px 56px;container-type:inline-size;container-name:tasks}
@@ -17,39 +17,60 @@
 .tl-row > .tl-status{width:auto;min-width:65px;height:20px;padding:0 6px;border:1px solid transparent;border-radius:6px;background:none;font:inherit;font-size:var(--t-xs);cursor:pointer}
 .tl-row:hover > .tl-status,.tl-status[aria-expanded=true]{border-color:var(--line)}
 .tl-status:hover{background:var(--surface2);color:var(--ink)}
-.tl-status:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-status:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
-/* ---- toolbar: title, labelled tabs with counts, search, new task */
-.tl-head{display:flex;flex-wrap:wrap;align-items:center;gap:12px;row-gap:8px;min-height:44px}
+/* ---- the header, one row: title, scope ▾, then whose list, search, filter, layout, finished, Catch up, ⋯ and new task.
+   With no room the search folds to its icon (.s-fold), the finished views move to the chips row, and only then does the
+   row wrap (.wrap); task-list.js tasksHeadFit. */
+.tl-head{position:relative;display:flex;flex-wrap:nowrap;align-items:center;gap:8px;min-height:32px;padding-bottom:6px}
+.tl-head.wrap{flex-wrap:wrap;row-gap:6px}
 .tl-head h1{flex:none;font-size:var(--t-lg);margin:0 4px 0 0;white-space:nowrap}
-.tl-head .spacer,.tl-bar .spacer{flex:1}
-.tl-tabs{flex:none;display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.tl-tabs [role=tab]{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/1 var(--sans);white-space:nowrap;cursor:pointer}
-.tl-tabs [role=tab]:hover{color:var(--ink)}
-.tl-tabs [role=tab][aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
-.tl-tabs [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
-.tl-tabs .cnt{font-size:var(--t-xs);color:var(--muted);font-weight:500}
-.tl-tabs .cnt.hot{color:var(--wait-ink);font-weight:600}
-.tl-type-search{display:flex;align-items:center;gap:10px;flex:1 1 auto;max-width:380px;min-width:0}
-.tl-types{display:inline-flex;align-items:center;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.tl-types[hidden]{display:none}
-.tl-types button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/1 var(--sans);white-space:nowrap;cursor:pointer}
-.tl-types button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
-.tl-types button:hover:not(:disabled){color:var(--ink)}
-.tl-types button:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
-.tl-types button:disabled{opacity:.45;cursor:default}
-#task-type-more span{max-width:130px;overflow:hidden;text-overflow:ellipsis}
-.tl-search{flex:1 1 150px;min-width:90px;max-width:180px;display:flex;align-items:center;gap:6px;height:30px;padding:0 6px 0 9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--muted)}
-.tl-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.tl-head .spacer{flex:1 1 0;min-width:0}
+.tl-head [hidden]{display:none!important}
+.tl-scope{flex:0 1 auto;display:inline-flex;align-items:center;gap:6px;min-width:56px;height:var(--ctl);padding:0 8px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
+.tl-scope:hover,.tl-scope[aria-expanded=true]{background:var(--surface2)}
+.tl-scope:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tl-scope-l{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tl-scope .cnt{flex:none;font-size:var(--t-xs);color:var(--muted);font-weight:500}
+.tl-scope .cnt.hot{color:var(--wait-ink);font-weight:600}
+.tl-scope svg{flex:none;color:var(--muted)}
+/* icon buttons: filter, archive, ⋯; the layout pair and the finished views */
+.tl-ib{position:relative;flex:none;display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;border:1px solid transparent;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.tl-ib:hover,.tl-ib[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.tl-ib[aria-pressed=true]{background:var(--raised);border-color:var(--line);color:var(--ink)}
+.tl-ib:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tl-ib.active{color:var(--ink)}
+.tl-fbadge{position:absolute;top:1px;right:0;min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:var(--ink);color:var(--bg);font:600 10px/15px var(--sans);text-align:center}
+.tl-pair{flex:none;display:inline-flex;align-items:center;gap:2px;height:var(--ctl);padding:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
+.tl-pair button{display:inline-grid;place-items:center;min-width:26px;height:100%;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
+.tl-pair button:hover{color:var(--ink)}
+.tl-pair button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
+.tl-pair button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tl-finished-slot,.tl-finished-bar{display:contents}
+.tl-pair[hidden]{display:none}
+.tl-bar .tl-finished{height:26px}
+.tl-search{flex:0 1 200px;min-width:120px;display:flex;align-items:center;gap:6px;height:var(--ctl);padding:0 6px 0 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--muted)}
+.tl-search:focus-within{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 .tl-search svg{flex:none}
-.tl-search input{flex:1;min-width:0;width:0;height:28px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
+.tl-search input{flex:1;min-width:0;width:0;height:30px;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font-size:var(--t-base);color:var(--ink)}
 .tl-search input:focus{outline:0;box-shadow:none}
+.tl-search input:placeholder-shown::-webkit-search-cancel-button{display:none}   /* an empty field keeps its room for the placeholder */
 .tl-search kbd{flex:none;font:var(--t-xs)/16px var(--sans);padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted)}
 .tl-search:focus-within kbd{display:none}
-.tl-new{flex:none;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:8px;font-size:var(--t-base);font-weight:600;white-space:nowrap}
+/* folded, the search is its icon; focused it opens over the header's first row; holding words, its icon is marked */
+.tl-head.s-fold .tl-search:not(:focus-within){flex:none;position:relative;width:var(--ctl);min-width:0;padding:0;justify-content:center;border-color:transparent;background:none;cursor:pointer}
+.tl-head.s-fold .tl-search:not(:focus-within):hover{background:var(--surface2);color:var(--ink)}
+.tl-head.s-fold .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.tl-head.s-fold .tl-search:not(:focus-within) kbd{display:none}
+.tl-head.s-fold .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);border-color:var(--line)}
+.tl-head.s-fold .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;height:var(--ctl);max-width:none;background:var(--surface)}
+.tl-who{flex:none;display:inline-flex;align-items:center;gap:3px;height:var(--ctl);padding:0 4px 0 6px;border:1px solid transparent;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.tl-who:hover,.tl-who[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.tl-who.asked{border-color:var(--line)}
+.tl-who:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
-/* ---- the filter bar: removable chips, Filter, Group by */
-.tl-bar{display:flex;align-items:center;gap:8px;min-height:38px;padding:4px 0 6px}
+/* ---- the chips row, only while filters are on (or the finished views have no room in the header) */
+.tl-bar{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 0 6px}
 .tl-bar[hidden]{display:none}
 .tl-filters{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .tl-chipset{display:contents}
@@ -60,37 +81,28 @@
 .tl-chip-main:hover,.tl-chip-x:hover{background:var(--surface2)}
 .tl-chip-x{display:grid;place-items:center;width:22px;padding:0;border:0;border-left:1px solid var(--line);background:none;color:var(--muted);cursor:pointer}
 .tl-chip-x:hover{color:var(--ink)}
-.tl-chip button:focus-visible,.tl-addf:focus-visible,.tl-gtoggle:focus-visible,.tl-gact:focus-visible,.tl-chev:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.tl-addf{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border:1px solid transparent;border-radius:6px;background:none;color:var(--muted);font-size:var(--t-sm);cursor:pointer}
-.tl-addf:hover{background:var(--surface2);color:var(--ink)}
-.tl-addf.active{border-style:dashed;border-color:var(--line)}
-.tl-addf.tl-ic{justify-content:center;width:24px;padding:0}
+.tl-chip button:focus-visible,.tl-gtoggle:focus-visible,.tl-gact:focus-visible,.tl-chev:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 button.linkish.tl-clear{font-size:var(--t-sm);color:var(--muted);text-decoration:none;padding:0 4px}
 button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-clear[hidden]{display:none}
-.tl-groupby{flex:none;display:inline-flex}
-.tl-groupby[hidden]{display:none}
 .tl-groupchip{gap:6px;padding:0 8px;color:var(--muted)}
 .tl-groupchip .v{color:var(--ink)}
-.tl-groupchip:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-groupchip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-who-wrap{flex:none;display:inline-flex}
-.tl-who-wrap[hidden]{display:none}
-.tl-who{gap:6px;padding:0 8px}
-.tl-who .v{max-width:18ch}
-.tl-who svg:last-child{color:var(--muted)}
-.tl-who:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 .tl-seg{display:flex;gap:2px;margin:0 0 6px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
-.tl-seg button{flex:1;height:24px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/1 var(--sans);white-space:nowrap;cursor:pointer}
+.tl-seg button{flex:1;height:24px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
 .tl-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
-.tl-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-seg button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-who-menu .tl-menu-h{padding-top:8px}
 .tl-who-team[hidden],.tl-who-more[hidden],.tl-menu-none[hidden]{display:none}
 .tl-who-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tl-mi-n{margin-left:auto;padding-left:8px;color:var(--muted);font-size:var(--t-sm)}
 .tl-mi-n+.tl-mi-on{margin-left:6px}
 .tl-who-more{color:var(--muted)}
-.tl-selmode[aria-pressed=true]{color:var(--accent);border-color:var(--line)}
-@media (min-width:761px){#task-select-mode{display:none!important}}
+.tl-menu-sep{height:1px;margin:4px 2px;background:var(--line)}
+.tl-gpicks{display:flex;flex-wrap:wrap;gap:4px;padding:0 4px 6px}
+.tl-gpicks .tl-mi.tl-gpick{width:auto;min-height:24px;padding:0 8px;border:1px solid var(--line);font-size:var(--t-sm)}
+.tl-gpicks .tl-gpick[aria-checked=true]{background:var(--raised);border-color:var(--ink)}
 
 /* ---- the list: groups, then one 32px line per task */
 .tl{margin:0 -28px;border-top:1px solid var(--line)}
@@ -100,7 +112,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-gtoggle{display:inline-flex;align-items:center;gap:8px;height:26px;padding:0 8px 0 4px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;cursor:pointer;min-width:0}
 .tl-gtoggle:hover{background:var(--row-hover)}
 .tl-gchev{display:inline-flex;color:var(--muted)}
-.tl-gchev svg{transform:rotate(90deg);transition:transform var(--dur-fast) var(--ease)}
+.tl-gchev svg{transform:var(--chev-open)}
 .tl-group.collapsed .tl-gchev svg{transform:none}
 .tl-gname{font-size:var(--t-label);font-weight:600;text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tl-gcount{font-size:var(--t-sm);color:var(--muted);font-weight:500}
@@ -109,7 +121,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-gact{flex:none;display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer;opacity:0;text-decoration:none}
 .tl-gchat{flex:none;display:inline-flex;align-items:center;gap:5px;height:22px;margin-left:6px;padding:0 8px;border:1px solid var(--line);border-radius:6px;color:var(--ink);font-size:var(--t-sm);text-decoration:none}
 .tl-gchat:hover{background:var(--row-hover);text-decoration:none}
-.tl-gchat:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-gchat:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-ghead:hover .tl-gact,.tl-gact:focus-visible{opacity:1}
 .tl-gact:hover{background:var(--row-hover);color:var(--ink);text-decoration:none}
 @media (hover:none){.tl-gact{opacity:1}}
@@ -117,23 +129,29 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-row{position:relative;display:flex;align-items:center;gap:8px;min-height:32px;padding:0 28px 0 12px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);font-size:var(--t-base);cursor:pointer}
 .tl-row:hover{background:var(--row-hover)}
 .tl-row.sel{background:var(--row-sel)}
-.tl-row.peeked{background:color-mix(in srgb,var(--accent) 8%,transparent)}
-.tl-row.peeked::before,.tl-row:has(.tl-open:focus-visible)::before,.tl-row.is-cursor::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
-.tl-row.is-cursor:not(.peeked):not(:has(.tl-open:focus-visible))::before{opacity:.45}
+.tl-row.peeked{background:var(--surface2)}
+.tl-row.peeked .tl-open{font-weight:600}   /* the open task: the house's current row */
+.tl-row:has(.tl-open:focus-visible)::before,.tl-row.is-cursor::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--ink)}
+.tl-row.is-cursor:not(:has(.tl-open:focus-visible))::before{opacity:.45}   /* the keyboard cursor (j/k) keeps its bar */
 .tl-row:has(.tl-open:focus-visible){background:var(--row-hover)}
 .tl-row.failed::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--fail)}
-.tl-check{flex:none;width:14px;height:14px;margin:0;accent-color:var(--accent);opacity:0;cursor:pointer}
+.tl-check{flex:none;width:14px;height:14px;margin:0;accent-color:var(--ink);opacity:0;cursor:pointer}
 .tl-check-pad{flex:none;width:2px}
+/* A Needs you row keeps the task rows' columns: room for their checkbox and status (needs-you.js needRowHTML). */
+.tl-check-room{width:14px}
 .tl-row:hover .tl-check,.tl-check:focus-visible,.tl-check:checked,#task-body.has-sel .tl-check{opacity:1}
-.tl-check:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tl-check:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .tl-chev,.tl-chev-pad{flex:none;width:16px;height:20px;margin-left:calc(var(--depth,0) * 22px)}
 .tl-chev{display:grid;place-items:center;padding:0;border:0;border-radius:4px;background:none;color:var(--muted);cursor:pointer}
 .tl-chev:hover{color:var(--ink);background:var(--row-hover)}
-.tl-chev svg{transition:transform var(--dur-fast) var(--ease)}
-.tl-chev.open svg{transform:rotate(90deg)}
-.tl-open{flex:0 1 auto;min-width:0;display:flex;align-items:center;height:30px;padding:0;border:0;background:none;color:var(--ink);font:500 var(--t-base)/1.3 var(--sans);text-align:left;cursor:pointer}
+.tl-chev.open svg{transform:var(--chev-open)}
+.tl-open{flex:0 1 auto;min-width:0;display:flex;align-items:center;height:30px;padding:0;border:0;background:none;color:var(--ink);font:500 var(--t-base)/var(--lh-tight) var(--sans);text-align:left;cursor:pointer}
 .tl-open:focus{outline:0}
 .tl-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* You: what the bot asks, as a muted second line under the title */
+.tl-row.tl-two .tl-open{flex:1 1 0;height:auto;min-height:30px;padding:4px 0}
+.tl-lines{display:flex;flex-direction:column;gap:1px;min-width:0}
+.tl-ask{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm);font-weight:400}
 .tl-row[style*="--depth:1"] .tl-open,.tl-row[style*="--depth:2"] .tl-open,.tl-row[style*="--depth:3"] .tl-open{font-weight:400}
 .tl-note{flex:1 1 0;min-width:0;display:flex;align-items:center;gap:5px;margin-left:4px;color:var(--muted);font-size:var(--t-sm);overflow:hidden}
 .tl-note-ic{flex:none;display:inline-flex;opacity:.8}
@@ -150,10 +168,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .ring{display:block}
 .ring-bg{fill:none;stroke:var(--line);stroke-width:2}
 .ring-fg{fill:none;stroke:var(--run);stroke-width:2;stroke-linecap:round}
-.tl-sub.all .ring-fg{stroke:var(--accent)}
+.tl-sub.all .ring-fg{stroke:var(--ink)}
 .tl-folded{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;padding:0 4px;border:1px solid var(--line);border-radius:999px}
-.tl-rec{flex:none;font-size:var(--t-sm);padding:1px 8px;border-radius:999px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;white-space:nowrap}
-.tl-rec:hover{background:var(--accent);color:var(--accent-ink)}
+.tl-rec{flex:none;font-size:var(--t-sm);padding:1px 8px;border-radius:999px;border:1px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer;white-space:nowrap}
+.tl-rec:hover{background:var(--ink);color:var(--bg)}
 .need-rec>span{color:var(--muted);margin-right:4px}
 .need-folded ul{margin:4px 0 0;padding-left:18px}
 .tl-due{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
@@ -166,8 +184,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-asker .av{box-shadow:0 0 0 2px var(--bg)}
 .tl-face{display:inline-flex}
 .tl-age{flex:none;min-width:42px;text-align:right;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
-.tl-failed{flex:none;display:grid;place-items:center;width:16px;height:16px;border-radius:50%;background:var(--fail);color:var(--bg);font-size:var(--t-xs);font-weight:700}
-.tl-empty{padding:32px 0;color:var(--muted);text-align:center;font-size:var(--t-base)}
+.tl-failed{flex:none;display:grid;place-items:center;width:16px;height:16px;border-radius:50%;background:var(--fail);color:var(--bg);font-size:var(--t-xs);font-weight:600}
 .tl-more{display:block;margin:12px auto 0}
 .tmodal .tag{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 6px}
 
@@ -185,18 +202,18 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcol.is-empty>header h2{writing-mode:vertical-rl;overflow:visible}
 .bcard{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;cursor:pointer;min-width:0}
 .bcard:hover{border-color:var(--g4)}
-.bcard.peeked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.bcard.sel{background:color-mix(in srgb,var(--accent) 12%,var(--bg));border-color:color-mix(in srgb,var(--accent) 60%,var(--line))}
-.bcard.is-cursor:not(.peeked){border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-.bcard:has(.bcard-open:focus-visible){outline:2px solid var(--accent);outline-offset:1px}
-.bcard-open{display:flex;align-items:flex-start;gap:7px;width:100%;padding:0;border:0;background:none;color:var(--ink);font:500 var(--t-sm)/1.4 var(--sans);text-align:left;cursor:pointer}
+.bcard.peeked{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.bcard.sel{background:color-mix(in srgb,var(--ink) 7%,var(--bg));border-color:color-mix(in srgb,var(--ink) 60%,var(--line))}
+.bcard.is-cursor:not(.peeked){border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
+.bcard:has(.bcard-open:focus-visible){outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.bcard-open{display:flex;align-items:flex-start;gap:7px;width:100%;padding:0;border:0;background:none;color:var(--ink);font:500 var(--t-sm)/var(--lh) var(--sans);text-align:left;cursor:pointer}
 .bcard-open:focus{outline:0}
 .bcard-title{min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .bcard-foot{display:flex;align-items:center;gap:6px;min-height:18px;margin-top:6px;color:var(--muted);font-size:var(--t-sm)}
 .bcard-foot .spacer{flex:1}
 .bcard-owner{padding:0;border:0;border-radius:50%;background:none;cursor:pointer}
 .bcard-owner:hover,.bcard-owner[aria-expanded="true"]{box-shadow:0 0 0 2px var(--g4)}
-.bcard-owner:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.bcard-owner:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bcard-chips{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
 .bcard-chips .tl-due{display:none}
 .bcard-rel{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted)}
@@ -205,7 +222,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-step-age.late{font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
 .bcard .age{min-width:20px;text-align:right}
 
-/* ---- the side peek: the task's own view (ui/app/task-modal.js), narrower */
+/* ---- the side peek: the task's own view (ui/app/task-modal.ts), narrower */
 #task-peek{position:relative;inset:auto;grid-column:2;grid-row:1;width:auto;max-width:none;height:auto;max-height:none;min-height:0;margin:0;padding:0;
   border:0;border-left:1px solid var(--line);border-radius:0;box-shadow:none;background:var(--surface);overflow-y:auto;z-index:4}
 #task-peek:not([open]){display:none}
@@ -220,11 +237,10 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 #task-peek .task-props{order:-1;margin:2px 0 6px;padding:2px 0 6px;border-bottom:1px solid var(--line)}
 #task-peek .prop{min-height:28px}
 #task-peek .task-rail:not([hidden]){margin:8px 0;border-bottom:1px solid var(--line)}
-.tmodal-head .pill.tstatus{background:none;padding:0;font-size:var(--t-sm);font-weight:600;color:var(--ink)}
 .peek-tools{display:inline-flex;gap:2px;margin-left:4px}
-.peek-btn{display:grid;place-items:center;width:26px;height:26px;padding:0;border-radius:6px;color:var(--muted)}
+.peek-btn{display:grid;place-items:center;width:26px;height:26px;padding:0;border-radius:6px;color:var(--muted);flex:none}
 .peek-btn:hover{color:var(--ink)}
-/* Done and Close task in the task header: compact bordered text buttons the height of the quiet icon buttons beside them */
+/* Done and Close in the task header: compact bordered text buttons the height of the quiet icon buttons beside them */
 .tmodal-act{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 9px;border-radius:6px;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
 .tmodal-act svg{flex:none}
 .tmodal-x svg{width:12px;height:12px}
@@ -240,20 +256,20 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-menu-q,.tl-menu-new input{width:100%;height:28px;margin:0 0 4px;padding:0 8px;font-size:var(--t-base);border:1px solid var(--line);border-radius:6px;background:var(--bg)}
 .tl-menu-new{margin:0}
 .tl-menu-list{display:flex;flex-direction:column}
-.tl-opt,.tl-mi{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:var(--t-base)/1.2 var(--sans);text-align:left;cursor:pointer}
+.tl-opt,.tl-mi{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:var(--t-base)/var(--lh-tight) var(--sans);text-align:left;cursor:pointer}
 .tl-opt:hover,.tl-mi:hover,.tl-mi:focus-visible,.tl-opt:focus-within{background:var(--surface2);outline:0}
 .tl-opt[hidden],.tl-mi[hidden]{display:none}
-.tl-opt input{flex:none;margin:0;width:14px;height:14px;accent-color:var(--accent)}
+.tl-opt input{flex:none;margin:0;width:14px;height:14px;accent-color:var(--ink)}
 .tl-opt-face{display:inline-flex}
-.tl-mi-on{margin-left:auto;color:var(--accent)}
+.tl-mi-on{margin-left:auto;color:var(--ink)}
 .tl-menu-none{padding:8px;color:var(--muted);font-size:var(--t-sm)}
 
 /* ---- the bulk bar: floats at the foot of the list while tasks are selected */
 .tl-bulk{position:sticky;bottom:16px;z-index:6;display:flex;align-items:center;gap:2px;width:max-content;max-width:100%;margin:16px auto 0;padding:4px 4px 4px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);box-shadow:0 10px 30px rgba(0,0,0,.3);font-size:var(--t-sm)}
 .tl-bulk[hidden]{display:none}
-.tl-bulk button{height:28px;padding:0 10px;border:0;border-radius:7px;background:none;color:var(--ink);font:500 var(--t-base)/1 var(--sans);cursor:pointer;white-space:nowrap}
+.tl-bulk button{height:28px;padding:0 10px;border:0;border-radius:7px;background:none;color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);cursor:pointer;white-space:nowrap}
 .tl-bulk button:hover:not(:disabled){background:var(--hover)}
-.tl-bulk button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.tl-bulk button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .tl-bulk button:disabled{opacity:.5;cursor:default}
 .tl-bulk .danger{color:var(--fail)}
 .tl-bulk-n{font-weight:600;margin-right:6px;padding-right:10px;border-right:1px solid var(--line);white-space:nowrap}
@@ -263,29 +279,11 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-bulk .tl-bulk-x{display:inline-flex;align-items:center;gap:5px;color:var(--muted);margin-left:4px}
 
 /* ---- a narrower list (the peek open, a small window): fewer things per line */
-@container tasks (max-width:920px){
-  .tl-head{flex-wrap:wrap;row-gap:8px}
-  .tl-tabs{order:5;flex-basis:100%;max-width:100%;overflow-x:auto}
-  .tl-type-search{flex:0 1 380px}
-}
 @container tasks (max-width:900px){
-  .tl-new span{display:none}
-  .tl-new{padding:0 9px}
-  .tl-search{flex-basis:150px}
   .tl-search kbd{display:none}
   .tl-row .tlabel{display:none}
 }
 @container tasks (max-width:640px){
-  .tl-head{flex-wrap:wrap;row-gap:6px}
-  .tl-head .spacer{display:none}
-  .tl-type-search{order:4;flex:1 0 100%;max-width:100%;gap:6px}
-  /* Type and search share the row whatever the font's widths: both may shrink, the search to 72px */
-  .tl-search{flex:1 1 0;min-width:72px}
-  .tl-head h1{margin-right:auto}
-  .tl-types{flex:0 1 auto;min-width:0;overflow:hidden}
-  .tl-types button{flex:0 1 auto;min-width:0;padding:0 7px;overflow:hidden}
-  #task-type-more span{max-width:80px;min-width:0}
-  .tl-tabs{order:5;max-width:100%;overflow-x:auto;scrollbar-width:none}
   .tl-note-text,.tl-due{display:none}
 }
 
@@ -299,19 +297,44 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-ghead{top:0;padding:0 8px 0 6px}
   .tl-row{min-height:40px;padding:4px 10px 4px 0;gap:6px;flex-wrap:wrap;row-gap:0}
   .tl-open{flex:1 1 0;height:auto;min-height:30px}
-  .tl-title{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.3}
+  .tl-title{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:var(--lh-tight)}
   .tl-fill{display:none}
   .tl-note{order:1;flex:0 0 100%;align-items:flex-start;margin:0 0 2px;padding-left:calc(var(--depth,0) * 22px + 30px)}
   .tl-note-ic{margin-top:2px}
-  .tl-note-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;line-height:1.35}
+  .tl-note-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;line-height:var(--lh)}
   .tl-sub.one{display:none}
   .tl-check{display:none}
   #task-body.has-sel .tl-check{display:inline-block;width:18px;height:18px;opacity:1}
+  .tl-check-room{display:none}
+  /* You on a phone: the face, the title with its ask, the age; nothing else takes the title's room */
+  .tl-queue .tl-chips,.tl-queue .tl-rec{display:none}
+  .tl-ask{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;line-height:var(--lh)}
+  #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
+  .tl-head{--add-w:30px;gap:4px;flex-wrap:wrap;row-gap:6px}
+  .tl-head h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}   /* the bottom bar already says Tasks */
+  /* The header's first row is the picker, ⋯, ✎, the run button and +, in that order; a break (::after) then starts the row of
+     view tools: search, filter, list or board, Finished and the archive. */
+  .tl-head::after{content:"";flex:0 0 100%;height:0;order:9}
+  .tl-head #task-scope{order:1}
+  .tl-head #task-more{order:2}
+  .tl-head #task-pipeline-edit{order:3}
+  .tl-head #task-play{order:4}
+  .tl-head #task-new{order:5}
+  .tl-head #task-who-wrap,.tl-head .tl-search,.tl-head #task-filter,.tl-head #task-layout,.tl-head .tl-finished-slot,.tl-head #task-archive,.tl-head .tl-decide{order:10}
+  .tl-head .tl-search{margin-left:auto}
+  .tl-head .spacer{display:none}
+  .tl-scope{margin-right:auto;padding:0 6px 0 8px;gap:4px}
+  .tl-ib{width:30px}
+  .tl-who{padding:0 2px 0 4px}
+  .tl-head .tl-search:not(:focus-within){flex:none;position:relative;width:30px;min-width:0;padding:0;justify-content:center;border-color:transparent;background:none}
+  .tl-head .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+  .tl-head .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);border-color:var(--line)}
+  .tl-head .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;height:var(--ctl);max-width:none;background:var(--surface)}
+  .tl-pair button{min-width:24px;padding:0 4px}
+  .tl-bar.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
   .tl-filters{flex-wrap:nowrap;flex:none}
-  .tl-groupchip .k{display:none}
-  .tl-addf.tl-ic{width:32px;height:32px}
   .tl-parent{display:none}
   #task-body .board{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:8px;margin:4px -12px 0;padding:0 12px 6px}
   .bcol{flex:0 0 max(260px,82vw);scroll-snap-align:start;max-height:none}
@@ -323,29 +346,28 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-peek .prop{min-height:44px}
   #task-peek .tmodal-head{gap:6px;padding-left:12px}
   #task-peek .tmodal-head>.tnum{display:none}
-  .tl-tabs [role=tab]{padding:0 8px;gap:4px}
-  .tl-head{gap:8px}
   body.task-peek-open{overflow:hidden}
   .tl-pop{inset:auto 0 0 0!important;width:100%;max-height:72vh;border-radius:16px 16px 0 0;padding:8px 8px max(12px,env(safe-area-inset-bottom))}
   .tl-pop:popover-open::backdrop{background:rgba(0,0,0,.25)}
   .tl-opt,.tl-mi{min-height:44px}
   .tl-bulk{bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
 }
-@media (prefers-reduced-motion:reduce){.tl-gchev svg,.tl-chev svg{transition:none}}
-.tl-bulk .tl-bulk-undo{color:var(--accent);font-weight:600}
+.tl-bulk .tl-bulk-undo{color:var(--ink);font-weight:600}
 .task-outcome-title{margin:2px 0 6px;font-weight:600}
 .prop-txt.wake,.tl-due.wake{color:var(--muted)}
 
 /* ---- the task (full and peek): one calm column of sections; small muted headings, thin dividers, no boxed panels */
 .tmodal:has(.task-layout) .tmodal-head{gap:8px}
-.tmodal:has(.task-layout) .tmodal-title{font-size:var(--t-lg);line-height:1.3;margin:12px 16px 2px;overflow-wrap:anywhere}
+.tmodal:has(.task-layout) .tmodal-title{font-size:var(--t-lg);line-height:var(--lh-tight);margin:12px 16px 2px;overflow-wrap:anywhere}
 .tmodal:has(.task-layout)>.tmeta{margin:0 16px 8px;font-size:var(--t-sm)}
 /* a bot's task set waiting on you (`--on`) */
 .tl-waiting{flex:none;font-size:var(--t-xs);font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
-.tchip-blocked{flex:none;font-size:var(--t-xs);line-height:16px;padding:0 6px;border-radius:8px;background:var(--idle-bg);color:var(--muted)}
 .peek-pos{flex:none;font-size:var(--t-sm);color:var(--muted);cursor:default}
 .tmodal-age{flex:none}
-.task-layout .tdesc{margin:4px 0 10px;font-size:var(--t-base);line-height:1.55;white-space:normal;background:none;padding:0;max-height:none}
+/* A phone's header has no room for the age too (its tooltip has it); a snoozed chip shortens rather than pushing the header wider */
+@media (max-width:480px){.tmodal-head .tmodal-age{display:none}}
+#task-modal .tmodal-head>.tchip-snoozed,#task-peek .tmodal-head>.tchip-snoozed{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.task-layout .tdesc{margin:4px 0 10px;font-size:var(--t-base);line-height:var(--lh-read);white-space:normal;background:none;padding:0;max-height:none}
 .task-layout .task-wait{margin:2px 0 10px;color:var(--muted);font-size:var(--t-base)}
 .task-layout .task-wait .lbl{display:inline;margin-right:4px}
 .task-layout .tsec{margin:10px 0 0;padding-top:8px;border-top:1px solid var(--line)}
@@ -360,7 +382,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .task-layout .tsecs{display:flex;flex-wrap:wrap;align-items:center;gap:0 4px}
 .task-layout .tsecs>*{flex:1 1 100%;min-width:0}
 .task-layout .tsecs>.tsec-empty:not(:has(form:not([hidden]))){order:1;flex:none;margin:10px 0 0;padding:0;border:0}
-.tsec-empty:not(:has(form:not([hidden]))) .rail-h{position:relative;gap:4px;height:24px;min-height:0;margin:0;padding:0 8px 0 4px;border-radius:6px;font-size:var(--t-sm);font-weight:500;letter-spacing:0;text-transform:none}
+.tsec-empty:not(:has(form:not([hidden]))) .rail-h{position:relative;gap:4px;height:24px;min-height:0;margin:0;padding:0 8px 0 4px;border-radius:6px;font-size:var(--t-sm);font-weight:500;letter-spacing:var(--track-normal);text-transform:none}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h:hover{background:var(--surface2);color:var(--ink)}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add{order:-1;margin:0;width:16px;height:16px;background:none;color:inherit}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add::after{content:"";position:absolute;inset:0}
@@ -370,14 +392,14 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .task-layout .tcomment{background:none;padding:6px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);border-radius:0}
 .task-layout .tcomment.sys{border-bottom:0}
 .sub-sum{display:flex;align-items:center;gap:8px}
-.rail-h .sub-sum{margin:0 0 0 auto;font-weight:400;letter-spacing:0;text-transform:none}
+.rail-h .sub-sum{margin:0 0 0 auto;font-weight:400;letter-spacing:var(--track-normal);text-transform:none}
 .rail-h .sub-bar{flex:none;width:48px}
 .sub-bar{flex:1;max-width:120px;height:3px;border-radius:2px;background:var(--line);overflow:hidden}
-.sub-bar>i{display:block;height:100%;background:var(--accent)}
+.sub-bar>i{display:block;height:100%;background:var(--ink)}
 .sub-add{grid-template-columns:minmax(0,1fr) auto}
 .sub-owner{display:grid;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--line);border-radius:6px;background:none;cursor:pointer}
 .sub-owner:hover{background:var(--surface2)}
-.sub-owner:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.sub-owner:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .prop-link{cursor:pointer}
 .prop-link .prop-txt{text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--muted) 50%,transparent);text-underline-offset:2px}
 @media (max-width:760px){
@@ -390,7 +412,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
-/* Release now on the Pending Release column (ui/app/settings-release.js) */
+/* Release now on the Pending Release column (ui/app/settings-release.ts) */
 .board-release-slot:empty{display:none}
 .board-release-slot .board-release{padding:2px 8px;font-size:var(--t-sm);min-height:0}
 
@@ -398,15 +420,13 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-row .tl-note.tl-refused{color:var(--fail)}
 .tl-refused .tl-note-text{display:block}
 @media (max-width:760px){.tl-refused .tl-note-text{display:-webkit-box}}
-.bcard-err{margin:6px 0 0;color:var(--fail);font-size:var(--t-sm);line-height:1.35;overflow-wrap:anywhere}
-/* Filtered for you: what the ask filter kept off the plate, folded at the foot of Needs you */
-.tl-filtered>summary{list-style:none;cursor:pointer}
-.tl-filtered>summary::-webkit-details-marker{display:none}
-.tl-filtered-row{display:flex;align-items:center;gap:12px;min-height:36px;padding:4px 22px 4px 18px;border-bottom:1px solid var(--line)}
-.tl-filtered-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.tl-filtered-text .muted{margin-left:6px;font-size:var(--t-sm)}
-.tl-filtered-act{flex:none}
-@media (max-width:640px){.tl-filtered-row{flex-wrap:wrap;padding:6px 14px}.tl-filtered-act{margin-left:auto}}
+.bcard-err{margin:6px 0 0;color:var(--fail);font-size:var(--t-sm);line-height:var(--lh);overflow-wrap:anywhere}
+/* Past-day ask outcomes on Settings → Tasks. */
+.ask-replay-row{display:flex;align-items:center;gap:12px;min-height:36px;padding:4px 22px 4px 18px;border-bottom:1px solid var(--line)}
+.ask-replay-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.ask-replay-text .muted{margin-left:6px;font-size:var(--t-sm)}
+.ask-replay-act{flex:none}
+@media (max-width:640px){.ask-replay-row{flex-wrap:wrap;padding:6px 14px}.ask-replay-act{margin-left:auto}}
 .ask-filter{display:grid;gap:12px;max-width:640px}
 .ask-filter label{display:grid;gap:4px}
 .ask-filter-modes{display:grid;gap:6px;border:0;padding:0;margin:0}
@@ -414,13 +434,13 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .ask-filter-replay{display:grid;gap:8px;margin-top:20px;max-width:none}
 .ask-filter-replay .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .ask-filter-replay input[type=date]{max-width:180px}
-/* Pull to refresh (pull-refresh.js): the spinner slides down over the page, which stays where it is. */
+/* Pull to refresh (pull-refresh.ts): the spinner slides down over the page, which stays where it is. */
 .pull-spin{position:fixed;z-index:30;left:50%;top:calc(env(safe-area-inset-top) - 40px);width:36px;height:36px;display:grid;place-items:center;
   border-radius:50%;border:1px solid var(--line);background:var(--surface);box-shadow:0 2px 10px rgba(0,0,0,.16);pointer-events:none;
   transform:translate(-50%,var(--pull,0px))}
 .pull-spin span{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--muted);
   transform:rotate(var(--turn,0deg))}
-.pull-spin.armed span{border-top-color:var(--accent)}
+.pull-spin.armed span{border-top-color:var(--ink)}
 .pull-spin.spinning{transition:transform var(--dur) var(--ease)}
 .pull-spin.spinning span{animation:treespin .8s linear infinite}
-@media (prefers-reduced-motion:reduce){.pull-spin.spinning span{animation:none;border-color:var(--accent)}}
+@media (prefers-reduced-motion:reduce){.pull-spin.spinning span{animation:none;border-color:var(--ink)}}

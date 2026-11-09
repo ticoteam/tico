@@ -1,0 +1,64 @@
+{
+  "created": [
+    {
+      "name": "Blocking tasks wake the Chief of Staff, others get a note",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "task_received",
+        "to": "person:dana"
+      },
+      "steps": [
+        {
+          "id": "triage",
+          "type": "decide",
+          "enabled": true,
+          "set": "task-rank@1",
+          "level": "low",
+          "out": "d1"
+        },
+        {
+          "id": "route",
+          "type": "paths",
+          "enabled": true,
+          "paths": [
+            {
+              "name": "blocked",
+              "when": [
+                {
+                  "field": "d1.urgency",
+                  "op": ">=",
+                  "value": 3
+                }
+              ],
+              "steps": [
+                {
+                  "id": "wake",
+                  "type": "action",
+                  "enabled": true,
+                  "do": "wake_bot",
+                  "args": {
+                    "bot": "chief-of-staff"
+                  }
+                }
+              ]
+            }
+          ],
+          "otherwise": {
+            "steps": [
+              {
+                "id": "note",
+                "type": "action",
+                "enabled": true,
+                "do": "note",
+                "args": {
+                  "text": "Noted for later."
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

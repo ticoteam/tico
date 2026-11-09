@@ -11,8 +11,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
   assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   onboarding_needed: true, providers_configured: false, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
 const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Head of Product'], ['builder', 'Builder'],
-  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'CEO Bot'],
-  ['librarian', 'Librarian']].map(([slug, display_name]) => ({slug, display_name,
+  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'Strategy Bot'],
+  ['librarian', 'Librarian']].map(([slug, display_name]) => ({id: slug, slug, display_name,
   status: 'active', template: slug, onboarding_state: ['coo', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
   repository_present: false}));
 
@@ -29,7 +29,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
       const request = route.request(), p = new URL(request.url()).pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module) {
         const file = uiFile(module[1]);
         if (fs.existsSync(file)) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
@@ -66,7 +66,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
           company_import: {fingerprint: 'a'.repeat(64), deferred: ['tool_connections'], seats: 1,
                            people: [{id: 'dana', name: 'Dana', title: 'Controller', seats: [], invited_at: null}]},
           company_import_failed: null, seats: {bookkeeping: 's-1'},
-          bots: [{...SAMPLE_BOTS[0], slug: 'coo', display_name: 'Assistant', status: 'active'}]};
+          bots: [{...SAMPLE_BOTS[0], id: 'coo', slug: 'coo', display_name: 'Assistant', status: 'active'}]};
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/getting-started/state') return json({tour: true, checklist: false, cards: [], skipped: []});

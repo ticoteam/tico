@@ -30,11 +30,11 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      if (p === '/tico/ui/overview/building.js') return route.fulfill({contentType: 'application/javascript', body: SCENE});
+      if (p === '/tico/ui/overview/building.ts') return route.fulfill({contentType: 'application/javascript', body: SCENE});
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
-          : name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/v2/overview/bot-hours') return json(hours);
       if (p === '/api/employees') return json([]);
@@ -43,10 +43,13 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/');
-    await page.waitForFunction(() => location.hash === '#/updates');
-    await page.evaluate(() => location.hash = '#/overview');
+    await page.waitForFunction(() => location.hash === '#/home');
+    await page.evaluate(() => location.hash = '#/overview/campus');
     const card = page.locator('#overview-hours');
     await card.locator('.ovh-plot').waitFor();
+    // A pointer moved while the page change still fades (150 ms) reaches the page when the fade ends; these hovers
+    // read the tip at once, so they start after it.
+    await page.waitForFunction(() => !document.querySelector(':root:active-view-transition'));
 
     // The headline, one decimal below 10; the Parity line dashed at 1×; the current week dotted, a hollow point.
     assert.equal(await card.locator('.ovh-head').innerText(), '6.1× bot hours per human hour · last 7 days');

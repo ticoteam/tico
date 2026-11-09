@@ -33,7 +33,11 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 /// Turned on or off by the heartbeat reply.
 pub fn set_enabled(on: bool) {
     if ENABLED.swap(on, Ordering::SeqCst) != on {
-        log(if on { "Tico runner: performance diagnostics on" } else { "Tico runner: performance diagnostics off" });
+        log(if on {
+            "Tico runner: performance diagnostics on"
+        } else {
+            "Tico runner: performance diagnostics off"
+        });
     }
 }
 
@@ -44,7 +48,6 @@ pub fn enabled() -> bool {
 #[derive(Clone, Debug, Default)]
 struct Proc {
     pid: u32,
-    ppid: u32,
     /// CPU time used so far, user and system, in milliseconds.
     cpu_ms: u64,
     rss: u64,
@@ -74,8 +77,13 @@ impl Sampler {
     pub fn sample(&mut self, active: usize, volumes: &[(&str, PathBuf)]) -> Option<Value> {
         let now = Instant::now();
         let procs = list_procs();
-        let elapsed_ms = self.at.map(|a| now.duration_since(a).as_millis() as u64).unwrap_or(0);
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+        let elapsed_ms = self
+            .at
+            .map(|a| now.duration_since(a).as_millis() as u64)
+            .unwrap_or(0);
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1) as f64;
         let previous = std::mem::take(&mut self.procs);
         self.procs = procs.iter().map(|p| (p.pid, (p.start, p.cpu_ms))).collect();
         let first = self.at.is_none();
@@ -91,20 +99,28 @@ impl Sampler {
         let rates: Vec<f64> = procs
             .iter()
             .map(|p| {
-                let before = previous.get(&p.pid).filter(|(start, _)| *start == p.start).map(|(_, ms)| *ms).unwrap_or(0);
+                let before = previous
+                    .get(&p.pid)
+                    .filter(|(start, _)| *start == p.start)
+                    .map(|(_, ms)| *ms)
+                    .unwrap_or(0);
                 let used = p.cpu_ms.saturating_sub(before) as f64;
                 (100.0 * used / elapsed_ms as f64).min(100.0 * cores)
             })
             .collect();
         let mut cpu = match (previous_total, cpu_total) {
-            (Some((b0, t0)), Some((b1, t1))) if t1 > t0 => 100.0 * (b1.saturating_sub(b0)) as f64 / (t1 - t0) as f64,
+            (Some((b0, t0)), Some((b1, t1))) if t1 > t0 => {
+                100.0 * (b1.saturating_sub(b0)) as f64 / (t1 - t0) as f64
+            }
             _ => rates.iter().sum::<f64>() / cores,
         };
         let mut memory = memory();
         let (mut scope, mut memory_scope) = ("host", "host");
         if crate::follow::kind() == "docker" {
             // A container's limits are what it runs out of, not the host's.
-            if let Some((used, limit)) = cgroup_memory().filter(|(_, limit)| memory.total == 0 || *limit < memory.total) {
+            if let Some((used, limit)) =
+                cgroup_memory().filter(|(_, limit)| memory.total == 0 || *limit < memory.total)
+            {
                 memory.total = limit;
                 memory.available = limit.saturating_sub(used);
                 (scope, memory_scope) = ("container", "container");
@@ -131,7 +147,10 @@ impl Sampler {
         }
         if memory.total > 0 {
             sample.insert("mem_total".into(), json!(memory.total));
-            sample.insert("mem_used".into(), json!(memory.total.saturating_sub(memory.available)));
+            sample.insert(
+                "mem_used".into(),
+                json!(memory.total.saturating_sub(memory.available)),
+            );
         }
         add_swap(&mut sample, &memory, cfg!(target_os = "linux"));
         let mut disks: Vec<Value> = Vec::new();
@@ -178,7 +197,12 @@ fn top_names(procs: &[Proc], rates: &[f64]) -> Vec<Value> {
     }
     let mut rows: Vec<(String, (f64, u64, u64))> = by_name.into_iter().collect();
     rows.sort_by(|a, b| b.1 .0.total_cmp(&a.1 .0).then_with(|| a.0.cmp(&b.0)));
-    let mut picked: Vec<(String, (f64, u64, u64))> = rows.iter().filter(|r| r.1 .0 >= 1.0).take(TOP_CPU).cloned().collect();
+    let mut picked: Vec<(String, (f64, u64, u64))> = rows
+        .iter()
+        .filter(|r| r.1 .0 >= 1.0)
+        .take(TOP_CPU)
+        .cloned()
+        .collect();
     rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then_with(|| a.0.cmp(&b.0)));
     for r in rows.into_iter().take(TOP_MEM) {
         if !picked.iter().any(|p| p.0 == r.0) {
@@ -191,7 +215,10 @@ fn top_names(procs: &[Proc], rates: &[f64]) -> Vec<Value> {
 /// An executable's name as a sample may carry it: its base name, letters, digits and `._+-`, 40 characters at most.
 fn clean_name(name: &str) -> String {
     let base = name.rsplit('/').next().unwrap_or(name);
-    base.chars().filter(|c| c.is_ascii_alphanumeric() || "._+-".contains(*c)).take(40).collect()
+    base.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "._+-".contains(*c))
+        .take(40)
+        .collect()
 }
 
 fn round1(x: f64) -> f64 {
@@ -199,7 +226,11 @@ fn round1(x: f64) -> f64 {
 }
 
 fn unix_now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0).floor()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+        .floor()
 }
 
 fn load_average() -> Option<[f64; 3]> {
@@ -214,14 +245,21 @@ fn load_average() -> Option<[f64; 3]> {
 fn list_procs() -> Vec<Proc> {
     let tick = clock_tick();
     let page = page_size();
-    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
     dir.flatten()
         .filter_map(|e| e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()))
-        .filter_map(|pid| std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|s| parse_stat(pid, &s, tick, page)))
+        .filter_map(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|s| parse_stat(pid, &s, tick, page))
+        })
         .collect()
 }
 
 /// `/proc/<pid>/stat`: the name sits in parentheses and may hold spaces or parentheses itself.
+#[cfg(any(target_os = "linux", test))]
 fn parse_stat(pid: u32, stat: &str, tick: u64, page: u64) -> Option<Proc> {
     let open = stat.find('(')?;
     let close = stat.rfind(')')?;
@@ -229,21 +267,37 @@ fn parse_stat(pid: u32, stat: &str, tick: u64, page: u64) -> Option<Proc> {
     let rest: Vec<&str> = stat.get(close + 1..)?.split_whitespace().collect();
     let num = |i: usize| rest.get(i).and_then(|v| v.parse::<u64>().ok());
     let ticks = num(11)? + num(12)?;
-    Some(Proc { pid, ppid: num(1)? as u32, cpu_ms: ticks * 1000 / tick.max(1), rss: num(21)? * page, name, start: num(19)? })
+    // Column one is the parent's pid: nothing reads it, but a line without a number there is skipped.
+    num(1)?;
+    Some(Proc {
+        pid,
+        cpu_ms: ticks * 1000 / tick.max(1),
+        rss: num(21)? * page,
+        name,
+        start: num(19)?,
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn clock_tick() -> u64 {
     // SAFETY: sysconf reads a constant.
     let t = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    if t > 0 { t as u64 } else { 100 }
+    if t > 0 {
+        t as u64
+    } else {
+        100
+    }
 }
 
 #[cfg(target_os = "linux")]
 fn page_size() -> u64 {
     // SAFETY: sysconf reads a constant.
     let p = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    if p > 0 { p as u64 } else { 4096 }
+    if p > 0 {
+        p as u64
+    } else {
+        4096
+    }
 }
 
 /// (busy, total) jiffies over every CPU, from `/proc/stat`'s first line.
@@ -252,6 +306,7 @@ fn system_cpu() -> Option<(u64, u64)> {
     parse_cpu_line(std::fs::read_to_string("/proc/stat").ok()?.lines().next()?)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_cpu_line(line: &str) -> Option<(u64, u64)> {
     let mut parts = line.split_whitespace();
     if parts.next()? != "cpu" {
@@ -269,9 +324,12 @@ fn parse_cpu_line(line: &str) -> Option<(u64, u64)> {
 
 #[cfg(target_os = "linux")]
 fn memory() -> Memory {
-    std::fs::read_to_string("/proc/meminfo").map(|s| parse_meminfo(&s)).unwrap_or_default()
+    std::fs::read_to_string("/proc/meminfo")
+        .map(|s| parse_meminfo(&s))
+        .unwrap_or_default()
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_meminfo(text: &str) -> Memory {
     let field = |name: &str| {
         text.lines()
@@ -282,7 +340,9 @@ fn parse_meminfo(text: &str) -> Memory {
     let swap_total = field("SwapTotal").unwrap_or(0);
     Memory {
         total: field("MemTotal").unwrap_or(0),
-        available: field("MemAvailable").or_else(|| field("MemFree")).unwrap_or(0),
+        available: field("MemAvailable")
+            .or_else(|| field("MemFree"))
+            .unwrap_or(0),
         swap_total,
         swap_used: swap_total.saturating_sub(field("SwapFree").unwrap_or(swap_total)),
     }
@@ -297,7 +357,12 @@ fn cgroup_memory() -> Option<(u64, u64)> {
     let limit: u64 = read("memory.max")?.trim().parse().ok()?;
     let current: u64 = read("memory.current")?.trim().parse().ok()?;
     let inactive = read("memory.stat")
-        .and_then(|s| s.lines().find_map(|l| l.strip_prefix("inactive_file ").and_then(|v| v.trim().parse::<u64>().ok())))
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.strip_prefix("inactive_file ")
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+            })
+        })
         .unwrap_or(0);
     Some((current.saturating_sub(inactive), limit))
 }
@@ -305,7 +370,10 @@ fn cgroup_memory() -> Option<(u64, u64)> {
 /// The cgroup's CPU time so far, in microseconds.
 fn cgroup_cpu_usage() -> Option<u64> {
     let stat = std::fs::read_to_string(format!("{CGROUP}/cpu.stat")).ok()?;
-    stat.lines().find_map(|l| l.strip_prefix("usage_usec ").and_then(|v| v.trim().parse().ok()))
+    stat.lines().find_map(|l| {
+        l.strip_prefix("usage_usec ")
+            .and_then(|v| v.trim().parse().ok())
+    })
 }
 
 /// How many cores the cgroup may use (`cpu.max` quota over period), when it is limited.
@@ -321,7 +389,9 @@ fn cgroup_cpu_limit() -> Option<f64> {
 
 #[cfg(not(target_os = "linux"))]
 fn list_procs() -> Vec<Proc> {
-    let Some(out) = run(&["ps", "-axo", "pid=,ppid=,rss=,time=,comm="]) else { return Vec::new() };
+    let Some(out) = run(&["ps", "-axo", "pid=,ppid=,rss=,time=,comm="]) else {
+        return Vec::new();
+    };
     out.lines().filter_map(parse_ps_line).collect()
 }
 
@@ -330,11 +400,18 @@ fn list_procs() -> Vec<Proc> {
 fn parse_ps_line(line: &str) -> Option<Proc> {
     let mut parts = line.split_whitespace();
     let pid = parts.next()?.parse().ok()?;
-    let ppid = parts.next()?.parse().ok()?;
+    // Column two is the parent's pid: nothing reads it, but a line without a number there is skipped.
+    parts.next()?.parse::<u32>().ok()?;
     let rss = parts.next()?.parse::<u64>().ok()? * 1024;
     let cpu_ms = parse_cpu_time(parts.next()?)?;
     let name = parts.collect::<Vec<_>>().join(" ");
-    Some(Proc { pid, ppid, cpu_ms, rss, name, start: 0 })
+    Some(Proc {
+        pid,
+        cpu_ms,
+        rss,
+        name,
+        start: 0,
+    })
 }
 
 #[cfg_attr(target_os = "linux", allow(dead_code))]
@@ -358,19 +435,32 @@ fn system_cpu() -> Option<(u64, u64)> {
 
 #[cfg(not(target_os = "linux"))]
 fn memory() -> Memory {
-    let total = run(&["sysctl", "-n", "hw.memsize"]).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+    let total = run(&["sysctl", "-n", "hw.memsize"])
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
     let used = run(&["vm_stat"]).map(|s| vm_stat_used(&s)).unwrap_or(0);
     // Raw swap is visible in simple load readings; add_swap keeps it out of diagnostic overloads.
-    let (swap_total, swap_used) = run(&["sysctl", "-n", "vm.swapusage"]).map(|s| swap_usage(&s)).unwrap_or((0, 0));
-    Memory { total, available: total.saturating_sub(used), swap_total, swap_used }
+    let (swap_total, swap_used) = run(&["sysctl", "-n", "vm.swapusage"])
+        .map(|s| swap_usage(&s))
+        .unwrap_or((0, 0));
+    Memory {
+        total,
+        available: total.saturating_sub(used),
+        swap_total,
+        swap_used,
+    }
 }
 
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 fn swap_usage(text: &str) -> (u64, u64) {
     let bytes = |key: &str| {
-        text.split(&format!("{key} = ")).nth(1).and_then(|s| s.split_whitespace().next())
-            .and_then(|s| s.strip_suffix('M')).and_then(|s| s.parse::<f64>().ok())
-            .map(|n| (n * 1024.0 * 1024.0) as u64).unwrap_or(0)
+        text.split(&format!("{key} = "))
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.strip_suffix('M'))
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|n| (n * 1024.0 * 1024.0) as u64)
+            .unwrap_or(0)
     };
     (bytes("total"), bytes("used"))
 }
@@ -388,38 +478,86 @@ fn vm_stat_used(text: &str) -> u64 {
     let pages = |name: &str| {
         text.lines()
             .find_map(|l| l.strip_prefix(name))
-            .and_then(|r| r.trim_start_matches(':').trim().trim_end_matches('.').parse::<u64>().ok())
+            .and_then(|r| {
+                r.trim_start_matches(':')
+                    .trim()
+                    .trim_end_matches('.')
+                    .parse::<u64>()
+                    .ok()
+            })
             .unwrap_or(0)
     };
-    (pages("Anonymous pages").saturating_sub(pages("Pages purgeable")) + pages("Pages wired down")
+    (pages("Anonymous pages").saturating_sub(pages("Pages purgeable"))
+        + pages("Pages wired down")
         + pages("Pages occupied by compressor"))
         * page
 }
 
 #[cfg(not(target_os = "linux"))]
 fn run(argv: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(argv[0]).args(&argv[1..]).stdin(std::process::Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let out = std::process::Command::new(argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Instantaneous high-level reading: one-minute load per core, memory, and active turns. No process scan.
-pub fn load_snapshot(active: usize) -> Value {
-    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+/// Memory available to this runner, including a Docker memory limit. No process scan or diagnostics post.
+pub fn memory_percent() -> Option<f64> {
     let mut mem = memory();
     if crate::follow::kind() == "docker" {
-        if let Some((used, limit)) = cgroup_memory().filter(|(_, limit)| mem.total == 0 || *limit < mem.total) {
+        if let Some((used, limit)) =
+            cgroup_memory().filter(|(_, limit)| mem.total == 0 || *limit < mem.total)
+        {
             mem.total = limit;
             mem.available = limit.saturating_sub(used);
         }
     }
+    (mem.total > 0)
+        .then(|| 100.0 * mem.total.saturating_sub(mem.available) as f64 / mem.total as f64)
+}
+
+/// Linux start waiters share a memory reading for at most a second, independently of diagnostics.
+#[cfg(not(test))]
+pub async fn start_memory() -> Option<f64> {
+    static SAMPLE: std::sync::OnceLock<tokio::sync::Mutex<Option<(Instant, Option<f64>)>>> =
+        std::sync::OnceLock::new();
+    let mut kept = SAMPLE.get_or_init(Default::default).lock().await;
+    if let Some((at, value)) = *kept {
+        if at.elapsed() < Duration::from_secs(1) {
+            return value;
+        }
+    }
+    let value = tokio::task::spawn_blocking(memory_percent)
+        .await
+        .ok()
+        .flatten();
+    *kept = Some((Instant::now(), value));
+    value
+}
+
+/// Instantaneous high-level reading: one-minute load per core, memory, and active turns. No process scan.
+pub fn load_snapshot(active: usize) -> Value {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1) as f64;
     json!({"at": unix_now(), "cpu_pct": load_average().map(|l| round1(100.0 * l[0] / cores)),
-           "mem_pct": (mem.total > 0).then(|| round1(100.0 * mem.total.saturating_sub(mem.available) as f64 / mem.total as f64)),
+           "mem_pct": memory_percent().map(round1),
            "running_turns": active})
 }
 
 /// Add only for servers that accept the field; diagnostics off means no reading.
 pub async fn with_snapshot(body: Value, active: usize) -> Value {
-    with_snapshot_if(body, active, enabled(), crate::follow::feature("load_snapshot")).await
+    with_snapshot_if(
+        body,
+        active,
+        enabled(),
+        crate::follow::feature("load_snapshot"),
+    )
+    .await
 }
 
 async fn with_snapshot_if(mut body: Value, active: usize, on: bool, supported: bool) -> Value {
@@ -450,7 +588,10 @@ pub async fn run_loop(runner: Arc<Runner>) {
         }
         missing_until = None;
         let active = runner.active.lock().unwrap().len();
-        let volumes = vec![("state", runner.state.directory.clone()), ("projects", runner.config.projects_dir())];
+        let volumes = vec![
+            ("state", runner.state.directory.clone()),
+            ("projects", runner.config.projects_dir()),
+        ];
         let (back, sample) = match tokio::task::spawn_blocking(move || {
             let s = sampler.sample(active, &volumes);
             (sampler, s)
@@ -469,7 +610,11 @@ pub async fn run_loop(runner: Arc<Runner>) {
         if batch.len() < BATCH {
             continue;
         }
-        match runner.client.post("runners/performance", &json!({"samples": batch}), None).await {
+        match runner
+            .client
+            .post("runners/performance", &json!({"samples": batch}), None)
+            .await
+        {
             Ok(_) => batch.clear(),
             Err(e) if e.status == 404 || e.status == 405 => {
                 missing_until = Some(Instant::now() + MISSING_BACKOFF);
@@ -477,7 +622,10 @@ pub async fn run_loop(runner: Arc<Runner>) {
             }
             Err(e) if e.status == 409 || e.status == 422 => {
                 // Turned off since the last heartbeat, or a sample this server cannot read: those samples go.
-                log(&format!("Tico runner: performance samples refused ({})", e.status));
+                log(&format!(
+                    "Tico runner: performance samples refused ({})",
+                    e.status
+                ));
                 batch.clear();
             }
             Err(_) => {}
@@ -489,8 +637,14 @@ pub async fn run_loop(runner: Arc<Runner>) {
 mod tests {
     use super::*;
 
-    fn p(pid: u32, ppid: u32, rss: u64, name: &str) -> Proc {
-        Proc { pid, ppid, cpu_ms: 0, rss, name: name.into(), start: 7 }
+    fn p(pid: u32, rss: u64, name: &str) -> Proc {
+        Proc {
+            pid,
+            cpu_ms: 0,
+            rss,
+            name: name.into(),
+            start: 7,
+        }
     }
 
     #[test]
@@ -500,7 +654,10 @@ mod tests {
         assert!(snapshot["at"].as_f64().unwrap() > 0.0);
         assert!(snapshot.get("cpu_pct").is_some() && snapshot.get("mem_pct").is_some());
         assert_eq!(snapshot.as_object().unwrap().len(), 4);
-        let mut sampler = Sampler { at: Some(Instant::now() - EVERY), ..Sampler::default() };
+        let mut sampler = Sampler {
+            at: Some(Instant::now() - EVERY),
+            ..Sampler::default()
+        };
         let sample = sampler.sample(7, &[]).unwrap();
         assert_eq!(sample["interval_s"], json!(60));
         assert_eq!(sample["active"], json!(7));
@@ -519,7 +676,12 @@ mod tests {
 
     #[test]
     fn raw_mac_swap_does_not_enter_diagnostic_fields() {
-        let memory = Memory { total: 1000, available: 150, swap_total: 100, swap_used: 95 };
+        let memory = Memory {
+            total: 1000,
+            available: 150,
+            swap_total: 100,
+            swap_used: 95,
+        };
         let mut mac = Map::new();
         add_swap(&mut mac, &memory, false);
         assert_eq!(mac["load_swap_used"], json!(95));
@@ -534,8 +696,16 @@ mod tests {
     #[test]
     fn process_names_are_base_names_and_never_arguments() {
         assert_eq!(clean_name("/usr/local/bin/cargo"), "cargo");
-        assert_eq!(clean_name("/Applications/Claude.app/Contents/MacOS/Claude Helper"), "ClaudeHelper");
-        let procs = vec![p(1, 0, 10, "cargo"), p(2, 0, 10, "cargo"), p(3, 0, 5000, "postgres"), p(4, 0, 1, "idle")];
+        assert_eq!(
+            clean_name("/Applications/Claude.app/Contents/MacOS/Claude Helper"),
+            "ClaudeHelper"
+        );
+        let procs = vec![
+            p(1, 10, "cargo"),
+            p(2, 10, "cargo"),
+            p(3, 5000, "postgres"),
+            p(4, 1, "idle"),
+        ];
         let top = top_names(&procs, &[30.0, 30.0, 0.0, 0.0]);
         assert_eq!(top[0]["name"], "cargo");
         assert_eq!(top[0]["cpu"], json!(60.0));
@@ -547,20 +717,37 @@ mod tests {
     fn proc_stat_cpu_and_meminfo_parse() {
         let stat = "4242 (my (odd) name) S 1 4242 4242 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 1 0 12345 1000 300 0";
         let proc = parse_stat(4242, stat, 100, 4096).unwrap();
-        assert_eq!((proc.name.as_str(), proc.ppid, proc.cpu_ms, proc.rss, proc.start), ("my (odd) name", 1, 3000, 300 * 4096, 12345));
-        assert_eq!(parse_cpu_line("cpu  100 0 50 800 50 0 0 0 0 0"), Some((150, 1000)));
+        assert_eq!(
+            (proc.name.as_str(), proc.cpu_ms, proc.rss, proc.start),
+            ("my (odd) name", 3000, 300 * 4096, 12345)
+        );
+        assert_eq!(
+            parse_cpu_line("cpu  100 0 50 800 50 0 0 0 0 0"),
+            Some((150, 1000))
+        );
         let m = parse_meminfo("MemTotal:  1000 kB\nMemFree: 10 kB\nMemAvailable: 400 kB\nSwapTotal: 100 kB\nSwapFree: 60 kB\n");
-        assert_eq!((m.total, m.available, m.swap_total, m.swap_used), (1024000, 409600, 102400, 40960));
+        assert_eq!(
+            (m.total, m.available, m.swap_total, m.swap_used),
+            (1024000, 409600, 102400, 40960)
+        );
     }
 
     #[test]
     fn mac_ps_and_vm_stat_parse() {
-        let proc = parse_ps_line("  812     1   20480   1:02.50 /Applications/Claude.app/Contents/MacOS/Claude Helper").unwrap();
-        assert_eq!((proc.pid, proc.ppid, proc.rss, proc.cpu_ms), (812, 1, 20480 * 1024, 62500));
+        let proc = parse_ps_line(
+            "  812     1   20480   1:02.50 /Applications/Claude.app/Contents/MacOS/Claude Helper",
+        )
+        .unwrap();
+        assert_eq!(
+            (proc.pid, proc.rss, proc.cpu_ms),
+            (812, 20480 * 1024, 62500)
+        );
         assert_eq!(parse_cpu_time("1-00:00:01"), Some(86_401_000));
         let vm = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:  10.\nPages active: 99.\nPages inactive: 5.\nPages purgeable: 4.\nPages wired down: 30.\nFile-backed pages: 60.\nAnonymous pages: 50.\nPages occupied by compressor: 6.\n";
         assert_eq!(vm_stat_used(vm), (50 - 4 + 30 + 6) * 16384);
-        assert_eq!(swap_usage("total = 1024.00M  used = 256.00M  free = 768.00M (encrypted)"),
-                   (1024 * 1024 * 1024, 256 * 1024 * 1024));
+        assert_eq!(
+            swap_usage("total = 1024.00M  used = 256.00M  free = 768.00M (encrypted)"),
+            (1024 * 1024 * 1024, 256 * 1024 * 1024)
+        );
     }
 }

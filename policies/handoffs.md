@@ -7,7 +7,7 @@ tracking. Bots use the `hub` CLI; people use Tico at `https://hub.acme.example`.
 
 1. Read `state.md`, then `hub task show <task-id>` and its comments.
 2. Set it to doing with `hub task update <task-id> --status doing --note "<current focus>"`.
-3. If the goal or deliverable is unclear, ask one focused question (`hub task ask`) and set the
+3. If the goal or deliverable is unclear, ask one focused question (`hub task question "<question>" --on <person>`) and set the
    task to waiting. Otherwise state the smallest necessary assumption and continue.
 
 Before starting a newly created task, compare it with the other active tasks between the same
@@ -48,6 +48,9 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
   `hub task link <task-id> <pr url> --wake-once`, set the task `waiting` with that in its note, and end the turn
   instead of polling. Tico wakes you once, in this task, when the checks finish, it is approved or gets changes
   requested, or a release ships it, whichever comes first. The wake changes nothing on the task; you decide.
+- Waiting on something Tico cannot see (a reply by mail, a date, an outside system): `hub task snooze <task-id> --until <time>
+  --note "<what to check when you wake>"` and end the turn. On a pull request or release wait, add the same `--note` to
+  `hub task wait`. The note comes back in your wake, so you check that and not the whole thread.
 - Progress, a finding, a question for the people on the task: `hub task comment <task-id> "<text>"`.
   A comment is on the record with your name; it is not a chat.
 
@@ -88,7 +91,7 @@ hub task create --owner <slug> --title "<verb-first title>" --body "<what and wh
 It does not wake the bot. The next run it has for any reason (its routine, a person, other work)
 carries the task in the same prompt, under "Next-run tasks", as a task of its own. Handle each one
 in that run and mark it done or declined like any other. When the run that carries it is not the
-time to do it, store when it is: `hub task defer <id> --after <task>` (when that task is done),
+time to do it, store when it is: `hub task later <id> --after <task>` (when that task is done),
 `--at <time>` or `--next-run`; it then gets a run of its own. A run that neither works it nor
 defers it hands it back to the next run. Until a run carries it, closing it is a
 cancel and wakes nobody. Only a bot has a next run; a task for a person is always an ordinary one.
@@ -132,12 +135,12 @@ would want it stopped.
 
 ## Asking the owner for anything
 
-The owner reads requests on a phone between meetings. `hub task ask` sends to the task's requester.
-Use it once when that requester is the owner and one answer unblocks the task. If the task
+The owner reads requests on a phone between meetings. `hub task question "<question>" --on <owner>` sends to the owner.
+Use it once when the task's requester is the owner and one answer unblocks the task. If the task
 requester is yourself or another bot, find or create one decision task for the owner, parented to
 the current work and include the exact packet there. Put that decision task in the **Team** lane (`--lane company`), even when its parent is a product task, so it appears in **Needs you**;
-keep the product work in the product lane. That human task is the ask. Do not call
-`hub question ask` or `hub message send` to the owner for the same question; each sends another notification. A direct
+keep the product work in the product lane. That human task is the question. Do not also
+send the owner the same question with `hub message send`; each sends another notification. A direct
 request already gets your final answer automatically, so link the task there once. The question
 should be the only thing the reader has to read: one decision, two options if you can name them, no playbook,
 coverage stats, or commit hashes. The human task title starts with a verb, its body's first paragraph is
@@ -219,7 +222,7 @@ When the deliverable is ready but the business result depends on a person, recor
 action on the existing task: the artifact and version, the destination, the decision owner, and
 the check you will run after the decision. Keep a product task with an open review PR in `review`
 and attach the PR link; that link is the handoff, so do not add a generic merge approval. Keep a
-team task awaiting a missing decision in `waiting`. For requested publication, verify the facts, assets and placement, then publish with your Tools when `outbound_send` is on. Ask only if the destination or scope is missing. Do not count
+team task awaiting a missing decision in `waiting`. For requested publication, verify the facts, assets and placement, then publish with your Tools when your sending policy in Tico lets you send. Ask only if the destination or scope is missing. Do not count
 acceptance as publication.
 
 If the source task was already closed before the placement or outcome decision, leave it closed.
@@ -227,7 +230,7 @@ Find an active task for that same artifact and decision first. If the owner requ
 bot-owned task, attach the exact packet there, ask the owner one scoped question on it, and leave it
 `waiting`. Otherwise create one decision task for the owner with `--parent <closed-source-task-id>`
 and the question and packet; the bot is its requester and receives the answer. The human task
-itself is the ask, so do not call `hub task ask` on it. Do not create a generic approval or
+itself is the question, so do not file another question on it. Do not create a generic approval or
 duplicate release task to compensate for a closed editorial task.
 
 On the next turn, check the current source of truth for that action (for example, PR state or a

@@ -41,16 +41,14 @@ Below, to "call" a tool means either way.
      then call `hub_message_mark_read` with `{"message_id":"<its id>"}`. If you cannot do what they ask, say
      so in one line and say what you would need, then mark it read. Never leave a person without an answer.
    - A notice (`kind: notice`, an fyi): read it, mark it read, do not reply.
-   - A question from another bot (`kind: ask`): answer with `hub_question_answer`
-     (`{"message_id":"<its id>","text":"..."}`; add `"unknown":true` and say what you would need, if you
-     cannot), then mark it read.
+   - A question from another bot: answer it in that bot's conversation with `hub_message_send` (as above, `in_reply_to` its id), or say in one line what you would need, then mark it read.
    - From another bot and not an ask: handle it like a person's message if it asks for something,
      otherwise mark it read.
 5. **Your tasks.** For each task that is yours and can move now, do the work, then call
    `hub_task_update` (`{"id":"<task id>","status":"done","note":"<the result>"}`): `status: done` with a
    short result note, or `status: waiting` with the reason
    (who or what you are waiting for). Waiting on a person to act: set `waiting_on` to their id and
-   write the note as your ask to them, so it reaches their Needs you: one or two plain sentences saying
+   write the note as your question to them; it files them a question task under yours, in their Needs you: one or two plain sentences saying
    what you need and what happens after, with no ids, hashes, file paths or tool names (Tico refuses
    anything else), for example "Approve the video tool trial for Thursday? If yes, I'll send the invite." A task you cannot touch this run stays as it is; do not
    churn statuses. The requester closes a task you finished.

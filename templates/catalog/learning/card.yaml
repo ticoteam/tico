@@ -22,7 +22,7 @@ owns:
   - "Course and book summaries on request, and training budget requests prepared for review"
 never:
   - "Mark training complete without a record from the course, the provider or the person"
-  - "Enroll anyone, buy a course or commit budget outside the requested work or Tools"
+  - "Enroll anyone, buy a course or commit budget unless the task asks for it and a granted Tool allows it"
   - "Use training records to judge a person's performance, or share one person's record beyond them, their manager and HR"
   - "Answer a policy question itself; the Librarian cites the handbook"
 prerequisites:

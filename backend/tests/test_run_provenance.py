@@ -1,5 +1,6 @@
 """Which model actually worked a task (GET /api/v2/tasks/{id} `runs[].ran_on`, Runs `ran_on`): a fallback turn names
 the model that ran it, never the bot's configured one, and a maker Tico cannot know stays unknown."""
+
 from backend.tests.test_api import assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.test_api import api  # noqa: F401
 
@@ -13,9 +14,12 @@ def work(api, machine, title, segments, **extra):
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": title}, machine["token"])
     parts = [{**s, "input_tokens": tokens, "output_tokens": tokens} for s, tokens in segments]
-    post(api, f"attempts/{attempt['id']}/complete",
-         {"outcome": "completed", "last_seq": 0, "text": "Built.", "usage": {**parts[-1], "segments": parts}, **extra},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Built.", "usage": {**parts[-1], "segments": parts}, **extra},
+        machine["token"],
+    )
     return task["id"], attempt["id"]
 
 
@@ -36,8 +40,9 @@ def test_a_claude_bot_that_fell_back_to_codex_shows_codex_and_unknown_stays_unkn
     assert made["family"] == "openai" and made["fallback"] == "codex"
     assert [s["model"] for s in made["segments"]] == ["gpt-6.1-sol"]
     with api.app.state.store.read() as c:
-        detail = c.execute("SELECT detail_json FROM events WHERE action='attempt.fallback' AND target=?",
-                           (aid,)).fetchone()[0]
+        detail = c.execute("SELECT detail FROM events WHERE action='attempt.fallback' AND target=?", (aid,)).fetchone()[
+            0
+        ]
     assert '"model": "gpt-6.1-sol"' in detail and '"primary_runtime"' in detail
     assert [r["ran_on"]["family"] for r in get(api, "bots/ops/turns") if r["id"] == aid] == ["openai"]
     # Claude's login is held after its limit (backend/login_holds.py); Try now, as after the plan renews, lifts it.
@@ -57,8 +62,12 @@ def test_a_claude_bot_that_fell_back_to_codex_shows_codex_and_unknown_stays_unkn
     task = post(api, "tasks", {"owner": "ops", "title": "silent", "body": "Build it."})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "silent"}, machine["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Built."},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Built."},
+        machine["token"],
+    )
     assert ran_on(api, task["id"]) == {"segments": [], "fallback": None, "family": None, "task_model": None}
 
 
@@ -74,6 +83,7 @@ def test_a_model_the_catalog_does_not_list_is_unknown_whatever_harness_ran_it(ap
 
 def test_a_run_that_also_worked_a_private_task_is_left_out_for_whoever_cannot_read_it(api):
     from backend.store import H
+
     machine = runner(api, "ana")
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])

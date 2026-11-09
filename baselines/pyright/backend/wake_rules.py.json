@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/wake_rules.py": [
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 93,
+                    "lineCount": 7
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 69,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
