@@ -18,6 +18,7 @@ on:
       - scripts/ci_install.sh
       - scripts/playwright-system-packages.json
       - scripts/rust_checks.sh
+      - scripts/pinned_tool.sh
       - '**/Cargo.lock'
       - '**/Cargo.toml'
       - .github/workflows/pr-cache.yml
@@ -79,6 +80,23 @@ jobs:
         if: steps.python.outputs.cache-hit != 'true' || steps.node.outputs.cache-hit != 'true' || steps.browsers.outputs.cache-hit != 'true' || steps.system.outputs.cache-hit != 'true'
         timeout-minutes: 11
         run: bash scripts/ci_install.sh browser-cache
+
+  pinned-tools:
+    # shellcheck and actionlint (scripts/pinned_tool.sh): what the static checks job and a queue group's plan job restore.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
+          lookup-only: true
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: bash scripts/pinned_tool.sh shellcheck --version && bash scripts/pinned_tool.sh actionlint -version
 
   rust-lint:
     runs-on: ubuntu-24.04
