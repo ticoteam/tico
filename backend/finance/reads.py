@@ -15,6 +15,7 @@ from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
 from . import campaigns as CP
+from . import receipts as RC
 from . import subscriptions as SUB
 from . import visible as VB
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
@@ -2038,6 +2039,7 @@ NAMED_ONLY_KINDS = (
     "account",
     "vendor",
     "campaign",
+    "receipt",
     "subscription",
 )  # searched when named (the chart a bot codes lines to, vendors), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
@@ -2502,6 +2504,8 @@ def search(
                 results += listed_vendors
             elif k == "campaign":
                 results += _search_campaigns(ctx, viewer, text, f, most)
+            elif k == "receipt":
+                results += RC.search(ctx, viewer, q=text, status=_filter(f, "status"), most=most)
             elif k == "subscription":
                 results += SUB.search(ctx, viewer, text, most)
             elif k in RECORD_KINDS:
@@ -2553,7 +2557,7 @@ INBOX_KINDS = (
     "bill_email",
 )
 INBOX_EACH = 200  # items one kind contributes before its count says "more"
-RECEIPT_DAYS = 90
+RECEIPT_DAYS = RC.RECEIPT_DAYS
 STATEMENT_DAYS = 35  # a money account reconciled longer ago than a statement month is an unreconciled item
 
 

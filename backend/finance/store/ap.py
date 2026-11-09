@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from . import contacts as SC
 from .banking import LIVE_PAYMENT, like
 from ..core.ledger import name_key
 from ..core.merchant import merchant_key
@@ -31,8 +32,19 @@ DOCS = {
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
-    """Insert one row (an id is made when the row has none) and return its id."""
-    assert table in TABLES
+    """Insert one row (an id is made when the row has none) and return its id. A contact goes to the Directory
+    (store/contacts.py): fin_contacts is a view."""
+    assert table in TABLES and table != "fin_vendor_aliases"
+    if table == "fin_contacts":
+        fields = dict(row)
+        return SC.create(
+            c,
+            str(fields.pop("book_id")),
+            fields,
+            str(fields.pop("created_at")),
+            str(fields.pop("created_by")),
+            str(fields.pop("id", "") or ""),
+        )
     values = {"id": new_id(), **row}
     cols = sorted(values)
     c.execute(f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [values[k] for k in cols])
@@ -47,10 +59,18 @@ def update(
     where: str = "",
     args: Sequence[object] = (),
 ) -> int:
-    """Set `fields` on one row (only when `where` also holds). How many rows changed."""
-    assert table in TABLES
+    """Set `fields` on one row (only when `where` also holds). How many rows changed. A contact's change goes to the
+    Directory (store/contacts.py)."""
+    assert table in TABLES and table != "fin_vendor_aliases"
     if not fields:
         return 0
+    if table == "fin_contacts":
+        if (
+            where
+            and c.execute(f"SELECT 1 FROM fin_contacts WHERE id=? AND ({where})", [row_id, *args]).fetchone() is None
+        ):
+            return 0
+        return SC.update(c, row_id, fields)
     cols = sorted(fields)
     sql = f"UPDATE {table} SET {','.join(k + '=?' for k in cols)} WHERE id=?" + (f" AND ({where})" if where else "")
     return c.execute(sql, [*(fields[k] for k in cols), row_id, *args]).rowcount
@@ -263,11 +283,7 @@ def aliases_of(c: sqlite3.Connection, contact_id: str) -> list[str]:
 
 
 def alias_add(c: sqlite3.Connection, book_id: str, name_key: str, contact_id: str, at: str) -> None:
-    c.execute(
-        "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at) VALUES(?,?,?,?) "
-        "ON CONFLICT(book_id, name_key) DO NOTHING",
-        (book_id, name_key, contact_id, at),
-    )
+    SC.alias_add(c, book_id, name_key, contact_id, at)
 
 
 def alias_row(c: sqlite3.Connection, book_id: str, name_key: str) -> Any:
@@ -280,20 +296,11 @@ def alias_put(
     c: sqlite3.Connection, book_id: str, name_key: str, contact_id: str, at: str, merged_from: str | None
 ) -> None:
     """A vendor merge's alias: a new name, or an alias moved to `contact_id` from the contact it was on."""
-    if alias_of(c, book_id, name_key):
-        c.execute(
-            "UPDATE fin_vendor_aliases SET contact_id=?, merged_from=? WHERE book_id=? AND name_key=?",
-            (contact_id, merged_from, book_id, name_key),
-        )
-        return
-    c.execute(
-        "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at, merged_from) VALUES(?,?,?,?,?)",
-        (book_id, name_key, contact_id, at, merged_from),
-    )
+    SC.alias_put(c, book_id, name_key, contact_id, at, merged_from)
 
 
 def alias_delete(c: sqlite3.Connection, book_id: str, name_key: str) -> None:
-    c.execute("DELETE FROM fin_vendor_aliases WHERE book_id=? AND name_key=?", (book_id, name_key))
+    SC.alias_delete(c, book_id, name_key)
 
 
 def active_vendor_alias(c: sqlite3.Connection, book_id: str, name_key: str) -> str:

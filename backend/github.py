@@ -637,6 +637,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             if detail.get("head_sha") != head_sha:
                 detail.pop("checks", None)
                 detail.pop("checks_dropped", None)
+                detail.pop(DROPPED_PENDING, None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
                 detail["health_reviewed_head"] = ""
@@ -876,11 +877,33 @@ def _worst(a, b):
     return "failing" if "failing" in (a, b) else "pending" if "pending" in (a, b) else None
 
 
-def _set_dropped(detail, dropped):
+# Whether a check the stored copy leaves out was still going: `checks_dropped` keeps only the worst state, so a running
+# check left out beside a dropped failure would read "failing" and could never be seen to finish.
+DROPPED_PENDING = "checks_dropped_pending"
+
+
+def _dropped_pending(checks, kept):
+    return any(state == "pending" for key, state in checks.items() if key not in kept)
+
+
+def _set_dropped(detail, dropped, pending=False):
     if dropped:
         detail["checks_dropped"] = dropped
     else:
         detail.pop("checks_dropped", None)
+    if dropped and pending:
+        detail[DROPPED_PENDING] = True
+    else:
+        detail.pop(DROPPED_PENDING, None)
+
+
+def _still_going(detail):
+    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out."""
+    return (
+        "pending" in (detail.get("checks") or {}).values()
+        or detail.get("checks_dropped") == "pending"
+        or bool(detail.get(DROPPED_PENDING))
+    )
 
 
 def _finish(c, task, link, detail, full, checks):
@@ -973,8 +996,10 @@ _pending_lock = threading.Lock()
 def refresh_pending_checks(service):
     """The background pass's read of checks that have sat pending with no word from GitHub for `STUCK_SUITE_MINUTES`,
     on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
-    so a suite that never started stops holding a green head (Dev 646). A link whose stored copy dropped a non-passing
-    check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
+    so a suite that never started stops holding a green head (Dev 646). A failed head whose stored copy still has a
+    pending check is read too: a failure outranks pending, so such a link reads "failing", but the pending suite keeps
+    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A link whose stored
+    copy dropped a non-passing check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
     a read only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first.
     Returns the ids of pending links that left pending."""
     with service.store.read() as c:
@@ -988,7 +1013,9 @@ def refresh_pending_checks(service):
                 "FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
                 "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
-                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL) AND l.number IS NOT NULL AND r.reachable=1 "
+                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
+                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending')) "
+                "AND l.number IS NOT NULL AND r.reachable=1 "
                 f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
                 "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
                 (
@@ -1025,30 +1052,42 @@ def apply_checks(c, link_id, head, checks, since=None):
     """Rebuild a PR link's checks from a fresh read (`read_checks`) at the head the link is at now. Checks that leave
     pending this way finish the head as a webhook's last check would (`_finish`, then verdict_moves.checks_done).
     `since` is the link's updated stamp when the read began: a link written after it (a webhook during the read) keeps
-    its checks, which are newer than the read. Returns the link's checks state, or None when the read no longer
-    applies (another head, a closed PR, a write since)."""
+    its checks, which are newer than the read. A failed head whose stored copy had a pending check and whose read has
+    none finishes too, though it read "failing" before and after: the pending check is what kept it from finishing.
+    Returns the link's checks state, or None when the read no longer applies (another head, a closed PR, a write since)."""
     row = c.execute("SELECT * FROM task_links WHERE id=?", (link_id,)).fetchone()
     link = dict(row) if row else None
     detail = H._json(link.get("detail"), {}) or {} if link else {}
     task = link and H.task(c, link["task_id"])
-    if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
+    if not checks or link is None or not task or link.get("state") != "open" or detail.get("head_sha") != head:
         return None
     if since is not None and link.get("updated_at") != since:
         return None
     # The state and the failures named come from the whole read; only the stored copy is cut.
     state, kept = _overall(checks), _kept(checks)
-    dropped = _dropped(checks, kept)
-    if detail.get("checks") == kept and link.get("checks") == state and detail.get("checks_dropped") == dropped:
+    dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
+    # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
+    # even when its state stays the same.
+    held = _still_going(detail) and "pending" not in checks.values()
+    if (
+        detail.get("checks") == kept
+        and link.get("checks") == state
+        and detail.get("checks_dropped") == dropped
+        and bool(detail.get(DROPPED_PENDING)) == dropped_pending
+        and not held
+    ):
         return state
     detail["checks"] = kept
-    _set_dropped(detail, dropped)
-    finished = state != "pending" and state != link.get("checks")
+    _set_dropped(detail, dropped, dropped_pending)
+    changed = state != link.get("checks")
+    # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
+    finished = state != "pending" and "pending" not in checks.values() and (changed or held)
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
     c.execute(
         "UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?", (state, json.dumps(detail), H.now(), link_id)
     )
-    if state != link.get("checks"):
+    if changed:
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
     if finished_head:
@@ -1129,8 +1168,9 @@ def pr_signal(c, event, payload):
                 checks[_suite_key(own, signal)] = "pending"
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
+            pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
             detail["checks"] = kept
-            _set_dropped(detail, dropped)
+            _set_dropped(detail, dropped, pending)
             fields["checks"] = _with_dropped(_overall(checks), dropped)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
@@ -1151,6 +1191,8 @@ def pr_signal(c, event, payload):
                 and not set(checks.values()) <= {"skipped"}
                 # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
                 and (not dropped or "failing" in checks.values())
+                # A check the copy left out may still be going: the next fresh read (apply_checks) finishes the head.
+                and not _still_going(detail)
             ):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
@@ -1368,10 +1410,17 @@ def refresh_task_prs(service, task_id):
                             except Exception:
                                 logging.getLogger("tico.github").debug("Head identity unavailable for %s #%s", *key)
                         # Pending checks, and a copy that dropped a check, are read afresh: a suite that never starts sends
-                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green.
+                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green. So is
+                        # a failing link that still holds a running check: this refresh moves the link's updated_at, so
+                        # task reads every few minutes would keep refresh_pending_checks from ever reading it (PR 3055).
                         checks = None
-                        dropped = (H._json(link.get("detail"), {}) or {}).get("checks_dropped")
-                        if head and (link.get("checks") == "pending" or dropped) and pr.get("state") == "open":
+                        stored = H._json(link.get("detail"), {}) or {}
+                        dropped = stored.get("checks_dropped")
+                        if (
+                            head
+                            and (link.get("checks") == "pending" or dropped or _still_going(stored))
+                            and pr.get("state") == "open"
+                        ):
                             try:
                                 checks = _fresh_checks(service, link["repo"], head)
                             except Exception:

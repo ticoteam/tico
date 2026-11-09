@@ -1,5 +1,5 @@
 """Org rule checks (docs/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
-is delivered (`questions/rule-check.json`, asked through the server's Decide engine on the rules' own budget).
+is delivered (`questions/rule-check.json`, asked through the server's Decide engine, on Decide's one monthly budget).
 
 Like ask ingest (backend/ask_ingest.py): one call per output, outside the write's transaction (`preflight`); plain
 code then applies the verdict inside the write (`apply`). Nothing here calls an engine under `store.transaction()` or
@@ -46,7 +46,7 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
 - Where: a rule's `where:` (`thread:<id>`, `team:<group>`, `kind:dm`, `has_outside_members`) is matched on the place.
   Messages and task comments have a place through their thread (a task comment's is its task's conversation). Mail and
   drafts have none, so a `where` rule never meets them.
-- Fails open: checks Off, no engine, the rules budget, the day's call cap, the deadline, an error or a malformed
+- Fails open: checks Off, no engine, Decide's monthly cap, the day's call cap, the deadline, an error or a malformed
   answer let the output through with a `rules.unchecked` event. Events never carry the text.
 - Bounded: at most `rule_check_concurrency` calls run at once in this process (`call_slots.Calls`); with every slot in
   use the output goes through unchecked at once (`busy`), never waiting for one. After BREAKER_FAILURES timeouts or
@@ -87,8 +87,6 @@ RULES_TARGET = B.RULES_TARGET  # the judge.call rows a rule check writes (`rule-
 # The most one check waits for its answer, by Decide level (Low is Jev; Medium and High are language models).
 DEADLINES = {"low": 5, "medium": 10, "high": 15}
 CONCURRENCY = 8  # calls at once, per process, when the setting names none
-# backend/judge.py: its env cap, its spend rows, and the key its saved cap sits under in Automations > Maintenance.
-BUDGET = ("rules_monthly_usd", "rules.spend", "rules_monthly_cap_usd")
 # Rule checks ask Jev only: the Gateway at Low (`tico-decide-low`), or a customer's own TypeSafe key. Never a higher Decide
 # level and never the company's own model, so a check is always a Jev call or unchecked (`RULE_LEVEL`).
 RULE_LEVEL = "low"
@@ -387,7 +385,8 @@ def _ask(calls, engine, state, questions, label, level):
         return None, "timeout"
     error = box.get("error")
     calls.done(None if error in NEUTRAL else not error, probe)
-    return box.get("result"), error
+    # The meter refused the call before asking: the decisions cap had no room for it (other calls spent or hold it).
+    return box.get("result"), "budget" if error == "spend_cap" else error
 
 
 def place_for(c, author, recipients=(), conversation_id=""):
@@ -549,14 +548,14 @@ def check_as(
             }
             if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
                 return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
-            engine = B.server_engine(store, c, primary, BUDGET, backup=False)
+            engine = B.server_engine(store, c, primary, backup=False)
             if engine is None:
-                capped = B.over_spend_cap(c, store.settings, None, BUDGET)
+                capped = B.over_spend_cap(c, store.settings)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
             if calls_today(c, people=is_person) >= B.daily_cap(store.settings, "human" if is_person else "bot"):
                 return {**verdict, "outcome": "unchecked", "error": "day_cap"}
         result, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
-        if error in ("busy", "breaker"):
+        if error in ("busy", "breaker", "budget"):
             return {**verdict, "outcome": "unchecked", "error": error}  # nothing was asked: no judge.call row
         if result is not None and not isinstance(result, dict):
             result, error = None, "shape"
@@ -981,9 +980,9 @@ def outside_edition(store, primary, output, to=""):
             }
             if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
                 return result("held", "too_large")
-            engine = B.server_engine(store, c, primary, BUDGET, backup=False)
+            engine = B.server_engine(store, c, primary, backup=False)
             if engine is None:
-                return result("held", "budget" if B.over_spend_cap(c, store.settings, None, BUDGET) else "no_engine")
+                return result("held", "budget" if B.over_spend_cap(c, store.settings) else "no_engine")
             if calls_today(c) >= B.daily_cap(store.settings, "bot"):
                 return result("held", "day_cap")
         answer, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
@@ -2392,9 +2391,9 @@ def stats(c, settings):
         ).fetchone()[0]
 
     hits = count("rules.blocked", "rules.escalated", "rules.warned")
-    cap = float(B.budget_cap(c, settings, BUDGET))
-    left = None if cap <= 0 else round(max(0.0, cap - B.spent_this_month(c, None, BUDGET)), 2)
-    # What the people's checks cost this month, out of the same budget: the judge.call rows carry each call's cost.
+    cap = float(B.budget_cap(c, settings))
+    left = None if cap <= 0 else round(max(0.0, cap - B.spent_this_month(c)), 2)
+    # What the people's checks cost this month, out of Decide's budget: the judge.call rows carry each call's cost.
     month = H.now()[:7] + "-01T00:00:00"
     people = c.execute(
         "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE actor=? AND "
@@ -2430,8 +2429,8 @@ def health_findings(c, settings):
             "check_id": "org_rules_unchecked",
             "title": f"{share}% of rule checks went unchecked today",
             "detail": f"{s['unchecked_today']} of {total} bot outputs that rules apply to went out unchecked today "
-            "(no decision model, the rules budget, the day's call cap, the deadline or an error).",
-            "fix": "Check the Tico AI Gateway key and the rules budget (TICO_RULES_MONTHLY_USD); the Rules page "
+            "(no decision model, the decisions monthly cap, the day's call cap, the deadline or an error).",
+            "fix": "Check the Tico AI Gateway key and the Monthly cap in Automations > Maintenance; the Rules page "
             "header shows what is left.",
         }
     ]
@@ -2575,7 +2574,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/rules/stats")
     def rules_stats(request: Request):
-        """The Rules page header: checks today, unchecked, blocked, dollars left in the rules budget, and on/off."""
+        """The Rules page header: checks today, unchecked, blocked, dollars left under Decide's monthly cap, and on/off."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -2692,7 +2691,6 @@ def install(app, store, auth, mutate):
 
 __all__ = [
     "ACTIONS",
-    "BUDGET",
     "OPERATIONS",
     "REPLAY",
     "answer",

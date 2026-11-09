@@ -7161,7 +7161,7 @@ def task_create(
         if value:  # written public text leaves a record, as a later publication's does
             _task_event(conn, row['id'], actor, field, None, value, '')
     if step is not None:
-        task_update(conn, actor, row["id"], step=step)
+        task_update(conn, actor, row["id"], step=step, enter_gate=is_bot(actor))
     if top:
         placed = task(conn, row["id"])
         if placed["step_id"]:
@@ -7412,6 +7412,7 @@ def task_update(
     strict=True,
     heard=(),
     override_requirements=False,
+    enter_gate=True,
 ):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
@@ -7429,6 +7430,7 @@ def task_update(
     `verdict` and `verdict_head` record a review or QA subtask's verdict and the head it judged (record_verdict).
     Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
     Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
+    `enter_gate` holds a card that enters a pipeline to its earlier stages' requirements; a create holds only a bot's.
     `heard` names bots that already have the news (a person's chat reply that closed their question task): they get
     no notice of it as well.
     """
@@ -7666,6 +7668,8 @@ def task_update(
         # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
         # closed stage such as Engineering's Done is progress, so it is held (pipeline_engine.is_cancellation).
         # A status done with no step is held as a move into the completion stage (pipeline_engine.completion_target).
+        if step == "" and row and row.get("step_id"):
+            pipeline_engine.check_clear(conn, actor, row)
         held_to = (
             pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
             if row
@@ -7673,7 +7677,13 @@ def task_update(
         )
         if held_to and row and held_to != row.get("step_id"):
             pipeline_engine.check_move(
-                conn, actor, {**row, "type_id": type_id}, held_to, override_requirements, override_note=note
+                conn,
+                actor,
+                {**row, "type_id": type_id},
+                held_to,
+                override_requirements,
+                override_note=note,
+                entering=enter_gate,
             )
         elif row and pipeline_engine.is_completion(row, effective):
             pipeline_engine.check_completion(conn, actor, row, override_requirements, override_note=note)
