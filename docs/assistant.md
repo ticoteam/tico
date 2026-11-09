@@ -35,7 +35,7 @@ but draws nothing (a class, not `hidden`), and the dot's flying copy is made onc
 What waits on you from elsewhere comes at the end of the DM as cards: a Confirm card BotOps (or another bot) left in
 its own Home, with its Confirm and Cancel, and up to three bots' questions to you from Needs you. A question with two to
 six picks is answered with a tap, any other with a line of words (a question with several picks at once links to its
-task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question task in your words, and the Assistant records it as your answer. It answers only when your words give what the question asks, such as a price, a pick, a yes or no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer nothing: the question stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell which one you meant. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a plain yes in your chat ([below](#goals-agreed-in-words)).
+task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open question task in your words, and the Assistant records it as your answer. It answers only when your words give what the question asks, such as a price, a pick, a yes or no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer nothing: the question stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell which one you meant. A Confirm card needs your own tap. A goal suggestion can also be confirmed by a yes in your chat ([below](#goals-agreed-in-words)).
 
 ## Helpers through the Assistant
 
@@ -53,7 +53,7 @@ The task opens with your words quoted.
 For the Strategy Bot and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
 `cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
 stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. The Strategy Bot's goal
-suggestions are agreed the way your own goal changes are: a plain yes in your chat confirms one ([below](#goals-agreed-in-words)).
+suggestions are agreed the way your own goal changes are: a yes in your chat confirms one ([below](#goals-agreed-in-words)).
 A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Bot's DM (`POST /api/v2/chat/goal-manager`) lands in their
 Assistant DM instead.
 
@@ -68,7 +68,8 @@ For your own goals, measures and targets, and for the Strategy Bot's goal sugges
 in your chat as a numbered read-back, with the exact steps. Only your yes saves it:
 
 - A plain yes as your next message, such as **yes**, **ok**, **go ahead** or **save it**, saves every change in it.
-- **Yes to 1 and 3** or **yes except 2** saves only those numbered changes.
+- **Yes to 1 and 3** saves only changes 1 and 3.
+- **Yes except 2** saves every change but number 2.
 
 Your yes counts only if it is your very next message after the read-back, with nothing from anyone else in between and
 nothing else from you after it, and within 30 minutes of the read-back. Any other reply saves nothing. Ask again, and the
@@ -79,14 +80,18 @@ include one, Tico refuses the whole read-back and saves nothing, and the Assista
 that change for your click. A KPI reading, the company Vision, strategy drafts and bets, and recovery suggestions stay
 clicks too, and are refused the same way.
 
-A suggestion the Strategy Bot made that you confirm with a plain yes leaves **Needs you**, as it does when you confirm
-its card. A message from you that opens with a no, such as "no" or "no, too high", turns down the waiting Strategy Bot
-suggestion of the same kind on the same goal, for the same KPI or measure, at once. The kinds are a goal's wording, a
-KPI added to a goal, a KPI's definition, a KPI target or a flag. It needs no read-back and no second yes. Your message
-is kept as the reason, unless it is only a no. Another measure's card on the same goal stays waiting. If two waiting
-cards of the same kind are about the same measure on the same goal, nothing is turned down, and Tico asks which one you
-mean. A yes that opens with "no", such as "No problem", is not a no: it turns nothing down, and a read-back saves only on a yes it can read, such as a plain yes or "yes to 1 and 3", so "No problem, save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's
-Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
+A suggestion the Strategy Bot made that you confirm with a yes leaves **Needs you**, as it does when you confirm its
+card. A message from you that opens with a no, such as "no" or "no, too high", turns down the waiting Strategy Bot
+suggestion at once. It turns down only a card of the same kind, on the same goal, for the same KPI or measure. A wording
+card names neither, so any other waiting wording card on the same goal counts as the same kind. The kinds are a goal's
+wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag. It needs no read-back and no second yes. Your
+message is kept as the reason, unless it is only a no. Another measure's card on the same goal stays waiting. If two
+waiting cards of the same kind are about the same measure on the same goal, nothing is turned down, and the Assistant
+asks which one you mean. With no waiting card, the no is still stored as a turned-down suggestion. A reply that opens
+with "no" but means yes, such as "No problem", is not a no and turns nothing down, unless it goes on to say to leave it,
+skip it, not or don't: "No problem, just leave it" is a no. A read-back takes only the yes forms above, so "No problem,
+save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's Assistant agrees goal changes
+in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
 
