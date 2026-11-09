@@ -250,6 +250,7 @@ def test_failing_tests_come_from_pytest_lines_and_the_ui_scripts_line():
     )
     assert mr.test_def("backend/tests/test_page_audience_review3.py::test_leak[stored]") == "test_leak"
     assert mr.test_file("google-tab.cjs") == "ui/tests/google-tab.cjs"
+    assert mr.test_file("chat.cts") == "ui/tests/chat.cts"
 
 
 def test_a_test_that_passed_green_with_nothing_it_uses_changed_is_likely_flaky(two_runs):
