@@ -176,7 +176,7 @@ def create_app(settings=None):
         # The default pool is min(32, cpus + 4) threads, about 6 on the server. Long waits (every
         # open chat stream's polls, uploads) filled it, and
         # every request's sign-in queued behind them for seconds. Give the loop a
-        # roomier pool, and sign-in its own (AUTH_POOL below).
+        # roomier pool, and sign-in its own (app.state.auth_pool, made below and shut down on the way out).
         from concurrent.futures import ThreadPoolExecutor
 
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico"))
@@ -459,9 +459,19 @@ def create_app(settings=None):
             from . import demo
 
             demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
+        # Sign-in's own threads, one pool per run of the app: an app built and served again and again (a demo build,
+        # every test) would otherwise keep 16 idle threads, and the app they hold, for the life of the process.
+        # A test can run the same app's lifespan inside another (two clients on one app), so each run keeps its own
+        # pool and clears the shared slot only while that slot is still its own.
+        auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+        app.state.auth_pool = auth_pool
         try:
             yield
         finally:
+            # First, so nothing below that raises can skip it; requests are done by the time the server shuts down.
+            if app.state.auth_pool is auth_pool:
+                app.state.auth_pool = None
+            auth_pool.shutdown(wait=False, cancel_futures=True)
             stop.set()
             if start_jobs_task:
                 await start_jobs_task  # short, and each in its own transaction: let it finish
@@ -696,10 +706,9 @@ def create_app(settings=None):
         "script-src " + " ".join(["'self'", *hashes]) + "; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
     )
 
-    from concurrent.futures import ThreadPoolExecutor
     from .timing import Timing
 
-    AUTH_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+    app.state.auth_pool = None  # the lifespan's own, while it runs; outside it sign-in uses the loop's default pool
     app.state.timing = Timing()
     app.state.timing.recorder = recorder
     app.state.flight = recorder
@@ -867,7 +876,7 @@ def create_app(settings=None):
             if request.url.path != "/api/v2/runners/enroll" and not agent_door:
                 began = time.perf_counter()
                 who = await asyncio.get_running_loop().run_in_executor(
-                    AUTH_POOL, auth.authenticate, request.headers, request.url.path, request.method
+                    app.state.auth_pool, auth.authenticate, request.headers, request.url.path, request.method
                 )
                 if who.support:
                     # Again on the path as sent, still percent-encoded: the gate then reads the address the router
