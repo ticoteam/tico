@@ -209,7 +209,7 @@ function visualFail(card: HTMLElement | null | undefined, message = "Couldn't sh
 function visualOpen(card: HTMLElement, version = Number(card.dataset.version)) {
   const d = card.closest<TfDialog>('dialog');
   if (d?.tfEl && tfOpen(d, card.dataset.file, version, {scroll: true})) return;
-  VIEW = {items: [{fileId: card.dataset.file, version, name: card.dataset.name, kind: viewKindOf(card.dataset.name)}], index: 0};
+  VIEW = {items: [{fileId: card.dataset.file, version, name: card.dataset.name ?? '', kind: viewKindOf(card.dataset.name)}], index: 0};
   void viewerShow();
 }
 document.addEventListener('click', ev => {
