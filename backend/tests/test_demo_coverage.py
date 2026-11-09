@@ -42,6 +42,8 @@ PAGES = {
     "files": page("files", "files"),
     # Library › Skills (ui/app/skills.ts): the directory, its usage and proposals (backend/demo_sections/skills.py).
     "skills": page("skills", "skills"),
+    # Library › Directory (ui/app/directory.ts): the people the demo's company works with (backend/demo_sections/directory.py).
+    "directory": page("entities/find/person", "rows"),
     "tools": page("tools", "integrations"),
     # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
     "connections": page("tool-index", "rows"),

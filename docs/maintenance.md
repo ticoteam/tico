@@ -53,7 +53,7 @@ Update skips before 05:00 company time without using up its cadence, so it can b
 
 ## Spend cap
 
-The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50).
+The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50). The rules' monthly cap (org rule checks, which ask Jev only) is saved here too, as `rules_monthly_cap_usd`; when it is not saved, `TICO_RULES_MONTHLY_USD` applies (default 50).
 
 ## Who can do what
 

@@ -44,6 +44,8 @@ interface MeetRec {
 }
 interface MeetList { meetings?: MeetRec[]; pending_count?: number }
 interface MeetSourceRow { id: string; status?: string; last_import?: string; last_succeeded_at?: string }
+// The viewer's Granola account: the last GET /v2/meetings/granola (null when the server has no such route).
+interface MeetGranola { connected: boolean; needs_signin: boolean; email?: string | null; last_error?: string | null }
 interface MeetLinkedTask { task_id: string; number?: number | null | undefined; title?: string | undefined; status?: string | undefined; created_by?: string; kind?: string }
 interface MeetLinked { tasks?: MeetLinkedTask[]; next_cursor?: string | null }
 interface MeetDraft {
@@ -57,7 +59,7 @@ interface MeetState {
   filter: string; when: string; person: string; source: string; people: Map<string, string>; selected: string; list: MeetRec[];
   poll: number; sourcesPoll: number; items: Record<string, MeetItems>; itemAdd: string; confirmDelete: string; open: boolean;
   query?: string; reviewBusy?: boolean; loaded?: boolean; empty?: boolean; sourceRows?: MeetSourceRow[] | null;
-  granola?: unknown; noteSave?: (() => Promise<void>) | null; linkOpen?: boolean; showDismissed?: boolean;
+  granola?: MeetGranola | null; noteSave?: (() => Promise<void>) | null; linkOpen?: boolean; showDismissed?: boolean;
   tsearch?: boolean; tq?: string; sideTab?: string | undefined; thit?: number; editing?: boolean; rec?: MeetRec;
   noteDraft?: {id: string; value: string} | null; noteTimer?: number; noteSaving?: boolean; noteAgain?: boolean;
   live?: Record<string, {chat: MeetChatMessage[]; bots: {bot: string; name?: string}[]}>;
