@@ -28,7 +28,7 @@ interface DirRule {
 }
 interface DirAttribute { key: string; name: string; value_type: string; multiple: number | boolean; sensitive: number | boolean; owner: string }
 interface DirDescribe { type: DirType; attributes: DirAttribute[] }
-interface DirSelf { id: string; name: string; operates_in: { id: string; name: string }[] }
+interface DirSelf { id: string; name: string; operates_in: { id: string; name: string; link_id?: string }[] }
 interface DirHistoryRow { id: string; attribute_key: string; value: unknown; source_type: string; source_id: string; confidence: number | null; active_from: string | null; active_until: string | null }
 
 const DIR_WORKS_AT = ['works_at', 'member_of'];

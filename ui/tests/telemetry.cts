@@ -12,11 +12,9 @@ interface Telemetry {
   run(path: string, task: () => Promise<unknown>): Promise<unknown>;
   reset(): void;
 }
-declare global {
-  interface Window {
-    telemetry: Telemetry;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  telemetry: Telemetry;
+};
 declare const TicoObservability: Telemetry;
 declare const telemetry: Telemetry;
 

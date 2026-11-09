@@ -22,12 +22,10 @@ type PWResponse = Awaited<ReturnType<Page['waitForResponse']>>;
 // Browser-side globals: set by the app's scripts or by the page under test.
 declare const S: {me?: unknown; emps?: unknown[]};
 declare function searchEntries(): {label: string; href: string}[];
-declare global {
-  interface Window {
-    __pwned?: number;
-    __copied: string[]; // set by the test before it is read
-  }
-}
+declare const window: Window & typeof globalThis & {
+  __pwned?: number;
+  __copied: string[]; // set by the test before it is read
+};
 interface Approval {id: string; state: string; to?: string; to_name?: string; note?: string}
 interface Edition {
   id: string; status: string; audience_id: string; title: string | null; audience_name: string;

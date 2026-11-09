@@ -33,19 +33,17 @@ declare const state: DreamState;
 declare function learnOpen(bot: string, data: {updates?: unknown[]; documents?: Record<string, string>}, dream?: Partial<DreamRecord> | null): void;
 declare function botDreamLoad(bot: string): Promise<void>;
 declare function dreamSplit(text: string): DreamCard[];
-declare global {
-  interface Window {
-    $: (selector: string, root?: ParentNode) => Element | null;
-    esc: (value: unknown) => string;
-    md: (text: string) => string;
-    ago: () => string;
-    toast: (message: string) => void;
-    BOT: {slug: string};
-    state: DreamState;
-    get: (url: string) => Promise<unknown>;
-    post: (url: string, body?: unknown) => Promise<unknown>;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  $: (selector: string, root?: ParentNode) => Element | null;
+  esc: (value: unknown) => string;
+  md: (text: string) => string;
+  ago: () => string;
+  toast: (message: string) => void;
+  BOT: {slug: string};
+  state: DreamState;
+  get: (url: string) => Promise<unknown>;
+  post: (url: string, body?: unknown) => Promise<unknown>;
+};
 
 const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go to Ana or the whole team? Suggested: the whole team\n'
   + '2. Drop the old "deploy on Fridays" rule? Suggested: yes';
@@ -58,7 +56,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     await page.setContent('<button id="bot-learn" class="bot-learn"><span class="bl-n"></span></button><div id="bot-dream-host"></div>');
     await page.addStyleTag({path: path.join(__dirname, '../styles/bot-learnings.css')});
     await page.evaluate(questions => {
-      window.$ = (selector, root = document) => root.querySelector(selector);
+      Object.assign(window, {$: (selector: string, root: ParentNode = document) => root.querySelector(selector)});
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.ago = () => 'today';

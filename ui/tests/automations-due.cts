@@ -10,6 +10,10 @@ import type {Page} from 'playwright';
 import type * as R from './support/redesign-e2e.cjs';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {run, open, go, ok, automationNamed, sideways, t} = require('./support/redesign-e2e.cjs') as typeof R;
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  ticoTheme: {set(theme: string): void};
+};
 
 // The hub's records as this journey reads them, and the page-side helper the chips call.
 interface Routine {

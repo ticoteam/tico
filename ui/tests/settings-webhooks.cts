@@ -11,25 +11,52 @@
 // set in place, its signing secret stays until Done, a refusal shows under the input, and Turn off clears it. No
 // sideways scroll on a phone.
 // TICO_SHOTS=<dir> saves screenshots (dark).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+type Page = import('playwright').Page;
+type Relay = {address_prefix: string; created_at: string; wake: boolean | null};
+type Trigger = {id: string; name: string; kind: string; event: string; url: string; builtin: boolean; created_by: string; created_at: string;
+  last_received: string | null; received_24h: number; refused_24h: number; signed: boolean; preset: string; type_from: string; hourly: number;
+  keep_days: number; unheard: string; relay: Relay | null};
+type Delivery = {delivery: string; sent_id: string; received_at: string; bytes: number; tasks: number; outcome: string; reason: string;
+  type: string; via: string; rules: number; stored: boolean};
+type Hook = {id: string; name: string; url: string; host: string; events: string[]; enabled: boolean; paused_reason: string; rate_per_hour: number;
+  allow_http: boolean; created_by: string; revision: number; can_change: boolean; old_secret_until: string | null;
+  last_7_days: {delivered: number; failed: number; pending: number}; filter: {departments: string[]; bots: string[]; task_types: string[]};
+  headers: {name: string; secret: boolean; set?: boolean; value?: string}[]};
+type Send = {id: string; webhook_id: string; type: string; subject: string; state: string; attempts: number; last_status: number | null;
+  last_error: string; created_at: string};
+type RelayStatus = {key: string; relays: number; cursor: number; last_pull: string | null; last_error: string; pending: number;
+  oldest: string | null; deleting: number; active: boolean};
+// The request bodies the test reads; a field is optional where some calls omit it.
+type Body = {name?: string; url?: string; events?: string[]; preset?: string; keep_days?: number; unheard?: string; since_hours?: number;
+  since?: string; after?: string; on?: boolean; wake?: boolean; filter?: {departments: string[]; bots: string[]; task_types: string[]};
+  headers?: {name: string; value?: string; secret: boolean}[]; expected_revision?: number};
+type CatalogEvent = {name: string; group: string; outbound?: boolean};
+type State = {triggers: Trigger[]; deliveries: Record<string, Delivery[]>; hooks: Hook[]; sends: Record<string, Send[]>; relay: RelayStatus;
+  hosted: boolean; role: string; wake: {url: string | null; set_at: string | null; set_by: string | null};
+  wakeFail: {status: number; code: string; detail: string} | null; puts: {path: string; body: unknown}[]; posts: {path: string; body: Body}[]};
+
+// Browser-side global the page defines (ui/app).
+declare var whMount: (name: string) => unknown;
+
 const shots = process.env.TICO_SHOTS || '';
 const CATALOG = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c', 'import json; from backend.event_catalog import listing; print(json.dumps(listing()))'],
-  {cwd: path.join(__dirname, '../..')}).toString());
+  {cwd: path.join(__dirname, '../..')}).toString()) as CatalogEvent[];
 const BASE = 'https://tico.acme.example/hooks';
-const AGO = m => new Date(Date.now() - m * 60000).toISOString();
+const AGO = (m: number) => new Date(Date.now() - m * 60000).toISOString();
 
-function trigger(id, name, more = {}) {
+function trigger(id: string, name: string, more: Partial<Trigger> = {}): Trigger {
   return {id, name, kind: 'webhook', event: 'webhook.' + id, url: `${BASE}/${id}`, builtin: false, created_by: 'human:ana', created_at: AGO(900),
     last_received: null, received_24h: 0, refused_24h: 0, signed: false, preset: 'none', type_from: '', hourly: 60, keep_days: 7, unheard: 'log',
     relay: null, ...more};
 }
-function server() {
+function server(): State {
   return {
     triggers: [
       trigger('shop', 'Shop', {last_received: AGO(4), received_24h: 12, refused_24h: 2, signed: true, preset: 'github', type_from: 'X-GitHub-Event'}),
@@ -55,25 +82,26 @@ function server() {
   };
 }
 
-async function open(browser, hash, viewport = {width: 1440, height: 900}, state = server(), store = {}) {
+async function open(browser: import('playwright').Browser, hash: string, viewport: {width: number; height: number} = {width: 1440, height: 900},
+  state: State = server(), store: {tab?: string} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('dialog', d => d.accept());
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   if (store.tab) await page.addInitScript(tab => sessionStorage.setItem('tico.settings.tab', tab), store.tab);
   await page.route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
       contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.4.9', app_name: 'Tico'};
-    const post = req.method() === 'POST' ? (req.postDataJSON() || {}) : null;
+    const post = req.method() === 'POST' ? ((req.postDataJSON() || {}) as Body) : null;
     if (post) state.posts.push({path: p, body: post});
     if (p === '/api/me') return json({id: 'ana', role: state.role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
@@ -91,39 +119,39 @@ async function open(browser, hash, viewport = {width: 1440, height: 900}, state 
     if (p === '/api/v2/task-types') return json({types: [{id: 'general', name: 'General', steps: []}, {id: 'bug', name: 'Bug', steps: []}]});
     if (p === '/api/v2/triggers' && !post) return json({triggers: state.triggers});
     if (p === '/api/v2/triggers') {
-      const id = post.name.toLowerCase();
-      state.triggers.push(trigger(id, post.name));
+      const id = post!.name!.toLowerCase();
+      state.triggers.push(trigger(id, post!.name!));
       return json({trigger: {id, event: 'webhook.' + id, url: `${BASE}/${id}/sek-ret-123`, replayed: false}});
     }
     let m = p.match(/^\/api\/v2\/triggers\/([^/]+)(?:\/(.*))?$/);
     if (m) {
-      const t = state.triggers.find(x => x.id === m[1]), rest = m[2] || '';
+      const t = state.triggers.find(x => x.id === m![1])!, rest = m[2] || '';
       if (rest === '' && post) { Object.assign(t, post); return json(t); }
-      if (rest === 'signing') { Object.assign(t, {signed: true, preset: post.preset, type_from: t.type_from || {github: 'X-GitHub-Event', standard: '/type', stripe: '/type'}[post.preset] || ''}); return json({trigger: {id: t.id, signed: true, preset: post.preset, signing_secret: 'whsec_c2VjcmV0', replayed: false}}); }
+      if (rest === 'signing') { Object.assign(t, {signed: true, preset: post!.preset!, type_from: t.type_from || ({github: 'X-GitHub-Event', standard: '/type', stripe: '/type'} as Record<string, string>)[post!.preset!] || ''}); return json({trigger: {id: t.id, signed: true, preset: post!.preset, signing_secret: 'whsec_c2VjcmV0', replayed: false}}); }
       if (rest === 'deliveries') return json({deliveries: state.deliveries[t.id] || []});
-      if (rest === 'recover') return json({recover: {trigger: t.id, since_hours: post.since_hours, found: 1, recovered: 1, duplicate: 0, still_refused: 0, more: false}});
-      if (rest === 'relay/wake') { t.relay.wake = post.wake; return json({relay: {trigger: t.id, relay_id: 'rl_1', wake: post.wake}}); }
+      if (rest === 'recover') return json({recover: {trigger: t.id, since_hours: post!.since_hours, found: 1, recovered: 1, duplicate: 0, still_refused: 0, more: false}});
+      if (rest === 'relay/wake') { t.relay!.wake = post!.wake!; return json({relay: {trigger: t.id, relay_id: 'rl_1', wake: post!.wake}}); }
       if (rest === 'relay') { t.relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(0), wake: null}; return json({relay: {trigger: t.id, relay_id: 'rl_1', address_prefix: t.relay.address_prefix, address: t.relay.address_prefix + '/gw-secret', replayed: false}}); }
       const d = rest.match(/^deliveries\/([^/]+)(\/replay)?$/);
-      if (d && d[2]) return json({replay: {delivery: d[1] + ':replay:1', of: d[1], tasks: 1, rules: 1}});
-      if (d) return json({delivery: {id: d[1], received_at: AGO(4), type: 'push', via: 'direct', outcome: 'accepted', tasks: 1, rules: 1, reason: '', bytes: 2300,
+      if (d && d[2]) return json({replay: {delivery: d[1]! + ':replay:1', of: d[1]!, tasks: 1, rules: 1}});
+      if (d) return json({delivery: {id: d[1]!, received_at: AGO(4), type: 'push', via: 'direct', outcome: 'accepted', tasks: 1, rules: 1, reason: '', bytes: 2300,
         expires_at: AGO(-6000), expired: false, content_type: 'application/json',
         headers: {'content-type': 'application/json', 'x-github-event': 'push', 'x-hub-signature-256': '[hidden]'}, body: '{"id":7,"ref":"refs/heads/main"}'}});
     }
     if (p === '/api/v2/webhooks' && !post) return json({items: state.hooks, more: false});
     if (p === '/api/v2/webhooks') {
-      const h = {...state.hooks[0], id: 'wh2', name: post.name, url: post.url, host: new URL(post.url).host, events: post.events, enabled: true, paused_reason: '', revision: 1,
+      const h = {...state.hooks[0]!, id: 'wh2', name: post!.name!, url: post!.url!, host: new URL(post!.url!).host, events: post!.events!, enabled: true, paused_reason: '', revision: 1,
         last_7_days: {delivered: 0, failed: 0, pending: 0}};
       state.hooks.push(h); state.sends.wh2 = [];
       return json({webhook: {...h, secret: 'whsec_b3V0Z29pbmc=', replayed: false}});
     }
     m = p.match(/^\/api\/v2\/webhooks\/([^/]+)(?:\/(.*))?$/);
     if (m) {
-      const h = state.hooks.find(x => x.id === m[1]), rest = m[2] || '';
+      const h = state.hooks.find(x => x.id === m![1])!, rest = m[2] || '';
       if (rest === '') return json({webhook: h, recent_attempts: []});
       if (rest === 'sends') return json({items: state.sends[h.id] || [], more: false});
       if (rest === 'resume') { h.enabled = true; return json({webhook: h}); }
-      if (rest === 'replay') return json(post.after ? {queued: 2, more: false} : {queued: 0, more: true, next_since: '2026-10-20T03:00:00.000000Z', next_after: 'we_1'});
+      if (rest === 'replay') return json(post!.after ? {queued: 2, more: false} : {queued: 0, more: true, next_since: '2026-10-20T03:00:00.000000Z', next_after: 'we_1'});
       return json({ok: true});
     }
     if (p === '/api/v2/relay') return json({relay: state.relay});
@@ -135,7 +163,7 @@ async function open(browser, hash, viewport = {width: 1440, height: 900}, state 
     if (p === '/api/v2/hooks/wake-url') {
       if (state.role !== 'owner') return json({error: {code: 'forbidden', detail: 'Only the owner may see or change the address that wakes this server'}}, 403);
       if (req.method() !== 'PUT') return json(state.wake);
-      const body = req.postDataJSON();
+      const body = req.postDataJSON() as {url: string | null};
       state.puts.push({path: p, body});
       if (state.wakeFail) { const {status, ...error} = state.wakeFail; state.wakeFail = null; return json({error}, status); }
       state.wake = body.url ? {url: body.url, set_at: AGO(0), set_by: 'human:ana'} : {url: null, set_at: null, set_by: null};
@@ -148,19 +176,19 @@ async function open(browser, hash, viewport = {width: 1440, height: 900}, state 
   return {page, errors, state};
 }
 // Every animation that ends has ended (a skeleton's shimmer runs forever).
-const settled = page => page.evaluate(() => Promise.all(document.getAnimations()
+const settled = (page: Page) => page.evaluate(() => Promise.all(document.getAnimations()
   .filter(a => a.effect?.getComputedTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
-const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
-const hash = page => new URL(page.url()).hash;
-const go = (page, to) => page.evaluate(to => { location.hash = to; }, to);
+const noSideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
+const hash = (page: Page) => new URL(page.url()).hash;
+const go = (page: Page, to: string) => page.evaluate(to => { location.hash = to; }, to);
 // The Gateway's Webhooks fold, drawn again (what reopening it does).
-const redraw = page => page.evaluate(() => whMount('gateway'));
+const redraw = (page: Page) => page.evaluate(() => whMount('gateway'));
 const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gateway', GATEWAY_LINK = '#/settings/models/wh-gateway';
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
-  const shot = async (page, name, el) => { if (shots) await page.locator(el).screenshot({path: path.join(shots, name + '.png')}); };
-  const view = async (page, name) => { if (shots) { await settled(page); await page.screenshot({path: path.join(shots, name + '.png')}); } };
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
+  const shot = async (page: Page, name: string, el: string) => { if (shots) await page.locator(el).screenshot({path: path.join(shots, name + '.png')}); };
+  const view = async (page: Page, name: string) => { if (shots) { await settled(page); await page.screenshot({path: path.join(shots, name + '.png')}); } };
   try {
     {
       // #/triggers lands on Automations' Incoming webhooks; the list has the built-in Tico Team row.
@@ -188,8 +216,8 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await dialog.waitFor({state: 'detached'});
       await pane.locator('[data-wh-secret="url"]').waitFor();
       assert.deepEqual(state.posts.map(x => x.path), ['/api/v2/triggers', '/api/v2/triggers/orders/signing', '/api/v2/triggers/orders']);
-      assert.deepEqual(state.posts[1].body, {preset: 'standard'});
-      assert.deepEqual(state.posts[2].body, {keep_days: 14, unheard: 'note'});
+      assert.deepEqual(state.posts[1]!.body, {preset: 'standard'});
+      assert.deepEqual(state.posts[2]!.body, {keep_days: 14, unheard: 'note'});
       assert.equal(await pane.locator('[data-wh-secret="url"] code').innerText(), `${BASE}/orders/sek-ret-123`);
       assert.equal(await pane.locator('[data-wh-secret="signing"] code').innerText(), 'whsec_c2VjcmV0');
       await shot(page, 'incoming-created-desktop', INCOMING);
@@ -226,7 +254,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       const recovered = page.waitForResponse(r => r.url().endsWith('/triggers/shop/recover'));
       await pane.locator('[data-wh-recover]').click();
       await recovered;
-      assert.deepEqual(state.posts.at(-1).body, {since_hours: 168});
+      assert.deepEqual(state.posts.at(-1)!.body, {since_hours: 168});
       await pane.locator('[data-wh-back]').click();
 
       // Tico Team's built-in: Edit only, keep days only.
@@ -236,7 +264,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       assert.equal(await pane.locator('[data-wh-rotate], [data-wh-sign], [data-wh-delete]').count(), 0);
       assert.doesNotMatch(await pane.locator('.wh-facts').innerText(), /Address/);
       await pane.locator('[data-wh-edit]').click();
-      assert.deepEqual(await page.locator('.wh-dialog form').evaluate(f => [...f.elements].filter(e => e.name).map(e => e.name)), ['keep_days']);
+      assert.deepEqual(await page.locator('.wh-dialog form').evaluate(f => [...(f as HTMLFormElement & {elements: Iterable<HTMLInputElement>}).elements].filter(e => e.name).map(e => e.name)), ['keep_days']);
       await page.locator('.wh-dialog [name=keep_days]').fill('10');
       await page.locator('.wh-dialog button[type=submit]').click();
       await page.locator('.wh-dialog').waitFor({state: 'detached'});
@@ -266,7 +294,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await make.locator('button[type=submit]').click();
       await make.waitFor({state: 'detached'});
       await pane.locator('[data-wh-secret="secret"]').waitFor();
-      const created = state.posts.find(x => x.path === '/api/v2/webhooks');
+      const created = state.posts.find(x => x.path === '/api/v2/webhooks')!;
       assert.deepEqual(created.body.events, ['task.*', 'approval.decided']);
       assert.equal(await pane.locator('[data-wh-secret="secret"] code').innerText(), 'whsec_b3V0Z29pbmc=');
       await pane.locator('[data-wh-back]').click();
@@ -307,7 +335,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       assert.equal(await edit.locator('[data-hdr-add]').isVisible(), true);
       await edit.locator('button[type=submit]').click();
       await edit.waitFor({state: 'detached'});
-      const saved = state.posts.find(x => x.path === '/api/v2/webhooks/wh1/update').body;
+      const saved = state.posts.find(x => x.path === '/api/v2/webhooks/wh1/update')!.body;
       assert.deepEqual(saved.filter, {departments: [], bots: ['eng', 'ops'], task_types: []});
       assert.deepEqual(saved.headers, [{name: 'x-api-key', secret: true}, {name: 'x-team', value: 'acme', secret: false},
         {name: 'Authorization', value: 'Bearer abc', secret: true}], 'blank rows are dropped and the kept secret is sent without a value');
@@ -326,12 +354,12 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       const caught = page.waitForResponse(r => r.url().endsWith('/wh1/recover'));
       await pane.locator('[data-wh-catchup-do="recover"]').click();
       await caught;
-      assert.match(state.posts.at(-1).body.since, /^\d{4}-\d\d-\d\d$/);
+      assert.match(state.posts.at(-1)!.body.since!, /^\d{4}-\d\d-\d\d$/);
       // Send missed carries on from where a round that said "more" stopped.
-      const missed = page.waitForResponse(r => r.url().endsWith('/wh1/replay') && r.request().postDataJSON().after === 'we_1');
+      const missed = page.waitForResponse(r => r.url().endsWith('/wh1/replay') && (r.request().postDataJSON() as Body).after === 'we_1');
       await pane.locator('[data-wh-catchup-do="replay"]').click();
       await missed;
-      assert.deepEqual(state.posts.at(-1).body, {since: '2026-10-20T03:00:00.000000Z', after: 'we_1'});
+      assert.deepEqual(state.posts.at(-1)!.body, {since: '2026-10-20T03:00:00.000000Z', after: 'we_1'});
       const paths = state.posts.map(x => x.path);
       assert.ok(paths.includes('/api/v2/webhooks/wh1/sends/s2/retry') && paths.includes('/api/v2/webhooks/wh1/example') && paths.includes('/api/v2/webhooks/wh1/resume'), paths.join(' '));
 
@@ -340,7 +368,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       pane = page.locator(GATEWAY);
       await pane.locator('[data-wh-no-key]').waitFor();
       assert.equal(hash(page), '#/settings/models');
-      assert.equal(await page.locator('[data-gateway-webhooks]').evaluate(d => d.open), true);
+      assert.equal(await page.locator('[data-gateway-webhooks]').evaluate(d => (d as HTMLDetailsElement).open), true);
       assert.match(await pane.locator('[data-wh-no-key]').innerText(), /Connect the Gateway first/);
       await shot(page, 'gateway-no-key-desktop', '#settings-gateway-card');
       // With a key: make an address, shown once.
@@ -363,13 +391,13 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await wake.uncheck();
       await woke;
       assert.deepEqual(state.posts.at(-1), {path: '/api/v2/triggers/shop/relay/wake', body: {wake: false}});
-      await page.waitForFunction(() => !document.querySelector('[data-wh-wake]').disabled);
+      await page.waitForFunction(() => !document.querySelector<HTMLInputElement>('[data-wh-wake]')!.disabled);
       assert.equal(await wake.isChecked(), false);
       const woke2 = page.waitForResponse(r => r.url().endsWith('/triggers/shop/relay/wake'));
       await wake.check();
       await woke2;
       assert.deepEqual(state.posts.at(-1), {path: '/api/v2/triggers/shop/relay/wake', body: {wake: true}});
-      await page.waitForFunction(() => !document.querySelector('[data-wh-wake]').disabled);
+      await page.waitForFunction(() => !document.querySelector<HTMLInputElement>('[data-wh-wake]')!.disabled);
       await shot(page, 'gateway-wake-desktop', '#settings-gateway-card');
       assert.deepEqual(errors, []);
       await page.close();
@@ -389,12 +417,12 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       // Old addresses, each at its part's new home.
       for (const [from, to] of [['#/webhooks', '#/automations/webhooks'], ['#/settings/triggers', '#/automations/webhooks'],
         ['#/settings/webhooks', '#/automations/webhooks'], ['#/settings/webhooks/incoming', '#/automations/webhooks'],
-        ['#/settings/webhooks/outgoing', '#/tools/webhooks'], ['#/settings/webhooks/gateway', '#/settings/models']]) {
+        ['#/settings/webhooks/outgoing', '#/tools/webhooks'], ['#/settings/webhooks/gateway', '#/settings/models']] as [string, string][]) {
         await go(page, '#/tools');
         await page.waitForFunction(() => location.hash === '#/tools');
         await go(page, from);
         await page.waitForFunction(to => location.hash === to, to);
-        await page.locator({'#/automations/webhooks': INCOMING, '#/tools/webhooks': OUTGOING, '#/settings/models': GATEWAY}[to]).locator(':scope > *').first().waitFor();
+        await page.locator(({'#/automations/webhooks': INCOMING, '#/tools/webhooks': OUTGOING, '#/settings/models': GATEWAY} as Record<string, string>)[to]!).locator(':scope > *').first().waitFor();
       }
       assert.deepEqual(errors, []);
       await page.close();
@@ -469,7 +497,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       // Phone: the row with its secret, and the edit form, fit.
       const state = server();
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
-      state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: null};
+      state.triggers[0]!.relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: null};
       const {page, errors} = await open(browser, GATEWAY_LINK, {width: 390, height: 844}, state);
       const pane = page.locator(GATEWAY);
       const row = pane.locator('[data-wh-wake-url]');
@@ -488,7 +516,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
     }
     {
       // Hidden on a hosted server (HQ wakes it) and from anyone but the owner (403).
-      for (const [what, more] of [['hosted', {hosted: true}], ['member', {role: 'member'}]]) {
+      for (const [what, more] of [['hosted', {hosted: true}], ['member', {role: 'member'}]] as [string, Partial<State>][]) {
         const state = Object.assign(server(), more);
         state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
         const {page, errors} = await open(browser, GATEWAY_LINK, undefined, state);
@@ -503,7 +531,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       // Phone: list, detail, outgoing and Gateway with nothing sideways.
       const state = server();
       state.relay = {...state.relay, key: 'connected', last_pull: AGO(1), pending: 0};
-      state.triggers[0].relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: true};
+      state.triggers[0]!.relay = {address_prefix: 'https://gw.tico.dev/v1/hooks/rl_1', created_at: AGO(60), wake: true};
       state.hosted = true;
       const {page, errors} = await open(browser, '#/automations/webhooks', {width: 390, height: 844}, state);
       let pane = page.locator(INCOMING);
