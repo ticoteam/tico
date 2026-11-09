@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/thread_catchup.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 37,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 60,
+                    "endColumn": 64,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

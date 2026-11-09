@@ -3,11 +3,11 @@
 import json
 import re
 from fastapi import Request
-from . import lifecycle, models as M, proposals, strategy_bot, task_privacy as privacy, views
+from . import docs_merge, lifecycle, models as M, proposals, strategy_bot, task_privacy as privacy, views
 from .store import H, Problem, encode
 
 
-# The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.js).
+# The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.ts).
 SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
 
 
@@ -30,7 +30,7 @@ def register(app, auth, mutate, settings, store):
             views.human_only(who)
             if not isinstance(body.value, bool):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
-        # The way the web's Send goes (ui/app/pill.js): read by any client; sends that name no delivery ignore it.
+        # The way the web's Send goes (ui/app/pill.ts): read by any client; sends that name no delivery ignore it.
         if key == "compose.send_way" and not (
             body.value in ("steer", "queue") or isinstance(body.value, str) and body.value in SEND_WAY_DEFERS
         ):
@@ -101,6 +101,10 @@ def register(app, auth, mutate, settings, store):
             )
             # A proposal answers as a bot's cap PUT does too: the approval's id and that it waits on a person.
             return {**row, "approval": row["id"], "status": "pending"} if body.kind in proposals.KINDS else row
+
+        if body.kind == "merge" and who.role == "bot":
+            # A docs-only pull request needs no approval: the bot merges it itself (policies/approvals.md).
+            docs_merge.refuse(getattr(app.state, "github_app", None), body.payload)
 
         draft = mutate(request, body, work)
         if body.kind == "support" and who.role == "bot":

@@ -1210,7 +1210,7 @@ class Bridge:
             hops += 1
             if not top:
                 return {"moot": True}
-        title = conv.get("subject") or "Sub-thread"
+        title = conv.get("subject") or _core().shown_name(c, None, conv)
         prefix = f"↳ {title}" if conv["id"] != top["id"] else ""
         anchor = top.get("parent_message_id")
         mapped = (

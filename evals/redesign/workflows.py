@@ -1223,7 +1223,7 @@ def wf3_steps(org, f):
             "post",
             "/api/v2/market/entities",
             {
-                "type": "company",
+                "type": "organization",
                 "name": "Northwind",
                 "evidence_ids": [filed.body["evidence"]["id"]],
                 "properties": {"source": url},

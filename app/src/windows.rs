@@ -1092,7 +1092,7 @@ pub(crate) fn switch_to(app: &App, id: &str) -> tauri::Result<()> {
 }
 
 /// What the page on screen runs as a switch away begins: its own leave (`window.ticoPageHidden`, which ends a call
-/// and a join on its way: ui/app/thread-call.js), and media it was playing pauses: it is no longer on screen. Only
+/// and a join on its way: ui/app/thread-call.ts), and media it was playing pauses: it is no longer on screen. Only
 /// for a clean leave: whether the page is then kept is `keeps`, which does not trust the page.
 const HIDE_PAGE: &str = "try { window.ticoPageHidden && window.ticoPageHidden(); } catch (e) {}\n\
     document.querySelectorAll('video, audio').forEach(m => { try { m.pause(); } catch (e) {} });";
@@ -3566,7 +3566,7 @@ mod window_state_tests {
 }
 
 // Search from the View menu (⌘K): bring the window forward, then the page opens
-// its own search dialog (`window.ticoSearch` in ui/app/search.js). The menu accelerator takes
+// its own search dialog (`window.ticoSearch` in ui/app/search.ts). The menu accelerator takes
 // ⌘K before the webview sees it, so the page's own shortcut still works everywhere else.
 pub(crate) fn open_search(app: &App) {
     show_window(app);

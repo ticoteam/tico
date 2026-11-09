@@ -39,7 +39,8 @@ _RR: Any = _rule_due_routine
 
 Result = dict[str, object]
 ACTOR = "bot:bookkeeper"  # the Bookkeeper (backend/bookkeeper.py): it owns the due dates and their routines
-ACCOUNT_BASE = "2100"  # a jurisdiction's liability account takes the first free code from here
+ACCOUNT_BASE = "2300"  # a new jurisdiction's liability account takes the first free code from here, clear of the
+# card lines from 2100 (banking.CARDS); a jurisdiction added before keeps its code
 DEFAULT_DUE_DAY = 20  # a sales tax return falls due on this day of the month after its quarter
 TASK_DAYS_SALES = 14  # a routine opens the task this many days before a sales tax due date
 TASK_DAYS_1099 = 30  # and this many before the 1099-NEC due date

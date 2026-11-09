@@ -164,6 +164,7 @@ CELL_ENV_KEYS = frozenset(
         "TICO_DOMAIN",
         "TICO_GATEWAY_INVITE",
         "TICO_OWNER_LINK_HASH",
+        "TICO_SETUP_HANDOFF_HASH",
         "TICO_BACKUP_URL",
         "TICO_BACKUP_REGION",
         "TICO_BACKUP_ENDPOINT",

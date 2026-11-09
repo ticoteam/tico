@@ -100,7 +100,9 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
         if command in names:
             names.remove(command)
             names.update(tools)
-    assert names - hubtools.SHELL_ONLY == set(hubtools.BY_NAME), names ^ set(hubtools.BY_NAME)
+    # An UNLISTED tool (a placeholder) has no command: it is reached only by name.
+    tools = set(hubtools.BY_NAME) - hubtools.UNLISTED
+    assert names - hubtools.SHELL_ONLY == tools, names ^ tools
     assert hubtools.SHELL_ONLY <= names
 
 

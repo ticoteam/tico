@@ -62,7 +62,7 @@ How a rule is used:
 |---|---|
 | Rules (Internal, External) | `org_rules` with `kind internal\|external` |
 | Who / With | `who`, `with` |
-| From | `rule_sources` |
+| From | `org_rules.source_entity_id` (an organization entity) |
 | Suggested | status `suggested` |
 | Due | `rule_due_dates` + `rule_due_status`; routine optional |
 | Decide | `judge.py`'s default engine; not "Jev" |
@@ -104,9 +104,10 @@ The shape follows `strategy_bets` (`backend/strategy.py`): a statement, cites, p
 events.
 
 ```
-rule_sources(id, name, kind vendor|customer|government|other, created_by, created_at)
+Rule sources are organization entities, not a table (migration 20261108044824 retired `rule_sources`): an entity's
+`properties.rule_source` holds {id, kind vendor|customer|government|other, created_by, created_at}.
 
-org_rules(id, kind internal|external, text, description?, source_id (external only),
+org_rules(id, kind internal|external, text, description?, source_entity_id (external only; the From),
           cite {file_id+version, section, quote} (external only),
           who  {everyone: bool, all_bots: bool, groups: [], bots: [], people: []},
           with {groups: [], bots: [], people: []} (internal only, optional; empty = any output),
@@ -296,7 +297,9 @@ ahead of time so it doesn't try.
     what inboxes and the mailbox loop read. Send anyway submits the hold's one-shot server nonce: the normal write
     runs once, as the bot, with `bot_access` and ask ingest, but Decide isn't asked again for that exact payload. A
     changed payload or a newer rule version is a new check. A held automation step whose automation now acts as
-    someone else (a new owner, a group's new lead) is refused with 409 `changed`. Keep blocked leaves it. The review
+    someone else (a new owner, a group's new lead) is refused with 409 `changed`. Keep blocked leaves it. A held
+    output nobody decides within 24 hours expires unsent: the hourly sweep keeps it blocked (oldest first, 50 a sweep)
+    and tells the bot it was not sent, so it can write it again within the rules or drop it. The review
     task body is a fixed line plus the hold id; nothing from the output is copied in.
   - **Appeal:** `hub rules appeal <hold-id> "<why>"` sends the hold to the reviewer as a review task. `why` is stored
     on the hold and shown only to the reviewer, never in a task body or a prompt. It isn't checked by rules, never delivers the payload, and isn't an override. That's the

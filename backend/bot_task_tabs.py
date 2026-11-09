@@ -4,10 +4,10 @@ tall each may grow, and the tabs over its task list, with their names, their ord
 A layout belongs to the bot, not to whoever looks: everyone who opens the bot's page sees the same sidebar, and
 changing one bot's never moves another's. The Assistant is the exception, since its list is each person's own: there
 every person keeps a layout of their own. A bot without a saved layout shows Tasks, Updates, Files and Routines in that
-order with the four default tabs (Needs You, Doing, Blocked, Assigned to Others).
+order with the four default tabs (Needs you, Doing, Blocked, Assigned to others).
 
-Needs You, Doing and Blocked are editable filters with default conditions. Their built-in key preserves identity
-for Reset to default and Needs You also keeps the bot's questions and approvals. Done Recently keeps its own view.
+Needs you, Doing and Blocked are editable filters with default conditions. Their built-in key preserves identity
+for Reset to default and Needs you also keeps the bot's questions and approvals. Done recently keeps its own view.
 Filters are rows of field and value that a task must all match, over the
 tasks the bot holds or asked for. The fields are a fixed list (FIELDS), not a query language. "me" and "others" mean
 the person looking, so the server counts each filter for its viewer. There is no cap on how many tabs a bot keeps;
@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 
 from . import models as M
+from . import pipeline_rights
 from . import question_tasks as QT
 from .store import H, Problem
 
@@ -33,7 +34,7 @@ CREATE TABLE IF NOT EXISTS bot_task_tabs (
 
 ACTIVE = ["open", "doing", "waiting"]
 FINISHED = ("done", "closed", "declined")
-# Finished tasks a filter shows unless it says Done within: the last two weeks, as Done Recently.
+# Finished tasks a filter shows unless it says Done within: the last two weeks, as Done recently.
 RECENT_DAYS = 14
 # Rows sent per filter tab in one read; its count is exact, and `next` reads the rest a page at a time.
 ROWS = 200
@@ -49,11 +50,11 @@ DEFAULT_CONDITIONS = {
 }
 
 DEFAULT = [
-    {"builtin": "needs", "name": "Needs You", "show_count": True},
+    {"builtin": "needs", "name": "Needs you", "show_count": True},
     {"builtin": "active", "name": "Doing", "show_count": True},
     {"builtin": "blocked", "name": "Blocked", "show_count": True},
     {
-        "name": "Assigned to Others",
+        "name": "Assigned to others",
         "show_count": True,
         "conditions": [
             {"field": "asked_by", "value": "this_bot"},
@@ -235,7 +236,7 @@ def clean(c, tabs):
             if tab.builtin in builtins:
                 raise bad("Each built-in tab can be listed once")
             if tab.types or tab.states or tab.waiting_on or (tab.builtin == "done" and tab.conditions):
-                raise bad("A built-in tab cannot use legacy fields; Done Recently keeps its own filter")
+                raise bad("A built-in tab cannot use legacy fields; Done recently keeps its own filter")
             builtins.add(tab.builtin)
             item = {"builtin": tab.builtin, "name": tab.name, "show_count": tab.show_count}
             if tab.builtin in DEFAULT_CONDITIONS:
@@ -472,8 +473,8 @@ def install(app, store, auth, mutate, settings, task_views=None):
         """What each filter tab shows the caller: its count and its newest tasks, among the tasks the bot holds or
         asked for that the caller may read, with `next` when it has more. `tab` (a key, c0, c1…) reads that tab alone
         and `before` (a tab's `next`) its next page. Default filters use their stable built-in keys;
-        Done Recently is drawn by the page from its own reads. `match_ids` optionally checks supplemental
-        question IDs against Needs You, so its count can deduplicate even beyond the current page."""
+        Done recently is drawn by the page from its own reads. `match_ids` optionally checks supplemental
+        question IDs against Needs you, so its count can deduplicate even beyond the current page."""
         who = request.state.identity
         auth.domain(who)
         after = before.rsplit("|", 1) if before else None
@@ -484,7 +485,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
-            visible = auth.task_sql(c, who)
+            visible = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             out, ids = [], []
             for at, layout_tab in enumerate(read(c, settings, who, bot)["tabs"]):
                 key = layout_tab.get("builtin") or "c" + str(at)

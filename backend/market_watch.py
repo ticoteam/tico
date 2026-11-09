@@ -68,11 +68,11 @@ ACTOR = H.KEEPER  # who writes what a check finds
 GITHUB = re.compile(r"github:([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})")
 
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS market_watches (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, url TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS entity_watches (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, url TEXT NOT NULL, "
     "kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT, checked_at TEXT, changed_at TEXT, "
     "last_hash TEXT, last_text TEXT, last_status TEXT, error TEXT, signal_watch_id TEXT)",
-    "CREATE INDEX IF NOT EXISTS market_watches_active ON market_watches(active, checked_at)",
-    "CREATE INDEX IF NOT EXISTS market_watches_entity ON market_watches(entity_id)",
+    "CREATE INDEX IF NOT EXISTS entity_watches_active ON entity_watches(active, checked_at)",
+    "CREATE INDEX IF NOT EXISTS entity_watches_entity ON entity_watches(entity_id)",
 )
 
 # Test seams: the name resolver and socket the fetch uses, and how the check thread is started.
@@ -175,12 +175,12 @@ def row_of(row, text=False):
 
 
 def get(c, watch_id):
-    found = c.execute("SELECT * FROM market_watches WHERE id=?", (watch_id,)).fetchone()
+    found = c.execute("SELECT * FROM entity_watches WHERE id=?", (watch_id,)).fetchone()
     return dict(found) if found else None
 
 
 def listing(c, entity_id=None):
-    sql, args = "SELECT * FROM market_watches", ()
+    sql, args = "SELECT * FROM entity_watches", ()
     if entity_id:
         sql, args = sql + " WHERE entity_id=?", (entity_id,)
     return [row_of(r) for r in c.execute(sql + " ORDER BY active DESC, created_at, id", args)]
@@ -221,9 +221,9 @@ def add(c, actor, entity_id, url, kind):
     entity = MK.entity(c, entity_id)
     if not entity:
         raise Problem("not_found", f"There is no market entity {entity_id}", 404)
-    if c.execute("SELECT 1 FROM market_watches WHERE active=1 AND url=?", (url,)).fetchone():
+    if c.execute("SELECT 1 FROM entity_watches WHERE active=1 AND url=?", (url,)).fetchone():
         raise Problem("exists", "That page is already watched", 409)
-    if c.execute("SELECT count(*) FROM market_watches WHERE active=1").fetchone()[0] >= MAX_ACTIVE:
+    if c.execute("SELECT count(*) FROM entity_watches WHERE active=1").fetchone()[0] >= MAX_ACTIVE:
         raise Problem("limit", f"At most {MAX_ACTIVE} pages are watched at once; stop one first", 409)
     row = {
         "id": H.new_id(),
@@ -234,7 +234,7 @@ def add(c, actor, entity_id, url, kind):
         "created_at": H.now(),
     }
     c.execute(
-        "INSERT INTO market_watches (id, entity_id, url, kind, active, created_by, created_at) "
+        "INSERT INTO entity_watches (id, entity_id, url, kind, active, created_by, created_at) "
         "VALUES (:id, :entity_id, :url, :kind, 1, :created_by, :created_at)",
         row,
     )
@@ -247,7 +247,7 @@ def stop(c, actor, watch_id):
     if not row:
         raise Problem("not_found", f"There is no watch {watch_id}", 404)
     if row["active"]:
-        c.execute("UPDATE market_watches SET active=0 WHERE id=?", (watch_id,))
+        c.execute("UPDATE entity_watches SET active=0 WHERE id=?", (watch_id,))
         H.event(c, actor, "market.watch.stop", watch_id, {"entity": row["entity_id"]})
     return row_of(get(c, watch_id))
 
@@ -260,7 +260,7 @@ def due(c, limit=BATCH, skip_mirrored=False):
     return [
         dict(r)
         for r in c.execute(
-            "SELECT id, entity_id, url, kind FROM market_watches WHERE active=1 AND kind<>? "
+            "SELECT id, entity_id, url, kind FROM entity_watches WHERE active=1 AND kind<>? "
             f"{held} ORDER BY checked_at IS NOT NULL, checked_at, id LIMIT ?",
             (RELEASE, limit),
         )
@@ -275,7 +275,7 @@ def record(c, watch, result):
     now = H.now()
     if result["status"] != "ok":
         c.execute(
-            "UPDATE market_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
+            "UPDATE entity_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
             (now, result["status"], result.get("error") or "", row["id"]),
         )
         return False
@@ -283,18 +283,18 @@ def record(c, watch, result):
     fresh = digest(text)
     if row["last_hash"] is None:  # the baseline
         c.execute(
-            "UPDATE market_watches SET checked_at=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
+            "UPDATE entity_watches SET checked_at=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
             (now, fresh, text, row["id"]),
         )
         return False
-    c.execute("UPDATE market_watches SET checked_at=?, last_status='ok', error=NULL WHERE id=?", (now, row["id"]))
+    c.execute("UPDATE entity_watches SET checked_at=?, last_status='ok', error=NULL WHERE id=?", (now, row["id"]))
     if row["last_hash"] == fresh:
         return False  # nothing new
     removed, added = changes(row["last_text"] or "", text)
     if size_of(removed, added) < MIN_CHANGE:
         return False  # too small to report; the baseline stays, so slow edits add up
     c.execute(
-        "UPDATE market_watches SET changed_at=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"])
+        "UPDATE entity_watches SET changed_at=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"])
     )
     file_change(c, row, removed, added, fresh, now)
     return True
@@ -385,7 +385,7 @@ def _set_cursor(c, cursor):
 def file_signal(c, change):
     """One change HQ found on a watch of this install, filed the way a local read's change is. 1 when it was filed."""
     row = c.execute(
-        "SELECT * FROM market_watches WHERE signal_watch_id=? AND active=1", (str(change.get("watch_id") or ""),)
+        "SELECT * FROM entity_watches WHERE signal_watch_id=? AND active=1", (str(change.get("watch_id") or ""),)
     ).fetchone()
     if not row:
         return 0  # a watch stopped here since: HQ's change is not news
@@ -395,7 +395,7 @@ def file_signal(c, change):
         removed, added = [], [str(change.get("title") or "")] + str(change.get("added") or "").splitlines()
     else:
         removed, added = str(change.get("removed") or "").splitlines(), str(change.get("added") or "").splitlines()
-    c.execute("UPDATE market_watches SET changed_at=? WHERE id=?", (found, watch["id"]))
+    c.execute("UPDATE entity_watches SET changed_at=? WHERE id=?", (found, watch["id"]))
     file_change(
         c,
         watch,
@@ -429,12 +429,12 @@ def mirror(store, key, base, pull=True):
     held = {w["id"]: w for w in listed.get("watches") or [] if isinstance(w, dict) and w.get("id")}
     with store.read() as c:
         active = [
-            dict(r) for r in c.execute("SELECT id, kind, url, signal_watch_id FROM market_watches WHERE active=1")
+            dict(r) for r in c.execute("SELECT id, kind, url, signal_watch_id FROM entity_watches WHERE active=1")
         ]
         ended = [
             dict(r)
             for r in c.execute(
-                "SELECT id, signal_watch_id FROM market_watches WHERE active=0 AND signal_watch_id IS NOT NULL"
+                "SELECT id, signal_watch_id FROM entity_watches WHERE active=0 AND signal_watch_id IS NOT NULL"
             )
         ]
     pairs = []
@@ -449,13 +449,13 @@ def mirror(store, key, base, pull=True):
                 continue  # HQ refused it: this check reads it here
             held[ident] = made
             with store.transaction() as c:
-                c.execute("UPDATE market_watches SET signal_watch_id=? WHERE id=? AND active=1", (ident, row["id"]))
+                c.execute("UPDATE entity_watches SET signal_watch_id=? WHERE id=? AND active=1", (ident, row["id"]))
         pairs.append((row["id"], ident))
     for row in ended:
         gone, _, _ = GW.signals_end(base, key, row["signal_watch_id"])
         if gone in (204, 404):
             with store.transaction() as c:
-                c.execute("UPDATE market_watches SET signal_watch_id=NULL WHERE id=?", (row["id"],))
+                c.execute("UPDATE entity_watches SET signal_watch_id=NULL WHERE id=?", (row["id"],))
     out = {"read": 0, "changed": 0, "errors": 0}
     with store.transaction() as c:
         for row_id, ident in pairs:
@@ -464,7 +464,7 @@ def mirror(store, key, base, pull=True):
                 continue  # HQ has not read it yet
             ok = theirs["status"] == "ok"
             c.execute(
-                "UPDATE market_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
+                "UPDATE entity_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
                 (
                     theirs.get("checked_at") or H.now(),
                     theirs["status"],
@@ -590,7 +590,7 @@ def tick(store, at=None):
         return False
     with store.transaction() as c:
         claimed = claim(c, day)
-        watching = claimed and c.execute("SELECT 1 FROM market_watches WHERE active=1 LIMIT 1").fetchone()
+        watching = claimed and c.execute("SELECT 1 FROM entity_watches WHERE active=1 LIMIT 1").fetchone()
     store.__dict__["market_watch_day"] = day
     return bool(watching) and start(store)
 

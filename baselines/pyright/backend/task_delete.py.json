@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/task_delete.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 16,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

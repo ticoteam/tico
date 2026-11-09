@@ -1,4 +1,4 @@
-// The last screen comes back the moment the same person opens the app again (ui/app/boot-snap.js): it is kept once the
+// The last screen comes back the moment the same person opens the app again (ui/app/boot-snap.ts): it is kept once the
 // page settles (only read-mostly pages, nothing private), shown as soon as /me answers as that person (before the
 // roster) in a shadow root over #main, out of the page's id space, while the new page draws into the real #main under
 // it, and goes when that page settles, or at most SNAP_SHOW_MAX_MS after it was shown. Another person, or a sign-out,

@@ -3,10 +3,12 @@ modules that make a page's content are stubbed at the package, so what is under 
 
 import hashlib
 import importlib
+import io
 import json
 import os
 import re
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -14,10 +16,11 @@ import pytest
 import httpx
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import backend.company_page as package
 import backend.tests.test_api as test_api
-from backend import automations, oidc, screening, task_trigger_rules, webhooks
+from backend import automations, oidc, screening, task_trigger_rules, team_icon, webhooks
 from backend import hubdb as H
 from backend.company_page import reader_app, readers as R, release, render
 from backend.store import digest
@@ -25,6 +28,7 @@ from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the a
 from backend.tests.test_oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
 
 ORIGIN = "https://open.acme.example"
+UI = Path(__file__).resolve().parents[2] / "ui" / "assets"
 NOT_FOUND = "Not found"
 
 
@@ -1231,3 +1235,74 @@ def test_the_real_modules_together_give_a_reader_a_page_and_take_it_back(site, m
     assert "October" not in client.get("/").text
     site.transparency("closed")
     assert plain_404(client.get("/"))
+
+
+# ------------------------------------------------------------------------------------------------------- icons
+def logo_png(colour):
+    """A logo with transparent edges, as a team sends it: the team icon keeps it as it is, only square."""
+    logo = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    logo.paste(colour + (255,), (10, 10, 30, 30))
+    out = io.BytesIO()
+    logo.save(out, "PNG")
+    return out.getvalue()
+
+
+def test_the_reader_icons_are_tico_until_the_team_sets_a_logo_and_then_it(site):
+    client = site.client()
+    site.transparency("open")
+    for path, rel in (("/favicon.ico", "favicon-32.png"), ("/apple-touch-icon.png", "apple-touch-icon.png")):
+        answer = client.get(path)
+        assert answer.status_code == 200 and answer.content == (UI / rel).read_bytes(), path
+        assert answer.headers["cache-control"] == "public, max-age=86400"
+        assert client.head(path).status_code == 200
+    assert site.api.post("/api/v2/team/icon", content=logo_png((0, 0, 255)), headers=headers()).status_code == 200
+    stored = site.api.get("/api/v2/team/icon").content
+    favicon = client.get("/favicon.ico")
+    assert favicon.content == stored and favicon.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_the_team_logo_as_apple_touch_icon_is_flat_and_made_once_per_logo(site, monkeypatch):
+    client = site.client()
+    site.transparency("open")
+    assert site.api.post("/api/v2/team/icon", content=logo_png((0, 0, 255)), headers=headers()).status_code == 200
+    calls = []
+    made = team_icon.touch_png
+    monkeypatch.setattr(team_icon, "touch_png", lambda data: calls.append(data) or made(data))
+    first = None
+    for _ in range(2):
+        answer = client.get("/apple-touch-icon.png")
+        assert answer.status_code == 200 and answer.headers["content-type"] == "image/png"
+        assert answer.headers["cache-control"] == "public, max-age=3600"
+        first = first or answer.content
+        assert answer.content == first
+        with Image.open(io.BytesIO(answer.content)) as icon:
+            assert icon.size == (180, 180) and icon.mode == "RGB"
+            assert icon.getpixel((5, 5)) == (255, 255, 255)
+            assert icon.getpixel((90, 90))[2] > 240  # the blue of the logo, in the middle
+    assert len(calls) == 1
+    assert site.api.post("/api/v2/team/icon", content=logo_png((255, 0, 0)), headers=headers()).status_code == 200
+    for _ in range(2):
+        assert client.get("/apple-touch-icon.png").content != first
+    assert len(calls) == 2
+
+
+def test_the_reader_host_serves_only_the_brand_files_from_assets(site):
+    client = site.client()
+    site.transparency("private")
+    svg = client.get("/assets/tico/tico-mark.svg")
+    assert svg.status_code == 200 and svg.headers["content-type"] == "image/svg+xml"
+    assert svg.content == (UI / "tico" / "tico-mark.svg").read_bytes()
+    assert client.get("/assets/favicon-32.png").content == (UI / "favicon-32.png").read_bytes()
+    assert plain_404(client.get("/assets/observability-vendors.js"))
+
+
+def test_closed_answers_no_icon_on_the_reader_host(site):
+    client = site.client()
+    site.transparency("closed")
+    for path in (
+        "/favicon.ico",
+        "/apple-touch-icon.png",
+        "/assets/favicon-32.png",
+        "/assets/tico/tico-mark.svg",
+    ):
+        assert plain_404(client.get(path)), path

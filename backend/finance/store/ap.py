@@ -6,8 +6,10 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from . import contacts as SC
 from .banking import LIVE_PAYMENT, like
 from ..core.ledger import name_key
+from ..core.merchant import merchant_key
 from .ledger import new_id, tagset
 
 TABLES = frozenset(
@@ -30,8 +32,19 @@ DOCS = {
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
-    """Insert one row (an id is made when the row has none) and return its id."""
-    assert table in TABLES
+    """Insert one row (an id is made when the row has none) and return its id. A contact goes to the Directory
+    (store/contacts.py): fin_contacts is a view."""
+    assert table in TABLES and table != "fin_vendor_aliases"
+    if table == "fin_contacts":
+        fields = dict(row)
+        return SC.create(
+            c,
+            str(fields.pop("book_id")),
+            fields,
+            str(fields.pop("created_at")),
+            str(fields.pop("created_by")),
+            str(fields.pop("id", "") or ""),
+        )
     values = {"id": new_id(), **row}
     cols = sorted(values)
     c.execute(f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [values[k] for k in cols])
@@ -46,10 +59,18 @@ def update(
     where: str = "",
     args: Sequence[object] = (),
 ) -> int:
-    """Set `fields` on one row (only when `where` also holds). How many rows changed."""
-    assert table in TABLES
+    """Set `fields` on one row (only when `where` also holds). How many rows changed. A contact's change goes to the
+    Directory (store/contacts.py)."""
+    assert table in TABLES and table != "fin_vendor_aliases"
     if not fields:
         return 0
+    if table == "fin_contacts":
+        if (
+            where
+            and c.execute(f"SELECT 1 FROM fin_contacts WHERE id=? AND ({where})", [row_id, *args]).fetchone() is None
+        ):
+            return 0
+        return SC.update(c, row_id, fields)
     cols = sorted(fields)
     sql = f"UPDATE {table} SET {','.join(k + '=?' for k in cols)} WHERE id=?" + (f" AND ({where})" if where else "")
     return c.execute(sql, [*(fields[k] for k in cols), row_id, *args]).rowcount
@@ -262,11 +283,34 @@ def aliases_of(c: sqlite3.Connection, contact_id: str) -> list[str]:
 
 
 def alias_add(c: sqlite3.Connection, book_id: str, name_key: str, contact_id: str, at: str) -> None:
-    c.execute(
-        "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at) VALUES(?,?,?,?) "
-        "ON CONFLICT(book_id, name_key) DO NOTHING",
-        (book_id, name_key, contact_id, at),
-    )
+    SC.alias_add(c, book_id, name_key, contact_id, at)
+
+
+def alias_row(c: sqlite3.Connection, book_id: str, name_key: str) -> Any:
+    return c.execute(
+        "SELECT contact_id, merged_from FROM fin_vendor_aliases WHERE book_id=? AND name_key=?", (book_id, name_key)
+    ).fetchone()
+
+
+def alias_put(
+    c: sqlite3.Connection, book_id: str, name_key: str, contact_id: str, at: str, merged_from: str | None
+) -> None:
+    """A vendor merge's alias: a new name, or an alias moved to `contact_id` from the contact it was on."""
+    SC.alias_put(c, book_id, name_key, contact_id, at, merged_from)
+
+
+def alias_delete(c: sqlite3.Connection, book_id: str, name_key: str) -> None:
+    SC.alias_delete(c, book_id, name_key)
+
+
+def active_vendor_alias(c: sqlite3.Connection, book_id: str, name_key: str) -> str:
+    """The active vendor contact a name key is an alias of, or ""."""
+    row = c.execute(
+        "SELECT a.contact_id FROM fin_vendor_aliases a JOIN fin_contacts k ON k.id=a.contact_id WHERE "
+        "a.book_id=? AND a.name_key=? AND k.active=1 AND k.kind IN ('vendor','both')",
+        (book_id, name_key),
+    ).fetchone()
+    return str(row[0]) if row is not None else ""
 
 
 def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
@@ -294,12 +338,16 @@ def renewals_due(c: sqlite3.Connection, book_id: str) -> list[Any]:
 
 
 def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
-    """The vendor a budget or a charge means: a contact's id stays; a name aliased to a contact (even one no longer
-    active: its history still maps) is that contact's id; any other name is its name key."""
-    if not key or is_contact(c, key):
+    """The vendor a budget or a charge means: a name aliased to a contact (even one no longer active: its history still
+    maps) is that contact's id, and so is a contact id a merge moved onto another vendor (vendors.py). A contact's id
+    with no alias stays; any other name is its name key."""
+    if not key:
         return key
     nk = name_key(key)
-    return alias_of(c, book_id, nk) or nk
+    alias = alias_of(c, book_id, nk)
+    if alias:
+        return alias
+    return key if is_contact(c, key) else nk
 
 
 def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
@@ -308,7 +356,10 @@ def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
     vendor = vendor_resolved(c, book_id, key)
     if not vendor:
         return []
-    names = aliases_of(c, vendor) if is_contact(c, vendor) else [vendor]
+    if is_contact(c, vendor):
+        names = aliases_of(c, vendor)
+    else:  # a plain name also carries its merchant key: lines the bank posted under that key before the name
+        names = [merchant_key(vendor)]
     return list(dict.fromkeys([vendor, *names]))
 
 

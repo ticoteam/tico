@@ -202,7 +202,9 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks, In QA is `qa` and
 Post Release QA is `release_qa`; reviews send their feedback back to the Builder's Fixes step
 whichever way they go, In QA passes to the merge (skip tag `skip-qa`), Pending Release takes merged tickets, and
-released steps never hold. Change any of it on the steps.
+released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
+Release to the next step, with the note "Shipped in vX.Y.Z", and closes the schedule's open Release task once nothing
+is left at Pending Release.
 
 GitHub access is reported restored only after a successful current head and checks read. An expired or canceled move stops retrying that move; its disappearance never proves access returned. Engineering and Health retain the single source notice while recovery remains unconfirmed.
 
@@ -253,6 +255,28 @@ hours becomes a stuck item, with the current reason. A different job or reason, 
 or a gap of more than five minutes in observations starts a new clock. An old queue alone does
 not establish twelve hours of refusal. Missing task threads and failed recovery delivery
 are recorded once and shown with the unstarted assignment, rather than silently omitted.
+
+### Resuming stranded work
+
+A bot's task can be left In Progress (`doing`) when a run ends without finishing it, handing it on or recording what
+it waits on. Once nothing has changed on such a task for 15 minutes after its last run ended, with no run queued or going
+for it and nothing recorded to wait on (no hold, snooze, follow-up time, deferral, blocker, open subtask, approval,
+unanswered question, worktree, milestone or pull request wait), Tico wakes its owner bot once on it. The wake goes
+through the ordinary wake path, so turn limits, budgets, back-off and lanes still apply, and it reaches a Reviewer too,
+which does not start its own open work. A sweep every 10 minutes wakes at most 25 such tasks, oldest first, one per bot
+and five per computer. It skips a bot that is paused, held, draining, busy with another run, or whose computer is offline.
+A task is resumed at most six times a day.
+
+A bot's Dev ticket in review at a check step (Review 1, Review 2, In QA) is resumed the same way once its check is
+over: the builder owns the next move (merge once CI is green, fix or re-run CI that failed or was cancelled, ask for the
+check again). It needs no check open or waiting for a free reviewer, no CI going and no merge queued on its pull request, and nothing changed on it or
+on a check under it for an hour.
+
+Progress is a status, step or owner change, a note, comment or message by the bot on the task, or a subtask or question
+filed under it. After three resumes in a row with no progress, Tico stops resuming the task and lists it once on the
+task roundup of the bot's manager (another bot on the org chart), or on the bot's own roundup when it has none. A person
+is never told. Progress makes the task eligible again. People's tasks, tasks that are open or waiting, and tasks in
+review anywhere but a check step are never resumed this way. **Automations → System jobs** lists the sweep as **Resume stranded work**.
 
 ## Work that is waiting
 
@@ -447,15 +471,17 @@ worktree holds, and people's tasks are never reopened this way.
 
 The task roundup leaves a task off its bot's list while the bot has a run queued or running on it, or while the task
 waits on something recorded: a blocker, an open subtask, a pending approval, an unanswered question, a due date, a
-snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A bot whose profile has its
+snooze, a stored resume, a pull request link armed with `--wake-once` or a milestone wait. A task waiting only on
+bots is listed to the bot it waits on, except while that bot has a run queued or running on the subtask or blocker
+that holds it. A bot whose profile has its
 sweeps off (a reviewer, lead, responder or monitor) is listed only its unanswered questions and its own follow-up
 times. The Task Manager's stalled-task list does not use these skips, so a task no check lists
 still reaches its report.
 
-Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. The task roundup
+Apart from [resuming stranded work](#resuming-stranded-work), Tico does not wake a bot once for each stalled task, and does not escalate repeated stalls to BotOps. The task roundup
 is the one grouped wake for a bot's tasks: each bot gets at most one list in each run (three times a day by default,
 at 6am, noon and 6pm company time), with its lines (a follow-up time that came, an unanswered question, an assignment
-not started, a task to restate, a late Dev ticket,
+not started, a task to restate, a stranded task it stopped resuming, a late Dev ticket,
 an engineering exception, a backlog, a missed update or a quiet task; see [System routines](system-routines.md)). The list goes only to the bot, in its own notice room with Tico, so the roundup
 never tells a person about a task. A private task is named by its id alone: who set its follow-up and its note, and what
 changed on it, stay out of the line.
@@ -692,6 +718,14 @@ This ordering applies to Decide; it does not change the order of Needs you elsew
 
 ### When nobody answers
 
+A reversible, internal default is not asked at all: a question whose `if_no_answer` has kind `reversible` is refused
+before anything is written (`422 ask_default_go_ahead`, "do your default now and record what you did in one line on
+the task"). The bot acts and leaves one line on its task, which shows in Updates, and the person can undo it. Sends,
+spending and deletes, and questions with no default, are still asked. When the owner turns off **Bots go ahead on
+their recommendation**, a reversible default is asked as before. A question is also refused when the person already
+has an open one that covers it, from any bot (`422 ask_duplicate`): the same task, the same question, or nearly the
+same words. The refusal names the open one and the bot waits on it (`hub task relate <task> blocked_by <id>`).
+
 `keeper` is the system and cannot answer. A question to it, including a system-filed task's requester, goes to the
 asker's first reachable person who can sign in or active bot that takes asks up its manager chain, else the company owner.
 Bot states use the runner's claim check. An onboarding manager cannot take a report's question, so Tico tries
@@ -906,7 +940,7 @@ the owner does not need to take a turn.
 
 Closing is a separate decision; it records `closed_at` and
 `closed_by`, preserving the completion time if the work was already Done. Earlier history
-is preserved, including tasks that older versions closed automatically. Use **Close task** in the
+is preserved, including tasks that older versions closed automatically. Use **Close** in the
 Done task’s menu, or bulk **Close**, to accept completion. A waking comment delegates further
 work, not permission for the assignee bot to accept its own result.
 Completed work does not block a new task with the same requester, owner and title; unfinished
@@ -1056,7 +1090,7 @@ returns to the step it left, without advancing through the refused gate; back at
 gave during the hold moves it on then. An owner-declared hold
 is cleared by moving back to a working step. The active Building clock pauses while blocked;
 a separate blocked age alerts the type's manager after four hours, once per hold. The bot rail's
-Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs You tasks.
+Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs you tasks.
 
 A task also has a place within its step, `step_rank`, lower first, apart from `rank`, its place in
 its owner's queue. A task that enters a step, when it is created or its step, type or status

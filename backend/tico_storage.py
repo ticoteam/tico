@@ -116,9 +116,10 @@ LINK_SECONDS, MISS_SECONDS = 240, 60
 # How this server fetches from the edge (`edge_read`); a test hands in its own.
 fetch = urllib.request.urlopen
 LOG = logging.getLogger("tico.storage")
-# Each live server's file store, for the scheduler (backend/scheduler.py), which has only the store; when HQ is due
-# next (monotonic, None: hourly only); and whether an answer is being fetched now.
-_live, _due, _asking = {}, {}, set()
+# When HQ is due next for each live server (monotonic, None: hourly only), and whether an answer is being fetched now.
+# Its file store, for the scheduler (backend/scheduler.py), which has only the store, is the store's own `file_store`
+# (install sets it): a table here would keep every store, and the app its closures hold, for the life of the process.
+_due, _asking = {}, set()
 _lock = threading.Lock()
 
 
@@ -473,8 +474,8 @@ def sync_later(store, due_only=False, report=False):
     """`sync` on a thread, for the scheduler: hourly with `report`, and each tick with `due_only`, which asks only
     when `_plan` said so. Nothing when this store has no live file store, or an answer is being fetched already."""
     with _lock:
-        live = _live.get(id(store))
-        if not live or live[0] is not store or id(store) in _asking:
+        live = getattr(store, "file_store", None)
+        if not live or id(store) in _asking:
             return None
         if due_only:
             at = _due.get(id(store))
@@ -482,7 +483,7 @@ def sync_later(store, due_only=False, report=False):
                 return None
             _due[id(store)] = time.monotonic() + 60  # a failed ask is tried again in a minute
         _asking.add(id(store))
-    _, vault, blobs = live
+    vault, blobs = live
 
     def run():
         try:
@@ -1065,7 +1066,8 @@ def install(app, store, auth):
 
     vault, blobs, settings = app.state.vault, app.state.blobs, store.settings
     with _lock:
-        _live[id(store)] = (store, vault, blobs)
+        store.file_store = (vault, blobs)
+        _due.pop(id(store), None)  # a store gone before this one may have had its id
     # Where pages and SVG on the company's address may be framed: the app's own address (`landed`).
     blobs.visual_ancestors = ancestors(settings)
 

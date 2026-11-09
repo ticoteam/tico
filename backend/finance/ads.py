@@ -2,9 +2,12 @@
 spend, from which day, which books line it books as, which stored keys hold each value, and which bot each ad account
 counts for.
 
-At most one enabled import per platform: two tools reading the same login (TIDY has a company set of keys and bots'
-copies) would count the same spend twice. Saving or asking for a run rings the import worker (ad_import.py); the
-routes ring it after the commit."""
+At most one enabled import per ad account (a Google Ads customer id, a Meta act_ id): two tools may import the same
+platform (TIDY has a company set of keys and bots' copies; an agency's manager login and an account's own login can both
+list the same account) while their accounts don't overlap. Switching on a tool whose known accounts another enabled
+import already reads is refused, naming the account; an overlap seen only once a run lists the accounts is left to the
+import that read it first (ad_import.run), so a day's spend is stored and counted once. Saving or asking for a run
+rings the import worker (ad_import.py); the routes ring it after the commit."""
 
 import re
 import sqlite3
@@ -77,12 +80,18 @@ def _current(ctx: Ctx, tool_id: str, platform: str) -> SA.AdImport:
     )
 
 
+def _overlap(c: sqlite3.Connection, tool_id: str, platform: str) -> SA.Claim | None:
+    """The first of the tool's known ad accounts another enabled import already reads (None: none)."""
+    known = [a.external_id for a in SA.accounts(c, tool_id) if a.active]
+    taken = SA.claimed(c, tool_id, platform, known)
+    return taken[min(taken)] if taken else None
+
+
 def _elsewhere(c: sqlite3.Connection, tool_id: str, platform: str) -> Row | None:
-    other = SA.enabled_platforms(c).get(platform)
-    if other is None or other.tool_id == tool_id:
+    found = _overlap(c, tool_id, platform)
+    if found is None:
         return None
-    row = c.execute("SELECT name FROM tools WHERE id=?", (other.tool_id,)).fetchone()
-    return {"tool_id": other.tool_id, "tool_name": str(row["name"]) if row else other.tool_id}
+    return {"tool_id": found.tool_id, "tool_name": found.tool_name, "account": found.label}
 
 
 def view(c: sqlite3.Connection, viewer: str, tool_id: str, at: str | None = None) -> Row:
@@ -153,8 +162,8 @@ def configure(
     credentials: dict[str, str | None] | None,
     at: str | None = None,
 ) -> Row:
-    """Save a tool's import settings; switching it on asks for a run. Refused: a second enabled import on the
-    platform, a day that is not one, a line that is not an active expense line, a key for a slot that is neither that
+    """Save a tool's import settings; switching it on asks for a run. Refused: switching on a tool one of whose ad
+    accounts another enabled import already reads, a day that is not one, a line that is not an active expense line, a key for a slot that is neither that
     slot's variable nor on this tool (ad_import.candidates), or switching on without the required keys or a line."""
     ctx = _admin(c, viewer, at)
     platform, _ = _tool(c, tool_id)
@@ -191,10 +200,9 @@ def configure(
                     f"{AI.SLOTS[platform][slot][0]}, or it is on this tool",
                 )
     if enabled:
-        if _elsewhere(c, tool_id, platform) is not None:
-            raise FinanceError(
-                CONFLICT, f"{SA.LABEL[platform]} spend already imports from another tool: switch that one off first"
-            )
+        overlap = _overlap(c, tool_id, platform) if not imp.enabled else None
+        if overlap is not None:
+            raise FinanceError(CONFLICT, overlap.text)
         gaps = AI.missing(platform, mapping)
         if gaps:
             raise FinanceError(INVALID, "Choose the keys for " + ", ".join(AI.SLOT_LABEL[s] for s in gaps))

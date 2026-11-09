@@ -12,12 +12,14 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
+from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
 from .core.org import Org
 from .store import access as SA
 from .store import ap as SAP
+from .store import attribution as SATT
 from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
@@ -39,6 +41,16 @@ GROUP_NAMES = {
 }
 OTHER_CODE = "6900"
 BILLS_EMAIL_KEY = "finance_bills_email"  # the install's bills address (actions.set_bills_email writes it)
+
+
+def _split_rows(row: Any | None) -> list[dict[str, object]]:
+    """A line's in-force attribution shares, as a transaction's `split`: none when the line counts as its tags."""
+    if row is None:
+        return []
+    return [
+        {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps}
+        for x in SATT.parse_splits(str(row["splits"]))
+    ]
 
 
 def page_size(limit: int) -> int:
@@ -229,7 +241,7 @@ def _card_accounts(ctx: Ctx) -> dict[str, str]:
     return {bid: b.account_id for bid, b in budgets.items()}
 
 
-def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, list[Row]]) -> Row:
+def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, list[Row]], vendor: Row) -> Row:
     m = money.get(str(r["money_account_id"]))
     return {
         "kind": "feed",
@@ -238,6 +250,7 @@ def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, li
         "amount": int(r["amount"]),
         "currency": str(r["currency"]),
         "counterparty": str(r["counterparty"]),
+        "vendor": vendor,  # {id, name}: the vendor the row's merchant resolves to (backend/finance/vendors.py)
         "description": str(r["description"]),
         "status": str(r["status"]),
         "pending": bool(r["pending"]),
@@ -425,7 +438,9 @@ def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[st
                         "tags": dict(line.tags),
                     }
                 )
-    names = vendor_labels(ctx, view, [str(x["vendor"]) for xs in out.values() for x in xs])
+    # A vendor on a line the viewer sees shows its name (visible.py): every key here is on a visible line.
+    keys = [str(x["vendor"]) for xs in out.values() for x in xs]
+    names = vendor_labels(ctx, view, keys, shown={k: True for k in keys})
     for xs in out.values():
         for x in xs:
             x["vendor_name"] = names.get(str(x["vendor"]), "")
@@ -494,7 +509,8 @@ def transactions(
     left out of the rest), line, dates, a search and `org` (keeps a line's team and teammate); `next` is the cursor for
     the following page."""
     ctx = load(c, at)
-    from .tab_ap import vendor_labels
+    from . import vendors as VN
+    from .tab_ap import sees_contact_kind, vendor_labels
 
     view = ctx.view(viewer)
     if source not in ("all", "feed", "entry"):
@@ -546,6 +562,13 @@ def transactions(
         cut = private_feed(ctx, view, rows)
         rows = [r for r in rows if str(r["id"]) not in cut]
         lines = _visible_lines(ctx, view, [str(r["entry_id"]) for r in rows if r["entry_id"]])
+        vendors = VN.feed_vendors(
+            c,
+            ctx.book.id,
+            rows,
+            lambda kind: sees_contact_kind(ctx, view, kind),
+            lines_shown=lambda r: bool(lines.get(str(r["entry_id"] or ""))),
+        )
         out: list[tuple[tuple[str, str], Row]] = []
         for r in rows:
             mine = lines.get(str(r["entry_id"] or ""), [])
@@ -555,7 +578,7 @@ def transactions(
                 continue
             if org is not None and not _org_keeps(org, pick):
                 continue
-            out.append((_key_of(r), _feed_row(ctx, r, money, lines)))
+            out.append((_key_of(r), _feed_row(ctx, r, money, lines, vendors[str(r["id"])])))
         return out
 
     hidden = set(private_cut(ctx, view))
@@ -584,6 +607,7 @@ def transactions(
 
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
+        held = SATT.in_force_rows(c, [str(r["line_id"]) for r in batch])
         stands = SK.feed_by_entry(c, sorted({str(r["entry_id"]) for r in batch}))
         origins = {str(r["line_id"]): feed_origin(r) for r in batch}
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
@@ -627,6 +651,7 @@ def transactions(
                         "source": str(r["source"]),
                         "reversed": str(r["entry_status"]) == "reversed",
                         "tags": tagged,
+                        **({"split": split} if (split := _split_rows(held.get(str(r["line_id"])))) else {}),
                     },
                 )
             )
@@ -1065,6 +1090,9 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
                 "default_team": team if team in visible else None,
                 "grants": [_grant_row(g, ctx) for g in mine],
                 "rights": rights,
+                # Whether the teammate may change attribution (finance.attribution; admin and owner imply it), shown
+                # where their rights are.
+                "attribute": R.has(org, m, R.ATTRIBUTION, ctx.rights(m)) if admin or m == viewer else None,
                 "may_grant": _may_grant(ctx, viewer, m, defaults),
                 "budgets": own.get(m, 0),
             }
