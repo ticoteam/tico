@@ -4606,14 +4606,30 @@
  ],
  "helpers": [
   {
-   "slug": "bookkeeper",
-   "template": "bookkeeper",
-   "name": "Bookkeeper",
+   "slug": "automations-owner",
+   "template": "automations-owner",
+   "name": "Automations Owner",
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Operational accounting, not strategy. Tico checks the Finance work queue in plain code every hour and gives the Bookkeeper one task only when there is something to do: rows to categorize, bills to enter, bills due, overdue invoices, receipts, failed syncs or a month ready to close. It acts only through the hub_finance tools, as itself, with finance.book, ap, ar, pay, cards and rules; it proposes posting rules, and a person approves each one. Every payment and the close still go to a person under the company's rules.",
-   "when": "Built in: keeps the books. Categorizes bank and card rows, enters bills, schedules payments, drafts reminders for overdue invoices, reconciles, prepares the monthly close and writes the monthly report, all through Finance's own actions and approvals.",
+   "summary": "Keeps the team's automations healthy: the routines, triggers, inbox automations and system jobs. Each week it reads them, notices misfires, noise and automations nobody owns, and proposes a fix on a task for the automation's owner. It changes an automation only when that owner approves the change. A team's own routines stay that team's; this bot keeps all of them working.",
+   "when": "Built in: keeps the team's automations healthy, the routines, triggers, inbox automations and system jobs. It notices a misfire or noise and proposes the fix; the automation's owner decides.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "bookkeeper",
+   "template": "bookkeeper",
+   "name": "Finance Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Operational accounting, not strategy. Tico checks the Finance work queue in plain code every hour and gives the Finance Owner one task only when there is something to do: rows to categorize, bills to enter, bills due, overdue invoices, receipts, failed syncs or a month ready to close. It acts only through the hub_finance tools, as itself, with finance.book, ap, ar, pay, cards and rules; it proposes posting rules, and a person approves each one. Every payment and the close still go to a person under the company's rules. Each Monday it also writes the weekly cash summary: cash now, the 13-week outlook against the minimum cash line, what is late or due, and usage against budget.",
+   "when": "Built in: keeps the books. Categorizes bank and card rows, enters bills, schedules payments, drafts reminders for overdue invoices, reconciles, prepares the monthly close and writes the monthly report, all through Finance's own actions and approvals. Each Monday it writes the weekly cash summary with the 13-week cash outlook and usage against budget.",
    "tags": [],
    "pains": [],
    "recommend_when": [],
@@ -4677,7 +4693,7 @@
   {
    "slug": "tico-counsel",
    "template": "tico-counsel",
-   "name": "Counsel",
+   "name": "Rules Owner",
    "department": "core",
    "lead": false,
    "core": true,
@@ -4688,6 +4704,22 @@
    "recommend_when": [
     "never"
    ],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "updates-owner",
+   "template": "updates-owner",
+   "name": "Updates Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Writes the company update for each period from what teammates report in Tico, with every figure's source and date, and skips a period with nothing new. The update is the source each audience's edition on the Company page reads from. It drafts a file for the owner; it never publishes an edition, and a person drafts, approves and publishes each one. Each teammate still writes their own update.",
+   "when": "Built in: writes the company update each period from what the team reports, as a draft for the owner to review. Nothing reaches an audience without a person's approval.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
    "first_routine": "",
    "tools": [],
    "default": false
