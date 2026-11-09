@@ -21,7 +21,7 @@ interface VisualFrame extends HTMLIFrameElement {
   visualEchoes?: number | undefined;
 }
 interface VisualDialog extends HTMLDialogElement {
-  visualFrom?: {card: HTMLElement; opener: HTMLElement | SVGElement | null; scroll: [Element, number][]} | null | undefined;
+  visualFrom?: {card: HTMLElement; opener: (Element & {focus?: (options?: FocusOptions) => void}) | null; scroll: [Element, number][]} | null | undefined;
   zoomAbort?: AbortController | null | undefined;
   zoomed?: boolean | undefined;
 }
@@ -55,8 +55,9 @@ function visualRetry(card: HTMLElement, el: Element, attr = 'src') {
 }
 function visualPictureWire(card: HTMLElement) {
   const img = card.querySelector<HTMLImageElement>('img.vcard-img'), body = card.querySelector<HTMLElement>('.vcard-body');
-  if (!img || !body) return;
+  if (!img) return;
   const ready = () => {
+    if (!body) return;
     body.classList.add('ready');
     // Size not known before: the picture's own, from now on.
     if (!/aspect-ratio/.test(body.getAttribute('style') || '') && img.naturalWidth && img.naturalHeight)
@@ -197,7 +198,7 @@ function visualExpand(card: HTMLElement) {
   body.innerHTML = kind === 'page'
     ? `<iframe class="vcard-full-frame" title="${esc(title)}" sandbox="${VISUAL_PAGE_SANDBOX}" credentialless referrerpolicy="no-referrer" src="${esc(src)}"></iframe>`
     : `<img class="vcard-full-img" alt="${esc(title)}" src="${esc(src)}" draggable="false">`;
-  d.visualFrom = {card, opener: document.activeElement instanceof HTMLElement || document.activeElement instanceof SVGElement ? document.activeElement : null, scroll: visualScrollers(card)};
+  d.visualFrom = {card, opener: document.activeElement, scroll: visualScrollers(card)};
   visualZoomReset(d);
   const zoomBar = d.querySelector<HTMLElement>('.pic-zoom-bar');
   if (zoomBar) zoomBar.hidden = kind === 'page';
