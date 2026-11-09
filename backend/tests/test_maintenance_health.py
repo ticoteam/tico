@@ -44,7 +44,7 @@ from backend.tests.helpers.goal_manager import BASE
 from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.helpers.support import FakeHQ
 from backend.tests.helpers.maintenance_health import turn
-from backend.tests.test_member_bots import botops  # noqa: F401
+from backend.tests.helpers.member_bots import botops  # noqa: F401
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0096_retire_health_monitor.py"
 HM_SLUG = "health-monitor"  # the retired Health Monitor's slug: migration 0096 archives its row

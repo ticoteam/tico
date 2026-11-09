@@ -57,6 +57,7 @@ interface SourceLineOptions {
 /** The task fields the task text helpers read. */
 interface HubTask {
   requester_id?: string | null | undefined;
+  requester_source?: string | null | undefined;
   origin_actor?: string | null | undefined;
   owner_id?: string | null | undefined;
   title?: string | null | undefined;
