@@ -51,7 +51,7 @@ A thread's audience is one of these:
 Open **Thread settings** with the ⋯ button in a thread's header. The panel holds the thread's settings. Each row saves as
 you change it, so there is no Save button. A row you may not use is left out. On a phone the panel fills the screen.
 
-- **Name**: the thread's title. Press Enter to save. A manager sees it, except on a Home and in a DM with one teammate.
+- **Name**: the thread's title. Press Enter to save. A manager sees it, except on a Home and in a top-level DM with one teammate.
 - **Who can read**: **Only members**, **A team** or **Company**. Choosing **A team** saves once you pick the team. A
   manager sees it on a top-level thread that is not a DM or a Home.
 - **Members**: opens the Members list, with its count. Shown on a top-level thread whose audience is `company`, `team`,
@@ -100,8 +100,12 @@ Each reader follows a thread at one level. Choose it in the **Notifications** ro
 - **All** (`live`): every new message (the default; a bot following a chat starts at Mentions),
 - **Mentions** (`mentions`): only messages that name you or reply to you,
 - **Digest** (`digest`): in a batch (an email an hour for a person, one run an hour for a bot),
-- **Off** (`muted`): unread counts stay, nothing is sent. Off lasts until you choose another level. A thread you do not
-  follow shows as Off too.
+- **Off** (`muted`): unread counts stay, nothing is sent, with two exceptions. A DM with one teammate: once the page reloads,
+  its unread count is not shown on that teammate's row in the Team list, whether the teammate is a person or a bot. On a
+  page that is already open, the count can stay after you turn Off, and a new message in that DM can raise it until you
+  reload. Catch up shows an Off thread only for what [Pinned and Catch up](#pinned-and-catch-up) lists, and in a DM with
+  one teammate only for a mention or a reply to one of your messages inside one of its sub-threads. Off lasts until you
+  choose another level. A thread you do not follow shows as Off too.
 
 Posting in a thread does not follow it. Starting a thread, being @mentioned or being replied to does, and you can
 follow from Thread settings or `hub thread follow`. A message reaches whoever it @mentions or replies to, whatever
@@ -121,6 +125,15 @@ are in where the loop guard paused the bots' wakes; posting there lets them all 
 themselves, as many as the thread's hour has room for. Unread threads come next, then the rest, newest first. A thread's
 row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
+
+## Update requests
+
+A bot's daily update request is a notice from the keeper. In a thread, the request and the bot's replies to it read
+as one line, **› Update generated**. Tapping the line shows or hides them. The group holds the request, the bot's first reply to
+it, and the bot's other messages from that same run. It ends at the first message that is not one of those: a person's,
+another bot's, the keeper's, a message from another run, or a deleted or hidden one. The line stays shut until tapped. A
+quote or a search hit opens the group it sits in. The posted update keeps its own row and is never in the group. If the
+request is deleted, its messages read as ordinary messages again.
 
 ## Bots in threads
 
@@ -147,16 +160,20 @@ Anyone who reads a thread can pin it for themselves. A manager can pin a thread 
 everyone** switch in [Thread settings](#thread-settings)), except a DM with one teammate, a Home, a task's thread or a
 meeting's; anyone can still unpin it for themselves. Pinned threads lead
 the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
-messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed.
+messages. A muted thread is left out unless it holds a mention, an ask or an assignment that is new since you last read
+it, or a message from a person, or a bot's ask, mention or reply, that is addressed to you and that you have not answered. In a DM
+with one teammate, only a mention does this, and a reply to one of your messages inside one of its sub-threads does too; a reply to your message at the DM's top level does not. Catch up reads only a limited number of such messages, so a muted thread can stay out even when one of them matches. A group DM and every other new top-level thread need a
+name. A DM with one teammate and a task's thread may go unnamed. Details:
+[threads contract §10.1](dev/threads-contract.md).
 
 A card has **Later**, **Mute** and **Mark read**, and a reply box if you can post in its thread. Type a reply and a
 **Send** button appears. Send posts the reply. If you already follow the thread, the sent message stays on the card while
 Catch up stays open, and the card stays until you choose **Mark read**, **Mute** or **Later**, or you read the thread
 somewhere else. Reopening Catch up shows only the new messages from others, not your reply. If you did not follow it,
 posting makes you follow it, and the card leaves Catch up at once. Whether it comes back depends on your last read of the
-thread. If you had never read it, your reply marks everything before it as read, and those messages do not bring the card
-back. If you had read it before, or had stopped following it, the card comes back the next time you open Catch up when
-others wrote messages after that read, and it shows only those messages, not your reply. A reply a rule holds is
+thread. If you have never followed or read it, your reply marks everything before it as read, and those messages do not
+bring the card back. If you had followed or read it before, the card comes back the next time you open Catch up when
+others wrote messages after your last read, and it shows only those messages, not your reply. A reply a rule holds is
 not added to the card: a notice says it was held, and the box is cleared. While a reply is sending, its box and **Send**
 are disabled, even if you close and reopen Catch up. What you type stays in the box as you move between cards; closing
 Catch up clears it.
@@ -198,6 +215,8 @@ when no person or bot did; it is not shown as a name.
 | A built-in: Follow-up timer, Earlier messages, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
 | One of your automations | A small gray line; the name opens the automation. |
 | System (an update, a backup, a migration), or any other keeper line | A small gray line with no sender. |
+
+A gray line is always one line. Text that does not fit ends in "…"; hover over a long line to read its text.
 
 Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
 unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), not "keeper". Task

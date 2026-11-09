@@ -10,7 +10,7 @@ type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_a
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
-type SettingsHistory = {changes: Record<string, unknown>[]; transitions: Record<string, unknown>[]; transitions_truncated?: boolean; next_before?: string | null};
+type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
 type HarnessCaps = {api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string};
 type HarnessRow = {id: string; name?: string; external?: boolean; capabilities?: HarnessCaps};

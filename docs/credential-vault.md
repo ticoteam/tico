@@ -91,7 +91,7 @@ services:
       - ./aws-credentials:/run/aws/credentials:ro
 ```
 
-**Settings > Health > Credential encryption** reports whether the data key is wrapped with the requested KMS key.
+**Settings > General > Health > Details** shows a **Credential encryption** check that reports whether the data key is wrapped with the requested KMS key.
 Before the first credential save, or until a local key is wrapped on its next use, it warns that KMS is not active yet.
 If saving fails, check the container's AWS credentials, region and key permissions; existing encrypted values stay intact.
 

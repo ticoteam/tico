@@ -2,18 +2,9 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// A person on the chart: the roster row plus the fields the server sends that the generated type leaves out.
-type OrgPerson = AppState['people'][number] & {role?: string; inbox_bot?: string; report_position?: number};
+// The chart's node types (OrgNode, OrgByParent, ...) are in ui/types/shared.d.ts: other pages draw the same tree.
 // The server also sends the person a group hangs under (reports_to, before groups nested by `parent`).
 interface OrgGroup { reports_to?: string }
-// A node of the team chart. A bot node is its roster row; a seat node is its seat row (its own `kind` is the node's).
-interface OrgGroupNode { kind: 'group'; helpers?: boolean; id: string; name?: string | undefined; order: number }
-interface OrgPersonNode { kind: 'person'; id: string; person: OrgPerson }
-type OrgBotNode = Employee & {kind: 'bot'};
-type OrgSeatRow = Omit<import('../types/api').Seat, 'kind'>;
-type OrgSeatNode = OrgSeatRow & {kind: 'seat'; seat: OrgSeatRow};
-type OrgNode = OrgGroupNode | OrgPersonNode | OrgBotNode | OrgSeatNode;
-type OrgByParent = Record<string, OrgNode[]>;
 // What orgBossKey reads of a node (the chart's nodes, and the `{kind, person}` stand-ins other pages pass).
 interface OrgBossNode { kind: string; person?: {org_parent?: string}; org_parent?: string }
 // A chart row whose named fields a drop writes (people, bots, groups).
@@ -780,7 +771,7 @@ function orgTreeWithHelpers(byParent: OrgByParent): OrgByParent {
   return out;
 }
 // One parent's rows in the team chart's order. The screen after Create (ui/first-run.ts) lists its groups the same way.
-function orgSorted(parent: string, kids: OrgNode[] | undefined): OrgNode[] {
+function orgSorted<T extends OrgNode>(parent: string, kids: T[] | undefined): T[] {
   const placed = byReportOrder(parent);
   return (kids || []).slice().sort((a, b) => {
     // A group's own humans and bots come first, then the groups nested in it.

@@ -8,6 +8,20 @@ below word for word as its notes.
 
 ## [Unreleased]
 
+## [0.4.17] - 2026-10-28
+
+### Added
+- **Set goals by chatting with the CEO Bot.** Tell it what you want to achieve; it drafts a goal and saves only the details you review and approve ([Goals](docs/ceo-bot.md)).
+- **Hide the CEO Bot from your own chart.** Remove it from your Team chart without changing its reporting line or how it works for anyone else ([Team chart](docs/org-chart.md)).
+
+### Changed
+- **Blocked tasks show what they await.** Their reason follows current holds and clears when the last hold ends. Questions stay with their task, and the asker is told when a question is withdrawn ([Tasks](docs/tasks.md)).
+- **A paused turn resumes after an update.** Work paused at the computer's update time limit continues when the update clears, without a manual resume ([Updates](docs/updates.md)).
+
+### Fixed
+- **Bots start when turns take over inputs.** A claim no longer fails with a server error when a turn takes an input an earlier turn had read ([Sessions](docs/sessions.md)).
+- **The relay closes refused control connections.** After the gateway refuses a control path, it closes that connection so clients do not reuse it for another request ([AI Gateway](docs/ai-gateway.md)).
+
 ## [0.4.15] - 2026-10-27
 
 ### Fixed
