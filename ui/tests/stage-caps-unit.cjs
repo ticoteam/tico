@@ -24,7 +24,9 @@ console.log('stage-caps-unit: ok');
 
 // The Tasks list's row picker (ui/app/task-list.ts tasksRowStatusSave) says a move over a stage's cap, as the board and
 // the task do: the server's over_cap reaches taskOverCapWarn.
-const listSource = fs.readFileSync(path.join(__dirname, '../../build/ui/app/task-list.js'), 'utf8');
+// The list's bulk actions (tasksBulkApply) live in task-list-bulk.ts, beside it.
+const listSource = ['task-list.js', 'task-list-bulk.js']
+  .map(name => fs.readFileSync(path.join(__dirname, '../../build/ui/app', name), 'utf8')).join('\n');
 // One function's source from the built list, read up to its closing brace.
 function listFunction(name) {
   const start = listSource.indexOf(`async function ${name}(`);

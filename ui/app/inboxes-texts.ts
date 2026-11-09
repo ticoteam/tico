@@ -8,44 +8,130 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The API's inbound shapes, as the page reads them (GET /v2/inbound/*, POST /v2/inbound/company-connection).
+interface InGap { count: number; }
+interface InInbox {
+  inbox_id: string;
+  kind: string;
+  name: string | null;
+  address: string;
+  state: string;
+  audience: 'company' | 'team';
+  group_id: string | null;
+  cancel_pending?: boolean;
+  period_end?: number | null;
+  used_for?: string | null;
+}
+/** One page of inboxes (inAll reads every page up to IN_PAGES). */
+interface InInboxList {
+  configured?: boolean;
+  error?: string | null;
+  gaps?: InGap[] | null;
+  last_synced_at?: number | null;
+  inboxes: InInbox[];
+  more?: boolean;
+  next?: string | null;
+}
+interface InRequest { request_id: string; name: string; state: string; price_micros: number; quoted_until?: number | null; }
+interface InRequestList { phone_requests: InRequest[]; more?: boolean; error?: string | null; next?: string | null; }
+/** One answer of either list, before inAll names its key. */
+interface InPage {
+  configured?: boolean;
+  error?: string | null;
+  gaps?: InGap[] | null;
+  last_synced_at?: number | null;
+  inboxes?: InInbox[];
+  phone_requests?: InRequest[];
+  next?: string | null;
+}
+interface InMessage {
+  message_id: string;
+  inbox_id: string;
+  kind: string;
+  received_at: number;
+  from: string;
+  subject: string | null;
+  preview: string | null;
+  spam: boolean;
+  truncated: boolean;
+  has_code: boolean;
+  retention_removed?: boolean;
+}
+interface InMessagesPage { messages: InMessage[]; next?: number | null; }
+/** One message's body (GET /v2/inbound/messages/<id>) or its code (…/code). */
+interface InReveal { text?: string; code?: string | null; next_offset?: number | null; }
+/** The state a page keeps on its host: the inbox it shows (null on Messages with none) and its paging. */
+interface InState {
+  inbox?: InInbox | null;
+  inboxes?: InInbox[];
+  before?: number | null | undefined;
+  next?: number | null | undefined;
+  reads?: number;
+}
+/** The filter form's named controls (the form is drawn by IN_FILTERS and inAllDraw). */
+interface InFilterElements extends HTMLFormControlsCollection {
+  inboxes: HTMLSelectElement;
+  kind: HTMLSelectElement;
+  q: HTMLInputElement;
+  sender: HTMLInputElement;
+  has_code: HTMLInputElement;
+  spam: HTMLInputElement;
+}
+interface InFilterForm extends HTMLFormElement { readonly elements: InFilterElements; }
+/** A company connection: the preview and the connect answer. */
+interface InConnection { company: { company_id: string; name: string }; expires_at: number; }
+interface InConnectionElements extends HTMLFormControlsCollection { code: HTMLInputElement; consent: HTMLInputElement; }
+interface InConnectionForm extends HTMLFormElement { readonly elements: InConnectionElements; }
+/** The ctx a page's handlers get (inBind): what they use, without the draw's me and run. */
+type InLive = Pick<InboxCtx, 'admin' | 'live' | 'refresh' | 'go' | 'once'>;
+
+// The expandos the inbox pages keep on their host element.
+interface HTMLElement {
+  _in?: InState | null;
+  _inCtx?: InLive;
+  _inRequest?: InRequest | null;
+}
+
 const IN_PAGES = 10;   // pages of 100 read for one list; the API is paged and byte-capped
 const IN_LIVE = ['requested', 'quoted', 'accepted', 'approved'];   // a phone request still open
-let INBOUND_TIMER = null;
-const inPrice = value => (value / 1000000).toLocaleString('en-US', {style: 'currency', currency: 'USD'});
+let INBOUND_TIMER: number | null = null;
+const inPrice = (value: number): string => (value / 1000000).toLocaleString('en-US', {style: 'currency', currency: 'USD'});
 
-async function inAll(path, key) {
-  const first = await get(path, {fresh: true});
+function inAll(path: string, key: 'inboxes'): Promise<InInboxList>;
+function inAll(path: string, key: 'phone_requests'): Promise<InRequestList>;
+async function inAll(path: string, key: 'inboxes' | 'phone_requests'): Promise<InInboxList | InRequestList> {
+  const first = await get<InPage>(path, {fresh: true});
   const list = [...(first[key] || [])];
   let after = first.next;
   for (let n = 1; after && n < IN_PAGES; n++) {
-    const more = await get(`${path}?after=${encodeURIComponent(after)}`, {fresh: true});
+    const more = await get<InPage>(`${path}?after=${encodeURIComponent(after)}`, {fresh: true});
     list.push(...(more[key] || [])); after = more.next;
   }
-  return {...first, [key]: list, more: !!after};
+  return {...first, [key]: list, more: !!after} as InInboxList | InRequestList;
 }
-const inInboxes = ctx => ctx.once('inbound', () => inAll('/v2/inbound/inboxes', 'inboxes'));
-const inRequests = ctx => ctx.once('phone-requests', () => (ctx.admin ? inAll('/v2/inbound/phone-requests', 'phone_requests')
+const inInboxes = (ctx: InLive): Promise<InInboxList> => ctx.once('inbound', () => inAll('/v2/inbound/inboxes', 'inboxes'));
+const inRequests = (ctx: InLive): Promise<InRequestList> => ctx.once('phone-requests', () => (ctx.admin ? inAll('/v2/inbound/phone-requests', 'phone_requests')
   : Promise.resolve({phone_requests: []})));
-function inReaders(i) {
+function inReaders(i: InInbox): string {
   const groups = S.orgGroups || [], here = i.audience === 'team' ? i.group_id : '';
   return here ? groups.find(g => g.id === here)?.name || here : 'Everyone';
 }
 // Active is Connected on every inbox page; a sync the server reports failing needs attention.
-function inStatus(i, d) {
+function inStatus(i: InInbox, d: InInboxList): [string, string] {
   if (!d.configured) return ['attention', 'Not connected'];
   if (i.state === 'active') return d.error ? ['attention', 'Sync failed'] : ['ok', i.cancel_pending ? 'Renewal off' : 'Connected'];
   if (i.state === 'error') return ['attention', 'Sync failed'];
   if (['off', 'paused', 'released'].includes(i.state)) return ['off', 'Not in use'];
   return ['pending', 'Pending'];
 }
-function inSyncLine(d) {
+function inSyncLine(d: InInboxList): string {
   return !d.configured ? 'Tico addresses are not connected. Ask your owner to set them up.'
     : d.error ? 'Messages could not sync. Tico will retry.'
     : d.gaps?.length ? `${d.gaps.reduce((sum, g) => sum + g.count, 0)} messages expired before Tico reconnected.`
     : d.last_synced_at ? `Last synced ${new Date(d.last_synced_at * 1000).toLocaleString()}.` : 'Waiting for the first sync.';
 }
-function inRequestStatus(r) {
-  const quoted = r.state === 'quoted' && r.price_micros > 0 && r.quoted_until > Date.now() / 1000;
+function inRequestStatus(r: InRequest) {
+  const quoted = r.state === 'quoted' && r.price_micros > 0 && (r.quoted_until ?? 0) > Date.now() / 1000;
   return {quoted, cancellable: IN_LIVE.includes(r.state),
     text: r.state === 'quoted' ? (quoted ? `Quote ${inPrice(r.price_micros)} / 30 days` : 'Quote expired')
       : r.state === 'requested' ? 'Awaiting quote' : r.state.charAt(0).toUpperCase() + r.state.slice(1)};
@@ -59,24 +145,24 @@ inboxesKind('number', {label: 'Phone number', order: 30,
   add: {label: 'Phone number', admin: true, open: ctx => inPhoneDialog(ctx)}});
 
 // ---------------------------------------------------------------------------------------------------------- Add tool
-function inCreateDialog(ctx) {
+function inCreateDialog(ctx: InLive) {
   const dialog = whDialog('New Tico address', '<label>Inbox name<input name="name" maxlength="80" required placeholder="Account logins"></label>',
     '<button class="primary" type="submit">Create email inbox</button>');
   dialog.id = 'inbound-create';
-  whSubmit(dialog, async data => {
-    const made = await post('/v2/inbound/inboxes', {kind: 'email', name: String(data.get('name') || '')});
+  whSubmit(dialog, async (data: FormData) => {
+    const made: {inbox_id?: string} | undefined = await post('/v2/inbound/inboxes', {kind: 'email', name: String(data.get('name') || '')});
     dialog.close(); toast('Created');
     return ctx.go(made?.inbox_id ? 'tico/' + made.inbox_id : '');
   });
 }
 const IN_PHONE_LINE = 'Monthly non-VoIP US numbers receive SMS only. Rentals require TICO approval until billing is available. '
   + 'Accepting a quote records your agreement to that price; it does not buy a number.';
-function inPhoneDialog(ctx) {
+function inPhoneDialog(ctx: InLive) {
   const dialog = whDialog('Request a US mobile number', `<p class="muted">${esc(IN_PHONE_LINE)}</p>
     <label>Name<input name="name" maxlength="80" required placeholder="Mobile number" value="Mobile number"></label>`,
     '<button class="primary" type="submit" id="inbound-phone">Request</button>');
-  whSubmit(dialog, async data => {
-    const r = await post('/v2/inbound/phone-requests', {name: String(data.get('name') || '') || 'Mobile number'});
+  whSubmit(dialog, async (data: FormData) => {
+    const r: {phone_request?: {request_id?: string}} | undefined = await post('/v2/inbound/phone-requests', {name: String(data.get('name') || '') || 'Mobile number'});
     dialog.close(); toast('Phone request sent for TICO review. No number has been purchased.');
     const id = r?.phone_request?.request_id;
     return ctx.go(id ? 'number/' + id : '');
@@ -84,8 +170,14 @@ function inPhoneDialog(ctx) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- One inbox
-async function inDetail(host, id, ctx) {
-  clearInterval(INBOUND_TIMER);
+// The inbox a page shows: its host keeps it while the page is drawn. Only an action on the page reads it.
+function inCurrentInbox(host: HTMLElement): InInbox {
+  const inbox = host._in?.inbox;
+  if (!inbox) throw new Error('No such inbox');
+  return inbox;
+}
+async function inDetail(host: HTMLElement, id: string, ctx: InLive): Promise<InboxResolved | null> {
+  if (INBOUND_TIMER !== null) clearInterval(INBOUND_TIMER);
   const d = await inInboxes(ctx);
   if (!ctx.live()) return null;
   const inbox = d.inboxes.find(i => i.inbox_id === id);
@@ -100,7 +192,7 @@ async function inDetail(host, id, ctx) {
   return {kind: inbox.kind === 'sms' ? 'number' : 'tico', id, name: inbox.name || inbox.address, address: inbox.address, inbox};
 }
 
-function inDraw(host, i, d, ctx) {
+function inDraw(host: HTMLElement, i: InInbox, d: InInboxList, ctx: InLive) {
   const admin = settingsIsAdmin(), [status, statusText] = inStatus(i, d);
   const sub = [i.name ? i.address : '', i.period_end ? `Paid through ${new Date(i.period_end * 1000).toLocaleDateString()}` : '',
     inSyncLine(d)].filter(Boolean).map(esc).join(' · ');
@@ -125,48 +217,50 @@ function inDraw(host, i, d, ctx) {
   inBind(host, ctx);
   inPoll(host, ctx);
 }
-const inFail = (host, error) => { const s = host.querySelector('#inbound-status'); if (s) s.textContent = error.message; };
+const inFail = (host: HTMLElement, error: unknown) => { const s = host.querySelector('#inbound-status'); if (s) s.textContent = errorMessage(error, ''); };
 
 // The filters and the table an inbox's page and Messages share; Messages adds which inboxes and the channel.
 const IN_FILTERS = `<label>From <input name="sender" maxlength="200"></label><label>Search messages <input name="q" type="search" maxlength="200"></label>
   <label><input name="has_code" type="checkbox"> Has a code</label><label><input name="spam" type="checkbox"> Include spam</label>
   <button class="ghost inbound-apply" type="submit" aria-label="Filter" title="Filter">${filterIcon(16)}</button>`;
-const inTable = all => `<div class="inbound-scroll"><table class="inbound-table"><thead><tr><th>Received</th>${all ? '<th>Channel</th><th>To</th>' : ''}<th>From</th><th>Message</th><th>Code</th></tr></thead>
+const inTable = (all: boolean) => `<div class="inbound-scroll"><table class="inbound-table"><thead><tr><th>Received</th>${all ? '<th>Channel</th><th>To</th>' : ''}<th>From</th><th>Message</th><th>Code</th></tr></thead>
   <tbody id="inbound-messages"></tbody></table></div>
   <div class="row"><button type="button" class="ghost" id="inbound-newest">Newest</button><button type="button" class="ghost" id="inbound-older" hidden>Older messages</button></div>
   <p id="inbound-status" class="muted" role="status"></p>`;
 
 // Reads now, then again every 15 seconds while the page is open and showing the newest messages.
-function inPoll(host, ctx) {
-  const active = () => ctx.live() && host.isConnected && !host.closest('.settings-pane')?.hidden;
+function inPoll(host: HTMLElement, ctx: InLive) {
+  const active = () => ctx.live() && host.isConnected && !host.closest<HTMLElement>('.settings-pane')?.hidden;
   void inMessages(host).catch(e => inFail(host, e));
   INBOUND_TIMER = setInterval(() => {
-    if (!active()) { clearInterval(INBOUND_TIMER); return; }
-    if (document.hidden || formBusy(host.querySelector('#inbound-filter')) || host._in.before) return;
+    if (!active()) { if (INBOUND_TIMER !== null) clearInterval(INBOUND_TIMER); return; }
+    if (document.hidden || formBusy(host.querySelector<InFilterForm>('#inbound-filter')) || host._in?.before) return;
     void inMessages(host).catch(e => inFail(host, e));
   }, 15000);
 }
 
 // One inbox's messages on its page; on Messages (st.inbox null), the inboxes picked, or every inbox when none is.
-async function inMessages(host) {
-  const st = host._in, form = host.querySelector('#inbound-filter'); if (!form) return;
-  const f = form.elements, all = !st.inbox;
-  const ids = all ? [...f.inboxes.selectedOptions].map(o => o.value) : [st.inbox.inbox_id];
+async function inMessages(host: HTMLElement) {
+  const st = host._in, form = host.querySelector<InFilterForm>('#inbound-filter'); if (!st || !form) return;
+  const f = form.elements, inbox = st.inbox, all = !inbox;
+  const ids = all ? [...f.inboxes.selectedOptions].map(o => o.value) : [inbox.inbox_id];
   const params = new URLSearchParams({limit: '50'});
   if (ids.length) params.set('inbox_ids', ids.join(','));
   if (all && f.kind.value) params.set('kind', f.kind.value);
   if (f.q.value) params.set('q', f.q.value);
   if (f.sender.value) params.set('from', f.sender.value);
-  for (const name of ['has_code', 'spam']) if (f[name].checked) params.set(name, 'true');
+  for (const name of ['has_code', 'spam'] as const) if (f[name].checked) params.set(name, 'true');
   if (st.before) params.set('before', String(st.before));
   const read = st.reads = (st.reads || 0) + 1;   // only the newest read draws: a slow older answer never replaces it
-  const data = await get('/v2/inbound/messages?' + params, {fresh: true});
+  const data = await get<InMessagesPage>('/v2/inbound/messages?' + params, {fresh: true});
   if (host._in !== st || st.reads !== read || !host.isConnected) return;
   st.next = data.next;
-  host.querySelector('#inbound-older').hidden = !st.next;
-  const to = m => { const i = st.inboxes?.find(x => x.inbox_id === m.inbox_id);
+  const older = host.querySelector<HTMLButtonElement>('#inbound-older'), tbody = host.querySelector<HTMLTableSectionElement>('#inbound-messages');
+  if (!older || !tbody) return;
+  older.hidden = !st.next;
+  const to = (m: InMessage) => { const i = st.inboxes?.find(x => x.inbox_id === m.inbox_id);
     return `<td>${esc(String(m.kind || '').toUpperCase())}</td><td>${esc(i?.address || m.inbox_id)}${i?.name ? `<br><span class="muted">${esc(i.name)}</span>` : ''}</td>`; };
-  host.querySelector('#inbound-messages').innerHTML = data.messages.length ? data.messages.map(m => `<tr data-in-message="${esc(m.message_id)}">
+  tbody.innerHTML = data.messages.length ? data.messages.map(m => `<tr data-in-message="${esc(m.message_id)}">
       <td>${esc(new Date(m.received_at * 1000).toLocaleString())}</td>${all ? to(m) : ''}<td>${esc(m.from)}</td>
       <td><button class="linkish" data-inbound-read="${esc(m.message_id)}">${esc(m.subject || m.preview || (m.retention_removed ? 'Removed by retention' : 'View message'))}</button>${
         m.subject ? `<p>${esc(m.preview)}</p>` : ''}${m.spam ? '<span class="muted">Spam</span>' : ''}${m.truncated ? '<span class="muted"> · Truncated</span>' : ''}</td>
@@ -179,8 +273,8 @@ async function inMessages(host) {
 // since their messages stay. Built once a visit: a redraw refreshes the inbox choices and keeps what was picked.
 inboxesView('messages', {label: 'Messages', order: 10, render: (host, ctx) => inAllDraw(host, ctx)});
 
-async function inAllDraw(host, ctx) {
-  clearInterval(INBOUND_TIMER);
+async function inAllDraw(host: HTMLElement, ctx: InLive) {
+  if (INBOUND_TIMER !== null) clearInterval(INBOUND_TIMER);
   const d = await inInboxes(ctx);
   if (!ctx.live() || !host.isConnected) return;
   if (!host.querySelector('#inbound-filter[data-in-all]')) {
@@ -193,34 +287,42 @@ async function inAllDraw(host, ctx) {
       ${inTable(true)}</section>`;
     host._in = {inbox: null, inboxes: [], before: 0, next: null};
   }
-  const select = host.querySelector('#inbound-filter').elements.inboxes;
+  const filter = host.querySelector<InFilterForm>('#inbound-filter'); if (!filter) return;
+  const select = filter.elements.inboxes;
   const picked = new Set([...select.selectedOptions].map(o => o.value));
   select.innerHTML = d.inboxes.map(i => `<option value="${esc(i.inbox_id)}"${picked.has(i.inbox_id) ? ' selected' : ''}>${
     esc(i.name || i.address)}${i.name ? ' · ' + esc(i.address) : ''}${i.state === 'released' ? ' · Not in use' : ''}</option>`).join('');
-  host._in.inboxes = d.inboxes;
+  if (host._in) host._in.inboxes = d.inboxes;
   inBind(host, ctx);
   inPoll(host, ctx);
 }
 
-function inBind(host, first) {
+function inBind(host: HTMLElement, first: InLive) {
   host._inCtx = first;   // bound once a page; each handler uses the newest draw's ctx
   if (host.dataset.inBound) return;
   host.dataset.inBound = '1';
-  const ctx = {live: () => host._inCtx.live(), refresh: () => host._inCtx.refresh(), go: view => host._inCtx.go(view),
-    once: (name, load) => host._inCtx.once(name, load), get admin() { return host._inCtx.admin; }};
+  const current = (): InLive => {
+    const c = host._inCtx;
+    if (!c) throw new Error('No inbox page');
+    return c;
+  };
+  const ctx: InLive = {live: () => current().live(), refresh: () => current().refresh(), go: view => current().go(view),
+    once: (name, load) => current().once(name, load), get admin() { return current().admin; }};
   host.addEventListener('submit', event => {
-    if (event.target.id !== 'inbound-filter') return;
-    event.preventDefault(); host._in.before = 0; void inMessages(host).catch(e => inFail(host, e));
+    if (!(event.target instanceof Element) || event.target.id !== 'inbound-filter') return;
+    event.preventDefault(); if (host._in) host._in.before = 0; void inMessages(host).catch(e => inFail(host, e));
   });
   host.addEventListener('change', event => {
-    const pick = event.target.closest('[data-inbound-audience]');
+    if (!(event.target instanceof Element)) return;
+    const pick = event.target.closest<HTMLSelectElement>('[data-inbound-audience]');
     if (pick) void inAudience(host, pick, ctx);
   });
   host.addEventListener('click', event => {
-    const b = event.target.closest('button'); if (!b || !host._in && !host._inRequest) return;
-    if (b.id === 'inbound-newest') { host._in.before = 0; void inMessages(host).catch(e => inFail(host, e)); }
-    else if (b.id === 'inbound-older') { host._in.before = host._in.next; void inMessages(host).catch(e => inFail(host, e)); }
-    else if (b.dataset.inboundRead || b.dataset.inboundCode) void inReveal(b.dataset.inboundRead || b.dataset.inboundCode, !!b.dataset.inboundCode).catch(e => inFail(host, e));
+    if (!(event.target instanceof Element)) return;
+    const b = event.target.closest<HTMLButtonElement>('button'); if (!b || !host._in && !host._inRequest) return;
+    if (b.id === 'inbound-newest') { if (host._in) host._in.before = 0; void inMessages(host).catch(e => inFail(host, e)); }
+    else if (b.id === 'inbound-older') { if (host._in) host._in.before = host._in.next; void inMessages(host).catch(e => inFail(host, e)); }
+    else if (b.dataset.inboundRead || b.dataset.inboundCode) void inReveal(String(b.dataset.inboundRead || b.dataset.inboundCode), !!b.dataset.inboundCode).catch(e => inFail(host, e));
     else if (b.hasAttribute('data-in-check')) void inCheck(host, b, ctx);
     else if (b.hasAttribute('data-inbound-edit')) inEditDialog(host, ctx);
     else if (b.hasAttribute('data-inbound-release')) void inRelease(host, ctx);
@@ -229,52 +331,57 @@ function inBind(host, first) {
 }
 
 // Who reads an inbox: the company, or one group and the groups under it. Admins change it here.
-async function inAudience(host, pick, ctx) {
+async function inAudience(host: HTMLElement, pick: HTMLSelectElement, ctx: InLive) {
   pick.disabled = true;
   try {
-    await put(`/v2/inbound/inboxes/${encodeURIComponent(pick.dataset.inboundAudience)}/audience`,
+    await put(`/v2/inbound/inboxes/${encodeURIComponent(pick.dataset.inboundAudience || '')}/audience`,
       pick.value ? {audience: 'team', group_id: pick.value} : {audience: 'company'});
     toast('Saved');
-  } catch (error) { inFail(host, error); toast(error.message, true); await ctx.refresh(); }
+  } catch (error) { inFail(host, error); toast(errorMessage(error, ''), true); await ctx.refresh(); }
   finally { pick.disabled = false; }
 }
 
-async function inReveal(id, code) {
+async function inReveal(id: string, code: boolean) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal inbound-dialog';
   dialog.setAttribute('aria-label', code ? 'Verification code' : 'Incoming message');
   dialog.innerHTML = '<h2>Incoming message</h2><pre></pre><div class="row"><button type="button" class="ghost" data-more hidden>Read more</button><button type="button" class="ghost" data-close>Close</button></div>';
-  document.body.append(dialog); dialog.onclose = () => dialog.remove(); dialog.querySelector('[data-close]').onclick = () => dialog.close(); dialog.showModal();
-  let offset = 0;
+  document.body.append(dialog); dialog.onclose = () => dialog.remove();
+  const close = dialog.querySelector<HTMLButtonElement>('[data-close]'); if (close) close.onclick = () => dialog.close();
+  dialog.showModal();
+  let offset: number | null | undefined = 0;
   const load = async () => {
-    const data = await get('/v2/inbound/messages/' + encodeURIComponent(id) + (code ? '/code' : '?offset=' + offset));
-    dialog.querySelector('pre').textContent += code ? data.code || 'No code found.' : data.text;
-    dialog.querySelector('[data-more]').hidden = data.next_offset === null || code;
+    const data = await get<InReveal>('/v2/inbound/messages/' + encodeURIComponent(id) + (code ? '/code' : '?offset=' + offset));
+    const pre = dialog.querySelector<HTMLPreElement>('pre'), more = dialog.querySelector<HTMLButtonElement>('[data-more]');
+    if (!pre || !more) return;
+    pre.textContent += code ? data.code || 'No code found.' : data.text;
+    more.hidden = data.next_offset === null || code;
     offset = data.next_offset;
   };
-  dialog.querySelector('[data-more]').onclick = () => void load().catch(e => { dialog.querySelector('pre').textContent += '\n' + e.message; });
+  const more = dialog.querySelector<HTMLButtonElement>('[data-more]');
+  if (more) more.onclick = () => void load().catch(e => { const pre = dialog.querySelector<HTMLPreElement>('pre'); if (pre) pre.textContent += '\n' + errorMessage(e, ''); });
   await load();
 }
 
 // Check connection reads the inbox list again: whether the service is connected and when it last synced.
-async function inCheck(host, b, ctx) {
+async function inCheck(host: HTMLElement, b: HTMLButtonElement, ctx: InLive) {
   b.disabled = true;
   try {
     const d = await inAll('/v2/inbound/inboxes', 'inboxes');
     if (!host.isConnected) return;
-    const i = d.inboxes.find(x => x.inbox_id === host._in.inbox.inbox_id);
+    const i = d.inboxes.find(x => x.inbox_id === host._in?.inbox?.inbox_id);
     if (!i) return ctx.go('');
     inDraw(host, i, d, ctx);
     toast(inSyncLine(d), !d.configured || !!d.error);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { toast(errorMessage(e, ''), true); }
   finally { if (b.isConnected) b.disabled = false; }
 }
 
-function inEditDialog(host, ctx) {
-  const i = host._in.inbox;
+function inEditDialog(host: HTMLElement, ctx: InLive) {
+  const i = inCurrentInbox(host);
   const dialog = whDialog('Edit inbox', `<label>Inbox name<input name="name" maxlength="80" required value="${esc(i.name || '')}"></label>
     <label>Used for<input name="used_for" maxlength="500" value="${esc(i.used_for || '')}" placeholder="What accounts or workflows depend on this inbox?"></label>`,
     '<button class="primary" type="submit" data-in-save>Save</button>');
-  whSubmit(dialog, async data => {
+  whSubmit(dialog, async (data: FormData) => {
     await writeRequestOnce('PATCH', '/v2/inbound/inboxes/' + i.inbox_id, {name: String(data.get('name') || ''), used_for: String(data.get('used_for') || '')});
     dialog.close(); toast('Saved');
     return ctx.refresh();
@@ -283,24 +390,24 @@ function inEditDialog(host, ctx) {
 
 // Stop using in Tico: a Tico address is released for good; a number's renewal is cancelled and it receives until its
 // paid period ends. An inbox something depends on asks for its address typed back.
-async function inRelease(host, ctx) {
-  const i = host._in.inbox;
+async function inRelease(host: HTMLElement, ctx: InLive) {
+  const i = inCurrentInbox(host);
   const warning = i.kind === 'sms' ? 'Cancel renewal? The number keeps receiving until the paid period ends.'
     : 'Release this address permanently? Future messages will no longer be delivered.';
-  const send = async confirm => {
+  const send = async (confirm: string) => {
     await post('/v2/inbound/inboxes/' + i.inbox_id + '/release', {confirm});
     toast(i.kind === 'sms' ? 'Renewal cancelled' : 'Released');
     return i.kind === 'sms' ? ctx.refresh() : ctx.go('');
   };
   if (!i.used_for) {
     if (!await settingsConfirm({title: 'Stop using in Tico?', text: warning, ok: i.kind === 'sms' ? 'Cancel renewal' : 'Release'})) return;
-    try { await send(''); } catch (e) { toast(e.message, true); }
+    try { await send(''); } catch (e) { toast(errorMessage(e, ''), true); }
     return;
   }
   const dialog = whDialog('Stop using in Tico?', `<p>${esc(warning)}</p><p class="muted">Used for: ${esc(i.used_for)}</p>
     <label>Type ${esc(i.address)} to confirm<input name="confirm" autocomplete="off" spellcheck="false" required></label>`,
     `<button class="primary people-danger" type="submit" data-in-release-ok>${i.kind === 'sms' ? 'Cancel renewal' : 'Release'}</button>`);
-  whSubmit(dialog, async data => {
+  whSubmit(dialog, async (data: FormData) => {
     const typed = String(data.get('confirm') || '').trim();
     if (typed !== i.address) throw new Error(`Type ${i.address} to confirm.`);
     await send(typed);
@@ -309,7 +416,7 @@ async function inRelease(host, ctx) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- A phone request
-function inRequestDraw(host, r, ctx) {
+function inRequestDraw(host: HTMLElement, r: InRequest, ctx: InLive) {
   const s = inRequestStatus(r);
   const actions = [s.quoted ? `<button type="button" class="primary" data-inbound-phone-accept="${esc(r.request_id)}">Accept quote</button>` : '',
     s.cancellable ? `<button type="button" class="ghost danger" data-inbound-phone-cancel="${esc(r.request_id)}">Cancel request</button>` : ''].join('');
@@ -321,8 +428,8 @@ function inRequestDraw(host, r, ctx) {
   inBind(host, ctx);
 }
 
-async function inRequestAct(host, b, ctx) {
-  const accept = !!b.dataset.inboundPhoneAccept, id = b.dataset.inboundPhoneAccept || b.dataset.inboundPhoneCancel;
+async function inRequestAct(host: HTMLElement, b: HTMLButtonElement, ctx: InLive) {
+  const accept = !!b.dataset.inboundPhoneAccept, id = String(b.dataset.inboundPhoneAccept || b.dataset.inboundPhoneCancel);
   const r = (await inRequests(ctx).catch(() => ({phone_requests: []}))).phone_requests.find(p => p.request_id === id)
     || (host._inRequest?.request_id === id ? host._inRequest : null) || INBOUND_SETTINGS.requests.find(p => p.request_id === id);
   if (!r) return;
@@ -334,7 +441,7 @@ async function inRequestAct(host, b, ctx) {
   try {
     await post('/v2/inbound/phone-requests/' + encodeURIComponent(id) + (accept ? '/accept' : '/cancel'), accept ? {price_micros: r.price_micros} : {});
     toast(accept ? 'Quote accepted' : 'Request cancelled');
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { toast(errorMessage(e, ''), true); }
   finally { if (b.isConnected) b.disabled = false; }
   await ctx.refresh();
 }
@@ -343,7 +450,7 @@ async function inRequestAct(host, b, ctx) {
 // Email: the hosted service's state and, for an admin, joining a Tico company account's shared Inbox with a code.
 inboxesSetting('tico-connection', {section: 'email', order: 30,
   render: async (host, ctx) => {
-    const d = await inInboxes(ctx).catch(e => ({error: e.message, configured: false, inboxes: []}));
+    const d = await inInboxes(ctx).catch(e => ({error: errorMessage(e, ''), configured: false, inboxes: []}));
     if (!ctx.live()) return;
     host.innerHTML = inboxesCard('set-inbound', 'Tico addresses', `<p id="inbound-sync" class="muted" role="status">${esc(inSyncLine(d))}</p>
       ${ctx.admin ? `<details id="inbound-connection"><summary>Join your company’s shared Inbox</summary>
@@ -360,23 +467,26 @@ inboxesSetting('tico-connection', {section: 'email', order: 30,
     if (ctx.admin) inConnectionBind(host, ctx);
   }});
 
-function inConnectionBind(host, ctx) {
-  const connectionForm = host.querySelector('#inbound-connection-form');
-  let shown = null, generation = 0, busy = false;
+function inConnectionBind(host: HTMLElement, ctx: InLive) {
+  const connectionForm = host.querySelector<InConnectionForm>('#inbound-connection-form');
+  const preview = host.querySelector<HTMLElement>('#inbound-connection-preview'), connect = host.querySelector<HTMLButtonElement>('#inbound-connection-connect');
+  const connectionStatus = host.querySelector<HTMLElement>('#inbound-connection-status'), submit = connectionForm?.querySelector<HTMLButtonElement>('[type="submit"]');
+  const company = host.querySelector<HTMLElement>('#inbound-connection-company');
+  if (!connectionForm || !preview || !connect || !connectionStatus || !submit || !company) return;
+  let shown: InConnection | null = null, generation = 0, busy = false;
   const input = connectionForm.elements.code, consent = connectionForm.elements.consent;
-  const preview = host.querySelector('#inbound-connection-preview'), connect = host.querySelector('#inbound-connection-connect');
-  const connectionStatus = host.querySelector('#inbound-connection-status'), submit = connectionForm.querySelector('[type="submit"]');
-  const active = () => host.isConnected && !host.closest('.settings-pane')?.hidden;
+  const active = () => host.isConnected && !host.closest<HTMLElement>('.settings-pane')?.hidden;
   const clearPreview = () => {
     generation++; shown = null; preview.hidden = true; consent.checked = false; connect.disabled = true;
-    host.querySelector('#inbound-connection-company').textContent = '';
+    company.textContent = '';
   };
   input.oninput = () => { clearPreview(); connectionStatus.textContent = ''; };
   consent.onchange = () => { connect.disabled = busy || !shown || !consent.checked; };
-  async function connectionAction(action) {
+  async function connectionAction(action: 'preview' | 'connect') {
+    if (!preview || !connect || !connectionStatus || !submit || !company) return;
     if (busy) return;
     if (action === 'connect' && (!shown || !consent.checked)) return;
-    if (action === 'connect' && shown.expires_at * 1000 <= Date.now()) {
+    if (action === 'connect' && shown && shown.expires_at * 1000 <= Date.now()) {
       clearPreview(); connectionStatus.textContent = 'This code expired. Get a new code in the portal.'; return;
     }
     const code = input.value, target = shown?.company.company_id;
@@ -386,23 +496,24 @@ function inConnectionBind(host, ctx) {
     if (action === 'connect') { input.disabled = true; consent.disabled = true; }
     connectionStatus.textContent = action === 'preview' ? 'Checking company…' : 'Connecting Inbox…';
     try {
-      const result = await post('/v2/inbound/company-connection', {action, code});
+      const result: InConnection = await post('/v2/inbound/company-connection', {action, code});
       if (!active() || generation !== pending || input.value !== code) return;
       if (action === 'preview') {
         shown = result;
-        host.querySelector('#inbound-connection-company').textContent = `Company: ${result.company.name} · ${result.company.company_id}`;
+        company.textContent = `Company: ${result.company.name} · ${result.company.company_id}`;
         preview.hidden = false; connectionStatus.textContent = 'Review the company and shared Inbox access before connecting.';
       } else {
         if (result.company.company_id !== target) throw new Error('Could not confirm the selected company. Check the portal.');
         input.value = ''; clearPreview();
         connectionStatus.textContent = `Inbox connected to ${result.company.name} (${result.company.company_id}). Manage or disconnect it in the customer portal.`;
         const fresh = await inAll('/v2/inbound/inboxes', 'inboxes').catch(() => null);
-        if (fresh && host.querySelector('#inbound-sync')) host.querySelector('#inbound-sync').textContent = inSyncLine(fresh);
+        const sync = host.querySelector<HTMLElement>('#inbound-sync');
+        if (fresh && sync) sync.textContent = inSyncLine(fresh);
       }
     } catch (error) {
       if (active() && generation === pending) {
-        if ([403, 409, 422].includes(error.status)) clearPreview();
-        connectionStatus.textContent = error.message;
+        if ([403, 409, 422].includes(errorStatus(error) ?? 0)) clearPreview();
+        connectionStatus.textContent = errorMessage(error, '');
       }
     } finally {
       busy = false; input.disabled = false; consent.disabled = false;
@@ -414,11 +525,11 @@ function inConnectionBind(host, ctx) {
 }
 
 // Texts: phone requests, for an admin. Asking for a number sends nothing to buy; TICO prices it and approves it.
-const INBOUND_SETTINGS = {requests: []};
+const INBOUND_SETTINGS: {requests: InRequest[]} = {requests: []};
 inboxesSetting('texts-numbers', {section: 'texts', order: 10,
   render: async (host, ctx) => {
     if (!ctx.admin) { host.innerHTML = ''; return; }
-    const [d, r] = await Promise.all([inInboxes(ctx).catch(() => ({configured: false})), inRequests(ctx).catch(e => ({error: e.message, phone_requests: []}))]);
+    const [d, r] = await Promise.all([inInboxes(ctx).catch(() => ({configured: false})), inRequests(ctx).catch((e): InRequestList => ({error: errorMessage(e, ''), phone_requests: []}))]);
     if (!ctx.live()) return;
     INBOUND_SETTINGS.requests = r.phone_requests;
     const rows = r.phone_requests.map(p => {
@@ -433,8 +544,9 @@ inboxesSetting('texts-numbers', {section: 'texts', order: 10,
         : '<p class="muted">No phone requests yet.</p>'}</div>
       <p id="inbound-phone-status" class="muted" role="status">${r.more ? 'Showing the first 1,000 requests.' : ''}</p>`,
       `<button type="button" class="primary settings-head-act" data-in-phone-open${d.configured ? '' : ' disabled'}>Request a number</button>`);
-    host.onclick = event => {
-      const b = event.target.closest('button'); if (!b) return;
+    host.onclick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const b = event.target.closest<HTMLButtonElement>('button'); if (!b) return;
       if (b.hasAttribute('data-in-phone-open')) inPhoneDialog(ctx);
       else if (b.dataset.inboundPhoneAccept || b.dataset.inboundPhoneCancel) void inRequestAct(host, b, ctx);
     };

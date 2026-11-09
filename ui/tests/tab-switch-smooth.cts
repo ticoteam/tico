@@ -16,20 +16,15 @@ interface Shift {at: number; value: number; route: string; nodes: string[]}
 interface Skel {lap: number | false; route: string; cls: string; where: string}
 interface LayoutShift extends PerformanceEntry {value: number; sources: {node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly}[]}
 interface Visit {lap: number | false; route: string; first: Set<string>; shift: number; moved: string[]; late: string[]; keys: number}
-declare global {
-  interface Window {
-    __shifts: Shift[];
-    __skels: Skel[];
-    __watch: number | false;
-    __inflight: number;
-    __quietSince: number;
-    __visits: Visit[];
-    __back: number;
-  }
-  interface Element {
-    __lap2?: boolean;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  __shifts: Shift[];
+  __skels: Skel[];
+  __watch: number | false;
+  __inflight: number;
+  __quietSince: number;
+  __visits: Visit[];
+  __back: number;
+};
 declare const S: {route: string; lastRead: {tasks: unknown}};
 declare const DASH: {view?: unknown} | undefined;
 declare const STRAT: unknown;
@@ -148,11 +143,11 @@ run('tab-switch-smooth', ['org', 'toured', 'groups', 'automations'], async ({hub
   // The team list's rows are marked: a page change toggles which one is current in place and replaces none of them.
   const start = await page.evaluate(() => {
     window.__watch = 2;
-    for (const row of document.querySelectorAll('#tree > li')) row.__lap2 = true;
+    for (const row of document.querySelectorAll<Element & {__lap2?: boolean}>('#tree > li')) row.__lap2 = true;
     return performance.now();
   });
   await lap(page);
-  const rows = await page.evaluate(() => [...document.querySelectorAll('#tree > li')].map(row => !!row.__lap2));
+  const rows = await page.evaluate(() => [...document.querySelectorAll<Element & {__lap2?: boolean}>('#tree > li')].map(row => !!row.__lap2));
   const {shifts, skels, visits} = await page.evaluate((at: number) => {
     window.__watch = false;
     return {shifts: window.__shifts.filter(s => s.at >= at), skels: window.__skels.filter(s => s.lap === 2),

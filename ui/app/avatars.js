@@ -4,6 +4,7 @@
 
 // ----------------------------------------------------------------- bot identity: one filled Google symbol per role, with colour reserved for department.
 // The symbols stay distinct when colour is unavailable; new/custom bots fall back to initials.
+/** @type {Record<string, {tico?: boolean, icon?: string, color?: string}>} */
 const BOT_AVATARS = {
   // Operations / Tico
   coo: {tico: true, color: '#0f6e56'},

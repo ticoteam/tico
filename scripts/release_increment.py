@@ -4,14 +4,14 @@ At most ONE full Release validation (ci.yml's whole gate) is dispatched automati
 outcome (full_within_day). The anchor is the newest full validation of those 24 hours that ran the suite to an answer
 whose commit main still contains: a green one, or a red one naming its failures. It is the anchor whichever release it
 validated, and the day's other candidates run only what their diff from it selects. A cancelled full run, or a red one
-with unnamed failures (a build, a VM, a startup failure), is no anchor, and it allows no second full run: the window
+with unnamed failures (a build, a VM, a startup failure), is no anchor, and it allows no second full run: the train
 waits, and a person runs Release train by hand to validate again (a manual run dispatches as it does today). Once the
-full run is a day old, the window may dispatch one again. A candidate after the anchor runs only what its diff from the
+full run is a day old, the train may dispatch one again. A candidate after the anchor runs only what its diff from the
 anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set,
 the factory checks when their inputs changed, the product part (the upgrade journey and the Docker smoke checks) when its
 previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
 the failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until
-a commit since it selects one of its failures; until then the window waits. A green validation after it (full or
+a commit since it selects one of its failures; until then the train waits. A green validation after it (full or
 incremental, of a commit main still contains) supersedes it.
 
 The decisions here are pure. The GitHub reads (runs, job logs) come from scripts/release_train.py, and the checkout's
@@ -104,7 +104,7 @@ def anchor_of(records, now, contained, named):
 
 def full_within_day(records, now):
     """The newest full validation that finished within the last 24 hours, whatever its outcome (a cancelled one, or a red
-    one with unnamed failures, too), or None. While it exists the window dispatches no full validation automatically:
+    one with unnamed failures, too), or None. While it exists the train dispatches no full validation automatically:
     a person runs Release train by hand to validate again. `records` are every release's validations, as anchor_of
     reads them."""
     finished = [
@@ -135,7 +135,7 @@ def red_since(records, anchor, contained):
     """The newest red validation that no later green one supersedes, or None. Reds count back to the anchor when there is
     one, else back to the newest green validation of any release. A green validation (full or incremental, of a commit
     main still contains) supersedes the reds older than it. Reds carry across releases: a red nothing later passed is
-    still main's failure, and dropping it at the next window would leave its failure unrun. `records` are newest first,
+    still main's failure, and dropping it at the next release would leave its failure unrun. `records` are newest first,
     as anchor_of reads them."""
     for record in records:
         if anchor is not None and record["id"] == anchor["id"]:
@@ -153,7 +153,7 @@ def names(items):
 
 
 def red_rule(red, head, since_red):
-    """Whether the window runs head again after a red validation, and the line it logs.
+    """Whether the train runs head again after a red validation, and the line it logs.
 
     `red` is the red validation (sha, url, conclusion, failed: a set of tokens, or None when unnamed); `since_red` is the
     tokens the commits since red select (None when their diff could not be read). A red whose head is still main's head
@@ -186,7 +186,7 @@ def red_rule(red, head, since_red):
             names(hits),
             head[:12],
         )
-    return False, "no commit since %s selects what failed there (%s): the window waits for such a commit" % (
+    return False, "no commit since %s selects what failed there (%s): the train waits for such a commit" % (
         short,
         names(failed),
     )
@@ -454,7 +454,7 @@ def matrix_of(plan_text):
 
 
 class Checkout:
-    """What a commit range selects, read from the checkout (the window job's, at main's head)."""
+    """What a commit range selects, read from the checkout (the train job's, at main's head)."""
 
     def __init__(self, root=ROOT):
         self.root = Path(root)
@@ -486,7 +486,7 @@ class Checkout:
         """The tokens the commits base..head select, or None when the diff cannot be read."""
         try:
             changed, selected = self.selected(base, head)
-        except Exception:  # noqa: BLE001 - an unreadable diff is a fact the window logs, not a crash
+        except Exception:  # noqa: BLE001 - an unreadable diff is a fact the train logs, not a crash
             return None
         return selection_tokens(selected, changed, self.root)
 

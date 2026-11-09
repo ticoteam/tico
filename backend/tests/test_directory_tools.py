@@ -239,3 +239,22 @@ def test_the_store_resolves_targets_types_and_the_company_summary_by_the_one_rea
         assert ES.describe_type(c, "person")["type"]["key"] == "person"
         assert ES.describe_type(c, "no-such-type") is None
         assert ES.type_exists(c, "place") and not ES.type_exists(c, "no-such-type")
+
+
+def test_only_an_owner_or_an_admin_changes_where_we_operate(api):
+    with api.app.state.store.transaction() as c:
+        ES.ensure_self(c, company_name="Acme Lights", domain="acme.example")
+        texas = ES.upsert(c, ANA, "place", match={"name": "Texas"}, name="Texas")["id"]
+    add = {"from_ref": "acme.example", "link_key": "operates_in", "to_ref": texas}
+
+    refused = answer(api, "post", "entities/links", "cara-test", json=add)
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden"
+    assert answer(api, "get", "entities/self", "cara-test").json()["operates_in"] == []
+
+    link = answer(api, "post", "entities/links", "ben-test", json=add).json()["id"]
+    [place] = answer(api, "get", "entities/self", "cara-test").json()["operates_in"]
+    assert place["id"] == texas and place["link_id"] == link
+
+    assert answer(api, "post", "entities/unlink", "cara-test", json={"link_id": link}).status_code == 403
+    assert answer(api, "post", "entities/unlink", "ana-test", json={"link_id": link}).json() == {"id": link}
+    assert answer(api, "get", "entities/self", "ana-test").json()["operates_in"] == []

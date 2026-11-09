@@ -52,7 +52,8 @@ interface ThvRefs {
   earlier_messages?: { thread_id?: string };
   files?: ThvFileRef[];
   attachments?: ChatFile[];
-  warnings?: unknown[];
+  /** The runner's notices (backend/execution.py split_runner_notices): plain lines. */
+  warnings?: string[];
   turn_id?: string | null;
   [key: string]: unknown;
 }
@@ -81,7 +82,7 @@ interface ThvMessage {
   reply_to?: ThvQuote | null | undefined;
   routed?: { to?: ({ actor?: string; name?: string } | null)[] } | null | undefined;
   sub_thread?: { id?: string; last_read_seq?: number | string } | null | undefined;
-  run?: { steps?: unknown; did?: unknown[] };
+  run?: ChatRun;
   refs?: ThvRefs;
   reactions?: ThvReaction[];
   [key: string]: unknown;
@@ -1329,7 +1330,7 @@ async function thvComposerTask(view: ThvView, text: string) {
     thvComposerClear(view); thvChips(view);
     toast(`Task for ${empName(slug)} created`);
     await v2Refresh();
-    if (BOT?.slug === slug) void loadBotTasksV2(slug);
+    if (slug !== null && BOT?.slug === slug) void loadBotTasksV2(slug);
   } catch (e) { toast(errorMessage(e, ''), true); }
 }
 // /new in a DM: the DM is archived and the next message starts a fresh one, as the old chat's New chat did.
