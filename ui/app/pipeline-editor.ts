@@ -50,11 +50,13 @@ const peOptions = (rows: [string, string][], on: string | null | undefined): str
   rows.map(([v, l]) => `<option value="${esc(v)}"${v === on ? ' selected' : ''}>${esc(l)}</option>`).join('');
 const pePeople = (): {id: string; name: string}[] => (S.people || []).filter(p => !p.hidden).map(p => ({id: 'human:' + p.id, name: p.name || p.id}));
 const peBots = (): {id: string; name: string}[] => (S.emps || []).filter(e => e.state !== 'archived').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
-/** A choice of one person or bot. A clearable choice offers `none` as an empty value. One that cannot be cleared (an owner
+/** A choice of one person or bot (`bot:<slug>`; the type read gives its manager as a bare slug). A clearable choice offers `none` as an empty value. One that cannot be cleared (an owner
     or a manager: the server refuses an empty one) shows `none` only while nothing is set, as a disabled placeholder. */
 const peWho = (rows: {id: string; name: string}[], on: string | null | undefined, none: string, clearable = true): string => {
   const empty = clearable ? `<option value="">${esc(none)}</option>` : on ? '' : `<option value="" disabled selected>${esc(none)}</option>`;
-  return `${empty}${rows.map(r => `<option value="${esc(r.id)}"${r.id === on ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
+  // A saved choice missing from the list (an archived bot) still shows as itself, never as the first row.
+  const kept = on && !rows.some(r => r.id === on) ? `<option value="${esc(on)}" disabled selected>${esc(on.replace(/^(bot|human):/, ''))}</option>` : '';
+  return `${empty}${kept}${rows.map(r => `<option value="${esc(r.id)}"${r.id === on ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
 };
 
 /** "2 days", "90 minutes": a Warn after time the way the person would say it. */
@@ -199,7 +201,7 @@ function peBodyHTML(state: PeState): string {
   return `<div class="pe-settings">
       <label class="pe-f"><span>Prefix</span><input name="prefix" maxlength="2" value="${esc(t.prefix ?? '')}" data-pe-setting="prefix" autocomplete="off"></label>
       <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'Not set', false)}</select></label>
-      <label class="pe-f"><span>Pipeline Manager</span><select data-pe-setting="manager_id">${peWho(peBots(), t.manager, 'Not set', false)}</select></label>
+      <label class="pe-f"><span>Pipeline Manager</span><select data-pe-setting="manager_id">${peWho(peBots(), t.manager && !t.manager.includes(':') ? `bot:${t.manager}` : t.manager, 'Not set', false)}</select></label>
       ${peGoalHTML(state)}
       ${from ? `<p class="pe-froms"><span>From</span> ${from}</p>` : ''}</div>
     <ol class="pe-stages">${t.steps.map((s, i) => peStageHTML(state, s, i, t.steps.length)).join('')}</ol>

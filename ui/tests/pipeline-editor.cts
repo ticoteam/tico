@@ -52,7 +52,8 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
     const body = method === 'GET' ? null : req.postDataJSON();
     if (method !== 'GET') writes.push({method, p, body});
     if (p === '/api/me') return json(me);
-    if (p === '/api/employees') return json([{name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}}]);
+    if (p === '/api/employees') return json([{name: 'auditor', display_name: 'Auditor', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}},
+      {name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Ruiz', role: 'owner'}, {id: 'sam', name: 'Sam Okafor', role: 'member'}], teams: {}, org_groups: []});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
@@ -92,7 +93,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
       const s = state.settings;
       if ('prefix' in body) { s.prefix = body.prefix; state.type.prefix = body.prefix; }
       if ('owner_id' in body) { s.owner_id = body.owner_id; state.type.pipeline_owner_id = body.owner_id; }
-      if ('manager_id' in body) { s.manager_id = body.manager_id; state.type.manager = body.manager_id; }
+      if ('manager_id' in body) { s.manager_id = body.manager_id; state.type.manager = body.manager_id?.replace(/^bot:/, '') ?? null; }  // the type read gives a bare slug, like the server
       if ('goal' in body) s.goal = body.goal || null;
       if (body.visibility) { s.visibility = body.visibility; if (body.visibility === 'members') s.factory_id = null; }
       if ('factory_id' in body) s.factory_id = body.factory_id || null;
@@ -133,6 +134,10 @@ async function desktop(browser: import('playwright').Browser) {
   await page.locator('[data-pe-setting=manager_id]').selectOption('bot:lead');
   await page.waitForFunction(() => (document.querySelector('[data-pe-setting=manager_id]')! as HTMLInputElement).value === 'bot:lead');
   assert.deepEqual(last(writes, '/api/v2/pipelines/dev/settings'), {manager_id: 'bot:lead'});
+  // Reopened, the saved manager (a bare slug in the type read) shows as itself, not as the first bot in the list.
+  await page.locator('[data-pe-close]').click();
+  await page.locator('#task-pipeline-edit').click();
+  await page.waitForFunction(() => (document.querySelector('[data-pe-setting=manager_id]') as HTMLSelectElement | null)?.value === 'bot:lead');
   // Goal saves on blur; Factory picks a live one;
   // Private sends the visibility, then who may see it, and a private pipeline has no factory.
   const nextSettings = () => page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/v2/pipelines/dev/settings');
@@ -257,7 +262,7 @@ async function unsetChoices(browser: import('playwright').Browser) {
   await page.locator('.pe-stage').first().waitFor();
   const enabled = (sel: string) => page.locator(`${sel} option:not([disabled])`).evaluateAll((os: HTMLElement[]) => os.map(o => (o as HTMLOptionElement).value));
   assert.deepEqual(await enabled('[data-pe-setting=owner_id]'), ['human:ana', 'human:sam'], 'the owner has no empty choice');
-  assert.deepEqual(await enabled('[data-pe-setting=manager_id]'), ['bot:lead'], 'an unset manager has no empty choice');
+  assert.deepEqual(await enabled('[data-pe-setting=manager_id]'), ['bot:auditor', 'bot:lead'], 'an unset manager has no empty choice');
   assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().innerText(), 'Not set', 'an unset manager says so');
   assert.equal(await page.locator('[data-pe-setting=manager_id] option').first().evaluate(o => (o as HTMLOptionElement).disabled), true, 'the placeholder cannot be chosen');
   assert.deepEqual(errors, [], 'unset choices: no page errors');
