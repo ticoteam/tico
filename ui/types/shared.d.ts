@@ -171,6 +171,8 @@ interface Employee {
   can_chat?: boolean;
   my_access?: AccessLevel;
   machine?: BotMachine | null;
+  /** The computer a bot is placed on (`assignments` row), when the server sends it. */
+  assignment?: { runner_id?: string } | null;
   agent?: BotAgent | null;
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
   online?: boolean;
