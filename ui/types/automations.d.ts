@@ -52,6 +52,67 @@ interface AuAll {
   done?: boolean;
 }
 
+/* An automation's flow as the page reads and writes it (CONTRACT §2; automations-flow.ts draws it, automations-editors.js
+   edits it). api.d.ts types steps, trigger and destinations as plain records; these are the fields the page uses. */
+
+/** An action's arguments as the hub keeps them: text mostly, but a post_update's `to` is a list and a webhook's `data` an object. */
+type AuArgs = Record<string, unknown>;
+/** A rule's or a destination's action: {do, args}; older copies said just the name. */
+type AuThen = string | { do?: string; args?: AuArgs };
+/** A condition: a field, a check and a value; a yes/no or a choice can carry a minimum (0..1; '' or none for no minimum). */
+interface AuCond { field?: string; op?: string; value?: unknown; min?: number | string | null }
+/** A Filter rule: its conditions, its actions, the destination it goes to, and what runs after it. */
+interface AuRule { when?: AuCond[]; match?: string; then?: AuThen[]; to?: string | undefined; stop?: boolean; next?: string }
+/** A Decide question: yes/no ('noul') or a choice over criteria (a list of ids, or ids to words). */
+interface AuQuestion { type?: string; instructions?: unknown; criteria?: string[] | Record<string, string> }
+/** A saved question set (GET /v2/automations/question-sets), whose questions a Decide step on it reads. */
+type AuQuestionSet = import('./api').QuestionSets['sets'][number];
+/** One column of a Paths step, or its Otherwise. */
+interface AuPath { name?: string; when?: AuCond[]; steps?: AuStep[] }
+/** An llm step's choice of destinations: a draft or a reply turn that picks one. */
+interface AuChoose { mode?: string; to?: string[]; default?: string }
+/** A step: its id, kind and switch, and each kind's own fields (filter, decide, llm, find, bot_turn, paths, action). */
+interface AuStep {
+  id: string;
+  type: string;
+  enabled?: boolean;
+  out?: string;
+  rules?: AuRule[];
+  questions?: Record<string, AuQuestion>;
+  set?: string;
+  level?: string;
+  as?: string;
+  prompt?: string;
+  choose?: AuChoose;
+  bot?: string;
+  source?: string;
+  query?: string;
+  since?: string;
+  limit?: number;
+  paths?: AuPath[];
+  otherwise?: AuPath;
+  do?: string;
+  args?: AuArgs;
+}
+/** A destination of a board flow: where a rule, a question or the LLM sends a message, and what it does there. */
+interface AuDest { id: string; name?: string; color?: string; then?: AuThen[] }
+/** What starts an automation: its kind and that kind's fields. */
+interface AuTrigger { type?: string; filters?: AuCond[]; name?: string; inbox?: string; [field: string]: unknown }
+/** A flow: its steps, its destinations (a board's), and its trigger. */
+interface AuFlow { steps?: AuStep[]; destinations?: AuDest[] | null; trigger?: AuTrigger }
+/** An automation as the page holds it (AU.cur): the API's fields, with steps and trigger always present (automations.js
+    auNormal), and the fields a built-in or a system job carries. */
+type AuAutomation = Omit<import('./api').Automation, 'steps' | 'trigger' | 'destinations'> & {
+  steps: AuStep[];
+  trigger: AuTrigger;
+  destinations?: AuDest[] | null;
+  builtin?: boolean;
+  description?: string;
+  readonly?: boolean;
+  owner?: string;
+  controls?: { schedule?: string };
+};
+
 interface AutomationsState {
   // The list and its teams. automations.js auLoadList sets list, groups and listError; a row is an automation, or one
   // of the pseudo-rows the page adds (Maintenance, the Heartbeat, Sys jobs, Incoming webhooks), built to the same shape.
@@ -72,7 +133,7 @@ interface AutomationsState {
   /** The open automation's tab: Flow or Runs (automations.js auRouteParts). */
   view: AuView;
   /** The open automation as the server sent it, with steps and trigger present (automations.js auNormal). null until read. */
-  cur: import('./api').Automation | null;
+  cur: AuAutomation | null;
   /** The editor open in the side panel (automations-editors.js auEdOpen). */
   ed: AuEditor | null;
   /** The ⋯ or + menu open over the page (automations.js auMenuOpen). */
