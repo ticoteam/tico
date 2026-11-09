@@ -713,7 +713,7 @@ function whWakeUrl(el: HTMLElement, wake: WhWake, {editing = false, error = '', 
 // Automations: incoming webhooks are a built-in row of the list, kind webhook, and their own screen (pageAutomations).
 // The row shows when the hub answers its list of triggers, as Maintenance's does when /v2/maintenance answers.
 const AU_HOOKS = 'webhooks';
-function auHooksList<T extends Array<import('../types/api').Automation>>(list: T, found: { triggers?: WebhookTrigger[] | null } | null): T {
+function auHooksList<T extends Array<Pick<import('../types/api').Automation, 'id'>>>(list: T, found: { triggers?: WebhookTrigger[] | null } | null): T {
   if (!Array.isArray(found?.triggers)) return list;
   WH_TRIGGERS = whIncoming(found.triggers);
   const row = {id: AU_HOOKS, name: 'Incoming webhooks', kind: 'webhook', builtin: true, readonly: true, owner_id: AU_MAINT_OWNER,

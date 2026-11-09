@@ -1,4 +1,4 @@
-// Automations step editors (ui/app/automations-editors.js) against the fake hub in support/automations-fake.cjs: Filter
+// Automations step editors (ui/app/automations-editors.ts) against the fake hub in support/automations-fake.cjs: Filter
 // rules, Decide (set, level, questions, the last run's bars) and LLM (runs as, prompt) each save the flow with one PATCH
 // that makes a new version; Versions restores one; on a computer the spend chip, "+" between steps (no Paths except at the
 // end of a list), a step's own switch and Delete step. A phone edits in a sheet from the bottom; a computer in the right panel.
