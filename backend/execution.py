@@ -2872,7 +2872,7 @@ def obsolete_notices_sql(c):
         "OR (m.body LIKE 'New task from %' AND m.recipient_id=t.owner_id "
         "AND json_extract(m.refs,'$.filed_in') IS NOT NULL "
         "AND (t.status='waiting' OR EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=t.id "
-        "AND sh.kind='snoozed' AND sh.released_at IS NULL AND sh.until_at>?3)) "
+        "AND sh.kind='snoozed' AND sh.released_at IS NULL AND sh.until_at>?)) "
         "AND NOT EXISTS (SELECT 1 FROM attempts fa WHERE fa.id=json_extract(m.refs,'$.filed_in') "
         "AND fa.state IN ('leased','running'))) "
         "OR ((m.ref_wake IN ('status_check','stalled','step_status') "

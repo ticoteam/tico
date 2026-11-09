@@ -40,15 +40,17 @@ THINKING = "Thinking"
 # newest OPEN_PER_BOT, so one bot's old wakes never crowd out another's.
 OPEN_PER_BOT = 50
 _OPEN_SQL = (
-    "WITH open AS (SELECT d.recipient, d.state, d.carrier_id, d.message_id, d.created_at, m.seq FROM message_deliveries d "
-    "JOIN messages m ON m.id=d.message_id WHERE d.root_id=?1 AND d.recipient LIKE 'bot:%' "
+    "WITH parameters AS (SELECT ? AS root_id, ? AS open_per_bot), "
+    "open AS (SELECT d.recipient, d.state, d.carrier_id, d.message_id, d.created_at, m.seq FROM message_deliveries d "
+    "JOIN messages m ON m.id=d.message_id CROSS JOIN parameters p WHERE d.root_id=p.root_id AND d.recipient LIKE 'bot:%' "
     "AND d.mode IN ('queue','steer') AND d.state IN ('pending','delivered','capped') AND d.cause='human'), "
     "posted AS (SELECT p.sender_id, MAX(p.seq) AS seq FROM messages p WHERE p.conversation_id IN "
-    "(SELECT id FROM conversations WHERE root_id=?1 OR id=?1) AND p.seq>(SELECT MIN(seq) FROM open) "
+    "(SELECT conversations.id FROM conversations CROSS JOIN parameters WHERE conversations.root_id=parameters.root_id "
+    "OR conversations.id=parameters.root_id) AND p.seq>(SELECT MIN(seq) FROM open) "
     "AND p.sender_id IN (SELECT recipient FROM open) GROUP BY p.sender_id) "
     "SELECT recipient, state, carrier_id, message_id, created_at FROM (SELECT o.*, ROW_NUMBER() OVER "
     "(PARTITION BY o.recipient ORDER BY o.created_at DESC) AS n FROM open o LEFT JOIN posted q ON q.sender_id=o.recipient "
-    "WHERE q.seq IS NULL OR o.seq>q.seq) WHERE n<=?2 ORDER BY created_at"
+    "WHERE q.seq IS NULL OR o.seq>q.seq) WHERE n<=(SELECT open_per_bot FROM parameters) ORDER BY created_at"
 )
 _RUNS_SQL = (
     "SELECT a.id, a.bot_id, a.runner_id, a.state, COALESCE(a.started_at, a.created_at) AS since FROM attempts a "
@@ -102,10 +104,10 @@ def send_trailing(c, roots=None):
         # The triggers' own clock (events._NOW), and again quiet for 5 s: a trigger may have sent one since the read.
         wrote += c.execute(
             "INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
-            "SELECT 'threads','bot_status',?1,?1,strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "SELECT 'threads','bot_status',?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now') "
             f"WHERE NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' "
-            f"AND subject_id=?1 AND created_at>={_QUIET})",
-            (root,),
+            f"AND subject_id=? AND created_at>={_QUIET})",
+            (root, root, root),
         ).rowcount
     return wrote
 
