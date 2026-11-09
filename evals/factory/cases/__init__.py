@@ -1,9 +1,14 @@
 """Scenarios kept one per file: each module's `SCENARIOS` list joins scenarios.SCENARIOS, after the built-in ones.
 A case module imports what it needs from evals.factory.scenarios (Scenario, standard, tickets, the checks) and adds
 its own setup and checks beside them; add one import line below for it. The imports are literal so the PR checks'
-dependency map (scripts/pr_checks.py) sees exactly which files the sim runs."""
+dependency map (scripts/pr_checks.py) sees exactly which files the sim runs.
 
-SCENARIOS = []
+The cases extend scenarios.SCENARIOS itself, so the list is whole whichever module is imported first. Copying this
+package's own list from scenarios.py read it half built when a case module was imported first (a test importing
+evals.factory.cases.freezes before anything imported scenarios): scenarios.SCENARIOS then lacked every case."""
+
+from evals.factory.scenarios import SCENARIOS  # the built-ins: scenarios.py defines them before it imports this package
+
 # One line per case, in name order:  from .<name> import SCENARIOS as _<name>; SCENARIOS += _<name>
 from .ci_caps import SCENARIOS as _ci_caps
 
@@ -32,3 +37,15 @@ SCENARIOS += _verdict_past_open_sibling
 from .source_outages import SCENARIOS as _source_outages
 
 SCENARIOS += _source_outages
+from .pipeline_requirements import SCENARIOS as _pipeline_requirements
+
+SCENARIOS += _pipeline_requirements
+from .pipeline_attach import SCENARIOS as _pipeline_attach
+
+SCENARIOS += _pipeline_attach
+from .pipeline_review import SCENARIOS as _pipeline_review
+
+SCENARIOS += _pipeline_review
+from .pipeline_manager import SCENARIOS as _pipeline_manager
+
+SCENARIOS += _pipeline_manager

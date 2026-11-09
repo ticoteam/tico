@@ -42,6 +42,7 @@ ORDER = [
     "stall_checks",
     "approval_expiry",
     "repository_waits",
+    "entity_links",
     "call_sweeps",
 ]
 

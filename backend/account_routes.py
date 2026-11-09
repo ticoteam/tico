@@ -6,7 +6,7 @@ from clients.agent_skill import WHO_NEEDS_ME
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 from urllib.parse import urlparse
-from . import invites, mcp_oauth, models as M, oidc, owner_link, personal_tokens
+from . import invites, mcp_oauth, models as M, oidc, owner_link, personal_tokens, setup_handoff
 from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH
 from .observability import browser_config, staff_display_name
 from .store import H, Problem, encode
@@ -160,6 +160,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
 
     oidc.register(app, auth)
     owner_link.register(app, auth)
+    setup_handoff.register(app, auth, store, mutate)
     mcp_oauth.register(app, auth, store)
 
     @app.get(LOGOUT_PATH)

@@ -11,7 +11,7 @@ const {uiFile} = require('./support/page.cjs');
       await page.setContent('<div id="status"></div>');
       await page.addScriptTag({content: `const SETTINGS_PRESENCE = {at: Date.now()}; const esc = value => String(value);`});
       // cloud-machines is TypeScript: uiFile serves its compiled file (npm run build:ui).
-      for (const script of ['app/computer-detail.js', 'app/settings-devices.js', 'app/cloud-machines.ts']) {
+      for (const script of ['app/computer-detail.ts', 'app/settings-devices.ts', 'app/cloud-machines.ts']) {
         await page.addScriptTag({path: uiFile(script)});
       }
       const status = await page.evaluate(() => {

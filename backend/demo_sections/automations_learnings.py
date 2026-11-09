@@ -97,7 +97,7 @@ CONTENT = {
                 }
             ],
         },
-        # Ben's inbox as a board (ui/app/automations-flow.js auBoardShape): rules, a question, then Sort into the
+        # Ben's inbox as a board (ui/app/automations-flow.ts auBoardShape): rules, a question, then Sort into the
         # destinations. Off, so the week's mail runs only the automations above and below.
         {
             "key": "inbox-board",

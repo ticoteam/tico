@@ -9,11 +9,11 @@
 #app-update a.primary{padding:5px 12px;border-radius:6px;text-decoration:none}
 #app-update .ghost{color:var(--bg);opacity:.75}
 #stale-banner:not([hidden])~#app-update{bottom:72px}
-/* Signed out (ui/app/session.js): over the top of every page until the person signs in again. */
+/* Signed out (ui/app/session.ts): over the top of every page until the person signs in again. */
 #signed-out{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:3200;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 32px);padding:8px 8px 8px 14px;background:var(--ink);color:var(--bg);border-radius:8px;font-size:var(--t-base);box-shadow:0 6px 20px rgba(0,0,0,.2)}
 #signed-out[hidden]{display:none}
 #signed-out>*{white-space:nowrap}
-/* The Tico team has access (ui/support.js): over the top of every page while the session lasts. */
+/* The Tico team has access (ui/support.ts): over the top of every page while the session lasts. */
 #support-access-banner{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:3100;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 32px);padding:6px 8px 6px 14px;background:var(--wait-bg);color:var(--ink);border:1px solid var(--wait);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
 #support-access-banner[hidden],#support-access-banner [hidden]{display:none}
 #usage-notice{position:fixed;left:16px;bottom:16px;z-index:3000;display:flex;align-items:center;gap:12px;max-width:min(560px,calc(100vw - 32px));padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
@@ -67,7 +67,7 @@ html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility
 :root{--r-ctl:6px;--r-pop:10px}
 *{box-sizing:border-box}
 html,body{height:100%}
-/* The rails' widths; dragging an edge changes them (ui/app/rails.js, ui/styles/rails.css). */
+/* The rails' widths; dragging an edge changes them (ui/app/rails.ts, ui/styles/rails.css). */
 :root{--rail-left:236px;--rail-right:320px}
 body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
@@ -102,7 +102,7 @@ table,time,kbd,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[t
 .mono{font-family:var(--mono);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
 /* Icon glyphs are ligatures ("dynamic_feed"): until the icon font is in, a glyph would read as that word. They hold
-   their box but stay invisible until ui/theme.js marks the page html.icons-ready (the font settled, or 10s). */
+   their box but stay invisible until ui/theme.ts marks the page html.icons-ready (the font settled, or 10s). */
 html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person-mail-link,.av-glyph,.int-key){visibility:hidden}
 /* Motion (tokens.css: --dur-fast, --dur, --ease). Surfaces that appear on top fade in; rows answer a
    hover with a quick tint. Only opacity and transform move, never layout. */
@@ -118,7 +118,7 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
   .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.people-menu button,.section-toggle,.section-head,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
-/* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
+/* A page change cross-fades the window, opacity only (ui/app/router.ts routeChanged). The whole window, not #main
    alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still
    gives a press during the fade to the root element, so the router ends the fade and passes the press on. */
 ::view-transition{pointer-events:none}

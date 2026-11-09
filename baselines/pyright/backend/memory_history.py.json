@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/memory_history.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 39,
+                    "endColumn": 46,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

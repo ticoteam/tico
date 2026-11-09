@@ -22,7 +22,7 @@ function vaultClose() {
   if (dialog.open) dialog.close();
   dialog.replaceChildren();
 }
-// Read the vault again after a change and let Tools redraw what it shows of it (ui/app/redesign-library.js).
+// Read the vault again after a change and let Tools redraw what it shows of it (ui/app/redesign-library.ts).
 async function vaultLoad() {
   try { await vaultFetch(); }
   catch (error) { toast(errorMessage(error, ''), true); }
@@ -64,14 +64,22 @@ async function vaultReveal(id: string) {
   try {
     const result = await post(`/v2/credentials/${encodeURIComponent(id)}/reveal`);
     if (!dialog.open || !dialog.isConnected || generation !== VAULT_DIALOG_GENERATION) return;
-    dialog.querySelector('p')!.remove();   // the Loading line vaultDialog drew
+    const loading = dialog.querySelector<HTMLElement>('p');
+    if (!loading) throw new Error('The vault dialog did not draw its Loading line');
+    loading.remove();   // the Loading line vaultDialog drew
     const label = document.createElement('label'); label.textContent = 'Value';
     const value = document.createElement('textarea'); value.readOnly = true; value.value = result.value; value.setAttribute('aria-label','Value'); label.appendChild(value);dialog.appendChild(label);
     const copy = document.createElement('button');copy.type='button';copy.className='primary';copy.textContent='Copy';
     copy.onclick = async () => {try {await navigator.clipboard.writeText(value.value);toast('Copied');} catch {value.focus();value.select();toast('Select and copy the value shown.');}};
     dialog.appendChild(copy); VAULT_REVEAL_TIMER = setTimeout(vaultClose,60000);
     // The error replaces the Loading line, which is still drawn while this dialog is open.
-  } catch(error) { if(dialog.open && generation === VAULT_DIALOG_GENERATION) dialog.querySelector('p')!.textContent=errorMessage(error, ''); }
+  } catch(error) {
+    if(dialog.open && generation === VAULT_DIALOG_GENERATION) {
+      const loading = dialog.querySelector<HTMLElement>('p');
+      if (!loading) throw new Error('The vault dialog did not draw its Loading line');
+      loading.textContent=errorMessage(error, '');
+    }
+  }
 }
 // `row` is a stored credential to edit, or for Add a template ({name, env, source}: a tool's variable) to start from.
 function vaultEdit(row?: VaultEditRow) {
@@ -85,8 +93,9 @@ function vaultEdit(row?: VaultEditRow) {
     <p class="err bot-editor-wide" id="vault-error"></p>
     <button class="primary" type="submit">Save credential</button></form>`);
   if (!dialog) return;
-  // The form, its error line and every field are drawn just above, each under its own name.
-  const form = dialog.querySelector<HTMLFormElement>('form')!;
+  // The template just above draws the form and its fields; without a form there is nothing to wire.
+  const form = dialog.querySelector<HTMLFormElement>('form');
+  if (!form) return;
   const field = (name: string) => form.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`[name=${name}]`)!;
   form.onsubmit = async event => {
     event.preventDefault(); const button = form.querySelector<HTMLButtonElement>('[type=submit]')!; button.disabled=true;
@@ -112,7 +121,8 @@ function vaultShare(id: string) {
     <button class="primary" type="submit" ${choices.length?'':'disabled'}>Grant access</button><p class="err" id="vault-error"></p></form>`);
   if (!dialog) return;
   // The form, its submit button, its subject select and the revoke buttons are drawn just above.
-  const form = dialog.querySelector<HTMLFormElement>('form')!;
+  const form = dialog.querySelector<HTMLFormElement>('form');
+  if (!form) return;
   form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector<HTMLButtonElement>('button')!;button.disabled=true;
     try{await post(`/v2/credentials/${encodeURIComponent(id)}/grants`,{subject:form.querySelector<HTMLSelectElement>('[name=subject]')!.value});vaultClose();await vaultLoad();}
     catch(error){$('#vault-error').textContent=errorMessage(error, '');button.disabled=false;}};

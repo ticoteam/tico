@@ -117,6 +117,10 @@ function sourceLineHTML(m, {src = rowSource(m), at = m.created_at, text = m.body
 // Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
 // the ids of the rows in groups opened (sourceGroupToggle), nothing is stored, and a group stays open when updates join
 // it at either end, live or from an older page.
+/**
+ * @param {any[]} items
+ * @param {{line: (it: any) => string, draw: (it: any, i: number) => string, open?: (run: any[]) => boolean, isUpdate?: (it: any) => boolean}} opts
+ */
 function sourceRunsHTML(items, {line, draw, open = () => false, isUpdate = it => rowSource(it).kind === 'task_update'}) {
   const out = [];
   for (let i = 0; i < items.length;) {
