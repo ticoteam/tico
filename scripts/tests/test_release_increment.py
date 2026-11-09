@@ -215,7 +215,7 @@ def test_a_red_at_mains_head_waits_for_a_push():
 
 def test_a_red_waits_until_a_commit_since_it_selects_what_failed():
     go, why = ri.red_rule(red({"backend/tests/test_x.py"}), C, {"backend/tests/test_y.py"})
-    assert go is False and "the window waits" in why and "test_x.py" in why
+    assert go is False and "the train waits" in why and "test_x.py" in why
     go, why = ri.red_rule(red({"backend/tests/test_x.py"}), C, {"backend/tests/test_x.py", "ui/tests/threads.cjs"})
     assert go is True and "a commit since" in why and "test_x.py" in why
 

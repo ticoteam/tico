@@ -1,9 +1,9 @@
-# The hotfix lane, for major production issues only (docs/releasing.md#hotfixes): everything else waits for the next
-# release window. Anyone with write access, bots included, may run it from main. It validates the commit as the next
+# The hotfix lane, for major production issues only (docs/releasing.md#hotfixes): everything else goes out with the
+# release train. Anyone with write access, bots included, may run it from main. It validates the commit as the next
 # patch (a full Release validation run), tags and publishes it, updates the canary and waits until it is healthy, marks
 # it latest, then (promote_stable, the default) updates stable at once, unless RELEASE_HOLD is set or a release-blocker
 # issue is open (override_hold updates stable anyway, and the log says who did). Without stable, the hotfix waits for an
-# approval like any canary release. Its job shares the `release-train` concurrency group with the release window job
+# approval like any canary release. Its job shares the `release-train` concurrency group with the release train job
 # (train.yml), so the two never overlap. The reason and the release notes go in the job summary and on the
 # release-train issue: a success files a closed record, a failure leaves the issue open.
 name: Hotfix release

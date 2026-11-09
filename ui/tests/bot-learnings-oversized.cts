@@ -35,7 +35,7 @@ declare const window: Window & typeof globalThis & {
     await page.setContent('<button id="bot-learn" hidden><span class="bl-n"></span></button>');
     await page.addStyleTag({path: path.join(__dirname, '../styles/bot-learnings.css')});
     await page.evaluate(() => {
-      window.$ = (selector, root = document) => root.querySelector(selector);
+      Object.assign(window, {$: (selector: string, root: ParentNode = document) => root.querySelector(selector)});
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.BOT = {slug: 'ops'};
