@@ -29,7 +29,8 @@
 #   4 upgrade     "Update now" (POST /api/v2/system/update) moves the server to the candidate; the previous updater
 #                 applies the candidate's bundle and then replaces itself with the candidate's updater
 #   5 old runner  the previous release's runner, still running, against the candidate server: a turn in the same
-#                 session and a second worktree (v0.3.11, v0.3.36 and v0.3.37 broke exactly there)
+#                 session (migration 0067 moves the chat into the Home: a fresh thread there) and a second worktree
+#                 (v0.3.11, v0.3.36 and v0.3.37 broke exactly there)
 #   6 new runner  the computer moves to the candidate runner on the same volume: its turn still has the HUB_ variable
 #                 (v0.2.31 dropped them), continues the same session, the seeded worktree is still there and the
 #                 older releases' rows are intact; with the harness's saved sessions gone, the next turn still answers
@@ -51,6 +52,7 @@
 # service pulls only what is missing). The updater replaces itself only with an image it can pull, so updater images
 # go through a throwaway registry on 127.0.0.1, and the bundles the updater downloads come from a throwaway release
 # server on the install's network (the candidate's is built from this checkout for the local build).
+# shellcheck disable=SC2329  # the steps run through run_step by name, so the helpers they call look unused
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -130,12 +132,13 @@ esac
 WORK="$(mktemp -d)"
 DIR="$WORK/install"
 mkdir -p "$DIR" "$WORK/releases/download"
-RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK=""
+RESULTS=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION=""
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
 say() { printf '  %s\n' "$*"; }
 retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 0.5; done; }
 api() {  # curl arguments; the owner token never leaves the server container
+  # shellcheck disable=SC2016  # single quotes: the container's shell expands the token and "$@"
   dc exec -T server sh -c 'curl -sS --fail-with-body -H "Authorization: Bearer $(cat /data/local-owner.token)" -H "Content-Type: application/json" "$@"' sh "$@"
 }
 post() {
@@ -220,7 +223,14 @@ ask() {  # name, then what to ask (env=NAME, worktree=TASK): one turn with BotOp
   retry 120 reply_to "$cid" "$nonce" || { say "no reply from the fake harness to $nonce"; return 1; }
 }
 fact() { tr ' ' '\n' < "$WORK/reply" | sed -n "s/^$1=//p" | head -n 1; }   # one fact of the last reply
-replied() { get "conversations/$(cat "$WORK/conversation")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
+current_room() {  # conversation id: the room its messages are in now. When the bot's chats moved into its Home (migration
+  # 0067, backend/bot_home_merge.py) the old room is closed and its messages carry the Home's id; home_merges records which.
+  # Looked up on every check, so the room is found where it is after the update, a rollback or a restore.
+  local home
+  home="$(sql "SELECT home_id FROM home_merges WHERE conversation_id='$1' LIMIT 1" 2>/dev/null)"
+  printf '%s\n' "${home:-$1}"
+}
+replied() { get "conversations/$(current_room "$(cat "$WORK/conversation")")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
 conversation_intact() { replied && [ "$(environment_id)" = "$STATE_ID" ]; }
 fixture_intact() {  # the rows scripts/make_upgrade_fixture.py added, as many as it added
   [ "$(sql "SELECT (SELECT count(*) FROM bots WHERE slug IN ('coo','cmo','seo')) || ' ' || (SELECT count(*) FROM tasks WHERE id IN ('t1','t2','t3')) || ' ' || (SELECT count(*) FROM messages WHERE id IN ('m1','m2'))")" = "3 3 2" ]
@@ -246,7 +256,8 @@ release_bundle() {  # version: its bundle and SHA256SUMS where the release serve
   [ -s "$into/SHA256SUMS" ] && return 0
   mkdir -p "$into"
   if [ "$1" = "$CAND" ] && [ "$LOCAL" = 0 ]; then
-    curl -fsSL -o "$into/SHA256SUMS" "$RELEASES/download/$1/SHA256SUMS" && curl -fsSL -o "$into/tico-bundle-$1.tar.gz" "$RELEASES/download/$1/tico-bundle-$1.tar.gz" || return 1
+    bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$into/SHA256SUMS" "$RELEASES/download/$1/SHA256SUMS" && \
+      bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$into/tico-bundle-$1.tar.gz" "$RELEASES/download/$1/tico-bundle-$1.tar.gz" || return 1
   else
     python3 scripts/build_install_bundle.py --version "$1" --output "$into" >/dev/null || return 1
   fi
@@ -283,7 +294,8 @@ run_update() {  # version -> waits for a final state; prints it
 
 step_install() {
   local bundle="tico-bundle-$PREV.tar.gz" want got
-  curl -fsSL -o "$WORK/SHA256SUMS" "$RELEASES/download/$PREV/SHA256SUMS" && curl -fsSL -o "$WORK/$bundle" "$RELEASES/download/$PREV/$bundle" \
+  { bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$WORK/SHA256SUMS" "$RELEASES/download/$PREV/SHA256SUMS" &&
+    bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$WORK/$bundle" "$RELEASES/download/$PREV/$bundle"; } \
     || { say "could not download the $PREV bundle"; return 1; }
   want="$(awk -v f="$bundle" '{n=$2; sub(/^\*/,"",n)} n==f {print $1; exit}' "$WORK/SHA256SUMS")"
   got="$(sha256_of "$WORK/$bundle")"
@@ -362,6 +374,7 @@ step_seed() {
   post "credentials/$credential/grants" '{"subject": "bot:botops"}' >/dev/null || return 1
   SEED_TASK="$(new_task "Acme launch checklist")" || return 1
   ask seed env=HUB_BUCKET worktree="$SEED_TASK" || return 1
+  SEED_CONVERSATION="$(cat "$WORK/conversation")"
   SEED_THREAD="$(fact thread)"
   [ "$(fact HUB_BUCKET)" = "$(bucket_sha)" ] || { say "the seed turn did not get HUB_BUCKET: $(cat "$WORK/reply")"; return 1; }
   [ "$(fact worktree)" = ok ] || { say "the seed turn could not add a worktree: $(cat "$WORK/reply")"; return 1; }
@@ -412,7 +425,15 @@ step_old_runner() {
   [ "$(docker inspect --format '{{.Config.Image}}' "$RUNNER" | sed 's/.*://')" = "$PREV" ] || { say "the runner is not on $PREV"; return 1; }
   task="$(new_task "Acme pricing page")" || return 1
   ask old worktree="$task" || return 1
-  [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
+  if [ "$(current_room "$SEED_CONVERSATION")" != "$SEED_CONVERSATION" ]; then
+    # The seeded chat moved into the bot's Home on the update (backend/bot_home_merge.py): this turn starts a new thread
+    # there, so the Home's thread is the baseline for the checks after this one.
+    [ "$(fact thread)" != "$SEED_THREAD" ] || { say "the chat moved to the Home but the $PREV runner kept the seeded thread: $(cat "$WORK/reply")"; return 1; }
+    [ "$(cat "$WORK/conversation")" = "$(current_room "$SEED_CONVERSATION")" ] || { say "the $PREV runner's turn did not land in the Home"; return 1; }
+    SEED_THREAD="$(fact thread)"
+  else
+    [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
+  fi
   [ "$(fact worktree)" = ok ] || { say "the $PREV runner could not add a worktree: $(cat "$WORK/reply")"; return 1; }
   [ "$(worktree_state "$task" | tr '\n' ' ')" = "present on-disk " ] || { say "the $PREV runner's new worktree is $(worktree_state "$task" | tr '\n' ' ')"; return 1; }
 }

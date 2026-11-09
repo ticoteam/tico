@@ -1,4 +1,5 @@
 """The tables behind outgoing webhooks (backend/webhooks.py, backend/webhook_delivery.py); hubdb.MIGRATIONS applies them."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS webhooks (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, host TEXT NOT NULL,

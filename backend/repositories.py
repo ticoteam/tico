@@ -1,4 +1,5 @@
 """Team repository selection, bot grants and computer base-clone access."""
+
 import base64
 import json
 import time
@@ -14,6 +15,7 @@ from . import hubdb as H
 from . import read_cache
 from .auth import validate_identity
 from .store import Problem
+from . import bot_settings as BS
 
 SETTINGS = 'repos_new_bot_default'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
@@ -22,8 +24,10 @@ WORKFLOWS = 'repository-workflow-grants'
 WORKFLOW_EDITS = 'repository-workflow-edit-grants'
 # Each per-grant opt-in an Owner or admin sets on a write grant: its grant flag, where it is stored, what it is called
 # in a refusal, and the key its `stopped` entry uses.
-FLAGS = (('run_workflows', WORKFLOWS, 'Running workflows', 'run workflows', 'workflows_stopped'),
-         ('edit_workflows', WORKFLOW_EDITS, 'Editing workflow files', 'edit workflow files', 'workflow_edits_stopped'))
+FLAGS = (
+    ('run_workflows', WORKFLOWS, 'Running workflows', 'run workflows', 'workflows_stopped'),
+    ('edit_workflows', WORKFLOW_EDITS, 'Editing workflow files', 'edit workflow files', 'workflow_edits_stopped'),
+)
 STORED = {flag: key for flag, key, *_ in FLAGS}
 STARTED = {flag: key.replace('_stopped', '_started') for flag, *_, key in FLAGS}
 # The same opt-ins on All ticked repos, per repository, kept apart from the chosen grants' so each mode keeps its own
@@ -54,9 +58,10 @@ def computer_repositories(c):
     out = {}
     prefix = "computer-repositories:"
     # A key range, not LIKE (case-insensitive, so it cannot use the primary key): ';' sorts right after ':'.
-    for row in c.execute("SELECT key, value FROM registry_metadata WHERE key>=? AND key<?",
-                         (prefix, prefix[:-1] + ";")):
-        rid = row["key"][len(prefix):]
+    for row in c.execute(
+        "SELECT key, value FROM registry_metadata WHERE key>=? AND key<?", (prefix, prefix[:-1] + ";")
+    ):
+        rid = row["key"][len(prefix) :]
         try:
             value = json.loads(row["value"] or "{}")
         except ValueError:
@@ -69,16 +74,20 @@ def computer_repositories(c):
 
 
 def save_metadata(c, key, value):
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-              (key, json.dumps(value)))
+    c.execute(
+        'INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (key, json.dumps(value)),
+    )
 
 
 def release_cleared_overrides(c):
     """Hand rows whose Settings command was cleared before a clear released them back to their tico.json /
     conductor.json: they kept setup_source 'settings' with no command, so every sync skipped them. A save can no longer
     make such a row, so this runs on every start and only ever matches rows from before."""
-    c.execute("UPDATE repositories SET setup_command=NULL,setup_source=NULL WHERE setup_source='settings' "
-              "AND TRIM(COALESCE(setup_command,''),' '||char(9)||char(10)||char(13))=''")
+    c.execute(
+        "UPDATE repositories SET setup_command=NULL,setup_source=NULL WHERE setup_source='settings' "
+        "AND TRIM(COALESCE(setup_command,''),' '||char(9)||char(10)||char(13))=''"
+    )
 
 
 def migrate(c):
@@ -87,24 +96,32 @@ def migrate(c):
     for bot, repos in metadata(c, 'github-extra-repos').items():
         if not repos:
             continue
-        row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         if row:
             config = json.loads(row[0] or '{}')
             config['repo_access_mode'] = 'chosen'
-            c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(config), bot))
+            BS.write(c, bot, config)
         for repo in repos:
-            c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
-                      'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, repo, H.now()))
-            c.execute("INSERT INTO bot_repo_access VALUES(?,?,'write') ON CONFLICT(bot,full_name) DO UPDATE SET access='write'",
-                      (bot, repo))
+            c.execute(
+                'INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
+                'ON CONFLICT(full_name) DO UPDATE SET enabled=1',
+                (uuid.uuid4().hex, repo, H.now()),
+            )
+            c.execute(
+                "INSERT INTO bot_repo_access VALUES(?,?,'write') ON CONFLICT(bot,full_name) DO UPDATE SET access='write'",
+                (bot, repo),
+            )
 
     save_metadata(c, 'repositories-access-migrated', {'done': True})
 
 
 def unreachable(c):
     marks = metadata(c, 'repositories-confirmed-missing')
-    return {name for name, stamp in marks.items()
-            if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) and time.time() - stamp < 300}
+    return {
+        name
+        for name, stamp in marks.items()
+        if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) and time.time() - stamp < 300
+    }
 
 
 def reachable(c, names):
@@ -130,7 +147,9 @@ def mark_reachable(store, names):
         needs_write = any(name.lower() in marks for name in names)
         if not needs_write:
             for name in names:
-                row = c.execute('SELECT reachable FROM repositories WHERE full_name=? COLLATE NOCASE', (name,)).fetchone()
+                row = c.execute(
+                    'SELECT reachable FROM repositories WHERE full_name=? COLLATE NOCASE', (name,)
+                ).fetchone()
                 if row is not None and row['reachable'] != 1:
                     needs_write = True
                     break
@@ -142,6 +161,7 @@ def mark_reachable(store, names):
 
 def _botops():
     from .github_app import BOTOPS
+
     return BOTOPS
 
 
@@ -179,15 +199,25 @@ class Reads:
 
     def __init__(self, c, bots):
         from .shared_bots import _json, source_of
+
         self.c = c
         bots = list(dict.fromkeys(bots))
-        self.configs = self._rows('SELECT bot,config,repo FROM bot_config WHERE bot IN ({})', bots)
+        self.configs = self._rows(
+            f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (', bots
+        )
         sources = {source_of(_json(row['config'])) for row in self.configs.values()} - {''} - set(self.configs)
-        self.configs.update(self._rows('SELECT bot,config,repo FROM bot_config WHERE bot IN ({})', sorted(sources)))
+        self.configs.update(
+            self._rows(
+                f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN (', sorted(sources)
+            )
+        )
         self.chosen = {bot: [] for bot in bots}
         for part in H.chunks(bots):
-            for r in c.execute('SELECT bot,full_name,access FROM bot_repo_access WHERE bot IN (%s) ORDER BY bot,full_name'
-                               % ','.join('?' * len(part)), part):
+            for r in c.execute(
+                'SELECT bot,full_name,access FROM bot_repo_access WHERE bot IN (%s) ORDER BY bot,full_name'
+                % ','.join('?' * len(part)),
+                part,
+            ):
                 self.chosen[r['bot']].append({'full_name': r['full_name'], 'access': r['access']})
         self.missing = unreachable(c)
         self.creation = metadata(c, 'repository-creation-grants')
@@ -197,39 +227,52 @@ class Reads:
         self._enabled = self._bot_repos = self._all = None
 
     def _rows(self, sql, keys):
+        """`sql` ends where the key list goes: the marks for `keys` are added after it (no str.format, since the
+        declaration's SQL has braces of its own)."""
         out = {}
         for part in H.chunks(keys):
-            out.update((r[0], r) for r in self.c.execute(sql.format(','.join('?' * len(part))), part))
+            out.update((r[0], r) for r in self.c.execute(sql + ','.join('?' * len(part)) + ')', part))
         return out
 
     def enabled(self, name):
         """The enabled repository row (full_name, default_branch, setup_command) by this name, or None."""
         if self._enabled is None:
-            self._enabled = {nocase(r['full_name']): r for r in self.c.execute(
-                'SELECT full_name,default_branch,setup_command FROM repositories WHERE enabled=1')}
+            self._enabled = {
+                nocase(r['full_name']): r
+                for r in self.c.execute(
+                    'SELECT full_name,default_branch,setup_command FROM repositories WHERE enabled=1'
+                )
+            }
         return self._enabled.get(nocase(name))
 
     def all_mode(self):
         """Every bot's own repository, and the enabled shared ones, for a bot granted all of them."""
         if self._all is None:
-            self._all = ([r[0] for r in self.c.execute('SELECT repo FROM bot_config')],
-                         [r[0] for r in self.c.execute('SELECT full_name FROM repositories WHERE enabled=1 AND bot_repo=0')])
+            self._all = (
+                [r[0] for r in self.c.execute('SELECT repo FROM bot_config')],
+                [r[0] for r in self.c.execute('SELECT full_name FROM repositories WHERE enabled=1 AND bot_repo=0')],
+            )
         return self._all
 
     def all_ticked(self, org):
         """{lowercase name: owner/name} of the shared repositories All ticked repos reaches: the enabled ones, less
         bot repositories."""
         from .github_app import repo_of
+
         repos, shared = self.all_mode()
         bot_repos = {str(repo_of(repo, org) or '').lower() for repo in repos}
-        return {name.lower(): name for name in shared
-                if name.lower() not in bot_repos and not name.split('/')[1].lower().startswith('bot-')}
+        return {
+            name.lower(): name
+            for name in shared
+            if name.lower() not in bot_repos and not name.split('/')[1].lower().startswith('bot-')
+        }
 
 
 def access(c, bot, org, reads=None):
     """`reads` (a `Reads` covering `bot`) when the caller answers for many bots."""
     from .github_app import repo_of
     from .shared_bots import _json, source_of
+
     reads = reads or Reads(c, [bot])
     row = reads.configs.get(bot)
     if not row:
@@ -262,20 +305,33 @@ def access(c, bot, org, reads=None):
     if own:
         grants[own.lower()] = {'full_name': own, 'access': 'write'}
     missing = reads.missing
-    effective = [r for _, r in sorted(grants.items()) if (r['full_name'].lower() not in missing or r['full_name'].lower() == str(own).lower()) and org and r['full_name'].split('/')[0].lower() == org.lower()]
-    return {'mode': mode, 'all_access': all_access, 'chosen': chosen, 'all_repos': [ticked[k] for k in sorted(ticked)],
-            'effective': effective,
-            'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
-            'create_product_repositories': product_creation(reads.product_creation, bot)}
+    effective = [
+        r
+        for _, r in sorted(grants.items())
+        if (r['full_name'].lower() not in missing or r['full_name'].lower() == str(own).lower())
+        and org
+        and r['full_name'].split('/')[0].lower() == org.lower()
+    ]
+    return {
+        'mode': mode,
+        'all_access': all_access,
+        'chosen': chosen,
+        'all_repos': [ticked[k] for k in sorted(ticked)],
+        'effective': effective,
+        'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
+        'create_product_repositories': product_creation(reads.product_creation, bot),
+    }
 
 
 def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_click=True, owner=False):
     """`own_click` is False when a bot's turn makes the change for a person: it may grant with their rights, but
     not let a bot run workflows or edit workflow files. `owner`: the Owner is making the change."""
     from .github_app import repo_of, save_extra_repos
+
     before = access(c, bot, org)
     if body.create_repositories is not None:
         from .github_app import BOTOPS
+
         if not team_list or not H.is_human(actor):
             raise Problem('forbidden', 'Only an Owner or admin grants repository creation', 403)
         if bot == BOTOPS and not body.create_repositories:
@@ -285,7 +341,9 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         # On by default. Switching it back on after an off widens a bot, so it is the Owner's own click, as the Owner
         # creates product repositories themselves. Switching it off is a narrowing: an admin may too.
         if product and not (owner and own_click and H.is_human(actor)):
-            raise Problem('forbidden', 'Only the Owner turns on Create product repositories, in the bot\'s settings', 403)
+            raise Problem(
+                'forbidden', 'Only the Owner turns on Create product repositories, in the bot\'s settings', 403
+            )
         if not product and (not team_list or not H.is_human(actor)):
             raise Problem('forbidden', 'Only the Owner or an admin turns off Create product repositories', 403)
     wanted = {}
@@ -294,18 +352,26 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     for grant in body.chosen or []:
         name = repo_of(grant.full_name, org)
         if not name or name.split('/')[0].lower() != org.lower():
-            raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
+            raise Problem('github_repo', 'Choose a repository in the connected account or organization', 422)
         existing = c.execute('SELECT enabled,bot_repo FROM repositories WHERE full_name=?', (name,)).fetchone()
         if legacy and not team_list and (not existing or not existing['enabled']):
-            raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > Repositories', 422)
+            raise Problem('github_repo', 'Ask an Owner or admin to tick it in Settings > General › Repositories', 422)
         previous = {r['full_name'].lower(): r['access'] for r in before['chosen']}
         bot_repo = name.split('/')[1].lower().startswith('bot-') or any(
-            str(repo_of(r[0], org) or '').lower() == name.lower() for r in c.execute('SELECT repo FROM bot_config'))
-        if (bot_repo or existing and existing['bot_repo']) and not team_list and (name.lower() not in previous or previous[name.lower()] == 'read' and grant.access == 'write'):
+            str(repo_of(r[0], org) or '').lower() == name.lower() for r in c.execute('SELECT repo FROM bot_config')
+        )
+        if (
+            (bot_repo or existing and existing['bot_repo'])
+            and not team_list
+            and (name.lower() not in previous or previous[name.lower()] == 'read' and grant.access == 'write')
+        ):
             raise Problem('forbidden', 'An Owner or admin chooses bot repositories', 403)
         if legacy and team_list:
-            c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
-                      'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, name, H.now()))
+            c.execute(
+                'INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
+                'ON CONFLICT(full_name) DO UPDATE SET enabled=1',
+                (uuid.uuid4().hex, name, H.now()),
+            )
         elif not c.execute('SELECT 1 FROM repositories WHERE full_name=?', (name,)).fetchone():
             raise Problem('github_repo', 'Choose a repository from the team list', 422)
         wanted[name.lower()] = (name, grant.access)
@@ -313,10 +379,16 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             value = getattr(grant, flag)
             if value and grant.access != 'write':
                 raise Problem('github_repo', label + ' needs write access to ' + name, 422)
-            if value is not None and value != (name.lower() in was[flag]) and (
-                    not team_list or not H.is_human(actor) or not own_click):
-                raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                              'Repositories', 403)
+            if (
+                value is not None
+                and value != (name.lower() in was[flag])
+                and (not team_list or not H.is_human(actor) or not own_click)
+            ):
+                raise Problem(
+                    'forbidden',
+                    'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > General › Repositories',
+                    403,
+                )
             # Left out, a grant keeps its setting while it stays write.
             if value or value is None and name.lower() in was[flag] and grant.access == 'write':
                 flagged[flag].add(name.lower())
@@ -332,25 +404,33 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     for grant in body.all_repos or []:
         name = repo_of(grant.full_name, org)
         if not name or name.split('/')[0].lower() != org.lower():
-            raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
+            raise Problem('github_repo', 'Choose a repository in the connected account or organization', 422)
         named.setdefault(name.lower(), reach.get(name.lower()))
         for flag, _, label, verb, _ in FLAGS:
             value = getattr(grant, flag)
             if value and all_access != 'write':
                 raise Problem('github_repo', label + ' needs All ticked repos set to Write', 422)
-            if value is not None and value != (name.lower() in all_was[flag]) and (
-                    not team_list or not H.is_human(actor) or not own_click):
-                raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                              'Repositories', 403)
-            # One since unticked in Settings > Repositories may keep its tick or lose it, never gain one.
+            if (
+                value is not None
+                and value != (name.lower() in all_was[flag])
+                and (not team_list or not H.is_human(actor) or not own_click)
+            ):
+                raise Problem(
+                    'forbidden',
+                    'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > General › Repositories',
+                    403,
+                )
+            # One since unticked in Settings > General › Repositories may keep its tick or lose it, never gain one.
             if value and name.lower() not in reach and name.lower() not in all_was[flag]:
-                raise Problem('github_repo', name + ' is not one of the ticked repositories All ticked repos reaches', 422)
+                raise Problem(
+                    'github_repo', name + ' is not one of the ticked repositories All ticked repos reaches', 422
+                )
             if value:
                 all_flagged[flag].add(name.lower())
             elif value is False:
                 all_flagged[flag].discard(name.lower())
     if all_access != 'write':
-        all_flagged = {flag: set() for flag in STORED}          # Read for every ticked repository: the ticks go
+        all_flagged = {flag: set() for flag in STORED}  # Read for every ticked repository: the ticks go
     for flag, stored in ALL_STORED.items():
         if all_flagged[flag] != all_was[flag]:
             flags = metadata(c, stored)
@@ -358,12 +438,14 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if not flags[bot]:
                 flags.pop(bot)
             save_metadata(c, stored, flags)
-    config = json.loads(c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()[0] or '{}')
+    config = json.loads(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0] or '{}')
     config.update(repo_access_mode=body.mode, repo_all_access=all_access)
-    c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(config), bot))
+    BS.write(c, bot, config)
     if body.chosen is not None:
         c.execute('DELETE FROM bot_repo_access WHERE bot=?', (bot,))
-        c.executemany('INSERT INTO bot_repo_access VALUES(?,?,?)', [(bot, name, level) for name, level in wanted.values()])
+        c.executemany(
+            'INSERT INTO bot_repo_access VALUES(?,?,?)', [(bot, name, level) for name, level in wanted.values()]
+        )
         for flag, stored in STORED.items():
             flags = metadata(c, stored)
             names = sorted(wanted[key][0] for key in flagged[flag] if key in wanted)
@@ -382,7 +464,7 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         save_metadata(c, 'repository-creation-grants', grants)
     if product is not None and product != before['create_product_repositories']:
         grants = metadata(c, PRODUCT_GRANTS)
-        grants[bot] = bool(product)                           # an explicit choice either way; an off must stick
+        grants[bot] = bool(product)  # an explicit choice either way; an off must stick
         save_metadata(c, PRODUCT_GRANTS, grants)
     after = access(c, bot, org)
     # Kept flags apply again when a grant returns to effect (Own or All back to Chosen, Own or Chosen back to All): that is
@@ -390,10 +472,16 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
     for flag, _, _, verb, _ in FLAGS:
         had = {r['full_name'].lower() for r in before['effective'] if r.get(flag)}
         if any(r.get(flag) and r['full_name'].lower() not in had for r in after['effective']) and (
-                not team_list or not H.is_human(actor) or not own_click):
-            raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
-                          'Repositories', 403)
-    save_extra_repos(c, bot, [r['full_name'] for r in after['chosen'] if r['access'] == 'write'] if body.mode == 'chosen' else [])
+            not team_list or not H.is_human(actor) or not own_click
+        ):
+            raise Problem(
+                'forbidden',
+                'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > General › Repositories',
+                403,
+            )
+    save_extra_repos(
+        c, bot, [r['full_name'] for r in after['chosen'] if r['access'] == 'write'] if body.mode == 'chosen' else []
+    )
     lost = stopped(before, after)
     H.event(c, actor, 'bot.repos_changed', bot, {'before': before, 'after': after, **lost})
     return {**after, **lost}
@@ -406,8 +494,13 @@ def stopped(before, after):
     `creation_stopped` when repository creation was taken away. A switch to own keeps the chosen rows, but they stop
     applying."""
     kept = {(r['full_name'].lower(), r['access']) for r in after['effective']}
-    out = {'stopped': [{'full_name': r['full_name'], 'access': r['access']} for r in before['effective']
-                       if (r['full_name'].lower(), r['access']) not in kept]}
+    out = {
+        'stopped': [
+            {'full_name': r['full_name'], 'access': r['access']}
+            for r in before['effective']
+            if (r['full_name'].lower(), r['access']) not in kept
+        ]
+    }
     for flag, _, _, _, key in FLAGS:
         still = {r['full_name'].lower() for r in after['effective'] if r.get(flag)}
         lost = [r['full_name'] for r in before['effective'] if r.get(flag) and r['full_name'].lower() not in still]
@@ -431,8 +524,11 @@ def started(before, after):
         names = []
         for kind in ('effective', 'chosen', 'all_repos'):
             had = {r['full_name'].lower() for r in before[kind] if r.get(flag)}
-            names += [r['full_name'] for r in after[kind] if r.get(flag)
-                      and r['full_name'].lower() not in had and r['full_name'] not in names]
+            names += [
+                r['full_name']
+                for r in after[kind]
+                if r.get(flag) and r['full_name'].lower() not in had and r['full_name'] not in names
+            ]
         if names:
             out[STARTED[flag]] = names
     if not before.get('create_product_repositories') and after.get('create_product_repositories'):
@@ -481,10 +577,16 @@ def preview_change(c, settings, actor, bot, body):
 def needs_card(result):
     """Whether a change BotOps makes for a person goes on their Confirm card (`bot_set`, and the settings catalogue's
     class for it): it gives what only their own click may (`started_at`), or takes something away."""
-    return bool(result.get('workflows_started') or result.get('workflow_edits_started')
-                or result.get('product_creation_started') or result.get('stopped') or result.get('creation_stopped')
-                or result.get('workflows_stopped') or result.get('workflow_edits_stopped')
-                or result.get('product_creation_stopped'))
+    return bool(
+        result.get('workflows_started')
+        or result.get('workflow_edits_started')
+        or result.get('product_creation_started')
+        or result.get('stopped')
+        or result.get('creation_stopped')
+        or result.get('workflows_stopped')
+        or result.get('workflow_edits_stopped')
+        or result.get('product_creation_stopped')
+    )
 
 
 def trial(c, bot, update, org, actor, owner=False):
@@ -527,28 +629,44 @@ def card_words(c, settings, auth, who, bot, body):
 
 def plain_change(name, before, result):
     """What a repository access change does, in one or two plain sentences for a person's Confirm card: `Security
-    Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.` `before` is
+    Engineer: read-only on tico (was write). Loses access to tico-pages and tico-recorder.` `before` is
     `access()` before the change, `result` what `set_access` returned."""
     was = {r['full_name'].lower(): r for r in before['effective']}
     now = {r['full_name'].lower(): r for r in result['effective']}
-    changed = [f"{LEVEL[now[k]['access']]} on {_short(now[k]['full_name'])} (was {LEVEL[was[k]['access']]})"
-               for k in sorted(now) if k in was and now[k]['access'] != was[k]['access']]
+    changed = [
+        f"{LEVEL[now[k]['access']]} on {_short(now[k]['full_name'])} (was {LEVEL[was[k]['access']]})"
+        for k in sorted(now)
+        if k in was and now[k]['access'] != was[k]['access']
+    ]
     gained = [f"{LEVEL[now[k]['access']]} on {_short(now[k]['full_name'])}" for k in sorted(now) if k not in was]
     lost = [_short(was[k]['full_name']) for k in sorted(was) if k not in now]
     lines = ['; '.join(changed)] if changed else []
     if gained:
         lines.append('gets ' + _and(gained))
     # A tick kept for a grant not in effect yet (another mode, or All ticked repos on Read) says when it starts.
-    for flag, verb, risk in (('run_workflows', 'run workflows', "it can start CI there, and CI uses that repository's "
-                              "secrets"),
-                             ('edit_workflows', 'edit workflow files', "a workflow it pushes on a branch runs with that "
-                              "repository's secrets before review")):
+    for flag, verb, risk in (
+        ('run_workflows', 'run workflows', "it can start CI there, and CI uses that repository's secrets"),
+        (
+            'edit_workflows',
+            'edit workflow files',
+            "a workflow it pushes on a branch runs with that repository's secrets before review",
+        ),
+    ):
         names = result.get(STARTED[flag]) or []
         ticked = {r['full_name'].lower() for r in result.get('all_repos') or () if r.get(flag)}
-        groups = {'': [], ' once All ticked repos is on with Write': [], ' once Chosen repos is on with Write there': []}
+        groups = {
+            '': [],
+            ' once All ticked repos is on with Write': [],
+            ' once Chosen repos is on with Write there': [],
+        }
         for n in names:
-            groups['' if now.get(n.lower(), {}).get(flag) else ' once All ticked repos is on with Write'
-                   if n.lower() in ticked else ' once Chosen repos is on with Write there'].append(n)
+            groups[
+                ''
+                if now.get(n.lower(), {}).get(flag)
+                else ' once All ticked repos is on with Write'
+                if n.lower() in ticked
+                else ' once Chosen repos is on with Write there'
+            ].append(n)
         for when, group in groups.items():
             if group:
                 lines.append('may ' + verb + ' in ' + _and(_short(n) for n in group) + when + ': ' + risk)
@@ -559,7 +677,9 @@ def plain_change(name, before, result):
     if result.get('workflows_stopped'):
         lines.append('can no longer run workflows in ' + _and(_short(n) for n in result['workflows_stopped']))
     if result.get('workflow_edits_stopped'):
-        lines.append('can no longer edit workflow files in ' + _and(_short(n) for n in result['workflow_edits_stopped']))
+        lines.append(
+            'can no longer edit workflow files in ' + _and(_short(n) for n in result['workflow_edits_stopped'])
+        )
     if result.get('creation_stopped'):
         lines.append('can no longer create repositories')
     if result.get('product_creation_stopped'):
@@ -577,15 +697,25 @@ def plain_request(name, body):
     if mode == 'own':
         what = 'only its own repository'
     elif mode == 'all':
-        what = ((LEVEL.get(body['all_access'], 'write') if body.get('all_access') else 'the access level set before')
-                + ' on every repository the team uses')
+        what = (
+            LEVEL.get(body['all_access'], 'write') if body.get('all_access') else 'the access level set before'
+        ) + ' on every repository the team uses'
     elif mode == 'chosen':
         if body.get('chosen') is None:
             what = 'the repositories picked for it before, again'
         else:
             chosen = [g for g in body['chosen'] if isinstance(g, dict)]
-            what = ('; '.join(f"{LEVEL.get(g.get('access') or 'write', 'write')} on {_short(g.get('full_name'))}" for g in chosen)
-                    + ', besides its own repository') if chosen else 'only its own repository'
+            what = (
+                (
+                    '; '.join(
+                        f"{LEVEL.get(g.get('access') or 'write', 'write')} on {_short(g.get('full_name'))}"
+                        for g in chosen
+                    )
+                    + ', besides its own repository'
+                )
+                if chosen
+                else 'only its own repository'
+            )
     else:
         what = 'its repository access changes'
     if body.get('create_repositories') is True:
@@ -618,7 +748,9 @@ def _sync(service):
     while True:
         if service.repository_stop.is_set():
             return 'stopped'
-        response = service._call('GET', '/installation/repositories', params={'per_page': 100, 'page': page}, headers=headers)
+        response = service._call(
+            'GET', '/installation/repositories', params={'per_page': 100, 'page': page}, headers=headers
+        )
         if response.status_code >= 300:
             raise Problem('github_repositories', 'GitHub could not list repositories; retry Refresh', 502)
         batch = response.json()['repositories']
@@ -630,6 +762,7 @@ def _sync(service):
         return 'stopped'
     with service.store.read() as c:
         from .github_app import repo_of
+
         own = {str(repo_of(r[0], row['org']) or '').lower() for r in c.execute('SELECT repo FROM bot_config')}
         previous = {r['full_name'].lower(): dict(r) for r in c.execute('SELECT * FROM repositories')}
         overrides = {name for name, r in previous.items() if r['setup_source'] == 'settings'}
@@ -645,8 +778,12 @@ def _sync(service):
             if service.repository_stop.is_set():
                 return 'stopped'
             try:
-                response = service._call('GET', f"/repos/{repo['full_name']}/contents/{filename}", headers=headers,
-                                         params={'ref': repo['default_branch']} if repo.get('default_branch') else {})
+                response = service._call(
+                    'GET',
+                    f"/repos/{repo['full_name']}/contents/{filename}",
+                    headers=headers,
+                    params={'ref': repo['default_branch']} if repo.get('default_branch') else {},
+                )
             except Problem:
                 break
             if response.status_code == 404:
@@ -673,17 +810,36 @@ def _sync(service):
         c.execute('UPDATE repositories SET reachable=0')
         for repo in repos:
             name = repo['full_name']
-            c.execute('INSERT INTO repositories(id,full_name,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at,updated_at) '
-                      'VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(full_name) DO UPDATE SET bot_repo=excluded.bot_repo,'
-                      'default_branch=excluded.default_branch,reachable=1,last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at,'
-                      "setup_command=CASE WHEN repositories.setup_source='settings' THEN repositories.setup_command ELSE excluded.setup_command END,"
-                      "setup_source=CASE WHEN repositories.setup_source='settings' THEN 'settings' ELSE excluded.setup_source END",
-                      (uuid.uuid4().hex, name, int(name.split('/')[1].lower().startswith('bot-') or name.lower() in own),
-                       repo.get('default_branch'), repo['setup_command'], repo['setup_source'], H.now(), H.now()))
+            c.execute(
+                'INSERT INTO repositories(id,full_name,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at,updated_at) '
+                'VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(full_name) DO UPDATE SET bot_repo=excluded.bot_repo,'
+                'default_branch=excluded.default_branch,reachable=1,last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at,'
+                "setup_command=CASE WHEN repositories.setup_source='settings' THEN repositories.setup_command ELSE excluded.setup_command END,"
+                "setup_source=CASE WHEN repositories.setup_source='settings' THEN 'settings' ELSE excluded.setup_source END",
+                (
+                    uuid.uuid4().hex,
+                    name,
+                    int(name.split('/')[1].lower().startswith('bot-') or name.lower() in own),
+                    repo.get('default_branch'),
+                    repo['setup_command'],
+                    repo['setup_source'],
+                    H.now(),
+                    H.now(),
+                ),
+            )
         save_metadata(c, 'repositories-reachability-verified', {'done': True})
-        save_metadata(c, 'repositories-confirmed-missing', {r['full_name'].lower(): time.time() for r in c.execute('SELECT full_name FROM repositories WHERE reachable=0')})
+        save_metadata(
+            c,
+            'repositories-confirmed-missing',
+            {
+                r['full_name'].lower(): time.time()
+                for r in c.execute('SELECT full_name FROM repositories WHERE reachable=0')
+            },
+        )
         save_metadata(c, 'repositories-archived', {r['full_name'].lower(): bool(r.get('archived')) for r in repos})
-        save_metadata(c, 'repositories-sizes', {r['full_name'].lower(): r.get('size', 0) for r in repos if r.get('size')})
+        save_metadata(
+            c, 'repositories-sizes', {r['full_name'].lower(): r.get('size', 0) for r in repos if r.get('size')}
+        )
         save_metadata(c, 'repositories-synced', {'day': H.now()[:10]})
     repository_health(service)
     return 'synced'
@@ -692,16 +848,22 @@ def _sync(service):
 def repository_health(service):
     from .health import note_github_token
     from .github_app import repo_of
+
     with service.store.read() as c:
         row = service.row(c)
         org = row['org'] if row else ''
         own = {str(repo_of(r[0], org) or '').lower() for r in c.execute('SELECT repo FROM bot_config')}
         confirmed = unreachable(c)
-        missing = [r['full_name'] + ' is not reachable' for r in c.execute(
-            'SELECT full_name,enabled FROM repositories WHERE reachable=0 ORDER BY full_name')
-            if r['full_name'].lower() in confirmed and r['enabled'] and r['full_name'].lower() not in own]
-    note_github_token(service.store, '; '.join(missing) or None,
-                      'Refresh Settings > Repositories or check the GitHub App installation.')
+        missing = [
+            r['full_name'] + ' is not reachable'
+            for r in c.execute('SELECT full_name,enabled FROM repositories WHERE reachable=0 ORDER BY full_name')
+            if r['full_name'].lower() in confirmed and r['enabled'] and r['full_name'].lower() not in own
+        ]
+    note_github_token(
+        service.store,
+        '; '.join(missing) or None,
+        'Refresh Settings > General › Repositories or check the GitHub App installation.',
+    )
 
 
 def workflow_health(service, accepted, refused=False, flag='run_workflows'):
@@ -723,8 +885,14 @@ def workflow_health(service, accepted, refused=False, flag='run_workflows'):
 
 def _workflow_grants(c, flag):
     """`bot: owner/name` for each grant with `flag`, a chosen grant's or an All ticked repos tick."""
-    return sorted({bot + ': ' + name for key in (STORED[flag], ALL_STORED[flag])
-                   for bot, names in metadata(c, key).items() for name in names or ()})
+    return sorted(
+        {
+            bot + ': ' + name
+            for key in (STORED[flag], ALL_STORED[flag])
+            for bot, names in metadata(c, key).items()
+            for name in names or ()
+        }
+    )
 
 
 def workflows_waiting(c, flag='run_workflows'):
@@ -752,6 +920,7 @@ def queue_sync(service, refresh=False):
         service.repository_refresh_wanted |= refresh
         if service.repository_running:
             return
+
         def work():
             while True:
                 with service.repository_queue_lock:
@@ -778,9 +947,11 @@ def queue_sync(service, refresh=False):
                     # An installation change (a permission accepted, a repository added) can finish a waiting bot.
                     try:
                         from .repo_waits import tick
+
                         tick(service, force=True)
                     except Exception:
                         logging.getLogger('tico.repositories').warning('Waiting bot repositories could not be checked')
+
         service.repository_running = True
         service.repository_worker = threading.Thread(target=work, daemon=True)
         service.repository_worker.start()
@@ -796,7 +967,9 @@ def daily(service):
     if service.repository_running or service.repository_stop.is_set():
         return
     with service.store.read() as c:
-        if metadata(c, 'repositories-synced').get('day') == H.now()[:10] and metadata(c, 'repositories-reachability-verified').get('done'):
+        if metadata(c, 'repositories-synced').get('day') == H.now()[:10] and metadata(
+            c, 'repositories-reachability-verified'
+        ).get('done'):
             return
     delay = 300 if service.repository_sync_failures <= 1 else 3600
     if service.repository_sync_attempt and time.time() - service.repository_sync_attempt < delay:
@@ -807,8 +980,10 @@ def daily(service):
 def runner_repos(c, runner_id, org):
     result = {}
     sizes = metadata(c, 'repositories-sizes')
-    hosted = c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.id=a.bot WHERE a.runner_id=? AND b.state='active'",
-                       (runner_id,)).fetchall()
+    hosted = c.execute(
+        "SELECT a.bot FROM assignments a JOIN bots b ON b.id=a.bot WHERE a.runner_id=? AND b.state='active'",
+        (runner_id,),
+    ).fetchall()
     reads = Reads(c, [row[0] for row in hosted])
     for row in hosted:
         for grant in access(c, row[0], org, reads)['effective']:
@@ -878,19 +1053,36 @@ def install(app, store, service):
         with store.read() as c:
             validate_identity(c, who)
         if who.role not in ('human', 'owner') or (change and who.role != 'owner' and not app.state.auth.bot_admin(who)):
-            raise Problem('forbidden', 'Only the owner or an admin changes repository access' if change else 'A teammate may read repositories', 403)
+            raise Problem(
+                'forbidden',
+                'Only the owner or an admin changes repository access'
+                if change
+                else 'A teammate may read repositories',
+                403,
+            )
         return who
 
     def listing():
         with store.read() as c:
-            repos = [dict(r) for r in c.execute('SELECT full_name,enabled,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at FROM repositories ORDER BY full_name')]
+            repos = [
+                dict(r)
+                for r in c.execute(
+                    'SELECT full_name,enabled,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at FROM repositories ORDER BY full_name'
+                )
+            ]
             archived = metadata(c, 'repositories-archived')
             for r in repos:
                 r['archived'] = archived.get(r['full_name'].lower())
                 for key in ('enabled', 'bot_repo', 'reachable'):
                     r[key] = bool(r[key])
-            return {'repositories': repos, 'new_bot_default': metadata(c, SETTINGS).get('new_bot_default', 'own'),
-                    'github_connected': bool(service.row(c))}
+            github_row = service.row(c)
+            return {
+                'repositories': repos,
+                'new_bot_default': metadata(c, SETTINGS).get('new_bot_default', 'own'),
+                'github_connected': bool(github_row),
+                # An App that was created but never installed cannot reach any repository.
+                'github_installed': bool(github_row and github_row['installation_id']),
+            }
 
     @app.get('/api/v2/repositories')
     def repo_list(request: Request):
@@ -925,8 +1117,10 @@ def install(app, store, service):
             if 'setup_command' in body.model_fields_set:
                 # A cleared command hands the row back to the repository's tico.json / conductor.json on the next sync.
                 command = (body.setup_command or '').strip() or None
-                c.execute('UPDATE repositories SET setup_command=?,setup_source=? WHERE full_name=?',
-                          (command, 'settings' if command else None, name))
+                c.execute(
+                    'UPDATE repositories SET setup_command=?,setup_source=? WHERE full_name=?',
+                    (command, 'settings' if command else None, name),
+                )
             c.execute('UPDATE repositories SET updated_at=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
@@ -961,8 +1155,16 @@ def install(app, store, service):
             row = service.row(c)
             org = row['org'] if row else store.settings.github_owner
             if not who.task_actor or who.task_actor == 'bot:' + bot:
-                return set_access(c, bot, body, org, who.actor, team_list=True, own_click=not who.task_actor,
-                                  owner=who.role == 'owner')
+                return set_access(
+                    c,
+                    bot,
+                    body,
+                    org,
+                    who.actor,
+                    team_list=True,
+                    own_click=not who.task_actor,
+                    owner=who.role == 'owner',
+                )
             # A bot's turn acting for a person (BotOps, the Assistant) may give another bot access with their rights, but
             # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
             # stopped applying with nobody asked. Letting a bot run workflows or edit workflow files, or turning Create
@@ -973,14 +1175,19 @@ def install(app, store, service):
             before = access(c, bot, org)
             c.execute('SAVEPOINT repo_narrowing')
             try:
-                result = {**set_access(c, bot, body, org, who.actor, team_list=True, owner=who.role == 'owner'),
-                          **started(before, access(c, bot, org))}
+                result = {
+                    **set_access(c, bot, body, org, who.actor, team_list=True, owner=who.role == 'owner'),
+                    **started(before, access(c, bot, org)),
+                }
             except Problem:
                 c.execute('ROLLBACK TO repo_narrowing')
                 c.execute('RELEASE repo_narrowing')
                 raise
-            gains = result.get('workflows_started') or result.get('workflow_edits_started') \
+            gains = (
+                result.get('workflows_started')
+                or result.get('workflow_edits_started')
                 or result.get('product_creation_started')
+            )
             if not needs_card(result):
                 c.execute('RELEASE repo_narrowing')
                 return result
@@ -991,18 +1198,37 @@ def install(app, store, service):
             propose = getattr(app.state, 'botops_propose', None)
             if who.via == 'botops' and propose:
                 plain = plain_change(name, before, result)
-                return propose(c, who, 'PUT', '/api/v2/bots/' + bot + '/repositories', body.model_dump(exclude_none=True),
-                               plain[:300], what=plain)
+                return propose(
+                    c,
+                    who,
+                    'PUT',
+                    '/api/v2/bots/' + bot + '/repositories',
+                    body.model_dump(exclude_none=True),
+                    plain[:300],
+                    what=plain,
+                )
             if gains and who.via == 'assistant':
                 # The person's Assistant cannot make this change on its words: it is their card in Settings, or one
                 # proposed (`hub assistant propose`) for them to confirm.
-                raise Problem('confirm_required', 'That lets a bot run workflows, edit workflow files or create product '
-                              'repositories: the person confirms it in Settings > Repositories', 403)
+                raise Problem(
+                    'confirm_required',
+                    'That lets a bot run workflows, edit workflow files or create product '
+                    'repositories: the person confirms it in Settings > General › Repositories',
+                    403,
+                )
             if gains:
-                raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows, edit workflow files or '
-                              'create product repositories, themselves in Settings > Repositories', 403)
-            raise Problem('forbidden', 'This takes ' + describe_stopped(result) + ' away from ' + name + '; a person '
-                          'who manages it makes that change in Settings > Repositories', 403)
+                raise Problem(
+                    'forbidden',
+                    'Only an Owner or admin lets a bot run workflows, edit workflow files or '
+                    'create product repositories, themselves in Settings > General › Repositories',
+                    403,
+                )
+            raise Problem(
+                'forbidden',
+                'This takes ' + describe_stopped(result) + ' away from ' + name + '; a person '
+                'who manages it makes that change in Settings > General › Repositories',
+                403,
+            )
 
     def computer(request):
         who = request.state.identity
@@ -1027,10 +1253,20 @@ def install(app, store, service):
             grants = access(c, bot, row['org'] if row else store.settings.github_owner)['effective']
             result = []
             for grant in grants:
-                repo = c.execute('SELECT full_name,default_branch,setup_command FROM repositories WHERE full_name=?',
-                                 (grant['full_name'],)).fetchone()
-                result.append({**(dict(repo) if repo else {'full_name': grant['full_name'], 'default_branch': None,
-                                                          'setup_command': None}), 'access': grant['access']})
+                repo = c.execute(
+                    'SELECT full_name,default_branch,setup_command FROM repositories WHERE full_name=?',
+                    (grant['full_name'],),
+                ).fetchone()
+                result.append(
+                    {
+                        **(
+                            dict(repo)
+                            if repo
+                            else {'full_name': grant['full_name'], 'default_branch': None, 'setup_command': None}
+                        ),
+                        'access': grant['access'],
+                    }
+                )
             return {'repositories': result, 'configured': bool(row)}
 
     @app.post('/api/v2/runners/me/repositories/token')

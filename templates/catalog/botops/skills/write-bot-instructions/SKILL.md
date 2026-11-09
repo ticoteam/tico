@@ -30,7 +30,7 @@ Steps:
 Checks before you finish:
 - Every line is true for this team. A guess is written as an open question in `knowledge/`, not as a rule.
 - No credential value, customer name, personal address or account id appears in the file.
-- The bot cannot send outside the team unless a person turned sending on. `outbound_send` in `bot.yaml` stays false here.
+- The bot cannot send outside the team unless a person allowed it in Tico (its sending policy). `bot.yaml` carries no sending setting.
 - A rule that appears in two places says the same thing in both.
 - Every playbook the file names exists, and the file says when to read each one.
 

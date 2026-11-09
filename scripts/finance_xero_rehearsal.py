@@ -31,6 +31,7 @@ What is replaced, and where (each is listed again in the report):
   - Provider data: the fake's rows are fetched through its API; expectations are worked out from those rows by the
     functions in this file, which read the same Xero fields the parser reads.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -53,16 +54,32 @@ from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from finance_books_rehearsal import (COMPANY, NO_PROXY, OWNER_ACTOR, XERO_OTHER_TENANT, XERO_TENANT,  # noqa: E402
-                                     FakeHQ, Results, http, wait_until)
+from finance_books_rehearsal import (
+    COMPANY,
+    NO_PROXY,
+    OWNER_ACTOR,
+    XERO_OTHER_TENANT,
+    XERO_TENANT,
+    FakeHQ,
+    Results,
+    http,
+    wait_until,
+)
 
 DEMO_PORT, FAKE_PORT = 18871, 18872
 API = f"http://127.0.0.1:{FAKE_PORT}/api.xro/2.0"
-ENDPOINT_PATH = {"Accounts": "Accounts", "Contacts": "Contacts", "Items": "Items", "TrackingCategories": "TrackingCategories",
-                 "Invoices": "Invoices", "Payments": "Payments", "ManualJournals": "ManualJournals"}
+ENDPOINT_PATH = {
+    "Accounts": "Accounts",
+    "Contacts": "Contacts",
+    "Items": "Items",
+    "TrackingCategories": "TrackingCategories",
+    "Invoices": "Invoices",
+    "Payments": "Payments",
+    "ManualJournals": "ManualJournals",
+}
 TOKEN = "rehearsal-token-not-a-secret"
 MONTH_SEPT, MONTH_OCT, MONTH_NOV = "2026-09", "2026-10", "2026-11"
-WINDOW = ("2026-09-01", "2026-11-30")          # the P&L window every check reads: Sept (closed), Oct, Nov (open)
+WINDOW = ("2026-09-01", "2026-11-30")  # the P&L window every check reads: Sept (closed), Oct, Nov (open)
 TODAY = "2026-11-01"
 
 
@@ -71,6 +88,8 @@ def as_of_day() -> str:
     context.py Ctx.today), and never before the rehearsal's own dates. A reversal made after midnight UTC is dated the new
     day, so a constant would leave it out of the balance sheet."""
     return max(TODAY, dt.datetime.now(dt.timezone.utc).date().isoformat())
+
+
 BAL_MONTHS = (MONTH_SEPT, MONTH_OCT, MONTH_NOV)
 
 
@@ -88,9 +107,18 @@ def dated(day: dt.date, key: str = "Date") -> dict[str, str]:
     return {key: xdate(day), f"{key}String": f"{day.isoformat()}T00:00:00"}
 
 
-def account(aid: str, code: str, name: str, cls: str, typ: str, system: str = "", status: str = "ACTIVE") -> dict[str, Any]:
-    row: dict[str, Any] = {"AccountID": aid, "Code": code, "Name": name, "Class": cls, "Type": typ, "Status": status,
-                           "UpdatedDateUTC": xdate(dt.date(2026, 8, 31))}
+def account(
+    aid: str, code: str, name: str, cls: str, typ: str, system: str = "", status: str = "ACTIVE"
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "AccountID": aid,
+        "Code": code,
+        "Name": name,
+        "Class": cls,
+        "Type": typ,
+        "Status": status,
+        "UpdatedDateUTC": xdate(dt.date(2026, 8, 31)),
+    }
     if system:
         row["SystemAccount"] = system
     return row
@@ -131,35 +159,73 @@ CLASS = {row["AccountID"]: row["Class"] for row in ACCOUNTS}
 BANK = "acc-bank"
 ACC_CODE_TO_ID = {row["Code"]: row["AccountID"] for row in ACCOUNTS}
 
-CONTACTS = [("con-acme", "Acme Retail", True, False, "ACTIVE"), ("con-north", "Northwind Traders", True, False, "ACTIVE"),
-            ("con-job12", "Job 12", True, False, "ACTIVE"), ("con-blue", "Blue Ridge Hosting", False, True, "ACTIVE"),
-            ("con-pine", "Pine Design Co", False, True, "ACTIVE"), ("con-summit", "Summit Legal", False, True, "ARCHIVED")]
+CONTACTS = [
+    ("con-acme", "Acme Retail", True, False, "ACTIVE"),
+    ("con-north", "Northwind Traders", True, False, "ACTIVE"),
+    ("con-job12", "Job 12", True, False, "ACTIVE"),
+    ("con-blue", "Blue Ridge Hosting", False, True, "ACTIVE"),
+    ("con-pine", "Pine Design Co", False, True, "ACTIVE"),
+    ("con-summit", "Summit Legal", False, True, "ARCHIVED"),
+]
 CUSTOMERS = ["con-acme", "con-north", "con-job12"]
 
 ITEMS = [("item-cons", "CONS", "Consulting", "200"), ("item-inst", "INST", "Installation", "201")]
-TRACKING = [("tc-region", "Region", [("opt-east", "East", "ACTIVE"), ("opt-west", "West", "ACTIVE"),
-                                     ("opt-legacy", "Legacy", "ARCHIVED")]),
-            ("tc-office", "Office", [("opt-denver", "Denver", "ACTIVE"), ("opt-austin", "Austin", "ACTIVE")])]
+TRACKING = [
+    (
+        "tc-region",
+        "Region",
+        [("opt-east", "East", "ACTIVE"), ("opt-west", "West", "ACTIVE"), ("opt-legacy", "Legacy", "ARCHIVED")],
+    ),
+    ("tc-office", "Office", [("opt-denver", "Denver", "ACTIVE"), ("opt-austin", "Austin", "ACTIVE")]),
+]
 
 # Bills (Xero's ACCPAY invoices): id, date, contact, number, [(account, cents)], Xero status, tracking on line 1 or None
 BILLS = [
     ("bill-101", dt.date(2026, 9, 3), "con-blue", "BILL-101", [("acc-exp-soft", 12000)], "AUTHORISED", None),
-    ("bill-102", dt.date(2026, 9, 8), "con-pine", "BILL-102", [("acc-exp-rent", 150000), ("acc-exp-office", 2500)], "PAID", None),
+    (
+        "bill-102",
+        dt.date(2026, 9, 8),
+        "con-pine",
+        "BILL-102",
+        [("acc-exp-rent", 150000), ("acc-exp-office", 2500)],
+        "PAID",
+        None,
+    ),
     ("bill-103", dt.date(2026, 9, 14), "con-summit", "BILL-103", [("acc-exp-contr", 80000)], "PAID", None),
     ("bill-104", dt.date(2026, 9, 21), "con-blue", "BILL-104", [("acc-exp-ins", 45000)], "AUTHORISED", None),
-    ("bill-105", dt.date(2026, 9, 28), "con-pine", "BILL-105", [("acc-exp-office", 3300), ("acc-exp-travel", 8900)], "AUTHORISED", None),
+    (
+        "bill-105",
+        dt.date(2026, 9, 28),
+        "con-pine",
+        "BILL-105",
+        [("acc-exp-office", 3300), ("acc-exp-travel", 8900)],
+        "AUTHORISED",
+        None,
+    ),
     ("bill-106", dt.date(2026, 10, 2), "con-blue", "BILL-106", [("acc-exp-soft", 12000)], "PAID", None),
     ("bill-107", dt.date(2026, 10, 6), "con-summit", "BILL-107", [("acc-exp-contr", 125000)], "PAID", None),
     ("bill-108", dt.date(2026, 10, 9), "con-pine", "BILL-108", [("acc-exp-meals", 4150)], "VOIDED", None),
-    ("bill-109", dt.date(2026, 10, 13), "con-blue", "BILL-109", [("acc-exp-bank", 2750), ("acc-exp-util", 19900)], "AUTHORISED", "East"),
+    (
+        "bill-109",
+        dt.date(2026, 10, 13),
+        "con-blue",
+        "BILL-109",
+        [("acc-exp-bank", 2750), ("acc-exp-util", 19900)],
+        "AUTHORISED",
+        "East",
+    ),
     ("bill-110", dt.date(2026, 10, 19), "con-pine", "BILL-110", [("acc-exp-adv", 60000)], "AUTHORISED", None),
     ("bill-111", dt.date(2026, 10, 23), "con-summit", "BILL-111", [("acc-exp-contr", 45000)], "AUTHORISED", None),
     ("bill-112", dt.date(2026, 10, 29), "con-blue", "BILL-112", [("acc-exp-office", 7720)], "AUTHORISED", None),
     ("bill-113", dt.date(2026, 10, 20), "con-blue", "BILL-113", [("acc-exp-soft", 8000)], "AUTHORISED", None),
 ]
 # Bill payments (Xero ACCPAYPAYMENT): id, date, bill id, cents (the bill's whole total)
-BILL_PAYMENTS = [("bpay-301", dt.date(2026, 9, 25), "bill-102", 152500), ("bpay-302", dt.date(2026, 10, 5), "bill-103", 80000),
-                 ("bpay-303", dt.date(2026, 10, 16), "bill-106", 12000), ("bpay-304", dt.date(2026, 10, 27), "bill-107", 125000)]
+BILL_PAYMENTS = [
+    ("bpay-301", dt.date(2026, 9, 25), "bill-102", 152500),
+    ("bpay-302", dt.date(2026, 10, 5), "bill-103", 80000),
+    ("bpay-303", dt.date(2026, 10, 16), "bill-106", 12000),
+    ("bpay-304", dt.date(2026, 10, 27), "bill-107", 125000),
+]
 # Manual journals (POSTED): id, date, narration, [(account, signed cents: debit +)]
 JOURNALS = [
     ("jnl-701", dt.date(2026, 9, 1), "Opening balance", [("acc-bank", 5000000), ("acc-cap", -5000000)]),
@@ -181,24 +247,59 @@ def invoice_rows() -> list[dict[str, Any]]:
         lines = [("acc-inc-cons" if i % 2 else "acc-inc-inst", rng.randrange(20000, 300000))]
         if i % 5 == 0:
             lines.append(("acc-inc-inst", rng.randrange(5000, 60000)))
-        rows.append({"InvoiceID": f"inv-{i:03d}", "InvoiceNumber": f"INV-{i:04d}", "Type": "ACCREC", "day": day,
-                     "contact": CUSTOMERS[i % 3], "lines": lines, "Status": "AUTHORISED", "Reference": ""})
+        rows.append(
+            {
+                "InvoiceID": f"inv-{i:03d}",
+                "InvoiceNumber": f"INV-{i:04d}",
+                "Type": "ACCREC",
+                "day": day,
+                "contact": CUSTOMERS[i % 3],
+                "lines": lines,
+                "Status": "AUTHORISED",
+                "Reference": "",
+            }
+        )
     return rows
 
 
-def doc_row(kind: str, ident: str, number: str, day: dt.date, contact: str, lines: list[tuple[str, int]], status: str,
-            tracking: str | None = None) -> dict[str, Any]:
+def doc_row(
+    kind: str,
+    ident: str,
+    number: str,
+    day: dt.date,
+    contact: str,
+    lines: list[tuple[str, int]],
+    status: str,
+    tracking: str | None = None,
+) -> dict[str, Any]:
     items = []
     for n, (account_id, cents) in enumerate(lines, 1):
-        item: dict[str, Any] = {"Description": f"Line {n} on {number}", "Quantity": 1, "UnitAmount": f"{cents / 100:.2f}",
-                                "LineAmount": f"{cents / 100:.2f}", "AccountID": account_id}
+        item: dict[str, Any] = {
+            "Description": f"Line {n} on {number}",
+            "Quantity": 1,
+            "UnitAmount": f"{cents / 100:.2f}",
+            "LineAmount": f"{cents / 100:.2f}",
+            "AccountID": account_id,
+        }
         if tracking and n == 1:
             item["Tracking"] = [{"Name": "Region", "Option": tracking}]
         items.append(item)
     total = sum(c for _, c in lines)
-    return {"InvoiceID": ident, "InvoiceNumber": number, "Type": kind, "Contact": {"ContactID": contact},
-            **dated(day), "DueDate": xdate(day), "Status": status, "LineAmountTypes": "NoTax", "LineItems": items,
-            "Total": f"{total / 100:.2f}", "CurrencyCode": "USD", "UpdatedDateUTC": xdate(day), "Reference": ""}
+    return {
+        "InvoiceID": ident,
+        "InvoiceNumber": number,
+        "Type": kind,
+        "Contact": {"ContactID": contact},
+        **dated(day),
+        "DueDate": xdate(day),
+        "Status": status,
+        "LineAmountTypes": "NoTax",
+        "LineItems": items,
+        "Total": f"{total / 100:.2f}",
+        "CurrencyCode": "USD",
+        "UpdatedDateUTC": xdate(day),
+        "Reference": "",
+    }
 
 
 def seed_rows() -> dict[str, list[dict[str, Any]]]:
@@ -207,55 +308,128 @@ def seed_rows() -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {k: [] for k in ENDPOINT_PATH}
     out["Accounts"] = [dict(row) for row in ACCOUNTS]
     for cid, name, customer, supplier, status in CONTACTS:
-        out.setdefault("Contacts", []).append({"ContactID": cid, "Name": name, "IsCustomer": customer,
-                                              "IsSupplier": supplier, "ContactStatus": status,
-                                              "UpdatedDateUTC": xdate(dt.date(2026, 8, 31))})
+        out.setdefault("Contacts", []).append(
+            {
+                "ContactID": cid,
+                "Name": name,
+                "IsCustomer": customer,
+                "IsSupplier": supplier,
+                "ContactStatus": status,
+                "UpdatedDateUTC": xdate(dt.date(2026, 8, 31)),
+            }
+        )
     for iid, code, name, income in ITEMS:
-        out["Items"].append({"ItemID": iid, "Code": code, "Name": name, "IsSold": True, "IsPurchased": False,
-                             "IsTrackedAsInventory": False, "SalesDetails": {"UnitPrice": "1800.00", "AccountCode": income},
-                             "PurchaseDetails": {"AccountCode": "425"}, "UpdatedDateUTC": xdate(dt.date(2026, 8, 31))})
+        out["Items"].append(
+            {
+                "ItemID": iid,
+                "Code": code,
+                "Name": name,
+                "IsSold": True,
+                "IsPurchased": False,
+                "IsTrackedAsInventory": False,
+                "SalesDetails": {"UnitPrice": "1800.00", "AccountCode": income},
+                "PurchaseDetails": {"AccountCode": "425"},
+                "UpdatedDateUTC": xdate(dt.date(2026, 8, 31)),
+            }
+        )
     for tid, name, options in TRACKING:
-        out["TrackingCategories"].append({
-            "TrackingCategoryID": tid, "Name": name, "Status": "ACTIVE",
-            "Options": [{"TrackingOptionID": oid, "Name": oname, "Status": ostatus} for oid, oname, ostatus in options],
-            "UpdatedDateUTC": xdate(dt.date(2026, 8, 31))})
+        out["TrackingCategories"].append(
+            {
+                "TrackingCategoryID": tid,
+                "Name": name,
+                "Status": "ACTIVE",
+                "Options": [
+                    {"TrackingOptionID": oid, "Name": oname, "Status": ostatus} for oid, oname, ostatus in options
+                ],
+                "UpdatedDateUTC": xdate(dt.date(2026, 8, 31)),
+            }
+        )
     for row in invoice_rows():
         day = row["day"]
         total = sum(c for _, c in row["lines"])
-        paid = (int(row["InvoiceID"][4:]) % 3 == 0)
+        paid = int(row["InvoiceID"][4:]) % 3 == 0
         status = "PAID" if paid else row["Status"]
-        out["Invoices"].append(doc_row("ACCREC", row["InvoiceID"], row["InvoiceNumber"], day, row["contact"], row["lines"], status))
+        out["Invoices"].append(
+            doc_row("ACCREC", row["InvoiceID"], row["InvoiceNumber"], day, row["contact"], row["lines"], status)
+        )
         if paid:
             paid_on = min(day + dt.timedelta(days=3), dt.date(2026, 10, 31))
-            out["Payments"].append(payment_row(f"rcpt-{row['InvoiceID'][4:]}", "ACCRECPAYMENT", paid_on,
-                                               row["InvoiceID"], "ACCREC", BANK, total, f"RCPT-{row['InvoiceID'][4:]}"))
+            out["Payments"].append(
+                payment_row(
+                    f"rcpt-{row['InvoiceID'][4:]}",
+                    "ACCRECPAYMENT",
+                    paid_on,
+                    row["InvoiceID"],
+                    "ACCREC",
+                    BANK,
+                    total,
+                    f"RCPT-{row['InvoiceID'][4:]}",
+                )
+            )
         elif int(row["InvoiceID"][4:]) % 4 == 1:
             half = total // 2
-            out["Payments"].append(payment_row(f"rcpt-{row['InvoiceID'][4:]}", "ACCRECPAYMENT", day + dt.timedelta(days=2),
-                                               row["InvoiceID"], "ACCREC", BANK, half, f"RCPT-{row['InvoiceID'][4:]}"))
-    out["Invoices"].append({"InvoiceID": "inv-draft", "InvoiceNumber": "INV-DRAFT", "Type": "ACCREC",
-                            "Contact": {"ContactID": "con-acme"}, **dated(dt.date(2026, 9, 10)), "Status": "DELETED",
-                            "LineAmountTypes": "NoTax", "LineItems": [{"Description": "draft", "LineAmount": "999.00",
-                                                                       "AccountID": "acc-inc-cons"}],
-                            "Total": "999.00", "UpdatedDateUTC": xdate(dt.date(2026, 9, 10))})
+            out["Payments"].append(
+                payment_row(
+                    f"rcpt-{row['InvoiceID'][4:]}",
+                    "ACCRECPAYMENT",
+                    day + dt.timedelta(days=2),
+                    row["InvoiceID"],
+                    "ACCREC",
+                    BANK,
+                    half,
+                    f"RCPT-{row['InvoiceID'][4:]}",
+                )
+            )
+    out["Invoices"].append(
+        {
+            "InvoiceID": "inv-draft",
+            "InvoiceNumber": "INV-DRAFT",
+            "Type": "ACCREC",
+            "Contact": {"ContactID": "con-acme"},
+            **dated(dt.date(2026, 9, 10)),
+            "Status": "DELETED",
+            "LineAmountTypes": "NoTax",
+            "LineItems": [{"Description": "draft", "LineAmount": "999.00", "AccountID": "acc-inc-cons"}],
+            "Total": "999.00",
+            "UpdatedDateUTC": xdate(dt.date(2026, 9, 10)),
+        }
+    )
     for bid, day, contact, number, lines, status, tracking in BILLS:
         out["Invoices"].append(doc_row("ACCPAY", bid, number, day, contact, lines, status, tracking))
     for pid, day, bill, cents in BILL_PAYMENTS:
         out["Payments"].append(payment_row(pid, "ACCPAYPAYMENT", day, bill, "ACCPAY", BANK, cents, pid.upper()))
     for jid, day, narration, lines in JOURNALS:
-        out["ManualJournals"].append({"ManualJournalID": jid, "Narration": narration, **dated(day), "Status": "POSTED",
-                                      "LineAmountTypes": "NoTax", "ShowOnCashBasisReports": True,
-                                      "UpdatedDateUTC": xdate(day),
-                                      "JournalLines": [{"AccountID": a, "LineAmount": f"{c / 100:.2f}",
-                                                        "Description": narration} for a, c in lines]})
+        out["ManualJournals"].append(
+            {
+                "ManualJournalID": jid,
+                "Narration": narration,
+                **dated(day),
+                "Status": "POSTED",
+                "LineAmountTypes": "NoTax",
+                "ShowOnCashBasisReports": True,
+                "UpdatedDateUTC": xdate(day),
+                "JournalLines": [
+                    {"AccountID": a, "LineAmount": f"{c / 100:.2f}", "Description": narration} for a, c in lines
+                ],
+            }
+        )
     return out
 
 
-def payment_row(pid: str, kind: str, day: dt.date, target: str, target_kind: str, bank: str, cents: int,
-                reference: str) -> dict[str, Any]:
-    return {"PaymentID": pid, "PaymentType": kind, "Invoice": {"InvoiceID": target, "Type": target_kind},
-            "Account": {"AccountID": bank}, **dated(day), "Amount": f"{cents / 100:.2f}", "Status": "AUTHORISED",
-            "Reference": reference, "UpdatedDateUTC": xdate(day)}
+def payment_row(
+    pid: str, kind: str, day: dt.date, target: str, target_kind: str, bank: str, cents: int, reference: str
+) -> dict[str, Any]:
+    return {
+        "PaymentID": pid,
+        "PaymentType": kind,
+        "Invoice": {"InvoiceID": target, "Type": target_kind},
+        "Account": {"AccountID": bank},
+        **dated(day),
+        "Amount": f"{cents / 100:.2f}",
+        "Status": "AUTHORISED",
+        "Reference": reference,
+        "UpdatedDateUTC": xdate(day),
+    }
 
 
 # ------------------------------------------------------------------------------------------------ expectations, from rows
@@ -319,15 +493,20 @@ def balances_of(rows: dict[str, list[dict[str, Any]]]) -> tuple[int, int, int]:
     return bank, ar, ap
 
 
-def months_of(rows: dict[str, list[dict[str, Any]]], month: str, pre: dict[str, list[dict[str, Any]]]) -> dict[str, tuple[int, int]]:
+def months_of(
+    rows: dict[str, list[dict[str, Any]]], month: str, pre: dict[str, list[dict[str, Any]]]
+) -> dict[str, tuple[int, int]]:
     """What Tico's P&L must show per month once the Sept close holds and the provider's changes are in. Sept is frozen at
     its close (`pre`). Oct is open, so it shows the live October documents. A change to a Sept document posts its reversal
     and replacement in the open period (Nov), so Nov is the Nov documents plus the Sept change (today minus the close)."""
     sept_now, sept_pre = pnl_of(rows, MONTH_SEPT), pnl_of(pre, MONTH_SEPT)
     nov_docs = pnl_of(rows, MONTH_NOV)
     late = (sept_now[0] - sept_pre[0], sept_now[1] - sept_pre[1])
-    return {MONTH_SEPT: sept_pre, MONTH_OCT: pnl_of(rows, MONTH_OCT),
-            MONTH_NOV: (nov_docs[0] + late[0], nov_docs[1] + late[1])}
+    return {
+        MONTH_SEPT: sept_pre,
+        MONTH_OCT: pnl_of(rows, MONTH_OCT),
+        MONTH_NOV: (nov_docs[0] + late[0], nov_docs[1] + late[1]),
+    }
 
 
 def fmt(pair: tuple[int, int]) -> str:
@@ -335,13 +514,16 @@ def fmt(pair: tuple[int, int]) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ the rehearsal
-NOT_AVAILABLE = "not_available"      # the error code a refused kind answers with (core/errors.py)
+NOT_AVAILABLE = "not_available"  # the error code a refused kind answers with (core/errors.py)
 
 # A payload that is valid for its kind, so that the refusal (not a validation error) is what the check sees. A payee by
 # check needs no account numbers, so nothing is sealed for it.
 REFUSAL_PAYLOADS: dict[str, dict[str, Any]] = {
-    "recipient_add": {"name": "Refusal check payee", "method": "check",
-                      "address": {"line1": "1 Main St", "city": "Austin", "region": "TX", "postal_code": "78701"}},
+    "recipient_add": {
+        "name": "Refusal check payee",
+        "method": "check",
+        "address": {"line1": "1 Main St", "city": "Austin", "region": "TX", "postal_code": "78701"},
+    },
 }
 
 
@@ -364,7 +546,7 @@ class XeroRehearsal:
         self.link: Any = None
         self.pre: dict[str, list[dict[str, Any]]] = {}
         self.notes: dict[str, Any] = {}
-        self.edit_t = 0.0                                           # when the polled edits were made (unix seconds)
+        self.edit_t = 0.0  # when the polled edits were made (unix seconds)
 
     # -- the fake Xero, started and stopped by PID
     def start_fake(self) -> None:
@@ -382,8 +564,10 @@ class XeroRehearsal:
             return False
 
     def fake_get(self, path: str) -> Any:
-        request = urllib.request.Request(f"http://127.0.0.1:{FAKE_PORT}{path}", headers={
-            "Authorization": "Bearer " + TOKEN, "xero-tenant-id": XERO_TENANT})
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{FAKE_PORT}{path}",
+            headers={"Authorization": "Bearer " + TOKEN, "xero-tenant-id": XERO_TENANT},
+        )
         with NO_PROXY.open(request, timeout=30) as reply:
             return json.loads(reply.read() or b"{}")
 
@@ -397,12 +581,22 @@ class XeroRehearsal:
         return list(self.fake_get("/_fake/calls")["calls"])
 
     def fake_writes(self) -> list[dict[str, Any]]:
-        return [c for c in self.fake_calls() if c["method"] in ("PUT", "POST") and c["path"].startswith("/api.xro/2.0/")]
+        return [
+            c for c in self.fake_calls() if c["method"] in ("PUT", "POST") and c["path"].startswith("/api.xro/2.0/")
+        ]
 
     def fake_rows(self) -> dict[str, list[dict[str, Any]]]:
         """Every row the fake holds, read through its API page by page (the provider's own state)."""
         out: dict[str, list[dict[str, Any]]] = {}
-        for endpoint in ("Invoices", "Payments", "ManualJournals", "Contacts", "Accounts", "Items", "TrackingCategories"):
+        for endpoint in (
+            "Invoices",
+            "Payments",
+            "ManualJournals",
+            "Contacts",
+            "Accounts",
+            "Items",
+            "TrackingCategories",
+        ):
             rows: list[dict[str, Any]] = []
             page = 1
             while True:
@@ -449,12 +643,13 @@ class XeroRehearsal:
         from backend import demo, hook_relay
         from backend.app import create_app
         from backend.finance import books_link
+
         self.books_link = books_link
         self.settings = demo.build(self.data, url=f"http://127.0.0.1:{DEMO_PORT}")
         self.app = create_app(self.settings)
         self.link = hook_relay.Link("gk_rehearsal_not_a_secret", "https://hq.invalid.example/rehearsal", "fp-rehearsal")
-        hook_relay.link_of = lambda c, vault, settings: self.link       # the worker's Gateway key (a fixed Link)
-        books_link._call = self.hq                                          # HQ answered by the fake
+        hook_relay.link_of = lambda c, vault, settings: self.link  # the worker's Gateway key (a fixed Link)
+        books_link._call = self.hq  # HQ answered by the fake
         config = uvicorn.Config(self.app, host="127.0.0.1", port=DEMO_PORT, log_level="warning", access_log=False)
         self.server = uvicorn.Server(config)
         self.server_thread = threading.Thread(target=self.server.run, name="demo-http", daemon=True)
@@ -466,6 +661,7 @@ class XeroRehearsal:
 
     def stop_demo(self) -> None:
         from backend.finance import books_sync
+
         try:
             books_sync.stop()
         except Exception as exc:  # noqa: BLE001 - teardown: a sync that will not stop is reported, the rest still closes
@@ -504,6 +700,7 @@ class XeroRehearsal:
 
     def ring(self) -> None:
         from backend.finance import books_sync
+
         books_sync.ring()
 
     def settle(self, predicate: Callable[[], bool], seconds: float, ring_every: float = 20.0) -> bool:
@@ -513,7 +710,7 @@ class XeroRehearsal:
             if time.time() - last >= ring_every:
                 self.ring()
                 last = time.time()
-            with suppress(Exception):           # a predicate that raises is not yet true; the deadline still ends the wait
+            with suppress(Exception):  # a predicate that raises is not yet true; the deadline still ends the wait
                 if predicate():
                     return True
             if time.time() > deadline:
@@ -538,53 +735,100 @@ class XeroRehearsal:
 
         def named(rows: list[dict[str, Any]], name: str) -> int:
             return sum(int(r["balance"]) for r in rows if r.get("name") == name)
-        return (named(bs["assets"], "Business Bank Account"), named(bs["assets"], "Accounts Receivable"),
-                named(bs["liabilities"], "Accounts Payable"))
+
+        return (
+            named(bs["assets"], "Business Bank Account"),
+            named(bs["assets"], "Accounts Receivable"),
+            named(bs["liabilities"], "Accounts Payable"),
+        )
 
     # -- the steps
     def step_connect(self) -> None:
         res = self.res
         res.step = "1 connect"
         status, _ = http("POST", self.base + "/finance/books/connect", {"provider": "xero"}, token=self.token)
-        res.check("the HTTP connect route refuses a demo copy (company_server.off), as designed", status == 409, f"HTTP {status}")
+        res.check(
+            "the HTTP connect route refuses a demo copy (company_server.off), as designed",
+            status == 409,
+            f"HTTP {status}",
+        )
         res.skip("HTTP consent: the browser, HQ's consent page and the return route are not run")
         flow_start = len(self.hq.calls)
-        self.books_link.start(self.store, self.link, provider="xero", company_id=COMPANY, user=OWNER_ACTOR,
-                              return_base=self.settings.public_url + "/api/v2/finance/books/return")
+        self.books_link.start(
+            self.store,
+            self.link,
+            provider="xero",
+            company_id=COMPANY,
+            user=OWNER_ACTOR,
+            return_base=self.settings.public_url + "/api/v2/finance/books/return",
+        )
         return_to = str(self.hq.calls[flow_start][1]["return_to"])
         flow = return_to.rsplit("/", 1)[1]
         self.hq.realm = XERO_TENANT
-        self.cid = self.books_link.finish(self.store, self.vault, self.link, flow=flow, user=OWNER_ACTOR,
-                                          outcome="connected", reason="", claim_id="clm_rehearsal_xero_1")
+        self.cid = self.books_link.finish(
+            self.store,
+            self.vault,
+            self.link,
+            flow=flow,
+            user=OWNER_ACTOR,
+            outcome="connected",
+            reason="",
+            claim_id="clm_rehearsal_xero_1",
+        )
         row = self.sources_row()
         sync = row.get("sync", {})
-        res.check("the connection is recorded and active", bool(self.cid) and sync.get("status") == "active"
-                  and row.get("provider") == "xero", f"status={sync.get('status')} provider={row.get('provider')}")
+        res.check(
+            "the connection is recorded and active",
+            bool(self.cid) and sync.get("status") == "active" and row.get("provider") == "xero",
+            f"status={sync.get('status')} provider={row.get('provider')}",
+        )
         res.check("exactly one books connection on this install", len(self.books_rows()) == 1)
         leaked = [f"{p}-{i}" for p in ("acc", "ref") for i in range(1, self.hq.issued + 1)]
         shown = json.dumps(self.get("/finance/sources"))
-        res.check("the sources page shows no Xero token", not any(t in shown for t in leaked),
-                  f"tokens issued by the fake HQ: {self.hq.issued}")
+        res.check(
+            "the sources page shows no Xero token",
+            not any(t in shown for t in leaked),
+            f"tokens issued by the fake HQ: {self.hq.issued}",
+        )
         # A second Xero organisation on the same install: HQ refuses it (spec §3.4). The refusal is HQ's; here HQ is the fake.
         self.hq.realm = XERO_OTHER_TENANT
         self.hq.refuse_next.append(self.books_link.AlreadyConnected(None))
         refused = False
         try:
-            self.books_link.connect_claim(self.store, self.vault, self.link, provider="xero", company_id=COMPANY,
-                                          claim_id="clm_rehearsal_xero_2", name="second", by=OWNER_ACTOR,
-                                          now="2026-11-01T12:00:00.000000Z")
+            self.books_link.connect_claim(
+                self.store,
+                self.vault,
+                self.link,
+                provider="xero",
+                company_id=COMPANY,
+                claim_id="clm_rehearsal_xero_2",
+                name="second",
+                by=OWNER_ACTOR,
+                now="2026-11-01T12:00:00.000000Z",
+            )
         except self.books_link.AlreadyConnected:
             refused = True
         res.check("a second Xero organisation on the same install is refused (already_connected from HQ)", refused)
         res.check("the refused organisation makes no second connection", len(self.books_rows()) == 1)
         self.hq.realm = XERO_TENANT
-        same = self.books_link.connect_claim(self.store, self.vault, self.link, provider="xero", company_id=COMPANY,
-                                             claim_id="clm_rehearsal_xero_3", name="again", by=OWNER_ACTOR,
-                                             now="2026-11-01T12:01:00.000000Z")
-        res.check("reconnecting the same organisation keeps the same connection", same == self.cid, f"{same} vs {self.cid}")
+        same = self.books_link.connect_claim(
+            self.store,
+            self.vault,
+            self.link,
+            provider="xero",
+            company_id=COMPANY,
+            claim_id="clm_rehearsal_xero_3",
+            name="again",
+            by=OWNER_ACTOR,
+            now="2026-11-01T12:01:00.000000Z",
+        )
+        res.check(
+            "reconnecting the same organisation keeps the same connection", same == self.cid, f"{same} vs {self.cid}"
+        )
 
     def step_first_sync(self) -> None:
         from backend.finance import books_sync
+
         res = self.res
         res.step = "2 first sync"
         seed = seed_rows()
@@ -592,8 +836,11 @@ class XeroRehearsal:
         status, dry = self.act("mirror_start", {"connection_id": self.cid}, dry_run=True)
         res.check("the mirror switch previews", status == 200, f"HTTP {status} impact={str(dry.get('impact'))[:200]}")
         status, live = self.act("mirror_start", {"connection_id": self.cid})
-        res.check("the mirror switch is committed", status == 200 and live.get("status") == "committed",
-                  f"HTTP {status} {live.get('code') or live.get('reason') or ''}")
+        res.check(
+            "the mirror switch is committed",
+            status == 200 and live.get("status") == "committed",
+            f"HTTP {status} {live.get('code') or live.get('reason') or ''}",
+        )
         books_sync.start(self.store, self.vault, self.settings, rehearsal=False)
         exp_inc = pnl_of(seed, MONTH_SEPT)[0] + pnl_of(seed, MONTH_OCT)[0]
         exp_exp = pnl_of(seed, MONTH_SEPT)[1] + pnl_of(seed, MONTH_OCT)[1]
@@ -604,32 +851,54 @@ class XeroRehearsal:
             income = months[MONTH_SEPT][0] + months[MONTH_OCT][0]
             expense = months[MONTH_SEPT][1] + months[MONTH_OCT][1]
             return (income, expense, *self.balances())
+
         want = (exp_inc, exp_exp, exp_bank, exp_ar, exp_ap)
         done = self.settle(lambda: totals()[:2] == want[:2] and totals()[2:] == want[2:], 600)
         got = totals()
-        res.check("the backfill finishes and the P&L and balance sheet match the seeded totals to the cent",
-                  done and got == (*want[:2], *want[2:]), f"want income,expense,bank,ar,ap={want} got={got}")
-        res.check("the seed has more than 100 sales invoices (Xero pages are 100 rows)",
-                  sum(1 for r in seed["Invoices"] if r["Type"] == "ACCREC" and r["Status"] != "DELETED") > 100)
-        pages = [c for c in self.fake_calls() if c["method"] == "GET" and c["path"].endswith("/Invoices")
-                 and int(c["query"].get("page", 1)) >= 2]
-        res.check("the backfill read Invoices across more than one page", len(pages) >= 1, f"page reads past 1: {len(pages)}")
+        res.check(
+            "the backfill finishes and the P&L and balance sheet match the seeded totals to the cent",
+            done and got == (*want[:2], *want[2:]),
+            f"want income,expense,bank,ar,ap={want} got={got}",
+        )
+        res.check(
+            "the seed has more than 100 sales invoices (Xero pages are 100 rows)",
+            sum(1 for r in seed["Invoices"] if r["Type"] == "ACCREC" and r["Status"] != "DELETED") > 100,
+        )
+        pages = [
+            c
+            for c in self.fake_calls()
+            if c["method"] == "GET" and c["path"].endswith("/Invoices") and int(c["query"].get("page", 1)) >= 2
+        ]
+        res.check(
+            "the backfill read Invoices across more than one page", len(pages) >= 1, f"page reads past 1: {len(pages)}"
+        )
         row = self.sources_row()
-        res.check("the sync reports a successful read", bool(row.get("sync", {}).get("last_ok_at")),
-                  str(row.get("sync", {}).get("last_error")))
+        res.check(
+            "the sync reports a successful read",
+            bool(row.get("sync", {}).get("last_ok_at")),
+            str(row.get("sync", {}).get("last_error")),
+        )
         bs = self.balances()
-        res.check("bank, receivable and payable balances on the balance sheet match the seed to the cent",
-                  bs == balances_of(seed), f"want={balances_of(seed)} got={bs}")
+        res.check(
+            "bank, receivable and payable balances on the balance sheet match the seed to the cent",
+            bs == balances_of(seed),
+            f"want={balances_of(seed)} got={bs}",
+        )
         archived = json.dumps(self.get("/finance/contacts?kind=vendor&active=false"))
         res.check("the archived vendor comes in inactive (Summit Legal)", "Summit Legal" in archived)
         invoices = json.dumps(self.get("/finance/invoices?limit=200"))
         res.check("the deleted draft invoice (INV-DRAFT) adds nothing and is not listed", "INV-DRAFT" not in invoices)
         bills_raw = self.get("/finance/bills?limit=200")
         found = walk_for(bills_raw, "number", "BILL-108")
-        res.check("the voided bill (BILL-108) is not an open bill in Tico (it adds nothing to P&L or AP)",
-                  found is None or found.get("status") == "void", f"found status={found and found.get('status')}")
-        res.check("bill BILL-109 (Region: East on line 1) is in Tico (presence only; the tag is not read here)",
-                  walk_for(bills_raw, "number", "BILL-109") is not None)
+        res.check(
+            "the voided bill (BILL-108) is not an open bill in Tico (it adds nothing to P&L or AP)",
+            found is None or found.get("status") == "void",
+            f"found status={found and found.get('status')}",
+        )
+        res.check(
+            "bill BILL-109 (Region: East on line 1) is in Tico (presence only; the tag is not read here)",
+            walk_for(bills_raw, "number", "BILL-109") is not None,
+        )
         self.notes["seeded_totals"] = want
 
     def step_changes(self) -> None:
@@ -638,60 +907,97 @@ class XeroRehearsal:
         self.pre = self.fake_rows()
         months_before = self.pnl_months()
         expect_pre = months_of(self.pre, MONTH_SEPT, self.pre)
-        res.check("Tico's P&L by month matches the provider's rows before the changes (Sept, Oct, Nov)",
-                  all(months_before[m] == expect_pre[m] for m in BAL_MONTHS),
-                  f"tico={ {m: fmt(months_before[m]) for m in BAL_MONTHS} } want={ {m: fmt(expect_pre[m]) for m in BAL_MONTHS} }")
+        res.check(
+            "Tico's P&L by month matches the provider's rows before the changes (Sept, Oct, Nov)",
+            all(months_before[m] == expect_pre[m] for m in BAL_MONTHS),
+            f"tico={ {m: fmt(months_before[m]) for m in BAL_MONTHS} } want={ {m: fmt(expect_pre[m]) for m in BAL_MONTHS} }",
+        )
         status, body = self.act("close_period", {"month": MONTH_SEPT})
-        res.check("September closes in Tico before the provider edits it", status == 200 and body.get("status") == "committed",
-                  f"HTTP {status} {str(body)[:160]}")
-        status, body = self.act("journal", {"date": "2026-09-15", "memo": "Late Sept entry",
-                                            "lines": [{"account_id": self.acc("425"), "amount": 1000},
-                                                      {"account_id": self.acc("090"), "amount": -1000}]})
-        res.check("a Tico entry dated in the closed month is refused (§4.1: no posting into a closed period)",
-                  body.get("status") == "failed" and "closed" in str(body.get("reason", "")).lower(),
-                  str(body.get("reason"))[:200])
+        res.check(
+            "September closes in Tico before the provider edits it",
+            status == 200 and body.get("status") == "committed",
+            f"HTTP {status} {str(body)[:160]}",
+        )
+        status, body = self.act(
+            "journal",
+            {
+                "date": "2026-09-15",
+                "memo": "Late Sept entry",
+                "lines": [
+                    {"account_id": self.acc("425"), "amount": 1000},
+                    {"account_id": self.acc("090"), "amount": -1000},
+                ],
+            },
+        )
+        res.check(
+            "a Tico entry dated in the closed month is refused (§4.1: no posting into a closed period)",
+            body.get("status") == "failed" and "closed" in str(body.get("reason", "")).lower(),
+            str(body.get("reason"))[:200],
+        )
         sept_before = self.pnl_months()[MONTH_SEPT]
-        res.check("the closed month reads the same after the refused entry", sept_before == expect_pre[MONTH_SEPT],
-                  fmt(sept_before))
+        res.check(
+            "the closed month reads the same after the refused entry",
+            sept_before == expect_pre[MONTH_SEPT],
+            fmt(sept_before),
+        )
 
         # Polled changes: Xero sends no webhook for a payment or a manual journal, so only the change feed brings them.
         calls_before = len(self.fake_calls())
-        receipt = next(r for r in self.pre["Payments"] if r["PaymentType"] == "ACCRECPAYMENT"
-                       and r["DateString"][:7] == MONTH_SEPT)
+        receipt = next(
+            r for r in self.pre["Payments"] if r["PaymentType"] == "ACCRECPAYMENT" and r["DateString"][:7] == MONTH_SEPT
+        )
         self.edit_t = time.time()
         self.edit("Payments", receipt["PaymentID"], lambda r: r.update({"Status": "DELETED"}))
         # Xero reopens an invoice whose receipt is deleted; the invoice row moves too.
-        self.edit("Invoices", receipt["Invoice"]["InvoiceID"],
-                  lambda r: r.update({"Status": "AUTHORISED"}) if r.get("Status") == "PAID" else None)
+        self.edit(
+            "Invoices",
+            receipt["Invoice"]["InvoiceID"],
+            lambda r: r.update({"Status": "AUTHORISED"}) if r.get("Status") == "PAID" else None,
+        )
         self.edit("ManualJournals", "jnl-704", lambda r: r.update({"Status": "VOIDED"}))
         rows = self.fake_rows()
         want = months_of(rows, MONTH_SEPT, self.pre)
         want_bs = balances_of(rows)
         done = self.settle(lambda: self.pnl_months() == want and self.balances() == want_bs, 720)
-        polled = [c for c in self.fake_calls()[calls_before:] if c["method"] == "GET"
-                  and c["path"].rsplit("/", 1)[-1] in ("Payments", "ManualJournals") and c["if_modified_since"]]
+        polled = [
+            c
+            for c in self.fake_calls()[calls_before:]
+            if c["method"] == "GET"
+            and c["path"].rsplit("/", 1)[-1] in ("Payments", "ManualJournals")
+            and c["if_modified_since"]
+        ]
         bs_got = self.balances()
-        res.check("the change feed (modified-since) brings the polled payment delete and journal void, with no webhook",
-                  done and len(polled) >= 2,
-                  f"modified-since reads of those lists: {len(polled)}; balances want={want_bs} got={bs_got}; "
-                  f"pnl want={ {m: fmt(want[m]) for m in BAL_MONTHS} } got={ {m: fmt(self.pnl_months()[m]) for m in BAL_MONTHS} }; "
-                  f"{self.diag(self.poll_diag, receipt, calls_before)}")
+        res.check(
+            "the change feed (modified-since) brings the polled payment delete and journal void, with no webhook",
+            done and len(polled) >= 2,
+            f"modified-since reads of those lists: {len(polled)}; balances want={want_bs} got={bs_got}; "
+            f"pnl want={ {m: fmt(want[m]) for m in BAL_MONTHS} } got={ {m: fmt(self.pnl_months()[m]) for m in BAL_MONTHS} }; "
+            f"{self.diag(self.poll_diag, receipt, calls_before)}",
+        )
         self.notes["polled_settled"] = done
 
         # Webhook changes: invoice and bill edits, a void and a delete, each relayed as a Xero event.
-        inv_oct = next(r["InvoiceID"] for r in self.pre["Invoices"] if r["Type"] == "ACCREC" and r["Status"] == "AUTHORISED"
-                       and r["DateString"][:7] == MONTH_OCT)
+        inv_oct = next(
+            r["InvoiceID"]
+            for r in self.pre["Invoices"]
+            if r["Type"] == "ACCREC" and r["Status"] == "AUTHORISED" and r["DateString"][:7] == MONTH_OCT
+        )
         self.edit("Invoices", inv_oct, lambda r: bump_invoice(r, 5000))
         self.edit("Invoices", "bill-101", lambda r: set_bill_amount(r, 15000))
         self.edit("Invoices", "bill-105", lambda r: r.update({"Status": "VOIDED"}))
         self.edit("Invoices", "bill-112", lambda r: r.update({"Status": "VOIDED"}))
         # Xero sends CREATE and UPDATE events only, so a void arrives as an UPDATE. Xero deletes only drafts and payments;
         # the deleted payment is in the polled path above.
-        events = [("Invoices", inv_oct, "UPDATE"), ("Invoices", "bill-101", "UPDATE"),
-                  ("Invoices", "bill-105", "UPDATE"), ("Invoices", "bill-112", "UPDATE"),
-                  ("Invoices", receipt["Invoice"]["InvoiceID"], "UPDATE")]
+        events = [
+            ("Invoices", inv_oct, "UPDATE"),
+            ("Invoices", "bill-101", "UPDATE"),
+            ("Invoices", "bill-105", "UPDATE"),
+            ("Invoices", "bill-112", "UPDATE"),
+            ("Invoices", receipt["Invoice"]["InvoiceID"], "UPDATE"),
+        ]
         envelope = webhook_envelope("xero-rehearsal-1", events)
         from backend.finance import books_sync as BS
+
         with self.store.transaction() as c:
             kept = BS.delivery(c, "xero", envelope)
         res.check("a relayed Xero webhook is kept for the worker", kept == "kept", kept)
@@ -703,20 +1009,31 @@ class XeroRehearsal:
         want_bs = balances_of(rows)
         done = self.settle(lambda: self.pnl_months() == want and self.balances() == want_bs, 300)
         got = self.pnl_months()
-        res.check("the provider's edits, voids and deletes land: Sept frozen, Oct and Nov as the spec says, balance sheet today",
-                  done, f"want={ {m: fmt(want[m]) for m in BAL_MONTHS} } got={ {m: fmt(got[m]) for m in BAL_MONTHS} } "
-                        f"bs want={want_bs} got={self.balances()}; {self.diag(self.ap_diag, rows)}")
-        res.check("September itself stays as it closed (the frozen month)", got[MONTH_SEPT] == expect_pre[MONTH_SEPT],
-                  f"sept now {fmt(got[MONTH_SEPT])}, at close {fmt(expect_pre[MONTH_SEPT])}")
+        res.check(
+            "the provider's edits, voids and deletes land: Sept frozen, Oct and Nov as the spec says, balance sheet today",
+            done,
+            f"want={ {m: fmt(want[m]) for m in BAL_MONTHS} } got={ {m: fmt(got[m]) for m in BAL_MONTHS} } "
+            f"bs want={want_bs} got={self.balances()}; {self.diag(self.ap_diag, rows)}",
+        )
+        res.check(
+            "September itself stays as it closed (the frozen month)",
+            got[MONTH_SEPT] == expect_pre[MONTH_SEPT],
+            f"sept now {fmt(got[MONTH_SEPT])}, at close {fmt(expect_pre[MONTH_SEPT])}",
+        )
         # the close snapshot's marker shows on a closed month's P&L read (the close checklist does not carry it)
         sept = self.get(f"/finance/pnl?start={MONTH_SEPT}-01&end={MONTH_SEPT}-30&period=month&basis=accrual")
         restatements = (sept.get("snapshot") or {}).get("restatements")
-        res.check("the closed month takes the restatement and flags it on its close snapshot",
-                  restatements is not None and int(restatements) >= 1,
-                  f"September's close snapshot (its P&L read) restatements={restatements}")
+        res.check(
+            "the closed month takes the restatement and flags it on its close snapshot",
+            restatements is not None and int(restatements) >= 1,
+            f"September's close snapshot (its P&L read) restatements={restatements}",
+        )
         tx = self.get("/finance/transactions?limit=200")
-        res.check("a late item posts in the open period with its original date in the description (§4.1)",
-                  any_text(tx, "2026-09-03"), "searched the transactions list text for the original date 2026-09-03 (bill-101)")
+        res.check(
+            "a late item posts in the open period with its original date in the description (§4.1)",
+            any_text(tx, "2026-09-03"),
+            "searched the transactions list text for the original date 2026-09-03 (bill-101)",
+        )
 
     def acc(self, code: str) -> str:
         found = walk_for(self.get("/finance/chart"), "number", code)
@@ -732,65 +1049,125 @@ class XeroRehearsal:
         customer = self.contact("Acme Retail", "customer")
         soft, cons, rent, bank = self.acc("425"), self.acc("200"), self.acc("424"), self.acc("090")
         before = self.fake_rows()
-        status, body = self.act("bill_create", {"vendor_id": vendor, "number": "T-BILL-1", "bill_date": TODAY,
-                                                "lines": [{"account_id": soft, "amount": 4500, "description": "Tico bill"}]},)
-        res.check("a bill from Tico is queued and goes out through the outbox", status == 200 and body.get("status") != "failed",
-                  f"HTTP {status} {str(body)[:160]}")
+        status, body = self.act(
+            "bill_create",
+            {
+                "vendor_id": vendor,
+                "number": "T-BILL-1",
+                "bill_date": TODAY,
+                "lines": [{"account_id": soft, "amount": 4500, "description": "Tico bill"}],
+            },
+        )
+        res.check(
+            "a bill from Tico is queued and goes out through the outbox",
+            status == 200 and body.get("status") != "failed",
+            f"HTTP {status} {str(body)[:160]}",
+        )
         self.wait_settled()
         ok = self.fake_has("Invoices", "InvoiceNumber", "T-BILL-1", lines=[("acc-exp-soft", 4500)])
-        res.check("the bill is confirmed locally with the same amount and account (Software 425)", ok and self.tico_has_bill("T-BILL-1", 4500, "425"))
-        status, body = self.act("invoice_create", {"customer_id": customer, "number": "T-INV-1", "invoice_date": TODAY,
-                                                   "lines": [{"account_id": cons, "amount": 25000, "description": "Tico invoice"}]})
+        res.check(
+            "the bill is confirmed locally with the same amount and account (Software 425)",
+            ok and self.tico_has_bill("T-BILL-1", 4500, "425"),
+        )
+        status, body = self.act(
+            "invoice_create",
+            {
+                "customer_id": customer,
+                "number": "T-INV-1",
+                "invoice_date": TODAY,
+                "lines": [{"account_id": cons, "amount": 25000, "description": "Tico invoice"}],
+            },
+        )
         res.check("an invoice from Tico is queued", status == 200 and body.get("status") != "failed", str(body)[:160])
         self.wait_settled()
-        res.check("the invoice is confirmed in the provider with the same amount and account (Consulting 200)",
-                  self.fake_has("Invoices", "InvoiceNumber", "T-INV-1", lines=[("acc-inc-cons", 25000)]) and
-                  self.tico_has_invoice("T-INV-1", 25000, "200"))
-        open_inv = next(r for r in before["Invoices"] if r["Type"] == "ACCREC" and r["Status"] == "AUTHORISED"
-                        and not any(p["Invoice"]["InvoiceID"] == r["InvoiceID"] for p in before["Payments"]))
+        res.check(
+            "the invoice is confirmed in the provider with the same amount and account (Consulting 200)",
+            self.fake_has("Invoices", "InvoiceNumber", "T-INV-1", lines=[("acc-inc-cons", 25000)])
+            and self.tico_has_invoice("T-INV-1", 25000, "200"),
+        )
+        open_inv = next(
+            r
+            for r in before["Invoices"]
+            if r["Type"] == "ACCREC"
+            and r["Status"] == "AUTHORISED"
+            and not any(p["Invoice"]["InvoiceID"] == r["InvoiceID"] for p in before["Payments"])
+        )
         tico_inv = self.tico_invoice_id(open_inv["InvoiceNumber"])
-        status, body = self.act("invoice_record_payment", {"invoice_id": tico_inv, "amount": 10000, "date": TODAY,
-                                                           "account_id": bank})
-        res.check("a payment on an invoice is queued", status == 200 and body.get("status") != "failed", str(body)[:160])
+        status, body = self.act(
+            "invoice_record_payment", {"invoice_id": tico_inv, "amount": 10000, "date": TODAY, "account_id": bank}
+        )
+        res.check(
+            "a payment on an invoice is queued", status == 200 and body.get("status") != "failed", str(body)[:160]
+        )
         self.wait_settled()
-        res.check("the payment is confirmed in the provider with the same amount and bank account",
-                  self.fake_payment(open_inv["InvoiceID"], 10000))
-        status, body = self.act("journal", {"date": TODAY, "memo": "Tico journal", "source": "manual",
-                                            "lines": [{"account_id": rent, "amount": 10000},
-                                                      {"account_id": bank, "amount": -10000}]})
+        res.check(
+            "the payment is confirmed in the provider with the same amount and bank account",
+            self.fake_payment(open_inv["InvoiceID"], 10000),
+        )
+        status, body = self.act(
+            "journal",
+            {
+                "date": TODAY,
+                "memo": "Tico journal",
+                "source": "manual",
+                "lines": [{"account_id": rent, "amount": 10000}, {"account_id": bank, "amount": -10000}],
+            },
+        )
         res.check("a journal from Tico is queued", status == 200 and body.get("status") != "failed", str(body)[:160])
         self.wait_settled()
-        res.check("the journal is confirmed in the provider with the same amounts and accounts (Rent 424 and Checking)",
-                  self.fake_journal("Tico journal", [("acc-exp-rent", 10000), ("acc-bank", -10000)]),
-                  self.diag(self.journal_diag, "Tico journal", [("acc-exp-rent", 10000), ("acc-bank", -10000)]))
+        res.check(
+            "the journal is confirmed in the provider with the same amounts and accounts (Rent 424 and Checking)",
+            self.fake_journal("Tico journal", [("acc-exp-rent", 10000), ("acc-bank", -10000)]),
+            self.diag(self.journal_diag, "Tico journal", [("acc-exp-rent", 10000), ("acc-bank", -10000)]),
+        )
         # A lost reply: the write lands at the provider, its answer does not reach the install, the retry must not add a copy.
         self.fake_post("/_fake/lose", {"times": 1})
-        status, body = self.act("bill_create", {"vendor_id": vendor, "number": "T-BILL-2", "bill_date": TODAY,
-                                                "lines": [{"account_id": soft, "amount": 3000, "description": "retry bill"}]})
+        status, body = self.act(
+            "bill_create",
+            {
+                "vendor_id": vendor,
+                "number": "T-BILL-2",
+                "bill_date": TODAY,
+                "lines": [{"account_id": soft, "amount": 3000, "description": "retry bill"}],
+            },
+        )
         res.check("the bill whose reply is lost is queued", status == 200 and body.get("status") != "failed")
-        settled = self.settle(lambda: self.writes_settled() and self.fake_count("Invoices", "InvoiceNumber", "T-BILL-2") >= 1, 240)
+        settled = self.settle(
+            lambda: self.writes_settled() and self.fake_count("Invoices", "InvoiceNumber", "T-BILL-2") >= 1, 240
+        )
         copies = self.fake_count("Invoices", "InvoiceNumber", "T-BILL-2")
-        res.check("after a lost reply the retry makes no duplicate (one bill T-BILL-2 at the provider)",
-                  settled and copies == 1 and self.tico_has_bill("T-BILL-2", 3000, "425"),
-                  f"provider copies={copies} settled={settled} outbox={self.outbox()}")
+        res.check(
+            "after a lost reply the retry makes no duplicate (one bill T-BILL-2 at the provider)",
+            settled and copies == 1 and self.tico_has_bill("T-BILL-2", 3000, "425"),
+            f"provider copies={copies} settled={settled} outbox={self.outbox()}",
+        )
         self.notes["lost_reply_writes"] = self.fake_count("Invoices", "InvoiceNumber", "T-BILL-2")
         # An expired token: the provider refuses once with 401, the install asks HQ for a new token and tries again.
         refreshes = self.hq.refreshes
         calls_mark = len(self.fake_calls())
-        self.fake_post("/_fake/expire", {"writes_only": True})     # the next write is refused, not a background read
-        status, body = self.act("journal", {"date": TODAY, "memo": "Tico journal after expiry", "source": "manual",
-                                            "lines": [{"account_id": rent, "amount": 2000},
-                                                      {"account_id": bank, "amount": -2000}]})
+        self.fake_post("/_fake/expire", {"writes_only": True})  # the next write is refused, not a background read
+        status, body = self.act(
+            "journal",
+            {
+                "date": TODAY,
+                "memo": "Tico journal after expiry",
+                "source": "manual",
+                "lines": [{"account_id": rent, "amount": 2000}, {"account_id": bank, "amount": -2000}],
+            },
+        )
         self.wait_settled()
-        res.check("a 401 from the provider refreshes the token through HQ, then the write goes through",
-                  self.hq.refreshes > refreshes and self.fake_journal("Tico journal after expiry",
-                                                                       [("acc-exp-rent", 2000), ("acc-bank", -2000)]),
-                  f"refreshes {refreshes} -> {self.hq.refreshes}; action {body.get('status')}; the fake's calls after "
-                  f"the expiry (method, last path part): {self.calls_since(calls_mark)}; "
-                  f"{self.diag(self.journal_diag, 'Tico journal after expiry', [('acc-exp-rent', 2000), ('acc-bank', -2000)])}")
+        res.check(
+            "a 401 from the provider refreshes the token through HQ, then the write goes through",
+            self.hq.refreshes > refreshes
+            and self.fake_journal("Tico journal after expiry", [("acc-exp-rent", 2000), ("acc-bank", -2000)]),
+            f"refreshes {refreshes} -> {self.hq.refreshes}; action {body.get('status')}; the fake's calls after "
+            f"the expiry (method, last path part): {self.calls_since(calls_mark)}; "
+            f"{self.diag(self.journal_diag, 'Tico journal after expiry', [('acc-exp-rent', 2000), ('acc-bank', -2000)])}",
+        )
 
     def step_refusals(self) -> None:
         from backend.finance import mirror
+
         res = self.res
         res.step = "5 refused writes"
         self.wait_settled()
@@ -817,24 +1194,44 @@ class XeroRehearsal:
                 continue
             status, body = self.act(kind, {})
             reason = str(body.get("reason") or "")
-            res.check(f"{kind} against Xero gives a clear answer (refusal with a reason, or a write)",
-                      body.get("status") != "failed" or bool(reason),
-                      f"status={body.get('status')} code={body.get('code')} {reason[:140]}")
+            res.check(
+                f"{kind} against Xero gives a clear answer (refusal with a reason, or a write)",
+                body.get("status") != "failed" or bool(reason),
+                f"status={body.get('status')} code={body.get('code')} {reason[:140]}",
+            )
         self.settle(lambda: False, 10)
-        res.check("the refused writes add no outbox row", self.outbox() == before_outbox,
-                  f"before={before_outbox} after={self.outbox()}")
-        res.check("the refused writes send nothing to the provider", len(self.fake_writes()) == before_writes,
-                  f"writes before={before_writes} after={len(self.fake_writes())}")
+        res.check(
+            "the refused writes add no outbox row",
+            self.outbox() == before_outbox,
+            f"before={before_outbox} after={self.outbox()}",
+        )
+        res.check(
+            "the refused writes send nothing to the provider",
+            len(self.fake_writes()) == before_writes,
+            f"writes before={before_writes} after={len(self.fake_writes())}",
+        )
 
     def step_budgets(self) -> None:
         res = self.res
         res.step = "6 budgets and holds"
         self.wait_settled()
         software = self.acc("425")
-        status, body = self.act("budget_create", {"name": "Software (Nov)", "period": "month", "account_id": software,
-                                                  "amount": 100000, "at_limit": "decline", "effective_from": TODAY})
-        res.check("a monthly budget on the mirrored Software line is set", status == 200 and body.get("status") == "committed",
-                  f"HTTP {status} {str(body)[:200]}")
+        status, body = self.act(
+            "budget_create",
+            {
+                "name": "Software (Nov)",
+                "period": "month",
+                "account_id": software,
+                "amount": 100000,
+                "at_limit": "decline",
+                "effective_from": TODAY,
+            },
+        )
+        res.check(
+            "a monthly budget on the mirrored Software line is set",
+            status == 200 and body.get("status") == "committed",
+            f"HTTP {status} {str(body)[:200]}",
+        )
         budget = self.budget("Software (Nov)")
         rows = self.fake_rows()
         # November's Software actual: the November bills at the provider (Tico's own bills included), plus the change to
@@ -843,45 +1240,78 @@ class XeroRehearsal:
         want_actual = soft_of(rows["Invoices"], MONTH_NOV) + late_soft
         state = budget.get("state", {}) if budget else {}
         got_actual = int(state.get("actual", -1)) if state else -1
-        res.check("the budget on a mirrored expense line sees the mirrored actuals to the cent",
-                  budget is not None and got_actual == want_actual, f"want {want_actual} got state={str(state)[:240]}")
+        res.check(
+            "the budget on a mirrored expense line sees the mirrored actuals to the cent",
+            budget is not None and got_actual == want_actual,
+            f"want {want_actual} got state={str(state)[:240]}",
+        )
         # A payment held while its reply is lost: the second payment is refused beyond what is left.
-        target = next(r for r in self.fake_rows()["Invoices"] if r["Type"] == "ACCREC" and r["Status"] == "AUTHORISED"
-                      and not any(p["Invoice"]["InvoiceID"] == r["InvoiceID"] for p in self.fake_rows()["Payments"]))
+        target = next(
+            r
+            for r in self.fake_rows()["Invoices"]
+            if r["Type"] == "ACCREC"
+            and r["Status"] == "AUTHORISED"
+            and not any(p["Invoice"]["InvoiceID"] == r["InvoiceID"] for p in self.fake_rows()["Payments"])
+        )
         total = cents(target["Total"])
         first = total // 2
         tico_id = self.tico_invoice_id(target["InvoiceNumber"])
         bank = self.acc("090")
         writes_before = len(self.fake_writes())
         self.fake_post("/_fake/lose", {"times": 1})
-        status, body = self.act("invoice_record_payment", {"invoice_id": tico_id, "amount": first, "date": TODAY,
-                                                           "account_id": bank})
+        status, body = self.act(
+            "invoice_record_payment", {"invoice_id": tico_id, "amount": first, "date": TODAY, "account_id": bank}
+        )
         sent = self.settle(lambda: len(self.fake_writes()) > writes_before, 90)
         left = total - first
-        status2, body2 = self.act("invoice_record_payment", {"invoice_id": tico_id, "amount": left + 1, "date": TODAY,
-                                                             "account_id": bank})
-        res.check("while a payment's reply is lost (held), a second payment beyond what is left is refused",
-                  sent and body2.get("status") == "failed" and f"({left})" in str(body2.get("reason", "")),
-                  f"left should be {left}; first status={body.get('status')}; second: {body2.get('status')} "
-                  f"{str(body2.get('reason'))[:160]}")
+        status2, body2 = self.act(
+            "invoice_record_payment", {"invoice_id": tico_id, "amount": left + 1, "date": TODAY, "account_id": bank}
+        )
+        res.check(
+            "while a payment's reply is lost (held), a second payment beyond what is left is refused",
+            sent and body2.get("status") == "failed" and f"({left})" in str(body2.get("reason", "")),
+            f"left should be {left}; first status={body.get('status')}; second: {body2.get('status')} "
+            f"{str(body2.get('reason'))[:160]}",
+        )
         self.wait_settled()
-        res.check("the held payment lands once: one payment at the provider, no duplicate after its retry",
-                  self.fake_payment_count(target["InvoiceID"], first) == 1, f"copies={self.fake_payment_count(target['InvoiceID'], first)}")
+        res.check(
+            "the held payment lands once: one payment at the provider, no duplicate after its retry",
+            self.fake_payment_count(target["InvoiceID"], first) == 1,
+            f"copies={self.fake_payment_count(target['InvoiceID'], first)}",
+        )
         # A pending mirrored bill is a hold source in §4.4; this asks whether it holds the budget while it is pending.
         self.fake_post("/_fake/lose", {"times": 1})
-        status, body = self.act("bill_create", {"vendor_id": self.contact("Blue Ridge Hosting", "vendor"), "number": "T-BILL-3",
-                                                "bill_date": TODAY,
-                                                "lines": [{"account_id": software, "amount": 9000, "description": "held bill"}]})
+        status, body = self.act(
+            "bill_create",
+            {
+                "vendor_id": self.contact("Blue Ridge Hosting", "vendor"),
+                "number": "T-BILL-3",
+                "bill_date": TODAY,
+                "lines": [{"account_id": software, "amount": 9000, "description": "held bill"}],
+            },
+        )
         self.settle(lambda: self.fake_count("Invoices", "InvoiceNumber", "T-BILL-3") >= 1, 60)
         state = self.budget("Software (Nov)").get("state", {})
-        res.check("a mirrored bill still waiting for the provider holds its budget (§4.4 bill holds)",
-                  int(state.get("held", 0)) == 9000, f"held={state.get('held')} state={str(state)[:200]}")
+        res.check(
+            "a mirrored bill still waiting for the provider holds its budget (§4.4 bill holds)",
+            int(state.get("held", 0)) == 9000,
+            f"held={state.get('held')} state={str(state)[:200]}",
+        )
         self.wait_settled()
-        status, body = self.act("bill_create", {"vendor_id": self.contact("Blue Ridge Hosting", "vendor"), "number": "T-BILL-OVER",
-                                                "bill_date": TODAY,
-                                                "lines": [{"account_id": software, "amount": 95000, "description": "over"}]})
-        res.check("a bill past a decline budget's limit is refused (§4.4: new requests refused at limit)",
-                  body.get("status") == "failed", f"status={body.get('status')} reason={str(body.get('reason'))[:160]}")
+        status, body = self.act(
+            "bill_create",
+            {
+                "vendor_id": self.contact("Blue Ridge Hosting", "vendor"),
+                "number": "T-BILL-OVER",
+                "bill_date": TODAY,
+                "lines": [{"account_id": software, "amount": 95000, "description": "over"}],
+            },
+        )
+        res.check(
+            "a bill past a decline budget's limit is refused (§4.4: new requests refused at limit)",
+            body.get("status") == "failed",
+            f"status={body.get('status')} reason={str(body.get('reason'))[:160]}",
+        )
         self.wait_settled()
 
     def step_disconnect(self) -> None:
@@ -898,45 +1328,82 @@ class XeroRehearsal:
             via = f"in-process books_link.drop (HTTP said {status}: {str(body)[:120]})"
         res.check("the books connection is disconnected", True, via)
         row = self.sources_row()
-        res.check("after disconnect the connection is recorded as disconnected and the books stay", row.get("sync", {}).get("status")
-                  in ("disconnected", None) and len(self.books_rows()) == 1 and (self.pnl_months(), self.balances()) == before,
-                  f"sync={row.get('sync')}")
-        status, body = self.act("bill_create", {"vendor_id": self.contact("Blue Ridge Hosting", "vendor"), "number": "T-BILL-4",
-                                                "bill_date": TODAY,
-                                                "lines": [{"account_id": self.acc("425"), "amount": 1000, "description": "after"}]})
+        res.check(
+            "after disconnect the connection is recorded as disconnected and the books stay",
+            row.get("sync", {}).get("status") in ("disconnected", None)
+            and len(self.books_rows()) == 1
+            and (self.pnl_months(), self.balances()) == before,
+            f"sync={row.get('sync')}",
+        )
+        status, body = self.act(
+            "bill_create",
+            {
+                "vendor_id": self.contact("Blue Ridge Hosting", "vendor"),
+                "number": "T-BILL-4",
+                "bill_date": TODAY,
+                "lines": [{"account_id": self.acc("425"), "amount": 1000, "description": "after"}],
+            },
+        )
         self.settle(lambda: False, 90)
-        res.check("after disconnect no write reaches the provider",
-                  len(self.fake_writes()) == writes_before and self.fake_count("Invoices", "InvoiceNumber", "T-BILL-4") == 0,
-                  f"action={body.get('status')} {str(body.get('reason'))[:120]}; provider writes "
-                  f"before={writes_before} after={len(self.fake_writes())}")
+        res.check(
+            "after disconnect no write reaches the provider",
+            len(self.fake_writes()) == writes_before and self.fake_count("Invoices", "InvoiceNumber", "T-BILL-4") == 0,
+            f"action={body.get('status')} {str(body.get('reason'))[:120]}; provider writes "
+            f"before={writes_before} after={len(self.fake_writes())}",
+        )
         self.hq.realm = XERO_TENANT
-        again = self.books_link.connect_claim(self.store, self.vault, self.link, provider="xero", company_id=COMPANY,
-                                              claim_id="clm_rehearsal_xero_7", name="back", by=OWNER_ACTOR,
-                                              now="2026-11-01T13:00:00.000000Z")
+        again = self.books_link.connect_claim(
+            self.store,
+            self.vault,
+            self.link,
+            provider="xero",
+            company_id=COMPANY,
+            claim_id="clm_rehearsal_xero_7",
+            name="back",
+            by=OWNER_ACTOR,
+            now="2026-11-01T13:00:00.000000Z",
+        )
         # Spec 3.4 covers reconnecting while connected (the tokens are replaced, same connection). After a disconnect the
         # books record a new connection and keep the old one as disconnected; this check asserts one active connection.
-        active = [(r.get("sync") or {}).get("connection_id") for r in self.books_rows()
-                  if str((r.get("sync") or {}).get("status")) == "active"]
-        res.check("after a disconnect, reconnecting leaves exactly one active books connection (the new one)",
-                  active == [again], f"active={active} new={again} disconnected={self.cid}; rows={len(self.books_rows())}")
-        self.settle(lambda: self.fake_count("Invoices", "InvoiceNumber", "T-BILL-4") >= 1 and self.writes_settled(), 300)
+        active = [
+            (r.get("sync") or {}).get("connection_id")
+            for r in self.books_rows()
+            if str((r.get("sync") or {}).get("status")) == "active"
+        ]
+        res.check(
+            "after a disconnect, reconnecting leaves exactly one active books connection (the new one)",
+            active == [again],
+            f"active={active} new={again} disconnected={self.cid}; rows={len(self.books_rows())}",
+        )
+        self.settle(
+            lambda: self.fake_count("Invoices", "InvoiceNumber", "T-BILL-4") >= 1 and self.writes_settled(), 300
+        )
         copies = self.fake_count("Invoices", "InvoiceNumber", "T-BILL-4")
-        res.check("after reconnect no write is duplicated at the provider", copies <= 1,
-                  f"T-BILL-4 copies={copies} (0: refused while disconnected, 1: held and sent once); outbox={self.outbox()}")
+        res.check(
+            "after reconnect no write is duplicated at the provider",
+            copies <= 1,
+            f"T-BILL-4 copies={copies} (0: refused while disconnected, 1: held and sent once); outbox={self.outbox()}",
+        )
         rows = self.fake_rows()
         want = months_of(rows, MONTH_SEPT, self.pre)
         want_bs = balances_of(rows)
         got = self.pnl_months()
         after_lines = self.bs_lines()
-        moved = {k: (before_lines.get(k), after_lines.get(k)) for k in sorted(set(before_lines) | set(after_lines))
-                 if before_lines.get(k) != after_lines.get(k)}
-        res.check("after reconnect the books equal the provider's rows (every month and the balance sheet)",
-                  got == want and self.balances() == want_bs, f"got={ {m: fmt(got[m]) for m in BAL_MONTHS} } "
-                                                             f"want={ {m: fmt(want[m]) for m in BAL_MONTHS} } "
-                                                             f"bs want={want_bs} got={self.balances()}; "
-                                                             f"balance-sheet lines that moved (before disconnect, after reconnect; "
-                                                             f"{len(before_lines)} lines before, {len(after_lines)} after): "
-                                                             f"{moved}; {self.diag(self.ap_diag, rows)}")
+        moved = {
+            k: (before_lines.get(k), after_lines.get(k))
+            for k in sorted(set(before_lines) | set(after_lines))
+            if before_lines.get(k) != after_lines.get(k)
+        }
+        res.check(
+            "after reconnect the books equal the provider's rows (every month and the balance sheet)",
+            got == want and self.balances() == want_bs,
+            f"got={ {m: fmt(got[m]) for m in BAL_MONTHS} } "
+            f"want={ {m: fmt(want[m]) for m in BAL_MONTHS} } "
+            f"bs want={want_bs} got={self.balances()}; "
+            f"balance-sheet lines that moved (before disconnect, after reconnect; "
+            f"{len(before_lines)} lines before, {len(after_lines)} after): "
+            f"{moved}; {self.diag(self.ap_diag, rows)}",
+        )
 
     # -- helpers for the steps
     def kinds(self) -> list[str]:
@@ -973,8 +1440,14 @@ class XeroRehearsal:
     def fake_count(self, endpoint: str, field: str, value: str) -> int:
         return sum(1 for row in self.fake_rows()[endpoint] if str(row.get(field)) == value)
 
-    def fake_has(self, endpoint: str, field: str, value: str, lines: list[tuple[str, int]] | None = None,
-                 amount: int | None = None) -> bool:
+    def fake_has(
+        self,
+        endpoint: str,
+        field: str,
+        value: str,
+        lines: list[tuple[str, int]] | None = None,
+        amount: int | None = None,
+    ) -> bool:
         for row in self.fake_rows()[endpoint]:
             if str(row.get(field)) != value:
                 continue
@@ -990,9 +1463,14 @@ class XeroRehearsal:
         return self.fake_payment_count(invoice_id, amount) == 1
 
     def fake_payment_count(self, invoice_id: str, amount: int) -> int:
-        return sum(1 for p in self.fake_rows()["Payments"] if p.get("Invoice", {}).get("InvoiceID") == invoice_id
-                   and cents(p["Amount"]) == amount and p.get("Status") == "AUTHORISED"
-                   and p.get("Account", {}).get("AccountID") == BANK)
+        return sum(
+            1
+            for p in self.fake_rows()["Payments"]
+            if p.get("Invoice", {}).get("InvoiceID") == invoice_id
+            and cents(p["Amount"]) == amount
+            and p.get("Status") == "AUTHORISED"
+            and p.get("Account", {}).get("AccountID") == BANK
+        )
 
     def fake_journal(self, narration: str, lines: list[tuple[str, int]]) -> bool:
         """A journal Tico wrote: its narration is the memo and then the Tico reference (see core/xero.py marked())."""
@@ -1004,8 +1482,14 @@ class XeroRehearsal:
 
     def journal_diag(self, narration: str, lines: list[tuple[str, int]]) -> str:
         """The journal the check looks for, as the provider holds it: its narration and its lines (want and got)."""
-        got = [(str(j.get("Narration")), [(str(x.get("AccountID")), str(x.get("LineAmount"))) for x in j.get("JournalLines", [])])
-               for j in self.fake_rows()["ManualJournals"] if narration in str(j.get("Narration") or "")]
+        got = [
+            (
+                str(j.get("Narration")),
+                [(str(x.get("AccountID")), str(x.get("LineAmount"))) for x in j.get("JournalLines", [])],
+            )
+            for j in self.fake_rows()["ManualJournals"]
+            if narration in str(j.get("Narration") or "")
+        ]
         return f"want lines {lines}; provider journals with '{narration}' in the narration: {got}"
 
     def diag(self, fn: Callable[..., str], *args: Any) -> str:
@@ -1018,8 +1502,11 @@ class XeroRehearsal:
     def bs_lines(self) -> dict[str, int]:
         """Every balance-sheet line as the books show it today: 'section: name' to its balance."""
         bs = self.get(f"/finance/balance-sheet?as_of={as_of_day()}")
-        return {f"{section}: {r.get('name')}": int(r.get("balance", 0)) for section in ("assets", "liabilities", "equity")
-                for r in bs.get(section, [])}
+        return {
+            f"{section}: {r.get('name')}": int(r.get("balance", 0))
+            for section in ("assets", "liabilities", "equity")
+            for r in bs.get(section, [])
+        }
 
     def calls_since(self, mark: int) -> list[tuple[str, str]]:
         """The first calls the fake took after a mark (method, last path part): a refused one is the first."""
@@ -1034,16 +1521,24 @@ class XeroRehearsal:
             name = str(call["path"]).rsplit("/", 1)[-1]
             if call["method"] != "GET" or name not in ("Payments", "ManualJournals") or not call["if_modified_since"]:
                 continue
-            head = {"Authorization": "Bearer " + TOKEN, "xero-tenant-id": XERO_TENANT, "If-Modified-Since": call["if_modified_since"]}
+            head = {
+                "Authorization": "Bearer " + TOKEN,
+                "xero-tenant-id": XERO_TENANT,
+                "If-Modified-Since": call["if_modified_since"],
+            }
             url = f"http://127.0.0.1:{FAKE_PORT}{call['path']}?{urllib.parse.urlencode(call['query'])}"
             with NO_PROXY.open(urllib.request.Request(url, headers=head), timeout=30) as reply:
                 listed = json.loads(reply.read() or b"{}").get(name, [])
             ids = [str(r.get(self.id_key(name))) for r in listed]
-            reads.append(f"{name} page={call['query'].get('page')} if-modified-since={call['if_modified_since']} "
-                         f"rows={len(ids)} receipt_in_rows={rcpt in ids}")
+            reads.append(
+                f"{name} page={call['query'].get('page')} if-modified-since={call['if_modified_since']} "
+                f"rows={len(ids)} receipt_in_rows={rcpt in ids}"
+            )
         at_fake = self.fake_row("Payments", rcpt)
-        return (f"receipt {rcpt} at the fake: Status={at_fake.get('Status')} UpdatedDateUTC={at_fake.get('UpdatedDateUTC')}; "
-                f"edit at unix {self.edit_t:.1f}; polled reads: {reads}")
+        return (
+            f"receipt {rcpt} at the fake: Status={at_fake.get('Status')} UpdatedDateUTC={at_fake.get('UpdatedDateUTC')}; "
+            f"edit at unix {self.edit_t:.1f}; polled reads: {reads}"
+        )
 
     def docs_with(self, node: object, field: str) -> list[dict[str, Any]]:
         """Every dict under `node` that holds `field` (a list page holds its documents as dicts)."""
@@ -1067,26 +1562,36 @@ class XeroRehearsal:
         tico: dict[str, tuple[str, int, int]] = {}
         for path in ("/finance/bills?limit=200", "/finance/invoices?limit=200"):
             for doc in self.docs_with(self.get(path), "number"):
-                tico[str(doc["number"])] = (str(doc.get("status")), int(doc.get("total") or 0),
-                                            int(doc.get("remaining") or 0))
+                tico[str(doc["number"])] = (
+                    str(doc.get("status")),
+                    int(doc.get("total") or 0),
+                    int(doc.get("remaining") or 0),
+                )
         prov: dict[str, tuple[str, int, int]] = {}
         for doc in rows["Invoices"]:
             if doc.get("Type") not in ("ACCPAY", "ACCREC"):
                 continue
             status = str(doc.get("Status"))
-            prov[str(doc.get("InvoiceNumber"))] = (status, cents(doc.get("Total")),
-                                                   cents(doc.get("AmountDue")) if status == "AUTHORISED" else 0)
+            prov[str(doc.get("InvoiceNumber"))] = (
+                status,
+                cents(doc.get("Total")),
+                cents(doc.get("AmountDue")) if status == "AUTHORISED" else 0,
+            )
         diffs: list[str] = []
         for number in sorted(set(tico) | set(prov)):
             t, p = tico.get(number), prov.get(number)
             t_open = 0 if t is None or t[0] in ("draft", "void") else t[2]
             p_open = 0 if p is None else p[2]
             if t_open != p_open:
-                diffs.append(f"{number}: tico[{t[0] if t else '-'} total={t[1] if t else '-'} open={t_open}] "
-                             f"provider[{p[0] if p else '-'} total={p[1] if p else '-'} open={p_open}]")
-        return (f"payable and receivable lines on the balance sheet (name: balance): {lines}; documents read: tico "
-                f"{len(tico)}, provider {len(prov)}; documents whose open amount differs (tico vs provider): "
-                f"{diffs or 'none'}")
+                diffs.append(
+                    f"{number}: tico[{t[0] if t else '-'} total={t[1] if t else '-'} open={t_open}] "
+                    f"provider[{p[0] if p else '-'} total={p[1] if p else '-'} open={p_open}]"
+                )
+        return (
+            f"payable and receivable lines on the balance sheet (name: balance): {lines}; documents read: tico "
+            f"{len(tico)}, provider {len(prov)}; documents whose open amount differs (tico vs provider): "
+            f"{diffs or 'none'}"
+        )
 
     def wait_settled(self) -> None:
         self.settle(self.writes_settled, 240)
@@ -1095,16 +1600,26 @@ class XeroRehearsal:
         self.start_fake()
         try:
             self.start_demo()
-            for step in (self.step_connect, self.step_first_sync, self.step_changes, self.step_writes,
-                         self.step_refusals, self.step_budgets, self.step_disconnect):
+            for step in (
+                self.step_connect,
+                self.step_first_sync,
+                self.step_changes,
+                self.step_writes,
+                self.step_refusals,
+                self.step_budgets,
+                self.step_disconnect,
+            ):
                 try:
                     step()
                 except Exception as exc:  # noqa: BLE001 - a step that cannot run is a failed check, and the later steps run
                     self.res.check("the step ran to the end", False, f"{type(exc).__name__}: {str(exc)[:300]}")
         finally:
             self.close()
-        print(f"[xero] {'PASSED' if self.res.ok else 'FAILED'}: "
-              f"{sum(r['ok'] for r in self.res.rows)}/{len(self.res.rows)} checks; skips: {self.res.skips}", flush=True)
+        print(
+            f"[xero] {'PASSED' if self.res.ok else 'FAILED'}: "
+            f"{sum(r['ok'] for r in self.res.rows)}/{len(self.res.rows)} checks; skips: {self.res.skips}",
+            flush=True,
+        )
         return self.res.ok
 
 
@@ -1166,8 +1681,13 @@ def any_text(node: object, needle: str) -> bool:
 
 def soft_of(docs: list[dict[str, Any]], month: str) -> int:
     """Software (425) bill lines in cents, for live bills dated in one month."""
-    return sum(cents(line["LineAmount"]) for inv in docs if inv["Type"] == "ACCPAY" and live_doc(inv)
-               and inv["DateString"][:7] == month for line in inv["LineItems"] if line["AccountID"] == "acc-exp-soft")
+    return sum(
+        cents(line["LineAmount"])
+        for inv in docs
+        if inv["Type"] == "ACCPAY" and live_doc(inv) and inv["DateString"][:7] == month
+        for line in inv["LineItems"]
+        if line["AccountID"] == "acc-exp-soft"
+    )
 
 
 def bump_invoice(row: dict[str, Any], cents_more: int) -> None:
@@ -1186,12 +1706,24 @@ def webhook_envelope(external_id: str, events: list[tuple[str, str, str]]) -> di
     """A Xero webhook as HQ relays it: an `events` list, one event per changed record."""
     out = []
     for category, ident, kind in events:
-        out.append({"resourceUrl": f"https://api.xero.com/api.xro/2.0/{category}/{ident}", "resourceId": ident,
-                    "eventDateUtc": "2026-11-01T12:00:00.000Z", "eventType": kind,
-                    "eventCategory": "INVOICE" if category == "Invoices" else category.upper(), "tenantId": XERO_TENANT,
-                    "tenantType": "ORGANISATION"})
-    return {"type": "tico.finance.webhook", "provider": "xero", "external_id": external_id, "company_id": COMPANY,
-            "payload": {"events": out, "firstEventSequence": 1, "lastEventSequence": len(out), "entropy": "rehearsal"}}
+        out.append(
+            {
+                "resourceUrl": f"https://api.xero.com/api.xro/2.0/{category}/{ident}",
+                "resourceId": ident,
+                "eventDateUtc": "2026-11-01T12:00:00.000Z",
+                "eventType": kind,
+                "eventCategory": "INVOICE" if category == "Invoices" else category.upper(),
+                "tenantId": XERO_TENANT,
+                "tenantType": "ORGANISATION",
+            }
+        )
+    return {
+        "type": "tico.finance.webhook",
+        "provider": "xero",
+        "external_id": external_id,
+        "company_id": COMPANY,
+        "payload": {"events": out, "firstEventSequence": 1, "lastEventSequence": len(out), "entropy": "rehearsal"},
+    }
 
 
 def run_child(keep: bool) -> int:
@@ -1200,6 +1732,7 @@ def run_child(keep: bool) -> int:
     sys.path.insert(0, str(ROOT))
     os.chdir(ROOT)
     from backend import demo
+
     rehearsal = XeroRehearsal(keep)
     with demo.network_blocked():
         try:

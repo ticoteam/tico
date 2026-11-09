@@ -17,6 +17,7 @@ Google account, connectors/mail/oauth.py, so the turn refuses a write it did not
 bot may open when it handed the attempt out; any other mailbox, and any attempt of any other bot, gets an error
 ("no mailbox" when the hub named none: the bot is nobody's message bot).
 """
+
 import json
 import os
 import socket
@@ -38,13 +39,23 @@ def _server_rejects_token_purpose(exc):
     if getattr(exc, "status", None) != 422:
         return False
     if str(getattr(exc, "code", "")).lower() not in {
-        "validation", "validation_error", "unknown_field", "extra_forbidden",
+        "validation",
+        "validation_error",
+        "unknown_field",
+        "extra_forbidden",
     }:
         return False
     detail = str(getattr(exc, "detail", exc)).lower()
-    return "purpose" in detail and any(marker in detail for marker in (
-        "extra input", "extra field", "unknown field", "unexpected field", "extra_forbidden",
-    ))
+    return "purpose" in detail and any(
+        marker in detail
+        for marker in (
+            "extra input",
+            "extra field",
+            "unknown field",
+            "unexpected field",
+            "extra_forbidden",
+        )
+    )
 
 
 class Server:
@@ -109,6 +120,7 @@ class Server:
                 # The hub's refusal names the cause (App not installed on it, outside the organization): a failed
                 # clone shows it rather than a bare exception name.
                 from .git_credentials import token_problem
+
                 return {"error": f"{type(exc).__name__}: {token_problem(exc, repository)}"}
             return {"error": type(exc).__name__}
         if not granted:
@@ -139,7 +151,7 @@ class Server:
         if not granted:
             return {"error": "no token"}
         reply = {"token": granted["token"], "expiry": granted.get("expiry", "")}
-        if isinstance(granted.get("scopes"), list):     # a connected account: the turn refuses what it did not grant
+        if isinstance(granted.get("scopes"), list):  # a connected account: the turn refuses what it did not grant
             reply["scopes"] = granted["scopes"]
         return reply
 
@@ -164,6 +176,7 @@ class Server:
         self.server = UnixServer(self.path, Handler)
         # Whoever holds an attempt token may ask; the file mode only keeps strangers' processes out.
         from . import isolation
+
         os.chmod(self.path, 0o600)
         isolation.chown(self.path)
         threading.Thread(target=self.server.serve_forever, name="credential-socket", daemon=True).start()
@@ -182,6 +195,7 @@ def serve(client, path=None, mail=None, refresh=None):
     """The supervisor's server: `client` is the runner's own, `mail`
     (service, mailbox) -> {"token", "expiry"} mints Gmail access."""
     from . import isolation
+
     path = path or os.environ.get("TICO_RUNNER_CRED_SOCKET")
     directory = None
     if not isolation.enabled() and not path:
@@ -191,14 +205,17 @@ def serve(client, path=None, mail=None, refresh=None):
 
     def mint(bot, repository=None):
         from .git_credentials import hub_token, select_token
+
         granted = hub_token(client, {"bot": bot})
         return select_token(granted, repository)
+
     legacy_purpose_servers = set()
     purpose_lock = threading.Lock()
     server_key = str(getattr(client, "url", None) or id(client))
 
     def mint_git(bot, repository=None):
         from .git_credentials import hub_token, select_token
+
         with purpose_lock:
             legacy_server = server_key in legacy_purpose_servers
         if legacy_server:
@@ -215,6 +232,7 @@ def serve(client, path=None, mail=None, refresh=None):
                 # that schema for this server so every later git request uses its supported body.
                 granted = hub_token(client, {"bot": bot})
         return select_token(granted, repository)
+
     try:
         server = Server(path, mint, mail, refresh, mint_git=mint_git).start()
         server.directory = directory
@@ -251,7 +269,9 @@ def request_refresh(path, attempt_token, repository, timeout=60):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(timeout)
         connection.connect(str(path))
-        connection.sendall(json.dumps({'token': attempt_token, 'repository': repository, 'refresh': True}).encode() + b'\n')
+        connection.sendall(
+            json.dumps({'token': attempt_token, 'repository': repository, 'refresh': True}).encode() + b'\n'
+        )
         reply = json.loads(connection.makefile('rb').readline(MAX_LINE))
     if not reply.get('refreshed') and not reply.get('cached'):
         raise ValueError(reply.get('error') or 'mirror refresh failed')
@@ -272,7 +292,9 @@ def request_mail(path, attempt_token, service, mailbox, timeout=60):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(timeout)
         connection.connect(str(path))
-        connection.sendall(json.dumps({"token": attempt_token, "mail": {"service": service, "mailbox": mailbox}}).encode() + b"\n")
+        connection.sendall(
+            json.dumps({"token": attempt_token, "mail": {"service": service, "mailbox": mailbox}}).encode() + b"\n"
+        )
         line = connection.makefile("rb").readline(MAX_LINE)
     reply = json.loads(line)
     if not reply.get("token"):

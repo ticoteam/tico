@@ -1,4 +1,5 @@
 """The outbound pollers on recurring paths share one SSL context per trust mode instead of building one per tick."""
+
 import httpx
 
 from backend import hook_relay, inbound, outbound_tls
@@ -22,6 +23,7 @@ def test_context_is_built_once_per_trust_mode(monkeypatch):
 
 class SpyClient(httpx.Client):
     """Records the verify setting each client is built with, and answers from a fake HQ instead of the network."""
+
     opened = []
 
     def __init__(self, *args, **kwargs):

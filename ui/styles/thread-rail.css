@@ -1,5 +1,5 @@
 /* ui/styles/thread-rail.css — The Threads page: the thread rail beside one thread, Catch up, New thread and Browse
-   threads. Markup: ui/app/thread-rail.js, ui/app/catch-up.js, ui/app/threads-page.js (New thread). */
+   threads. Markup: ui/app/thread-rail.ts, ui/app/catch-up.ts, ui/app/threads-page.ts (New thread). */
 
 #nav-threads .nav-icon svg,#mobile-threads .mobile-nav-icon svg{display:block}
 
@@ -12,7 +12,21 @@
 .tr-rail>*{flex-shrink:0}
 .tr-pane{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;padding:0 20px max(var(--s3),env(safe-area-inset-bottom))}
 .tr-pane .thread-page{max-width:none}
-.tr-empty{flex:1;display:flex;align-items:center;justify-content:center}
+/* overflow-y: a window too short for the block scrolls the pane, where a centred block would be cut off at both ends */
+.tr-empty{flex:1;display:flex;align-items:center;justify-content:center;overflow-y:auto}
+/* No thread open (TR_EMPTY_HTML, ui/app/thread-rail.js): the picture, one heading, one sentence and New thread, centred.
+   The picture is 360px at most, scales down with its pane, and takes its colours from the tokens, so both themes read it. */
+.tr-empty .empty-state{width:min(360px,100%);margin:auto;padding:var(--s6) 0}
+.tr-empty h2{font-size:var(--t-lg)}
+.tr-empty p{margin:0}
+.tr-diagram{display:block;width:100%;height:auto;margin-bottom:var(--s2)}
+.tr-diagram .td-card{fill:var(--surface);stroke:var(--line);stroke-width:1}
+.tr-diagram .td-face{fill:var(--surface2);stroke:var(--line);stroke-width:1.5}
+.tr-diagram .td-ink{fill:var(--ink)}
+.tr-diagram .td-bar{fill:var(--line)}
+.tr-diagram .td-line{fill:none;stroke:var(--line);stroke-width:1.5}
+.tr-diagram .td-stroke{fill:none;stroke:var(--ink);stroke-width:1.8;stroke-linecap:round}
+.tr-diagram .td-title{fill:var(--ink);font:600 12px/1 var(--sans)}
 
 .tr-top{display:flex;align-items:center;height:36px;padding:0 4px 0 8px}
 .tr-h{flex:1;margin:0;font-size:15px;font-weight:600;letter-spacing:var(--track-snug)}
@@ -113,8 +127,16 @@
 .cu-msg-body{margin-top:2px;overflow-wrap:anywhere}
 .cu-msg-body>:first-child{margin-top:0}.cu-msg-body>:last-child{margin-bottom:0}
 .cu-more{align-self:flex-start;margin:2px 18px 0 58px;color:var(--muted);font-size:var(--t-sm)}
-.cu-reply{padding:0 18px 12px}
-.cu-reply input{height:40px;border-color:var(--g4);border-radius:10px;background:var(--bg);padding:0 12px}
+.cu-reply{display:flex;align-items:center;gap:8px;padding:0 18px 12px}
+.cu-reply input{flex:1;min-width:0;height:40px;border-color:var(--g4);border-radius:10px;background:var(--bg);padding:0 12px}
+.cu-reply .cu-send{display:none;flex:none;place-items:center;width:40px;height:40px;padding:0;border-radius:10px}
+.cu-reply.has-text .cu-send{display:inline-grid}
+/* Undo takes the progress bar's place in the head while it shows, so it covers nothing and nothing moves. */
+.cu-undo{flex:1;display:flex;justify-content:center;min-width:0}
+.cu-undo+.cu-bar{display:none}
+.cu-undo-pill{display:flex;align-items:center;gap:12px;min-width:0;padding:4px 12px;border-radius:999px;background:var(--ink);color:var(--bg);font-size:var(--t-sm)}
+.cu-undo-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cu-undo-pill button{flex:none;padding:0;border:0;background:none;color:inherit;font:600 var(--t-sm) var(--sans);text-decoration:underline;cursor:pointer}
 .cu-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line)}
 .cu-foot .spacer{flex:1}
 .cu-later{height:32px;padding:0 12px;border:1px solid var(--g4);border-radius:8px;background:none;color:var(--ink);font-weight:500;cursor:pointer}
@@ -195,11 +217,12 @@ legend.nt-lbl{margin-bottom:6px}
   .cu-head h2{flex:1 1 calc(100% - 60px);order:1;font-size:var(--t-xl)}
   .cu-x{order:2;width:44px;height:44px;background:none}
   .cu-pos{order:3}
-  .cu-bar{order:4}
+  .cu-bar,.cu-undo{order:4}
   .cu-stack{flex:1}
   .cu-card{flex:1;box-shadow:none;border-radius:14px;overflow:hidden}
   .cu-msgs{flex:1}
   .cu-reply input{height:44px;border-radius:12px}
+  .cu-reply .cu-send{width:44px;height:44px;border-radius:12px}
   .cu-card-head{padding:14px 16px}
   .cu-msg{padding-left:calc(16px + var(--d) * 16px);padding-right:16px}
   .cu-mute{display:none}

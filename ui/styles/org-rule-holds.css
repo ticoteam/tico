@@ -1,4 +1,4 @@
-/* ui/styles/org-rule-holds.css — Org rule checks (ui/app/org-rule-holds.js): a review task's held outputs, the held
+/* ui/styles/org-rule-holds.css — Org rule checks (ui/app/org-rule-holds.ts): a review task's held outputs, the held
    note in a chat, and the checks line in the Rules header. Colours are the theme's tokens, so light and dark follow. */
 .rule-holds{display:flex;flex-direction:column;gap:12px;margin:0 0 16px}
 .rh-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:flex;

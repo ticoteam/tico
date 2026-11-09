@@ -94,8 +94,11 @@ def names(level, person="", team="", bot=""):
     if level["everyone"]:
         return True
     groups = [team] if isinstance(team, str) else list(team or ())
-    return bool((person and person in level["people"]) or any(g and g in level["teams"] for g in groups)
-                or (bot and bot in level["bots"]))
+    return bool(
+        (person and person in level["people"])
+        or any(g and g in level["teams"] for g in groups)
+        or (bot and bot in level["bots"])
+    )
 
 
 def owner_ids(raw):
@@ -109,7 +112,12 @@ def owner_ids(raw):
 
 def summary(doc):
     """The three levels as short words, for the audit trail: 'everyone' or a count of entries."""
+
     def word(level):
-        return "everyone" if level["everyone"] else "; ".join(
-            f"{len(level[key])} {key}" for key in LISTS if level[key]) or "nobody"
+        return (
+            "everyone"
+            if level["everyone"]
+            else "; ".join(f"{len(level[key])} {key}" for key in LISTS if level[key]) or "nobody"
+        )
+
     return {level: word(doc[level]) for level in LEVELS}

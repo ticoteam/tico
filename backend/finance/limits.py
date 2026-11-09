@@ -2,6 +2,7 @@
 limit a bot can be over, so the bot takes no new job and reads "Paused: AI services budget reached". Video production is
 not a run limit (a run need not make images): at its cutoff it refuses new image making for whoever it covers, people
 included, and pauses no bot. One `Cutoffs` serves a whole pass over many bots: the budgets' states are read once."""
+
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -22,6 +23,7 @@ class Cutoff:
     """The budget a bot is held by: its id and name, its period's word, and when that period ends (UTC midnight after
     its last day; "" for a one-time budget, which never turns over). No amounts: who reads a paused bot may not see
     the budget's numbers."""
+
     budget_id: str
     name: str
     period: str
@@ -63,8 +65,7 @@ class Cutoffs:
                 if st.at_limit:
                     end = date.fromisoformat(st.period_end)
                     until = "" if end >= B.ONCE_END else (end + timedelta(days=1)).isoformat() + "T00:00:00Z"
-                    return Cutoff(budget_id=b.id, name=b.name, period=PERIOD_WORDS.get(b.period, b.period),
-                                  until=until)
+                    return Cutoff(budget_id=b.id, name=b.name, period=PERIOD_WORDS.get(b.period, b.period), until=until)
         return None
 
 
@@ -87,8 +88,8 @@ def cutoffs(c: sqlite3.Connection, at: str | None = None, line: str = AI) -> Cut
     today = dates.day(ctx.today)
     cut: dict[str, B.State] = {}
     for bid in budgets:
-        if not versions.get(bid):
-            continue
+        if not versions.get(bid) or budgeting.budget_platform(ctx, budgets[bid]):
+            continue  # an ad budget only warns (budgeting.warn_only)
         st = budgeting.state(ctx, bid, today)
         if st.at_limit and st.amount is not None:
             cut[bid] = st

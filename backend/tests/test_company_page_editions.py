@@ -1,6 +1,7 @@
 """Company page editions (plan §1, §3, §4): what a draft reads, what holds one, who may approve, what publishing spends, and
 the ways back. Acme is the fictional company: Ana owns it, Ben is an admin, Ops is a bot. The stats, release and readers
 modules belong to other tracks and are stubbed by attribute, so these tests keep working once they land."""
+
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -26,11 +27,26 @@ from backend.tests.test_org_rules import as_bot, org, rule
 
 START, END = "2026-10-01", "2026-10-31"
 FACTS = {"stats": [{"label": "Revenue", "display": "$120,000", "period": "October 2026"}], "company": "Acme"}
-NO_FIGURES = {"title": "A quiet month", "sections": {
-    "highlights": ["The team kept shipping."], "lowlights": [], "numbers": [], "asks": [], "next": ["We keep going."]}}
-GOOD = {"title": "October in review", "sections": {
-    "highlights": ["Revenue reached $120,000."], "lowlights": [], "numbers": ["Revenue: $120,000"],
-    "asks": ["Intros to design partners, please."], "next": ["We keep shipping."]}}
+NO_FIGURES = {
+    "title": "A quiet month",
+    "sections": {
+        "highlights": ["The team kept shipping."],
+        "lowlights": [],
+        "numbers": [],
+        "asks": [],
+        "next": ["We keep going."],
+    },
+}
+GOOD = {
+    "title": "October in review",
+    "sections": {
+        "highlights": ["Revenue reached $120,000."],
+        "lowlights": [],
+        "numbers": ["Revenue: $120,000"],
+        "asks": ["Intros to design partners, please."],
+        "next": ["We keep shipping."],
+    },
+}
 SECRET_RULE = "Never name a customer."
 
 
@@ -50,9 +66,14 @@ class Page:
         at = H.now()
         with self.store.transaction() as c:
             c.execute("INSERT OR REPLACE INTO company_page_settings(id, transparency) VALUES('company','private')")
-            c.execute("INSERT INTO audiences(id,name,kind,due_rule,enabled,created_at,updated_at) "
-                      "VALUES('board','Board','board','{\"business_day\": 5}',1,?,?)", (at, at))
-            c.execute("INSERT INTO audience_sources(id,audience_id,author,created_at) VALUES('s1','board','ops',?)", (at,))
+            c.execute(
+                "INSERT INTO audiences(id,name,kind,due_rule,enabled,created_at,updated_at) "
+                "VALUES('board','Board','board','{\"business_day\": 5}',1,?,?)",
+                (at, at),
+            )
+            c.execute(
+                "INSERT INTO audience_sources(id,audience_id,author,created_at) VALUES('s1','board','ops',?)", (at,)
+            )
             # Revenue is a KPI the board may show: the real projection and facts read it.
             revenue = K.create(c, "human:ana", "human:ana", {"name": "Revenue", "unit": "$", "cadence": "monthly"})
             K.add_reading(c, "human:ana", revenue, 120000, period_start=START, period_end=END)
@@ -69,11 +90,13 @@ class Page:
         def notify(c, edition_id):
             self.notified.append(edition_id)
             return real_notify(c, edition_id)
+
         real_refresh = release.refresh
 
         def refresh(store, at):
             self.refreshes.append(at)
             return real_refresh(store, at)
+
         monkeypatch.setattr(release, "rebuild", rebuild)
         monkeypatch.setattr(release, "refresh", refresh)
         monkeypatch.setattr(readers, "notify_edition", notify)
@@ -82,6 +105,10 @@ class Page:
         settings["ana-token"] = Identity("human:ana", "owner", "ana@acme.example", via_token=True)
         settings["ana-assistant"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant", confirmed=True)
         as_bot(api, "ops", "ops-test")
+
+    def write_sql(self, statement):
+        with self.store.transaction() as c:
+            c.execute(statement)
 
     def write(self, system, user):
         self.calls.append((system, user))
@@ -92,12 +119,16 @@ class Page:
     def note(self, bot, kind, day, body, meetings=0):
         ident = H.new_id()
         with self.store.transaction() as c:
-            c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,meetings) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (ident, bot, kind, day, "Headline", body, H.now(), H.now(), meetings))
+            c.execute(
+                "INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,meetings) VALUES(?,?,?,?,?,?,?,?,?)",
+                (ident, bot, kind, day, "Headline", body, H.now(), H.now(), meetings),
+            )
         return ident
 
     def draft(self):
-        return post(self.api, "editions", {"audience_id": "board", "author": "ops", "period_start": START, "period_end": END})
+        return post(
+            self.api, "editions", {"audience_id": "board", "author": "ops", "period_start": START, "period_end": END}
+        )
 
     def ask(self, edition, token="ana-test"):
         return post(self.api, f"editions/{edition['id']}/approval", {}, token=token)
@@ -111,8 +142,13 @@ class Page:
         return get(self.api, f"editions/{edition['id']}")
 
     def publish(self, edition, token="ana-test", expected=200):
-        return post(self.api, f"editions/{edition['id']}/publish", {"approval_id": edition["approval"]["id"]},
-                    token=token, expected=expected)
+        return post(
+            self.api,
+            f"editions/{edition['id']}/publish",
+            {"approval_id": edition["approval"]["id"]},
+            token=token,
+            expected=expected,
+        )
 
     def published(self):
         return self.publish(self.approved())
@@ -152,7 +188,7 @@ def test_a_draft_reads_only_the_instructions_the_facts_and_the_chosen_updates(pa
         assert [r["id"] for r in E.source_updates(c, "ops", "2026-10-13", "2026-10-13")] == [secret]
 
 
-@pytest.mark.parametrize("answer", [
+BAD_ANSWERS = [
     {"title": "No sections"},
     {"title": "A", "sections": {"highlights": ["Only one key."]}},
     {"title": "A", "sections": {**GOOD["sections"], "extra": ["An unknown section."]}},
@@ -162,17 +198,21 @@ def test_a_draft_reads_only_the_instructions_the_facts_and_the_chosen_updates(pa
     {"title": "A", "sections": {**GOOD["sections"], "highlights": ["x" * (E.ITEM_CHARS + 1)]}},
     "not an object",
     RuntimeError("model down"),
-])
-def test_a_malformed_answer_or_failed_call_is_held_empty_and_can_be_drafted_again(page, answer):
-    page.answer = answer
-    edition = page.draft()
-    assert edition["status"] == "held" and edition["sections"] == [] and page.rebuilds == []
-    post(page.api, f"editions/{edition['id']}/approval", {}, expected=409)
-    checks = get(page.api, f"editions/{edition['id']}")["checks"]
-    assert next(c for c in checks if c["kind"] == "draft")["outcome"] == "failed"
-    page.answer = GOOD
-    again = page.draft()
-    assert again["id"] == edition["id"] and again["status"] == "ready" and again["title"] == GOOD["title"]
+]
+
+
+def test_a_malformed_answer_or_failed_call_is_held_empty_and_can_be_drafted_again(page):
+    for answer in BAD_ANSWERS:
+        page.write_sql("DELETE FROM editions")  # a fresh period each time: a ready edition is not held again
+        page.answer = answer
+        edition = page.draft()
+        assert edition["status"] == "held" and edition["sections"] == [] and page.rebuilds == [], answer
+        post(page.api, f"editions/{edition['id']}/approval", {}, expected=409)
+        checks = get(page.api, f"editions/{edition['id']}")["checks"]
+        assert next(c for c in checks if c["kind"] == "draft")["outcome"] == "failed", answer
+        page.answer = GOOD
+        again = page.draft()
+        assert again["id"] == edition["id"] and again["status"] == "ready" and again["title"] == GOOD["title"], answer
 
 
 def test_no_engine_holds_the_draft_and_one_period_makes_one_edition(page):
@@ -190,9 +230,21 @@ def test_an_ask_keeps_its_id_through_an_edit_and_a_write_cannot_name_a_new_one(p
     edition = page.draft()
     ask = next(s for s in edition["sections"] if s["key"] == "asks")["items"][0]
     assert ask["ask_id"]
-    r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(), json={"sections": [
-        {"key": "asks", "items": [{"body": "Reworded ask.", "ask_id": ask["ask_id"]},
-                                  {"body": "Another ask.", "ask_id": "chosen-by-caller"}]}]})
+    r = page.api.patch(
+        f"/api/v2/editions/{edition['id']}",
+        headers=headers(),
+        json={
+            "sections": [
+                {
+                    "key": "asks",
+                    "items": [
+                        {"body": "Reworded ask.", "ask_id": ask["ask_id"]},
+                        {"body": "Another ask.", "ask_id": "chosen-by-caller"},
+                    ],
+                }
+            ]
+        },
+    )
     assert r.status_code == 200, r.text
     items = next(s for s in r.json()["sections"] if s["key"] == "asks")["items"]
     assert items[0]["ask_id"] == ask["ask_id"] and items[1]["ask_id"] not in (None, "chosen-by-caller")
@@ -202,12 +254,13 @@ def test_an_ask_keeps_its_id_through_an_edit_and_a_write_cannot_name_a_new_one(p
 def test_the_leak_check_flags_numbers_names_and_links_not_in_the_facts():
     def found(*texts):
         return E.leak_findings("October in review", plain_sections(*texts), FACTS, START, END, ["Board"])
+
     assert found("Revenue reached $120,000.", "The team shipped in October 2026.") == {}
     assert found("Revenue reached $130,000.") == {"numbers": ["130,000"], "names": [], "links": []}
     # The dates in the facts don't make their digits allowed: a day's "1" is not a million.
     assert found("Revenue hit $1m.")["numbers"] == ["1m"]
     assert found("We signed Globex this month.")["names"] == ["Globex"]
-    assert found("Globex renewed.")["names"] == ["Globex"]            # a name at a sentence's start is still a name
+    assert found("Globex renewed.")["names"] == ["Globex"]  # a name at a sentence's start is still a name
     assert found("Dana Reyes joined.")["names"] == ["Dana", "Reyes"]
     assert found("We added thirty seats.")["numbers"] == ["thirty"]
     assert found("See https://evil.example/x for more.")["links"] == ["https://evil.example/x"]
@@ -221,12 +274,18 @@ def test_the_leak_check_flags_numbers_names_and_links_not_in_the_facts():
     assert found("Revenue hit $10m.")["numbers"] == ["10m"]
 
 
-
-
 def test_times_and_ids_in_the_facts_do_not_make_figures_allowed():
     """A clock reading or an id in the facts would allow its digits, so a figure would pass only at some hours."""
-    facts = {"stats": [{"as_of": "2026-11-02T01:23:45.000Z", "id": "4b5cb1b2-fe2c-4de8-bdb2-d086f4c6d008",
-                        "updated_at": "00:01:30", "display": "$120,000"}]}
+    facts = {
+        "stats": [
+            {
+                "as_of": "2026-11-02T01:23:45.000Z",
+                "id": "4b5cb1b2-fe2c-4de8-bdb2-d086f4c6d008",
+                "updated_at": "00:01:30",
+                "display": "$120,000",
+            }
+        ]
+    }
     assert E.leak_findings("t", plain_sections("Revenue hit $1m."), facts, START, END)["numbers"] == ["1m"]
 
 
@@ -243,16 +302,22 @@ def test_a_source_allows_its_counts_and_plain_words_but_not_money_names_links_or
     """An approved update lets the page repeat its counts and words, and nothing it says is a money or percent figure, a
     name inside a sentence or a link. A figure equal to a stat the audience may not see is flagged whatever a source says."""
     routed = "Routed 31 requests; 28 were finished within a day."
-    assert E.leak_findings("t", plain_sections("Routed 31 requests; 28 were finished."), FACTS, START, END,
-                           sources=[routed]) == {}
+    assert (
+        E.leak_findings(
+            "t", plain_sections("Routed 31 requests; 28 were finished."), FACTS, START, END, sources=[routed]
+        )
+        == {}
+    )
     money = "Cash is $8m and margin is 40%."
     assert E.leak_findings("t", plain_sections(money), FACTS, START, END, sources=[money])["numbers"] == ["8m", "40%"]
     mid_name = "We closed a deal with Stripe."
-    assert E.leak_findings("t", plain_sections(mid_name), FACTS, START, END,
-                           sources=["Routed 31 requests; we closed a deal with Stripe."])["names"] == ["Stripe"]
+    assert E.leak_findings(
+        "t", plain_sections(mid_name), FACTS, START, END, sources=["Routed 31 requests; we closed a deal with Stripe."]
+    )["names"] == ["Stripe"]
     link = "See https://acme.example/report for the figures."
     assert E.leak_findings("t", plain_sections(link), FACTS, START, END, sources=[link])["links"] == [
-        "https://acme.example/report"]
+        "https://acme.example/report"
+    ]
     hidden = "We have 148 paying customers."
     found = E.leak_findings("t", plain_sections(hidden), FACTS, START, END, sources=[hidden], unseen=[148.0])
     assert found["numbers"] == ["148"] and not found["names"] and not found["links"]
@@ -261,29 +326,45 @@ def test_a_source_allows_its_counts_and_plain_words_but_not_money_names_links_or
 
 
 def test_a_sentence_start_word_in_a_source_is_a_name_unless_it_reads_as_an_ordinary_word():
-    """"Northwind renewed." starts a sentence, but nothing says it's ordinary: it stays a name. A started word that
+    """ "Northwind renewed." starts a sentence, but nothing says it's ordinary: it stays a name. A started word that
     reads as ordinary (lowercase elsewhere in the text, -ed or -ing, or a common past verb) is allowed."""
     source = "Northwind renewed."
-    assert E.leak_findings("t", plain_sections("We signed Northwind."), FACTS, START, END,
-                           sources=[source])["names"] == ["Northwind"]
-    assert E.leak_findings("t", plain_sections("Sent the report to readers."), FACTS, START, END,
-                           sources=["Sent the report to readers."]) == {}
-    assert E.leak_findings("t", plain_sections("Growth came in."), FACTS, START, END,
-                           sources=["Growth came in. The growth held."]) == {}
+    assert E.leak_findings("t", plain_sections("We signed Northwind."), FACTS, START, END, sources=[source])[
+        "names"
+    ] == ["Northwind"]
+    assert (
+        E.leak_findings(
+            "t",
+            plain_sections("Sent the report to readers."),
+            FACTS,
+            START,
+            END,
+            sources=["Sent the report to readers."],
+        )
+        == {}
+    )
+    assert (
+        E.leak_findings(
+            "t", plain_sections("Growth came in."), FACTS, START, END, sources=["Growth came in. The growth held."]
+        )
+        == {}
+    )
 
 
 def test_a_money_figure_is_checked_against_the_facts_and_a_source_count_never_allows_it():
-    """"8 requests" in a source allows a plain 8, not "$8m": a money, percent or magnitude figure must be in the facts,
+    """ "8 requests" in a source allows a plain 8, not "$8m": a money, percent or magnitude figure must be in the facts,
     and "$8m" and "148k" are compared as the numbers they stand for."""
     source = "We closed 8 requests. Cash is $8m."
     assert E.leak_findings("t", plain_sections("We closed 8 requests."), FACTS, START, END, sources=[source]) == {}
-    assert E.leak_findings("t", plain_sections("Cash is $8m."), FACTS, START, END,
-                           sources=[source])["numbers"] == ["8m"]
+    assert E.leak_findings("t", plain_sections("Cash is $8m."), FACTS, START, END, sources=[source])["numbers"] == [
+        "8m"
+    ]
     facts = {"stats": [{"display": "$118k"}]}
     assert E.leak_findings("t", plain_sections("Cash is $118k."), facts, START, END) == {}
     assert E.leak_findings("t", plain_sections("Cash is $118,000."), facts, START, END) == {}
-    assert E.leak_findings("t", plain_sections("We have $148k."), FACTS, START, END,
-                           unseen=[148000.0])["numbers"] == ["148k"]
+    assert E.leak_findings("t", plain_sections("We have $148k."), FACTS, START, END, unseen=[148000.0])["numbers"] == [
+        "148k"
+    ]
 
 
 def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
@@ -294,32 +375,45 @@ def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     leak = next(c for c in full["checks"] if c["kind"] == "leak")
     assert leak["outcome"] == "flagged" and "Globex" in leak["detail"]["names"] and "900k" in leak["detail"]["numbers"]
     assert post(page.api, f"editions/{edition['id']}/approval", {}, expected=409)["error"]["code"] == "conflict"
-    r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
-                       json={"sections": plain_sections("Revenue reached $120,000.")})
+    r = page.api.patch(
+        f"/api/v2/editions/{edition['id']}",
+        headers=headers(),
+        json={"sections": plain_sections("Revenue reached $120,000.")},
+    )
     assert r.status_code == 200 and r.json()["status"] == "ready"
     # A person's own write gets the same check: their edit can put it back on hold.
-    r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
-                       json={"sections": plain_sections("Revenue reached $500k.")})
+    r = page.api.patch(
+        f"/api/v2/editions/{edition['id']}",
+        headers=headers(),
+        json={"sections": plain_sections("Revenue reached $500k.")},
+    )
     assert r.status_code == 200 and r.json()["status"] == "held"
 
 
-@pytest.mark.parametrize("trouble,reason", [("no_engine", "no_engine"), ("error", "error"), ("checks_off", "checks_off")])
-def test_a_rule_nobody_could_read_holds_the_edition(page, monkeypatch, trouble, reason):
+def test_a_rule_nobody_could_read_holds_the_edition(page, monkeypatch):
     from backend import org_rule_check as K
+
     org(page.api)
     rule(page.api, {"kind": "internal", "text": SECRET_RULE, "who": {"outside_editions": True}})
-    judge = Judge(page.store, {SECRET_RULE: "globex"})
-    page.api.app.state.judge = judge
-    if trouble == "no_engine":
-        page.api.app.state.judge = None
-        monkeypatch.setattr(K.B, "server_engine", lambda *a, **k: None)
-    elif trouble == "error":
-        judge.fail = RuntimeError("judge down")
-    else:
-        monkeypatch.setattr(K, "on", lambda c: False)
-    edition = page.draft()
-    assert edition["status"] == "held"
-    assert reason in edition["last_check"]["reasons"] or (trouble == "error" and edition["last_check"]["reasons"])
+    real_engine, real_on = K.B.server_engine, K.on
+    for trouble in ("no_engine", "error", "checks_off"):
+        page.write_sql("DELETE FROM editions")
+        judge = Judge(page.store, {SECRET_RULE: "globex"})
+        page.api.app.state.judge = judge
+        monkeypatch.setattr(K.B, "server_engine", real_engine)
+        monkeypatch.setattr(K, "on", real_on)
+        if trouble == "no_engine":
+            page.api.app.state.judge = None
+            monkeypatch.setattr(K.B, "server_engine", lambda *a, **k: None)
+        elif trouble == "error":
+            judge.fail = RuntimeError("judge down")
+        else:
+            monkeypatch.setattr(K, "on", lambda c: False)
+        edition = page.draft()
+        assert edition["status"] == "held", trouble
+        assert trouble in edition["last_check"]["reasons"] or (
+            trouble == "error" and edition["last_check"]["reasons"]
+        ), trouble
 
 
 def test_a_broken_outside_rule_holds_and_a_bot_scoped_rule_does_not_read_editions(page):
@@ -332,9 +426,15 @@ def test_a_broken_outside_rule_holds_and_a_bot_scoped_rule_does_not_read_edition
     edition = post(page.api, f"editions/{page.draft()['id']}/check", {})
     assert edition["status"] == "held" and "broken" in edition["last_check"]["reasons"] and judge.calls
     # It reaches only editions: Ops's own write isn't checked against it, and only an owner or admin can set it.
-    rule(page.api, {"kind": "internal", "text": "Another.", "who": {"outside_editions": True}}, token="cara-test", expected=403)
+    rule(
+        page.api,
+        {"kind": "internal", "text": "Another.", "who": {"outside_editions": True}},
+        token="cara-test",
+        expected=403,
+    )
     with page.store.read() as c:
         from backend import org_rules
+
         assert SECRET_RULE not in [r["text"] for r in org_rules.matching(c, "bot:ops")]
 
 
@@ -348,9 +448,12 @@ def test_an_override_needs_a_person_and_a_note_and_covers_only_that_text(page):
     done = post(page.api, path, {"note": "Public figure, already announced."})
     assert done["status"] == "ready" and done["override_note"] == "Public figure, already announced."
     assert page.ask(done)["status"] == "awaiting_approval"
-    r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
-                       json={"sections": plain_sections("We reached 901 seats.")})
-    assert r.json()["status"] == "held"               # the note stays on the record, but it held for the old words
+    r = page.api.patch(
+        f"/api/v2/editions/{edition['id']}",
+        headers=headers(),
+        json={"sections": plain_sections("We reached 901 seats.")},
+    )
+    assert r.json()["status"] == "held"  # the note stays on the record, but it held for the old words
     assert r.json()["override_note"] == "Public figure, already announced."
 
 
@@ -376,7 +479,7 @@ def test_the_approval_carries_the_whole_text_and_goes_to_the_named_approver(page
 def test_only_a_person_at_their_own_click_decides_an_edition(page):
     edition = page.ask(page.draft())
     aid = edition["approval"]["id"]
-    for token in ("ana-token", "ana-assistant", "ops-test", "ben-test"):      # the last is the wrong person
+    for token in ("ana-token", "ana-assistant", "ops-test", "ben-test"):  # the last is the wrong person
         page.decide(aid, token, expected=403)
     with page.store.transaction() as c:
         assert H.approval(c, aid)["decision"] is None
@@ -411,6 +514,7 @@ def test_the_assistant_never_decides_one_even_with_the_setting_on_and_the_person
         c.execute("UPDATE audiences SET approver='human:ben' WHERE id='board'")
     aid = page.ask(page.draft())["approval"]["id"]
     from backend.tests.test_api import as_member
+
     as_member(api, "ben@acme.example")
     assert post(api, "assistant/settings", {"decides_approvals": True}, token="ben-test")["active"] is True
     _, attempt = assistant_turn(api, "ben-test", "Approve the board edition")
@@ -420,8 +524,13 @@ def test_the_assistant_never_decides_one_even_with_the_setting_on_and_the_person
     asked(api, f"approvals/{aid}", {"decision": "approved"}, token, "turn", expected=403)
     # Nor on a card the person would click: the click on a card is still the Assistant acting.
     steps = [{"path": f"/api/v2/approvals/{aid}", "body": {"decision": "approved"}}]
-    card = post(api, "assistant/actions", {"summary": "Approve it", "path": assistant.BATCH_PATH, "body": {"actions": steps}},
-                token=token, expected=403)
+    card = post(
+        api,
+        "assistant/actions",
+        {"summary": "Approve it", "path": assistant.BATCH_PATH, "body": {"actions": steps}},
+        token=token,
+        expected=403,
+    )
     assert card["error"]["code"] == "approve_own_click"
     assert get(api, f"approvals/{aid}", "ben-test")["decision"] is None
     # His own click still works, and the setting never got in the way of it.
@@ -434,12 +543,23 @@ def test_a_bot_cannot_ask_for_or_spend_an_edition_approval_on_its_own(page):
     for token in ("ops-test", "ana-test"):
         # Case and spaces don't get a bot past it: what an edition approves is worded only here.
         for spelled in (url, url.upper(), " " + url):
-            post(page.api, "approvals", {"kind": "publish", "payload": {"url": spelled, "content_sha256": "a" * 64}},
-                 token=token, expected=403)
+            post(
+                page.api,
+                "approvals",
+                {"kind": "publish", "payload": {"url": spelled, "content_sha256": "a" * 64}},
+                token=token,
+                expected=403,
+            )
     asked_for = page.ask(edition)
     page.decide(asked_for["approval"]["id"])
     for token in ("ops-test", "ana-test"):
-        post(page.api, f"approvals/{asked_for['approval']['id']}/consume", {"payload_hash": "a" * 64}, token=token, expected=403)
+        post(
+            page.api,
+            f"approvals/{asked_for['approval']['id']}/consume",
+            {"payload_hash": "a" * 64},
+            token=token,
+            expected=403,
+        )
     assert page.publish(get(page.api, f"editions/{edition['id']}"))["status"] == "published"
 
 
@@ -449,25 +569,44 @@ def test_no_route_serves_a_bot_a_token_only_acts_where_it_may(page):
     get(page.api, "editions", "ops-test", expected=403)
     get(page.api, path, "ops-test", expected=403)
     get(page.api, "editions", "cara-test", expected=403)
-    for sub, body in (("check", {}), ("approval", {}), ("publish", {}), ("retract", {"note": "x"}),
-                      ("correct", {"note": "x", "sections": plain_sections("x")}), ("override", {"note": "x"})):
+    for sub, body in (
+        ("check", {}),
+        ("approval", {}),
+        ("publish", {}),
+        ("retract", {"note": "x"}),
+        ("correct", {"note": "x", "sections": plain_sections("x")}),
+        ("override", {"note": "x"}),
+    ):
         post(page.api, f"{path}/{sub}", body, token="ops-test", expected=403)
         post(page.api, f"{path}/{sub}", body, token="cara-test", expected=403)
-    assert page.api.patch(f"/api/v2/{path}", headers=headers("ops-test"),
-                          json={"sections": plain_sections("x")}).status_code == 403
+    assert (
+        page.api.patch(
+            f"/api/v2/{path}", headers=headers("ops-test"), json={"sections": plain_sections("x")}
+        ).status_code
+        == 403
+    )
     post(page.api, "editions", {"audience_id": "board"}, token="ops-test", expected=403)
     post(page.api, "audiences/board/stats/approval", {}, token="ops-test", expected=403)
     # The Assistant may draft and edit for a person; asking or taking down is the person's.
     post(page.api, f"{path}/approval", {}, token="ana-assistant", expected=403)
     post(page.api, f"{path}/retract", {"note": "x"}, token="ana-assistant", expected=403)
-    assert page.api.patch(f"/api/v2/{path}", headers=headers("ana-assistant"),
-                          json={"sections": plain_sections("Revenue reached $120,000.")}).status_code == 200
+    assert (
+        page.api.patch(
+            f"/api/v2/{path}",
+            headers=headers("ana-assistant"),
+            json={"sections": plain_sections("Revenue reached $120,000.")},
+        ).status_code
+        == 200
+    )
 
 
 def test_an_edit_after_approval_makes_publish_refuse(page):
     edition = page.approved()
-    r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
-                       json={"sections": plain_sections("Revenue reached $120,000, reworded.")})
+    r = page.api.patch(
+        f"/api/v2/editions/{edition['id']}",
+        headers=headers(),
+        json={"sections": plain_sections("Revenue reached $120,000, reworded.")},
+    )
     assert r.status_code == 200 and r.json()["status"] == "ready" and r.json()["approval"] is None
     assert page.publish(edition, expected=409)["error"]["code"] == "conflict"
     assert page.rebuilds == [] and page.notified == []
@@ -493,18 +632,23 @@ def test_a_rule_or_disclosure_change_after_approval_refuses_publish_until_asked_
     assert asked_again["approval"]["id"] != edition["approval"]["id"]
     page.decide(asked_again["approval"]["id"])
     with page.store.transaction() as c:
-        c.execute("INSERT INTO disclosure_revisions(id,audience_id,created_by,created_at) VALUES('r2','board','human:ana',?)",
-                  (H.now(),))
+        c.execute(
+            "INSERT INTO disclosure_revisions(id,audience_id,created_by,created_at) VALUES('r2','board','human:ana',?)",
+            (H.now(),),
+        )
     assert page.publish(get(page.api, f"editions/{edition['id']}"), expected=409)["error"]["code"] == "approval_stale"
     assert page.rebuilds == []
 
 
 def test_an_approval_spends_once_and_a_lapsed_one_shows_and_can_be_asked_again(page):
     from backend import approval_expiry
+
     edition = page.ask(page.draft())
     with page.store.transaction() as c:
-        c.execute("UPDATE approvals SET created_at=?, ready_since=? WHERE id=?",
-                  (H.shift(H.now(), days=-40), H.shift(H.now(), days=-40), edition["approval"]["id"]))
+        c.execute(
+            "UPDATE approvals SET created_at=?, ready_since=? WHERE id=?",
+            (H.shift(H.now(), days=-40), H.shift(H.now(), days=-40), edition["approval"]["id"]),
+        )
         approval_expiry.sweep(c)
     lapsed = get(page.api, f"editions/{edition['id']}")
     assert lapsed["status"] == "awaiting_approval" and lapsed["approval"]["state"] == "lapsed"
@@ -536,13 +680,17 @@ def test_publishing_while_closed_rebuilds_but_notifies_nobody_and_a_failed_notic
 
     def boom(c, e):
         raise RuntimeError("mail down")
+
     with page.store.transaction() as c:
         c.execute("UPDATE company_page_settings SET transparency='private'")
     page.note("ops", "weekly", "2026-09-14", "September.")
-    page.answer = NO_FIGURES         # September's facts have no revenue, so a figure would be a leak
+    page.answer = NO_FIGURES  # September's facts have no revenue, so a figure would be a leak
     monkeypatch.setattr(readers, "notify_edition", boom)
-    second = post(page.api, "editions", {"audience_id": "board", "author": "ops", "period_start": "2026-09-01",
-                                         "period_end": "2026-09-30"})
+    second = post(
+        page.api,
+        "editions",
+        {"audience_id": "board", "author": "ops", "period_start": "2026-09-01", "period_end": "2026-09-30"},
+    )
     second = page.ask(second)
     page.decide(second["approval"]["id"])
     assert page.publish(second)["status"] == "published"
@@ -556,6 +704,7 @@ def test_a_failed_rebuild_after_publishing_is_told_and_the_publication_stands(pa
         if failure == "raises":
             raise RuntimeError("disk full")
         return {"id": "release-2", "empty": True, "failed": True}
+
     monkeypatch.setattr(release, "rebuild", boom)
     done = page.publish(edition)
     assert done["status"] == "published" and done["release_failed"] is True
@@ -575,6 +724,7 @@ def test_a_retract_whose_rebuild_cannot_swap_changes_nothing(page, monkeypatch):
 
     def boom(store_or_c, why):
         raise RuntimeError("swap failed")
+
     monkeypatch.setattr(release, "rebuild", boom)
     with pytest.raises(RuntimeError):
         page.api.post(f"/api/v2/editions/{edition['id']}/retract", headers=headers(), json={"note": "Wrong."})
@@ -586,7 +736,10 @@ def test_the_owners_view_names_each_sources_author_and_the_decision_note(page):
         c.execute("UPDATE bots SET display_name='Riley' WHERE slug='ops'")
     edition = page.ask(page.draft())
     aid = edition["approval"]["id"]
-    assert post(page.api, f"approvals/{aid}", {"decision": "declined", "note": "Soften the second line."})["decision"] == "declined"
+    assert (
+        post(page.api, f"approvals/{aid}", {"decision": "declined", "note": "Soften the second line."})["decision"]
+        == "declined"
+    )
     full = get(page.api, f"editions/{edition['id']}")
     assert full["approval"]["note"] == "Soften the second line."
     assert [s["author_name"] for s in full["sources"]] == ["Riley"]
@@ -607,7 +760,11 @@ def test_retract_takes_it_down_in_the_same_step_and_needs_a_person_and_a_note(pa
     post(page.api, path, {"note": "Wrong."}, token="ops-test", expected=403)
     post(page.api, path, {"note": "Wrong."}, token="ana-assistant", expected=403)
     done = post(page.api, path, {"note": "Wrong number."})
-    assert done["status"] == "retracted" and done["retracted_by"] == "human:ana" and done["retraction_note"] == "Wrong number."
+    assert (
+        done["status"] == "retracted"
+        and done["retracted_by"] == "human:ana"
+        and done["retraction_note"] == "Wrong number."
+    )
     assert page.rebuilds[-1] == "edition retracted"
     with page.store.read() as c:
         assert E.stream(c, ["board"]) == []
@@ -626,12 +783,16 @@ def test_retract_discards_an_unpublished_edition_and_kills_its_approval(page):
 def test_a_correction_is_a_new_version_through_the_same_steps_and_replaces_the_old_only_when_published(page):
     old = page.published()
     path = f"editions/{old['id']}/correct"
-    body = {"note": "Fixed the figure.", "title": "October, corrected", "sections": plain_sections("Revenue reached $120,000.")}
+    body = {
+        "note": "Fixed the figure.",
+        "title": "October, corrected",
+        "sections": plain_sections("Revenue reached $120,000."),
+    }
     post(page.api, path, {**body, "note": ""}, expected=422)
     new = post(page.api, path, body)
     assert new["version"] == 2 and new["supersedes_id"] == old["id"] and new["status"] == "ready"
     assert new["correction_note"] == "Fixed the figure." and [s["update_id"] for s in new["sources"]]
-    post(page.api, path, body, expected=409)                  # one open correction at a time
+    post(page.api, path, body, expected=409)  # one open correction at a time
     with page.store.read() as c:
         assert [(u["title"], u["version"]) for u in E.stream(c, ["board"])] == [(old["title"], 1)]
     asked_for = page.ask(new)
@@ -689,7 +850,9 @@ def test_a_retracted_edition_comes_back_only_through_a_correction_and_a_new_appr
 
 def test_a_published_edition_is_not_edited_in_place(page):
     edition = page.published()
-    r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(), json={"sections": plain_sections("Sneak.")})
+    r = page.api.patch(
+        f"/api/v2/editions/{edition['id']}", headers=headers(), json={"sections": plain_sections("Sneak.")}
+    )
     assert r.status_code == 409
 
 
@@ -700,23 +863,38 @@ def test_the_stream_shows_published_only_newest_first_paged_with_a_display_name_
     first = page.published()
     page.note("ops", "weekly", "2026-09-14", "September.")
     page.answer = NO_FIGURES
-    draft = post(page.api, "editions", {"audience_id": "board", "author": "ops", "period_start": "2026-09-01",
-                                        "period_end": "2026-09-30"})
+    draft = post(
+        page.api,
+        "editions",
+        {"audience_id": "board", "author": "ops", "period_start": "2026-09-01", "period_end": "2026-09-30"},
+    )
     with page.store.read() as c:
         shown = E.stream(c, ["board"])
     assert len(shown) == 1
     update = shown[0]
-    assert set(update) == {"anchor", "title", "author", "period", "published_at", "version", "correction_note", "sections"}
+    assert set(update) == {
+        "anchor",
+        "title",
+        "author",
+        "period",
+        "published_at",
+        "version",
+        "correction_note",
+        "sections",
+    }
     assert update["author"] == {"name": "Riley", "kind": "bot"} and update["period"] == "October 2026"
     assert "ops" not in json.dumps(update["author"]).lower() and first["id"] not in json.dumps(update)
-    assert {i for s in update["sections"] for i in s} == {"key", "items"} and all(s["items"] for s in update["sections"])
+    assert {i for s in update["sections"] for i in s} == {"key", "items"} and all(
+        s["items"] for s in update["sections"]
+    )
     asked_for = page.ask(draft)
     page.decide(asked_for["approval"]["id"])
     page.publish(asked_for)
     with page.store.read() as c:
         both = E.stream(c, ["board"])
-        assert [u["period"] for u in both] == ["2026-09-01 to 2026-09-30", "October 2026"] or \
-               [u["period"] for u in both] == ["September 2026", "October 2026"]
+        assert [u["period"] for u in both] == ["2026-09-01 to 2026-09-30", "October 2026"] or [
+            u["period"] for u in both
+        ] == ["September 2026", "October 2026"]
         assert E.stream(c, ["board"], limit=1) == both[:1]
         assert E.stream(c, ["board"], before=both[0]["published_at"]) == both[1:]
         assert E.stream(c, ["someone-else"]) == [] and E.stream(c, []) == []
@@ -725,8 +903,14 @@ def test_the_stream_shows_published_only_newest_first_paged_with_a_display_name_
 def test_the_owners_view_has_sources_checks_and_seen_by_and_the_list_is_paged(page):
     edition = page.published()
     with page.store.transaction() as c:
-        c.execute("INSERT INTO readers(id,email,added_by,created_at) VALUES('r1','reader@acme.example','human:ana',?)", (H.now(),))
-        c.execute("INSERT INTO edition_views(id,edition_id,reader_id,viewed_at) VALUES('v1',?,'r1',?)", (edition["id"], H.now()))
+        c.execute(
+            "INSERT INTO readers(id,email,added_by,created_at) VALUES('r1','reader@acme.example','human:ana',?)",
+            (H.now(),),
+        )
+        c.execute(
+            "INSERT INTO edition_views(id,edition_id,reader_id,viewed_at) VALUES('v1',?,'r1',?)",
+            (edition["id"], H.now()),
+        )
     full = get(page.api, f"editions/{edition['id']}")
     assert full["sources"] and {c["kind"] for c in full["checks"]} >= {"draft", "leak", "rules", "summary"}
     assert full["seen_by"][0]["email"] == "reader@acme.example" and full["seen_count"] == 1
@@ -760,6 +944,7 @@ def test_a_stats_board_approval_is_recorded_only_once_decided_and_only_for_the_b
     def change_board(mode):
         with page.store.transaction() as c:
             D.set_rule(c, "human:ana", "board", "kpi", mode=mode)
+
     change_board("rounded")
     second = post(page.api, path, {})["approval"]
     change_board("range")
@@ -802,36 +987,40 @@ ZONE = "America/Los_Angeles"
 
 def local(*parts):
     from zoneinfo import ZoneInfo
+
     return datetime(*parts, tzinfo=ZoneInfo(ZONE))
 
 
 BOARD, INVESTORS = {"due_rule": {"business_day": 5}}, {"due_rule": '{"business_day": 10}'}
 
 
-@pytest.mark.parametrize("audience,after,expected", [
-    # The 5th business day of the following month: Nov 1 2026 is a Sunday.
-    (BOARD, local(2026, 11, 1), local(2026, 11, 6)),
-    # The 10th, counting the same way.
-    (INVESTORS, local(2026, 11, 1), local(2026, 11, 13)),
-    # Starting on a Saturday: Aug 1 2026.
-    (BOARD, local(2026, 7, 31), local(2026, 8, 7)),
-    # Across a year: Jan 2027 starts on a Friday.
-    (BOARD, local(2026, 12, 15), local(2027, 1, 7)),
-    # After the month's due moment, the next month's. On the moment itself is not after it.
-    (BOARD, local(2026, 11, 6), local(2026, 12, 7)),
-    # N days after a period ends: Oct 31 + 30.
-    ({"due_rule": '{"days_after": 30}'}, local(2026, 11, 1), local(2026, 11, 30)),
-    # A long lag crosses a month: Jan 31 2026 + 45, then Feb 28 + 45.
-    ({"due_rule": '{"days_after": 45}'}, local(2026, 3, 1), local(2026, 3, 17)),
-    ({"due_rule": '{"days_after": 45}'}, local(2026, 3, 17), local(2026, 4, 14)),
-    # What audiences.get's view says is the same rule.
-    ({"due_rule": {"kind": "business_day", "n": 2}}, local(2026, 11, 1), local(2026, 11, 3)),
-    ({"due_rule": {"kind": "days_after_period_end", "n": 3}}, local(2026, 11, 1), local(2026, 11, 3)),
-    # A quarter's edition: Q3 ends Sep 30 2026, Q4 ends Dec 31.
-    ({"cadence": "quarterly", "due_rule": {"business_day": 5}}, local(2026, 9, 1), local(2026, 10, 7)),
-    ({"cadence": "quarterly", "due_rule": {"business_day": 5}}, local(2026, 11, 1), local(2027, 1, 7)),
-    ({"cadence": "quarterly", "due_rule": {"days_after": 30}}, local(2026, 9, 1), local(2026, 10, 30)),
-])
+@pytest.mark.parametrize(
+    "audience,after,expected",
+    [
+        # The 5th business day of the following month: Nov 1 2026 is a Sunday.
+        (BOARD, local(2026, 11, 1), local(2026, 11, 6)),
+        # The 10th, counting the same way.
+        (INVESTORS, local(2026, 11, 1), local(2026, 11, 13)),
+        # Starting on a Saturday: Aug 1 2026.
+        (BOARD, local(2026, 7, 31), local(2026, 8, 7)),
+        # Across a year: Jan 2027 starts on a Friday.
+        (BOARD, local(2026, 12, 15), local(2027, 1, 7)),
+        # After the month's due moment, the next month's. On the moment itself is not after it.
+        (BOARD, local(2026, 11, 6), local(2026, 12, 7)),
+        # N days after a period ends: Oct 31 + 30.
+        ({"due_rule": '{"days_after": 30}'}, local(2026, 11, 1), local(2026, 11, 30)),
+        # A long lag crosses a month: Jan 31 2026 + 45, then Feb 28 + 45.
+        ({"due_rule": '{"days_after": 45}'}, local(2026, 3, 1), local(2026, 3, 17)),
+        ({"due_rule": '{"days_after": 45}'}, local(2026, 3, 17), local(2026, 4, 14)),
+        # What audiences.get's view says is the same rule.
+        ({"due_rule": {"kind": "business_day", "n": 2}}, local(2026, 11, 1), local(2026, 11, 3)),
+        ({"due_rule": {"kind": "days_after_period_end", "n": 3}}, local(2026, 11, 1), local(2026, 11, 3)),
+        # A quarter's edition: Q3 ends Sep 30 2026, Q4 ends Dec 31.
+        ({"cadence": "quarterly", "due_rule": {"business_day": 5}}, local(2026, 9, 1), local(2026, 10, 7)),
+        ({"cadence": "quarterly", "due_rule": {"business_day": 5}}, local(2026, 11, 1), local(2027, 1, 7)),
+        ({"cadence": "quarterly", "due_rule": {"days_after": 30}}, local(2026, 9, 1), local(2026, 10, 30)),
+    ],
+)
 def test_next_due(audience, after, expected):
     assert S.next_due(audience, after, ZONE) == expected
 
@@ -849,20 +1038,23 @@ def test_a_quarter_is_the_period_it_drafts():
     assert found[1:] == ("2026-07-01", "2026-09-30")
 
 
-@pytest.mark.parametrize("audience,why", [
-    ({}, "due_rule"),
-    ({"due_rule": "{}"}, "due_rule"),
-    ({"due_rule": "not json"}, "due_rule"),
-    ({"due_rule": '{"weekday": 5}'}, "due_rule"),
-    ({"due_rule": '{"business_day": 0}'}, "due_rule"),
-    ({"due_rule": '{"business_day": 24}'}, "due_rule"),
-    ({"due_rule": '{"days_after": 366}'}, "due_rule"),
-    ({"due_rule": '{"days_after": true}'}, "due_rule"),
-    ({"due_rule": '{"business_day": 5, "days_after": 3}'}, "due_rule"),
-    ({"due_rule": {"kind": "fortnight", "n": 2}}, "due_rule"),
-    ({"due_rule": {"kind": ["business_day"], "n": 2}}, "due_rule"),
-    ({"cadence": "weekly", "due_rule": {"business_day": 5}}, "cadence"),
-])
+@pytest.mark.parametrize(
+    "audience,why",
+    [
+        ({}, "due_rule"),
+        ({"due_rule": "{}"}, "due_rule"),
+        ({"due_rule": "not json"}, "due_rule"),
+        ({"due_rule": '{"weekday": 5}'}, "due_rule"),
+        ({"due_rule": '{"business_day": 0}'}, "due_rule"),
+        ({"due_rule": '{"business_day": 24}'}, "due_rule"),
+        ({"due_rule": '{"days_after": 366}'}, "due_rule"),
+        ({"due_rule": '{"days_after": true}'}, "due_rule"),
+        ({"due_rule": '{"business_day": 5, "days_after": 3}'}, "due_rule"),
+        ({"due_rule": {"kind": "fortnight", "n": 2}}, "due_rule"),
+        ({"due_rule": {"kind": ["business_day"], "n": 2}}, "due_rule"),
+        ({"cadence": "weekly", "due_rule": {"business_day": 5}}, "cadence"),
+    ],
+)
 def test_a_rule_it_cannot_read_stops_the_schedule_rather_than_guess(audience, why):
     audience = {**audience, "kind": "board", "lag_days": 30}
     assert S.next_due(audience, local(2026, 11, 1), ZONE) is None
@@ -877,7 +1069,9 @@ def test_an_unreadable_rule_shows_as_a_problem_and_drafts_nothing(page):
     assert S.tick(page.store, at) == [] and page.calls == []
     with page.store.read() as c:
         assert S.next_wake(c, at) is None
-    assert get(page.api, "editions")["schedule_problems"] == [{"audience_id": "board", "name": "Board", "problem": "due_rule"}]
+    assert get(page.api, "editions")["schedule_problems"] == [
+        {"audience_id": "board", "name": "Board", "problem": "due_rule"}
+    ]
     # A disabled audience isn't scheduled anyway, so it isn't a problem.
     with page.store.transaction() as c:
         c.execute("UPDATE audiences SET enabled=0")
@@ -894,8 +1088,12 @@ def test_what_the_audiences_module_writes_is_what_the_schedule_reads(page):
         changed = audiences.create(c, "human:ana", "Lenders")
         changed = audiences.update(c, "human:ana", changed["id"], due_rule={"kind": "business_day", "n": 2})
     with page.store.read() as c:
-        expected = {"investors": local(2026, 11, 13), "public": local(2026, 11, 30), made["id"]: local(2026, 11, 3),
-                    changed["id"]: local(2026, 11, 3)}
+        expected = {
+            "investors": local(2026, 11, 13),
+            "public": local(2026, 11, 30),
+            made["id"]: local(2026, 11, 3),
+            changed["id"]: local(2026, 11, 3),
+        }
         for ident, due in expected.items():
             row = dict(c.execute("SELECT * FROM audiences WHERE id=?", (ident,)).fetchone())
             assert S.next_due(row, after, ZONE) == due, ident
@@ -917,6 +1115,7 @@ def test_the_stats_refresh_once_a_day_and_never_while_closed(page, monkeypatch):
 
     def boom(store, when):
         raise RuntimeError("render failed")
+
     monkeypatch.setattr(release, "refresh", boom)
     assert [d["status"] for d in S.tick(page.store, local(2026, 12, 7))] == ["ready"]
     assert S.start(page.store, local(2026, 12, 7)) is False
@@ -965,20 +1164,20 @@ def test_tick_before_the_due_day_or_with_nothing_written_opens_nothing(page):
     assert S.tick(page.store, local(2026, 12, 7)) == []
 
 
-@pytest.mark.parametrize("change,args", [
-    ("UPDATE company_page_settings SET transparency='closed'", ()),
-    ("DELETE FROM company_page_settings", ()),
-    ("UPDATE audiences SET enabled=0", ()),
-])
-def test_closed_or_disabled_does_nothing_and_sets_no_wake(page, change, args):
+def test_closed_or_disabled_does_nothing_and_sets_no_wake(page):
     at = local(2026, 11, 20)
-    with page.store.transaction() as c:
-        c.execute(change, args)
-    assert S.tick(page.store, at) == [] and page.calls == []
-    assert S.start(page.store, at) is False       # the tick above already had the day's refresh
-    with page.store.read() as c:
-        assert S.next_wake(c, at) is None
-        assert sleep_idle.edition_times(c, at) == []
+    for change in (
+        "UPDATE company_page_settings SET transparency='closed'",
+        "DELETE FROM company_page_settings",
+        "UPDATE audiences SET enabled=0",
+    ):
+        with page.store.transaction() as c:
+            c.execute(change)
+        assert S.tick(page.store, at) == [] and page.calls == [], change
+        assert S.start(page.store, at) is False  # the first tick already had the day's refresh
+        with page.store.read() as c:
+            assert S.next_wake(c, at) is None, change
+            assert sleep_idle.edition_times(c, at) == [], change
 
 
 def test_public_waits_for_open_and_the_wake_time_reaches_the_sleep_timer(page):
@@ -1000,15 +1199,17 @@ def test_a_failed_scheduled_draft_is_held_and_doesnt_stop_the_others(page):
     page.answer = RuntimeError("model down")
     at = local(2026, 11, 20)
     assert [d["status"] for d in S.tick(page.store, at)] == ["held"]
-    assert S.tick(page.store, at) == []     # a person picks it up from there; the schedule doesn't call again and again
+    assert S.tick(page.store, at) == []  # a person picks it up from there; the schedule doesn't call again and again
     assert len(page.calls) == 1
 
 
 def test_a_draft_left_by_a_restart_is_picked_up_again(page):
     with page.store.transaction() as c:
-        c.execute("INSERT INTO editions(id,audience_id,author,period_start,period_end,status,created_at,updated_at) "
-                  "VALUES('left','board','ops',?,?,'drafting',?,?)",
-                  (START, END, H.shift(H.now(), days=-1), H.shift(H.now(), days=-1)))
+        c.execute(
+            "INSERT INTO editions(id,audience_id,author,period_start,period_end,status,created_at,updated_at) "
+            "VALUES('left','board','ops',?,?,'drafting',?,?)",
+            (START, END, H.shift(H.now(), days=-1), H.shift(H.now(), days=-1)),
+        )
     assert [d["id"] for d in S.tick(page.store, local(2026, 11, 20))] == ["left"]
     assert page.rows("SELECT status FROM editions") == [{"status": "ready"}]
 

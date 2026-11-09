@@ -4,6 +4,7 @@ These start only owned loopback services on allocated ports and use fictional id
 Build relay-rs first (`cd relay-rs && cargo build --release`), then run this file with -m slow -n 0. The binary is
 TICO_SCREEN_RELAY_BIN, else the checkout's own relay-rs/target/release build when it matches the sources.
 """
+
 import contextlib
 from dataclasses import replace
 import json
@@ -35,14 +36,29 @@ KEY = "fictional-relay-key-for-isolated-tests-only"
 def relay_binary():
     """The relay under test: TICO_SCREEN_RELAY_BIN, else this checkout's release build if it is the current sources'."""
     from backend import screen_binary
+
     binary = os.environ.get("TICO_SCREEN_RELAY_BIN", "")
     if not binary:
-        built = Path(os.environ.get("CARGO_TARGET_DIR") or screen_binary.ROOT / "relay-rs" / "target") / "release" / "tico-screen-relay"
+        built = (
+            Path(os.environ.get("CARGO_TARGET_DIR") or screen_binary.ROOT / "relay-rs" / "target")
+            / "release"
+            / "tico-screen-relay"
+        )
         if screen_binary.current(built, screen_binary.source_id()):
             return str(built)
     if not binary or not Path(binary).is_file():
-        raise RuntimeError("Build relay-rs (cd relay-rs && cargo build --release) or set TICO_SCREEN_RELAY_BIN to its executable")
+        raise RuntimeError(
+            "Build relay-rs (cd relay-rs && cargo build --release) or set TICO_SCREEN_RELAY_BIN to its executable"
+        )
     return binary
+
+
+def gateway_origin(process):
+    """The public gateway's origin: the line the relay prints right after its own address, with the port it bound."""
+    line = process.stdout.readline()
+    if not line.startswith("screen gateway listening on "):
+        raise RuntimeError("Relay did not open its gateway: " + line)
+    return "http://" + line.strip().split()[-1]
 
 
 class Service:
@@ -53,8 +69,12 @@ class Service:
         self.origin = f"http://127.0.0.1:{self.listener.getsockname()[1]}"
         self.relay_url = self.origin
         self.start_rust()
-        self.settings = replace(api_helpers.api_settings(root), public_url=self.origin,
-                                screen_relay_url=self.relay_url, screen_relay_key=KEY)
+        self.settings = replace(
+            api_helpers.api_settings(root),
+            public_url=self.origin,
+            screen_relay_url=self.relay_url,
+            screen_relay_key=KEY,
+        )
         # Reuse the production-facing fictional API fixture without sharing its application or database.
         original = api_helpers.api_settings
         api_helpers.api_settings = lambda _: self.settings
@@ -75,19 +95,33 @@ class Service:
 
     def start_rust(self):
         binary = self.binary or relay_binary()
+        # Both listeners bind port 0 and the relay reports the ports it took, so no port is picked here and released for
+        # another test to take. A restart keeps the relay's own port, the one the API was given: if another test took it
+        # once the old relay exited, the start is tried again.
         port = 0 if self.relay_url == self.origin else int(self.relay_url.rsplit(":", 1)[1])
-        if not hasattr(self, "public_origin"):
-            reserved = self.bind()
-            self.public_origin = f"http://127.0.0.1:{reserved.getsockname()[1]}"
-            reserved.close()
-        self.process = subprocess.Popen([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env={**os.environ, "TICO_SCREEN_RELAY_KEY": KEY, "TICO_SCREEN_PYTHON_URL": self.origin,
-                 "TICO_SCREEN_RELAY_BIND": f"127.0.0.1:{port}",
-                 "TICO_SCREEN_PUBLIC_BIND": self.public_origin.removeprefix("http://")})
-        line = self.process.stdout.readline()
-        if not line.startswith("screen relay listening on "):
-            raise RuntimeError("Relay did not start: " + line)
+        for attempt in range(10):
+            self.process = subprocess.Popen(
+                [str(binary)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env={
+                    **os.environ,
+                    "TICO_SCREEN_RELAY_KEY": KEY,
+                    "TICO_SCREEN_PYTHON_URL": self.origin,
+                    "TICO_SCREEN_RELAY_BIND": f"127.0.0.1:{port}",
+                    "TICO_SCREEN_PUBLIC_BIND": "127.0.0.1:0",
+                },
+            )
+            line = self.process.stdout.readline()
+            if line.startswith("screen relay listening on "):
+                break
+            self.process.wait(5)
+            if "AddrInUse" not in line or attempt == 9:
+                raise RuntimeError("Relay did not start: " + line)
+            time.sleep(0.2)
         self.relay_url = "http://" + line.strip().split()[-1]
+        self.public_origin = gateway_origin(self.process)
 
     def start_http(self):
         self.server = uvicorn.Server(uvicorn.Config(self.api.app, lifespan="off", log_level="error", access_log=False))
@@ -106,19 +140,33 @@ class Service:
         port = int(self.origin.rsplit(":", 1)[1])
         self.stop_http()
         if self.initial:
-            self.initial.close(); self.initial = None
+            self.initial.close()
+            self.initial = None
         else:
             self.api.__exit__(None, None, None)
         self.settings = replace(self.settings, test_identities=dict(self.settings.test_identities))
         self.api = TestClient(create_app(self.settings)).__enter__()
-        self.listener = self.bind(port)
+        # stop_http released the port: another test may take it before this bind, so the bind is tried again.
+        for attempt in range(50):
+            try:
+                self.listener = self.bind(port)
+                break
+            except OSError:
+                if attempt == 49:
+                    raise
+                time.sleep(0.1)
         self.start_http()
 
     def restart_rust(self):
-        self.process.terminate(); self.process.wait(5)
+        self.process.terminate()
+        self.process.wait(5)
         self.start_rust()
-        self.eventually(lambda: self.api.app.state.store.screen_sessions.healthy
-                        and self.api.app.state.store.screen_sessions.boot == self.control("hello", get=True)["boot"])
+        self.eventually(
+            lambda: (
+                self.api.app.state.store.screen_sessions.healthy
+                and self.api.app.state.store.screen_sessions.boot == self.control("hello", get=True)["boot"]
+            )
+        )
 
     def control(self, op, get=False, **body):
         with httpx.Client(base_url=self.relay_url, headers={"Authorization": "Bearer " + KEY}, timeout=4) as http:
@@ -127,9 +175,15 @@ class Service:
         return response.json()
 
     def websocket(self, path, token=None, origin=None, **options):
-        return connect(self.relay_url.replace("http://", "ws://") + path,
-                       additional_headers=headers(token) if token else None, origin=origin,
-                       open_timeout=5, close_timeout=1, max_size=16 << 20, **options)
+        return connect(
+            self.relay_url.replace("http://", "ws://") + path,
+            additional_headers=headers(token) if token else None,
+            origin=origin,
+            open_timeout=5,
+            close_timeout=1,
+            max_size=16 << 20,
+            **options,
+        )
 
     def computer(self, mode="control"):
         r = runner(self.api)
@@ -150,7 +204,7 @@ class Service:
         while time.monotonic() < deadline:
             if predicate():
                 return
-            time.sleep(.02)
+            time.sleep(0.02)
         raise AssertionError("condition did not become true within its deadline")
 
     def close(self):
@@ -170,7 +224,8 @@ class Service:
                     try:
                         self.process.wait(5)
                     except subprocess.TimeoutExpired:
-                        self.process.kill(); self.process.wait(5)
+                        self.process.kill()
+                        self.process.wait(5)
 
 
 @contextlib.contextmanager
@@ -205,22 +260,27 @@ def test_ticket_replay_wrong_runner_pairing_modes_and_limits(service):
     # A runner may arrive first and preserve its VNC greeting until the browser comes.
     with service.websocket(service.runner_path(opened), token=r["token"]) as computer:
         computer.send(b"RFB 003.008\n")
+
         def redeem(_):
             try:
                 return service.websocket(opened["ws_path"], origin=service.origin, subprotocols=["binary"])
             except InvalidStatus as exc:
                 assert exc.response.status_code == 403
                 return None
+
         with ThreadPoolExecutor(2) as pool:
             attempts = list(pool.map(redeem, range(2)))
         winners = [s for s in attempts if s]
         assert len(winners) == 1
         with winners[0] as browser:
             assert browser.subprotocol == "binary" and browser.recv(timeout=5) == b"RFB 003.008\n"
-            browser.send(b"\x01\x02"); assert computer.recv(timeout=5) == b"\x01\x02"
-            computer.send("frame"); assert browser.recv(timeout=5) == "frame"
+            browser.send(b"\x01\x02")
+            assert computer.recv(timeout=5) == b"\x01\x02"
+            computer.send("frame")
+            assert browser.recv(timeout=5) == "frame"
             denied(service, service.runner_path(opened), token=r["token"])
-            service.opened(r); service.opened(r)
+            service.opened(r)
+            service.opened(r)
             post(service.api, f"computers/{r['runner_id']}/screen/sessions", {"control": False}, expected=429)
             post(service.api, f"computers/{r['runner_id']}/screen", {"mode": "view"})
             with pytest.raises(ConnectionClosed) as closed:
@@ -241,15 +301,23 @@ def test_revocation_races_disconnects_and_duplicate_safe_audit(service):
             with pytest.raises(ConnectionClosed):
                 browser.recv(timeout=5)
     rid = r["runner_id"]
+
     def closes():
         with service.api.app.state.store.read() as c:
-            return c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                             "AND json_extract(detail,'$.session_id')=?", (rid, opened["session_id"])).fetchone()[0]
+            return c.execute(
+                "SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
+                "AND json_extract(detail,'$.session_id')=?",
+                (rid, opened["session_id"]),
+            ).fetchone()[0]
+
     service.eventually(lambda: closes() == 1)
     # Admission and revocation serialize through durable policy and the grant generation.
     with ThreadPoolExecutor(2) as pool:
-        opening = pool.submit(lambda: service.api.post(f"/api/v2/computers/{rid}/screen/sessions",
-                                                     headers=headers(), json={"control": False}))
+        opening = pool.submit(
+            lambda: service.api.post(
+                f"/api/v2/computers/{rid}/screen/sessions", headers=headers(), json={"control": False}
+            )
+        )
         off = pool.submit(lambda: post(service.api, f"computers/{rid}/screen", {"mode": "off"}))
         response, _ = opening.result(), off.result()
     assert response.status_code in (200, 403)
@@ -276,13 +344,17 @@ def test_restart_invalidates_old_tickets_and_reconciles_audit(service):
     opened = service.opened(r)
     with service.websocket(opened["ws_path"]) as browser:
         with service.websocket(service.runner_path(opened), token=r["token"]) as computer:
-            computer.send(b"new server"); assert browser.recv(timeout=5) == b"new server"
+            computer.send(b"new server")
+            assert browser.recv(timeout=5) == b"new server"
     opened = service.opened(r)
     service.restart_rust()
     denied(service, opened["ws_path"])
     with service.api.app.state.store.read() as c:
-        count = c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                          "AND json_extract(detail,'$.session_id')=?", (r["runner_id"], opened["session_id"])).fetchone()[0]
+        count = c.execute(
+            "SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
+            "AND json_extract(detail,'$.session_id')=?",
+            (r["runner_id"], opened["session_id"]),
+        ).fetchone()[0]
     assert count == 1
 
 
@@ -292,6 +364,7 @@ def test_backpressure_does_not_delay_revocation(service):
     with service.websocket(opened["ws_path"], max_queue=1) as browser:
         with service.websocket(service.runner_path(opened), token=r["token"]) as computer:
             stop = threading.Event()
+
             def flood():
                 try:
                     for _ in range(1024):
@@ -300,15 +373,16 @@ def test_backpressure_does_not_delay_revocation(service):
                         computer.send(b"x" * 65536)
                 except (ConnectionClosed, OSError):
                     pass
+
             producer = threading.Thread(target=flood, daemon=True)
             producer.start()
             try:
-                time.sleep(.2)  # The browser's bounded receive queue deliberately stops draining.
+                time.sleep(0.2)  # The browser's bounded receive queue deliberately stops draining.
                 start = time.monotonic()
                 post(service.api, f"computers/{r['runner_id']}/screen", {"mode": "off"})
                 with pytest.raises(ConnectionClosed) as closed:
                     while True:
-                        browser.recv(timeout=max(.1, 6 - (time.monotonic() - start)))
+                        browser.recv(timeout=max(0.1, 6 - (time.monotonic() - start)))
                 assert closed.value.rcvd.code == 4403
                 assert time.monotonic() - start < 6
             finally:
@@ -323,16 +397,29 @@ def test_private_protocol_fences_replays_stale_grants_and_lease_loss(service):
     r = service.computer()
     remote = service.api.app.state.store.screen_sessions
     with remote.lock:
-        body = {"lease": remote.lease, "sequence": remote.sequence + 1, "op": "grant", "id": "prepared",
-                "runner_id": r["runner_id"], "actor": "human:ana", "control": False,
-                "generation": remote.generations[r["runner_id"]], "mode": "control"}
+        body = {
+            "lease": remote.lease,
+            "sequence": remote.sequence + 1,
+            "op": "grant",
+            "id": "prepared",
+            "runner_id": r["runner_id"],
+            "actor": "human:ana",
+            "control": False,
+            "generation": remote.generations[r["runner_id"]],
+            "mode": "control",
+        }
         answer = remote._request("/control/v1/command", body)
         assert remote._request("/control/v1/command", body) == answer  # exact retry is harmless
         remote.sequence += 1
         assert remote._command("pending", runner_id=r["runner_id"])["sessions"] == []
         denied(service, f"/api/v2/runners/{r['runner_id']}/screen/ws?ticket=" + answer["ticket"])
-        remote._command("mode", runner_id=r["runner_id"], generation=remote.generations[r["runner_id"]] + 1,
-                        mode="off", reason="revoked")
+        remote._command(
+            "mode",
+            runner_id=r["runner_id"],
+            generation=remote.generations[r["runner_id"]] + 1,
+            mode="off",
+            reason="revoked",
+        )
         with pytest.raises(Problem) as stale:
             remote._request("/control/v1/command", {**body, "sequence": remote.sequence + 1})
         assert getattr(stale.value, "status", None) == 403
@@ -348,16 +435,33 @@ def test_private_protocol_fences_replays_stale_grants_and_lease_loss(service):
             with pytest.raises(ConnectionClosed) as closed:
                 browser.recv(timeout=9)
             assert closed.value.rcvd.code == 1012
-    report = {"id": opened["session_id"], "runner_id": r["runner_id"], "actor": "human:ana",
-              "control": False, "lease": remote.lease, "seconds": 0, "code": 1012}
+    report = {
+        "id": opened["session_id"],
+        "runner_id": r["runner_id"],
+        "actor": "human:ana",
+        "control": False,
+        "lease": remote.lease,
+        "seconds": 0,
+        "code": 1012,
+    }
     with service.api.app.state.store.transaction() as c:
         remote._record(c, report)
         remote._record(c, report)
-        assert c.execute("SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
-                         "AND json_extract(detail,'$.session_id')=?",
-                         (r["runner_id"], opened["session_id"])).fetchone()[0] == 1
+        assert (
+            c.execute(
+                "SELECT count(*) FROM events WHERE action='runner.screen_close' AND target=? "
+                "AND json_extract(detail,'$.session_id')=?",
+                (r["runner_id"], opened["session_id"]),
+            ).fetchone()[0]
+            == 1
+        )
     with httpx.Client(base_url=service.relay_url, timeout=3) as client:
         assert client.get("/control/v1/hello").status_code == 403
-        assert client.post("/control/v1/command", headers={"Authorization": "Bearer " + KEY},
-                           json={"lease": remote.lease, "sequence": remote.sequence + 1,
-                                 "op": "heartbeat", "ack": []}).status_code == 409
+        assert (
+            client.post(
+                "/control/v1/command",
+                headers={"Authorization": "Bearer " + KEY},
+                json={"lease": remote.lease, "sequence": remote.sequence + 1, "op": "heartbeat", "ack": []},
+            ).status_code
+            == 409
+        )
