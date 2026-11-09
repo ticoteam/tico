@@ -51,7 +51,7 @@ A thread's audience is one of these:
 Open **Thread settings** with the ⋯ button in a thread's header. The panel holds the thread's settings. Each row saves as
 you change it, so there is no Save button. A row you may not use is left out. On a phone the panel fills the screen.
 
-- **Name**: the thread's title. Press Enter to save. A manager sees it, except on a Home and in a DM with one teammate.
+- **Name**: the thread's title. Press Enter to save. A manager sees it, except on a Home and in a top-level DM with one teammate.
 - **Who can read**: **Only members**, **A team** or **Company**. Choosing **A team** saves once you pick the team. A
   manager sees it on a top-level thread that is not a DM or a Home.
 - **Members**: opens the Members list, with its count. Shown on a top-level thread whose audience is `company`, `team`,
@@ -100,8 +100,12 @@ Each reader follows a thread at one level. Choose it in the **Notifications** ro
 - **All** (`live`): every new message (the default; a bot following a chat starts at Mentions),
 - **Mentions** (`mentions`): only messages that name you or reply to you,
 - **Digest** (`digest`): in a batch (an email an hour for a person, one run an hour for a bot),
-- **Off** (`muted`): unread counts stay, nothing is sent. Off lasts until you choose another level. A thread you do not
-  follow shows as Off too.
+- **Off** (`muted`): unread counts stay, nothing is sent, with two exceptions. A DM with one teammate: once the page reloads,
+  its unread count is not shown on that teammate's row in the Team list, whether the teammate is a person or a bot. On a
+  page that is already open, the count can stay after you turn Off, and a new message in that DM can raise it until you
+  reload. Catch up shows an Off thread only for what [Pinned and Catch up](#pinned-and-catch-up) lists, and in a DM with
+  one teammate only for a mention or a reply to one of your messages inside one of its sub-threads. Off lasts until you
+  choose another level. A thread you do not follow shows as Off too.
 
 Posting in a thread does not follow it. Starting a thread, being @mentioned or being replied to does, and you can
 follow from Thread settings or `hub thread follow`. A message reaches whoever it @mentions or replies to, whatever
@@ -147,7 +151,11 @@ Anyone who reads a thread can pin it for themselves. A manager can pin a thread 
 everyone** switch in [Thread settings](#thread-settings)), except a DM with one teammate, a Home, a task's thread or a
 meeting's; anyone can still unpin it for themselves. Pinned threads lead
 the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
-messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed.
+messages. A muted thread is left out unless it holds a mention, an ask or an assignment that is new since you last read
+it, or a message from a person, or a bot's ask, mention or reply, that is addressed to you and that you have not answered. In a DM
+with one teammate, only a mention does this, and a reply to one of your messages inside one of its sub-threads does too; a reply to your message at the DM's top level does not. Catch up reads only a limited number of such messages, so a muted thread can stay out even when one of them matches. A group DM and every other new top-level thread need a
+name. A DM with one teammate and a task's thread may go unnamed. Details:
+[threads contract §10.1](dev/threads-contract.md).
 
 A card has **Later**, **Mute** and **Mark read**, and a reply box if you can post in its thread. Type a reply and a
 **Send** button appears. Send posts the reply. If you already follow the thread, the sent message stays on the card while
