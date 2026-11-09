@@ -74,7 +74,6 @@ ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 # .ts file reads. As .ts, the script loses its JSDoc types or its initial values type as never or implicit any, and the
 # reader stops type-checking. Typing these by hand is the follow-up. scripts/ui_flip.py keeps them as they are.
 KEPT_JS = {
-    "ui/app/finance.js": "the globals FIN and FIN_ACCESS: as .ts they are implicit any where finance-attribution.ts reads them",
     "ui/app/automations.js": "the global AU: as .ts it is implicit any where the automations files read it",
     "ui/app/automations-editors.js": "auAnswer: strict .ts files call it with its JSDoc signature, and its arguments become required",
     "ui/app/bot-page.js": "the global BOT: as .ts it is implicit any where a strict .ts file reads it",
