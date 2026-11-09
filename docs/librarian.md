@@ -114,6 +114,29 @@ market. The Librarian treats a task as research only when a person filed it with
 cannot widen its rules by naming a task "Research: ...". The playbook is
 `templates/catalog/librarian/playbooks/research-a-section.md`.
 
+### Deep research
+
+For a market question that needs real work (who competes, what buyers complain about, what the industry takes for
+granted, how big a segment is), a person files a task titled **Deep research: <question>** to the Librarian with the
+`research` label, and sets it to run on a high model:
+
+```sh
+hub task create --owner bot:librarian --title "Deep research: who sells window displays to small shops?" --label research --model claude-opus-5-5 --effort high --body "Scope: US, shops under 20 staff."
+```
+
+The Librarian plans the sources, then works in rounds over several turns, about four hours at most. Each round it
+sends up to six Haiku sub-agents (Claude Code's own sub-agents) to read reviews, forums, rival sites, filings and
+earnings calls and write down exact quotes. A separate Haiku checker drops any claim whose quote is not on the page
+or does not say it. The Librarian merges, counts, and thinks: what the industry takes for granted, what winners know
+that buyers won't say, which pains nobody fixes, where sources disagree. Between rounds it sets a check-back a few
+minutes out, so the next round picks up from its notes even in a fresh session.
+
+Each round writes what is checked: entities and edges in the graph, the market pages it changes, size figures as
+proposals, and the report at `_librarian/research/<slug>.md`, answer first, every sentence cited. Its working files
+(notes, the claims file, page copies) stay in the Librarian's repository under `reports/research/<task id>/`. The
+skill is `templates/catalog/librarian/skills/deep-market-research/`. On a harness without sub-agents it does the
+reading itself, in smaller rounds.
+
 ## Reading a link: `hub doc fetch`
 
 `hub doc fetch <url> [--max-chars N]` (MCP: `hub_doc_fetch`) runs on the computer that runs the bot, never on the Tico server,
@@ -260,7 +283,7 @@ CLI: `hub market define`, `segment add|tree`, `size add|accept|reject|params|lis
 
 ## Built-in
 
-Like the assistant and BotOps, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
+Like the assistant, BotOps and the Brand Owner, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
 it and it becomes active once a computer is enrolled. It cannot be archived or deleted by anyone (`409 system_bot`); pausing and
 renaming stay allowed, and Settings > Bots shows it as **Built-in**.
 

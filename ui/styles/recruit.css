@@ -1,4 +1,4 @@
-/* ui/styles/recruit.css — Post a job, a job's Applicants and one Applicant (ui/app/recruit.js).
+/* ui/styles/recruit.css — Post a job, a job's Applicants and one Applicant (ui/app/recruit.ts).
    Motion here is transform and opacity only; reduced motion shows each end state. */
 
 /* Post a job and Job post: labelled fields, two to a row where they pair. */

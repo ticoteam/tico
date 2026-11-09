@@ -13,6 +13,11 @@ JOBS = {
         "One list to each bot of its tasks with a missed update, gone quiet, or a follow-up time come. Runs at 6am, noon and 6pm company time by default.",
     ),
     "waiting_checks": ("open", "A bot's task waiting on nothing tracked goes back to open after 2 hours."),
+    "stranded_resume": (
+        "open",
+        "A bot's task in progress with no run and nothing to wait on gets one resume wake; three with no progress and "
+        "it goes to the bot's manager's roundup.",
+    ),
     "still_needed": ("open", "Weekday mornings, send questions unanswered for 2 business days back to their bots."),
     "task_manager_report": (
         "open",
@@ -37,7 +42,7 @@ def describe_job(row):
             "or with an open question or approval; at most 50 a pass.",
         }
     metadata = JOBS.get(row["key"])
-    wakes = {"assigned_tasks", "task_roundup", "heartbeat"}
+    wakes = {"assigned_tasks", "task_roundup", "heartbeat", "stranded_resume"}
     return {
         **row,
         "task_trigger": metadata[0] if metadata else None,

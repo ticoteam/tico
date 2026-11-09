@@ -1,4 +1,4 @@
-// The credential card (ui/credential-card.js): a bot asks for a secret inside the Assistant's chat (BotOps has no DM of its own), the person types it
+// The credential card (ui/credential-card.ts): a bot asks for a secret inside the Assistant's chat (BotOps has no DM of its own), the person types it
 // there, and it goes to one route only (the credential request's save), never anywhere else, never back into
 // the page, a toast or the console. Fixtures only, no network.
 const {chromium, webkit} = require('playwright');
@@ -29,7 +29,7 @@ async function open(browser, viewport, view) {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();

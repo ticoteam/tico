@@ -397,3 +397,49 @@ def test_health_and_the_assistants_card_never_name_a_hidden_key(api):
         assert "Close read_write" in assistant.describe(c, "DELETE", path, {}, ana, admins)[0]
         said = assistant.describe(c, "DELETE", path, {}, ben, admins)[0]
         assert "Close" not in said and rw in said
+
+
+def sql_targets(api, token):
+    r = api.post("/api/v2/sql", json={"sql": "SELECT target FROM events"}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return {row[0] for row in r.json()["rows"]}
+
+
+def test_sql_events_follow_historys_rule_for_a_hidden_tool_and_a_key_deleted_from_it(api):
+    """POST /api/v2/sql reads events as the Log does: once Ana makes the tool Only listed, Ben's own grant and reveal rows,
+    and the rows about a key she deletes from it, are gone from his events, and still in hers."""
+    tid, rw, ro = bank(api, None)
+    post(api, f"credentials/{rw}/grants", {"subject": "bot:ops"}, "ben-test")
+    post(api, f"credentials/{rw}/reveal", {}, "ben-test")
+    post(api, f"credentials/{ro}/reveal", {}, "ben-test")
+    assert {rw, ro} <= sql_targets(api, "ben-test")
+    patch(api, tid, {"audience": ONLY})
+    assert api.delete(f"/api/v2/api-tools/{tid}/keys/{ro}", headers=headers("ana-test")).status_code == 200
+    assert not {tid, rw, ro} & sql_targets(api, "ben-test")
+    assert {tid, rw, ro} <= sql_targets(api, "ana-test")
+
+
+def test_history_names_a_deleted_key_to_whoever_could_see_it(api):
+    """A key deleted from its tool or from the vault keeps its last name in the Log, not "A credential". A key of an
+    Only listed tool deleted since is named to the owner alone."""
+    tid, rw, ro = bank(api, None)
+    for cid in (rw, ro):
+        post(api, f"credentials/{cid}/reveal", {}, "ben-test")
+    assert api.delete(f"/api/v2/api-tools/{tid}/keys/{rw}", headers=headers("ana-test")).status_code == 200
+    assert api.delete(f"/api/v2/credentials/{ro}", headers=headers("ana-test")).status_code == 200
+    payroll = tool(api, "Acme Payroll", base_url="https://api.payroll.acme.example", check_path="/v1/me")["id"]
+    pay = post(
+        api,
+        f"api-tools/{payroll}/keys",
+        {"name": "Payroll read", "value": "acme-payroll-synthetic-ro-0099887766", "access_level": "read"},
+    )["id"]
+    post(api, f"credentials/{pay}/reveal", {}, "ben-test")
+    patch(api, payroll, {"audience": ONLY})
+    assert api.delete(f"/api/v2/api-tools/{payroll}", headers=headers("ana-test")).status_code == 200
+
+    def named(token):
+        page = get(api, "history?kind=credential.revealed", token)
+        return sorted(i["subject"] for i in page["items"])
+
+    assert named("ana-test") == ["Close read", "Close read_write", "Payroll read"]
+    assert named("ben-test") == ["A credential", "Close read", "Close read_write"]

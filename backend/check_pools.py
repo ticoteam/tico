@@ -659,6 +659,10 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     )
     if step.get("detached"):
         body += "\n" + step["pr"]["url"]
+    from . import review_pages
+
+    if review_pages.asks_shots(c, step):
+        body += "\n" + review_pages.SHOTS_ASK
     c.execute("SAVEPOINT check_pool_file")
     try:
         child = H.task_create(
@@ -814,7 +818,6 @@ def _unboard(c, ticket, snapshots=None):
         )
         if canonical and canonical["task_id"] != ticket["id"]:
             continue
-        detail = H._json(pr.get("detail"), {}) or {}
         head = V._head(pr)
         if not _heads([pr], snapshots) or snapshots is not None and _heads([pr], snapshots) != [head]:
             continue
@@ -823,9 +826,8 @@ def _unboard(c, ticket, snapshots=None):
             continue
         if (
             pr.get("mergeable") == "conflict"
-            or detail.get("mergeable_state") == "behind"
             or fresh.get("mergeable") is False
-            or fresh.get("mergeable_state") in ("dirty", "behind")
+            or fresh.get("mergeable_state") == "dirty"
         ):
             key = f"{pr['url']}@{head}"
             if not V.pr_notice_seen(c, ticket, "pr_rebase", pr, head):
@@ -950,16 +952,13 @@ def _take_plan(c, wait, only=None, snapshots=None):
         if not prs or not all(bot_pr(c, ticket, p) for p in prs):
             return {"drop": "the PR is no longer open"}
         step = {**step, "pr": prs[0]}
-        if any(
-            p.get("mergeable") == "conflict" or (H._json(p.get("detail"), {}) or {}).get("mergeable_state") == "behind"
-            for p in prs
-        ):
+        if any(p.get("mergeable") == "conflict" for p in prs):
             return {"drop": "the PR needs a rebase"}
         if any(
             ((snapshots or {}).get(p["id"]) or {}).get("state") == "closed"
             or ((snapshots or {}).get(p["id"]) or {}).get("draft")
             or ((snapshots or {}).get(p["id"]) or {}).get("mergeable") is False
-            or ((snapshots or {}).get(p["id"]) or {}).get("mergeable_state") in ("dirty", "behind")
+            or ((snapshots or {}).get(p["id"]) or {}).get("mergeable_state") == "dirty"
             for p in prs
         ):
             return {"drop": "the PR needs a fresh review route"}

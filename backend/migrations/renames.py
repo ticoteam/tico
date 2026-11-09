@@ -9,7 +9,9 @@ scripts/cleanup/renames.yaml).
 Each rename is SQLite's own ALTER TABLE ... RENAME, with legacy_alter_table off so SQLite rewrites every trigger,
 view, index and foreign key that names the column (index names stay as they are). `apply` runs in the caller's
 transaction and never commits, for a migration file's up(conn); `apply_now` wraps it in one transaction of its own.
-A rename whose old name is gone is done already, so a second boot does nothing.
+A rename whose old name is gone is done already, so a second boot does nothing. A table rename carries its own wave
+(TABLES), and `apply` renames it only when that wave is asked for, so an older file's `apply(conn, waves=("1",))` on a
+fresh database leaves the table to the file that names its wave.
 """
 
 from .renames_data import COLUMNS, TABLES
@@ -21,14 +23,17 @@ class RenameConflict(RuntimeError):
 
 def pending(conn, waves=None):
     """The (kind, table, old, new) renames this database still needs, in order: tables first, then columns. `waves`
-    limits the columns to those waves (all of the map's when None)."""
+    names the waves that run: a table rename only when its wave is named, a column rename when its wave is named or
+    `waves` is None (every column wave)."""
     columns = {}
     for table, column in conn.execute(
         "SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type='table'"
     ):
         columns.setdefault(table, set()).add(column)
     todo = []
-    for old, new in TABLES:
+    for old, new, wave in TABLES:
+        if wave not in (waves or ()):
+            continue
         if old in columns and new not in columns:
             todo.append(("table", old, old, new))
             columns[new] = columns.pop(old)
@@ -97,7 +102,7 @@ def _column_renames():
 
 def current_table(table):
     """A table's name in this code, for a name a stored row was saved under before a rename."""
-    for old, new in TABLES:
+    for old, new, _wave in TABLES:
         if table == old:
             table = new
     return table

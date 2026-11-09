@@ -1,9 +1,13 @@
-"""Page monitors: the guard, who may watch, what a real change files, and that a fetch holds no transaction."""
+"""Page monitors: the guard, who may watch, what a real change files, that a fetch holds no transaction, and the
+Gateway's Signals (HQ is faked: no call leaves the test)."""
+
+import json
 
 import pytest
 
 from backend import market_watch as W
 from backend.store import H
+from clients import gateway as GW
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 from backend.tests.test_company import with_strategy_bot
 from backend.tests.test_market import _librarian, _seed
@@ -173,7 +177,7 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     with store.transaction() as c:
         for n in range(W.MAX_ACTIVE - 1):
             c.execute(
-                "INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
+                "INSERT INTO entity_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
                 (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()),
             )
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
@@ -214,3 +218,210 @@ def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded
         },
     )
     assert bet_tasks() == [("Bet 1: may be wrong", "bot:goal-manager")]
+
+
+COPYRIGHT = "© 2025 Northwind Analytics, Inc. All rights reserved. Terms and privacy apply to every visitor."
+
+
+def test_a_copyright_year_change_files_nothing(seeded, monkeypatch):
+    watch(seeded)
+    # fetch_page returns normalized text; the copyright line is dropped there.
+    pages(
+        monkeypatch,
+        W.normalize(BASE + "\n" + COPYRIGHT),
+        W.normalize(BASE + "\n" + COPYRIGHT.replace("2025", "2026")),
+    )
+    before = counts(seeded)
+    assert check(seeded)["changed"] == 0
+    assert check(seeded)["changed"] == 0
+    assert counts(seeded) == before
+
+
+class Hq:
+    """Tico HQ's Signals, faked: the watches it holds, the changes it has found and every call made to it."""
+
+    def __init__(self):
+        self.watches, self.changes, self.calls, self.refuse, self.n = {}, [], [], False, 0
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(GW, "signals_watches", self.listed)
+        monkeypatch.setattr(GW, "signals_watch", self.register)
+        monkeypatch.setattr(GW, "signals_end", self.end)
+        monkeypatch.setattr(GW, "signals_changes", self.found)
+
+    def listed(self, base, key, **_):
+        self.calls.append(("list",))
+        return 200, {"watches": [dict(w) for w in self.watches.values()]}, ""
+
+    def register(self, base, key, kind, target, **_):
+        self.calls.append(("register", kind, target))
+        if self.refuse:
+            return 422, {}, "invalid"
+        for held in self.watches.values():
+            if (held["kind"], held["target"]) == (kind, target):
+                return 200, dict(held), ""  # the same watch again is the one HQ has
+        self.n += 1
+        ident = f"sw_{self.n:016x}"
+        self.watches[ident] = {
+            "id": ident,
+            "kind": kind,
+            "target": target,
+            "label": None,
+            "created_at": "2026-11-06T09:00:00Z",
+            "checked_at": None,
+            "changed_at": None,
+            "status": "pending",
+        }
+        return 201, dict(self.watches[ident]), ""
+
+    def end(self, base, key, watch_id, **_):
+        self.calls.append(("end", watch_id))
+        return (204, {}, "") if self.watches.pop(watch_id, None) else (404, {}, "not_found")
+
+    def found(self, base, key, since="", limit=200, **_):
+        self.calls.append(("changes", since))
+        start = int(since[3:]) if since else 0
+        rows = self.changes[start : start + limit]
+        return 200, {"changes": [dict(r) for r in rows], "next": f"v1.{start + len(rows)}"}, ""
+
+    def read(self, ident, status="ok"):
+        self.watches[ident].update(status=status, checked_at="2026-11-06T09:30:00Z")
+
+    def change(self, ident, removed="", added="", title="Pricing", url=PAGE, kind="page"):
+        self.changes.append(
+            {
+                "id": f"sc_{len(self.changes) + 1:016x}",
+                "watch_id": ident,
+                "kind": kind,
+                "target": url,
+                "found_at": "2026-11-06T10:00:00Z",
+                "title": title,
+                "removed": removed,
+                "added": added,
+                "url": url,
+            }
+        )
+
+
+@pytest.fixture
+def signals(seeded, monkeypatch):
+    """The Gateway connected to a faked HQ, with each sync run on the spot."""
+    settings = seeded.app.state.store.settings
+    settings.gateway_key, settings.gateway_url = "gw-synthetic", "https://hq.example/v1/gateway"
+    hq = Hq()
+    hq.install(monkeypatch)
+    monkeypatch.setattr(W, "spawn", lambda work: work())
+    return hq
+
+
+def cursor_of(api):
+    with api.app.state.store.read() as c:
+        return json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?", (W.CURSOR_KEY,)).fetchone()[0])
+
+
+def test_with_the_gateway_a_watch_is_registered_once_and_its_change_files_like_a_local_one(
+    signals, seeded, monkeypatch
+):
+    watch(seeded)
+    [ident] = signals.watches
+    assert ("register", "page", PAGE) in signals.calls
+    with seeded.app.state.store.read() as c:
+        assert c.execute("SELECT signal_watch_id FROM entity_watches").fetchone()[0] == ident
+    monkeypatch.setattr(W, "fetch_page", lambda url: pytest.fail("the Gateway reads the page, not the server"))
+    signals.read(ident)
+    assert check(seeded) == {"read": 1, "changed": 0, "errors": 0}
+    assert signals.calls.count(("register", "page", PAGE)) == 1
+    signals.change(ident, removed="Pro plan costs 29 a seat", added="Pro plan now costs 39 a seat")
+    before = counts(seeded)
+    assert check(seeded) == {"read": 1, "changed": 1, "errors": 0}
+    after = counts(seeded)
+    assert {k: after[k] - before[k] for k in after} == {"market_insights": 1, "market_evidence": 1, "page_events": 1}
+    with seeded.app.state.store.read() as c:
+        evidence = H._rows(c.execute("SELECT source_url, quote FROM market_evidence"))[-1]
+    assert evidence["source_url"] == PAGE and "Pro plan now costs 39" in evidence["quote"]
+    assert cursor_of(seeded)["cursor"] == "v1.1"
+    assert check(seeded)["changed"] == 0  # the cursor is past the change: it is not filed twice
+    assert ("changes", "v1.1") in signals.calls
+
+
+def test_ending_a_watch_ends_it_at_hq_on_the_spot(signals, seeded):
+    made = watch(seeded)["watch"]
+    [ident] = signals.watches
+    post(seeded, f"market/watches/{made['id']}/stop", {})
+    assert signals.watches == {} and ("end", ident) in signals.calls
+    with seeded.app.state.store.read() as c:
+        assert c.execute("SELECT signal_watch_id FROM entity_watches").fetchone()[0] is None
+
+
+def test_without_the_gateway_the_pages_are_read_here_as_before(seeded, monkeypatch):
+    hq = Hq()
+    hq.install(monkeypatch)
+    watch(seeded)
+    pages(monkeypatch, BASE, CHANGED)
+    assert check(seeded)["changed"] == 0
+    assert check(seeded)["changed"] == 1
+    assert hq.calls == []
+
+
+def test_a_watch_the_gateway_refuses_is_read_here(signals, seeded, monkeypatch):
+    signals.refuse = True
+    watch(seeded)
+    pages(monkeypatch, BASE, CHANGED)
+    assert check(seeded) == {"read": 1, "changed": 0, "errors": 0}
+    assert check(seeded) == {"read": 1, "changed": 1, "errors": 0}
+
+
+def test_the_gateways_status_for_a_watch_shows_on_it(signals, seeded):
+    watch(seeded)
+    [ident] = signals.watches
+    signals.read(ident, status="blocked")
+    assert check(seeded) == {"read": 1, "changed": 0, "errors": 1}
+    row = get(seeded, "market/watches")["watches"][0]
+    assert row["last_status"] == "blocked" and row["error"] == "Read by the Gateway: blocked" and row["checked_at"]
+
+
+def test_a_change_that_will_not_file_is_skipped_and_the_cursor_still_moves(signals, seeded, monkeypatch):
+    watch(seeded)
+    [ident] = signals.watches
+    signals.read(ident)
+    signals.change(ident, removed="Plan A", added="Plan A costs more now")
+    signals.change(ident, removed="Plan B", added="Plan B costs more now")
+    real, filed = W.file_change, []
+
+    def flaky(c, watch, *args, **kwargs):
+        filed.append(1)
+        if len(filed) == 1:
+            raise RuntimeError("refused")
+        return real(c, watch, *args, **kwargs)
+
+    monkeypatch.setattr(W, "file_change", flaky)
+    assert check(seeded)["changed"] == 1
+    assert cursor_of(seeded)["cursor"] == "v1.2"
+
+
+def test_a_release_is_watched_only_through_the_gateway_and_each_new_one_files(signals, seeded, monkeypatch):
+    made = watch(seeded, url="github:Acme/Rocket", entity="company/northwind", kind="release")["watch"]
+    assert made["url"] == "github:acme/rocket"
+    assert ("register", "release", "github:acme/rocket") in signals.calls
+    monkeypatch.setattr(W, "fetch_page", lambda url: pytest.fail("a release is never read here"))
+    [ident] = signals.watches
+    signals.read(ident)
+    signals.change(
+        ident,
+        title="v2.0",
+        added="Faster builds",
+        url="https://github.com/acme/rocket/releases/tag/v2.0",
+        kind="release",
+    )
+    assert check(seeded) == {"read": 1, "changed": 1, "errors": 0}
+    with seeded.app.state.store.read() as c:
+        insight = H._rows(c.execute("SELECT claim FROM market_insights WHERE source_ref LIKE 'watch:%'"))[-1]
+        evidence = H._rows(c.execute("SELECT source_url, quote FROM market_evidence"))[-1]
+    assert insight["claim"] == "Release: Northwind"
+    assert evidence["source_url"] == "https://github.com/acme/rocket/releases/tag/v2.0"
+    assert "Faster builds" in evidence["quote"]
+
+
+def test_a_release_without_the_gateway_is_refused(seeded):
+    watch(seeded, url="github:acme/rocket", entity="company/northwind", kind="release", expected=409)
+    assert get(seeded, "market/watches")["watches"] == []

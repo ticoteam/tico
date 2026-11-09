@@ -1,4 +1,4 @@
-/* ui/styles/team-build.css — Build a team (ui/app/team-build.js): a briefing, a grid of role cards, one footer button.
+/* ui/styles/team-build.css — Build a team (ui/app/team-build.ts): a briefing, a grid of role cards, one footer button.
    Colours are the app's tokens, so light and dark follow the theme. Entrance motion is transform and opacity only. */
 .tb-dialog{box-sizing:border-box;width:min(1080px,calc(100vw - 48px));max-width:none;max-height:calc(100dvh - 48px);
   padding:0;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);

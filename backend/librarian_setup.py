@@ -23,6 +23,7 @@ from pydantic import Field
 
 from . import getting_started as GS
 from . import librarian as L
+from . import market as MK
 from . import models as M
 from .store import H, Problem, encode
 
@@ -199,7 +200,7 @@ def setup_docs(c, auth, who, body):
     return {"task_id": task["id"], "bot": L.LIBRARIAN, "sources": sources}
 
 
-def market_text(answers):
+def market_text(answers, serves=()):
     lines = [
         "Build our market map from the owner's answers, and set what Market tracks from them. "
         "Follow playbooks/market-setup.md.",
@@ -210,6 +211,8 @@ def market_text(answers):
     ]
     for key in QUESTIONS:
         lines += ["## " + HEADINGS[key], "", answers[key] or "(blank)", ""]
+    if serves:  # where the company serves: the sizes are for these places
+        lines += ["Serves: " + MK._for_task("; ".join(serves)) + ". Size the market for these places.", ""]
     lines += [
         "What Market tracks: start the Coverage universe page with a section \"What Market tracks\": the "
         "competitors (core unless a source shows otherwise), the buyer segments, and the channels, topics, "
@@ -230,8 +233,15 @@ def setup_market(c, auth, who, body):
             raise Problem("validation", "Say what you sell, or give your website", 422)
         if not GS._active(c, GS.LIBRARIAN):
             raise Problem("librarian", "The Librarian is not running yet. It starts once a computer hosts it.", 409)
+        from . import onboarding
+
         task = GS._task(
-            c, auth, who, GS.LIBRARIAN, GS._market_title(c, "bot:" + GS.LIBRARIAN, who.actor), market_text(answers)
+            c,
+            auth,
+            who,
+            GS.LIBRARIAN,
+            GS._market_title(c, "bot:" + GS.LIBRARIAN, who.actor),
+            market_text(answers, onboarding.regions(c)),
         )
         state["task_id"] = task["id"]
         H.event(c, who.actor, "getting_started.market_requested", GS.LIBRARIAN, {"task": task["id"], "questions": True})

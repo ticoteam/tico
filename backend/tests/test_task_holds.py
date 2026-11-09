@@ -90,6 +90,46 @@ def test_an_answer_or_a_decided_approval_clears_its_hold(api):
         assert row["status"] == "open" and row["note"] == "Your spend approval was approved; nothing left to wait on"
 
 
+def test_the_last_child_completes_even_when_the_parent_restore_is_refused_by_its_gate(api):
+    """Finding R4: a bot's parent waits on its last child in an early waiting stage with an unmet approval. The child
+    completes; the parent's automatic restore into the later open stage is refused by that stage's gate. The refusal is
+    logged on the parent (auto_move_refused), and the child's completion stands."""
+    from backend import pipeline_requirements as R
+
+    with api.app.state.store.transaction() as c:
+        pipe = H.type_create(
+            c,
+            "human:ana",
+            "Release pipe",
+            [{"name": "Hold", "status": "waiting"}, {"name": "Ship", "status": "open"}],
+            mover=True,
+        )
+        hold = next(s["id"] for s in pipe["steps"] if s["name"] == "Hold")
+        R.add(
+            c,
+            "human:ana",
+            hold,
+            {"name": "Spec approved", "kind": "approval", "reviewed_by": "person", "reviewer_id": "human:ana"},
+        )
+        parent = H.task_create(
+            c, "human:ben", "Release the pricing page", "x", "bot:ops", type=pipe["id"], step="Ship", lint=False
+        )["id"]
+        child = bot_task(c, "Write the copy", owner="bot:cpo", parent=parent, actor="bot:ops")
+        wait(c, parent)
+        c.execute("UPDATE tasks SET step_id = ? WHERE id = ?", (hold, parent))
+        c.commit()
+        assert H.task(c, parent)["status"] == "waiting"
+        H.task_update(c, "bot:cpo", child, status="done", note="Copy written")
+        assert H.task(c, child)["status"] == "done"
+        assert H.task(c, parent)["status"] == "waiting"
+        assert (
+            c.execute(
+                "SELECT count(*) FROM history_events WHERE subject_id = ? AND kind = 'auto_move_refused'", (parent,)
+            ).fetchone()[0]
+            == 1
+        )
+
+
 def test_a_note_only_update_keeps_the_tracked_reason_and_never_names_an_untracked_person(api):
     """Criteria 8 and 9."""
     with api.app.state.store.transaction() as c:

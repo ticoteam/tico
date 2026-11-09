@@ -14,6 +14,10 @@ from typing import Any, cast
 from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import campaigns as CP
+from . import receipts as RC
+from . import subscriptions as SUB
+from . import visible as VB
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
@@ -38,6 +42,9 @@ from .store import access as SA
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import attribution as SATT
+from .attribution import visible as attribution_visible
+from .core import attribution as CATT
 from .store import ads as SAD
 from .store import ap as SAP
 from .store import catalog as SC
@@ -112,6 +119,7 @@ def _cells(
                     location=location,
                     class_id=klass,
                     project=project,
+                    lines=int(r["line_count"]) if "line_count" in r.keys() else 0,  # cash rollups count no lines
                 )
             )
     return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
@@ -772,12 +780,13 @@ def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
     return cell.account_id
 
 
-def _labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
-    """Each group's label; a vendor group's from tab_ap.vendor_labels (a contact's name, never its id)."""
+def _labels(s: _Seen, keys: Iterable[str], by: str, shown: Mapping[str, bool] | None = None) -> dict[str, str]:
+    """Each group's label; a vendor group's from tab_ap.vendor_labels (a contact's name, never its id). `shown` is a
+    vendor's visibility by key (visible.py), given for a vendor group."""
     if by in LOCATED:
         named = _located_names(s.ctx.c, by)
         return {k: _located_label(named, by, k) for k in keys}
-    names = tab_ap.vendor_labels(s.ctx, s.view, keys) if by == "vendor" else {}
+    names = tab_ap.vendor_labels(s.ctx, s.view, keys, shown) if by == "vendor" else {}
     return {k: names.get(k, k) if by == "vendor" and k else _label(s, k, by) for k in keys}
 
 
@@ -823,8 +832,25 @@ def _grouped(
         if key is None or (key == "" and by in ("department", "team", "teammate") and not s.view.company_expenses()):
             continue
         sums[key] = sums.get(key, 0) + cell.amount
-    labels = _labels(s, sums, by)
-    rows: list[Row] = [{"key": k or NONE, "label": labels[k], "amount": v} for k, v in sums.items()]
+    shown: dict[str, bool] = {}
+    lost: set[str] = set()
+    if by == "vendor":
+        # A vendor's name shows when the viewer sees one of its lines; a total that lost a hidden line says excl (visible.py)
+        seen = VB.records_visible(
+            s.ctx,
+            s.view,
+            "vendor",
+            cells,
+            all_contacts=tab_ap.sees_contact_kind(s.ctx, s.view, "vendor"),
+            window=(a.isoformat(), z.isoformat()),
+        )
+        shown = {k: v.named for k, v in seen.items()}
+        lost = {k for k, v in seen.items() if v.excl}
+    labels = _labels(s, sums, by, shown if by == "vendor" else None)
+    rows: list[Row] = [
+        {"key": k or NONE, "label": labels[k], "amount": v, **({"excl": True} if k in lost else {})}
+        for k, v in sums.items()
+    ]
     return {
         "by": by,
         "start": a.isoformat(),
@@ -1358,6 +1384,7 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
         "pace_end": None if cut else st.pace_end,
         "spent_from": st.spent_from,
         "as_of": st.as_of,
+        "reported": None if cut else st.reported,
     }
 
 
@@ -1398,7 +1425,8 @@ def budgets(
     """Every budget the viewer sees (their view's, and always their own: handlers.reads_budget), with where it stands today, or in the period holding the day `on` (past or
     future): the amount of the version in effect then, and that period's spend and holds. Spend is read live
     (budgeting's module docstring): in each month a healthy import covers, an ad budget's platform's daily spend
-    stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`."""
+    stands in for its charges and holds there, and each row says its `platform` and its state `pace_end`, `spent_from` and `as_of`
+    (or, for an ad budget that does not swap, the platform's figure beside its books in `reported`)."""
     s = _open(c, viewer, at)
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
@@ -1509,6 +1537,10 @@ METRICS = (
     "unreconciled_days",
     "duplicate_charges",
     "price_increases",
+    "unattributed",
+    "ad_spend",
+    "per_conversion",
+    "subscriptions_monthly",
 )
 STALE_HOURS = 24  # bank data older than this marks a cash metric stale
 WATCH_LABELS = 10  # the Watch findings a metric names (its count is the whole)
@@ -1618,13 +1650,53 @@ def metric(
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
     oldest reconciliation of the money accounts the viewer sees; duplicate_charges, price_increases: how many Watch
-    findings of that kind the posted debits show now, with their first labels."""
+    findings of that kind the posted debits show now, with their first labels; ad_spend: the viewer's campaigns' spend
+    over the window (this month by default); per_conversion: that spend over the conversions (amount null with none);
+    subscriptions_monthly: the monthly cost of the active subscriptions the viewer sees, with their count."""
     if name not in METRICS:
         raise invalid(f"a metric is {'|'.join(METRICS)}")
     s = _open(c, viewer, at)
     currency = s.ctx.book.base_currency
     base: Row = {"name": name, "as_of": s.ctx.at, "view_version": s.view.version}
     today = dates.day(s.ctx.today)
+    if name == "unattributed":
+        a, z = _window(start, end, s.ctx)
+        amount, count, lost = _unattributed_total(s, a, z)
+        return {
+            **base,
+            "value": amount,
+            "amount": amount,
+            "lines": count,
+            "excl": lost,
+            "start": a.isoformat(),
+            "end": z.isoformat(),
+            "unit": "minor",
+            "currency": currency,
+        }
+    if name in ("ad_spend", "per_conversion"):
+        a, z = _window(start, end, s.ctx)
+        if name == "ad_spend":
+            got = CP.ad_spend(s.ctx, viewer, a.isoformat(), z.isoformat())
+            return {
+                **base,
+                "value": got["amount"],
+                "amount": got["amount"],
+                "start": a.isoformat(),
+                "end": z.isoformat(),
+                "unit": "minor",
+                "currency": currency,
+            }
+        got = CP.ad_per_conversion(s.ctx, viewer, a.isoformat(), z.isoformat())
+        return {
+            **base,
+            "value": got["amount"],
+            "amount": got["amount"],
+            "conversions": got["conversions"],
+            "start": a.isoformat(),
+            "end": z.isoformat(),
+            "unit": "minor",
+            "currency": currency,
+        }
     if name in ("budget_remaining", "budget_pct_used"):
         b = s.ctx.budgets().get(budget_id or "")
         if b is None or not reads_budget(s.ctx, viewer, b):
@@ -1700,12 +1772,24 @@ def metric(
             "data_as_of": data_as_of,
             "stale": stale,
         }
+    if name == "subscriptions_monthly":
+        got = SUB.summary(s.ctx, viewer)
+        return {
+            **base,
+            "value": got["amount"],
+            "amount": got["amount"],
+            "count": got["count"],
+            "unit": "minor",
+            "currency": currency,
+        }
     if name in ("duplicate_charges", "price_increases"):
         # The same Watch checks the daily Watch runs (watch_findings), read as a count with the first few labels; plain
         # code over the viewer's posted debits, no model call.
-        found = (W.duplicate_charges if name == "duplicate_charges" else W.price_increases)(
-            _charges(c, viewer, s.ctx.at)
-        )
+        charges = _charges(c, viewer, s.ctx.at)
+        if name == "duplicate_charges":
+            found = W.duplicate_charges(charges)
+        else:
+            found = SUB.price_findings(charges, SUB.watch_rows(c))
         money_ids, _ = tab.feed_scope(s.ctx, s.view)
         data_as_of, stale = _data_as_of(s, money_ids)
         return {
@@ -1766,7 +1850,18 @@ def _uncategorized(s: _Seen, a: date, z: date, most: int, skip: int = 0) -> tupl
 
 
 # ------------------------------------------------------------------------------------------------ reports
-REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by")
+REPORTS = (
+    "pnl",
+    "pnl_by",
+    "balance_sheet",
+    "cash_flow",
+    "budget_vs_actual",
+    "ap_aging",
+    "ar_aging",
+    "spend_by",
+    "campaigns",
+    "subscriptions",
+)
 
 
 def _prior(a: date, z: date) -> tuple[date, date]:
@@ -1857,6 +1952,18 @@ def _cash_flow(c: sqlite3.Connection, viewer: str, a: date, z: date, period: str
     }
 
 
+def _campaigns_report(ctx: Ctx, viewer: str, a: date, z: date, top: int) -> Row:
+    """The campaigns the viewer sees over [a, z], by spend: the first `top` rows, with totals over all of them."""
+    found = CP.rows(ctx, viewer, a.isoformat(), z.isoformat())
+    return {
+        "rows": found[:top],
+        "count": len(found),
+        "totals": CP.totals(found),
+        "start": a.isoformat(),
+        "end": z.isoformat(),
+    }
+
+
 def report(
     c: sqlite3.Connection,
     viewer: str,
@@ -1872,7 +1979,9 @@ def report(
     at: str | None = None,
 ) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
-    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair) or
+    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair),
+    campaigns (the ad campaigns by spend, with totals), subscriptions (the subscriptions with their monthly total and the
+    renewals in the next 30 days; the window does not apply) or
     pnl_by
     (`by` location|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n`
     rows
@@ -1884,6 +1993,8 @@ def report(
     top = max(1, min(int(top_n), MAX_TOP))
     if kind == "balance_sheet":
         return {"kind": kind, **tab.balance_sheet(c, viewer, as_of=end, at=at)}
+    if kind == "subscriptions":
+        return {"kind": kind, **SUB.report(_open(c, viewer, at).ctx, viewer, top)}
     if kind in ("ap_aging", "ar_aging"):
         return {"kind": kind, **_aging_report(c, viewer, "bill" if kind == "ap_aging" else "invoice", top, at)}
     ctx = load(c, at)
@@ -1898,6 +2009,8 @@ def report(
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
             return budget_vs_actual(c, viewer, p.isoformat(), q.isoformat(), period, limit=top, at=at)
+        if kind == "campaigns":
+            return _campaigns_report(ctx, viewer, p, q, top)
         return spend_by(c, viewer, by or "vendor", p.isoformat(), q.isoformat(), top_n=top, at=at)
 
     out: Row = {"kind": kind, **one(a, z)}
@@ -1922,7 +2035,13 @@ SEARCH_KINDS = (
     "po",
     "estimate",
 )
-NAMED_ONLY_KINDS = ("account",)  # searched when named (the chart a bot codes lines to), not in the first few of each
+NAMED_ONLY_KINDS = (
+    "account",
+    "vendor",
+    "campaign",
+    "receipt",
+    "subscription",
+)  # searched when named (the chart a bot codes lines to, vendors), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10  # results per kind when no kind is named
 
@@ -1967,6 +2086,14 @@ def _search_rules(
     ], (str(page[-1]["id"]) if len(rows) > most else None)
 
 
+def _search_campaigns(ctx: Ctx, viewer: str, q: str, f: Mapping[str, object], most: int) -> list[Row]:
+    """The campaigns the viewer sees whose name matches, in the month `month` names (this month by default), by spend."""
+    month = _filter(f, "month") or dates.day(ctx.today).strftime("%Y-%m")
+    first, last = CP.month_window(month)
+    needle = q.lower()
+    return [r for r in CP.rows(ctx, viewer, first, last) if needle in str(r["name"]).lower()][:most]
+
+
 def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
     """The active accounts the viewer may post to, matched by code or name, in code order: the same lines the bill,
     invoice and journal forms list (tab_ap.chart), so a bot can find the account id of a line. Paged by (code, id)."""
@@ -1998,6 +2125,145 @@ def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | Non
         }
         for a in page
     ], nxt
+
+
+def _search_vendors(s: _Seen, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
+    """Vendors by name (a vendor or both contacts), each with what the viewer sees of it this month. A vendor is listed
+    only when its name may show (visible.py), so a page can hold fewer than `most`; paged over the contacts."""
+    if not s.view.sees_anything():
+        raise denied("vendors are not in your view")
+    marks = tab.decode_cursor(cursor) or []
+    after = (marks[0], marks[1]) if len(marks) == 2 else None
+    contacts = SAP.contacts_page(
+        s.ctx.c, book_id=s.ctx.book.id, kinds=("vendor", "both"), q=q, active=True, after=after, most=most + 1
+    )
+    page = contacts[:most]
+    a, z = dates.month_bounds(dates.day(s.ctx.today))
+    expense = sorted(x.id for x in s.ctx.accounts.values() if x.type == "expense")
+    seen = VB.records_visible(
+        s.ctx,
+        s.view,
+        "vendor",
+        _cells(s, a, z, expense),
+        record_ids=[str(r["id"]) for r in page],
+        all_contacts=tab_ap.sees_contact_kind(s.ctx, s.view, "vendor"),
+        window=(a.isoformat(), z.isoformat()),
+    )
+    out: list[Row] = []
+    for r in page:
+        vis = seen.get(str(r["id"]))
+        if vis is None or not vis.named:
+            continue
+        name = str(r["name"])
+        out.append(
+            {
+                "kind": "vendor",
+                "id": str(r["id"]),
+                "label": name,
+                "name": name,
+                "aliases": SAP.aliases_of(s.ctx.c, str(r["id"])),
+                "month": {"spend": vis.amount, "excl": vis.excl, "as_of": s.ctx.at},
+            }
+        )
+    nxt = tab.encode_cursor([str(page[-1]["name"]), str(page[-1]["id"])]) if len(contacts) > most and page else None
+    return out, nxt
+
+
+UNATTRIBUTED_CHUNK = 500  # lines read per page while a total is summed
+
+
+def _unattributed_visible(s: _Seen, rows: Sequence[Any]) -> tuple[list[Any], bool]:
+    """The unattributed lines the viewer sees: on an account in their view, and not on a private one they lack the detail
+    of (that one is left out and marks the total excl). A line with no team or teammate is company-wide only."""
+    cut = VB.private_accounts(s.ctx, s.view)
+    kept: list[Any] = []
+    lost = False
+    for r in rows:
+        account = s.ctx.accounts.get(str(r["account_id"]))
+        if account is None or not s.view.sees(account, {}):
+            continue
+        if str(r["account_id"]) in cut:
+            lost = True
+            continue
+        kept.append(r)
+    return kept, lost
+
+
+def _unattributed_total(s: _Seen, a: date, z: date) -> tuple[int, int, bool]:
+    """The reader's slice of the window's unattributed P&L lines: its amount, its line count, and whether a hidden one
+    was left out."""
+    ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES]
+    amount = count = 0
+    lost = False
+    after: tuple[str, str] | None = None
+    while True:
+        batch = SL.unattributed_lines(
+            s.ctx.c, s.ctx.book.id, a.isoformat(), z.isoformat(), ids, after, UNATTRIBUTED_CHUNK
+        )
+        kept, cut = _unattributed_visible(s, batch)
+        lost = lost or cut
+        amount += sum(int(r["amount"]) for r in kept)
+        count += len(kept)
+        if len(batch) < UNATTRIBUTED_CHUNK:
+            return amount, count, lost
+        last = batch[-1]
+        after = (str(last["entry_date"]), str(last["id"]))
+
+
+def unattributed(
+    c: sqlite3.Connection,
+    viewer: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+    at: str | None = None,
+) -> Row:
+    """The Unattributed queue: the P&L lines in the window (this month by default) with no team or teammate and no
+    attribution in force, newest first, paged by (entry date, line id). Only what the viewer sees: a line with no tags
+    shows to company-wide views alone. A page can hold fewer lines than `limit` (lines the viewer cannot see are left
+    out after the page is read)."""
+    s = _open(c, viewer, at)
+    a, z = _window(start, end, s.ctx)
+    parts = tab.decode_cursor(cursor)
+    after = (parts[0], parts[1]) if len(parts) == 2 else None
+    most = tab.page_size(limit)
+    ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES]
+    fetched = SL.unattributed_lines(c, s.ctx.book.id, a.isoformat(), z.isoformat(), ids, after, most + 1)
+    page = fetched[:most]
+    kept, _ = _unattributed_visible(s, page)
+    contacts = [str(r["contact_id"]) for r in kept if r["contact_id"]]
+    names = tab_ap.vendor_labels(s.ctx, s.view, contacts, {k: True for k in contacts})
+    lines: list[Row] = []
+    for r in kept:
+        account = s.ctx.accounts[str(r["account_id"])]
+        cid = str(r["contact_id"] or "")
+        lines.append(
+            {
+                "id": str(r["id"]),
+                "date": str(r["entry_date"]),
+                "entry_id": str(r["entry_id"]),
+                "account": {"id": account.id, "code": account.code, "name": account.name},
+                "amount": int(r["amount"]),
+                "description": str(r["description"] or ""),
+                "memo": str(r["memo"] or ""),
+                "vendor": {"id": cid, "name": names.get(cid, "")},
+                "source": str(r["source"]),
+            }
+        )
+    nxt = (
+        tab.encode_cursor([str(page[-1]["entry_date"]), str(page[-1]["id"])]) if len(fetched) > most and page else None
+    )
+    return {
+        "lines": lines,
+        "next_cursor": nxt,
+        "start": a.isoformat(),
+        "end": z.isoformat(),
+        "as_of": s.ctx.at,
+        "currency": s.ctx.book.base_currency,
+        "view_version": s.view.version,
+    }
 
 
 def _record_row(kind: str, r: Any) -> Row:
@@ -2106,8 +2372,10 @@ def search(
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
-    the active accounts the forms list, in code order."""
+    item/location/project: active (1 keeps only active records); campaign (named only): a search over name, in the month
+    `month` names (default this month), with each campaign's month as the viewer sees it; account (named only): a search over code and name,
+    the active accounts the forms list, in code order; vendor (named only): a search over name, each with this month's
+    spend as the viewer sees it (visible.py), listing only the vendors whose name may show."""
     if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
         raise invalid(f"kind is {'|'.join((*SEARCH_KINDS, *NAMED_ONLY_KINDS))}")
     if cursor and kind is None:
@@ -2231,6 +2499,15 @@ def search(
             elif k == "account":
                 listed_accounts, nxt = _search_accounts(ctx, viewer, text, most, cursor)
                 results += listed_accounts
+            elif k == "vendor":
+                listed_vendors, nxt = _search_vendors(_open(c, viewer, at), text, most, cursor)
+                results += listed_vendors
+            elif k == "campaign":
+                results += _search_campaigns(ctx, viewer, text, f, most)
+            elif k == "receipt":
+                results += RC.search(ctx, viewer, q=text, status=_filter(f, "status"), most=most)
+            elif k == "subscription":
+                results += SUB.search(ctx, viewer, text, most)
             elif k in RECORD_KINDS:
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)
@@ -2280,7 +2557,7 @@ INBOX_KINDS = (
     "bill_email",
 )
 INBOX_EACH = 200  # items one kind contributes before its count says "more"
-RECEIPT_DAYS = 90
+RECEIPT_DAYS = RC.RECEIPT_DAYS
 STATEMENT_DAYS = 35  # a money account reconciled longer ago than a statement month is an unreconciled item
 
 
@@ -2724,10 +3001,12 @@ def _month_windows(today: date, n: int = 4) -> list[tuple[str, str, str]]:
     return out
 
 
-def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
-    """Posted debits of the last WATCH_HISTORY_DAYS as the viewer's view shows them (feed rows, not pending)."""
+def _charges(c: sqlite3.Connection, viewer: str, at: str, days: int = WATCH_HISTORY_DAYS) -> list[W.Charge]:
+    """Posted debits of the last WATCH_HISTORY_DAYS as the viewer's view shows them: the feed rows (not pending), and for
+    each money account with no feed rows in the window, its posted expense entries. Only a mirrored book (QuickBooks or
+    Xero) reads entries: in a Tico-kept book a bill's entry and its feed payment would count the same charge twice."""
     today = date.fromisoformat(at[:10])
-    start = (today - timedelta(days=WATCH_HISTORY_DAYS)).isoformat()
+    start = (today - timedelta(days=days)).isoformat()
     out: list[W.Charge] = []
     cursor: str | None = None
     for _ in range(WATCH_PAGES):
@@ -2736,15 +3015,14 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
         except FinanceError:
             break
         for row in cast(list[Row], page.get("rows") or []):
-            payee = str(row.get("counterparty") or "").strip().lower()
+            # A charge groups by its vendor (alias -> contact, else the merchant key), never by its raw text, and reads
+            # under the vendor's name (backend/finance/vendors.py).
+            if row.get("kind") != "feed":
+                continue
+            vendor = cast(Row, row.get("vendor") or {})
+            payee = str(vendor.get("id") or "")
             amount = int(cast(int, row.get("amount") or 0))
-            if (
-                row.get("kind") != "feed"
-                or row.get("pending")
-                or row.get("status") == "ignored"
-                or amount >= 0
-                or not payee
-            ):
+            if row.get("pending") or row.get("status") == "ignored" or amount >= 0 or not payee:
                 continue
             out.append(
                 W.Charge(
@@ -2752,20 +3030,97 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     payee=payee,
                     amount=-amount,
                     day=date.fromisoformat(str(row["date"])[:10]),
-                    shown=str(row.get("counterparty") or "").strip(),
+                    shown=str(vendor.get("name") or row.get("counterparty") or "").strip(),
                     card=str(row.get("card_id") or ""),
+                    money=str(cast(Row, row.get("money_account") or {}).get("id") or ""),
                 )
             )
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break
+    book = SL.book(c)
+    if book is None or book.mode != "mirror":
+        return out  # a Tico-kept book pays its bills from the feed, and that feed row is the charge
+    fed = _fed_money_accounts(c, start, today.isoformat())
+    return out + _entry_charges(c, viewer, start, today.isoformat(), fed)
+
+
+def watch_charges(c: sqlite3.Connection, viewer: str, at: str, days: int = WATCH_HISTORY_DAYS) -> list[W.Charge]:
+    """The posted debits of the last `days` (_charges): what the daily look that suggests subscriptions reads."""
+    return _charges(c, viewer, at, days)
+
+
+def _fed_money_accounts(c: sqlite3.Connection, start: str, end: str) -> set[str]:
+    """The books' accounts (GL lines) of the money accounts that have feed rows dated in the window: their money is read
+    from the feed, so their entries are never read again as charges."""
+    rows = c.execute(
+        "SELECT DISTINCT m.account_id FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+        "WHERE f.txn_date BETWEEN ? AND ? AND m.account_id IS NOT NULL",
+        (start, end),
+    ).fetchall()
+    return {str(r[0]) for r in rows}
+
+
+def _entry_charges(c: sqlite3.Connection, viewer: str, start: str, end: str, fed: set[str]) -> list[W.Charge]:
+    """One charge per posted expense entry in the window whose money account has no feed rows: the expense lines it
+    carries, summed, under the vendor they name (the vendor the books resolve, as a feed row's vendor is). Reversed
+    entries and entries with no vendor are left out."""
+    types = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, type FROM fin_accounts").fetchall()}
+    book = SL.book(c)
+    if book is None:
+        return []
+    grouped: dict[str, dict[str, Any]] = {}
+    cursor: str | None = None
+    for _ in range(WATCH_PAGES):
+        try:
+            page = transactions(c, viewer, source="entry", start=start, end=end, limit=200, cursor=cursor)
+        except FinanceError:
+            break
+        for row in cast(list[Row], page.get("rows") or []):
+            if row.get("kind") != "entry" or row.get("reversed") or types.get(str(row.get("account_id"))) != "expense":
+                continue
+            entry = str(row["entry_id"])
+            if entry not in grouped:
+                money = SATT.money_account_of(c, entry)
+                if money in fed:
+                    grouped[entry] = {"skip": True}
+                    continue
+                payee = SAP.vendor_resolved(c, book.id, str(row.get("vendor") or ""))
+                grouped[entry] = {
+                    "skip": not payee,
+                    "payee": payee,
+                    "shown": str(row.get("vendor_name") or payee),
+                    "day": str(row["date"]),
+                    "amount": 0,
+                    "money": money,
+                }
+            if not grouped[entry]["skip"]:
+                grouped[entry]["amount"] += int(cast(int, row.get("amount") or 0))
+        cursor = cast(str | None, page.get("next"))
+        if not cursor:
+            break
+    out: list[W.Charge] = []
+    for entry, g in grouped.items():
+        if g["skip"] or int(g["amount"]) <= 0:
+            continue
+        out.append(
+            W.Charge(
+                id=entry,
+                payee=str(g["payee"]),
+                amount=int(g["amount"]),
+                day=date.fromisoformat(str(g["day"])[:10]),
+                shown=str(g["shown"]).strip(),
+                money=str(g["money"]),
+            )
+        )
     return out
 
 
 def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str, Any]]:
     """Every Watch check's findings now: runway, unusual spend per payee over the last four months, and the posted
     debits read for duplicate charges, price increases and unused subscriptions (the cards an archived or idle bot holds
-    come from the hub's bot facts). Every read goes through the viewer's view."""
+    come from the hub's bot facts; confirmed subscriptions set the expected amount and the active ones, subscriptions.py).
+    Every read goes through the viewer's view."""
     today = date.fromisoformat(at[:10])
     found: list[dict[str, Any]] = []
     figures: Row = {}
@@ -2790,8 +3145,9 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
             series.setdefault(payee, [0] * len(months))[index] += int(cast(int, row.get("amount") or 0))
     found += W.unusual_spend(series, months[-1][0])
     charges = _charges(c, viewer, at)
-    found += W.duplicate_charges(charges) + W.price_increases(charges)
-    found += W.unused_subscriptions(charges, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
+    subs = SUB.watch_rows(c)
+    found += W.duplicate_charges(charges) + SUB.price_findings(charges, subs)
+    found += SUB.unused_findings(charges, subs, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
     return found
 
 
@@ -3010,3 +3366,143 @@ def descendant_ids(accounts: Mapping[str, Account], account_id: str) -> set[str]
 def pnl_section_of(accounts: Mapping[str, Account], account_id: str) -> str:
     """Where a P&L account sits: revenue, cost of revenue, operating expenses, or other income and expense."""
     return pnl_section(accounts, accounts[account_id])
+
+
+# ------------------------------------------------------------------------------------------------ attribution
+def _split_rows(splits: Sequence[CATT.Split], shares: Sequence[int]) -> list[Row]:
+    return [
+        {"teammate": s.teammate, "team": s.team, "share_bps": s.share_bps, "amount": amount}
+        for s, amount in zip(splits, shares, strict=False)
+    ]
+
+
+def line_attribution(c: sqlite3.Connection, viewer: str, line_id: str, at: str | None = None) -> Row:
+    """One posted P&L line's attribution: the shares in force (and their source), their amounts, and the line's history
+    newest first. A line the viewer does not see reads as not found."""
+    s = _open(c, viewer, at)
+    found = SL.lines(c, [line_id])
+    if line_id not in found or str(found[line_id][0]["book_id"]) != s.ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such line in your view")
+    line = found[line_id][1]
+    if not attribution_visible(s.ctx, viewer, line):
+        raise FinanceError(NOT_FOUND, "no such line in your view")
+    rows = SATT.history(c, line_id)
+    now = rows[0] if rows else None
+    splits = SATT.parse_splits(str(now["splits"])) if now is not None else ()
+    shares = CATT.shares_of(splits, line.amount)
+    source = str(now["source"]) if now is not None and splits else "tags"
+    rule_id = str(now["rule_id"]) if now is not None and splits and now["rule_id"] else None
+    rule = SATT.rule(c, rule_id) if rule_id else None
+    return {
+        "line_id": line_id,
+        "source": source,
+        "rule_id": rule_id,
+        "rule_name": str(rule["name"]) if rule is not None else None,
+        "set_by": str(now["set_by"]) if now is not None else None,
+        "set_at": str(now["created_at"]) if now is not None else None,
+        "can_change": R.has(s.ctx.org, viewer, R.ATTRIBUTION, s.ctx.rights(viewer)),
+        "tags": dict(line.tags),
+        "amount": line.amount,
+        "splits": _split_rows(splits, shares),
+        "history": [
+            {
+                "id": str(r["id"]),
+                "source": str(r["source"]),
+                "rule_id": str(r["rule_id"]) if r["rule_id"] else None,
+                "splits": [
+                    {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps}
+                    for x in SATT.parse_splits(str(r["splits"]))
+                ],
+                "set_by": str(r["set_by"]),
+                "set_at": str(r["created_at"]),
+                "superseded_at": str(r["superseded_at"]) if r["superseded_at"] else None,
+            }
+            for r in rows[: SATT.HISTORY_MAX]
+        ],
+    }
+
+
+DIMENSION_MONTHS = 12  # the classes, locations and projects a map read lists: those seen on lines in this many months
+
+
+def attribution_dimensions(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
+    """The classes, locations and projects seen on the P&L lines of the last DIMENSION_MONTHS the viewer sees, largest
+    amount first, each with its line count, amount and the attribution rule it has (its shares, or null). Needs the
+    attribution right (or admin), as the rules do."""
+    s = _open(c, viewer, at)
+    ctx = s.ctx
+    if not R.has(ctx.org, viewer, R.ATTRIBUTION, ctx.rights(viewer)):
+        raise denied("you need the attribution right to see the classes")
+    since = dates.add_months(dates.day(ctx.today), -DIMENSION_MONTHS).isoformat()
+    marks = ",".join("?" * len(SATT.DIMENSION_KINDS))
+    tagged = c.execute(
+        f"SELECT t.line_id, t.kind, t.value FROM fin_line_tags t JOIN fin_lines l ON l.id=t.line_id "
+        f"WHERE t.kind IN ({marks}) AND l.book_id=? AND l.entry_date>=? ORDER BY t.line_id",
+        [*SATT.DIMENSION_KINDS, ctx.book.id, since],
+    ).fetchall()
+    found = SL.lines(c, sorted({str(r[0]) for r in tagged}))
+    totals: dict[tuple[str, str], list[int]] = {}
+    for r in tagged:
+        hit = found.get(str(r[0]))
+        if hit is None or ctx.accounts.get(hit[1].account_id) is None:
+            continue
+        if ctx.accounts[hit[1].account_id].type not in PNL_TYPES or not attribution_visible(ctx, viewer, hit[1]):
+            continue
+        slot = totals.setdefault((str(r[1]), str(r[2])), [0, 0])
+        slot[0] += 1
+        slot[1] += hit[1].amount
+    rules = {(str(r["match_kind"]), str(r["match_id"])): r for r in SATT.rules(c, ctx.book.id)}
+    out: list[Row] = []
+    for (kind, dim_id), (lines, amount) in totals.items():
+        name = SATT.dimension_name(c, kind, dim_id)
+        if name is None:
+            continue
+        rule = rules.get((kind, dim_id))
+        out.append(
+            {
+                "kind": kind,
+                "id": dim_id,
+                "name": name,
+                "lines": lines,
+                "amount": amount,
+                "rule_id": str(rule["id"]) if rule is not None else None,
+                "splits": [
+                    {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps} for x in SATT.rule_splits(rule)
+                ]
+                if rule is not None
+                else None,
+            }
+        )
+    out.sort(key=lambda x: (-cast(int, x["amount"]), str(x["kind"]), str(x["id"])))
+    return {"dimensions": out, "can_change": True, "view_version": s.view.version}
+
+
+def attribution_rules(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
+    """The book's attribution rules, first created first. Needs the finance.attribution right (or admin)."""
+    s = _open(c, viewer, at)
+    if not R.has(s.ctx.org, viewer, R.ATTRIBUTION, s.ctx.rights(viewer)):
+        raise denied("you need the attribution right to see the rules")
+    rows = SATT.rules(c, s.ctx.book.id)
+    labels = SATT.rule_label_targets(c, s.ctx.book.id, rows)
+    return {
+        "can_change": True,  # only holders of the right (or admin, or the owner) read the rules, and they all may change them
+        "rules": [
+            {
+                "id": str(r["id"]),
+                "name": str(r["name"]),
+                "match": {
+                    "kind": str(r["match_kind"]),
+                    "id": str(r["match_id"]),
+                    "label": labels.get(str(r["match_id"]), str(r["match_id"])),
+                },
+                "splits": [
+                    {"teammate": x.teammate, "team": x.team, "share_bps": x.share_bps} for x in SATT.rule_splits(r)
+                ],
+                "enabled": bool(int(r["enabled"])),
+                "apply_from": str(r["apply_from"]) if r["apply_from"] else None,
+                "created_by": str(r["created_by"]),
+                "updated_at": str(r["updated_at"] or r["created_at"]),
+            }
+            for r in rows
+        ],
+    }
