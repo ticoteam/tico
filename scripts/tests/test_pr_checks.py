@@ -466,7 +466,11 @@ def test_a_route_change_selects_the_contract_tests(repo_map):
     # The spec is generated from the code, so no committed spec file in a route's diff reaches the contract test any more.
     # The route's module reaches it through the app's imports, and the generator reaches it directly.
     for changed in ("backend/computers_routes.py", "backend/openapi_v2.py"):
-        assert "backend/tests/test_openapi_v2.py" in checks.selection([changed], graph=repo_map)["python"], changed
+        picked = checks.selection([changed], graph=repo_map)
+        assert "backend/tests/test_openapi_v2.py" in picked["python"], changed
+        # A light pull request narrows the plan (depth 1, the hub app.py is not followed): the contract test must stay.
+        light = checks.narrow(picked, [changed], "pull_request", graph=repo_map)
+        assert "backend/tests/test_openapi_v2.py" in light["python"], changed
 
 
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
