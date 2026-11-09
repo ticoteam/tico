@@ -455,12 +455,12 @@ async function auOnSwitch(e: Event) {
   if (stepId) { await auStepToggle(stepId, t.checked); return; }
   auHave(AU);
   const id = listId || AU.cur?.id, row = (AU.list || []).find(x => x.id === id) || AU.cur;
-  if (!row || id === undefined) return;   // G: a row is found only by a set id, or is AU.cur, which has one
+  if (!row) return;
   // A built-in is paused only by the top of the org (the server decides), and never without saying what stops.
   if (!t.checked && row.builtin && !confirm(`${row.name} is built in. Turning it off stops it for everyone.`)) { t.checked = true; return; }
   const state = AU;
   try {
-    const out = auNormal(await patch(auApi(id), {enabled: t.checked}));
+    const out = auNormal(await patch(auApi(id as string), {enabled: t.checked}));
     if (AU !== state || !state.list) return;   // G: a switch is drawn from a read list (null only before the first read)
     const i = state.list.findIndex(x => x.id === id);
     if (i >= 0) state.list[i] = {...state.list[i]!, enabled: out.enabled ?? t.checked};
