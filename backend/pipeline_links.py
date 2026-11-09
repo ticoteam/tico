@@ -208,7 +208,8 @@ def _role_holder(conn: sqlite3.Connection) -> str | None:
     ROLES names manager bots, which are never a role holder. The pipeline's manager is never returned."""
     from . import roadmap_flow
 
-    engineering = roadmap_flow.role_type(conn, roadmap_flow.ENGINEERING)
+    flows: Any = roadmap_flow  # roadmap_flow is untyped; the Any alias keeps strict mode quiet, as H and allocator do
+    engineering = flows.role_type(conn, flows.ENGINEERING)
     if engineering is None:
         return None
     # The bot holding that type's role. No stored record links one (see above), so none resolves.
