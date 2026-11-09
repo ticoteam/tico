@@ -85,7 +85,7 @@ function grRetireButton(btn, dlg, path, after) {
 
 // A small dialog: a title, a form, Cancel and the primary button (none, and Close, with no `saveLabel`). `onSave(form)`
 // throws to show an error.
-function grDialog(title: string, body: string, saveLabel: string | null | undefined, onSave: (form: HTMLFormElement) => unknown) {
+function grDialog(title: string, body: string, saveLabel: string | null | undefined, onSave: ((form: HTMLFormElement) => unknown) | null) {
   document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal gr-dlg';
@@ -100,7 +100,7 @@ function grDialog(title: string, body: string, saveLabel: string | null | undefi
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
   form.onsubmit = async ev => {
     ev.preventDefault();
-    if (!save) return;
+    if (!save || !onSave) return;
     err.hidden = true; save.disabled = true;
     try { if (await onSave(form) === false) save.disabled = false; else dlg.close(); }
     catch (e) { err.textContent = e.message || 'Not saved'; err.hidden = false; save.disabled = false; }

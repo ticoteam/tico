@@ -36,7 +36,7 @@ interface GrowthCohort {
 interface GrowthSource { id: string; system: string; truth_for: string; retired_at?: string | null; }
 interface GrowthKpi { id: string; name: string; }
 /** The form's fields by name, as the dialogs read them (grDialog hands the form element); K is the names the dialog reads. */
-interface GrowthFormFields<K extends string> { elements: Record<K, { value: string }>; }
+type GrowthFormFields<K extends string> = HTMLFormControlsCollection & Record<K, { value: string }>;
 type SettingsField = 'unit' | 'revenue_month' | 'margin_pct';
 type CohortField = 'month' | 'spend' | 'bot_cost' | 'new_customers' | 'quality' | 'src_spend' | 'src_new' | 'revenue_month' | 'margin_pct' | GrowthKeptField;
 type ChannelField = 'name' | 'slug' | 'track' | 'stage' | 'owner_ref' | 'budget_month' | 'source_id' | 'guardrail_kpi_id' | 'guardrail_max' | 'why';
@@ -71,8 +71,8 @@ async function gcSettings(state: GrowthState) {
       ${grField('Margin %', `<input name="margin_pct" inputmode="decimal" value="${esc(st.margin_pct ?? '')}">`)}</div></div></fieldset>
     <section class="gr-sec gs-sec" aria-label="Channels"><h3 class="gr-k">Channels</h3>${list.map(c => row(c, true)).join('')}${row(GC_UNKNOWN, false)}
       <button class="ghost small gs-add" type="button" data-ch-add>+ Channel</button></section>
-    <a class="gs-src" href="${GR_SOURCES}" data-gr-sources>Where numbers come from</a>`, 'Save', async (form: GrowthFormFields<SettingsField>) => {
-    const v = (n: SettingsField) => form.elements[n].value;
+    <a class="gs-src" href="${GR_SOURCES}" data-gr-sources>Where numbers come from</a>`, 'Save', async form => {
+    const v = (n: SettingsField) => (form.elements as GrowthFormFields<SettingsField>)[n].value;
     const body: GrowthSettings = {revenue_month: grNum(v('revenue_month')), margin_pct: grNum(v('margin_pct'))};
     if (v('unit').trim()) body.unit = v('unit').trim();
     await put('/v2/growth/settings', body);
@@ -115,8 +115,8 @@ function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCoh
     <div class="gr-trio">${GC_KEPT.map(([f, d]) => n(f, `Kept ${d} days %`, c[f])).join('')}</div>
     <div class="gr-pair">${n('revenue_month', 'Revenue / customer', c.revenue_month)}${n('margin_pct', 'Margin %', c.margin_pct)}</div>
     ${grField('Spend from', `<input name="src_spend" maxlength="300" value="${esc(srcs.spend || '')}">`)}
-    ${grField('New from', `<input name="src_new" maxlength="300" value="${esc(srcs.new_customers || '')}">`)}`, 'Save', async (form: GrowthFormFields<CohortField>) => {
-      const v = (name: CohortField) => form.elements[name].value;
+    ${grField('New from', `<input name="src_new" maxlength="300" value="${esc(srcs.new_customers || '')}">`)}`, 'Save', async form => {
+      const v = (name: CohortField) => (form.elements as GrowthFormFields<CohortField>)[name].value;
       // The server merges these keys into what it keeps; an empty one removes that key.
       const sources = {...srcs, spend: v('src_spend').trim(), new_customers: v('src_new').trim()};
       const month = fresh ? v('month') : c.month ?? '';
@@ -146,8 +146,8 @@ async function gcChannelDialog(state: GrowthState, c: GrowthChannelRow | null = 
     ${grField('Max', `<input name="guardrail_max" inputmode="decimal" value="${esc(c?.guardrail_max ?? '')}">`)}</div>
     ${grField('Why', `<textarea name="why" rows="2" maxlength="1000">${esc(c?.why || '')}</textarea>`)}
     ${c ? '<button type="button" class="ghost danger gr-retire" data-retire>Retire</button>' : ''}`;
-  const dlg = grDialog(c ? c.name : 'New channel', body, c ? 'Save' : 'Add', async (form: GrowthFormFields<ChannelField>) => {
-    const el = form.elements, v = (n: ChannelField) => el[n].value.trim();
+  const dlg = grDialog(c ? c.name : 'New channel', body, c ? 'Save' : 'Add', async form => {
+    const el = form.elements as GrowthFormFields<ChannelField>, v = (n: ChannelField) => el[n].value.trim();
     const out: ChannelBody = {name: v('name'), track: v('track'), stage: v('stage'), owner_ref: v('owner_ref') || null, budget_month: grNum(v('budget_month')),
       source_id: v('source_id') || null, guardrail_kpi_id: v('guardrail_kpi_id') || null, guardrail_max: grNum(v('guardrail_max')), why: v('why')};
     if (!out.name) throw new Error('A name');
