@@ -1,8 +1,8 @@
 # Write a board brief
 
 Triggered by the weekly review when a problem meets the brief threshold in `knowledge/product-practice.md`, or when the
-product lead (`product-lead`) asks for a brief on a named problem. Budget 30 minutes. The outcome is one page, filed as a task
-owned by the product lead (`product-lead`), that can be approved, changed or declined from the page alone.
+your manager asks for a brief on a named problem. Budget 30 minutes. The outcome is one page, filed as a task
+owned by your manager, that can be approved, changed or declined from the page alone.
 
 ---
 
@@ -43,12 +43,12 @@ One page, plain words, in this shape:
 
 Save the page to a file in your checkout, then file it:
 
-    hub task create --owner product-lead --title "Board brief: <problem>" --body-file <file> --label segment:<slug>
+    hub task create --owner <your manager> --title "Board brief: <problem>" --body-file <file> --label segment:<slug>
 
 If the problem is already a Product roadmap item, comment the brief on that item instead of filing a new task. Record the
 brief in `knowledge/briefs.md`: the date, the problem, the task id, and "filed".
 
 ## 5. Stop there
 
-Do not tell a customer, a salesperson or a marketer that the problem will be fixed. The product lead's (`product-lead`) decision
+Do not tell a customer, a salesperson or a marketer that the problem will be fixed. Your manager's decision
 comes back on the task, and the next weekly review records it.

@@ -3838,7 +3838,7 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Owns one customer segment's activation and retention. Each week it ranks that segment's problems from tickets, feedback, calls and usage, and writes one-page product briefs for the product lead (`product-lead`) to approve.",
+   "summary": "Owns one customer segment's activation and retention. Each week it ranks that segment's problems from tickets, feedback, calls and usage, and writes one-page product briefs for its manager to approve, then writes the Spec page for each approved one.",
    "when": "A team with two or more customer segments where the product works for one group and the others drop off before they get value, and nobody answers for each group's problems.",
    "tags": [
     "product",

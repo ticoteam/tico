@@ -15,9 +15,9 @@ Steps:
 4. Name the likely cause from the factor that moved:
    - CPM up, click-through and conversion rate steady: the auction got dearer or the audience saturated. Check the same week's CPM for the account's other campaigns. If they rose too, the cause is the market, not this campaign.
    - Click-through down, CPM and conversion rate steady: creative fatigue or an offer that has stopped landing. Read `skills/spot-creative-fatigue/SKILL.md`.
-   - Conversion rate down, CPM and click-through steady: the landing page, the offer, the form or the tracking. Check the primary event still fires once, on the same page, for the same action. A changed page goes to `cro-owner` with the evidence.
+   - Conversion rate down, CPM and click-through steady: the landing page, the offer, the form or the tracking. Check the primary event still fires once, on the same page, for the same action. A changed page goes to the conversion channel's owner with the evidence.
    - Two factors moved: name both, and rank them by how far each moved.
-5. Check the tracking before you accept the conclusion. If the primary event count is off against the CRM for the same week and source (once that is read), the rise may be the tracking, not the performance. Route it to `marketing-ops`.
+5. Check the tracking before you accept the conclusion. If the primary event count is off against the CRM for the same week and source (once that is read), the rise may be the tracking, not the performance. Route it to the tracking owner.
 6. Check the changes in the last 14 days in `knowledge/changes.md`. A budget or audience change in that window is a candidate cause. If one exists, the answer may be "wait until the date it can be read", not a new change.
 7. Write the diagnosis into the review: the three factors with their eight-week averages and this week's values, the cause named as likely, the check that would confirm it, and either the change proposed or "wait until <date>".
 

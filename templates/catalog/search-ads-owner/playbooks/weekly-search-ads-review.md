@@ -18,7 +18,7 @@ From the attached exports (or read-only reporting, once connected): per campaign
 
 ## 3. Check each campaign against its target
 
-Compare the cost per primary conversion with the campaign's own target. Over target two weeks running: name the factor, using the diagnosis section of `knowledge/paid-search-method.md`. Check the query mix and the page before you name a bid as the cause. If the conversion rate fell and the search terms did not change, check tracking with `marketing-ops`. Never judge a segment's campaign against another segment's target.
+Compare the cost per primary conversion with the campaign's own target. Over target two weeks running: name the factor, using the diagnosis section of `knowledge/paid-search-method.md`. Check the query mix and the page before you name a bid as the cause. If the conversion rate fell and the search terms did not change, check tracking with the tracking owner. Never judge a segment's campaign against another segment's target.
 
 ## 4. Find the waste
 
@@ -41,7 +41,7 @@ For each change applied 14 or more days ago: before, after, and whether it did w
 
 ## 8. Choose three changes
 
-Rank by money at stake. For each one: the exact edit (platform, campaign or ad group, setting, from, to), the segment it serves, the evidence, the expected effect and the date you will check it. A budget move between segments, or between search and social, is not yours to make: write it as a question to the marketing lead (`marketing-lead`) on its own line. A landing page that does not match its search goes to `cro-owner` with its evidence. A conversion that is counted wrongly goes to `marketing-ops`. Prepare each change with `playbooks/prepare-a-search-ads-change.md`. This review applies nothing.
+Rank by money at stake. For each one: the exact edit (platform, campaign or ad group, setting, from, to), the segment it serves, the evidence, the expected effect and the date you will check it. A budget move between segments, or between search and social, is not yours to make: write it as a question to the Growth Team Manager (`growth-team-manager`) on its own line. A landing page that does not match its search goes to `cro-owner` with its evidence. A conversion that is counted wrongly goes to the tracking owner. Prepare each change with `playbooks/prepare-a-search-ads-change.md`. This review applies nothing.
 
 ## 9. Write and hand over
 

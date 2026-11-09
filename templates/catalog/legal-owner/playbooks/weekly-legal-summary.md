@@ -22,10 +22,10 @@ waiting on the Rules Owner (`tico-counsel`), so name it in the summary.
 ## 3. Read the legal team
 
 For each legal bot in `hub team show`: `hub update list --bot <slug>` and its newest `reports/` file. Take:
-- from `legal-review`: contracts waiting for a human and notice deadlines inside 30 days;
-- from `compliance`: filings and renewals inside 30 days, and anything overdue;
-- from `privacy`: open data subject requests and their response dates;
-- from `legal-ops`, `paralegal`, `ip-paralegal`, `corporate-secretary`: blocked work and deadlines.
+- from the bot that holds contracts: contracts waiting for a human and notice deadlines inside 30 days;
+- from the bot that holds filings: filings and renewals inside 30 days, and anything overdue;
+- from the bot that holds privacy requests: open data subject requests and their response dates;
+- from any other legal bot listed: blocked work and deadlines.
 Where a bot is absent, read the same from `knowledge/obligations.md` and the open tasks, and say which.
 
 ## 4. Pick the owner's decisions

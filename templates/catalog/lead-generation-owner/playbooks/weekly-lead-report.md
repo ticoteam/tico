@@ -25,7 +25,7 @@ Read last week's report, `knowledge/lead-method.md` and `knowledge/sources.md`.
 Use the export on the task if one is attached. Otherwise read the leads with their source tag, stage, owner and first-touch
 time, from the CRM through `hub db list` and `hub db <name> "<select>"`, or from `hub sql "<select>"` for the team's own
 tables. Monday to Sunday. Write the pull into `knowledge/sources.md` with its window and the date it was pulled. A lead with no
-tag is counted as "no source" and listed for marketing-ops. If no source has the leads, every count reads "not measured".
+tag is counted as "no source" and listed for the tracking owner. If no source has the leads, every count reads "not measured".
 
 ## 3. Apply the rule to each arrival
 

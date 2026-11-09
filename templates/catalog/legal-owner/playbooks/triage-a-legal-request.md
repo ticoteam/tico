@@ -27,8 +27,7 @@ Log it in `knowledge/requests.md` and record its stage there: Intake until it is
    breach, a value over the threshold): write the lawyer's brief (facts with dates, documents, the question,
    the deadline) and put it on the task for the owner. Engage counsel when requested and your Tools allow it; record the cost and scope.
 2. **Belongs to a legal bot** by the team lines: propose the route in one line with the reason.
-3. **Contract with flags needing a judgement**: review it yourself with the method in `legal-review`'s
-   summary (read liability, indemnity, term and renewal, termination, IP and data first), and write
+3. **Contract with flags needing a judgement**: review it yourself (read liability, indemnity, term and renewal, termination, IP and data first), and write
    `reports/reviews/<party>-<kind>.md`: the five-line summary, the flags against the playbook, and the
    questions for counsel.
 4. **Answered by a documented position**: answer in three lines and cite the source and its date.

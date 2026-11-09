@@ -376,6 +376,20 @@ class SettingsAdmin:
             else {}
         )
 
+    def template_private_default(self, template):
+        """The `private_tasks_default` the template's card declares: a bot made from it keeps its tasks private unless
+        the person says otherwise. False when the card declares none (or is missing), so no slug is named here."""
+        from pathlib import Path
+        import yaml
+
+        if not template:
+            return False
+        try:
+            manifest = yaml.safe_load((Path(self.settings.catalog_dir) / template / "card.yaml").read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            return False
+        return isinstance(manifest, dict) and manifest.get("private_tasks_default") is True
+
     def template_gateway(self, template):
         """The template's bot.yaml `gateway:` block ({level, fast}, docs/creating-bots.md), kept in the new bot's settings
         so a Gateway bot with no model of its own starts on that level; {} when it names none."""
@@ -616,7 +630,7 @@ class SettingsAdmin:
             "private_tasks_default": (
                 body.private_tasks_default
                 if "private_tasks_default" in body.model_fields_set
-                else body.template == "general-counsel"
+                else self.template_private_default(body.template)
             ),
             "model_managed_by": "cloud",
         }
