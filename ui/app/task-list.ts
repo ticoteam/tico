@@ -1026,7 +1026,9 @@ async function tasksBulkApply(state, describe, bodyFor, action) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const data = await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
-        if (data?.over_cap) overCap.set(body.step || '', [t, body, data]);   // one line per stage, as one move says
+        // One line per stage, as one move says: the stage the card landed in (a Status move names none of its own).
+        const landed = data?.task?.step_id || body.step || '';
+        if (data?.over_cap) overCap.set(landed, [t, {...body, step: landed}, data]);
         changed++;
         if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general',
           told: !!actorSlug(taskRequester(t))});

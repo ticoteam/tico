@@ -65,3 +65,18 @@ bulkContext.tasksBulkApply({}, {done: 'moved to Doing'}, () => ({step: 'doing'})
   assert.deepEqual(bulkWarned, [['T2', 'doing', true]], 'a bulk move says the stage is over its cap once');
   console.log('stage-caps-unit: bulk move ok');
 });
+
+// A Status move names no stage: each card's landing stage (the returned task's step_id) gets its own line.
+const statusWarned = [];
+const twoLines = [{id: 'A1', version: 1, type_id: 'one'}, {id: 'B1', version: 1, type_id: 'two'}];
+const statusContext = vm.createContext({
+  tasksSelectedTasks: () => twoLines, tasksCanSelect: () => true, tasksMenuClose: () => {}, tasksBulkBar: () => {},
+  post: async url => ({over_cap: true, task: {step_id: url.includes('A1') ? 'doing-one' : 'doing-two'}}),
+  v2Get: async () => null, pipelineTypeId: () => 'line', actorSlug: () => '', taskRequester: () => '', TASKS_ST: null,
+  taskOverCapWarn: (task, body, data) => statusWarned.push([task.id, body.step, data?.over_cap]),
+});
+vm.runInContext(listFunction('tasksBulkApply'), statusContext);
+statusContext.tasksBulkApply({}, {done: 'moved'}, () => ({status: 'doing'})).then(() => {
+  assert.deepEqual(statusWarned, [['A1', 'doing-one', true], ['B1', 'doing-two', true]], 'one line per landing stage');
+  console.log('stage-caps-unit: status move ok');
+});
