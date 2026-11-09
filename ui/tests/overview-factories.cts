@@ -184,6 +184,8 @@ async function phone(browser: import('playwright').Browser) {
   assert.equal(await page.locator('#of-lines').isVisible(), false);
   assert.match(await page.locator('[data-of-pl=camp] .of-onward').innerText(), /38 · 2d to Sales/);
   assert.match(await page.locator('[data-of-pl=camp] .of-in-chip').innerText(), /Ads 14/);
+  const short = await page.locator('[data-of-period], #of-new-b').evaluateAll((bs: HTMLElement[]) => bs.filter(b => b.getBoundingClientRect().height < 44).map(b => b.textContent));
+  assert.deepEqual(short, [], 'the period picker and + Factory are 44px tall on a phone');
   await page.locator('[data-of-pl=camp] .of-chat').click();
   await page.locator('#of-rail-chat .thv').waitFor();
   const sheet = (await page.locator('#of-rail').boundingBox())!;
