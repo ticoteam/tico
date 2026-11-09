@@ -65,7 +65,7 @@ BISECT_LIMIT = 15 * 60  # seconds a whole bisect may take
 ALL_UI = "ui/tests/*"  # any browser script: a UI file UI_MAP does not name
 PYTEST_FAILED = re.compile(r"\bFAILED (\S+::\S+)")
 PYTEST_NODE = re.compile(r"\S+\.py::\S+$")
-# scripts/ui-tests.cjs ends a red run with "N of M UI scripts failed: a.cjs, b.cjs (all M took Ss)".
+# scripts/ui-tests.cts ends a red run with "N of M UI scripts failed: a.cjs, b.cjs (all M took Ss)".
 UI_FAILED = re.compile(r"\d+ of \d+ UI scripts failed: (.+?)(?: \((?:all \d+ took )?\d+s\))?\s*$")
 MESSAGE_PR = re.compile(r"Merge pull request #(\d+)\b|\(#(\d+)\)\s*$")
 STATE = re.compile(r"<!-- main-red-state (\{[^\n]*\}) -->")

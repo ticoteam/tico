@@ -1,5 +1,7 @@
 // The saved Recorder panel uses the real window and a delayed Tauri write.
-import type {Route} from 'playwright';
+import type {PreviewShared, RecorderWindow, SharedArgs} from './globals.d.ts';
+// The page's window, file-local (no global augmentation): the preview script in this program types it its own way.
+declare const window: Window & typeof globalThis & RecorderWindow;
 require('../../ui/tests/support/browser.cts');
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -138,7 +140,7 @@ const path: typeof import('node:path') = require('node:path');
       await row.waitFor();
       if(inFlight) await page.evaluate(()=>{const f=window.pendingFixture;f.hold=new Promise(resolve=>f.release=resolve);});
       await row.evaluate(el=>{
-        for(const [key,value] of [['text','My unsaved title'],['owner','human:dana']]) {
+        for(const [key,value] of [['text','My unsaved title'],['owner','human:dana']] as [string, string][]) {
           const field=el.querySelector<HTMLInputElement>(`[data-shared-field="${key}"]`)!;
           if(field.hasAttribute('contenteditable')) field.textContent=value; else field.value=value;
           field.dispatchEvent(new Event('input',{bubbles:true}));
@@ -191,7 +193,7 @@ const path: typeof import('node:path') = require('node:path');
       const local=page.getByRole('textbox',{name:'Task',exact:true});
       await local.fill('My native unsaved title');
       await local.press('Tab');
-      await page.waitForFunction(()=>window.pendingFixture.a.items[0].title==='My native unsaved title');
+      await page.waitForFunction(()=>window.pendingFixture.a.items[0]!.title==='My native unsaved title');
       await page.getByRole('button',{name:'Create',exact:true}).click();
       const closed=page.locator(`[data-shared-row="server-${id}"]`);
       await closed.getByText('Sent by Sam Okafor',{exact:true}).waitFor();

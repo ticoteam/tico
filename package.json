@@ -8,7 +8,7 @@
     "build:observability": "esbuild ui/observability-vendors.ts --bundle --format=esm --minify --outfile=ui/assets/observability-vendors.js",
     "check:observability": "npm run build:ui && node --check build/ui/observability.js && node --check ui/assets/observability-vendors.js",
     "screenshots": "node scripts/screenshots/index.cts",
-    "test:ui": "node scripts/ui-tests.cjs"
+    "test:ui": "node scripts/ui-tests.cts"
   },
   "dependencies": {
     "@sentry/browser": "10.76.2",

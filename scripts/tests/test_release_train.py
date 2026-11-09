@@ -1718,3 +1718,32 @@ def test_a_full_validation_older_than_a_day_runs_even_when_a_fresh_incremental_a
     picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(plan=PLAN_TEXT))
     assert (picked["action"], picked["mode"]) == ("dispatch", "full")
     assert "no full validation in the last 24 hours" in picked["why"]
+
+
+def test_a_github_reply_cut_short_is_retried(monkeypatch):
+    import http.client
+
+    class Reply:
+        status, headers = 200, {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    calls = []
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise http.client.IncompleteRead(b"x" * 10, 5)
+        return Reply()
+
+    monkeypatch.setattr(rt.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(rt.time, "sleep", lambda seconds: None)
+    assert rt.GitHub("o/r", "t").get("actions/runs/1/jobs") == {"ok": True}
+    assert len(calls) == 2

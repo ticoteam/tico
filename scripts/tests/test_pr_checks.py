@@ -733,7 +733,7 @@ def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measure
     )
     assert checks.run(tmp_path / "plan.json", "browser-1") == 0
     command, env = calls[-1]
-    assert command == ["node", "scripts/ui-tests.cjs", "-j", str(checks.WORKERS), "chat"]
+    assert command == ["node", "scripts/ui-tests.cts", "-j", str(checks.WORKERS), "chat"]
     assert env["TICO_UI_TIMINGS"] == str(tmp_path / "ci-results" / "browser-1.json")
     # The UI helpers import the backend through TICO_PYTHON: the suite's own interpreter, never a bare python3.
     assert env["TICO_PYTHON"] == sys.executable
@@ -1143,8 +1143,12 @@ def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
         job = jobs[name]
         assert job["permissions"] == {"contents": "read", "actions": "write"}, name
         cancel = job["steps"][-1]
-        assert cancel["if"] == "failure()" and cancel["run"] == 'gh run cancel "$GITHUB_RUN_ID"', name
-        assert cancel["env"] == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
+        # It names what failed first (every leg then ends "cancelled"), and the cancel is its last line.
+        lines = cancel["run"].strip().splitlines()
+        assert cancel["if"] == "failure()" and lines[-1] == 'gh run cancel "$GITHUB_RUN_ID"', name
+        assert any(line.startswith('echo "::error title=') for line in lines), name
+        env = {k: v for k, v in cancel["env"].items() if k not in ("SUITE", "SHARD")}
+        assert env == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
     # Only the two heavy legs and the plan (which cancels superseded queue groups) may cancel; every other job keeps the
     # workflow's read-only token.
     assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "factory-sim", "plan"}
@@ -1991,7 +1995,7 @@ def test_a_local_pass_runs_the_ci_selection_and_prints_a_receipt_the_review_gate
     test, check = pytest_leg(python)
     assert test[-1] == "tests/test_app.py" and "pytest" in test and test[test.index("-n") + 1] == "2"
     assert check[1:3] == ["scripts/pr_checks.py", "junit-ran"]  # a leg whose every test skipped is no pass
-    assert "scripts/ui-tests.cjs" in browser and browser[-1] == "chat"
+    assert "scripts/ui-tests.cts" in browser and browser[-1] == "chat"
     # Heavy local runs share the computer's slots (scripts/heavy.sh), as a bot's full suite does.
     assert all(c[1].endswith("scripts/heavy.sh") for c in branch.commands)
     line = receipt_line(capsys.readouterr().out)
@@ -2066,6 +2070,25 @@ def test_a_python_leg_that_runs_no_test_is_no_pass(tmp_path, monkeypatch):
     assert checks.junit_ran(report)
     monkeypatch.setattr("sys.argv", ["pr_checks.py", "junit-ran", str(report)])
     assert checks.main() == 0
+
+
+def test_a_fail_fast_cancel_names_the_first_failing_tests(tmp_path, monkeypatch, capsys):
+    # The leg that failed cancels the run, so it shows "cancelled" too; its error names what failed instead.
+    (tmp_path / "python-7.xml").write_text(
+        '<testsuite><testcase classname="backend.tests.test_thread_halfway" name="test_bounded"><failure message="x"/>'
+        '</testcase><testcase classname="backend.tests.test_ok" name="test_fine"/>'
+        '<testcase classname="backend.tests.test_b" name="test_err"><error message="y"/></testcase></testsuite>'
+    )
+    (tmp_path / "broken.xml").write_text("<testsuite")
+    assert checks.junit_failed([tmp_path / "python-7.xml"], limit=1) == [
+        "test_thread_halfway.py::test_bounded",
+        "and 1 more",
+    ]
+    monkeypatch.setattr("sys.argv", ["pr_checks.py", "failed", str(tmp_path)])
+    assert not checks.main()
+    assert capsys.readouterr().out.strip() == "test_thread_halfway.py::test_bounded, test_b.py::test_err"
+    workflow = (ROOT / ".github/workflows/pr-checks.yml").read_text()
+    assert "pr_checks.py failed ci-results" in workflow and "::error title=${SUITE} failed::" in workflow
 
 
 def test_a_leg_passes_only_when_pytest_passed_and_a_test_ran_and_keeps_pytests_own_code(tmp_path):

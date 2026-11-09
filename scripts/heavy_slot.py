@@ -1,5 +1,5 @@
 """A bot's own pytest run takes one of the box's heavy-job slots (scripts/heavy.sh), as release_checks.py and
-ui-tests.cjs do. Bots on one shared computer each ran the suite directly, with xdist workers, until the load held
+ui-tests.cts do. Bots on one shared computer each ran the suite directly, with xdist workers, until the load held
 every new turn on that computer; heavy.sh lets a few run at once, at low priority, and the rest wait.
 
 The root conftest.py calls `reexec` from pytest_configure, before collection and before xdist starts workers."""

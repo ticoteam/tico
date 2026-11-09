@@ -8,7 +8,8 @@
 # core.hooksPath .githooks` runs this, and the branch conflict check, on every push. CONTRIBUTING.md lists where this
 # differs from CI.
 # Checks: lint.sh (ruff baseline and ruff format), shell_lint.sh (shellcheck), actionlint (workflows), migration order,
-# check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet), the
+# check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet),
+# check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/ type-check strictly), the
 # OpenAPI document (backend.openapi_v2 --check), check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
 # check_wire_contract.py (runner wire contract), check_types.sh (basedpyright on the backend against its baseline), and
 # cargo fmt for the Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
@@ -124,7 +125,7 @@ rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
 # 1. Python lint, as lint.sh runs it in CI: the ruff baseline (counts only go down, against origin/main), the pytest
 # ignore count, and ruff format over the whole repository. The ruff settings and the pytest config are inputs too.
 # lint.sh also runs pr_checks.py smoke-check, which reads the smoke set and the browser runner's core scripts.
-if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^scripts/(lint|lint_baseline|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cjs$|^ui/tests/.*\.cjs$'; then
+if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^scripts/(lint|lint_baseline|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$|^scripts/ui-tests\.cts$|^ui/tests/.*\.cts$'; then
   job "lint (ruff baseline, format)" env LINT_BASE_REF="$ratchet" bash scripts/lint.sh
 else
   skip "lint (ruff baseline, format)" "no Python, ruff or pytest config changed"
@@ -207,12 +208,22 @@ fi
 # 6c. Every UI script is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
 # Its tsc reads ui/types/api.d.ts, which the ui types check writes from the backend's routes (so a Python change can
 # break a .ts file), and it starts once that check has finished.
-if touched '\.pyi?$|^ui/|^scripts/(check_ui_strict|ui_baseline|gen_ui_types)\.py$'; then
+# ui/tests/tsconfig.json extends tsconfig.node.json, and rule 10 reads its options through check_node_types.py.
+if touched '\.pyi?$|^ui/|^tsconfig\.node\.json$|^scripts/(check_ui_strict|ui_baseline|gen_ui_types|check_node_types)\.py$'; then
   strict=(python3 scripts/check_ui_strict.py ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"})
   if [ -n "$UI_TYPES_JOB" ]; then strict=(after "$UI_TYPES_JOB" "${strict[@]}"); fi
   job "ui strict (TypeScript, strict ratchet)" "${strict[@]}"
 else
   skip "ui strict (TypeScript, strict ratchet)" "no UI file changed"
+fi
+
+# 6c'. The TypeScript Node runs directly outside ui/ (scripts/ and recorder/ .cts, .mts and .d.ts files) type-checks
+# strictly, with no baseline (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
+# a project. The base config and the npm packages whose types the scripts read are inputs too.
+if touched '^([^u]|u[^i]|ui[^/])[^[:space:]]*\.([cm]?ts|tsx)$|(^|/)tsconfig(\.node)?\.json$|^package(-lock)?\.json$|^scripts/check_node_types\.py$'; then
+  job "node types (scripts/, recorder/ TypeScript)" python3 scripts/check_node_types.py
+else
+  skip "node types (scripts/, recorder/ TypeScript)" "no TypeScript outside ui/ changed"
 fi
 
 # 6d. A check that picks UI source by a .js suffix alone stops covering each converted .ts file. Text only, a second.

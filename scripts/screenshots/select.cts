@@ -78,7 +78,7 @@ const DARK_FILES: string[] = ['ui/styles/tokens.css', 'ui/theme.ts'];
 function globToRegExp(glob: string): RegExp {
   let out = '';
   for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
+    const c = glob[i]!;
     if (c === '*') {
       if (glob[i + 1] === '*') { out += '.*'; i++; } else out += '[^/]*';
     } else if (c === '?') {

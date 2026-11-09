@@ -112,6 +112,7 @@ from .screen import listing as screen_listing
 from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
+from .github_app import CALLBACK_PATH as GITHUB_APP_CALLBACK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, encode
@@ -569,18 +570,7 @@ def create_app(settings=None):
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
-        def reason(error):
-            if (
-                error["type"] == "extra_forbidden"
-                and tuple(error["loc"])[-1:] == ("manager",)
-                and request.url.path.startswith("/api/v2/task-types")
-            ):
-                return M.MANAGER_FIXED
-            return error["msg"]
-
-        detail = "; ".join(
-            ".".join(str(part) for part in error["loc"]) + ": " + reason(error) for error in exc.errors()
-        )
+        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"] for error in exc.errors())
         return JSONResponse({"error": {"code": "validation", "detail": detail, "retryable": False}}, status_code=422)
 
     app.state.observability = telemetry
@@ -881,9 +871,20 @@ def create_app(settings=None):
             )
             if request.url.path != "/api/v2/runners/enroll" and not agent_door:
                 began = time.perf_counter()
-                who = await asyncio.get_running_loop().run_in_executor(
-                    app.state.auth_pool, auth.authenticate, request.headers, request.url.path, request.method
-                )
+                try:
+                    who = await asyncio.get_running_loop().run_in_executor(
+                        app.state.auth_pool, auth.authenticate, request.headers, request.url.path, request.method
+                    )
+                except Problem as exc:
+                    # GitHub's return for the App's setup (backend/github_app.py) comes in the browser, which may hold no owner
+                    # session: only the missing identity passes, and the route parks the code. Any other refusal stands.
+                    if (
+                        exc.code != "identity"
+                        or request.url.path != GITHUB_APP_CALLBACK_PATH
+                        or request.method != "GET"
+                    ):
+                        raise
+                    return await call_next(request)
                 if who.support:
                     # Again on the path as sent, still percent-encoded: the gate then reads the address the router
                     # will, not a decoded one that could differ from it.

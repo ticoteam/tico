@@ -1,9 +1,10 @@
 // Synthetic replay of the real Recorder window. No server, model or bot is contacted.
-import type {Route} from 'playwright';
+import type {RecorderWindow} from './globals.d.ts';
+// The page's window, file-local (no global augmentation): the preview script in this program types it its own way.
+declare const window: Window & typeof globalThis & RecorderWindow;
 // Run from the repository root: node recorder/tests/live-sharing.cts
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 async function replay(browser: import('playwright').Browser): Promise<void> {
   const context = await browser.newContext();
@@ -22,7 +23,7 @@ async function replay(browser: import('playwright').Browser): Promise<void> {
     await page.addInitScript(() => { window.setInterval = () => 0; });
     await page.goto('http://recorder.example/preview/index.html?scene=live');
     await page.evaluate(() => {
-      const m = window.__PREVIEW__.state.meetings.m2;
+      const m = window.__PREVIEW__.state.meetings.m2!; // scene=live seeds m2
       m.live_url = 'https://acme.example/#/meetings?live=synthetic-room';
       m.people.org = 'Acme <test>';
       m.people.team = false;

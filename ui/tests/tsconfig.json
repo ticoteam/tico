@@ -1,23 +1,7 @@
 {
+  "extends": "../../tsconfig.node.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "moduleDetection": "force",
-    "types": ["node"],
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noUnusedLocals": true,
-    "noFallthroughCasesInSwitch": true,
-    "exactOptionalPropertyTypes": true,
-    "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true,
-    "allowJs": false,
-    "checkJs": false,
-    "noEmit": true,
-    "skipLibCheck": true
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["./**/*.cts"]
 }

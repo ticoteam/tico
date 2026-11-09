@@ -1,3 +1,4 @@
+import type {Api} from '../ui-tests.cts';
 const {test}: typeof import('node:test') = require('node:test');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -9,7 +10,7 @@ const {EventEmitter}: typeof import('node:events') = require('node:events');
 // browser.cts is TypeScript: the vm below runs its source with the types stripped (Node's own stripper, as --require does).
 const {stripTypeScriptTypes}: typeof import('node:module') = require('node:module');
 type Emitter = import('node:events').EventEmitter;
-const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport, typeScriptGuard}: typeof import('../ui-tests.cjs') = require('../ui-tests.cjs');
+const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport, typeScriptGuard} = require('../ui-tests.cts') as Api;
 
 test('frame timing scripts run alone after the parallel pool, within the selected files', async () => {
   const active = new Set<string>(), started: string[] = [], finished: string[] = [];
@@ -35,7 +36,7 @@ test('frame timing scripts run alone after the parallel pool, within the selecte
 test('one CPU-idle policy, explicit overrides and shared context/page timeouts', async () => {
   const counters = (user: number, idle: number) => Array.from({length: 12}, () => ({times: {user, nice: 0, sys: 0, idle, irq: 0}}));
   const snapshots = [counters(10000, 50000), counters(10070, 50030)];
-  const sampled = await sampleCpu(() => snapshots.shift(), async (ms: number) => assert.equal(ms, 1000));
+  const sampled = await sampleCpu(() => snapshots.shift()!, async (ms: number) => assert.equal(ms, 1000));
   assert.deepEqual(sampled, {cores: 12, idleFraction: 0.3});
   assert.equal(snapshots.length, 0);
   const spare = resources({}, sampled.cores, sampled.idleFraction);
@@ -155,7 +156,7 @@ test('a hung browser script is named with its pending call; it and everything it
 test('newPage and page.close fail with their name instead of waiting forever', {timeout: 30000}, async () => {
   const never = (): Promise<never> => new Promise(() => {});
   const page = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, close: never};
-  const context: FakeContext = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event: string, callback: unknown) => { context.onPage = callback as FakeContext['onPage']; },
+  const context: FakeContext = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event: string, callback: unknown) => { context.onPage = callback as NonNullable<FakeContext['onPage']>; },
                    newPage: never};
   const engine = () => ({launch: async () => ({newContext: async () => context}), launchPersistentContext: async () => context});
   const playwright = {chromium: engine(), firefox: engine(), webkit: engine()};
@@ -201,8 +202,9 @@ function fakeRunner({platform = 'darwin', execFileSync = () => { throw new Error
   const child = new EventEmitter() as unknown as FakeChild;
   child.pid = 123;
   for (const pipe of ['stdout', 'stderr'] as const) { child[pipe] = new EventEmitter() as unknown as FakeStream; child[pipe].destroy = () => {}; }
-  const sandbox: {exports: typeof import('../ui-tests.cjs')} = {exports: {} as typeof import('../ui-tests.cjs')};
-  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../ui-tests.cjs'), 'utf8'), {
+  const sandbox: {exports: Api} = {exports: {} as Api};
+  // The runner is TypeScript: the vm runs its source with the types stripped, as Node does when it runs the file.
+  vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(path.resolve(__dirname, '../ui-tests.cts'), 'utf8'), {mode: 'strip'}), {
     module: sandbox, __dirname: path.resolve(__dirname, '..'), setTimeout, clearTimeout, console, Buffer,
     require: (name: string) => name === 'node:child_process' ? {spawn: () => child, execFileSync} : require(name),
     process: {platform, env: {}, execPath: 'node', kill: () => { throw new Error('no real signals'); }}
@@ -313,7 +315,7 @@ test('the browser call log is bounded while it streams and in the report, and UR
 });
 
 test('--group e2e lists the end-to-end journeys, and an unknown group is refused', () => {
-  const script = path.join(__dirname, '..', 'ui-tests.cjs');
+  const script = path.join(__dirname, '..', 'ui-tests.cts');
   const list = spawnSync(process.execPath, [script, '--group', 'e2e', '--list'], {encoding: 'utf8'});
   assert.equal(list.status, 0, list.stderr);
   const names = list.stdout.trim().split('\n');

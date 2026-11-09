@@ -428,13 +428,6 @@ class TaskTypeCreate(Contract):
     steps_only: bool = False
 
 
-# Refusing a `manager` field says where the choice it was after lives.
-MANAGER_FIXED = (
-    "A task type's manager is fixed by its role and can't be changed. To choose which bot receives public "
-    "roadmap suggestions, use Settings → Tasks → Public roadmap → Suggestions go to (or `hub roadmap settings`)."
-)
-
-
 class TaskTypeUpdate(Contract):
     default_visibility: Literal['public', 'private'] | None = None
     name: ID | None = None
@@ -442,6 +435,8 @@ class TaskTypeUpdate(Contract):
     bots: TypeBots | None = None
     numbered: bool | None = None
     steps_only: bool | None = None
+    # A pipeline's manager: `bot:<id>` or `<id>`, an active bot; "" clears it (backend/pipeline_requirements.py set_manager).
+    manager: str | None = Field(default=None, max_length=128)
 
 
 # What a pick says on a person's card (ui/app/question-card.ts): `then` is its "what happens" line, under its button;

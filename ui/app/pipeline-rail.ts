@@ -119,8 +119,8 @@ function pipelineRailTasks(state: PipelineTasksState, rail: PipelineRail): Pipel
 function pipelineRailLateHTML(view: PipelineManagerView): string {
   if (!view.late.length) return '';
   const rows = view.late.map(item => `<li><button type="button" class="pr-late" data-rail-task="${esc(item.task_id)}">
-      <span class="pr-late-id">${esc(item.task_id)}</span>
-      <span class="pr-late-what">${esc(item.stage_name)} · warn after ${esc(pipelineLimit(item.limit_minutes))}</span>
+      <span class="pr-late-main"><span class="pr-late-title">${esc(item.title || item.task_id)}</span>
+      <span class="pr-late-what">${esc(item.stage_name)} · warn after ${esc(pipelineLimit(item.limit_minutes))}</span></span>
       <span class="pr-late-age tnum">${esc(pipelineSpan(item.age_minutes))}</span></button></li>`).join('');
   return `<section class="pr-sec"><h3 class="pipe-h">Late · ${view.late.length}</h3><ul class="pr-list">${rows}</ul></section>`;
 }
@@ -139,7 +139,7 @@ function pipelineRailTabHTML(state: PipelineTasksState, rail: PipelineRail): str
     const tasks = pipelineRailTasks(state, rail);
     return tasks.length
       ? `<ul class="pr-list">${tasks.map(task => `<li><button type="button" class="pr-late" data-rail-task="${esc(String(task.id))}">
-          <span class="pr-late-id">${esc(String(task.id))}</span><span class="pr-late-what">${esc(task.title || '')}</span></button></li>`).join('')}</ul>`
+          <span class="pr-late-main"><span class="pr-late-title">${esc(task.title || String(task.id))}</span></span></button></li>`).join('')}</ul>`
       : '<p class="pr-empty">Nothing</p>';
   }
   if (rail.tab === 'learned') return pipelineRailLogHTML(view.log.filter(line => line.action === 'propose_rule'), 'Nothing yet');

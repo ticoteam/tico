@@ -1714,7 +1714,8 @@ TASK_BULK_FILTER = (
     "hub_task_bulk",
     "Change every task a filter selects: step, status, owner, tags or close, as hub_task_update or hub_task_close "
     "would, with your rights (refused ones are skipped, with why). Filter: hub_task_list's plus `ids` and "
-    "`exclude_owner`; at least one. Over 200 is refused. Run `dry_run` (counts only) first.",
+    "`exclude_owner`; at least one. Over 200 is refused. Run `dry_run` first: it skips the org rule check and the "
+    "handoff check, so a task either would hold counts as changed there and is skipped for real.",
     {
         "filter": {
             "type": "object",
@@ -1743,7 +1744,11 @@ TASK_BULK_FILTER = (
         "add": {"type": "array", "items": {"type": "string"}, "description": "Action tags: add"},
         "remove": {"type": "array", "items": {"type": "string"}, "description": "Action tags: remove"},
         "note": _s("Why; noted on each change"),
-        "dry_run": {"type": "boolean", "default": False, "description": "Count only"},
+        "dry_run": {
+            "type": "boolean",
+            "default": False,
+            "description": "Count only. Does not count rule or handoff holds: a task one would hold shows as changed here",
+        },
     },
     required=("filter", "action"),
     writes=True,
@@ -9752,6 +9757,38 @@ def pipeline(api, args):
         "pipeline",
         **{k: args[k] for k in ("type", "owner", "label", "updated_since", "snoozed", "bot", "since") if args.get(k)},
     )
+
+
+def _pipeline_id(api, ref):
+    """A pipeline's id from its id or its name (the task types are its pipelines)."""
+    types = api.get("task-types")["types"]
+    named = [t for t in types if t["id"] == ref] or [t for t in types if str(t.get("name", "")).lower() == ref.lower()]
+    if not named:
+        raise ValueError(f"No pipeline named {ref!r}")
+    if len(named) > 1:
+        raise ValueError(f"{ref!r} names more than one pipeline: use its id")
+    return named[0]["id"]
+
+
+@tool(
+    "hub_pipeline_manager",
+    "Set or clear a pipeline's manager bot: the bot that runs the pipeline's manager pass and judges its stuck tasks. "
+    "Give `bot` to set it or `clear` to clear it, not both. Only the pipeline's owner and admins may; the bot must be "
+    "active (an archived, paused or planned bot is refused, and the manager stays as it was).",
+    {
+        "pipeline": _s("The pipeline: its id or its name"),
+        "bot": _s("The bot to manage the pipeline: its id or slug (an active bot)"),
+        "clear": {"type": "boolean", "description": "Clear the manager instead of setting one"},
+    },
+    required=("pipeline",),
+    writes=True,
+)
+def pipeline_manager(api, args):
+    if bool(args.get("bot")) == bool(args.get("clear")):
+        raise ValueError("Name the bot to set as the manager, or clear the manager; not both and not neither")
+    pipeline_id = _pipeline_id(api, args["pipeline"])
+    value = "" if args.get("clear") else args["bot"]
+    return api.patch("pipelines/" + pipeline_id + "/settings", {"manager_id": value}, key=_key(args))
 
 
 @tool(

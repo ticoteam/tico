@@ -901,6 +901,53 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
 }
 
 #[tokio::test]
+async fn an_existing_task_worktree_survives_a_base_checkout_without_an_upstream() {
+    let tmp = Tmp::new();
+    let (bare, _) = remote(&tmp.0, "bot-ops");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "ops", "restart");
+
+    assert_eq!(
+        sessions::ensure(&main, &session, "restart", &env)
+            .await
+            .unwrap(),
+        ("origin/main".into(), "".into())
+    );
+
+    // Simulate a restart where the base checkout's current branch no longer tracks GitHub. The existing task lane
+    // still has its own origin/main tracking branch and must keep running in that worktree.
+    sh(&main, &["checkout", "--quiet", "-b", "local-only"]);
+    assert!(
+        sessions::upstream(&main, &crate::safegit::environment(&env))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        sessions::ensure(&main, &session, "restart", &env)
+            .await
+            .unwrap(),
+        ("origin/main".into(), "".into())
+    );
+    assert_eq!(
+        sh(&session, &["symbolic-ref", "--short", "HEAD"]),
+        "tico-session/restart"
+    );
+}
+
+#[tokio::test]
 async fn a_stateless_task_lane_commits_no_memory_and_leaves_what_it_wrote_in_memory_as_it_is() {
     let tmp = Tmp::new();
     let (bare, _seed) = remote(&tmp.0, "bot-counsel");
@@ -1316,6 +1363,33 @@ async fn a_private_meetings_checkout_needs_no_upstream_but_a_tasks_does() {
         "reused"
     );
     assert!(sessions::remove_private(&main, &session, &name, &env).await);
+}
+
+#[tokio::test]
+async fn a_task_without_an_upstream_reports_that_before_a_leftover_path() {
+    let tmp = Tmp::new();
+    let projects = tmp.0.join("projects");
+    let main = projects.join("bot-ops");
+    std::fs::create_dir_all(&main).unwrap();
+    sh(&main, &["init", "-q", "-b", "main"]);
+    std::fs::write(main.join("AGENT.md"), "# Ops\n").unwrap();
+    sh(&main, &["add", "-A"]);
+    sh(&main, &["commit", "-qm", "start"]);
+    let env = turn_env(&tmp.0, &[]);
+    let task = sessions::path_for(&projects, "ops", "leftover");
+    std::fs::create_dir_all(&task).unwrap();
+    std::fs::write(task.join("keep"), "untouched").unwrap();
+
+    assert_eq!(
+        sessions::ensure(&main, &task, "leftover", &env)
+            .await
+            .unwrap(),
+        (String::new(), sessions::NO_UPSTREAM.into())
+    );
+    assert_eq!(
+        std::fs::read_to_string(task.join("keep")).unwrap(),
+        "untouched"
+    );
 }
 
 #[tokio::test]

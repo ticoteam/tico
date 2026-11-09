@@ -18,15 +18,14 @@ import type {AddressInfo} from 'node:net';
 import type {Page as BrowserPage, ViewportSize} from 'playwright';
 import type {Classification, Page as SelectPage, Selection} from './select.cts';
 
-// The page globals the capture reads and the demo's pages provide.
-declare global {
-  interface Window {
-    supportOpen: () => void;
-    __marketDraws?: number;
-  }
-}
+// The page globals the capture reads and the demo's pages provide. File-local, not a global augmentation: every script
+// under scripts/ shares one program (scripts/tsconfig.json).
+declare const window: Window & typeof globalThis & {
+  supportOpen: () => void;
+  __marketDraws?: number;
+};
 
-const {spawn, execFileSync} = require('node:child_process');
+const {spawn, execFileSync}: typeof import('node:child_process') = require('node:child_process');
 const fs: typeof import('node:fs') = require('node:fs');
 const net: typeof import('node:net') = require('node:net');
 const os: typeof import('node:os') = require('node:os');
@@ -220,13 +219,17 @@ const PAGES: PageSpec[] = [
       'ui/app/slash-commands.ts', 'ui/styles/threads.css', 'ui/styles/thread-*.css', 'ui/styles/chat*.css', 'ui/styles/feedback.css',
       'ui/styles/visual-*.css']},
   {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
-    ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0].id)), ready: 'Job post',
+    ((await (await fetch('/api/v2/seats')).json()) as {seats: Seat[]}).seats[0]!.id)), ready: 'Job post',
     ui: ['ui/app/recruit.ts', 'ui/app/team-build.ts', 'ui/styles/recruit.css', 'ui/styles/team-build.css']},
 ];
 
 function argument(name: string, fallback = ''): string {
   const at = process.argv.indexOf('--' + name);
-  return at > 0 ? process.argv[at + 1] : fallback;
+  if (at <= 0) return fallback;
+  // A flag with no value after it is a usage error, not the empty string (--only at the end would shoot every page).
+  const value = process.argv[at + 1];
+  if (value === undefined) throw new Error(`--${name} needs a value`);
+  return value;
 }
 
 // The message of a thrown value, for a problem line.
@@ -252,7 +255,7 @@ function darkPaths(base: string, head: string): string[] {
   let file = '';
   for (const line of git(['diff', '-U0', '--no-renames', base, head, '--', 'ui']).split('\n')) {
     const header = /^diff --git a\/(\S+) b\/(\S+)/.exec(line);
-    if (header) { file = header[2]; continue; }
+    if (header) { file = header[2]!; continue; }
     const changed = (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---'));
     if (changed && /dark/i.test(line)) found.add(file);
   }
@@ -334,13 +337,14 @@ async function capture(): Promise<void> {
   fs.mkdirSync(out, {recursive: true});
   const demo: Demo = argument('url') ? {url: argument('url').replace(/\/$/, ''), stop() {}} : await bootDemo();
   const channel = process.env.TICO_BROWSER_CHANNEL ?? 'chrome';
-  const browser = await chromium.launch({channel: channel || undefined, headless: true});
+  // Playwright reads an undefined channel as none (its bundled Chromium); the type has no room for undefined.
+  const browser = await chromium.launch({channel: channel || undefined, headless: true} as import('playwright').LaunchOptions);
   const problems: string[] = [];
   const written: string[] = [];
   try {
     for (const theme of themes) {
       for (const width of widths) {
-        const context = await browser.newContext({...WIDTHS[width], colorScheme: THEMES[theme], locale: 'en-US', timezoneId: 'America/Los_Angeles'});
+        const context = await browser.newContext({...WIDTHS[width], colorScheme: THEMES[theme]!, locale: 'en-US', timezoneId: 'America/Los_Angeles'});
         // ui/theme.ts is dark unless this browser saved a choice, so colorScheme alone shot dark for both themes: save the
         // theme before the page's scripts read it. colorScheme stays for the CSS that follows the system.
         await context.addInitScript(saved => { try { localStorage.setItem('tico.theme', saved); } catch { /* no storage */ } }, theme);

@@ -12,7 +12,7 @@ bot's own work is tasks, never issues.
 
 ## Tests
 `python3 -m pytest -q` (parallel by default) runs the default Python suite, which leaves out tests marked
-`@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cjs`). On a fresh computer, a bot's runner
+`@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cts`). On a fresh computer, a bot's runner
 included, run `npm ci && npx playwright install chromium` and install `backend/requirements-dev.txt` in a venv
 first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
@@ -35,7 +35,7 @@ on a queue run links the per-job timing receipt. Runner/harness changes also run
 RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the release train dispatches it (docs/releasing.md#the-release-train). The default Python suite runs in parallel in about a minute and the whole
 default run (pytest plus core UI) in about 2 minutes; `python scripts/release_checks.py` runs both and records time and
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
-`scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py`, `ui-tests.cjs` and pytest in a
+`scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py`, `ui-tests.cts` and pytest in a
 bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
 "waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Release checks run off the
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
@@ -43,7 +43,7 @@ shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE
 It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally (in a bot's
 turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote).
 The factory simulation (`python -m evals.factory.run`, evals/factory/README.md) runs end-to-end board scenarios and
-goes to RunsOn by default. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
+goes to RunsOn by default. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cts --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). There is no budget on how many tests the suite has: write as many as a change needs, as long as each one
 guards a real failure (a privacy or permission boundary, migrations and data safety, a core task/run flow, a
 regression, an edge case that would lose or duplicate work). No tests of wording, copy or docs, trivial getters or

@@ -24,15 +24,15 @@ python -m pytest -q                            # the default Python suite, in pa
 
 npm ci
 npx playwright install chromium
-npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
+npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cts)
 ```
 
 Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
 the merge queue runs them again on the merged result before a change lands. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
-list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
+list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cts --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
-for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
+for one file, `node scripts/ui-tests.cts <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there. `python3 scripts/remote.py -- <command>` runs a command on a fresh VM instead: it exits 75 when it never dispatched
 the run and 76 when the run ended without a result; any other code is the command's own (`--help` lists them).
 
@@ -50,7 +50,8 @@ main fetched last time), `scripts/check.sh`, and `scripts/check_conflicts.sh`. A
 do. `check.sh` prints one line per check with its time; a check whose inputs did not change prints SKIP.
 
 `check.sh` runs the checks CI's static job runs, on what you changed: the Python lint baseline and ruff format, shellcheck,
-actionlint, the migration order, the UI API types, UI strict (every script TypeScript), the UI source suffix check, the
+actionlint, the migration order, the UI API types, UI strict (every script TypeScript), node types (the scripts/ and
+recorder/ TypeScript), the UI source suffix check, the
 OpenAPI spec (generated, never committed), Biome,
 the UI's API paths, the runner wire contract, and basedpyright on the backend against its baseline. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
 file, which is what CI's static job runs on each pull request.
@@ -95,6 +96,9 @@ all seconds long. Each counts findings per file against its own baseline file: `
 merge. The counts only shrink: after you fix findings, lower the baseline with
 `python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
 `ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
+The TypeScript that Node runs directly outside `ui/` (the `.cts` and `.mts` scripts under `scripts/` and `recorder/`)
+has its own strict check with no baseline, `python3 scripts/check_node_types.py`: each folder's `tsconfig.json` extends
+`tsconfig.node.json`, which `ui/tests/tsconfig.json` extends too, and every TypeScript file outside `ui/` must be in one.
 The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
 walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
@@ -131,7 +135,7 @@ uv pip compile backend/requirements-dev.in --python-version 3.15 -o backend/requ
 Upgrade a small compatible group with `--upgrade-package NAME` on the first command, then regenerate
 the development lock. Keep major migrations separate. After changing the browser SDK pins in
 `package.json`, run `npm run build:observability` and the real SDK privacy and retry tests in
-`node scripts/ui-tests.cjs telemetry`. The desktop GLib backport and its provenance checks are
+`node scripts/ui-tests.cts telemetry`. The desktop GLib backport and its provenance checks are
 documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 ## Developer Certificate of Origin

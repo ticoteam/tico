@@ -806,7 +806,7 @@ CONFTEST_BELOW_LIMIT = 25
 # that skips the job runs those checks itself (image_checks).
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
-UI_RUNNER = "scripts/ui-tests.cjs"
+UI_RUNNER = "scripts/ui-tests.cts"
 # The factory simulation (evals/factory) runs the Dev board end to end, and the merge queue runs it when a change reaches
 # what it runs. That reach is measured, not mapped: evals/factory/call_path.json lists the Python files a run of the sim
 # executed, the non-Python files it read and the folders it listed (python -m evals.factory.run --seeds 1-3
@@ -969,7 +969,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
-    scripts/ui-tests.cjs).
+    scripts/ui-tests.cts).
     """
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(
@@ -1714,9 +1714,9 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
 
 
 def browser_scripts(args, root=ROOT):
-    """The browser scripts these ui-tests.cjs arguments run (CORE for none), by name."""
+    """The browser scripts these ui-tests.cts arguments run (CORE for none), by name."""
     out = subprocess.run(
-        ["node", "scripts/ui-tests.cjs", "--list", *args], cwd=root, capture_output=True, text=True, check=True
+        ["node", "scripts/ui-tests.cts", "--list", *args], cwd=root, capture_output=True, text=True, check=True
     ).stdout.split()
     if not out:
         raise RuntimeError(f"Browser selection {args} listed no scripts")
@@ -1743,7 +1743,7 @@ def run(plan_path, suite, root=None, quarantine=False):
     if suite.startswith("browser-"):
         if not files:
             raise RuntimeError("A browser check requires an explicit nonempty script list")
-        command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
+        command = ["node", "scripts/ui-tests.cts", "-j", str(WORKERS), *files]
         # The UI helpers import the backend with TICO_PYTHON (ui/tests/support/page.cts); this interpreter has the
         # locked requirements, while a bare python3 on the runner's PATH may not (no cryptography).
         env = {
@@ -1895,6 +1895,21 @@ def junit_ran(path):
     """Whether a pytest JUnit report holds a test that ran (passed or failed), not only skipped ones."""
     path = Path(path)
     return path.is_file() and any(case.find("skipped") is None for case in ET.parse(path).iter("testcase"))
+
+
+def junit_failed(paths, limit=3):
+    """The first failing tests in pytest JUnit reports, as "file.py::test", for the error a fail-fast cancel prints."""
+    names = []
+    for path in paths:
+        try:
+            cases = ET.parse(path).iter("testcase")
+        except (ET.ParseError, OSError):
+            continue
+        for case in cases:
+            if case.find("failure") is not None or case.find("error") is not None:
+                module = case.get("classname", "").rsplit(".", 1)[-1]
+                names.append(f"{module}.py::{case.get('name', '')}" if module else case.get("name", ""))
+    return names[:limit] + ([f"and {len(names) - limit} more"] if len(names) > limit else [])
 
 
 def pytest_leg(interpreter, jobs, suite, args):
@@ -2062,6 +2077,8 @@ def main():
     mine.add_argument("--ready", action="store_true", help="after a pass, mark this branch's draft pull request ready")
     ran = sub.add_parser("junit-ran", help="exit 1 unless a pytest JUnit report holds a test that was not skipped")
     ran.add_argument("report")
+    failed = sub.add_parser("failed", help="print the first failing tests in the JUnit reports in a folder")
+    failed.add_argument("folder")
     sub.add_parser("durations")
     sub.add_parser("receipt")
     sub.add_parser("smoke-check")
@@ -2089,6 +2106,8 @@ def main():
         if not junit_ran(args.report):
             print(f"{args.report}: every test skipped or none ran", file=sys.stderr)
             return 1
+    elif args.action == "failed":
+        print(", ".join(junit_failed(sorted(Path(args.folder).glob("*.xml")))))
     elif args.action == "local":
         return local(base=args.base, jobs=args.jobs, ready=args.ready)
     elif args.action == "durations":

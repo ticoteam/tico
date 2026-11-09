@@ -261,12 +261,18 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
       # Fail fast: a failed suite stops the other legs and any other job in the run at once. `checks` still reports it.
+      # Every leg, this one too, then ends "cancelled", so an error annotation first names the suite and its first failing
+      # tests: a reader (or a bot) of the run sees a failure, not a cancel.
       - name: Cancel the run when a suite failed
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh run cancel "$GITHUB_RUN_ID"
+          SUITE: ${{ matrix.suite }}
+        run: |
+          failed=$("$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py failed ci-results 2>/dev/null || true)
+          echo "::error title=${SUITE} failed::${failed:-see the job log}. The run was cancelled on purpose (fail fast), so the other legs show cancelled."
+          gh run cancel "$GITHUB_RUN_ID"
 
   factory-sim:
     # Merge queue groups, and a pull request from this repository once it is ready, when the plan selects the factory
@@ -329,14 +335,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh run cancel "$GITHUB_RUN_ID"
+          SHARD: ${{ matrix.shard }}
+        run: |
+          echo "::error title=factory sim ${SHARD} failed::see the job Summary. The run was cancelled on purpose (fail fast), so the other legs show cancelled."
+          gh run cancel "$GITHUB_RUN_ID"
 
   static:
     # Every push to a pull request that is not a draft (a queue group runs the same list on its merge commit in its plan
     # job instead, scripts/ci/merge_commit_checks.sh): pinned ruff against its baseline (no new findings or
     # suppressions), basedpyright on the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
     # OpenAPI document, the runner wire contract, shell scripts (shellcheck) and workflows (actionlint). Seconds each
-    # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too.
+    # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too, and
+    # its Node counterpart for scripts/ and recorder/ (scripts/check_node_types.py).
     name: static checks
     if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
@@ -390,6 +400,8 @@ jobs:
         run: bash scripts/check_ui_lint.sh --base "$BASE_SHA"
       - name: UI strict (new UI code is TypeScript; each .ts file type-checks strictly)
         run: python3 scripts/check_ui_strict.py --base "$BASE_SHA"
+      - name: Node types (the .cts/.mts scripts under scripts/ and recorder/ type-check strictly, no baseline)
+        run: python3 scripts/check_node_types.py
       - name: UI routes
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_routes.sh --base "$BASE_SHA"
       - name: UI source suffixes (each .js UI scanner also reads .ts; text only)

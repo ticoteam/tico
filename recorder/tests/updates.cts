@@ -1,5 +1,7 @@
 // Synthetic replay of the Recorder's Updates row and Move to Applications prompt. No server is contacted.
-import type {Route} from 'playwright';
+import type {RecorderWindow} from './globals.d.ts';
+// The page's window, file-local (no global augmentation): the preview script in this program types it its own way.
+declare const window: Window & typeof globalThis & RecorderWindow;
 // Run from the repository root: node recorder/tests/updates.cts
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');

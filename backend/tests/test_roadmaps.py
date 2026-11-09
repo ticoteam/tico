@@ -6,7 +6,6 @@ import pytest
 
 from backend import hubdb as H
 from backend import roadmaps as R
-from backend import models as M
 from backend.tests.helpers.tasks_board import api, get, headers, post, relate
 from backend import bot_settings as BS
 from backend.tests.helpers.roadmaps import ORIGIN, public_setup
@@ -1592,7 +1591,7 @@ def _suggestions_receiver_order_and_states(api):
     assert receiver('ops', ops='archived', cpo='archived', cmo='archived') == (None, 'chosen_archived')
 
 
-def _only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_fixed(api):
+def _only_owners_and_admins_choose_the_suggestions_bot_and_a_pipeline_manager_is_an_active_bot(api):
     post(api, 'roadmaps/settings', {'suggestions_bot': 'cpo'}, token='ben-test', expected=403)
     assert get(api, 'roadmaps/settings', token='ben-test')['suggestions_bot'] is None
     assert (
@@ -1609,8 +1608,13 @@ def _only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_
     assert chosen['suggestions_bot'] == 'cpo' and chosen['suggestions_receiver']['source'] == 'chosen'
     automatic = post(api, 'roadmaps/settings', {'suggestions_bot': None})
     assert automatic['suggestions_bot'] is None and automatic['suggestions_receiver']['source'] == 'automatic'
-    refused = post(api, 'task-types/product-roadmap', {'manager': 'cpo'}, expected=422)['error']['detail']
-    assert refused == 'body.manager: ' + M.MANAGER_FIXED
+    # A pipeline's manager is any active bot, set on the task-type route too (by its owner); a refused one changes nothing.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_types SET pipeline_owner_id='human:ana' WHERE id='product-roadmap'")
+    assert post(api, 'task-types/product-roadmap', {'manager': 'bot:cpo'})['type']['manager'] == 'cpo'
+    refused = post(api, 'task-types/product-roadmap', {'manager': 'ops'}, expected=422)['error']['detail']
+    assert 'No active bot' in refused
+    assert get(api, 'task-types/product-roadmap')['type']['manager'] == 'cpo'
     other = post(api, 'task-types/product-roadmap', {'colour': 'red'}, expected=422)['error']['detail']
     assert other == 'body.colour: Extra inputs are not permitted'
 
@@ -1656,7 +1660,7 @@ def test_a_new_step_on_a_private_by_default_type_has_no_public_name_until_given_
 
 
 def test_who_may_choose_the_suggestions_bot_and_which_bot_receives_them(api):
-    _only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_fixed(api)
+    _only_owners_and_admins_choose_the_suggestions_bot_and_a_pipeline_manager_is_an_active_bot(api)
     _suggestions_receiver_order_and_states(api)
 
 
