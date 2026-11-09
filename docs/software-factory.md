@@ -173,6 +173,11 @@ ticket stays at its step with a Waiting tag.
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 
+A ticket that a spawn link files gets an owner the way a new ticket at the pipeline's first stage does. Tico picks the
+least busy active bot in that stage's assign pool that has a free slot. If no pool bot has one, it picks the least
+busy active pool bot, even one with no free slot. If the stage has no assign pool, or no pool bot is active, the
+card's owner gets the ticket. The Pipeline Manager never owns a spawned ticket.
+
 ## The roadmap
 
 Feature ideas live in the **Product roadmap** type: Suggested → Exploring → Spec → Approved → Building → Ready to
