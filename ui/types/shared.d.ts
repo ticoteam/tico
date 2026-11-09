@@ -142,6 +142,8 @@ interface AppConfig {
   beta?: { id: string; name?: string; docs?: string[]; templates?: string[]; harnesses?: string[] }[];
   providers_configured?: boolean;
   default_runtime?: string;
+  /** The release the server runs, as runners compare it (settings-devices.ts serverReleaseTag). */
+  runner_compat?: { version?: string };
   in_docker?: boolean;
   feedback_question?: FeedbackAsk | null;
   usage_count_notice?: unknown;
