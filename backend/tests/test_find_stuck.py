@@ -14,7 +14,18 @@ from backend.store import H
 from backend.maintenance_steps import find_stuck as FS
 from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.test_task_roundup import (  # noqa: F401
-    DAY, NOON, ago, blocks, build_clock, complete_jobs, lists, named_in, only_list, settle, started, task,
+    DAY,
+    NOON,
+    ago,
+    blocks,
+    build_clock,
+    complete_jobs,
+    lists,
+    named_in,
+    only_list,
+    settle,
+    started,
+    task,
 )
 
 
@@ -67,10 +78,12 @@ def test_a_delivered_list_is_recorded_once_with_every_task_it_named(api, monkeyp
     run, started = maintenance.run_now(store, api.app.state.auth, H.human_actor("ana"), step="find_stuck", wait=True)
     assert started and run["ok"] == 1 and run["steps"][0]["woke"] == 1, run
     with store.read() as c:
-        assert [row[0] for row in c.execute("SELECT target FROM events WHERE action=?",
-                                           (maintenance_limits.BOT_ACTION,))] == ["finance"]
-        assert sorted(row[0] for row in c.execute("SELECT target FROM events WHERE action=?",
-                                                (maintenance_limits.TASK_ACTION,))) == sorted([first, second])
+        assert [
+            row[0] for row in c.execute("SELECT target FROM events WHERE action=?", (maintenance_limits.BOT_ACTION,))
+        ] == ["finance"]
+        assert sorted(
+            row[0] for row in c.execute("SELECT target FROM events WHERE action=?", (maintenance_limits.TASK_ACTION,))
+        ) == sorted([first, second])
         assert not maintenance_limits.allow(c, "finance"), "the delivered list uses the bot's wake allowance"
 
 
@@ -78,8 +91,9 @@ def test_the_schedule_runs_find_stuck_and_then_keeps_its_due_rule(api, monkeypat
     store = api.app.state.store
     clock = [DAY]
     monkeypatch.setattr(H, "now", lambda: clock[0])
-    monkeypatch.setattr(maintenance, "_start", lambda store, auth, run_id, only, wait:
-                        maintenance._execute(store, auth, run_id, only))
+    monkeypatch.setattr(
+        maintenance, "_start", lambda store, auth, run_id, only, wait: maintenance._execute(store, auth, run_id, only)
+    )
     with store.transaction() as c:
         c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','find_stuck')")
         tid = task(c, "Draft the grant report")["id"]
@@ -104,14 +118,60 @@ def test_the_step_sends_at_most_max_bots_oldest_line_first_and_the_rest_wait_for
     store = api.app.state.store
     with store.transaction() as c:
         # Created finance, coo, ops: neither creation order nor name order is the age order (ops, coo, finance).
-        for slug, title, turned in (("finance", "Draft the grant report", ago(days=9)), ("coo", "Sign the menu", ago(days=10)),
-                                    ("ops", "Print the menu", ago(days=12))):
+        for slug, title, turned in (
+            ("finance", "Draft the grant report", ago(days=9)),
+            ("coo", "Sign the menu", ago(days=10)),
+            ("ops", "Print the menu", ago(days=12)),
+        ):
             settle(c, task(c, title, owner=H.bot_actor(slug))["id"], slug, turned)
             complete_jobs(c, slug)
     assert run_find_stuck(store, settings={"max_bots": 2})["details"]["woken"] == ["ops", "coo"]
     with store.read_transaction() as c:
         assert lists(c, "finance") == [], "the bot past the cap is not sent this run"
     assert run_find_stuck(store, at=NOON, settings={"max_bots": 2})["details"]["woken"] == ["finance"]
+
+
+def test_a_bot_with_more_than_25_lines_sent_last_run_waits_for_a_never_sent_bot(api, monkeypatch):
+    store = api.app.state.store
+    monkeypatch.setattr(H, "now", lambda: DAY)
+    with store.transaction() as c:
+        for n in range(26):
+            settle(c, task(c, f"Review invoice {n}")["id"], "finance", ago(days=12))
+        settle(c, task(c, "Sign the menu", owner=H.bot_actor("coo"))["id"], "coo", ago(days=2))
+        complete_jobs(c)
+        complete_jobs(c, "coo")
+    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["finance"]
+    with store.read() as c:
+        body = only_list(c)
+        assert named_in(body) == 25 and body.endswith("- and 1 more")
+        assert lists(c, "coo") == []
+        assert task_roundup._mark(c, task_roundup.SENT_KEY + "finance") == DAY
+        assert task_roundup._mark(c, task_roundup.SENT_KEY + "coo") is None
+    monkeypatch.setattr(H, "now", lambda: NOON)
+    assert run_find_stuck(store, at=NOON, settings={"max_bots": 1})["details"]["woken"] == ["coo"]
+    with store.read() as c:
+        assert len(lists(c)) == 1 and len(lists(c, "coo")) == 1
+
+
+def test_three_runs_with_one_slot_reach_all_three_bots_with_lines_left_to_send(api, monkeypatch):
+    store = api.app.state.store
+    clock = [DAY]
+    monkeypatch.setattr(H, "now", lambda: clock[0])
+    monkeypatch.setattr(task_roundup, "MAX_LINES", 1)
+    with store.transaction() as c:
+        for slug, days in (("finance", 12), ("coo", 10), ("ops", 8)):
+            for n in range(3):
+                settle(c, task(c, f"Review {slug} invoice {n}", owner=H.bot_actor(slug))["id"], slug, ago(days=days))
+            complete_jobs(c, slug)
+        task_roundup._set(c, task_roundup.SENT_KEY + "coo", ago(days=1))
+        task_roundup._set(c, task_roundup.SENT_KEY + "ops", ago(days=2))
+    for run, slug in enumerate(("finance", "ops", "coo")):
+        clock[0] = H.shift(DAY, hours=6 * run)
+        assert run_find_stuck(store, at=clock[0], settings={"max_bots": 1})["details"]["woken"] == [slug]
+    with store.read() as c:
+        for slug in ("finance", "coo", "ops"):
+            assert named_in(only_list(c, slug)) == 1
+        assert {plan["slug"] for plan in task_roundup.discover(c, H.shift(DAY, hours=18))} == {"finance", "coo", "ops"}
 
 
 def test_a_task_the_limiter_holds_is_dropped_from_its_list_while_an_eligible_one_is_sent(api):
@@ -143,7 +203,7 @@ def test_replacements_past_the_display_cap_also_pass_the_task_limit_in_the_send_
             settle(c, tid, "finance", ago(days=3, minutes=28 - n))
             tids.append(tid)
         complete_jobs(c)
-    daily_wakes = {tids[0]: 3, tids[25]: 3}     # one displayed task and the first replacement used their daily allowance
+    daily_wakes = {tids[0]: 3, tids[25]: 3}  # one displayed task and the first replacement used their daily allowance
     checked, recorded = [], []
 
     def allow(c, bot_id, task_id=None):
@@ -194,43 +254,54 @@ def test_a_blocker_past_the_bot_cap_gets_its_line_on_the_next_run(api):
         assert len(lists(c, "coo")) == 1, "the delivered recipient is not listed again"
 
 
-def test_the_oldest_eligible_line_orders_bots_even_when_it_is_past_the_display_cap(api, monkeypatch):
+def test_a_bots_oldest_unshown_line_does_not_move_it_ahead(api, monkeypatch):
     store = api.app.state.store
     monkeypatch.setattr(task_roundup, "MAX_LINES", 1)
     with store.transaction() as c:
         due = task(c, "Chase the quote")["id"]
         settle(c, due, "finance", ago(days=3))
-        task_check_backs.set_time(c, H.task(c, due), ago(hours=1), "Check the quote",
-                                  actor=H.human_actor("ana"), at=ago(hours=3))
+        task_check_backs.set_time(
+            c, H.task(c, due), ago(hours=1), "Check the quote", actor=H.human_actor("ana"), at=ago(hours=3)
+        )
         oldest = task(c, "Renew the lease")["id"]
         settle(c, oldest, "finance", ago(days=12))
         other = task(c, "Sign the menu", owner=H.bot_actor("coo"))["id"]
         settle(c, other, "coo", ago(days=5))
         complete_jobs(c)
         complete_jobs(c, "coo")
-    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["finance"]
+    with store.read() as c:
+        plan = next(plan for plan in task_roundup.discover(c, DAY) if plan["slug"] == "finance")
+        assert plan["oldest"] == H.parse_ts(ago(hours=1))
+    assert run_find_stuck(store, settings={"max_bots": 1})["details"]["woken"] == ["coo"]
+    with store.read() as c:
+        assert other[:8] in only_list(c, "coo") and lists(c) == []
+    assert run_find_stuck(store, at=NOON, settings={"max_bots": 1})["details"]["woken"] == ["finance"]
     with store.read() as c:
         body = only_list(c)
-        assert due[:8] in body and oldest[:8] not in body, "the oldest line set priority before the display cap"
-        assert lists(c, "coo") == []
+        assert due[:8] in body and oldest[:8] not in body
 
 
 def test_migration_0093_withdraws_only_the_keepers_open_still_wanted_questions():
     mig = importlib.import_module("backend.migrations.0093_withdraw_still_wanted")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE messages(id TEXT, sender_id TEXT, answered_by_id TEXT, refs TEXT, superseded_at TEXT)")
-    conn.executemany("INSERT INTO messages(id,sender_id,answered_by_id,refs,superseded_at) VALUES(?,?,?,?,NULL)", [
-        ("open", "keeper", None, '{"still_wanted": true}'),
-        ("answered", "keeper", "human:ana", '{"still_wanted": true}'),
-        ("person", "human:ana", None, '{"still_wanted": true}'),
-        ("ask", "keeper", None, '{"ask": true}'),
-    ])
+    conn.executemany(
+        "INSERT INTO messages(id,sender_id,answered_by_id,refs,superseded_at) VALUES(?,?,?,?,NULL)",
+        [
+            ("open", "keeper", None, '{"still_wanted": true}'),
+            ("answered", "keeper", "human:ana", '{"still_wanted": true}'),
+            ("person", "human:ana", None, '{"still_wanted": true}'),
+            ("ask", "keeper", None, '{"ask": true}'),
+        ],
+    )
     mig.up(conn)
     flags = dict(conn.execute("SELECT id, superseded_at IS NOT NULL FROM messages").fetchall())
     assert flags == {"open": 1, "answered": 0, "person": 0, "ask": 0}
     stamp = conn.execute("SELECT superseded_at FROM messages WHERE id='open'").fetchone()[0]
     mig.up(conn)
-    assert conn.execute("SELECT superseded_at FROM messages WHERE id='open'").fetchone()[0] == stamp, "running again changes nothing"
+    assert conn.execute("SELECT superseded_at FROM messages WHERE id='open'").fetchone()[0] == stamp, (
+        "running again changes nothing"
+    )
 
 
 def test_migration_0093_skips_a_database_with_no_superseded_column():
@@ -238,7 +309,9 @@ def test_migration_0093_skips_a_database_with_no_superseded_column():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE messages(id TEXT, sender_id TEXT, refs TEXT)")
     conn.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute("CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY, enabled INTEGER, updated_at TEXT, updated_by_id TEXT)")
+    conn.execute(
+        "CREATE TABLE maintenance_steps(key TEXT PRIMARY KEY, enabled INTEGER, updated_at TEXT, updated_by_id TEXT)"
+    )
     conn.execute("INSERT INTO maintenance_steps(key,enabled) VALUES('find_stuck',1)")
     conn.execute("INSERT INTO registry_metadata VALUES('system_routines',?)", ('{"task_roundup":{"on":false}}',))
     mig.up(conn)
@@ -252,16 +325,22 @@ def test_cutover_takes_the_switch_changed_since_0090_and_a_replay_keeps_later_ma
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("DELETE FROM maintenance_steps WHERE key='find_stuck'")
-        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
-                  "value=excluded.value", (json.dumps({"task_roundup": {"on": not on}}),))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
+            "value=excluded.value",
+            (json.dumps({"task_roundup": {"on": not on}}),),
+        )
         foundation.up(c)
         assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == int(not on)
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='system_routines'",
-                  (json.dumps({"task_roundup": {"on": on}, "kpi_asks": {"on": False}}),))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='system_routines'",
+            (json.dumps({"task_roundup": {"on": on}, "kpi_asks": {"on": False}}),),
+        )
         cutover.up(c)
         assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == int(on)
-        assert json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='system_routines'").fetchone()[0]) == {
-            "kpi_asks": {"on": False}}
+        assert json.loads(
+            c.execute("SELECT value FROM registry_metadata WHERE key='system_routines'").fetchone()[0]
+        ) == {"kpi_asks": {"on": False}}
         maintenance.save_step(c, "human:ana", {"key": "find_stuck", "enabled": not on})
         cutover.up(c)
         assert c.execute("SELECT enabled FROM maintenance_steps WHERE key='find_stuck'").fetchone()[0] == int(not on)
@@ -269,18 +348,29 @@ def test_cutover_takes_the_switch_changed_since_0090_and_a_replay_keeps_later_ma
 
 def test_cutover_retires_only_the_roundup_mirrors_and_never_recreates_them(api):
     from backend import automation_flow, automations, redesign_migration
+
     cutover = importlib.import_module("backend.migrations.0093_withdraw_still_wanted")
     store = api.app.state.store
     with store.transaction() as c:
-        mirror = redesign_migration._mirror("Task roundup", "person:ana", "job.task_roundup", {"on": True},
-                                            {"kind": "system_job", "id": "job:task_roundup"})
+        mirror = redesign_migration._mirror(
+            "Task roundup",
+            "person:ana",
+            "job.task_roundup",
+            {"on": True},
+            {"kind": "system_job", "id": "job:task_roundup"},
+        )
         automations._save(c, H.KEEPER, "old_roundup", automation_flow.check(mirror), None)
         personal = {**mirror, "builtin": False, "readonly": False, "name": "My reminder"}
         automations._save(c, H.KEEPER, "personal", automation_flow.check(personal), None)
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,started_at,status) "
-                  "VALUES('old_roundup_run','old_roundup',1,?,'queued')", (H.now(),))
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,version,started_at,status) "
+            "VALUES('old_roundup_run','old_roundup',1,?,'queued')",
+            (H.now(),),
+        )
         cutover.up(c)
-        assert c.execute("SELECT enabled,deleted_at IS NOT NULL FROM automations WHERE id='old_roundup'").fetchone()[:] == (0, 1)
+        assert c.execute("SELECT enabled,deleted_at IS NOT NULL FROM automations WHERE id='old_roundup'").fetchone()[
+            :
+        ] == (0, 1)
         assert c.execute("SELECT status FROM automation_runs WHERE id='old_roundup_run'").fetchone()[0] == "skipped"
         assert c.execute("SELECT deleted_at FROM automations WHERE id='personal'").fetchone()[0] is None
         cutover.up(c)

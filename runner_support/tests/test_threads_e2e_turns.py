@@ -52,8 +52,11 @@ def provider_turns(computer):
                 turns.append(("resume", argv[argv.index("--resume") + 1]))
             else:
                 turns.append(("new", argv[argv.index("--session-id") + 1]))
-        elif computer.harness == "codex" and call_.get("harness") == "codex" \
-                and call_.get("method") in ("thread/start", "thread/resume"):
+        elif (
+            computer.harness == "codex"
+            and call_.get("harness") == "codex"
+            and call_.get("method") in ("thread/start", "thread/resume")
+        ):
             turns.append(("new" if call_["method"] == "thread/start" else "resume", call_["thread"]))
     return turns
 
@@ -94,15 +97,17 @@ def test_a_mention_wakes_the_bot_and_plain_chatter_in_its_thread_does_not(api, c
     time.sleep(2)
     assert computer.attempts() == [], "plain chatter in a thread the bot follows starts no run"
     with api.app.state.store.read() as c:
-        modes = c.execute("SELECT mode FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'",
-                          (chatter["id"],)).fetchall()
+        modes = c.execute(
+            "SELECT mode FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'", (chatter["id"],)
+        ).fetchall()
     assert all(mode[0] in ("digest", "none") for mode in modes), f"the bot gets no run for chatter: {modes}"
     asked = say(api, "ana-test", t["id"], "@ops what is on the agenda?")
     until(lambda: finished(computer) == 1, "the reply to the mention")
     assert len(computer.attempts()) == 1, "one mention starts one run"
     with api.app.state.store.read() as c:
-        mode = c.execute("SELECT mode, reason FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'",
-                         (asked["id"],)).fetchone()
+        mode = c.execute(
+            "SELECT mode, reason FROM message_deliveries WHERE message_id=? AND recipient='bot:ops'", (asked["id"],)
+        ).fetchone()
     assert tuple(mode) == ("queue", "mention"), f"an addressed mention is a queued run: {tuple(mode)}"
 
 
@@ -110,6 +115,7 @@ def test_a_mention_wakes_the_bot_and_plain_chatter_in_its_thread_does_not(api, c
 def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(api, computer, monkeypatch):
     require_threads_api(api)
     from backend import threads
+
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
     computer.start()
     peer = runner(api)
@@ -122,14 +128,21 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
 
     def held():
         with api.app.state.store.read() as c:
-            return c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND recipient='bot:ops' "
-                             "AND state='capped'", (t["id"],)).fetchone()[0]
+            return c.execute(
+                "SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND recipient='bot:ops' AND state='capped'",
+                (t["id"],),
+            ).fetchone()[0]
 
     def deliveries():
         with api.app.state.store.read() as c:
-            return [tuple(r) for r in c.execute("SELECT mode, reason, state, cause FROM message_deliveries "
-                                                "WHERE root_id=? AND recipient='bot:ops' ORDER BY created_at",
-                                                (t["id"],)).fetchall()]
+            return [
+                tuple(r)
+                for r in c.execute(
+                    "SELECT mode, reason, state, cause FROM message_deliveries "
+                    "WHERE root_id=? AND recipient='bot:ops' ORDER BY created_at",
+                    (t["id"],),
+                ).fetchall()
+            ]
 
     for n in range(1, 7):
         say(api, "ana-test", t["id"], f"@cpo round {n}")
@@ -138,8 +151,12 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
         before = started()
         # A plain bot-to-bot message waits for its recipient's next run (backend/bot_to_bot.py), so cpo's ping is flagged
         # needs-action: that is the bot-caused wake the loop guard counts. The flag is written with cpo's own turn token.
-        post(api, f"threads/{t['id']}/messages", {"text": f"@ops ping {n}", "kind": "say",
-                                                  "refs": {"needs_action": True}}, token=turn["token"])
+        post(
+            api,
+            f"threads/{t['id']}/messages",
+            {"text": f"@ops ping {n}", "kind": "say", "refs": {"needs_action": True}},
+            token=turn["token"],
+        )
         finish(api, peer, turn, "")
         try:
             until(lambda: started() > before or held() > 0, f"round {n}: ops runs, or its wake is held")
@@ -182,7 +199,9 @@ def test_a_thread_keeps_its_provider_session_and_no_other_thread_shares_it(api, 
     assert first[0] == "new" and second == ("resume", first[1]), "a second turn in one thread resumes its session"
     assert third[0] == "new" and third[1] != first[1], "another private thread gets a session of its own"
     assert fourth[0] == "new" and fourth[1] not in (first[1], third[1]), "a DM never shares a thread's session"
-    assert fifth[0] == "new" and fifth[1] not in (first[1], third[1], fourth[1]), "the Home never shares the DM's session"
+    assert fifth[0] == "new" and fifth[1] not in (first[1], third[1], fourth[1]), (
+        "the Home never shares the DM's session"
+    )
 
 
 def fresh_root_turn(api, computer):
@@ -208,8 +227,9 @@ def fresh_root_turn(api, computer):
 def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots_history(api, computer):
     kind, thread, prompt, elsewhere = fresh_root_turn(api, computer)
     assert kind == "new" and thread != "old-bot-thread-0001", "the old shared thread is never resumed by a root"
-    assert elsewhere not in prompt and "OTHER-ROOM" not in prompt, \
+    assert elsewhere not in prompt and "OTHER-ROOM" not in prompt, (
         "nothing from another root reaches the fresh thread's prompt"
+    )
 
 
 @pytest.mark.parametrize("harness", ["claude"])

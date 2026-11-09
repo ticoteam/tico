@@ -24,8 +24,11 @@ def b64(s):
 
 
 def part(mime, text=None, filename="", size=None, charset="utf-8"):
-    p = {"mimeType": mime, "filename": filename,
-         "headers": [{"name": "Content-Type", "value": f"{mime}; charset={charset}"}]}
+    p = {
+        "mimeType": mime,
+        "filename": filename,
+        "headers": [{"name": "Content-Type", "value": f"{mime}; charset={charset}"}],
+    }
     if text is None:
         p["body"] = {"attachmentId": "att-1", "size": size or 0}
     else:
@@ -33,8 +36,16 @@ def part(mime, text=None, filename="", size=None, charset="utf-8"):
     return p
 
 
-def message(mid="m1", thread=None, headers=None, body=None, parts=None,
-            labels=("INBOX", "UNREAD"), epoch_ms=1788368400000, snippet=""):
+def message(
+    mid="m1",
+    thread=None,
+    headers=None,
+    body=None,
+    parts=None,
+    labels=("INBOX", "UNREAD"),
+    epoch_ms=1788368400000,
+    snippet="",
+):
     """A raw Gmail message dict. epoch default: 2026-09-02 10:00 America/Los_Angeles."""
     headers = dict(headers or {})
     payload = {"headers": [{"name": k, "value": v} for k, v in headers.items()]}
@@ -44,13 +55,20 @@ def message(mid="m1", thread=None, headers=None, body=None, parts=None,
     else:
         payload["mimeType"] = "text/plain"
         payload["body"] = {"data": b64(body or ""), "size": len(body or "")}
-    return {"id": mid, "threadId": thread or ("t-" + mid), "labelIds": list(labels),
-            "internalDate": str(epoch_ms), "snippet": snippet, "payload": payload}
+    return {
+        "id": mid,
+        "threadId": thread or ("t-" + mid),
+        "labelIds": list(labels),
+        "internalDate": str(epoch_ms),
+        "snippet": snippet,
+        "payload": payload,
+    }
 
 
 class _Req:
     def __init__(self, fn):
         self.fn = fn
+        self.headers = {}
 
     def execute(self):
         return self.fn()
@@ -69,19 +87,26 @@ class Boom(Exception):
 
 
 class FakeGmailService:
-    def __init__(self, messages=None, labels=None, profile=None, fail_times=0, fail_status=503,
-                 attachments=None, history=None, history_expired=False):
-        self.store = {m["id"]: m for m in (messages or [])}   # `messages()` is the resource
-        self.labels_by_id = dict(labels or {"INBOX": "INBOX", "UNREAD": "UNREAD",
-                                            "STARRED": "STARRED", "SENT": "SENT"})
-        self._profile = profile or {"emailAddress": "ana@acme.example", "messagesTotal": 3,
-                                    "historyId": "12345"}
+    def __init__(
+        self,
+        messages=None,
+        labels=None,
+        profile=None,
+        fail_times=0,
+        fail_status=503,
+        attachments=None,
+        history=None,
+        history_expired=False,
+    ):
+        self.store = {m["id"]: m for m in (messages or [])}  # `messages()` is the resource
+        self.labels_by_id = dict(labels or {"INBOX": "INBOX", "UNREAD": "UNREAD", "STARRED": "STARRED", "SENT": "SENT"})
+        self._profile = profile or {"emailAddress": "ana@acme.example", "messagesTotal": 3, "historyId": "12345"}
         self.created, self.modified, self.calls = [], [], []
         self.fail_times, self.fail_status = fail_times, fail_status
         self._next = 1
         self.drafts_by_id, self.sent, self.deleted_drafts = {}, [], []
         self.attachment_data = dict(attachments or {})
-        self.send_fails = False                          # make drafts.send blow up, for rollback
+        self.send_fails = False  # make drafts.send blow up, for rollback
         self.history_records = list(history or [])
         self.history_expired = history_expired
 
@@ -161,8 +186,9 @@ class _Labels:
         self.s = s
 
     def list(self, userId="me"):
-        return _Req(lambda: self.s._maybe_fail(
-            {"labels": [{"id": i, "name": n} for i, n in self.s.labels_by_id.items()]}))
+        return _Req(
+            lambda: self.s._maybe_fail({"labels": [{"id": i, "name": n} for i, n in self.s.labels_by_id.items()]})
+        )
 
     def create(self, userId="me", body=None):
         def go():
@@ -171,12 +197,25 @@ class _Labels:
             self.s.labels_by_id[lid] = body["name"]
             self.s.created.append(body["name"])
             return {"id": lid, "name": body["name"]}
+
         return _Req(go)
 
 
 class _Messages:
     def __init__(self, s):
         self.s = s
+
+    def send(self, userId="me", body=None, **kwargs):
+        def go():
+            self.s._maybe_fail(None)
+            rec = _Drafts(self.s)._make({"message": body})
+            self.s.drafts_by_id.pop(rec["id"])
+            m = self.s.store[rec["message"]["id"]]
+            m["labelIds"] = ["SENT"]
+            self.s.sent.append({"id": m["id"], "threadId": m["threadId"], "raw": body["raw"]})
+            return {"id": m["id"], "threadId": m["threadId"]}
+
+        return _Req(go)
 
     def list(self, userId="me", q=None, labelIds=None, maxResults=100, pageToken=None):
         def go():
@@ -186,6 +225,7 @@ class _Messages:
                 hits = [m for m in hits if set(labelIds) <= set(m.get("labelIds") or [])]
             hits.sort(key=lambda m: -int(m.get("internalDate", 0)))
             return self.s._maybe_fail({"messages": [{"id": m["id"]} for m in hits[:maxResults]]})
+
         return _Req(go)
 
     def get(self, userId="me", id=None, format="full"):
@@ -193,6 +233,7 @@ class _Messages:
             if id not in self.s.store:
                 raise Boom(404, "notFound")
             return self.s._maybe_fail(self.s.store[id])
+
         return _Req(go)
 
     def attachments(self):
@@ -209,9 +250,15 @@ class _Messages:
                 if lid not in have:
                     have.append(lid)
             m["labelIds"] = have
-            self.s.modified.append({"id": id, "add": (body or {}).get("addLabelIds") or [],
-                                    "remove": (body or {}).get("removeLabelIds") or []})
+            self.s.modified.append(
+                {
+                    "id": id,
+                    "add": (body or {}).get("addLabelIds") or [],
+                    "remove": (body or {}).get("removeLabelIds") or [],
+                }
+            )
             return self.s._maybe_fail(m)
+
         return _Req(go)
 
 
@@ -226,6 +273,7 @@ class _Attachments:
             if key not in self.s.attachment_data:
                 raise Boom(404, "notFound")
             return self.s._maybe_fail(dict(self.s.attachment_data[key]))
+
         return _Req(go)
 
 
@@ -238,6 +286,7 @@ class _Threads:
             msgs = [m for m in self.s.store.values() if m["threadId"] == id]
             msgs.sort(key=lambda m: int(m.get("internalDate", 0)))
             return self.s._maybe_fail({"id": id, "messages": msgs})
+
         return _Req(go)
 
 
@@ -245,11 +294,9 @@ class _History:
     def __init__(self, s):
         self.s = s
 
-    def list(self, userId="me", startHistoryId=None, historyTypes=None, maxResults=100,
-             pageToken=None, labelId=None):
+    def list(self, userId="me", startHistoryId=None, historyTypes=None, maxResults=100, pageToken=None, labelId=None):
         def go():
-            self.s.calls.append(("history", str(startHistoryId or ""),
-                                 list(historyTypes or [])))
+            self.s.calls.append(("history", str(startHistoryId or ""), list(historyTypes or [])))
             if self.s.history_expired:
                 raise Boom(404, "notFound")
             try:
@@ -257,33 +304,41 @@ class _History:
             except (TypeError, ValueError):
                 start = 0
             recs = [h for h in self.s.history_records if int(h.get("id") or 0) > start]
-            return self.s._maybe_fail({
-                "history": recs[:maxResults],
-                "historyId": str(self.s._profile.get("historyId", "12345")),
-            })
+            return self.s._maybe_fail(
+                {
+                    "history": recs[:maxResults],
+                    "historyId": str(self.s._profile.get("historyId", "12345")),
+                }
+            )
+
         return _Req(go)
 
 
 # ---------------------------------------------------------------- drafts (stage 2)
 
+
 def message_from_raw(raw, mid, thread_id="", labels=("DRAFT",)):
     """A stored Gmail message built from the base64url MIME the connector produced."""
     import email
+
     s = str(raw or "").replace("-", "+").replace("_", "/")
     parsed = email.message_from_bytes(base64.b64decode(s + "=" * (-len(s) % 4)))
     headers = {k: v for k, v in parsed.items()}
-    if parsed.is_multipart():                           # a draft with --attach files
+    if parsed.is_multipart():  # a draft with --attach files
         parts = []
         for sub in parsed.get_payload():
             data = sub.get_payload(decode=True) or b""
-            parts.append({"mimeType": sub.get_content_type(), "filename": sub.get_filename() or "",
-                          "headers": [{"name": k, "value": v} for k, v in sub.items()],
-                          "body": {"data": base64.urlsafe_b64encode(data).decode(),
-                                   "size": len(data)}})
+            parts.append(
+                {
+                    "mimeType": sub.get_content_type(),
+                    "filename": sub.get_filename() or "",
+                    "headers": [{"name": k, "value": v} for k, v in sub.items()],
+                    "body": {"data": base64.urlsafe_b64encode(data).decode(), "size": len(data)},
+                }
+            )
         return message(mid, thread_id or ("t-" + mid), headers, parts=parts, labels=list(labels))
     body = parsed.get_payload(decode=True) or b""
-    m = message(mid, thread_id or ("t-" + mid), headers, body=body.decode("utf-8", "replace"),
-                labels=list(labels))
+    m = message(mid, thread_id or ("t-" + mid), headers, body=body.decode("utf-8", "replace"), labels=list(labels))
     return m
 
 
@@ -318,6 +373,7 @@ class _Drafts:
             if format == "raw":
                 return {"id": id, "message": {"id": rec["message"]["id"], "raw": rec["message"]["raw"]}}
             return {"id": id, "message": self.s.store[rec["message"]["id"]]}
+
         return _Req(go)
 
     def delete(self, userId="me", id=None):
@@ -328,6 +384,7 @@ class _Drafts:
             self.s.store.pop(rec["message"]["id"], None)
             self.s.deleted_drafts.append(id)
             return {}
+
         return _Req(go)
 
     def send(self, userId="me", body=None):
@@ -342,17 +399,19 @@ class _Drafts:
             m["labelIds"] = ["SENT"]
             self.s.sent.append({"draft": did, "id": m["id"], "threadId": m["threadId"]})
             return {"id": m["id"], "threadId": m["threadId"], "labelIds": ["SENT"]}
+
         return _Req(go)
 
 
 # ---------------------------------------------------------------- calendar
+
 
 class FakeCalendarService:
     """calendarList, freebusy, and the event operations used by calendar.py."""
 
     def __init__(self, calendars=("primary", "team@acme.example"), busy=None, fail_insert=False):
         self.calendar_ids = list(calendars)
-        self.busy = list(busy or [])                    # [(iso start, iso end)] on every calendar
+        self.busy = list(busy or [])  # [(iso start, iso end)] on every calendar
         self.created_events, self.deleted, self.queries = {}, [], []
         self.events_by_calendar, self.event_queries = {}, []
         self.fail_insert = fail_insert
@@ -369,6 +428,7 @@ class FakeCalendarService:
 
     def list(self, maxResults=50, calendarId=None, pageToken=None, **kwargs):
         if calendarId is None:
+
             def calendar_page():
                 start = int(pageToken or 0)
                 end = start + maxResults
@@ -376,20 +436,24 @@ class FakeCalendarService:
                 if end < len(self.calendar_ids):
                     out["nextPageToken"] = str(end)
                 return out
+
             return _Req(calendar_page)
+
         def go():
             if getattr(self, "fail_list", False):
                 raise Boom(500, "calendar list failed")
-            self.event_queries.append(dict(kwargs, calendarId=calendarId, pageToken=pageToken,
-                                           maxResults=maxResults))
+            self.event_queries.append(dict(kwargs, calendarId=calendarId, pageToken=pageToken, maxResults=maxResults))
             return {"items": list(self.events_by_calendar.get(calendarId) or [])}
+
         return _Req(go)
 
     def query(self, body=None):
         def go():
             self.queries.append(body)
-            return {"calendars": {i: {"busy": [{"start": a, "end": b} for a, b in self.busy]}
-                                  for i in self.calendar_ids}}
+            return {
+                "calendars": {i: {"busy": [{"start": a, "end": b} for a, b in self.busy]} for i in self.calendar_ids}
+            }
+
         return _Req(go)
 
     def insert(self, calendarId="primary", body=None, sendUpdates="none", **kwargs):
@@ -401,10 +465,14 @@ class FakeCalendarService:
                 raise Boom(409, "calendar event already exists")
             if not (body or {}).get("id"):
                 self._next += 1
-            ev = dict(body or {}, id=eid, sendUpdates=sendUpdates, **kwargs)
+            ev = dict(body or {}, id=eid, etag='"' + eid + '"', sendUpdates=sendUpdates, **kwargs)
+            if ev.get("conferenceData"):
+                ev["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                ev["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
             self.created_events[eid] = ev
             self.events_by_calendar.setdefault(calendarId, []).append(ev)
             return ev
+
         return _Req(go)
 
     def get(self, calendarId="primary", eventId=None):
@@ -412,14 +480,42 @@ class FakeCalendarService:
             if eventId not in self.created_events:
                 raise Boom(404, "calendar event not found")
             return self.created_events[eventId]
+
         return _Req(go)
+
+    def patch(self, calendarId="primary", eventId=None, body=None, sendUpdates="none", **kwargs):
+        def go():
+            event = self.created_events.get(eventId)
+            if event is None:
+                raise Boom(404, "calendar event not found")
+            if request.headers.get("If-Match") != event.get("etag"):
+                raise Boom(412, "calendar event changed")
+            event.update(body or {})
+            event.update(sendUpdates=sendUpdates, **kwargs)
+            event["etag"] += "-patched"
+            if event.get("conferenceData"):
+                event["hangoutLink"] = "https://meet.google.com/abc-defg-hij"
+                event["conferenceData"]["createRequest"]["status"] = {"statusCode": "success"}
+            return event
+
+        request = _Req(go)
+        return request
 
     def delete(self, calendarId="primary", eventId=None, sendUpdates="none"):
         def go():
+            if request.headers.get("If-Match") and request.headers["If-Match"] != self.created_events.get(
+                eventId, {}
+            ).get("etag"):
+                raise Boom(412, "calendar event changed")
             self.created_events.pop(eventId, None)
+            self.events_by_calendar[calendarId] = [
+                event for event in self.events_by_calendar.get(calendarId, []) if event.get("id") != eventId
+            ]
             self.deleted.append(eventId)
             return {}
-        return _Req(go)
+
+        request = _Req(go)
+        return request
 
 
 # ---------------------------------------------------------------- Tico's mail access answer
@@ -435,6 +531,7 @@ def mail_access(slug):
     `manifest_level`, which the backfill uses): Read for a `read_only: true` entry, else Read and write. A handle with
     no manifest (a person's run) holds nothing unless a test grants it in MAIL_LEVELS."""
     from connectors.mail import access
+
     held = {}
     for e in access.entries(access._manifest(slug)):
         addr = str(e.get("identity") or "").strip().lower()
@@ -445,19 +542,22 @@ def mail_access(slug):
             held.pop(addr, None)
         else:
             held[addr] = level
-    return {"principal": f"bot:{slug}",
-            "mailboxes": [{"address": a, "level": lv} for a, lv in sorted(held.items())],
-            "company": dict(MAIL_COMPANY)}
+    return {
+        "principal": f"bot:{slug}",
+        "mailboxes": [{"address": a, "level": lv} for a, lv in sorted(held.items())],
+        "company": dict(MAIL_COMPANY),
+    }
 
 
 def runner_access():
     """GET /api/v2/connectors/mail/targets over the runner's registration: every mailbox a bot here declares, every
     roster address, and What Tico may do as the policy seam (pl.RUNNER_GET) answers it."""
     from connectors.mail import access, policy as pl
+
     boxes = sorted(set(access.mailbox_holders(access.PROJECTS)) | set(access.roster_mailboxes()))
     try:
         company = (pl.RUNNER_GET("connectors/mail/targets") if pl.RUNNER_GET else {}) or {}
-    except Exception:                                   # noqa: BLE001 - a test's seam that raises: Tico said nothing
+    except Exception:  # noqa: BLE001 - a test's seam that raises: Tico said nothing
         company = {}
     return {"mailboxes": [{"address": a} for a in boxes], "company": company.get("company")}
 
@@ -465,6 +565,7 @@ def runner_access():
 def install_mail_access():
     """Every test asks the fake server, never a real Tico (fake is imported by every test module)."""
     from connectors.mail import access
+
     access.SERVER_ACCESS, access.RUNNER_ACCESS, access.LEASED = mail_access, runner_access, False
     access.forget()
 

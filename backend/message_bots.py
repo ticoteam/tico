@@ -12,6 +12,7 @@ bot's computer reports it from bot.yaml (BotOps writes it there), or plain words
 x@y"). The person is the roster entry with that email when there is one, else the bot's own owner (whoever made it or
 asked BotOps for it): a mailbox on the company's Workspace domain is often not the address a person signs in with.
 """
+
 import json
 import re
 from types import SimpleNamespace
@@ -25,7 +26,7 @@ from . import bot_settings as BS
 TEMPLATES = frozenset({"inbox"})
 LINE = re.compile(r"^Mailbox:[ \t]*(\S+@\S+)[ \t]*$", re.M)
 WORDS = re.compile(r"\bmailbox\b[\s:=\-]*(?:is\s+|of\s+)?<?([\w.+%-]+@[\w-]+(?:\.[\w-]+)+)", re.I)
-DONE = "message-bots-linked"          # bots the start-up pass linked once: an owner who unlinks one is not overruled
+DONE = "message-bots-linked"  # bots the start-up pass linked once: an owner who unlinks one is not overruled
 
 
 def is_message_bot(config):
@@ -48,8 +49,9 @@ def mailbox_in_words(text):
 
 def reported_mailbox(c, bot):
     """The identity of the `gmail` tool the bot's computer reports from its bot.yaml, or empty."""
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?",
-                    (bot,)).fetchone()
+    row = c.execute(
+        "SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?", (bot,)
+    ).fetchone()
     report = ((readiness_document(row["readiness"]) if row else {}).get("bots") or {}).get(bot)
     return routines.declared_mailbox({"tools": (report or {}).get("tools") or []}) if isinstance(report, dict) else ""
 
@@ -58,8 +60,13 @@ def mailbox_of(c, bot, config, instructions=None):
     """The mailbox a message bot reads, from the first place that names one: the `Mailbox:` line, the gmail tool in
     its stored config, the gmail tool its computer reports, then the instructions' own words. Empty when none does."""
     text = instructions if instructions is not None else config.get("instructions")
-    return (declared_line(text) or routines.declared_mailbox(config) or reported_mailbox(c, bot)
-            or mailbox_in_words(text) or mailbox_in_words(config.get("description")))
+    return (
+        declared_line(text)
+        or routines.declared_mailbox(config)
+        or reported_mailbox(c, bot)
+        or mailbox_in_words(text)
+        or mailbox_in_words(config.get("description"))
+    )
 
 
 def owner_of(c, bot, roster, requester=None):
@@ -68,8 +75,12 @@ def owner_of(c, bot, roster, requester=None):
     row = c.execute("SELECT created_by,owner_id,bot_owners FROM bot_config WHERE bot=?", (bot,)).fetchone()
     owners = BA.owner_ids(row["bot_owners"]) if row else []
     made = H.actor_id(row["created_by"]) if row and str(row["created_by"] or "").startswith("human:") else ""
-    for who in (H.actor_id(requester) if str(requester or "").startswith("human:") else "", made,
-                owners[0] if len(owners) == 1 else "", str(row["owner_id"] or "") if row else ""):
+    for who in (
+        H.actor_id(requester) if str(requester or "").startswith("human:") else "",
+        made,
+        owners[0] if len(owners) == 1 else "",
+        str(row["owner_id"] or "") if row else "",
+    ):
         person = P.person(who, roster) if who else None
         if person and not person.get("hidden"):
             return person
@@ -86,6 +97,7 @@ def _config(c, bot):
 
 def _roster(c):
     from . import rooms
+
     return rooms.roster(c)
 
 
@@ -95,11 +107,11 @@ def _link(c, actor, roster, bot, person, mailbox):
     if not person or person.get("hidden") or not routines.MAILBOX.fullmatch(mailbox or ""):
         return None
     if person.get("inbox_bot") not in (None, "", bot):
-        return None                                  # they have a message bot already: theirs to change
+        return None  # they have a message bot already: theirs to change
     try:
         row = Access.assign_message_bot(c, roster, dict(person), SimpleNamespace(inbox_bot=bot, mailbox=mailbox))
     except Problem:
-        return None                                  # another person's bot, or a computer shared with other bots
+        return None  # another person's bot, or a computer shared with other bots
     row = P._person(row)
     Access.save_roster(c, {**roster, "people": [row if p["id"] == person["id"] else p for p in roster["people"]]})
     Access._sync_human(c, row)
@@ -160,12 +172,17 @@ def backfill(c, actor="keeper"):
         mailbox = mailbox_of(c, bot, config)
         if not mailbox:
             continue
-        person = (P.person_by_email(mailbox, roster) or owner_of(c, bot, roster)
-                  or (people[0] if len(people) == 1 else None))
+        person = (
+            P.person_by_email(mailbox, roster) or owner_of(c, bot, roster) or (people[0] if len(people) == 1 else None)
+        )
         # Only when whoever made the bot may give that grant (their own mailbox; any, for an admin).
         maker = owner_of(c, bot, roster)
-        if (person and not person.get("inbox_bot") and maker
-                and may_link(c, H.human_actor(maker["id"]), person, mailbox)):
+        if (
+            person
+            and not person.get("inbox_bot")
+            and maker
+            and may_link(c, H.human_actor(maker["id"]), person, mailbox)
+        ):
             wanted.append((bot, person, mailbox))
     claimed = [p["id"] for _, p, _ in wanted]
     linked = []
@@ -176,6 +193,8 @@ def backfill(c, actor="keeper"):
             linked.append(bot)
             roster = _roster(c)
     if linked:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                  (DONE, json.dumps(sorted(done | set(linked)))))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (DONE, json.dumps(sorted(done | set(linked)))),
+        )
     return linked

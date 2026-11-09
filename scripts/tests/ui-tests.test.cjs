@@ -291,7 +291,7 @@ test('--group e2e lists the end-to-end journeys, and an unknown group is refused
   const list = spawnSync(process.execPath, [script, '--group', 'e2e', '--list'], {encoding: 'utf8'});
   assert.equal(list.status, 0, list.stderr);
   const names = list.stdout.trim().split('\n');
-  assert.ok(names.includes('e2e-tasks') && names.includes('e2e-roles'), list.stdout);
+  assert.ok(names.includes('e2e-core') && names.includes('e2e-roles'), list.stdout);
   assert.ok(names.every(name => name.startsWith('e2e-')), list.stdout);
   const bad = spawnSync(process.execPath, [script, '--group', 'nope', '--list'], {encoding: 'utf8'});
   assert.equal(bad.status, 1);

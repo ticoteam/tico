@@ -1,4 +1,4 @@
-// The Goals page (ui/goals-kpis.js): one tree of every person and bot, nested as the org chart nests them, a line each
+// The Goals page (ui/goals-kpis.ts): one tree of every person and bot, nested as the org chart nests them, a line each
 // with the goal to the right (cut short, whole in its tooltip) and KPI chips; helper bots off it; tapping a line opens
 // that owner's panel, where goals and KPIs are added and edited. No helper chat sits beside it; Ask is the way in.
 // Fixtures only, no network.
@@ -61,7 +61,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/api/v2/events') { liveStreams.push(route); return; }   // held until the test sends a change
@@ -121,6 +121,38 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await page.locator('#nav-assistant, #nav-botops').count(), 0, 'Ask is the way in to both');
     // No Strategy Bot chat beside the tree: Ask (the person's Assistant) is the way in.
     assert.equal(await page.locator('#sbot, .gm-form, [data-gm-thread], [data-gm-on]').count(), 0, 'no Strategy Bot chat');
+
+    // The search above the tree: every word somewhere in a line (its name or its goals' words), the lines above a match
+    // kept for context, the rest taken out; a redraw keeps it, Escape clears it.
+    const search = page.getByRole('searchbox', {name: 'Search goals or people'});
+    assert.equal(await search.getAttribute('placeholder'), 'Search goals or people…');
+    const shown = () => page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : el.dataset.owner));
+    await search.fill('SEO');
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', 'bot:seo'], 'a bot with its manager chain; an unrelated bot hidden');
+    await page.evaluate(() => goalsRender(GOALS_ST));
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', 'bot:seo'], 'a redraw keeps the search');
+    await search.fill('organic  DOUBLE');
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', '+g-cmo2'], 'words of a goal title, any order: its owner and their goals');
+    await search.fill('keywords competitor');
+    assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', '+g-cmo2'], 'a further goal matches too');
+    await search.fill('board honest');
+    assert.deepEqual(await shown(), ['human:ana', 'human:ben'], 'a person\'s own goal line');
+    await search.fill('seo nomatch');
+    assert.equal(await page.locator('#goal-tree > li').count(), 0);
+    assert.equal(await page.locator('#goal-search-none').innerText(), 'No goals or people match.');
+    await search.fill('seo');
+    if (screenshotDir) {
+      fs.mkdirSync(screenshotDir, {recursive: true});
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate(v => ticoTheme.set(v), theme);
+        await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, `goals-search-${theme}.png`)});
+      }
+      await page.evaluate(() => ticoTheme.set('dark'));
+    }
+    await search.press('Escape');
+    assert.equal(await search.inputValue(), '');
+    assert.deepEqual(await page.locator('#goal-tree > li').count(), lines.length, 'Escape clears it: the whole tree again');
+    assert.equal(await page.locator('#goal-search-none').count(), 0);
 
     assert.match(await row('human:ben').innerText(), /Keep the board honest\./, 'a profile goal shows');
     // KPIs are chips: the dot and the latest value; no fresh data, no number.
@@ -293,6 +325,12 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.setViewportSize({width: 390, height: 844});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
     await page.evaluate(() => setDrawer(false));
+    await search.fill('seo');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'searching: no sideways scroll on a phone');
+    const box = await search.boundingBox();
+    assert(box.x >= 0 && box.x + box.width <= 390, 'the search fits a phone');
+    if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-search-phone.png')});
+    await search.press('Escape');
     if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-phone-test.png')});
     // Measured in one step: a refresh may redraw the tree between separate reads.
     const {cmo, seo, ana} = await page.evaluate(() => {
@@ -312,6 +350,6 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: goals tree, helpers off it, panel adds and edits goals and KPIs, truncation, phone.');
+    console.log('PASS: goals tree, helpers off it, search, panel adds and edits goals and KPIs, truncation, phone.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

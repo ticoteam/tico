@@ -1,4 +1,4 @@
-/* Task stats dialog (ui/app/task-stats.js) */
+/* Task stats dialog (ui/app/task-stats.ts) */
 .task-stats{width:min(820px,calc(100vw - 32px))}
 .task-stats .flow-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 16px 4px}
 .task-stats .flow-filters select{font-size:var(--t-base);flex:1 1 120px;min-width:0;max-width:none}

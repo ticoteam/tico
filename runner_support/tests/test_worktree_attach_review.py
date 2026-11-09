@@ -1,4 +1,5 @@
 """Regressions for inspecting API-attached worktrees without losing readiness proof."""
+
 import json
 
 from runner_support import worktrees as W
@@ -6,9 +7,15 @@ from runner_support.tests.test_worktrees import git, trees  # noqa: F401
 
 
 def _api_attached(row):
-    row.update(state='pending', detail_json=json.dumps({
-        'checkout_state': 'attached_pending', 'setup_pending': False,
-    }))
+    row.update(
+        state='pending',
+        detail_json=json.dumps(
+            {
+                'checkout_state': 'attached_pending',
+                'setup_pending': False,
+            }
+        ),
+    )
 
 
 def test_api_attachment_stays_ready_across_consecutive_heartbeats(trees):
@@ -21,8 +28,7 @@ def test_api_attachment_stays_ready_across_consecutive_heartbeats(trees):
     first = W.inspect(workspace, row)
     assert first['state'] == 'present', first
     detail = json.loads(row['detail_json'])
-    detail.update({key: value for key, value in first.items()
-                   if key not in ('state', 'link_id', 'branch')})
+    detail.update({key: value for key, value in first.items() if key not in ('state', 'link_id', 'branch')})
     row.update(state=first['state'], detail_json=json.dumps(detail))
 
     second = W.inspect(workspace, row)
@@ -62,8 +68,7 @@ def test_api_attachment_records_proof_without_discarding_dirty_work(trees):
     assert (path / 'notes.txt').read_text() == 'kept untracked file'
 
     detail = json.loads(row['detail_json'])
-    detail.update({key: value for key, value in first.items()
-                   if key not in ('state', 'link_id', 'branch')})
+    detail.update({key: value for key, value in first.items() if key not in ('state', 'link_id', 'branch')})
     row.update(state=first['state'], detail_json=json.dumps(detail))
     second = W.inspect(workspace, row)
     assert second['state'] == 'present', second

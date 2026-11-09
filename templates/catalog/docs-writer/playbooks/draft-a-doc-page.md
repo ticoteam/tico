@@ -54,4 +54,4 @@ then the draft in the docs repository's format, then the list of items marked to
 
 ## When you cannot verify
 
-Ask once with `hub task ask <id>`, naming the sentence and the human who knows. Ship the draft with the gap marked.
+Ask once with `hub task question "<question>" --on <person> --parent <id>`, naming the sentence and the human who knows. Ship the draft with the gap marked.

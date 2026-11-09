@@ -6,6 +6,7 @@
 3. Nothing posts into a closed period (also a database trigger).
 4. A line's account is active and in the entry's book.
 """
+
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -43,6 +44,7 @@ class Account:
 class Line:
     """One posting line. `amount` is base-currency minor units (debit +, credit -); `original_amount` is in
     `currency` and `fx_rate` turns it into `amount`."""
+
     account_id: str
     amount: int
     currency: str
@@ -51,12 +53,12 @@ class Line:
     contact_id: str = ""
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
-    role: str = ""          # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
+    role: str = ""  # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
     external_line: str = ""  # the provider's id for the line, so its tags follow it across a revision
 
 
-NAME_MAX = 80               # a vendor name's length: names are capped to it before they are keyed, never keys after
-KEY_MAX = 3 * NAME_MAX      # a key's: folding turns a character into up to three (ß is ss)
+NAME_MAX = 80  # a vendor name's length: names are capped to it before they are keyed, never keys after
+KEY_MAX = 3 * NAME_MAX  # a key's: folding turns a character into up to three (ß is ss)
 
 
 def name_key(name: str) -> str:
@@ -67,7 +69,7 @@ def name_key(name: str) -> str:
     return name.casefold().strip()
 
 
-MONEY_ROLE = "money"        # a feed row's own line: the money account's side (for a card, the card program's)
+MONEY_ROLE = "money"  # a feed row's own line: the money account's side (for a card, the card program's)
 
 
 @dataclass(frozen=True)
@@ -92,7 +94,7 @@ class Book:
     base_currency: str
     basis: str = "cash"
     fiscal_year_start: int = 1
-    mode: str = "native"                # native: Tico is the books; mirror: a provider's books are (spec §10)
+    mode: str = "native"  # native: Tico is the books; mirror: a provider's books are (spec §10)
     mirror_connection_id: str = ""
 
 
@@ -108,7 +110,7 @@ def tags(raw: object) -> dict[str, str]:
             continue
         if not isinstance(value, str) or len(value) > 200:
             raise invalid(f"tag {kind} is a text value")
-        if "|" in value:                  # a rollup key joins tags with |, so a value holding one could be misread
+        if "|" in value:  # a rollup key joins tags with |, so a value holding one could be misread
             raise invalid(f"tag {kind} has no | in it")
         out[kind] = value.strip()
     return out
@@ -139,8 +141,16 @@ def line(raw: object, base: str) -> Line:
         raise invalid("in the base currency, original_amount equals amount")
     if amount == 0:
         raise invalid("a line moves money: amount is not 0")
-    return Line(account_id=account_id, amount=amount, currency=cur, original_amount=amount, fx_rate=Decimal(1),
-                contact_id=vendor_text(p), description=V.opt_text(p, "description") or "", tags=tags(p.get("tags")))
+    return Line(
+        account_id=account_id,
+        amount=amount,
+        currency=cur,
+        original_amount=amount,
+        fx_rate=Decimal(1),
+        contact_id=vendor_text(p),
+        description=V.opt_text(p, "description") or "",
+        tags=tags(p.get("tags")),
+    )
 
 
 def vendor_text(p: V.Payload, key: str = "contact_id") -> str:
@@ -158,13 +168,25 @@ def entry(raw: object, book: Book) -> Entry:
     p = V.obj(raw)
     source = V.choice(p, "source", ("manual", "import"), "manual")
     lines = tuple(line(item, book.base_currency) for item in V.items(p.get("lines"), "lines", MAX_LINES))
-    return Entry(book_id=book.id, entry_date=V.day(p, "date"), memo=V.opt_text(p, "memo") or "", source=source,
-                 source_id=V.opt_text(p, "source_id", 200) or "", lines=lines,
-                 basis=V.choice(p, "basis", BASES, "both"))
+    return Entry(
+        book_id=book.id,
+        entry_date=V.day(p, "date"),
+        memo=V.opt_text(p, "memo") or "",
+        source=source,
+        source_id=V.opt_text(p, "source_id", 200) or "",
+        lines=lines,
+        basis=V.choice(p, "basis", BASES, "both"),
+    )
 
 
-def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, reversing: bool = False,
-          importing: bool = False) -> None:
+def check(
+    e: Entry,
+    book: Book,
+    accounts: Mapping[str, Account],
+    closed: bool,
+    reversing: bool = False,
+    importing: bool = False,
+) -> None:
     """Invariants 1, 3 and 4 for an entry about to post. `closed` says whether its date is in a closed period. A
     reversal may post to an account deactivated since the original, or the original could never be undone; a provider's
     history may name an account it retired, which is taken in as it was (`importing`)."""
@@ -186,7 +208,9 @@ def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, r
             raise invalid(f"account {account.code} {account.name} is inactive")
         money.minor(item.amount)
         if item.currency != book.base_currency:
-            raise invalid(f"lines are in the book's currency ({book.base_currency}); {item.currency} is not supported yet")
+            raise invalid(
+                f"lines are in the book's currency ({book.base_currency}); {item.currency} is not supported yet"
+            )
         if item.original_amount != item.amount or item.fx_rate != 1:
             raise invalid("in the base currency, original_amount equals amount at fx_rate 1")
         total += item.amount
@@ -196,9 +220,20 @@ def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, r
 
 def reversal(lines: Iterable[Line]) -> tuple[Line, ...]:
     """The lines that undo `lines`: every amount negated, tags, contacts and roles kept."""
-    return tuple(Line(account_id=x.account_id, amount=-x.amount, currency=x.currency,
-                      original_amount=-x.original_amount, fx_rate=x.fx_rate, contact_id=x.contact_id,
-                      description=x.description, tags=dict(x.tags), role=x.role) for x in lines)
+    return tuple(
+        Line(
+            account_id=x.account_id,
+            amount=-x.amount,
+            currency=x.currency,
+            original_amount=-x.original_amount,
+            fx_rate=x.fx_rate,
+            contact_id=x.contact_id,
+            description=x.description,
+            tags=dict(x.tags),
+            role=x.role,
+        )
+        for x in lines
+    )
 
 
 PNL_SECTIONS = ("revenue", "cost_of_revenue", "operating", "other")

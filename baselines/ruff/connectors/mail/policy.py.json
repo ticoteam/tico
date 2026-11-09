@@ -1,0 +1,6 @@
+{
+  "connectors/mail/policy.py": {
+    "BLE001": 8,
+    "S110": 3
+  }
+}

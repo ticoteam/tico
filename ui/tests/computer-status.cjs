@@ -1,7 +1,7 @@
 // Machine status uses live runner presence ahead of a stale cloud lifecycle record, at desktop and phone widths.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const path = require('node:path');
+const {uiFile} = require('./support/page.cjs');
 
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -10,8 +10,9 @@ const path = require('node:path');
       const page = await browser.newPage({viewport: {width, height: 900}});
       await page.setContent('<div id="status"></div>');
       await page.addScriptTag({content: `const SETTINGS_PRESENCE = {at: Date.now()}; const esc = value => String(value);`});
-      for (const script of ['computer-detail', 'settings-devices', 'cloud-machines']) {
-        await page.addScriptTag({path: path.join(__dirname, '../app', script + '.js')});
+      // cloud-machines is TypeScript: uiFile serves its compiled file (npm run build:ui).
+      for (const script of ['app/computer-detail.ts', 'app/settings-devices.ts', 'app/cloud-machines.ts']) {
+        await page.addScriptTag({path: uiFile(script)});
       }
       const status = await page.evaluate(() => {
         const machine = {last_seen_at: new Date().toISOString(), cloud_machine: {state: 'stopped'}};

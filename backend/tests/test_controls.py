@@ -20,4 +20,3 @@ def test_pause_fences_current_credential_even_after_resume(api):
     post(api, "bots/ops/control", {"action": "resume", "expected_revision": 2})
     get(api, "me", a["token"], expected=409)
     assert claim(api, r) is None  # Interrupted external effects still require reconciliation.
-

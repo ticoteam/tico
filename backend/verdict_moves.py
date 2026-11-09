@@ -21,6 +21,7 @@ Builder hand-offs (a verdict to act on, a failed check, a merge conflict, a merg
 the keeper's count: they always wake (wake_rules.always_wakes), are never held for a batch, and are the first of the
 bot's queued jobs a claim hands out (HANDOFF_FIRST_SQL). Each wakes the turn of the ticket's own session (its lane).
 """
+
 import json
 import logging
 
@@ -34,12 +35,13 @@ from .check_independence import assess as assess_independence
 log = logging.getLogger(__name__)
 
 GOOD = ("approve", "pass")
-NO_VERDICT = "comments"     # a check finished with no verdict: what it said is feedback, like changes
+NO_VERDICT = "comments"  # a check finished with no verdict: what it said is feedback, like changes
 HANDOFF = "handoff"
 HANDOFFS = ("verdict", "failed_check", "merge_conflict", "merge")
 # The claim's order key: a keeper hand-off before the bot's other queued jobs (backend/execution.py).
-HANDOFF_FIRST_SQL = (f"CASE WHEN m.sender_id='{H.KEEPER}' AND json_extract(m.refs,'$.{HANDOFF}') "
-                     "IS NOT NULL THEN 0 ELSE 1 END")
+HANDOFF_FIRST_SQL = (
+    f"CASE WHEN m.sender_id='{H.KEEPER}' AND json_extract(m.refs,'$.{HANDOFF}') IS NOT NULL THEN 0 ELSE 1 END"
+)
 
 
 def at_step(c, task_id, refs):
@@ -66,11 +68,19 @@ def _ticket(c, row, *, evidence=None):
     held: a hold keeps the ticket at its check step, where a verdict must wait for it to clear (`resumed`).
     Health passes the same task fields with holds and its set-read board as evidence."""
     from . import task_holds
-    row = task_holds.with_holds(c, row)     # its holds, when the row came from plain `tasks`
-    return row if (row and (H.is_bot(row.get("owner_id")) or evidence is None and F.pr_checks(c, row))
-                   and row.get("status") in H.ACTIVE_STATUSES
-                   and not row.get("blocked_since") and (F.has_flow(c, row.get("type_id"), evidence=evidence)
-                                                         or evidence is None and F.pr_checks(c, row))) else None
+
+    row = task_holds.with_holds(c, row)  # its holds, when the row came from plain `tasks`
+    return (
+        row
+        if (
+            row
+            and (H.is_bot(row.get("owner_id")) or evidence is None and F.pr_checks(c, row))
+            and row.get("status") in H.ACTIVE_STATUSES
+            and not row.get("blocked_since")
+            and (F.has_flow(c, row.get("type_id"), evidence=evidence) or evidence is None and F.pr_checks(c, row))
+        )
+        else None
+    )
 
 
 def step_of(c, row):
@@ -79,8 +89,11 @@ def step_of(c, row):
 
 
 def _prs(c, row, *, evidence=None):
-    return [p for p in (H.task_links(c, row["id"]) if evidence is None else evidence["prs"])
-            if p["kind"] == "pr" and p.get("state") != "closed"]
+    return [
+        p
+        for p in (H.task_links(c, row["id"]) if evidence is None else evidence["prs"])
+        if p["kind"] == "pr" and p.get("state") != "closed"
+    ]
 
 
 def _head(pr):
@@ -90,8 +103,9 @@ def _head(pr):
 def at_head(c, row, head, check=None):
     """Whether `head` (7 to 40 characters) is the head a pull request on this ticket is at now."""
     head = str(head or "").lower()
-    return bool(head) and any(_head(pr).startswith(head) for pr in _prs(c, row)
-                              if _head(pr) and (check is None or for_pr(check, pr)))
+    return bool(head) and any(
+        _head(pr).startswith(head) for pr in _prs(c, row) if _head(pr) and (check is None or for_pr(check, pr))
+    )
 
 
 def _full_head(c, row, head, *, evidence=None):
@@ -110,6 +124,7 @@ def is_merged(c, row):
 def review_checks(c, row, *, evidence=None):
     """Bot check candidates with their filed step and judged head, from rows or Health's raw set reads."""
     from .check_pools import is_security
+
     children = evidence["children"] if evidence is not None else [H.task(c, cid) for cid in TR.child_ids(c, row["id"])]
     out = []
     for child in children:
@@ -117,10 +132,22 @@ def review_checks(c, row, *, evidence=None):
             continue
         step = F.check_step(c, child, row, evidence=evidence)
         board = evidence["boards"].get(row["type_id"], []) if evidence is not None else None
-        filed = (child["id"] in evidence["filed"] if evidence is not None else
-                 c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
-                           "AND kind='check_filed' AND new=? LIMIT 1", (row["id"], child["id"])).fetchone())
-        if step or filed or child.get("verdict") or is_security(child.get("title")) or F.titled(c, row["type_id"], child.get("title"), board=board):
+        filed = (
+            child["id"] in evidence["filed"]
+            if evidence is not None
+            else c.execute(
+                "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
+                "AND kind='check_filed' AND new=? LIMIT 1",
+                (row["id"], child["id"]),
+            ).fetchone()
+        )
+        if (
+            step
+            or filed
+            or child.get("verdict")
+            or is_security(child.get("title"))
+            or F.titled(c, row["type_id"], child.get("title"), board=board)
+        ):
             out.append({**child, "check_step": step, "judged_head": _judged_head(c, child, evidence=evidence)})
     return sorted(out, key=lambda t: (t.get("created_at") or "", t["id"]))
 
@@ -133,8 +160,11 @@ def for_pr(check, pr):
 def _checks(c, row, step, *, evidence=None, pr=None):
     """The ticket's checks filed at check step `step`, newest last. A person's own subtask filed there is ordinary
     work, never a check, whatever its title: finished with no verdict, it is not a check's comments."""
-    return [t for t in review_checks(c, row, evidence=evidence) if (t["check_step"] or {}).get("id") == step["id"]
-            and (pr is None or for_pr(t, pr))]
+    return [
+        t
+        for t in review_checks(c, row, evidence=evidence)
+        if (t["check_step"] or {}).get("id") == step["id"] and (pr is None or for_pr(t, pr))
+    ]
 
 
 def _verdict(check):
@@ -154,8 +184,15 @@ def move(c, row, target, why, *, sources=()):
     try:
         # The owner hears of the move on the hand-off that caused it, not again from a step rule.
         H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],), strict=False)
-        H._task_event(c, row["id"], H.KEEPER, "verdict_move",
-                      json.dumps({"source_tasks": list(sources)}) if sources else None, target["name"], why)
+        H._task_event(
+            c,
+            row["id"],
+            H.KEEPER,
+            "verdict_move",
+            json.dumps({"source_tasks": list(sources)}) if sources else None,
+            target["name"],
+            why,
+        )
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
         c.execute("RELEASE verdict_move")
@@ -163,9 +200,10 @@ def move(c, row, target, why, *, sources=()):
         if notice:
             review_gate.notify(c, H.KEEPER, notice)
             from . import move_retry
+
             move_retry.remember(c, H.KEEPER, notice)
         return False
-    except Exception:  # noqa: BLE001 - a verdict or a merge is never lost to the move it causes
+    except Exception:  # a verdict or a merge is never lost to the move it causes
         c.execute("ROLLBACK TO verdict_move")
         c.execute("RELEASE verdict_move")
         log.exception("verdict move of %s to %s failed", row["id"], target["id"])
@@ -183,37 +221,56 @@ def after_verdict(c, check):
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check["id"]) or ""))
     step = ticket and F.check_step(c, check, ticket)
     head = str(check.get("verdict_head") or _judged_head(c, check) or "").lower()
-    if (not verdict or not step or not review_gate.can_copy_prs(c, ticket, check)
-            or (not step.get("detached") and ticket.get("step_id") != step["id"])
-            or not at_head(c, ticket, head, check if step.get("detached") else None)):
+    if (
+        not verdict
+        or not step
+        or not review_gate.can_copy_prs(c, ticket, check)
+        or (not step.get("detached") and ticket.get("step_id") != step["id"])
+        or not at_head(c, ticket, head, check if step.get("detached") else None)
+    ):
         return None
     name = step["name"]
     # Verdicts are commonly written inside the checker turn's final tool call. The executed
     # model segments are committed by turn_finish afterwards, so this callback records an
     # immutable pending marker and leaves routing to the post-capture callback.
-    attempt = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
-                        (check["id"],)).fetchone()
+    attempt = c.execute(
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (check["id"],)
+    ).fetchone()
     attempt_id = attempt["id"] if attempt else None
-    pending = {"check_id": check["id"], "attempt_id": attempt_id, "step": name, "head": head,
-               "verdict": verdict}
-    existing = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
-                         "ORDER BY rowid DESC LIMIT 1", (ticket["id"],)).fetchone()
-    if not existing or H._json(existing["new"], {}).get("check_id") != check["id"] or \
-            H._json(existing["new"], {}).get("attempt_id") != attempt_id or \
-            H._json(existing["new"], {}).get("head") != head:
-        H._task_event(c, ticket["id"], H.KEEPER, "verdict_wait", None,
-                      json.dumps(pending, sort_keys=True), "")
-    return {"moved": None, "handoff": None, "quiet": True, "pending": True,
-            "say": f"{name} recorded {verdict} at head {head}; waiting for this check attempt's execution record."}
+    pending = {"check_id": check["id"], "attempt_id": attempt_id, "step": name, "head": head, "verdict": verdict}
+    existing = c.execute(
+        "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
+        "ORDER BY rowid DESC LIMIT 1",
+        (ticket["id"],),
+    ).fetchone()
+    if (
+        not existing
+        or H._json(existing["new"], {}).get("check_id") != check["id"]
+        or H._json(existing["new"], {}).get("attempt_id") != attempt_id
+        or H._json(existing["new"], {}).get("head") != head
+    ):
+        H._task_event(c, ticket["id"], H.KEEPER, "verdict_wait", None, json.dumps(pending, sort_keys=True), "")
+    return {
+        "moved": None,
+        "handoff": None,
+        "quiet": True,
+        "pending": True,
+        "say": f"{name} recorded {verdict} at head {head}; waiting for this check attempt's execution record.",
+    }
 
 
 def _judged_head(c, check, *, evidence=None):
     """The head a check was filed for (its review_head), for a check finished with no verdict line."""
     if evidence is not None:
-        found = next((e for e in reversed(evidence["child_events"].get(check["id"], [])) if e["kind"] == "review_head"), None)
+        found = next(
+            (e for e in reversed(evidence["child_events"].get(check["id"], [])) if e["kind"] == "review_head"), None
+        )
     else:
-        found = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
-                          "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
+        found = c.execute(
+            "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='review_head' "
+            "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            (check["id"],),
+        ).fetchone()
     return str(found["new"] if found else "").split(",")[0]
 
 
@@ -224,33 +281,54 @@ def after_capture(c, check_id, head, attempt_id, *, snapshots=None):
     if not verdict or str(check.get("verdict_head") or _judged_head(c, check) or "").lower() != str(head or "").lower():
         return None
     attempt = c.execute("SELECT task_id,bot_id,settled_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    latest = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (check_id,)).fetchone()
-    if (not attempt or attempt["task_id"] != check_id or not attempt["settled_at"] or
-            not latest or latest["id"] != attempt_id or check.get("status") != "done" or
-            H.actor_id(attempt["bot_id"]) != H.actor_id(check.get("owner_id"))):
+    latest = c.execute(
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (check_id,)
+    ).fetchone()
+    if (
+        not attempt
+        or attempt["task_id"] != check_id
+        or not attempt["settled_at"]
+        or not latest
+        or latest["id"] != attempt_id
+        or check.get("status") != "done"
+        or H.actor_id(attempt["bot_id"]) != H.actor_id(check.get("owner_id"))
+    ):
         return None
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check_id) or ""))
     step = ticket and F.check_step(c, check, ticket)
     if not step or not review_gate.can_copy_prs(c, ticket, check):
         return None
-    marker = c.execute("SELECT rowid,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
-                       "AND json_extract(new,'$.check_id')=? ORDER BY rowid DESC LIMIT 1", (ticket["id"], check_id)).fetchone()
+    marker = c.execute(
+        "SELECT rowid,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
+        "AND json_extract(new,'$.check_id')=? ORDER BY rowid DESC LIMIT 1",
+        (ticket["id"], check_id),
+    ).fetchone()
     pending = H._json(marker["new"], {}) if marker else {}
-    if (pending.get("check_id"), pending.get("attempt_id"), pending.get("head"), pending.get("verdict")) != \
-            (check_id, attempt_id, str(head or "").lower(), verdict):
+    if (pending.get("check_id"), pending.get("attempt_id"), pending.get("head"), pending.get("verdict")) != (
+        check_id,
+        attempt_id,
+        str(head or "").lower(),
+        verdict,
+    ):
         return None
-    if ((not step.get("detached") and ticket.get("step_id") != step["id"])
-            or not at_head(c, ticket, head, check if step.get("detached") else None)):
+    if (not step.get("detached") and ticket.get("step_id") != step["id"]) or not at_head(
+        c, ticket, head, check if step.get("detached") else None
+    ):
         return None
     prior = delivery(c, check)
     if prior and prior.get("consumed"):
         return None
     name = step["name"]
-    eligible = assess_independence(c, ticket, H.actor_id(check.get("owner_id") or ""), head=head,
-                                   check_id=check["id"], attempt_id=attempt_id)
+    eligible = assess_independence(
+        c, ticket, H.actor_id(check.get("owner_id") or ""), head=head, check_id=check["id"], attempt_id=attempt_id
+    )
     # Model company is a routing preference, never a verdict gate. Keep actual builder/checker families
     # alongside the verdict for audit, including fallback runs and unknown provenance.
-    pr = next((p for p in _prs(c, ticket) if for_pr(check, p) and _head(p).startswith(head)), None) if step.get("detached") else None
+    pr = (
+        next((p for p in _prs(c, ticket) if for_pr(check, p) and _head(p).startswith(head)), None)
+        if step.get("detached")
+        else None
+    )
     route = verdict_route(c, ticket, head, step=step, pr=pr)
     standing = verdict if verdict not in GOOD else route["verdict"]
     if standing not in GOOD:
@@ -261,17 +339,24 @@ def after_capture(c, check_id, head, attempt_id, *, snapshots=None):
     out["consumed"] = True
     out["attempt_id"] = attempt_id
     out["source_tasks"] = list(dict.fromkeys([*out.get("source_tasks", []), check_id]))
-    H._task_event(c, check["id"], H.KEEPER, "verdict_move", None,
-                  json.dumps({"verdict": verdict, "head": head, **out}, sort_keys=True), "")
+    H._task_event(
+        c,
+        check["id"],
+        H.KEEPER,
+        "verdict_move",
+        None,
+        json.dumps({"verdict": verdict, "head": head, **out}, sort_keys=True),
+        "",
+    )
     if step.get("detached"):
         from . import check_pools
+
         check_pools.entered(c, H.KEEPER, ticket, snapshots=snapshots)
     if out.get("handoff"):
         refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
         if out["handoff"] == "merge":
             refs["pr_head"] = head
-        forward(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket["id"], refs),
-                sources=out["source_tasks"])
+        forward(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket["id"], refs), sources=out["source_tasks"])
     return out
 
 
@@ -280,24 +365,29 @@ def resumed(c, task_id):
     ticket = _ticket(c, H.task(c, task_id))
     if ticket and F.pr_checks(c, ticket):
         from . import check_pools
+
         return check_pools.entered(c, H.KEEPER, ticket)
     step = ticket and F.step(c, ticket.get("step_id"))
     if not step or not F.is_check(step):
         return None
     # A replay must keep the same audience as the child's normal result delivery.
-    last = next((t for t in reversed(_checks(c, ticket, step))
-                 if _verdict(t) and H._subtask_result_parent(c, t)), None)
+    last = next((t for t in reversed(_checks(c, ticket, step)) if _verdict(t) and H._subtask_result_parent(c, t)), None)
     return replay(c, last) if last else None
 
 
 def replay(c, check, *, snapshots=None):
     """Consume an undelivered verdict once, through the normal head, audience and capture checks."""
     check = H.task(c, check["id"])
-    if (not check or check.get("status") != "done" or (delivery(c, check) or {}).get("consumed")
-            or not H._subtask_result_parent(c, check, bot_only=False)):
+    if (
+        not check
+        or check.get("status") != "done"
+        or (delivery(c, check) or {}).get("consumed")
+        or not H._subtask_result_parent(c, check, bot_only=False)
+    ):
         return None
-    attempt = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
-                        (check["id"],)).fetchone()
+    attempt = c.execute(
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (check["id"],)
+    ).fetchone()
     if not attempt or not after_verdict(c, check):
         return None
     head = str(check.get("verdict_head") or _judged_head(c, check) or "").lower()
@@ -310,8 +400,12 @@ def _failed(c, ticket, step, verdict, head, passed=None, *, pr=None):
     name = step["name"]
     gave = "no verdict (its comments are the feedback)" if verdict == NO_VERDICT else verdict
     target = F.step(c, F.of(step).get("on_fail"))
-    said = (f"{name} gave {passed} at head {head}, but {name} already gave {gave} at that head, and only a new head "
-            "clears it" if passed else f"{name} gave {gave} at head {head}")
+    said = (
+        f"{name} gave {passed} at head {head}, but {name} already gave {gave} at that head, and only a new head "
+        "clears it"
+        if passed
+        else f"{name} gave {gave} at head {head}"
+    )
     head = _full_head(c, ticket, head)
     failed = [t for t in _checks(c, ticket, step, pr=pr) if verdict_at([t], head) not in (None, *GOOD)]
     sources = [t["id"] for t in failed if _verdict(t) == verdict][:1]
@@ -321,10 +415,17 @@ def _failed(c, ticket, step, verdict, head, passed=None, *, pr=None):
             said += f". {findings['note'][:4000]}"
             sources = list(dict.fromkeys([findings["id"], *sources]))
     moved = bool(target) and move(c, ticket, target, f"{name} gave {verdict} at {head[:12]}", sources=sources)
-    return {"moved": target["name"] if moved else None, "handoff": "verdict", "quiet": False,
-            "source_tasks": sources,
-            "say": (f"Tico moved this ticket to {target['name']}: {said}." if moved else
-                    said + (f"; Tico could not move this ticket to {target['name']}." if target else "."))}
+    return {
+        "moved": target["name"] if moved else None,
+        "handoff": "verdict",
+        "quiet": False,
+        "source_tasks": sources,
+        "say": (
+            f"Tico moved this ticket to {target['name']}: {said}."
+            if moved
+            else said + (f"; Tico could not move this ticket to {target['name']}." if target else ".")
+        ),
+    }
 
 
 def _passed(c, ticket, step, why, *, sources=()):
@@ -339,45 +440,71 @@ def _passed(c, ticket, step, why, *, sources=()):
             ready = merge_ready(c, ticket)
             if ready:
                 _merge_woken(c, ticket, ready[1])
-            return {"moved": None, "handoff": "merge" if ready else None, "quiet": not ready,
-                    "source_tasks": merge_sources(c, ticket, ready[1]) if ready else list(sources),
-                    "say": merge_text(c, ticket, *ready) if ready else
-                    f"{why}. Tico wakes you to merge once CI is green on it."}
+            return {
+                "moved": None,
+                "handoff": "merge" if ready else None,
+                "quiet": not ready,
+                "source_tasks": merge_sources(c, ticket, ready[1]) if ready else list(sources),
+                "say": merge_text(c, ticket, *ready)
+                if ready
+                else f"{why}. Tico wakes you to merge once CI is green on it.",
+            }
     target = F.step(c, target) if target and not isinstance(target, dict) else target
     if not target:
         return {"moved": None, "handoff": None, "quiet": True, "say": f"{why}."}
     moved = move(c, ticket, target, why, sources=sources)
     # A move to the next check needs nothing from the builder; a move back to the builder's own step is its cue.
     cue = moved and target["status"] in ("open", "doing")
-    return {"moved": target["name"] if moved else None, "handoff": "verdict" if cue else None, "quiet": moved and not cue,
-            "say": (f"Tico moved this ticket to {target['name']}: {why}." if moved else
-                    f"{why}; Tico could not move this ticket to {target['name']}.")}
+    return {
+        "moved": target["name"] if moved else None,
+        "handoff": "verdict" if cue else None,
+        "quiet": moved and not cue,
+        "say": (
+            f"Tico moved this ticket to {target['name']}: {why}."
+            if moved
+            else f"{why}; Tico could not move this ticket to {target['name']}."
+        ),
+    }
 
 
 def delivery(c, check):
     """What the verdict's delivery to the builder carries (hubdb._deliver_subtask_result): the outcome
     `after_verdict` kept for the check's current verdict and head, or None."""
-    row = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' "
-                    "ORDER BY created_at DESC, rowid DESC "
-                    "LIMIT 1", (check["id"],)).fetchone()
+    row = c.execute(
+        "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' "
+        "ORDER BY created_at DESC, rowid DESC "
+        "LIMIT 1",
+        (check["id"],),
+    ).fetchone()
     out = H._json(row[0], {}) if row else None
-    marker = c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
-                       "AND json_extract(new,'$.check_id')=? ORDER BY rowid DESC LIMIT 1",
-                       (TR.parent_of(c, check["id"]) or "", check["id"])).fetchone()
+    marker = c.execute(
+        "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_wait' "
+        "AND json_extract(new,'$.check_id')=? ORDER BY rowid DESC LIMIT 1",
+        (TR.parent_of(c, check["id"]) or "", check["id"]),
+    ).fetchone()
     pending = H._json(marker["new"], {}) if marker else {}
-    turn = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
-                     (check["id"],)).fetchone()
+    turn = c.execute(
+        "SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (check["id"],)
+    ).fetchone()
     waiting = turn and pending.get("check_id") == check["id"] and pending.get("attempt_id") == turn["id"]
     verdict = _verdict(check)
     head = str(check.get("verdict_head") or _judged_head(c, check) or "").lower()
     # A rerouted check can get the same verdict at the same head from its next checker: that attempt's own outcome is
     # still to come, so the earlier attempt's is not it.
-    if out and (out.get("verdict"), out.get("head")) == (verdict, head) \
-            and not (waiting and out.get("attempt_id") not in (None, turn["id"])):
+    if (
+        out
+        and (out.get("verdict"), out.get("head")) == (verdict, head)
+        and not (waiting and out.get("attempt_id") not in (None, turn["id"]))
+    ):
         return out
     if waiting:
-        return {"verdict": verdict, "head": head, "pending": True,
-                "quiet": True, "say": "This check verdict is waiting for its executed attempt to be captured."}
+        return {
+            "verdict": verdict,
+            "head": head,
+            "pending": True,
+            "quiet": True,
+            "say": "This check verdict is waiting for its executed attempt to be captured.",
+        }
     return None
 
 
@@ -403,8 +530,12 @@ def verdict_route(c, row, head, *, step=None, evidence=None, pr=None):
 
 def verdict_at(checks, head):
     """The same-head verdict from already read checks; a failed head needs a new commit."""
-    given = [_verdict(check) for check in checks if _verdict(check)
-             and head.startswith(str(check.get("verdict_head") or check.get("judged_head") or "-").split(",")[0].lower())]
+    given = [
+        _verdict(check)
+        for check in checks
+        if _verdict(check)
+        and head.startswith(str(check.get("verdict_head") or check.get("judged_head") or "-").split(",")[0].lower())
+    ]
     return next((v for v in given if v not in GOOD), given[-1] if given else None)
 
 
@@ -413,10 +544,15 @@ def _skipped(c, row, step, head, *, evidence=None):
     was skipped (timed out) at that head and no check there failed the head."""
     if F.skip_target(c, {**row, "tags": evidence["tags"]} if evidence is not None else row, step):
         return True
-    skipped = (any(e["kind"] == "round_skipped" and e["new"] == f"{step['id']}:{head}" for e in evidence["events"])
-               if evidence is not None else c.execute(
-                   "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='round_skipped' "
-                   "AND new=? LIMIT 1", (row["id"], f"{step['id']}:{head}")).fetchone())
+    skipped = (
+        any(e["kind"] == "round_skipped" and e["new"] == f"{step['id']}:{head}" for e in evidence["events"])
+        if evidence is not None
+        else c.execute(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='round_skipped' "
+            "AND new=? LIMIT 1",
+            (row["id"], f"{step['id']}:{head}"),
+        ).fetchone()
+    )
     if not skipped:
         return False
     verdict = _verdict_at(c, row, step, head, evidence=evidence)
@@ -436,16 +572,26 @@ def merge_ready(c, row, *, evidence=None, pr=None):
     if not step or F.MERGE not in (flow.get("on_pass"), flow.get("after_green")):
         return None
     prs = [p for p in ([pr] if pr else _prs(c, row, evidence=evidence)) if p.get("state") in ("open", "draft")]
-    if len(prs) != 1 or prs[0].get("state") != "open" or prs[0].get("checks") != "passing" \
-            or prs[0].get("mergeable") == "conflict" or not _head(prs[0]):
+    if (
+        len(prs) != 1
+        or prs[0].get("state") != "open"
+        or prs[0].get("checks") != "passing"
+        or prs[0].get("mergeable") == "conflict"
+        or not _head(prs[0])
+    ):
         return None
     pr, head = prs[0], _head(prs[0])
     if detached:
         from .check_pools import bot_pr
+
         detail = H._json(pr.get("detail"), {}) or {}
-        if (not bot_pr(c, row, pr) or detail.get("error") or detail.get("mergeable_state") == "behind"
-                or any(v not in ("passing", "skipped") for v in (detail.get("checks") or {}).values())
-                or ("qa" in H.task_labels(row) and not any(F.check_kind(s) == "qa" for s in detached))):
+        if (
+            not bot_pr(c, row, pr)
+            or detail.get("error")
+            or detail.get("mergeable_state") == "behind"
+            or any(v not in ("passing", "skipped") for v in (detail.get("checks") or {}).values())
+            or ("qa" in H.task_labels(row) and not any(F.check_kind(s) == "qa" for s in detached))
+        ):
             return None
         for required in detached:
             checks = _checks(c, row, required, pr=pr)
@@ -469,47 +615,87 @@ def _judged_by(c, row, step, *, evidence=None):
         return None
     checks = _checks(c, row, check, evidence=evidence)
     heads = [_head(pr) for pr in _prs(c, row, evidence=evidence) if _head(pr)]
-    failed = [t for t in checks if _verdict(t) and _verdict(t) not in GOOD
-              and any(verdict_at([t], head) for head in heads)]
+    failed = [
+        t for t in checks if _verdict(t) and _verdict(t) not in GOOD and any(verdict_at([t], head) for head in heads)
+    ]
     found = next((t for t in reversed(failed or checks) if _verdict(t)), None)
     return str(found.get("verdict_head") or found["judged_head"] or "").lower() if found else None
 
 
 def merge_sources(c, row, head, pr=None):
     """The checks whose approvals a merge notice summarizes, including when CI turned green later."""
-    return [t["id"] for t in review_checks(c, row) if (pr is None or for_pr(t, pr))
-            and verdict_at([t], head) in GOOD]
+    return [t["id"] for t in review_checks(c, row) if (pr is None or for_pr(t, pr)) and verdict_at([t], head) in GOOD]
+
+
+# A push after approval changes the head, so the approvals no longer count and the PR waits for new reviews.
+AS_APPROVED = "Merge it as approved: don't push to the branch; put non-blocking notes in a follow-up PR."
+
+
+def _after_merge(c, row):
+    """What follows the merge command, true with or without a merge queue: a queue takes the PR instead, and the ticket
+    moves when GitHub reports the PR merged (github.pull_request), never on a line the builder posts."""
+    landing = F.merge_step(c, row["type_id"])
+    return (
+        "A repo with a merge queue queues the PR instead; Tico moves this ticket"
+        + (f" to {landing['name']}" if landing else "")
+        + " once GitHub reports the PR merged, so do not announce a merge before then."
+    )
 
 
 def merge_text(c, row, pr, head, *, announce=True):
     if F.pr_checks(c, row):
         prefix = f"Approved at {head}, checks green: " if announce else f"At {head}: "
-        return (prefix + f"merge PR #{pr['number']} under the repo's merge rules. "
-                f"Use --match-head-commit {head}. {pr['url']}")
+        return (
+            prefix + f"merge PR #{pr['number']} under the repo's merge rules. "
+            f"Use --match-head-commit {head}. {_after_merge(c, row)} {AS_APPROVED} {pr['url']}"
+        )
     name = step_of(c, row) or "The last check"
     number = pr.get("number") or "?"
-    landing = F.merge_step(c, row["type_id"])
-    return (f"Ready to merge: {name} cleared PR #{number} at head {head} and CI is green. Merge it under the merge "
-            f"rules (gh pr merge {number} --squash --match-head-commit {head}) and post the MERGED line"
-            + (f"; Tico then moves this ticket to {landing['name']}." if landing else "."))
+    return (
+        f"Ready to merge: {name} cleared PR #{number} at head {head} and CI is green. Merge it under the merge "
+        f"rules (gh pr merge {number} --squash --match-head-commit {head}). {_after_merge(c, row)} {AS_APPROVED}"
+    )
+
+
+# A removal from a merge queue for a reason other than a merge (github.pull_request writes `merge_queue_failed` at the
+# head) makes the head's next green pass a merge wake again: the builder was told to fix and merge, and that is not done.
+MERGE_REARM = {"merge_wake": "merge_queue_failed"}
 
 
 def pr_notice_seen(c, row, kind, pr, head):
-    """Saved notices use full PR identities too, including older URL spellings."""
-    for event in c.execute("SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=?",
-                           (row["id"], kind)):
+    """Saved notices use full PR identities too, including older URL spellings. The last notice for this PR and head
+    decides: a rearm written after the notice means it was not seen."""
+    rearm = MERGE_REARM.get(kind, kind)
+    seen = False
+    for event in c.execute(
+        "SELECT kind, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN (?, ?) "
+        "ORDER BY rowid",
+        (row["id"], kind, rearm),
+    ):
         url, _, saved_head = str(event["new"] or "").rpartition("@")
         if saved_head == head and PR.same(url, pr):
-            return True
-    return False
+            seen = event["kind"] == kind
+    return seen
+
+
+def _queued(pr, head):
+    """Whether GitHub has this pull request in a merge queue at `head` (github.pull_request keeps `merge_queue`)."""
+    queue = (H._json(pr.get("detail"), {}) or {}).get("merge_queue") or {}
+    return queue.get("state") == "queued" and queue.get("head") == head
 
 
 def _merge_woken(c, row, head, pr=None):
     """Record the merge wake for this head; False when one was already sent for it."""
     key = f"{pr['url']}@{head}" if pr else head
-    if (pr_notice_seen(c, row, "merge_wake", pr, head) if pr else
-            c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='merge_wake' "
-                      "AND new=? LIMIT 1", (row["id"], key)).fetchone()):
+    if (
+        pr_notice_seen(c, row, "merge_wake", pr, head)
+        if pr
+        else c.execute(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='merge_wake' "
+            "AND new=? LIMIT 1",
+            (row["id"], key),
+        ).fetchone()
+    ):
         return False
     H._task_event(c, row["id"], H.KEEPER, "merge_wake", None, key, "")
     return True
@@ -525,17 +711,34 @@ def merge_wake(c, row, snapshots=None):
             for pr in prs:
                 fresh = snapshots.get(pr["id"]) or {}
                 checks = fresh.get("checks") or {}
-                if (fresh.get("error") or fresh.get("head_sha") != _head(pr) or fresh.get("state") == "closed"
-                        or fresh.get("draft") or fresh.get("mergeable") is False):
+                if (
+                    fresh.get("error")
+                    or fresh.get("head_sha") != _head(pr)
+                    or fresh.get("state") == "closed"
+                    or fresh.get("draft")
+                    or fresh.get("mergeable") is False
+                ):
                     continue
-                green = bool(checks) and "passing" in checks.values() and all(v in ("passing", "skipped") for v in checks.values())
+                green = (
+                    bool(checks)
+                    and "passing" in checks.values()
+                    and all(v in ("passing", "skipped") for v in checks.values())
+                )
                 detail = {**(H._json(pr.get("detail"), {}) or {}), **fresh}
                 verified.append({**pr, "checks": "passing" if green else "pending", "detail": json.dumps(detail)})
             prs = verified
-        ready = next((ready for pr in prs if (ready := merge_ready(c, row, pr=pr))
-                      and not pr_notice_seen(c, row, "merge_wake", pr, ready[1])), None)
+        ready = next(
+            (
+                ready
+                for pr in prs
+                if (ready := merge_ready(c, row, pr=pr)) and not pr_notice_seen(c, row, "merge_wake", pr, ready[1])
+            ),
+            None,
+        )
     else:
         ready = row and merge_ready(c, row)
+    if ready and _queued(ready[0], ready[1]):
+        return False  # GitHub already has it in the merge queue at this head: nothing to merge again
     sources = (merge_sources(c, row, ready[1], pr=ready[0]) or [row["id"]]) if ready else []
     if ready and F.pr_checks(c, row):
         recipient = merge_recipient(c, row, ready[0])
@@ -544,16 +747,36 @@ def merge_wake(c, row, snapshots=None):
         if recipient != row["owner_id"]:
             actor = row["owner_id"] if H.task_private(c, row) else H.KEEPER
             # The task's body is work to do; the review summary keeps its sources on a separate notice.
-            merge_task = H.task_create(c, actor, f"Merge PR #{ready[0]['number']} at {ready[1][:12]}",
-                                       merge_text(c, row, *ready, announce=False), recipient, parent_id=row["id"],
-                                       quiet_notice=True)
-            forward(c, merge_task, recipient, merge_text(c, row, *ready),
-                    {HANDOFF: "merge", "pr_head": ready[1]}, sources=sources, trigger="pr_checks")
+            merge_task = H.task_create(
+                c,
+                actor,
+                f"Merge PR #{ready[0]['number']} at {ready[1][:12]}",
+                merge_text(c, row, *ready, announce=False),
+                recipient,
+                parent_id=row["id"],
+                quiet_notice=True,
+            )
+            forward(
+                c,
+                merge_task,
+                recipient,
+                merge_text(c, row, *ready),
+                {HANDOFF: "merge", "pr_head": ready[1]},
+                sources=sources,
+                trigger="pr_checks",
+            )
             _merge_woken(c, row, ready[1], ready[0])
             return True
     if ready and _merge_woken(c, row, ready[1], ready[0] if F.pr_checks(c, row) else None):
-        forward(c, row, row["owner_id"], merge_text(c, row, *ready), {HANDOFF: "merge", "pr_head": ready[1]},
-                sources=sources, trigger="pr_checks")
+        forward(
+            c,
+            row,
+            row["owner_id"],
+            merge_text(c, row, *ready),
+            {HANDOFF: "merge", "pr_head": ready[1]},
+            sources=sources,
+            trigger="pr_checks",
+        )
         return True
     return False
 
@@ -563,6 +786,7 @@ def merge_recipient(c, row, pr):
     if H.is_human(row["owner_id"]):
         return row["owner_id"]
     from . import repositories, release_flow
+
     repo = str(pr.get("repo") or "")
     if "/" not in repo:
         return None
@@ -576,15 +800,19 @@ def merge_recipient(c, row, pr):
         bot = H.bot(c, H.actor_id(actor))
         if not bot or bot.get("state") != "active":
             return False
-        return any(r["full_name"].lower() == repo.lower() and r["access"] == "write"
-                   for r in repositories.access(c, H.actor_id(actor), org)["effective"])
+        return any(
+            r["full_name"].lower() == repo.lower() and r["access"] == "write"
+            for r in repositories.access(c, H.actor_id(actor), org)["effective"]
+        )
 
     if writable(row["owner_id"]):
         return row["owner_id"]
     board = F.pr_checks(c, row)
     manager = H.type_manager(c, {"type_id": board[0]["type_id"]}) if board else None
     candidates = [manager, release_flow.release_manager(c)]
-    candidates += [r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE repo=? COLLATE NOCASE ORDER BY bot", (repo,))]
+    candidates += [
+        r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE repo=? COLLATE NOCASE ORDER BY bot", (repo,))
+    ]
     return next(("bot:" + slug for slug in dict.fromkeys(candidates) if slug and writable("bot:" + slug)), None)
 
 
@@ -624,6 +852,7 @@ def new_head(c, row):
     row = _ticket(c, H.task(c, row["id"]))
     if row and F.pr_checks(c, row):
         from . import check_pools
+
         return check_pools.entered(c, H.KEEPER, row)
     step = row and F.step(c, row.get("step_id"))
     if not step or not F.is_check(step) or F.skip_target(c, row, step):
@@ -631,6 +860,7 @@ def new_head(c, row):
     if any(t["status"] in H.ACTIVE_STATUSES for t in _checks(c, row, step)):
         return None
     from . import check_pools
+
     return check_pools.entered(c, H.KEEPER, row)
 
 
@@ -645,8 +875,14 @@ def skip(c, row):
     H._task_event(c, row["id"], H.KEEPER, "step_skipped", None, step["name"], f"tagged {tag}")
     out = _passed(c, row, step, f"{step['name']} skipped: the ticket is tagged {tag}")
     if out.get("handoff"):
-        forward(c, row, row["owner_id"], out["say"], at_step(c, row["id"], {HANDOFF: out["handoff"]}),
-                sources=out.get("source_tasks") or [row["id"]])
+        forward(
+            c,
+            row,
+            row["owner_id"],
+            out["say"],
+            at_step(c, row["id"], {HANDOFF: out["handoff"]}),
+            sources=out.get("source_tasks") or [row["id"]],
+        )
     return out
 
 
@@ -662,19 +898,26 @@ def timeouts(c, at=None):
         hours = F.of(step).get("timeout_hours")
         if not hours or not F.is_check(step):
             continue
-        for (ticket_id,) in c.execute(f"SELECT id FROM tasks WHERE step_id=? AND status IN "
-                                      f"({','.join('?' * len(H.ACTIVE_STATUSES))})",
-                                      (step["id"], *H.ACTIVE_STATUSES)).fetchall():
+        for (ticket_id,) in c.execute(
+            f"SELECT id FROM tasks WHERE step_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
+            (step["id"], *H.ACTIVE_STATUSES),
+        ).fetchall():
             ticket = _ticket(c, H.task(c, ticket_id))
-            entered = c.execute("SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
-                                "AND new=? "
-                                "ORDER BY created_at DESC,rowid DESC LIMIT 1", (ticket_id, step["id"])).fetchone()
+            entered = c.execute(
+                "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
+                "AND new=? "
+                "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                (ticket_id, step["id"]),
+            ).fetchone()
             if not ticket or not entered or (at - H.parse_ts(entered[0])).total_seconds() < hours * 3600:
                 continue
-            if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
-                         "AND kind IN ('round_skipped','step_skipped') "
-                         "AND created_at>=? LIMIT 1", (ticket_id, entered[0])).fetchone():
-                continue        # skipped already: the merge, its builder's to do, is what it waits for
+            if c.execute(
+                "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? "
+                "AND kind IN ('round_skipped','step_skipped') "
+                "AND created_at>=? LIMIT 1",
+                (ticket_id, entered[0]),
+            ).fetchone():
+                continue  # skipped already: the merge, its builder's to do, is what it waits for
             head = next((_head(p) for p in _prs(c, ticket) if _head(p)), "")
             # A verdict at the head is usable whichever way it went. A pass ends the round on it, waiting only for what
             # comes after the check (green CI and the merge), and says so rather than that no verdict came (Dev 646).
@@ -683,24 +926,45 @@ def timeouts(c, at=None):
             sources = [t["id"] for t in _checks(c, ticket, step) if verdict_at([t], head) == verdict] if verdict else []
             for check in _checks(c, ticket, step):
                 if check["status"] in H.ACTIVE_STATUSES:
-                    H.task_close(c, H.KEEPER, check["id"],
-                                 note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.", strict=False)
+                    H.task_close(
+                        c,
+                        H.KEEPER,
+                        check["id"],
+                        note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.",
+                        strict=False,
+                    )
             if verdict:
                 note = f"{step['name']}: {verdict} at head {head[:12]}; round closed after {hours:g} h"
             else:
                 note = f"{step['name']}: no usable verdict in {hours:g} h"
-            H._task_event(c, ticket_id, H.KEEPER, "round_skipped",
-                          json.dumps({"source_tasks": sources}) if sources else None, f"{step['id']}:{head}", note)
+            H._task_event(
+                c,
+                ticket_id,
+                H.KEEPER,
+                "round_skipped",
+                json.dumps({"source_tasks": sources}) if sources else None,
+                f"{step['id']}:{head}",
+                note,
+            )
             if verdict and verdict not in GOOD:
                 out = _failed(c, H.task(c, ticket_id), step, verdict, head)
                 refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
             else:
-                why = (f"{step['name']} gave {verdict} at head {head}" if verdict else
-                       f"{step['name']} had no usable verdict for {hours:g} h; Tico skipped the round")
+                why = (
+                    f"{step['name']} gave {verdict} at head {head}"
+                    if verdict
+                    else f"{step['name']} had no usable verdict for {hours:g} h; Tico skipped the round"
+                )
                 out = _passed(c, H.task(c, ticket_id), step, why, sources=sources)
                 refs = {HANDOFF: out["handoff"]}
             if out.get("handoff"):
-                forward(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket_id, refs),
-                        sources=out.get("source_tasks") or sources or [ticket_id])
+                forward(
+                    c,
+                    ticket,
+                    ticket["owner_id"],
+                    out["say"],
+                    at_step(c, ticket_id, refs),
+                    sources=out.get("source_tasks") or sources or [ticket_id],
+                )
             skipped.append(ticket_id)
     return skipped

@@ -1,4 +1,5 @@
 """The UI's icon font is a subset: an icon missing from it renders as its raw name."""
+
 import importlib.util
 from pathlib import Path
 
@@ -12,9 +13,12 @@ def test_every_icon_in_use_is_in_the_font_manifest():
     used = set(build.used_icons())
     listed = set(build.read_manifest())
     assert used, "the scanner found no icons; it has drifted from how the UI renders them"
-    assert not used - listed, "icons used but not in the font; run scripts/build-icon-font.py: %s" % sorted(used - listed)
-    assert not listed - used, "icons.txt lists icons nothing uses; run scripts/build-icon-font.py: %s" % sorted(listed - used)
-
+    assert not used - listed, "icons used but not in the font; run scripts/build-icon-font.py: %s" % sorted(
+        used - listed
+    )
+    assert not listed - used, "icons.txt lists icons nothing uses; run scripts/build-icon-font.py: %s" % sorted(
+        listed - used
+    )
 
 
 def test_every_url_of_the_font_carries_its_hash():

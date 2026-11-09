@@ -8,6 +8,7 @@ free slots, completed onboarding and a profile that accepts the ticket take it; 
 the next pass, oldest first.
 
 The allocator only changes the owner; the owner moves the ticket on, and the step's own wake tells it."""
+
 from . import hubdb as H
 from . import step_flow as F
 
@@ -46,7 +47,7 @@ def held_between(c, type_id, assign_step):
     """(after, before): a ticket is in its owner's hand at a step whose position is strictly between the assigning
     step and the type's merged step."""
     merged = F.merge_step(c, type_id)
-    return assign_step["position"], merged["position"] if merged else 10 ** 6
+    return assign_step["position"], merged["position"] if merged else 10**6
 
 
 def in_hand(c, slug, type_id, assign_step):
@@ -55,12 +56,15 @@ def in_hand(c, slug, type_id, assign_step):
     return c.execute(
         "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.owner_id=? AND t.type_id=? "
         f"AND t.status NOT IN ({','.join('?' * len(FINISHED))}) AND s.position>? AND s.position<?",
-        ("bot:" + slug, type_id, *FINISHED, after, before)).fetchone()[0]
+        ("bot:" + slug, type_id, *FINISHED, after, before),
+    ).fetchone()[0]
 
 
 def _open(c, slug):
-    return c.execute(f"SELECT count(*) FROM tasks WHERE owner_id=? AND status NOT IN ({','.join('?' * len(FINISHED))})",
-                     ("bot:" + slug, *FINISHED)).fetchone()[0]
+    return c.execute(
+        f"SELECT count(*) FROM tasks WHERE owner_id=? AND status NOT IN ({','.join('?' * len(FINISHED))})",
+        ("bot:" + slug, *FINISHED),
+    ).fetchone()[0]
 
 
 def allocate(c, at=None):
@@ -78,23 +82,32 @@ def allocate(c, at=None):
         owners = {"bot:" + s for s in rule["pool"]}
         waiting = c.execute(
             f"SELECT id, owner_id FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created_at, id", (step["id"], *FINISHED)).fetchall()
+            "ORDER BY created_at, id",
+            (step["id"], *FINISHED),
+        ).fetchall()
         for ticket_id, owner in waiting:
             if owner in owners:
                 continue
             ticket = H.task(c, ticket_id)
-            free = [(in_hand(c, s, step["type_id"], step), _open(c, s), s) for s in pool
-                    if H.bot_reads_task(c, "bot:" + s, ticket)
-                    and not H.task_taking_refusal(c, H.KEEPER, "bot:" + s, ticket["title"],
-                                                 H.TR.parent_of(c, ticket_id))]
+            free = [
+                (in_hand(c, s, step["type_id"], step), _open(c, s), s)
+                for s in pool
+                if H.bot_reads_task(c, "bot:" + s, ticket)
+                and not H.task_taking_refusal(c, H.KEEPER, "bot:" + s, ticket["title"], H.TR.parent_of(c, ticket_id))
+            ]
             free = [f for f in free if f[0] < rule["slots"]]
             if not free:
                 continue
             slug = min(free)[2]
             label = (H.bot(c, slug) or {}).get("slug", slug)
-            H.task_update(c, H.KEEPER, ticket_id, owner="bot:" + slug,
-                          note=f"Tico gave this to {label}: the least busy of the {step['name']} pool "
-                               f"({min(free)[0]} of {rule['slots']} slots in use).")
+            H.task_update(
+                c,
+                H.KEEPER,
+                ticket_id,
+                owner="bot:" + slug,
+                note=f"Tico gave this to {label}: the least busy of the {step['name']} pool "
+                f"({min(free)[0]} of {rule['slots']} slots in use).",
+            )
             H._task_event(c, ticket_id, H.KEEPER, "allocated", owner, "bot:" + slug, step["name"])
             given.append((ticket_id, label))
     return given

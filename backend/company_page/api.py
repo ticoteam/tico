@@ -1,6 +1,7 @@
 """The /api/v2 routes for the switch, audiences, disclosure and the stats board. Owners and admins read and write, because
 every one of these shows what a company keeps back. A bot is refused; BotOps comes through as the person it acts for, so
 it can do what they can and no more."""
+
 import asyncio
 import base64
 import hashlib
@@ -23,8 +24,10 @@ from . import stats as ST
 PAGE_BYTES = 256 * 1024
 PAGE_MOST = 200
 # The preview is served on the app's own origin, so it runs sandboxed: an opaque origin can't touch the app's session.
-PREVIEW_POLICY = ("default-src 'none'; img-src data: https:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
-                  "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts")
+PREVIEW_POLICY = (
+    "default-src 'none'; img-src data: https:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
+)
 
 
 class PageSettings(Contract):
@@ -96,6 +99,7 @@ class Empty(Contract):
 
 class LogoBody(Contract):
     """What a logo upload is recorded as: its digest, so the same key sent with other bytes is not replayed as the first."""
+
     digest: str = Field(max_length=64)
 
 
@@ -106,6 +110,7 @@ def logo_type(data):
     """PNG, JPEG or WebP by its first bytes, never by the name or type the client sent. SVG is refused: it can run script
     when a browser opens it."""
     from . import release
+
     if len(data) > release.MAX_LOGO_BYTES:
         raise Problem("too_large", "The logo must be 2 MB or smaller", 413)
     for mime, (_, magic) in release.LOGO_TYPES.items():
@@ -118,7 +123,7 @@ def page(items, key, limit, offset):
     """A page of a list, cut at PAGE_MOST rows or PAGE_BYTES, whichever comes first, and where to go next."""
     limit, offset = max(1, min(int(limit), PAGE_MOST)), max(0, int(offset))
     out, used = [], 0
-    for item in items[offset:offset + limit]:
+    for item in items[offset : offset + limit]:
         used += len(json.dumps(item, default=str).encode())
         if out and used > PAGE_BYTES:
             break
@@ -132,12 +137,22 @@ def preview_view(c, settings, audience, at):
     built by the same code the page is, so the two can't differ; the logo is inlined, since the preview has no release
     folder to load it from."""
     from . import editions, release
+
     badge = "private" if audience["kind"] != "public" else "open"
-    view = release.view_model(c, audience, ST.project(c, audience["id"], at)["stats"], editions.stream(c, [audience["id"]]),
-                              None, badge, settings)
+    view = release.view_model(
+        c,
+        audience,
+        ST.project(c, audience["id"], at)["stats"],
+        editions.stream(c, [audience["id"]]),
+        None,
+        badge,
+        settings,
+    )
     if view["company"]["logo_url"]:
         data = release._logo_bytes(c, settings, view)
-        mime = {ext: mime for mime, (ext, _) in release.LOGO_TYPES.items()}[view["company"]["logo_url"].rsplit(".", 1)[1]]
+        mime = {ext: mime for mime, (ext, _) in release.LOGO_TYPES.items()}[
+            view["company"]["logo_url"].rsplit(".", 1)[1]
+        ]
         view["company"]["logo_url"] = f"data:{mime};base64,{base64.b64encode(data).decode()}" if data else ""
     return view
 
@@ -146,16 +161,22 @@ def next_due(c, audiences):
     """Each audience with the day its next edition comes due, in the company's zone. None where the schedule won't write
     one: switched off, the page Closed, no sources, or Public while the page isn't Open."""
     from . import schedule
+
     shown = S.get(c)["transparency"]
     sourced = {r[0] for r in c.execute("SELECT DISTINCT audience_id FROM audience_sources")}
     zone, at = schedule.company_zone(), H.parse_ts(H.now())
 
     def due(audience):
-        if (not audience["enabled"] or shown == "closed" or audience["id"] not in sourced
-                or (audience["kind"] == "public" and shown != "open")):
+        if (
+            not audience["enabled"]
+            or shown == "closed"
+            or audience["id"] not in sourced
+            or (audience["kind"] == "public" and shown != "open")
+        ):
             return None
         moment = schedule.next_due(audience, at, zone)
         return moment.astimezone(zone).date().isoformat() if moment else None
+
     return [{**a, "next_due": due(a)} for a in audiences]
 
 
@@ -184,11 +205,21 @@ def register(app, store, auth, mutate, settings):
     def page_view(c):
         from datetime import datetime, timezone
         from . import release
+
         current = S.get(c)
         # The reader address answers with a page only when something public is approved and a release is served.
-        live = bool(release.public_view(c, datetime.now(timezone.utc), settings)) and release.current_dir(settings) is not None
-        return {**current, "company_name": settings.company_name, "reader_origin": settings.reader_origin,
-                "page_domain": settings.page_domain, "address": S.address(current["slug"], settings), "public_live": live}
+        live = (
+            bool(release.public_view(c, datetime.now(timezone.utc), settings))
+            and release.current_dir(settings) is not None
+        )
+        return {
+            **current,
+            "company_name": settings.company_name,
+            "reader_origin": settings.reader_origin,
+            "page_domain": settings.page_domain,
+            "address": S.address(current["slug"], settings),
+            "public_live": live,
+        }
 
     @app.get("/api/v2/company-page")
     def company_page_show(request: Request):
@@ -208,10 +239,13 @@ def register(app, store, auth, mutate, settings):
             current = S.get(c)
             slug = fields.get("slug", current["slug"])
             # Open or Private with no address would publish to nowhere and look as if it had worked.
-            if fields.get("transparency", current["transparency"]) in ("private", "open") and not S.address(slug, settings):
+            if fields.get("transparency", current["transparency"]) in ("private", "open") and not S.address(
+                slug, settings
+            ):
                 raise Problem("address", "Set the page's address first", 422)
             S.update(c, actor, **fields)
             return page_view(c)
+
         return write(request, body, work)
 
     # The logo is the one picture the page sends out, so it is uploaded here and kept apart from the library's files.
@@ -219,11 +253,17 @@ def register(app, store, auth, mutate, settings):
     def company_page_logo_show(request: Request):
         gate(request)
         with store.read() as c:
-            row = c.execute("SELECT b.digest, b.content_type FROM company_page_settings s JOIN blobs b ON b.id=s.logo_file_id "
-                            "WHERE s.id='company'").fetchone()
+            row = c.execute(
+                "SELECT b.digest, b.content_type FROM company_page_settings s JOIN blobs b ON b.id=s.logo_file_id "
+                "WHERE s.id='company'"
+            ).fetchone()
         if not row:
             raise Problem("not_found", "No logo is set", 404)
-        headers = {"ETag": '"' + row[0] + '"', "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"}
+        headers = {
+            "ETag": '"' + row[0] + '"',
+            "Cache-Control": "private, no-cache",
+            "X-Content-Type-Options": "nosniff",
+        }
         return Response(app.state.blobs.get(row[0]), media_type=row[1], headers=headers)
 
     @app.post("/api/v2/company-page/logo")
@@ -241,7 +281,9 @@ def register(app, store, auth, mutate, settings):
                 picture = blobs.register(c, who, digest, len(data), S.LOGO_NAME + "." + LOGO_EXT[mime], mime)
                 S.update(c, who.actor, logo_file_id=picture["id"])
                 return page_view(c)
+
             return mutate(request, LogoBody(digest=digest), save)
+
         return await asyncio.to_thread(run)
 
     @app.delete("/api/v2/company-page/logo")
@@ -249,12 +291,14 @@ def register(app, store, auth, mutate, settings):
         def work(c, actor):
             S.update(c, actor, logo_file_id=None)
             return page_view(c)
+
         return write(request, Empty(), work)
 
     @app.get("/api/v2/company-page/preview")
     def company_page_preview(request: Request, audience: str = "", theme: str = ""):
         gate(request)
         from . import render
+
         with store.read() as c:
             found = A.get(c, audience)
             if not found:
@@ -288,8 +332,13 @@ def register(app, store, auth, mutate, settings):
     # ------------------------------------------------------------------ disclosure
     def grid(c, audience_id):
         A.need(c, audience_id)
-        return {"rules": D.rules(c, audience_id), "revision": D.current_revision(c, audience_id),
-                "data_classes": list(D.DATA_CLASSES), "modes": list(D.MODES), "presets": list(D.PRESETS)}
+        return {
+            "rules": D.rules(c, audience_id),
+            "revision": D.current_revision(c, audience_id),
+            "data_classes": list(D.DATA_CLASSES),
+            "modes": list(D.MODES),
+            "presets": list(D.PRESETS),
+        }
 
     @app.get("/api/v2/audiences/{audience_id}/disclosure")
     def disclosure_show(request: Request, audience_id: str):
@@ -302,8 +351,10 @@ def register(app, store, auth, mutate, settings):
         take them back. So the response says how many there are, rather than changing the page in silence."""
         if not change["tightened"]:
             return {}
-        count = c.execute("SELECT count(*) FROM editions WHERE audience_id=? AND status='published' AND retracted_at IS NULL",
-                          (audience_id,)).fetchone()[0]
+        count = c.execute(
+            "SELECT count(*) FROM editions WHERE audience_id=? AND status='published' AND retracted_at IS NULL",
+            (audience_id,),
+        ).fetchone()[0]
         return {"published_editions": count}
 
     @app.put("/api/v2/audiences/{audience_id}/disclosure")
@@ -313,6 +364,7 @@ def register(app, store, auth, mutate, settings):
         def work(c, actor):
             change = D.set_rules(c, actor, audience_id, rules)
             return {**grid(c, audience_id), **tightened(c, audience_id, change)}
+
         return write(request, body, work)
 
     @app.post("/api/v2/audiences/{audience_id}/disclosure/preset")
@@ -320,6 +372,7 @@ def register(app, store, auth, mutate, settings):
         def work(c, actor):
             change = D.apply_preset(c, actor, audience_id, body.name)
             return {**grid(c, audience_id), **tightened(c, audience_id, change)}
+
         return write(request, body, work)
 
     # ------------------------------------------------------------------ sources

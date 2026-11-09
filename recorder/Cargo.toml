@@ -65,6 +65,7 @@ objc2-core-video = "0.3.2"
 dispatch2 = "0.3"
 
 [build-dependencies]
+cc = "1"
 tauri-build = { version = "=2.7.4", optional = true }
 
 [dev-dependencies]

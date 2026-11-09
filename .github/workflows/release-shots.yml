@@ -1,0 +1,95 @@
+name: Release shots
+
+# Before and after screenshots of the pages a release changes (scripts/release_shots.py), for the release's owner to
+# approve by looking. Called by the release train with base, head and version; run by hand with workflow_dispatch.
+# A caller grants `contents: write` (the job pushes the changed pictures to the release-evidence branch). The job uploads
+# its folder as the artifact `release-shots-<version>`: release-shots.md (the section) and the pictures. A caller in the
+# same run downloads it by that name (train.yml, approval-shots), and it is missing when the job died before it uploaded.
+
+on:
+  workflow_call:
+    inputs:
+      base:
+        description: "The release before: a tag or commit, e.g. v0.5.204"
+        required: true
+        type: string
+      head:
+        description: "The candidate: a commit SHA or a branch name"
+        required: true
+        type: string
+      version:
+        description: "The release name, e.g. v0.5.205; it names the release-evidence folder"
+        required: true
+        type: string
+    outputs:
+      artifact:
+        description: "The name of the artifact holding release-shots.md, the \"What it looks like\" section; download it by this name"
+        value: ${{ jobs.shots.outputs.artifact }}
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "The release before: a tag or commit"
+        required: true
+        type: string
+        default: v0.5.204
+      head:
+        description: "The candidate: a commit SHA or a branch name"
+        required: true
+        type: string
+        default: main
+      version:
+        description: "The release name; it names the release-evidence folder"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  shots:
+    name: release shots ${{ inputs.version }}
+    # The gate's desktop part runs the same browser on this label. Spot like every RunsOn job; never spot=false.
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/volume=30gb:gp3:125mbs:3000iops/extras=s3-cache
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    outputs:
+      artifact: release-shots-${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.head }}
+          fetch-depth: 0
+      # The demo runs on the image's Python, as ci.yml's gate does (test_build_versions.py holds the workflows to it).
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install the demo's Python and Node dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/shots-venv"
+          # uv installs the same pinned lock as pip, as ci.yml does.
+          python3 -m pip install --disable-pip-version-check uv==0.13.1
+          python3 -m uv pip install --python "$RUNNER_TEMP/shots-venv/bin/python" -r backend/requirements-dev.txt
+          npm ci --no-audit --no-fund
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Capture the pages the release changed
+        env:
+          BASE: ${{ inputs.base }}
+          HEAD: ${{ inputs.head }}
+          VERSION: ${{ inputs.version }}
+          OUT: ${{ runner.temp }}/release-shots
+          DEMO_PYTHON: ${{ runner.temp }}/shots-venv/bin/python
+        run: |
+          python3 scripts/release_shots.py --base "$BASE" --head "$HEAD" --version "$VERSION" --out "$OUT" \
+            --python "$DEMO_PYTHON" --repo "$GITHUB_REPOSITORY" --upload
+      - name: Keep the pictures, the manifest and the markdown
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-shots-${{ inputs.version }}
+          path: ${{ runner.temp }}/release-shots
+          if-no-files-found: ignore

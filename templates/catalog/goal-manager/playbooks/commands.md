@@ -51,7 +51,7 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
   request to a person, only as `playbooks/check-ins.md` and `playbooks/owner-chat.md` say.
 
 ## Questions and messages
-- `hub question ask <bot> "<question>"`: asks another bot. `hub question answer <message-id> "<answer>"`: answers one asked of you.
+- `hub message send <bot> "<question>" --needs-action`: asks another bot; it replies in its own time. `hub message send <bot> "<answer>"`: answers a bot that asked you.
 - `hub message send <person-or-bot> "<text>"`: a message, only when a playbook says to send one.
 
 ## What customers do and say (`playbooks/keep-proof-current.md`)
