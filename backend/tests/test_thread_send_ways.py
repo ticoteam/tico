@@ -2,8 +2,6 @@
 backend/delivery.py): a post that names no way goes exactly as before, into the bot's running turn; queue waits for that
 turn; defer starts no run until its deadline; a deadline takes the right to message the bot. Fictional people only."""
 
-import pytest
-
 from backend import delivery, task_privacy
 from backend.store import H
 from backend.tests.test_api import api, claim, headers, post  # noqa: F401  (the fixture and its helpers)
@@ -28,8 +26,10 @@ def home(api):
 
 def carrier_of(api, message_id):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT carrier_id, mode FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL",
-                        (message_id,)).fetchone()
+        row = c.execute(
+            "SELECT carrier_id, mode FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL",
+            (message_id,),
+        ).fetchone()
         assert row, "no carrier"
         refs = H.message(c, row["carrier_id"])["refs"]
     return row["carrier_id"], row["mode"], refs
@@ -111,7 +111,9 @@ def test_a_deadline_or_a_wake_takes_the_right_to_message_the_bot(api):
     assert r.status_code == 200, r.text
     tid = r.json()["id"]
     for way in ({"delivery": "queue"}, {"delivery": "steer"}, {"delivery": "defer", "defer_for": "1h"}):
-        r = api.post(f"/api/v2/threads/{tid}/messages", json={"text": "Mine first.", **way}, headers=headers("cara-test"))
+        r = api.post(
+            f"/api/v2/threads/{tid}/messages", json={"text": "Mine first.", **way}, headers=headers("cara-test")
+        )
         assert r.status_code == 403, r.text
     assert not rows(api, conversation_id=tid)
 
@@ -123,29 +125,33 @@ def test_a_member_of_a_dm_with_the_bot_names_any_way_without_write(api):
     queued = say(api, tid, "Mine first.", token="cara-test", delivery="queue")
     assert queued["sent_as"]["delivery"] == "queue" and job_of(api, queued["id"])
     later = say(api, tid, "In an hour.", token="cara-test", delivery="defer", defer_for="1h")
-    assert later["sent_as"]["delivery"] == "defer" and [r["due_at"] is not None for r in rows(api, item=later["id"])] == [True]
+    assert later["sent_as"]["delivery"] == "defer" and [
+        r["due_at"] is not None for r in rows(api, item=later["id"])
+    ] == [True]
 
 
-@pytest.mark.parametrize("body", [
-    {"text": "x", "delivery": "steer", "defer_for": "4h"},
-    {"text": "x", "delivery": "defer", "defer_for": "0m"},
-    {"text": "x", "delivery": "later"},
-    {"text": "x", "refs": {"send_way": "defer"}},
-    {"text": "x", "refs": {"send_defer_for": "1h"}},
-    {"text": "x", "delivery": "queue", "refs": {"delivery": "queue"}},
-])
-def test_a_thread_delivery_that_cannot_apply_is_refused(api, body):
+def test_a_thread_delivery_that_cannot_apply_is_refused(api):
     setup(api)
     tid, _ = dm(api, "Hello.")
-    assert api.post(f"/api/v2/threads/{tid}/messages", json=body, headers=headers()).status_code == 422
+    for body in [
+        {"text": "x", "delivery": "steer", "defer_for": "4h"},
+        {"text": "x", "delivery": "defer", "defer_for": "0m"},
+        {"text": "x", "delivery": "later"},
+        {"text": "x", "refs": {"send_way": "defer"}},
+        {"text": "x", "refs": {"send_defer_for": "1h"}},
+        {"text": "x", "delivery": "queue", "refs": {"delivery": "queue"}},
+    ]:
+        r = api.post(f"/api/v2/threads/{tid}/messages", json=body, headers=headers())
+        assert r.status_code == 422, (body, r.status_code, r.text)
 
 
 def test_a_way_goes_only_where_a_bot_is_across(api):
     made = post(api, "threads/dm", {"members": ["human:ben"], "body": "Budget call at 3"})
     r = api.post(f"/api/v2/threads/{made['id']}/messages", json={"text": "x", "delivery": "queue"}, headers=headers())
     assert r.status_code == 422 and "bot" in r.text, r.text
-    r = api.post("/api/v2/threads/dm", json={"members": ["human:ben"], "body": "x", "delivery": "defer"},
-                 headers=headers())
+    r = api.post(
+        "/api/v2/threads/dm", json={"members": ["human:ben"], "body": "x", "delivery": "defer"}, headers=headers()
+    )
     assert r.status_code == 422, r.text
 
 
@@ -187,8 +193,9 @@ def test_a_deferred_carrier_is_checked_again_when_it_is_carried_or_fired(api, mo
     task = post(api, "tasks", {"title": "Secret plan", "body": "Do", "owner": "human:ana", "private": True})
     hidden = say(api, tid, "About the secret plan.", refs={"task": task["id"]}, delivery="defer", defer_for="30m")
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL",
-                             (hidden["id"],)).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL", (hidden["id"],)
+        ).fetchone()
     assert hidden["sent_as"] == {"delivery": "defer", "until": None} and not rows(api, conversation_id=tid)
 
     soon = say(api, tid, "Billing first.", delivery="defer", defer_for="30m")
@@ -197,8 +204,11 @@ def test_a_deferred_carrier_is_checked_again_when_it_is_carried_or_fired(api, mo
     assert len(rows(api, conversation_id=tid)) == 2
     real = task_privacy.message_readable
     gone = {soon["id"], later["id"]}
-    monkeypatch.setattr(task_privacy, "message_readable", lambda c, a, m, current=False: (
-        (m or {}).get("id") not in gone and real(c, a, m, current)))
+    monkeypatch.setattr(
+        task_privacy,
+        "message_readable",
+        lambda c, a, m, current=False: (m or {}).get("id") not in gone and real(c, a, m, current),
+    )
     tick(api, 31)
     assert fired(api) == [] and all(job_of(api, cid) is None for cid in carriers)
     with api.app.state.store.transaction() as c:

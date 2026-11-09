@@ -1,4 +1,4 @@
-// A routine with a due date on a real hub (ui/app/automations*.js, docs/routines.md "Before a due date"): + New, Before a
+// A routine with a due date on a real hub (ui/app/automations*.js, docs/routines.md "Before a due date"): +, Before a
 // due date makes an off routine of Dana's on a due trigger; the trigger editor sets First due, Repeats, the days before
 // and the zone, saved as the hub's trigger; the list reads "Due Mar 1 · yearly · 21d before", files it under Due date
 // and shows the next due day over when its task opens. A Create task step made in the editor opens a task for a bot,
@@ -108,7 +108,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   assert.ok(groups.includes('due') && groups.indexOf('due') === groups.length - 1 - (groups.includes('system') ? 1 : 0),
     `${tag}: Due date after the other kinds, before system jobs (${groups})`);
   // The Due date chip narrows the list to it.
-  if (phone) await page.locator('[data-filters]').click();
+  if (phone) { await page.locator('[data-filters]').click(); await page.locator('[data-fsec="trig"]').click(); }
   await page.locator('[data-ftrig="due"]').click();
   assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => x.dataset.row)), [made.id]);
   await page.locator('[data-ftrig="due"]').click();

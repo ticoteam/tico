@@ -84,7 +84,7 @@ Read issues with `gh issue list -R <repo> --state open --json number,title,label
 `gh issue view <n> -R <repo> --comments` and `gh search issues "<words>" -R <repo>`. Compare against
 what you have seen with `hub decision ask --set covered --state-file cand.json --option covered=existing.json`
 so duplicates are decided in one call, not by rereading every issue. A question for the requester is
-`hub task ask <id>`, one open question per task. An urgent issue is `hub task create --owner <person> --title...
+`hub task question "<question>" --on <person> --parent <id>`, one open question per task. An urgent issue is `hub task create --owner <person> --title...
 --link <issue url>`. Finish every task, quiet week or not.
 
 ## Quality standards

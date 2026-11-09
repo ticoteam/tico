@@ -1,11 +1,14 @@
 """The reader origin and the reader list, end to end through a real app and a real OIDC provider in the test process. The
 modules that make a page's content are stubbed at the package, so what is under test is who gets what."""
+
 import hashlib
 import importlib
+import io
 import json
 import os
 import re
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -13,10 +16,11 @@ import pytest
 import httpx
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import backend.company_page as package
 import backend.tests.test_api as test_api
-from backend import automations, oidc, screening, task_trigger_rules, webhooks
+from backend import automations, oidc, screening, task_trigger_rules, team_icon, webhooks
 from backend import hubdb as H
 from backend.company_page import reader_app, readers as R, release, render
 from backend.store import digest
@@ -24,6 +28,7 @@ from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the a
 from backend.tests.test_oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
 
 ORIGIN = "https://open.acme.example"
+UI = Path(__file__).resolve().parents[2] / "ui" / "assets"
 NOT_FOUND = "Not found"
 
 
@@ -43,22 +48,43 @@ def configured(monkeypatch, fake):
         made.oidc_issuer, made.oidc_client_id, made.oidc_client_secret = fake.issuer, CLIENT, SECRET
         made.session_secret = "s" * 40
         return made
+
     monkeypatch.setattr(test_api, "api_settings", settings)
 
 
 def anchor_of(row):
-    return "u-" + hashlib.sha256("|".join((row["audience_id"], row["author"], row["period_start"], row["period_end"])).encode()).hexdigest()[:12]
+    return (
+        "u-"
+        + hashlib.sha256(
+            "|".join((row["audience_id"], row["author"], row["period_start"], row["period_end"])).encode()
+        ).hexdigest()[:12]
+    )
 
 
 def stream(c, audience_ids, before=None, limit=10, company_name=""):
     marks = ",".join("?" * len(audience_ids))
-    rows = c.execute(f"SELECT * FROM editions WHERE audience_id IN ({marks}) AND status='published' AND retracted_at IS NULL "
-                     "AND published_at<? ORDER BY published_at DESC LIMIT ?", (*audience_ids, before or "~", limit))
-    return [{"anchor": anchor_of(r), "title": r["title"], "author": {"name": "Ops", "kind": "bot", "actor": "bot:ops"},
-             "period": "Oct", "published_at": r["published_at"], "version": 1, "correction_note": None,
-             "approval_id": "INTERNAL-APPROVAL", "body": "INTERNAL-BODY",
-             "sections": [{"key": "asks", "items": [{"body": "Intro?", "ask_id": "ask-1", "source": "INTERNAL-SOURCE"}]}]}
-            for r in rows]
+    rows = c.execute(
+        f"SELECT * FROM editions WHERE audience_id IN ({marks}) AND status='published' AND retracted_at IS NULL "
+        "AND published_at<? ORDER BY published_at DESC LIMIT ?",
+        (*audience_ids, before or "~", limit),
+    )
+    return [
+        {
+            "anchor": anchor_of(r),
+            "title": r["title"],
+            "author": {"name": "Ops", "kind": "bot", "actor": "bot:ops"},
+            "period": "Oct",
+            "published_at": r["published_at"],
+            "version": 1,
+            "correction_note": None,
+            "approval_id": "INTERNAL-APPROVAL",
+            "body": "INTERNAL-BODY",
+            "sections": [
+                {"key": "asks", "items": [{"body": "Intro?", "ask_id": "ask-1", "source": "INTERNAL-SOURCE"}]}
+            ],
+        }
+        for r in rows
+    ]
 
 
 class Site:
@@ -72,23 +98,30 @@ class Site:
 
     def transparency(self, value):
         with self.store.transaction() as c:
-            c.execute("INSERT INTO company_page_settings(id,transparency) VALUES('company',?) "
-                      "ON CONFLICT(id) DO UPDATE SET transparency=excluded.transparency", (value,))
+            c.execute(
+                "INSERT INTO company_page_settings(id,transparency) VALUES('company',?) "
+                "ON CONFLICT(id) DO UPDATE SET transparency=excluded.transparency",
+                (value,),
+            )
 
     def audience(self, kind, name=None, enabled=1):
         audience_id, now = H.new_id(), H.now()
         with self.store.transaction() as c:
-            c.execute("INSERT INTO audiences(id,name,kind,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-                      (audience_id, name or kind, kind, enabled, now, now))
+            c.execute(
+                "INSERT INTO audiences(id,name,kind,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+                (audience_id, name or kind, kind, enabled, now, now),
+            )
         self.approved.add(audience_id)
         return audience_id
 
     def edition(self, audience_id, title="An update", published_at=None):
         edition_id, now = H.new_id(), H.now()
         with self.store.transaction() as c:
-            c.execute("INSERT INTO editions(id,audience_id,author,period_start,period_end,status,title,published_at,"
-                      "created_at,updated_at) VALUES(?,?,'company',?,'2026-10-31','published',?,?,?,?)",
-                      (edition_id, audience_id, edition_id, title, published_at or now, now, now))
+            c.execute(
+                "INSERT INTO editions(id,audience_id,author,period_start,period_end,status,title,published_at,"
+                "created_at,updated_at) VALUES(?,?,'company',?,'2026-10-31','published',?,?,?,?)",
+                (edition_id, audience_id, edition_id, title, published_at or now, now, now),
+            )
         return edition_id
 
     def reader(self, email, *audience_ids):
@@ -139,16 +172,36 @@ def site(configured, api, fake, tmp_path, monkeypatch):  # noqa: F811
 
     def project(c, audience_id, at):
         made.projected.append(audience_id)
-        return {"stats": [{"id": "s-1", "label": "Revenue of " + audience_id, "chart": "number", "display": "$1", "stale": False,
-                           "raw_value": "INTERNAL-RAW", "series": [{"period": "Oct", "value": 1, "display": "$1",
-                                                                    "ledger_id": "INTERNAL-LEDGER"}]}],
-                "held": [{"id": "s-2", "label": "HELD-LABEL", "reason": "HELD-REASON"}]}
+        return {
+            "stats": [
+                {
+                    "id": "s-1",
+                    "label": "Revenue of " + audience_id,
+                    "chart": "number",
+                    "display": "$1",
+                    "stale": False,
+                    "raw_value": "INTERNAL-RAW",
+                    "series": [{"period": "Oct", "value": 1, "display": "$1", "ledger_id": "INTERNAL-LEDGER"}],
+                }
+            ],
+            "held": [{"id": "s-2", "label": "HELD-LABEL", "reason": "HELD-REASON"}],
+        }
 
-    monkeypatch.setattr(package, "stats", SimpleNamespace(
-        project=project, board_approved=lambda c, audience_id: audience_id in made.approved), raising=False)
+    monkeypatch.setattr(
+        package,
+        "stats",
+        SimpleNamespace(project=project, board_approved=lambda c, audience_id: audience_id in made.approved),
+        raising=False,
+    )
     monkeypatch.setattr(package, "editions", SimpleNamespace(stream=stream, anchor_of=anchor_of), raising=False)
-    monkeypatch.setattr(package, "render", SimpleNamespace(
-        page=lambda view: "PAGE " + json.dumps(view), signed_out=lambda view: "SIGNED OUT " + json.dumps(view)), raising=False)
+    monkeypatch.setattr(
+        package,
+        "render",
+        SimpleNamespace(
+            page=lambda view: "PAGE " + json.dumps(view), signed_out=lambda view: "SIGNED OUT " + json.dumps(view)
+        ),
+        raising=False,
+    )
     monkeypatch.setattr(release, "current_dir", lambda settings: release_dir)
     made.transparency("private")
     return made
@@ -159,8 +212,11 @@ def signed_out(answer):
 
 
 def plain_404(answer):
-    return (answer.status_code == 404 and "set-cookie" not in answer.headers
-            and (answer.text == NOT_FOUND or answer.request.method == "HEAD"))
+    return (
+        answer.status_code == 404
+        and "set-cookie" not in answer.headers
+        and (answer.text == NOT_FOUND or answer.request.method == "HEAD")
+    )
 
 
 # ----------------------------------------------------------------------------------------------- the two hosts
@@ -172,43 +228,69 @@ def walk(app):
                 yield method, re.sub(r"\{[^}]*\}", "x", path) or "/"
 
 
-@pytest.mark.parametrize("transparency", ["closed", "private", "open"])
+# The gate is host-based, so transparency does not change which app routes 404: "open" stands for all three.
+@pytest.mark.parametrize("transparency", ["open"])
 def test_no_route_of_the_app_answers_on_the_reader_host(site, transparency):
     site.transparency(transparency)
     client = site.client()
     answered = [r[1] for r in reader_app.ROUTES]
     routes = list(walk(site.app))
     assert sum(path.startswith("/api/") for _, path in routes) > 100
-    assert get(site.api, "readers")["readers"] == []        # the same credential works on the app's own host
+    assert get(site.api, "readers")["readers"] == []  # the same credential works on the app's own host
     for method, path in routes:
         if path in answered or path == "/assets/x":
             continue
-        answer = client.request(method, path, headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "k"},
-                                cookies={"__Host-tico_session": "x", "tico_session": "x"})
+        answer = client.request(
+            method,
+            path,
+            headers={
+                "Authorization": "Bearer ana-test",
+                "Idempotency-Key": "k",
+                "Cookie": "__Host-tico_session=x; tico_session=x",
+            },
+        )
         assert plain_404(answer), (method, path, answer.status_code)
 
 
 def test_identity_headers_and_app_cookies_never_reach_the_reader_app():
     gate = reader_app.ReaderGate(None, None, ORIGIN)
-    kept = gate._clean([(b"Authorization", b"Bearer x"), (b"proxy-authorization", b"x"), (b"cf-access-jwt-assertion", b"x"),
-                        (b"x-amzn-oidc-data", b"x"), (b"x-forwarded-email", b"x"), (b"x-tico-actor", b"x"),
-                        (b"cookie", b"__Host-tico_session=app; __Host-tico_reader=r; other=1; __Host-tico_reader_login=l"),
-                        (b"accept", b"text/html")])
+    kept = gate._clean(
+        [
+            (b"Authorization", b"Bearer x"),
+            (b"proxy-authorization", b"x"),
+            (b"cf-access-jwt-assertion", b"x"),
+            (b"x-amzn-oidc-data", b"x"),
+            (b"x-forwarded-email", b"x"),
+            (b"x-tico-actor", b"x"),
+            (b"cookie", b"__Host-tico_session=app; __Host-tico_reader=r; other=1; __Host-tico_reader_login=l"),
+            (b"accept", b"text/html"),
+        ]
+    )
     assert dict(kept) == {b"cookie": b"__Host-tico_reader=r; __Host-tico_reader_login=l", b"accept": b"text/html"}
     assert gate._clean([(b"cookie", b"__Host-tico_session=app")]) == []
 
 
-@pytest.mark.parametrize("hosts, reached", [
-    ([b"open.acme.example"], "reader"), ([b"OPEN.acme.example:8443"], "reader"), ([b"open.acme.example."], "reader"),
-    ([b"tico.acme.example"], "app"), ([b"open.acme.example.evil.example"], "app"), ([b"[bad"], "app"),
-    ([b"tico.acme.example", b"open.acme.example"], "neither")])
+@pytest.mark.parametrize(
+    "hosts, reached",
+    [
+        ([b"open.acme.example"], "reader"),
+        ([b"OPEN.acme.example:8443"], "reader"),
+        ([b"open.acme.example."], "reader"),
+        ([b"tico.acme.example"], "app"),
+        ([b"open.acme.example.evil.example"], "app"),
+        ([b"[bad"], "app"),
+        ([b"tico.acme.example", b"open.acme.example"], "neither"),
+    ],
+)
 def test_the_gate_decides_by_hostname_and_refuses_two_hosts(hosts, reached):
     import asyncio
+
     seen, sent = [], []
 
     def marker(name):
         async def app(scope, receive, send):
             seen.append(name)
+
         return app
 
     async def send(message):
@@ -228,10 +310,13 @@ def test_reader_cookie_and_reader_routes_do_nothing_on_the_app_host(site):
     cookie = client.cookies["__Host-tico_reader"]
     token = R.unsubscribe_token(site.store.settings, "any-edition")
     bare = TestClient(site.app, follow_redirects=False)
-    assert bare.get("/api/v2/readers", cookies={"__Host-tico_reader": cookie, "tico_reader": cookie}).status_code in (401, 403)
+    # The cookies go in the header: httpx deprecates per-request cookies=, and the header is what the server reads.
+    assert bare.get(
+        "/api/v2/readers", headers={"Cookie": f"__Host-tico_reader={cookie}; tico_reader={cookie}"}
+    ).status_code in (401, 403)
     assert not bare.post("/unsubscribe", data={"token": token, "email": "pat@other.example"}).is_success
     assert not bare.post("/reply", data={"anchor": "x", "body": "hi"}).is_success
-    assert "PAGE" not in bare.get("/", cookies={"__Host-tico_reader": cookie}).text[:10]
+    assert "PAGE" not in bare.get("/", headers={"Cookie": f"__Host-tico_reader={cookie}"}).text[:10]
     assert site.rows("SELECT notify FROM readers")[0]["notify"] == 1
 
 
@@ -253,18 +338,35 @@ def test_no_sign_in_provider_turns_private_audiences_off(site, monkeypatch):
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "private_audiences_off"
 
 
-@pytest.mark.parametrize("value, expected", [
-    ("https://open.acme.example/ignored", "https://open.acme.example"), ("http://open.acme.example", ""), ("not a url", ""),
-    ("https://a@open.acme.example", ""), ("https://[bad", ""), ("http://127.0.0.1:9", "http://127.0.0.1:9")])
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("https://open.acme.example/ignored", "https://open.acme.example"),
+        ("http://open.acme.example", ""),
+        ("not a url", ""),
+        ("https://a@open.acme.example", ""),
+        ("https://[bad", ""),
+        ("http://127.0.0.1:9", "http://127.0.0.1:9"),
+    ],
+)
 def test_reader_origin_must_be_an_https_origin(value, expected):
-    settings = SimpleNamespace(reader_origin=value, public_url="https://tico.acme.example", visual_origin="", runner_url="")
+    settings = SimpleNamespace(
+        reader_origin=value, public_url="https://tico.acme.example", visual_origin="", runner_url=""
+    )
     assert reader_app.check_origin(settings) == expected
 
 
 @pytest.mark.parametrize("field", ["public_url", "visual_origin", "runner_url"])
 def test_reader_origin_on_a_shared_hostname_stops_the_server(field):
-    settings = SimpleNamespace(**{"reader_origin": "https://tico.acme.example:8443", "public_url": "https://x.example",
-                                  "visual_origin": "", "runner_url": "", field: "http://TICO.acme.example"})
+    settings = SimpleNamespace(
+        **{
+            "reader_origin": "https://tico.acme.example:8443",
+            "public_url": "https://x.example",
+            "visual_origin": "",
+            "runner_url": "",
+            field: "http://TICO.acme.example",
+        }
+    )
     with pytest.raises(ValueError):
         reader_app.check_origin(settings)
 
@@ -273,7 +375,9 @@ def test_reader_origin_on_a_shared_hostname_stops_the_server(field):
 def test_session_cookie_is_host_prefixed_http_only_and_lax(site):
     site.reader("pat@other.example", site.audience("board"))
     done = site.sign_in(site.client(), "pat@other.example")
-    set_cookie = next(v for k, v in done.headers.multi_items() if k == "set-cookie" and v.startswith("__Host-tico_reader="))
+    set_cookie = next(
+        v for k, v in done.headers.multi_items() if k == "set-cookie" and v.startswith("__Host-tico_reader=")
+    )
     low = set_cookie.lower()
     assert "secure" in low and "httponly" in low and "samesite=lax" in low and "path=/" in low and "domain" not in low
     stored = site.rows("SELECT token_hash FROM reader_sessions")[0]["token_hash"]
@@ -285,9 +389,9 @@ def test_a_reader_signs_in_with_no_roster_side_effects_even_on_an_allowed_domain
     before = site.rows("SELECT count(*) n FROM humans")[0]["n"]
     audience = site.audience("board")
     site.edition(audience, "Board news")
-    client = site.signed_in("new@acme.example", audience)      # an address the app itself would admit
+    client = site.signed_in("new@acme.example", audience)  # an address the app itself would admit
     assert site.page(client)["updates"][0]["title"] == "Board news"
-    outsider = site.signed_in("pat@other.example", audience)   # and one its domain rule would refuse
+    outsider = site.signed_in("pat@other.example", audience)  # and one its domain rule would refuse
     assert site.page(outsider)["updates"]
     assert site.rows("SELECT count(*) n FROM humans")[0]["n"] == before
     assert not site.rows("SELECT 1 FROM humans WHERE email IN ('new@acme.example','pat@other.example')")
@@ -394,7 +498,7 @@ def test_an_audience_change_applies_on_the_next_request(site):
     site.api.patch(f"/api/v2/readers/{reader}", json={"audience_ids": []}, headers=headers())
     assert client.get("/").status_code == 403
     site.api.patch(f"/api/v2/readers/{reader}", json={"audience_ids": [investors]}, headers=headers())
-    site.write("UPDATE audiences SET enabled=0 WHERE id=?", investors)   # the audience itself switched off
+    site.write("UPDATE audiences SET enabled=0 WHERE id=?", investors)  # the audience itself switched off
     assert client.get("/").status_code == 403
 
 
@@ -407,8 +511,17 @@ def test_closed_reveals_nothing_to_anyone_on_any_route(site):
     never = site.client().get("/never-a-route")
     assert plain_404(never)
     for caller in (site.client(), client):
-        for path in ("/", "/data.json", "/feed.xml", "/assets/fonts/a.woff2", "/sign-in", "/auth/callback?code=x&state=y",
-                     "/invite/" + "a" * 43, "/unsubscribe", "/unsubscribe?token=forged.x"):
+        for path in (
+            "/",
+            "/data.json",
+            "/feed.xml",
+            "/assets/fonts/a.woff2",
+            "/sign-in",
+            "/auth/callback?code=x&state=y",
+            "/invite/" + "a" * 43,
+            "/unsubscribe",
+            "/unsubscribe?token=forged.x",
+        ):
             answer = caller.get(path)
             assert plain_404(answer), path
             assert answer.content == never.content and answer.headers["cache-control"] == "no-store"
@@ -449,17 +562,31 @@ def test_an_open_company_with_no_release_yet_is_a_plain_404(site, monkeypatch):
     assert plain_404(site.client().get("/"))
 
 
-@pytest.mark.parametrize("path", [
-    "/assets/../secret.woff2", "/assets/%2e%2e/%2e%2e/secret.woff2", "/assets/..%2f..%2fsecret.woff2",
-    "/assets/fonts/..%5c..%5csecret.woff2", "/assets/.%2e/index.html", "/assets/fonts/.hidden.woff2",
-    "/assets/link.woff2", "/assets/fonts/a.html", "/assets/fonts", "/assets/", "/index.html", "/current/index.html"])
-def test_static_serving_stays_inside_the_release(site, path):
+STATIC_ESCAPES = [
+    "/assets/../secret.woff2",
+    "/assets/%2e%2e/%2e%2e/secret.woff2",
+    "/assets/..%2f..%2fsecret.woff2",
+    "/assets/fonts/..%5c..%5csecret.woff2",
+    "/assets/.%2e/index.html",
+    "/assets/fonts/.hidden.woff2",
+    "/assets/link.woff2",
+    "/assets/fonts/a.html",
+    "/assets/fonts",
+    "/assets/",
+    "/index.html",
+    "/current/index.html",
+]
+
+
+def test_static_serving_stays_inside_the_release(site):
     site.transparency("open")
     (site.release_dir / "assets" / "fonts" / ".hidden.woff2").write_bytes(b"hidden")
     (site.release_dir / "assets" / "fonts" / "a.html").write_text("<script>")
     os.symlink(site.release_dir.parent / "secret.woff2", site.release_dir / "assets" / "link.woff2")
-    answer = TestClient(site.app, base_url=ORIGIN, follow_redirects=False).get(path)
-    assert answer.status_code == 404 and b"outside" not in answer.content and b"hidden" not in answer.content
+    client = TestClient(site.app, base_url=ORIGIN, follow_redirects=False)
+    for path in STATIC_ESCAPES:
+        answer = client.get(path)
+        assert answer.status_code == 404 and b"outside" not in answer.content and b"hidden" not in answer.content, path
 
 
 def test_a_reader_gets_only_their_audience_and_only_named_fields(site):
@@ -480,7 +607,7 @@ def test_a_reader_gets_only_their_audience_and_only_named_fields(site):
     private = client.get("/data.json")
     assert private.json()["updates"][0]["title"] == "Investors only" and private.headers["cache-control"] == "no-store"
     assert not {"csrf", "actions", "viewer"} & set(private.json())
-    assert plain_404(client.get("/feed.xml"))        # no private feed
+    assert plain_404(client.get("/feed.xml"))  # no private feed
 
 
 def test_a_stats_board_nobody_approved_shows_no_stats(site):
@@ -499,14 +626,16 @@ def test_a_reader_of_an_open_company_with_no_audience_sees_the_public_page(site)
 
 def test_show_older_pages_and_views_count_only_what_was_received(site):
     audience = site.audience("board")
-    made = [site.edition(audience, f"Update {i}", f"2026-10-{i + 1:02d}T00:00:00.000000Z") for i in range(R.PAGE_SIZE + 2)]
+    made = [
+        site.edition(audience, f"Update {i}", f"2026-10-{i + 1:02d}T00:00:00.000000Z") for i in range(R.PAGE_SIZE + 2)
+    ]
     client = site.signed_in("pat@other.example", audience)
     first = site.page(client)
     assert len(first["updates"]) == R.PAGE_SIZE and first["next_before"]
     seen = {r["edition_id"] for r in site.rows("SELECT edition_id FROM edition_views")}
     assert seen == set(made[2:])
     site.page(client)
-    assert len(site.rows("SELECT 1 FROM edition_views")) == R.PAGE_SIZE       # a reload records nothing new
+    assert len(site.rows("SELECT 1 FROM edition_views")) == R.PAGE_SIZE  # a reload records nothing new
     older = client.get("/", params={"before": first["next_before"]})
     assert [u["title"] for u in json.loads(older.text[5:])["updates"]] == ["Update 1", "Update 0"]
     assert json.loads(older.text[5:])["next_before"] is None
@@ -529,8 +658,11 @@ def test_an_invite_makes_a_reader_once_and_is_stored_only_as_a_hash(site):
     data, path = invite(site, audience)
     token = path.rsplit("/", 1)[1]
     assert site.rows("SELECT token_hash FROM reader_invites")[0]["token_hash"] == digest(token)
-    dump = json.dumps(site.rows("SELECT * FROM reader_invites") + site.rows("SELECT * FROM idempotency"), default=str) \
-        if site.rows("SELECT name FROM sqlite_master WHERE name='idempotency'") else ""
+    dump = (
+        json.dumps(site.rows("SELECT * FROM reader_invites") + site.rows("SELECT * FROM idempotency"), default=str)
+        if site.rows("SELECT name FROM sqlite_master WHERE name='idempotency'")
+        else ""
+    )
     assert token not in dump
     # A link scanner opens the address and spends nothing.
     assert site.client().get(path).status_code == 303
@@ -553,7 +685,9 @@ def test_expired_and_revoked_invites_refuse_and_an_unverified_sign_in_spends_not
     site.write("UPDATE reader_invites SET expires_at=? WHERE id=?", H.shift(H.now(), days=-1), expired["id"])
     assert site.sign_in(site.client(), "pat@other.example", path=expired_path).status_code == 403
     revoked, revoked_path = invite(site, audience)
-    assert site.api.delete(f"/api/v2/audiences/{audience}/invites/{revoked['id']}", headers=headers()).status_code == 200
+    assert (
+        site.api.delete(f"/api/v2/audiences/{audience}/invites/{revoked['id']}", headers=headers()).status_code == 200
+    )
     assert site.sign_in(site.client(), "pat@other.example", path=revoked_path).status_code == 403
     live, live_path = invite(site, audience)
     assert site.sign_in(site.client(), "pat@other.example", path=live_path, email_verified=False).status_code == 403
@@ -591,9 +725,12 @@ def test_an_invite_cannot_take_over_a_row_another_account_holds(site):
 # ----------------------------------------------------------------------------------------------- the list
 def test_only_owners_and_admins_manage_readers_and_the_list_pages(site):
     from backend.tests.test_api import as_member
+
     as_member(site.api, "ben@acme.example")
     assert site.api.get("/api/v2/readers", headers=headers("ben-test")).status_code == 403
-    assert site.api.post("/api/v2/readers", json={"email": "p@x.example"}, headers=headers("ben-test")).status_code == 403
+    assert (
+        site.api.post("/api/v2/readers", json={"email": "p@x.example"}, headers=headers("ben-test")).status_code == 403
+    )
     assert site.api.get("/api/v2/reader-messages", headers=headers("cara-test")).status_code == 403
     for i in range(3):
         post(site.api, "readers", {"email": f"p{i}@other.example"})
@@ -603,17 +740,26 @@ def test_only_owners_and_admins_manage_readers_and_the_list_pages(site):
     assert post(site.api, "readers", {"email": "P0@Other.example"})["added"] is False
     assert site.api.post("/api/v2/readers", json={"email": "not an email"}, headers=headers()).status_code == 422
     public = site.audience("public")
-    assert site.api.post("/api/v2/readers", json={"email": "q@x.example", "audience_ids": [public]},
-                         headers=headers()).status_code == 422
+    assert (
+        site.api.post(
+            "/api/v2/readers", json={"email": "q@x.example", "audience_ids": [public]}, headers=headers()
+        ).status_code
+        == 422
+    )
     assert site.rows("SELECT count(*) n FROM humans WHERE email LIKE '%other.example'")[0]["n"] == 0
 
 
 def test_the_assistant_gets_no_reader_data_without_the_persons_click():
     calls = []
-    app = SimpleNamespace(get=lambda path: (lambda fn: calls.append(fn) or fn), post=lambda path: (lambda fn: fn),
-                          patch=lambda path: (lambda fn: fn), delete=lambda path: (lambda fn: fn))
+    app = SimpleNamespace(
+        get=lambda path: lambda fn: calls.append(fn) or fn,
+        post=lambda path: lambda fn: fn,
+        patch=lambda path: lambda fn: fn,
+        delete=lambda path: lambda fn: fn,
+    )
     from backend.company_page import api_readers
     from backend.store import Problem
+
     who = SimpleNamespace(via="assistant", confirmed=False, role="owner")
     auth = SimpleNamespace(domain=lambda w: None, company_role=lambda w: "owner")
     api_readers.register(app, SimpleNamespace(settings=None), auth, None)
@@ -623,7 +769,9 @@ def test_the_assistant_gets_no_reader_data_without_the_persons_click():
 
 def test_csv_import_takes_good_lines_and_names_the_bad_ones(site):
     audience = site.audience("investors")
-    text = "Name,Email\nPat,pat@other.example\nBad,not-an-email\nSam,SAM@other.example\n,\nPat again,pat@other.example\n"
+    text = (
+        "Name,Email\nPat,pat@other.example\nBad,not-an-email\nSam,SAM@other.example\n,\nPat again,pat@other.example\n"
+    )
     done = post(site.api, "readers/import", {"csv": text, "audience_id": audience})
     assert (done["added"], done["existing"], done["invalid_count"]) == (2, 1, 1)
     assert done["errors"] == [{"line": 3, "reason": "Not a valid email"}]
@@ -641,8 +789,13 @@ def with_edition(site, kind="board"):
     audience = site.audience(kind)
     edition = site.edition(audience, "October")
     client = site.signed_in("pat@other.example", audience)
-    return SimpleNamespace(audience=audience, edition=edition, client=client, csrf=site.csrf(client),
-                           anchor=site.page(client)["updates"][0]["anchor"])
+    return SimpleNamespace(
+        audience=audience,
+        edition=edition,
+        client=client,
+        csrf=site.csrf(client),
+        anchor=site.page(client)["updates"][0]["anchor"],
+    )
 
 
 def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monkeypatch):
@@ -652,7 +805,7 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     monkeypatch.setattr(automations, "on_event", lambda *a, **k: calls.append("automation"))
     real_judge = task_trigger_rules.judge
     monkeypatch.setattr(task_trigger_rules, "judge", lambda *a, **k: (calls.append("rule"), real_judge(*a, **k))[1])
-    with site.store.transaction() as c:         # the spies do hear an ordinary task
+    with site.store.transaction() as c:  # the spies do hear an ordinary task
         H.task_create(c, H.KEEPER, "Check the spies", "Body", "human:ana", lint=False, deduplicate=False)
     assert {"webhook", "automation", "rule"} <= set(calls)
     calls.clear()
@@ -669,19 +822,30 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     assert task["owner_id"].startswith("human:") and task["private"] == 1
     assert "pat@other.example" not in task["title"] + task["body"]
     assert "untrusted" in task["body"] and "<outside-text>" in task["body"]
-    assert task["body"].count("</outside-text>") == 1          # the writer can't close the fence
+    assert task["body"].count("</outside-text>") == 1  # the writer can't close the fence
     assert requester["email"] == "pat@other.example" and requester["actor"] is None
     assert not [r for r in site.rows("SELECT detail FROM events") if "pat@other.example" in str(r["detail"])]
     assert not site.rows("SELECT 1 FROM tasks WHERE id=? AND owner_id LIKE 'bot:%'", task["id"])
 
 
 def test_a_warned_message_says_so_to_the_owner(site, monkeypatch):
-    verdict = {"action": "warn", "score": 0.9, "kinds": ["override"], "source": "idea", "reason": "", "matched": [],
-               "detector": "test", "label": "override"}
+    verdict = {
+        "action": "warn",
+        "score": 0.9,
+        "kinds": ["override"],
+        "source": "idea",
+        "reason": "",
+        "matched": [],
+        "detector": "test",
+        "label": "override",
+    }
     monkeypatch.setattr(screening, "screen", lambda *a, **k: verdict)
     monkeypatch.setattr(screening, "_kinds_words", lambda v: "override")
     made = with_edition(site)
-    assert made.client.post("/can-help", data={"csrf": made.csrf, "anchor": made.anchor, "ask_id": "ask-1"}).status_code == 303
+    assert (
+        made.client.post("/can-help", data={"csrf": made.csrf, "anchor": made.anchor, "ask_id": "ask-1"}).status_code
+        == 303
+    )
     message = site.rows("SELECT * FROM reader_messages")[0]
     assert message["kind"] == "can_help" and message["ask_id"] == "ask-1" and message["body"] == "I can help."
     with site.store.read() as c:
@@ -710,8 +874,8 @@ def test_a_reply_needs_this_origin_and_the_token(site):
     assert made.client.post("/reply", data={k: v for k, v in form.items() if k != "csrf"}).status_code == 403
     assert made.client.post("/reply", data=form, headers={"Origin": "https://evil.example"}).status_code == 403
     assert made.client.post("/reply", data=form, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
-    assert plain_404(made.client.post("/reply", json=form))     # a form or nothing
-    assert plain_404(site.client().post("/reply", data=form))   # no session at all
+    assert plain_404(made.client.post("/reply", json=form))  # a form or nothing
+    assert plain_404(site.client().post("/reply", data=form))  # no session at all
     assert not site.rows("SELECT 1 FROM reader_messages")
     other = site.signed_in("sam@other.example", made.audience)  # another reader's page holds another token
     assert other.post("/reply", data=form).status_code == 403
@@ -751,7 +915,11 @@ class Notices:
 
     def send_notice(self, emails, company, link, unsubscribe):
         self.calls.append(SimpleNamespace(emails=emails, company=company, link=link, unsubscribe=unsubscribe))
-        answer = self.answers.pop(0) if self.answers else (202, {"status": "sent", "sent": len(emails), "failed": 0, "limited": 0})
+        answer = (
+            self.answers.pop(0)
+            if self.answers
+            else (202, {"status": "sent", "sent": len(emails), "failed": 0, "limited": 0})
+        )
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -765,7 +933,7 @@ class Notices:
 def notices(site, monkeypatch):
     made = Notices()
     monkeypatch.setitem(R._state, "oidc", made)
-    monkeypatch.setattr(R, "kick", lambda: None)        # the tests call drain themselves
+    monkeypatch.setattr(R, "kick", lambda: None)  # the tests call drain themselves
     return made
 
 
@@ -793,7 +961,7 @@ def test_notices_go_after_the_commit_to_the_audience_with_notify_on_and_carry_on
             raise RuntimeError("the publish fails")
     assert kicks == [] and statuses(site) == []
     assert notify(site, edition) == {"status": "queued", "count": 1} and kicks == [1]
-    assert notify(site, edition)["count"] == 0          # a second call doesn't queue a second mail
+    assert notify(site, edition)["count"] == 0  # a second call doesn't queue a second mail
     R.drain()
     assert notices.mailed == ["pat@other.example"] and statuses(site) == ["sent"]
     sent = notices.calls[0]
@@ -854,7 +1022,7 @@ def test_an_issuers_limit_waits_with_a_bound_and_never_builds_a_backlog(site, no
     notices.answers = [(429, {"error": "too_many", "retry_after": 900})]
     R.drain()
     assert statuses(site) == ["pending"] and R._state["not_before"] > 0
-    R.drain()                                           # it holds off until the issuer's time is up
+    R.drain()  # it holds off until the issuer's time is up
     assert len(notices.calls) == 1
     R._state["not_before"] = 0.0
     R.drain()
@@ -862,21 +1030,28 @@ def test_an_issuers_limit_waits_with_a_bound_and_never_builds_a_backlog(site, no
     late = site.edition(board)
     notify(site, late)
     site.write("UPDATE reader_notices SET created_at=? WHERE edition_id=?", H.shift(H.now(), hours=-25), late)
-    R.drain()                                           # too old to be news: it stops waiting and says so
+    R.drain()  # too old to be news: it stops waiting and says so
     assert statuses(site) == ["failed", "sent"] and len(notices.calls) == 2
 
 
-@pytest.mark.parametrize("answer, status", [((409, {"error": "no_reader_callback"}), "unavailable"), ((502, {"error": "not_sent"}), "failed"),
-                                            ((503, {"error": "mail_unavailable"}), "failed"), ((400, {"error": "invalid_email"}), "failed")])
-def test_a_refusal_is_recorded_as_not_sent_and_the_page_still_works(site, notices, answer, status):
+def test_a_refusal_is_recorded_as_not_sent_and_the_page_still_works(site, notices):
+    answers = [
+        ((409, {"error": "no_reader_callback"}), "unavailable"),
+        ((502, {"error": "not_sent"}), "failed"),
+        ((503, {"error": "mail_unavailable"}), "failed"),
+        ((400, {"error": "invalid_email"}), "failed"),
+    ]
+    recorded = []
     board = site.audience("board")
     site.reader("pat@other.example", board)
     client = site.signed_in("sam@other.example", board)
-    notify(site, site.edition(board))
-    notices.answers = [answer]
-    R.drain()
-    assert statuses(site) == [status, status] and len(notices.calls) == 1
-    assert site.page(client)["updates"]
+    for n, (answer, status) in enumerate(answers):
+        notify(site, site.edition(board, f"An update {n}"))
+        notices.answers = [answer]
+        R.drain()
+        recorded += [status, status]
+        assert statuses(site) == sorted(recorded) and len(notices.calls) == n + 1
+        assert site.page(client)["updates"]
 
 
 def test_a_network_failure_retries_a_bounded_number_of_times(site, notices):
@@ -906,7 +1081,7 @@ def test_a_provider_with_no_notice_endpoint_says_no_email_and_a_rehearsal_sends_
     monkeypatch.setattr(R, "kick", lambda: None)
     edition = site.edition(board)
     notify(site, edition)
-    R.drain()                                           # the provider in this test offers no such endpoint
+    R.drain()  # the provider in this test offers no such endpoint
     assert statuses(site) == ["unavailable"]
     assert get(site.api, "readers")["email_available"] is False
     assert get(site.api, f"editions/{edition}/notices")["readers"]["unavailable"] == 1
@@ -920,6 +1095,7 @@ def test_the_notice_request_is_exactly_what_the_issuer_takes(site, monkeypatch):
     def fake_post(url, **kwargs):
         calls.append((url, kwargs))
         return SimpleNamespace(status_code=202, json=lambda: {"status": "sent"})
+
     real = R._state["oidc"]
     doc = {**real._discover(), reader_app.NOTICE_ENDPOINT: site.fake.issuer + "/oauth2/reader-notice"}
     monkeypatch.setattr(real, "_discover", lambda: doc)
@@ -929,7 +1105,12 @@ def test_the_notice_request_is_exactly_what_the_issuer_takes(site, monkeypatch):
     assert real.send_notice(to, " Acme\n Inc ", ORIGIN + "/", ORIGIN + "/unsubscribe?token=t")[0] == 202
     url, kwargs = calls[0]
     assert url.endswith("/oauth2/reader-notice") and kwargs["follow_redirects"] is False
-    assert kwargs["json"] == {"to": to, "company": "Acme Inc", "url": ORIGIN + "/", "unsubscribe_url": ORIGIN + "/unsubscribe?token=t"}
+    assert kwargs["json"] == {
+        "to": to,
+        "company": "Acme Inc",
+        "url": ORIGIN + "/",
+        "unsubscribe_url": ORIGIN + "/unsubscribe?token=t",
+    }
     request = next(kwargs["auth"].auth_flow(httpx.Request("POST", url)))
     assert request.headers["authorization"] == httpx.BasicAuth(CLIENT, SECRET)._auth_header
     assert "client_secret" not in kwargs["json"] and "data" not in kwargs
@@ -944,7 +1125,9 @@ def test_unsubscribe_works_from_its_link_alone_even_closed_and_reveals_nothing(s
     token = R.unsubscribe_token(site.store.settings, "edition-1")
     client = site.client()
     assert plain_404(client.get("/unsubscribe", params={"token": token[:-2] + "00"}))
-    assert plain_404(client.post("/unsubscribe", data={"token": "e30." + token.split(".")[1], "email": "pat@other.example"}))
+    assert plain_404(
+        client.post("/unsubscribe", data={"token": "e30." + token.split(".")[1], "email": "pat@other.example"})
+    )
     forged = R.unsubscribe_token(SimpleNamespace(session_secret="z" * 40), "edition-1")
     assert plain_404(client.post("/unsubscribe", data={"token": forged, "email": "pat@other.example"}))
     assert plain_404(client.get("/unsubscribe", params={"token": "é.é"}))
@@ -992,7 +1175,10 @@ def test_the_real_page_posts_to_the_routes_here_and_they_work(site, monkeypatch)
     anchor = re.search(r'name="anchor" value="([^"]+)"', text)[1]
     assert client.post(render.REPLY_PATH, data={"csrf": csrf, "anchor": anchor, "body": "hi"}).status_code == 303
     assert client.post(render.HELP_PATH, data={"csrf": csrf, "anchor": anchor, "ask_id": "ask-1"}).status_code == 303
-    assert {r["kind"] for r in site.rows("SELECT kind FROM reader_messages WHERE edition_id=?", edition)} == {"reply", "can_help"}
+    assert {r["kind"] for r in site.rows("SELECT kind FROM reader_messages WHERE edition_id=?", edition)} == {
+        "reply",
+        "can_help",
+    }
     door = site.client().get("/")
     assert door.status_code == 200 and f'href="{render.SIGN_IN_PATH}"' in door.text
     assert ("GET", render.SIGN_IN_PATH) in reader_app.ROUTES
@@ -1012,13 +1198,15 @@ def test_show_older_is_a_whole_page_for_the_script_to_read(site, monkeypatch):
     assert "<a data-older" not in older.text and "data-older href" not in older.text
 
 
-def test_assets_come_from_the_release_on_both_private_and_open_and_fonts_outlive_an_empty_one(site, tmp_path, monkeypatch):
+def test_assets_come_from_the_release_on_both_private_and_open_and_fonts_outlive_an_empty_one(
+    site, tmp_path, monkeypatch
+):
     client = site.client()
     assert client.get("/assets/fonts/a.woff2").content == b"font"
     site.transparency("open")
     assert client.get("/assets/fonts/a.woff2").content == b"font"
     site.transparency("private")
-    monkeypatch.setattr(release, "current_dir", lambda settings: None)     # a private company's release holds nothing
+    monkeypatch.setattr(release, "current_dir", lambda settings: None)  # a private company's release holds nothing
     fonts = tmp_path / "template-fonts"
     fonts.mkdir()
     (fonts / "t.woff2").write_bytes(b"template")
@@ -1047,3 +1235,74 @@ def test_the_real_modules_together_give_a_reader_a_page_and_take_it_back(site, m
     assert "October" not in client.get("/").text
     site.transparency("closed")
     assert plain_404(client.get("/"))
+
+
+# ------------------------------------------------------------------------------------------------------- icons
+def logo_png(colour):
+    """A logo with transparent edges, as a team sends it: the team icon keeps it as it is, only square."""
+    logo = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    logo.paste(colour + (255,), (10, 10, 30, 30))
+    out = io.BytesIO()
+    logo.save(out, "PNG")
+    return out.getvalue()
+
+
+def test_the_reader_icons_are_tico_until_the_team_sets_a_logo_and_then_it(site):
+    client = site.client()
+    site.transparency("open")
+    for path, rel in (("/favicon.ico", "favicon-32.png"), ("/apple-touch-icon.png", "apple-touch-icon.png")):
+        answer = client.get(path)
+        assert answer.status_code == 200 and answer.content == (UI / rel).read_bytes(), path
+        assert answer.headers["cache-control"] == "public, max-age=86400"
+        assert client.head(path).status_code == 200
+    assert site.api.post("/api/v2/team/icon", content=logo_png((0, 0, 255)), headers=headers()).status_code == 200
+    stored = site.api.get("/api/v2/team/icon").content
+    favicon = client.get("/favicon.ico")
+    assert favicon.content == stored and favicon.headers["cache-control"] == "public, max-age=3600"
+
+
+def test_the_team_logo_as_apple_touch_icon_is_flat_and_made_once_per_logo(site, monkeypatch):
+    client = site.client()
+    site.transparency("open")
+    assert site.api.post("/api/v2/team/icon", content=logo_png((0, 0, 255)), headers=headers()).status_code == 200
+    calls = []
+    made = team_icon.touch_png
+    monkeypatch.setattr(team_icon, "touch_png", lambda data: calls.append(data) or made(data))
+    first = None
+    for _ in range(2):
+        answer = client.get("/apple-touch-icon.png")
+        assert answer.status_code == 200 and answer.headers["content-type"] == "image/png"
+        assert answer.headers["cache-control"] == "public, max-age=3600"
+        first = first or answer.content
+        assert answer.content == first
+        with Image.open(io.BytesIO(answer.content)) as icon:
+            assert icon.size == (180, 180) and icon.mode == "RGB"
+            assert icon.getpixel((5, 5)) == (255, 255, 255)
+            assert icon.getpixel((90, 90))[2] > 240  # the blue of the logo, in the middle
+    assert len(calls) == 1
+    assert site.api.post("/api/v2/team/icon", content=logo_png((255, 0, 0)), headers=headers()).status_code == 200
+    for _ in range(2):
+        assert client.get("/apple-touch-icon.png").content != first
+    assert len(calls) == 2
+
+
+def test_the_reader_host_serves_only_the_brand_files_from_assets(site):
+    client = site.client()
+    site.transparency("private")
+    svg = client.get("/assets/tico/tico-mark.svg")
+    assert svg.status_code == 200 and svg.headers["content-type"] == "image/svg+xml"
+    assert svg.content == (UI / "tico" / "tico-mark.svg").read_bytes()
+    assert client.get("/assets/favicon-32.png").content == (UI / "favicon-32.png").read_bytes()
+    assert plain_404(client.get("/assets/observability-vendors.js"))
+
+
+def test_closed_answers_no_icon_on_the_reader_host(site):
+    client = site.client()
+    site.transparency("closed")
+    for path in (
+        "/favicon.ico",
+        "/apple-touch-icon.png",
+        "/assets/favicon-32.png",
+        "/assets/tico/tico-mark.svg",
+    ):
+        assert plain_404(client.get(path)), path

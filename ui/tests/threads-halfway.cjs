@@ -55,7 +55,7 @@ async function open(browser, {phone = false, twin = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], stops: [], timelines: [], reacts: []};
-  const sse = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false};
+  const sse = {queue: [], seq: 0, latest: null, done: false}, state = {archived: false, needs: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   // A closed page's waiting stream ends, so node can exit.
   page.on('close', () => { sse.done = true; });
@@ -64,11 +64,11 @@ async function open(browser, {phone = false, twin = false} = {}) {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json(['ops', 'fin', 'qa', ...(twin ? ['ops2'] : [])].map(name => ({name,
       display_name: name === 'qa' ? 'QA' : name === 'ops2' ? 'Ops' : name[0].toUpperCase() + name.slice(1),
@@ -91,6 +91,7 @@ async function open(browser, {phone = false, twin = false} = {}) {
     if (p === '/api/v2/threads/dm') return json(state.archived ? {thread: null} : dmThread);
     if (p === '/api/v2/threads/t-dm-ops' && method === 'PATCH') { state.archived = true; return json({...dmThread, archived_at: at(0)}); }
     if (p === '/api/v2/threads/catch-up') return json({items: [{thread: noteThread, new_count: 1, mention: false, messages: noteMessages(), more: 0}], count: 1, next_cursor: null});
+    if (p === '/api/v2/needs-you') return json({items: state.needs, count: state.needs.length});
     if (p === '/api/v2/messages/kfar') return json({error: 'not_found'}, 404);
     if (p === '/api/v2/threads/home/' + encodeURIComponent('bot:ops') || p === '/api/v2/threads/home/bot:ops') return json({error: 'not_found'}, 404);
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
@@ -117,7 +118,7 @@ async function open(browser, {phone = false, twin = false} = {}) {
     if (p === '/api/v2/rule-holds') return json({holds: [], next_cursor: null});
     return json(unrouted(p));
   });
-  return {page, seen, sse};
+  return {page, seen, sse, state};
 }
 async function shot(page, name) {
   if (!shots) return;
@@ -156,7 +157,7 @@ let browser = null;
 
   // ---- a shared thread, desktop
   {
-    const {page, seen, sse} = await open(browser);
+    const {page, seen, sse, state} = await open(browser);
     await page.goto('https://tico-ui.test/#/thread/t-ship');
     await row(page, 'm6').waitFor();
     assert.ok(seen.timelines.includes('1'), 'the timeline is read flat');
@@ -253,19 +254,6 @@ let browser = null;
     assert.equal(await page.locator('.th-status').count(), 0, 'the reply takes the row away');
     assert.equal(await row(page, 'live1').locator('.th-quote').getAttribute('data-th-quote'), 'm2', 'a live reply quotes what it answers');
 
-    // The Ask's question, with a thread's composer on screen, is its own row above the composer, never over it.
-    await page.evaluate(() => {
-      const el = document.getElementById('ask-peek');
-      el.querySelector('[data-peek-text]').textContent = 'Got a quick question for you';
-      el.dataset.item = 'q1'; el.classList.add('ask-on'); askPeekDock();
-    });
-    assert.equal(await page.locator('.thv-composer .thv-peek-slot #ask-peek').count(), 1);
-    const [peek, pill] = [await box(page.locator('#ask-peek')), await box(page.locator('.thv-composer .thv-ask'))];
-    assert.ok(peek.y + peek.height <= pill.y + 0.5, `the peek sits above the composer: ${JSON.stringify([peek, pill])}`);
-    // Away from a thread it floats by the dot again.
-    await page.goto('https://tico-ui.test/#/tasks');
-    await page.waitForFunction(() => document.getElementById('ask-peek')?.parentElement === document.body);
-    assert.equal(await page.locator('#ask-peek.ask-peek-row').count(), 0);
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
@@ -276,11 +264,9 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops/dm');
     await page.locator('#bot-thread .th-status-working').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').getAttribute('placeholder'), 'Message Ops', 'the name alone, never its slug');
-    await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
-    assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').getAttribute('aria-label'), 'Thread settings');
+    await page.locator('#bot-top #bot-top-acts').waitFor();
+    assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').count(), 0, 'a bot thread has no settings menu');
     assert.equal(await page.locator('#bot-more-btn .nav-icon').count(), 0, 'Info is not a second ⋮ beside the ⋯');
-    const [top, menu] = [await box(page.locator('#bot-top')), await box(page.locator('#bot-top-acts [data-thv-menu]'))];
-    assert.ok(menu.y >= top.y && menu.y + menu.height <= top.y + top.height + 0.5, 'the menu sits in the top line');
     assert.equal(await page.locator('#pane-chat .bot-talk-bar .thv-menu-btn').count(), 0, 'no box of its own under the tabs');
     await themed(page, 'bot-dm-working');
     // /new: the fresh DM starts with nothing of the old one, its status rows and Stop included.

@@ -1,6 +1,6 @@
 // Offline regression for company subscriptions given to computers (backend/model_subscriptions.py): a subscription is a
 // company's saved plan login or API key; a computer holds at most one per AI tool; a bot never picks one.
-//  - Settings has a Models tab between Computers and Repositories with Subscriptions, Tico Gateway, Defaults and
+//  - Settings has a Models tab after Computers with Subscriptions, Tico Gateway, Defaults and
 //    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
 //  - Add subscription: a kind search box that starts on Claude plan, a required name, an owner (you unless changed), the
 //    own-bots line, POST {kind, name, secret} (owner_id only when changed); an API key has no owner and no such line;
@@ -48,7 +48,7 @@ function fixtures() {
       {id: 's1', name: 'Claude Max (Ana)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
         computers: ['r1', 'r2', 'r3'], usage: {window: '5h', used_pct: 62, cost_usd_month: null}, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana'},
       {id: 's2', name: 'ChatGPT Pro (Ana)', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '',
-        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null}, added_by: 'ana'},
+        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null, resets_at: new Date(Date.now() + ((4 * 24 + 15) * 60 + 30) * 60000).toISOString()}, added_by: 'ana'},
       {id: 's3', name: 'OpenAI key (company)', kind: 'openai_key', runtime: 'codex', label: 'OpenAI API key', status: 'working', status_detail: '',
         computers: [], usage: {window: null, used_pct: null, cost_usd_month: 41.2}, added_by: 'ana', owner_id: '', owner_name: ''},
       {id: 's4', name: 'Claude Max (Sam)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'needs_reconnect', status_detail: 'Token expired',
@@ -96,11 +96,11 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json(bots);
@@ -202,7 +202,7 @@ async function until(page, check, what) {
 async function navigation(browser) {
   const {page, errors} = await open(browser, {tab: 'general'});
   const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(list => list.map(b => b.dataset.settingsTab));
-  assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 3), ['devices', 'models', 'repos'], 'Models sits between Computers and Repositories');
+  assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 2), ['devices', 'models'], 'Models sits after Computers');
   for (const alias of ['models', 'providers', 'chat', 'subscriptions', 'limits']) {
     await page.evaluate(() => settingsShow('general'));
     await page.evaluate(alias => settingsShow(alias), alias);
@@ -222,7 +222,7 @@ async function navigation(browser) {
     assert.equal(await page.locator('#settings-tasks').isVisible(), true, `${alias} opens Tasks`);
   }
   for (const alias of ['credentials', 'cloud']) {
-    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
+    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), alias === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools');
   }
   assert.deepEqual(errors, []);
   await page.close();
@@ -243,11 +243,14 @@ async function modelsTab(browser) {
     [...r.querySelector('.subs-use').querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill')].map(e => e.textContent).join(' ')]));
   assert.deepEqual(rows, [
     ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', '5h 62%'],
-    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13%'],
+    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13% resets in 4d 15h'],
     ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
     ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Reconnect'],
     ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
     ['Claude Max (Dee)', 'Claude plan', '', '1', 'Waiting for a computer to report']]);
+  // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
+  assert.match(await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'), /^13% used in the week · 87% left · resets \S/);
+  assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
   // A reading of 0% still draws its bar, and a plan with no reading says why in muted text.
   assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
   assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);
@@ -586,9 +589,14 @@ async function computersTable(browser) {
   await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r1] [data-subs-pick=claude]')?.dataset.current === 's4');
   assert.deepEqual(writes.at(-1).body, {runner_id: 'r1', runtime: 'claude', subscription: 's4', confirm: true});
-  assert.match(await page.locator('#toast, .toast').last().innerText(), /Tico Team box's Claude Code: Claude Max \(Sam\) · 2 tasks restarted/);
-  // A login that needs reconnecting says so beside the picker.
-  assert.equal(await row('r1').locator('[data-subs-reconnect]').count(), 1);
+  const switchMessage = /Tico Team box's Claude Code: Claude Max \(Sam\) · 2 tasks restarted/;
+  const switchedToast = page.locator('#toast, .toast', {hasText: switchMessage}).last();
+  await switchedToast.waitFor();
+  assert.match(await switchedToast.innerText(), switchMessage);
+  // The saved picker and toast precede subsRefresh's redraw, which adds the reconnect action.
+  const reconnect = row('r1').locator('[data-subs-reconnect]');
+  await reconnect.waitFor();
+  assert.equal(await reconnect.count(), 1);
   // A click on the row's name opens the computer's pop-up, with the queue line and one connection per AI tool.
   await row('r1').locator('.machine-name').click();
   const detail = page.locator('#set-machines dialog.computer-detail[open]');

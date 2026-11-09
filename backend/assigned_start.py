@@ -4,6 +4,7 @@ starts remain visible until attempted.
 The audit ledger is keyed by the assignment event, not by mutable task.updated. The roundup writes its row when the line is
 sent, so it survives restarts and the health check reads it. It does not turn a Lead's profile into an idle task-pulling profile.
 """
+
 import logging
 
 from . import auto_tasks, hubdb as H, task_privacy as privacy
@@ -22,18 +23,33 @@ def page_ledger(c, rows):
     for part in H.chunks(row['id'] for row in rows):
         marks = ','.join('?' * len(part))
         for task_id, event_id, ts in c.execute(
-                f"SELECT subject_id,id,created_at FROM history_events WHERE subject_type='task' AND kind='owner' "
-                f"AND subject_id IN ({marks}) ORDER BY subject_id,created_at DESC,rowid DESC", part):
+            f"SELECT subject_id,id,created_at FROM history_events WHERE subject_type='task' AND kind='owner' "
+            f"AND subject_id IN ({marks}) ORDER BY subject_id,created_at DESC,rowid DESC",
+            part,
+        ):
             owners.setdefault(task_id, (event_id, ts))
         for target, detail in c.execute(
-                f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,created_at DESC",
-                (EVENT, *part)):
+            f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,created_at DESC",
+            (EVENT, *part),
+        ):
             ledger.setdefault(target, []).append(H._json(detail, {}))
     return owners, ledger
 
 
-def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=None, visible="1", manager_actor=None,
-               on_error=None, page=None, owner=None):
+def candidates(
+    c,
+    at=None,
+    task_ids=None,
+    recorded=None,
+    *,
+    after="",
+    scanned=None,
+    visible="1",
+    manager_actor=None,
+    on_error=None,
+    page=None,
+    owner=None,
+):
     if task_ids is not None and not task_ids:
         return
     at = at or H.now()
@@ -43,8 +59,10 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     params.extend(task_ids or ())
     # Select the current assignment's ledger entry before reading task bodies or provenance.
     assignment_key = "coalesce((SELECT id FROM history_events WHERE subject_type='task' AND subject_id=t.id AND kind='owner' ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at)"
-    ledger = ("SELECT 1 FROM events e WHERE e.target=t.id AND e.action='task.assignment-rewake' "
-              f"AND json_extract(e.detail,'$.assignment')={assignment_key}")
+    ledger = (
+        "SELECT 1 FROM events e WHERE e.target=t.id AND e.action='task.assignment-rewake' "
+        f"AND json_extract(e.detail,'$.assignment')={assignment_key}"
+    )
     if recorded is not None:
         scope += " AND " + ("EXISTS" if recorded else "NOT EXISTS") + "(" + ledger
         if recorded:
@@ -64,11 +82,17 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     # The scheduler persists the last inspected id, so held/started rows cannot starve later work.
     # Checked per candidate task (a key lookup), so the reader's rule keeps its own column names. As
     # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
-    visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
-    rows = H._rows(c.execute(f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id "
-                             "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
-                             + scope + visibility + " ORDER BY t.id LIMIT ?",
-                             (*params, SCAN_LIMIT)))
+    visibility = f" AND EXISTS(SELECT 1 FROM tasks WHERE tasks.id=t.id AND ({visible}))" if visible != "1" else ""
+    rows = H._rows(
+        c.execute(
+            f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id "
+            "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
+            + scope
+            + visibility
+            + " ORDER BY t.id LIMIT ?",
+            (*params, SCAN_LIMIT),
+        )
+    )
     if page is not None:
         page[:] = [len(rows)]
     owners, ledger = page_ledger(c, rows)
@@ -141,9 +165,11 @@ RUN_PAIRS = 250
 
 def _runs_sql(pairs):
     """The runs of each (bot, floor) pair at or after that bot's own floor: one join on the attempts' bot_id index."""
-    return ("WITH f(bot,since) AS (VALUES " + ",".join("(?,?)" for _ in range(pairs)) + ") "
-            "SELECT a.id,a.bot_id,a.created_at FROM f JOIN attempts a ON a.bot_id=f.bot AND a.created_at>=f.since "
-            "ORDER BY a.created_at DESC")
+    return (
+        "WITH f(bot,since) AS (VALUES " + ",".join("(?,?)" for _ in range(pairs)) + ") "
+        "SELECT a.id,a.bot_id,a.created_at FROM f JOIN attempts a ON a.bot_id=f.bot AND a.created_at>=f.since "
+        "ORDER BY a.created_at DESC"
+    )
 
 
 def _runs(c, floors):
@@ -175,7 +201,9 @@ def _attempted(c, rows, picked):
         if runs:
             privacy.prime_attempts(c, [run['id'] for run in runs])
     except Exception:
-        logging.getLogger(__name__).exception('Assignment recovery could not read its runs together; reading each bot alone')
+        logging.getLogger(__name__).exception(
+            'Assignment recovery could not read its runs together; reading each bot alone'
+        )
         runs = []
         for bot, since in floors.items():
             try:
@@ -209,8 +237,9 @@ def unstarted(c, at=None, owner=None):
     out, after = [], ""
     while True:
         scanned, page = [""], []
-        out.extend(candidates(c, at, recorded=False, after=after, scanned=scanned, page=page, owner=owner,
-                              on_error=_skip_row))
+        out.extend(
+            candidates(c, at, recorded=False, after=after, scanned=scanned, page=page, owner=owner, on_error=_skip_row)
+        )
         # A short page is the last: the page after it, from its last id, would be empty and is not read.
         if not scanned[0] or page[0] < SCAN_LIMIT:
             return out
@@ -227,10 +256,15 @@ def overdue(c, at=None, *, visible="1", manager_actor=None, limit=200):
     after, count = "", 0
     while count < limit:
         scanned, page = [""], []
-        for row, _, since, saved in candidates(c, at, recorded=True, visible=visible,
-                                               manager_actor=manager_actor, after=after,
-                                               scanned=scanned, page=page):
-            yield {**row, 'assigned_at': since, 'rewoken_at': saved['rewoken_at'], 'rewake_refusal': saved.get('refusal')}
+        for row, _, since, saved in candidates(
+            c, at, recorded=True, visible=visible, manager_actor=manager_actor, after=after, scanned=scanned, page=page
+        ):
+            yield {
+                **row,
+                'assigned_at': since,
+                'rewoken_at': saved['rewoken_at'],
+                'rewake_refusal': saved.get('refusal'),
+            }
             count += 1
             if count >= limit:
                 return
@@ -252,13 +286,20 @@ def _bot_state(c, bot, settings):
     from . import execution as E
     from .shared_bots import follow
     from .store import readiness_document
+
     owner = H.bot(c, bot)
     if owner and owner['state'] != 'active':
         return owner['state'], None
-    config = c.execute(f"SELECT {BS.CONFIG} AS config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
-                       f"FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (bot,)).fetchone()
-    runner = c.execute('SELECT r.* FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id '
-                       'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
+    config = c.execute(
+        f"SELECT {BS.CONFIG} AS config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
+        f"FROM bot_config bc {BS.JOIN} WHERE bc.bot=?",
+        (bot,),
+    ).fetchone()
+    runner = c.execute(
+        'SELECT r.* FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id '
+        'WHERE a.bot=? AND r.revoked_at IS NULL',
+        (bot,),
+    ).fetchone()
     if not runner:
         return 'no_computer', None
     if not config:
@@ -270,8 +311,12 @@ def _bot_state(c, bot, settings):
     why, declared = E.claim_refusal(c, settings, runner, bot, config['config'], config['draining'], ready, held_bots)
     if why:
         return why, None
-    return None, {'runner': runner, 'ready': ready, 'followed': follow(c, bot, declared),
-                  'busy': set(E.live_lanes(c)) | held_lanes}
+    return None, {
+        'runner': runner,
+        'ready': ready,
+        'followed': follow(c, bot, declared),
+        'busy': set(E.live_lanes(c)) | held_lanes,
+    }
 
 
 def reason(c, row, settings, shared=None, suspect=None):
@@ -279,6 +324,7 @@ def reason(c, row, settings, shared=None, suspect=None):
     `shared`: a dict the caller keeps across its tasks, so each bot's shared checks are read once for all of them.
     `suspect`: auto_tasks.maybe_waiting over those tasks."""
     from . import execution as E
+
     bot = H.actor_id(row['owner_id'])
     if shared is None:
         why, state = _bot_state(c, bot, settings)
@@ -289,18 +335,31 @@ def reason(c, row, settings, shared=None, suspect=None):
     if why:
         return why
     runner, ready, followed, busy = state['runner'], state['ready'], state['followed'], state['busy']
-    jobs = c.execute(f"SELECT j.*,{E.unfenced_sql()} free,{E.scoped_sql()} in_scope "
-                     "FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-                     f"WHERE j.bot_id=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id",
-                     (bot, row['id'])).fetchall()
+    jobs = c.execute(
+        f"SELECT j.*,{E.unfenced_sql()} free,{E.scoped_sql()} in_scope "
+        "FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE j.bot_id=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id",
+        (bot, row['id']),
+    ).fetchall()
     if jobs:
         job = jobs[0]
-        return ('scoped' if not job['in_scope'] else 'uncertain' if not job['free'] else
-                E.job_refusal(c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner), suspect=suspect,
-                              runner=runner) or
-                ('cooling_off' if E.login_refusal(c, settings, runner['id'], bot, followed, job['id']) else 'not_started'))
-    return (auto_tasks.refusal(c, row, followed, woken=True, suspect=suspect) or row.get('rewake_refusal')
-            or 'no_queued_wake')
+        return (
+            'scoped'
+            if not job['in_scope']
+            else 'uncertain'
+            if not job['free']
+            else E.job_refusal(
+                c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner), suspect=suspect, runner=runner
+            )
+            or (
+                'cooling_off' if E.login_refusal(c, settings, runner['id'], bot, followed, job['id']) else 'not_started'
+            )
+        )
+    return (
+        auto_tasks.refusal(c, row, followed, woken=True, suspect=suspect)
+        or row.get('rewake_refusal')
+        or 'no_queued_wake'
+    )
 
 
 def description(c, row, settings, why=None):

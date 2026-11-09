@@ -3,6 +3,7 @@
 Only transitions send notes. A changed waiter count or repeated failed probe updates the same incident; neither
 opens work nor wakes a manager. Source keys are digests and notices carry no task, login name or provider error.
 """
+
 import hashlib
 import json
 
@@ -19,32 +20,72 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
     old = H._json(saved[0], {}) if saved else {}
     if not active and not old.get('active'):
         return
-    if old.get('active') == bool(active) and old.get('kind') == kind and old.get('waiting') == int(waiting) and old.get('until') == until:
+    if (
+        old.get('active') == bool(active)
+        and old.get('kind') == kind
+        and old.get('waiting') == int(waiting)
+        and old.get('until') == until
+    ):
         return
     now = H.now()
-    record = {'source': source, 'kind': kind, 'active': bool(active), 'since': old.get('since') if old.get('active') else since or now,
-              'waiting': int(waiting), 'until': until, 'updated': now}
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-              (key, json.dumps(record)))
+    record = {
+        'source': source,
+        'kind': kind,
+        'active': bool(active),
+        'since': old.get('since') if old.get('active') else since or now,
+        'waiting': int(waiting),
+        'until': until,
+        'updated': now,
+    }
+    c.execute(
+        'INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (key, json.dumps(record)),
+    )
     if bool(old.get('active')) == bool(active):
         return
     transition = 'waiting' if active else 'restored'
-    expected = (until[:16].replace('T', ' ') + ' UTC' if until and until > now else
-                'checking availability now' if until else 'unknown; checked automatically') if active else 'available now'
-    text = (f"{kind}: {'waiting' if active else 'available again'}. Since {record['since'][:16].replace('T', ' ')} UTC; "
-            f"{int(waiting)} turns waiting. Expected return: {expected}.")
+    expected = (
+        (
+            until[:16].replace('T', ' ') + ' UTC'
+            if until and until > now
+            else 'checking availability now'
+            if until
+            else 'unknown; checked automatically'
+        )
+        if active
+        else 'available now'
+    )
+    text = (
+        f"{kind}: {'waiting' if active else 'available again'}. Since {record['since'][:16].replace('T', ' ')} UTC; "
+        f"{int(waiting)} turns waiting. Expected return: {expected}."
+    )
     # A board can name its own Engineering manager. Never assume the company's bot slug.
-    managers = {r[0] for r in c.execute("SELECT manager FROM task_types WHERE role='engineering' AND manager IS NOT NULL")}
+    managers = {
+        r[0] for r in c.execute("SELECT manager FROM task_types WHERE role='engineering' AND manager IS NOT NULL")
+    }
     recipients = {H.bot_actor(x) for x in managers if x}
     for target in sorted(recipients):
         bot = H.bot(c, H.actor_id(target))
         if not bot or bot['state'] in ('planned', 'archived'):
             continue
-        H.say(c, H.KEEPER, target, text, kind='notice',
-              refs={'quiet': True, 'source_outage': {'key': key, 'state': transition,
-                    **{k: record[k] for k in ('kind', 'since', 'waiting', 'until')}}})
-    H.event(c, H.KEEPER, 'source_outage.' + transition, key,
-            {k: record[k] for k in ('kind', 'since', 'waiting', 'until')})
+        H.say(
+            c,
+            H.KEEPER,
+            target,
+            text,
+            kind='notice',
+            refs={
+                'quiet': True,
+                'source_outage': {
+                    'key': key,
+                    'state': transition,
+                    **{k: record[k] for k in ('kind', 'since', 'waiting', 'until')},
+                },
+            },
+        )
+    H.event(
+        c, H.KEEPER, 'source_outage.' + transition, key, {k: record[k] for k in ('kind', 'since', 'waiting', 'until')}
+    )
 
 
 def sync(c, settings):
@@ -54,10 +95,15 @@ def sync(c, settings):
     which ends the incident. Expired reset times are never presented as future availability.
     """
     from . import execution, login_holds, move_retry, performance
+
     seen = set()
-    queued = [dict(r) for r in c.execute(
-        f"SELECT j.bot_id,count(*) n,a.runner_id,{BS.CONFIG} AS config FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
-        f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE j.state='queued' GROUP BY j.bot_id,a.runner_id")]
+    queued = [
+        dict(r)
+        for r in c.execute(
+            f"SELECT j.bot_id,count(*) n,a.runner_id,{BS.CONFIG} AS config FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
+            f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE j.state='queued' GROUP BY j.bot_id,a.runner_id"
+        )
+    ]
     counts = {}
     for row in queued:
         config = H._json(row['config'], {}) or {}
@@ -75,32 +121,40 @@ def sync(c, settings):
         # Reuse wake batching's history/digest carrier; retries retain their own jobs and checkpoints.
         if execution.cooling_off(c, row['bot_id']):
             batch_waiters(c, row['bot_id'])
-    for (raw,) in c.execute('SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)).fetchall():
+    for (raw,) in c.execute(
+        'SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)
+    ).fetchall():
         hold = H._json(raw, {}) or {}
         if not isinstance(hold, dict) or not hold.get('runner_id') or not hold.get('runtime'):
             continue
         source = login_holds.key(hold['runner_id'], hold.get('profile'), hold['runtime'])
         count = counts.get((hold['runner_id'], hold.get('profile') or '', hold['runtime']), 0)
-        kind = f"{hold['runtime'].capitalize()} " + ('provider capacity' if hold.get('capacity') else 'subscription quota')
+        kind = f"{hold['runtime'].capitalize()} " + (
+            'provider capacity' if hold.get('capacity') else 'subscription quota'
+        )
         observe(c, source, kind, waiting=count, until=hold.get('until'), since=hold.get('since'))
         seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
     github = {}
     # Read the latest remembered move per ticket; stale moves neither count waiters nor keep an incident open.
     cutoff = H.shift(H.now(), seconds=-int(move_retry.RETRY_FOR.total_seconds()))
-    for (task_id,) in c.execute("SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND kind=? "
-                                "AND created_at>=?",
-                                (move_retry.FIELD, cutoff)).fetchall():
+    for (task_id,) in c.execute(
+        "SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND kind=? AND created_at>=?",
+        (move_retry.FIELD, cutoff),
+    ).fetchall():
         row = H.task(c, task_id)
         found = move_retry.remembered(c, dict(row), H.parse_ts(H.now()))
         if not found or not found[1].get('outage') or found[1].get('local'):
             continue
         detail = found[1]
         from .review_gate import links
+
         for link in links(c, dict(row)):
             # All checks for the same repository share access; PR numbers never split an incident.
             source = 'github:' + (link.get('repo') or (link.get('url') or '').split('/pull/')[0]).lower()
-            saved = c.execute('SELECT value FROM registry_metadata WHERE key=?',
-                              (PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],)).fetchone()
+            saved = c.execute(
+                'SELECT value FROM registry_metadata WHERE key=?',
+                (PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],),
+            ).fetchone()
             proof = H._json(saved[0], {}) if saved else {}
             if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated', ''):
                 continue  # A successful read supersedes this old refusal, even if the ticket has not moved.
@@ -136,12 +190,16 @@ def _finish(c, key, value):
 
 def batch_waiters(c, bot):
     from . import wake_presets
+
     groups = {}
-    for row in c.execute("SELECT j.*,m.conversation_id,m.refs FROM jobs j JOIN message_refs m ON m.id=j.message_id "
-                         "WHERE j.bot_id=? AND j.state='queued' AND j.attempt_id IS NULL AND j.redirect=0 "
-                         "AND m.sender_id=? AND m.kind='notice' AND m.deleted_at IS NULL "
-                         "AND m.ref_quiet=0 AND m.ref_command=0 "
-                         "ORDER BY j.created_at,j.rowid", (bot, H.KEEPER)).fetchall():
+    for row in c.execute(
+        "SELECT j.*,m.conversation_id,m.refs FROM jobs j JOIN message_refs m ON m.id=j.message_id "
+        "WHERE j.bot_id=? AND j.state='queued' AND j.attempt_id IS NULL AND j.redirect=0 "
+        "AND m.sender_id=? AND m.kind='notice' AND m.deleted_at IS NULL "
+        "AND m.ref_quiet=0 AND m.ref_command=0 "
+        "ORDER BY j.created_at,j.rowid",
+        (bot, H.KEEPER),
+    ).fetchall():
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):
             continue
@@ -151,12 +209,23 @@ def batch_waiters(c, bot):
             wake_presets._release(c, bot, jobs)
 
 
-def github_read(c, prs, snapshots):
-    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
+def github_recoveries(c, prs, snapshots):
+    """Repositories whose complete read can clear an open access outage, without taking a writer."""
     repos = {}
     for pr in prs:
         if pr.get('repo'):
             repos.setdefault(pr['repo'].lower(), []).append(snapshots.get(pr['id']))
+    restored = []
     for repo, results in repos.items():
         if results and all(r and not r.get('error') and r.get('head_sha') for r in results):
-            observe(c, 'github:' + repo, 'GitHub checks access', active=False)
+            key = PREFIX + hashlib.sha256(('github:' + repo).encode()).hexdigest()[:32]
+            saved = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
+            if saved and (H._json(saved[0], {}) or {}).get('active'):
+                restored.append(repo)
+    return restored
+
+
+def github_read(c, prs, snapshots):
+    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
+    for repo in github_recoveries(c, prs, snapshots):
+        observe(c, 'github:' + repo, 'GitHub checks access', active=False)

@@ -1,6 +1,6 @@
 // A task with a question to you, opened before the first Needs you list is held (boot sends that read after the roster
 // and the opening page): the plain ask shows, and its question box takes its place once a list lands, without
-// reopening the task. A first read that fails keeps the wait for the next one that answers (ui/app/task-modal.js
+// reopening the task. A first read that fails keeps the wait for the next one that answers (ui/app/task-modal.ts
 // taskQcardWait, ui/app/hub-v2.js NEEDS_FIRST).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -18,11 +18,11 @@ const late = {id: 't-late', kind: 'question', title: 'Which launch date?', body:
   try {
     let release, reads = 0;
     const held = new Promise(done => { release = done; });
-    const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [{...late}], beforeGoto: async p => {
+    const {page, errors} = await open(browser, {hash: '#/tasks?view=list', waitForNeeds: false, extraTasks: [{...late}], beforeGoto: async p => {
       await p.route('**/api/v2/needs-you*', async route => {
         // the first read waits, then fails; the next one answers
         if (++reads === 1) { await held; return route.fulfill({status: 500, contentType: 'application/json', body: '{"error":{"detail":"busy"}}'}); }
-        await route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [late], version: 'v1', count: 1})});
+        await route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [late], version: 'v1', count: 1, plate_count: 1})});
       });
       await p.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
       await p.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));

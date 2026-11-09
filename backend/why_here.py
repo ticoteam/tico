@@ -32,8 +32,10 @@ def install(app, store, auth):
 
 def show(c, auth, who, ref):
     kind, item = resolve(c, auth, who, ref)
+
     def see(task_id):
         return bool(views._readable_task_ids(c, auth.task_sql(c, who), [task_id]))
+
     if kind == "task":
         made_by, created, cause = item["requester_id"], item["created_at"], task_cause(c, item, see)
         title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause)
@@ -44,18 +46,35 @@ def show(c, auth, who, ref):
         cause = task_cause(c, row, see) if row else {"type": "message", "conversation_id": item["conversation_id"]}
         siblings, stops = {"days": WINDOW_DAYS, "made": 0, "open": 0}, stops_for(c, cause, None)
     else:
-        made_by, created, title, task_id = item["requested_by_id"], item["created_at"], item["kind"], item.get("task_id")
+        made_by, created, title, task_id = (
+            item["requested_by_id"],
+            item["created_at"],
+            item["kind"],
+            item.get("task_id"),
+        )
         cause = {"type": "approval", "run": approval_run(c, item["id"]), "task": task_id}
         siblings, stops = {"days": WINDOW_DAYS, "made": 0, "open": 0}, stops_for(c, cause, None)
-    return {"ref": ref, "kind": kind, "id": item["id"], "title": title, "created_at": created,
-            "made_by": {"actor": made_by, "name": H.actor_name(c, made_by) if made_by else ""},
-            "task": task_id, "cause": cause, "siblings": siblings, "stop": stops[:STOPS_MAX]}
+    return {
+        "ref": ref,
+        "kind": kind,
+        "id": item["id"],
+        "title": title,
+        "created_at": created,
+        "made_by": {"actor": made_by, "name": H.actor_name(c, made_by) if made_by else ""},
+        "task": task_id,
+        "cause": cause,
+        "siblings": siblings,
+        "stop": stops[:STOPS_MAX],
+    }
 
 
 def resolve(c, auth, who, ref):
     """(kind, row) for the one thing `ref` names that the caller may read; 404 when none does."""
     if len(ref) >= 8:
-        rows = [dict(r) for r in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id=? OR id LIKE ? LIMIT 2", (ref, ref + "%"))]
+        rows = [
+            dict(r)
+            for r in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id=? OR id LIKE ? LIMIT 2", (ref, ref + "%"))
+        ]
         if len(rows) == 1:
             visible = auth.task_sql(c, who)
             if views._readable_task_ids(c, visible, [rows[0]["id"]]):
@@ -64,17 +83,20 @@ def resolve(c, auth, who, ref):
     if message and threads.message_readable(c, threads.viewer(auth, who), message):
         return "message", message
     approval = H.approval(c, ref)
-    if approval and (who.actor in (approval.get("requested_by_id"), approval.get("decision_owner"))
-                     or (approval.get("task_id") and views._readable_task_ids(
-                         c, auth.task_sql(c, who), [approval["task_id"]]))):
+    if approval and (
+        who.actor in (approval.get("requested_by_id"), approval.get("decision_owner"))
+        or (approval.get("task_id") and views._readable_task_ids(c, auth.task_sql(c, who), [approval["task_id"]]))
+    ):
         return "approval", approval
     raise Problem("not_found", f"no task, message or approval {ref} that you can read", 404)
 
 
 def approval_run(c, approval_id):
     """The run that asked for an approval, as its request was recorded (hubdb `approval.request`)."""
-    row = c.execute("SELECT detail FROM events WHERE action='approval.request' AND target=? "
-                    "ORDER BY created_at DESC LIMIT 1", (approval_id,)).fetchone()
+    row = c.execute(
+        "SELECT detail FROM events WHERE action='approval.request' AND target=? ORDER BY created_at DESC LIMIT 1",
+        (approval_id,),
+    ).fetchone()
     return (json.loads(row["detail"] or "{}") or {}).get("attempt_id") if row else None
 
 
@@ -82,8 +104,10 @@ def notice_refs(c, task):
     """The refs of the notice that told the task's owner about it (the first one that names an automation or a rule)."""
     if not task.get("conversation_id"):
         return {}
-    for row in c.execute("SELECT refs FROM messages WHERE conversation_id=? AND refs LIKE '%\"task\"%' "
-                         "ORDER BY created_at LIMIT 200", (task["conversation_id"],)):
+    for row in c.execute(
+        "SELECT refs FROM messages WHERE conversation_id=? AND refs LIKE '%\"task\"%' ORDER BY created_at LIMIT 200",
+        (task["conversation_id"],),
+    ):
         refs = json.loads(row["refs"] or "{}") if row["refs"] else {}
         if isinstance(refs, dict) and refs.get("task") == task["id"] and ("automation" in refs or "rule" in refs):
             return refs
@@ -102,8 +126,12 @@ def task_cause(c, task, see):
         return {"type": "automation", **found, "run": refs.get("automation_run")}
     if refs.get("rule"):
         rule = c.execute("SELECT text, version FROM org_rules WHERE id=?", (refs["rule"],)).fetchone()
-        return {"type": "rule", "id": refs["rule"], "text": (rule["text"] if rule else "")[:200],
-                "version": rule["version"] if rule else 1}
+        return {
+            "type": "rule",
+            "id": refs["rule"],
+            "text": (rule["text"] if rule else "")[:200],
+            "version": rule["version"] if rule else 1,
+        }
     parent = task_relations.parent_of(c, task["id"])
     if parent:
         if not see(parent):
@@ -120,8 +148,12 @@ def automation_info(c, aid):
         return {"id": aid, "name": "", "trigger": None, "enabled": None}
     trigger = (json.loads(row["flow"] or "{}") or {}).get("trigger") or {}
     keep = {k: trigger[k] for k in ("type", "cron", "every", "tz", "event") if k in trigger}
-    return {"id": aid, "name": row["name"], "trigger": keep or {"type": row["trigger_type"]},
-            "enabled": bool(row["enabled"])}
+    return {
+        "id": aid,
+        "name": row["name"],
+        "trigger": keep or {"type": row["trigger_type"]},
+        "enabled": bool(row["enabled"]),
+    }
 
 
 def siblings_and_stops(c, task, cause):
@@ -130,8 +162,10 @@ def siblings_and_stops(c, task, cause):
     if cause["type"] in ("automation", "rule"):
         made = set()
         key = "automation" if cause["type"] == "automation" else "rule"
-        for row in c.execute("SELECT refs FROM messages WHERE created_at>=? AND refs LIKE ? ORDER BY created_at LIMIT 5000",
-                             (since, f'%"{key}": "{cause["id"]}"%')):
+        for row in c.execute(
+            "SELECT refs FROM messages WHERE created_at>=? AND refs LIKE ? ORDER BY created_at LIMIT 5000",
+            (since, f'%"{key}": "{cause["id"]}"%'),
+        ):
             refs = json.loads(row["refs"] or "{}") if row["refs"] else {}
             # A list task ref (sent by a bot, or copied from one) names its first task, as in hubdb._task_ref.
             tid = H._task_ref(refs.get("task")) if isinstance(refs, dict) else None
@@ -139,17 +173,27 @@ def siblings_and_stops(c, task, cause):
                 made.add(tid)
     elif cause["type"] == "parent_task":
         kids = task_relations.child_ids(c, cause["id"]) if cause.get("id") else []
-        made = {r["id"] for part in H.chunks(kids)
-                for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({','.join('?' * len(part))}) AND created_at>=?",
-                                   (*part, since))}
+        made = {
+            r["id"]
+            for part in H.chunks(kids)
+            for r in c.execute(
+                f"SELECT id FROM tasks WHERE id IN ({','.join('?' * len(part))}) AND created_at>=?", (*part, since)
+            )
+        }
     else:
-        made = {r["id"] for r in c.execute("SELECT id FROM tasks WHERE requester_id=? AND title=? AND created_at>=?",
-                                           (task["requester_id"], task["title"], since))}
+        made = {
+            r["id"]
+            for r in c.execute(
+                "SELECT id FROM tasks WHERE requester_id=? AND title=? AND created_at>=?",
+                (task["requester_id"], task["title"], since),
+            )
+        }
     open_now = 0
     for part in H.chunks(sorted(made)):
         marks = ",".join("?" * len(part))
-        open_now += c.execute(f"SELECT COUNT(*) FROM tasks WHERE id IN ({marks}) AND status NOT IN ('done','closed','declined')",
-                              part).fetchone()[0]
+        open_now += c.execute(
+            f"SELECT COUNT(*) FROM tasks WHERE id IN ({marks}) AND status NOT IN ('done','closed','declined')", part
+        ).fetchone()[0]
     siblings = {"days": WINDOW_DAYS, "made": len(made), "open": open_now}
     return siblings, stops_for(c, cause, task)
 
@@ -158,25 +202,48 @@ def stops_for(c, cause, task):
     """Up to three `hub` lines that stop the source: each `{how, command, note}`, and every command parses with clients/hubcli."""
     kind = cause.get("type")
     if kind == "automation" and cause.get("id"):
-        return [{"how": "Turn the automation off", "command": f"hub automation update {cause['id']} --disable",
-                 "note": "its runs stop; `--enable` turns it back on"},
-                {"how": "Change what it does", "command": f"hub automation update {cause['id']} --file -",
-                 "note": "a JSON object with the fields to change, on stdin; a change to its steps is a new version"}]
+        return [
+            {
+                "how": "Turn the automation off",
+                "command": f"hub automation update {cause['id']} --disable",
+                "note": "its runs stop; `--enable` turns it back on",
+            },
+            {
+                "how": "Change what it does",
+                "command": f"hub automation update {cause['id']} --file -",
+                "note": "a JSON object with the fields to change, on stdin; a change to its steps is a new version",
+            },
+        ]
     if kind == "rule" and cause.get("id"):
-        return [{"how": "Retire the rule", "command": f"hub rules retire {cause['id']} --version {cause.get('version', 1)}",
-                 "note": "its due dates come back"}]
+        return [
+            {
+                "how": "Retire the rule",
+                "command": f"hub rules retire {cause['id']} --version {cause.get('version', 1)}",
+                "note": "its due dates come back",
+            }
+        ]
     if kind == "bot" and cause.get("bot"):
         slug = (H.bot(c, H.actor_id(cause["bot"])) or {}).get("slug") or H.actor_id(cause["bot"])
         title = (task or {}).get("title") or "its work"
-        return [{"how": "Close what it filed in one go (counts first)",
-                 "command": f"hub task bulk close --where-requester {shlex.quote(slug)} --dry-run",
-                 "note": "drop --dry-run to close them"},
-                {"how": "Pause the bot until its source is fixed", "command": f"hub bot pause {shlex.quote(slug)}"},
-                {"how": "Have BotOps fix the bot's source",
-                 "command": "hub task create --owner botops --title "
-                            + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
-                 "note": "BotOps reads the cause and files the fix in the bot's code"}]
+        return [
+            {
+                "how": "Close what it filed in one go (counts first)",
+                "command": f"hub task bulk close --where-requester {shlex.quote(slug)} --dry-run",
+                "note": "drop --dry-run to close them",
+            },
+            {"how": "Pause the bot until its source is fixed", "command": f"hub bot pause {shlex.quote(slug)}"},
+            {
+                "how": "Have BotOps fix the bot's source",
+                "command": "hub task create --owner botops --title " + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
+                "note": "BotOps reads the cause and files the fix in the bot's code",
+            },
+        ]
     if kind == "parent_task" and cause.get("id"):
-        return [{"how": "Close the parent task", "command": f"hub task close {cause['id']}",
-                 "note": "its open children stay as they are"}]
+        return [
+            {
+                "how": "Close the parent task",
+                "command": f"hub task close {cause['id']}",
+                "note": "its open children stay as they are",
+            }
+        ]
     return []

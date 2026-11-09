@@ -1,4 +1,5 @@
 """Message routines written in Assistant chat: off until a person's card click, with a readable plan."""
+
 import copy
 import json
 import re
@@ -18,6 +19,7 @@ def message(flow):
 def request_is_message(c, method, path, body):
     """Only Message writes get the routine card path; other automations keep their catalogue restrictions."""
     from . import automations as A
+
     if method == "POST" and path == CREATE:
         return message(body)
     if method == "PATCH" and (match := EDIT.fullmatch(path)):
@@ -51,6 +53,7 @@ def defaults(fields):
 def gate(store, method, path, fields):
     """True/False for a Message write; None leaves other automations to the ordinary Assistant gate."""
     from . import automations as A
+
     if method == "POST" and path == CREATE and message(fields):
         # The create route forces it off and puts its Turn on on a card in the same transaction.
         return fields.get("enabled") is True
@@ -62,19 +65,21 @@ def gate(store, method, path, fields):
         before = A.flow_of(row) if row else {}
         restored = {}
         if method == "POST" and (version := re.fullmatch(CREATE + r"/[^/]+/versions/(\d+)/restore", path)):
-            saved = c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
-                              (match.group(1), int(version.group(1)))).fetchone()
+            saved = c.execute(
+                "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                (match.group(1), int(version.group(1))),
+            ).fetchone()
             restored = json.loads(saved["flow"]) if saved else {}
     if not (message(before) or message(fields) or message(restored)):
         return None
     # Stopping is always possible. Any edit, enable, restore or manual run needs the person's click.
-    return not (method == "PATCH" and fields.get("enabled") is False
-                and set(fields) <= {"enabled", "summary"})
+    return not (method == "PATCH" and fields.get("enabled") is False and set(fields) <= {"enabled", "summary"})
 
 
 def mode(flow):
     from . import automations as A
     from .automation_flow import choosing
+
     modes = {step["choose"].get("mode", "draft") for step in choosing(flow.get("steps"))}
     actions = {do for do, _ in A._actions(flow)}
     if "reply" in modes or "send_reply" in actions:
@@ -88,6 +93,7 @@ def require_send(c, flow):
     """A Reply card promises sending, so refuse it when the inbox or company does not allow that."""
     from .automation_actions import send_on
     from .google_workspace import permissions
+
     if not message(flow) or not flow.get("enabled") or mode(flow) != "Reply":
         return
     inbox = flow["trigger"]["inbox"]
@@ -114,22 +120,27 @@ def _action(c, action):
         return "Forward to " + str(args.get("to") or args.get("webhook") or "")
     if do == "label":
         return "Label " + str(args.get("name") or args.get("tag") or "")
-    return {"leave_for_you": "Leave in inbox", "archive": "Archive", "draft_reply": "Draft reply",
-            "send_reply": "Send reply", "call_webhook": "Call webhook " + str(args.get("webhook") or "")}.get(
-                do, str(do or "").replace("_", " ").capitalize())
+    return {
+        "leave_for_you": "Leave in inbox",
+        "archive": "Archive",
+        "draft_reply": "Draft reply",
+        "send_reply": "Send reply",
+        "call_webhook": "Call webhook " + str(args.get("webhook") or ""),
+    }.get(do, str(do or "").replace("_", " ").capitalize())
 
 
 def describe(c, flow, verb, revision=None):
     """Only server-derived words on the card; the full reviewed request remains under Details."""
-    lines = [{"field": "Inbox", "new": flow["trigger"]["inbox"], "routine": True},
-             {"field": "Mode", "new": mode(flow)}]
+    lines = [{"field": "Inbox", "new": flow["trigger"]["inbox"], "routine": True}, {"field": "Mode", "new": mode(flow)}]
     if revision:
         lines[0]["routine_revision"] = revision
     for dest in flow.get("destinations") or []:
-        lines.append({"field": dest["name"], "new": "; ".join(_action(c, a) for a in dest.get("then") or [])
-                      or "Ignore"})
+        lines.append(
+            {"field": dest["name"], "new": "; ".join(_action(c, a) for a in dest.get("then") or []) or "Ignore"}
+        )
     # A blank hand-written flow may use actions directly rather than named destinations.
     from . import automations as A
+
     for do, args in A._step_actions(flow.get("steps")):
         lines.append({"field": "Action", "new": _action(c, {"do": do, "args": args})})
     return f'{verb} routine “{flow["name"]}”', lines
@@ -138,6 +149,7 @@ def describe(c, flow, verb, revision=None):
 def prepare(c, settings, who, method, path, body):
     """Validate and freeze what a Message card reviews, including an existing routine's unchanged destinations."""
     from . import automations as A
+
     match = EDIT.fullmatch(path)
     if not (method == "POST" and path == CREATE or method == "PATCH" and match):
         return body, None
@@ -155,8 +167,9 @@ def prepare(c, settings, who, method, path, body):
     stopping = method == "PATCH" and fields == {"enabled": False}
     if method == "POST":
         fields["enabled"] = True
-    flow = A._checked(c, {**before, **fields}, settings, access=not stopping, saved=before or None,
-                      aid=row["id"] if row else None)
+    flow = A._checked(
+        c, {**before, **fields}, settings, access=not stopping, saved=before or None, aid=row["id"] if row else None
+    )
     A._require(c, who, flow)
     require_send(c, flow)
     if not message(flow):
@@ -182,8 +195,14 @@ def check_confirmed(c, request, before, flow):
     aid = request.headers.get("x-tico-assistant-action", "").partition(".")[0]
     row = c.execute("SELECT diff FROM assistant_actions WHERE id=?", (aid,)).fetchone()
     lines = json.loads(row["diff"] or "[]") if row else []
-    revision = next((line.get("routine_revision") for line in lines if line.get("routine_revision")
-                     and line.get("routine_path", request.url.path) == request.url.path), None)
+    revision = next(
+        (
+            line.get("routine_revision")
+            for line in lines
+            if line.get("routine_revision") and line.get("routine_path", request.url.path) == request.url.path
+        ),
+        None,
+    )
     if revision and (not before or digest(before["flow"]) != revision):
         raise Problem("routine_changed", "This routine changed; ask for a new card", 409)
     require_send(c, flow)
@@ -192,6 +211,16 @@ def check_confirmed(c, request, before, flow):
 def propose_saved(c, settings, who, row, routes):
     """The create and its off routine's approval card commit together, or neither does."""
     from . import assistant
-    return assistant.create_proposal(c, settings, who, assistant.chat_room(c, settings, who), "assistant",
-                                     "Turn on " + row["name"], "PATCH", CREATE + "/" + row["id"],
-                                     {"enabled": True}, routes=routes)
+
+    return assistant.create_proposal(
+        c,
+        settings,
+        who,
+        assistant.chat_room(c, settings, who),
+        "assistant",
+        "Turn on " + row["name"],
+        "PATCH",
+        CREATE + "/" + row["id"],
+        {"enabled": True},
+        routes=routes,
+    )

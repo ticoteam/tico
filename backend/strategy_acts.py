@@ -32,9 +32,14 @@ LOG_PAGE = 50
 # What Undo says it put back or kept, in the owner's words.
 PLAIN = {"owner_id": "its owner", "status": "its status", "rank": "its place in the queue", "note": "its note"}
 # The fields Undo puts back, with the task events that mean someone changed one since: a step move is a status change.
-EVENTS = {"owner_id": ("owner",), "status": ("status", "step", "type"), "rank": ("rank",), "note": ("note",),
-          # A task the decision made is someone else's work once they reword it, so Undo leaves it open.
-          "words": ("title", "body")}
+EVENTS = {
+    "owner_id": ("owner",),
+    "status": ("status", "step", "type"),
+    "rank": ("rank",),
+    "note": ("note",),
+    # A task the decision made is someone else's work once they reword it, so Undo leaves it open.
+    "words": ("title", "body"),
+}
 
 # What stays the person's at every level: the kind, and the words the owner reads in Needs you.
 PERSON_ONLY = {
@@ -59,10 +64,12 @@ class Proposed(H.Refused):
 
     def __init__(self, kind, what, why="", task_id=None, said=None):
         self.kind, self.what, self.why, self.task_id = kind, what, why, task_id
-        super().__init__("proposed",
-                         f"{PERSON_ONLY[kind][0].upper()}{PERSON_ONLY[kind][1:]} stays the owner's at every "
-                         f"level: the Strategy Bot does not do it. It is now a proposal in the owner's Needs you: "
-                         f"{said or what}")
+        super().__init__(
+            "proposed",
+            f"{PERSON_ONLY[kind][0].upper()}{PERSON_ONLY[kind][1:]} stays the owner's at every "
+            f"level: the Strategy Bot does not do it. It is now a proposal in the owner's Needs you: "
+            f"{said or what}",
+        )
 
 
 def acts(c):
@@ -83,16 +90,22 @@ def gate(c, actor, kind, what, why="", task_id=None):
         raise ValueError(kind)
     if is_strategy_bot(actor):
         what = " ".join(str(what or "").split())[:500]
-        raise Proposed(kind, what, " ".join(str(why or "").split())[:1000], task_id,
-                       _say(c, what, task_id, _company(c), PRIVATE))
+        raise Proposed(
+            kind, what, " ".join(str(why or "").split())[:1000], task_id, _say(c, what, task_id, _company(c), PRIVATE)
+        )
 
 
 def settle(c, exc):
     """After a `Proposed` write is rolled back (backend/store.py `refused`): the proposal in the owner's Needs you and
     the line in the Strategy Bot log. Returns the action id."""
     change = {"do": exc.kind, **({"task_id": exc.task_id} if exc.task_id else {})}
-    return _log(c, kind=exc.kind, reason=exc.why, state="proposed",
-                left=[{"change": change, "text": exc.what, "why": PERSON_ONLY[exc.kind] + " stays the owner's"}])
+    return _log(
+        c,
+        kind=exc.kind,
+        reason=exc.why,
+        state="proposed",
+        left=[{"change": change, "text": exc.what, "why": PERSON_ONLY[exc.kind] + " stays the owner's"}],
+    )
 
 
 # ----------------------------------------------------------------------------- deciding alone
@@ -173,9 +186,14 @@ class Caller:
     def reads(self, row):
         return bool(row) and reads(self.c, self.visible)(row)
 
-    def would_read(self, owner, requester, private=0, guest=None):
-        return bool(self.c.execute(f"SELECT 1 FROM (SELECT ? AS owner_id, ? AS requester_id, ? AS private, ? AS guest) "
-                                   f"WHERE ({self.visible})", (owner, requester, private, guest)).fetchone())
+    def would_read(self, owner, requester, private=0, readers=None):
+        return bool(
+            self.c.execute(
+                f"SELECT 1 FROM (SELECT NULL AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS readers) tasks "
+                f"WHERE ({self.visible})",
+                (owner, requester, private, readers),
+            ).fetchone()
+        )
 
     def give(self, owner, task_id=None):
         return self._give(owner, task_id)
@@ -200,7 +218,7 @@ class Caller:
 def _bot_task(c, task_id):
     """A task the Strategy Bot may change alone: live, owned by a bot, and company-visible. None otherwise. It never
     acts alone on a private task, even one it may read: the log would carry the task's words (its note), and Undo, made
-    as the owner, could neither write it nor give back its guest. One it can't read never gets here (`Caller.task`)."""
+    as the owner, could not write it. One it can't read never gets here (`Caller.task`)."""
     row = H.task(c, str(task_id or ""))
     if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner_id"]):
         return None
@@ -273,8 +291,9 @@ def _check(c, change, caller):
         return "name a live bot task (a finished or private one can't be changed)", None
     if do == "reassign" and change["owner"] == row["owner_id"]:
         return f"{TASK} is already {caller.name(row['owner_id'])}'s", None
-    if do == "reassign" and not caller.would_read(change["owner"], row["requester_id"], row.get("private") or 0):
-        # A new owner drops the guest (task_update), so the task is read as it would be then.
+    if do == "reassign" and not caller.would_read(
+        change["owner"], row["requester_id"], row.get("private") or 0, row.get("readers")
+    ):
         return f"giving {TASK} to {_name(c, change['owner'])} would put it out of the Strategy Bot's sight", None
     if do == "reassign" and (private := _keeps_private(c, change["owner"], TASK)):
         return private, None
@@ -301,16 +320,28 @@ def _undone(c, change):
     leaves no mark on the task the Strategy Bot reads, so the server keeps the owner's Undo standing: the same change
     again is their proposal, not the bot's decision."""
     key = _same(change)
-    for (changes_json,) in c.execute("SELECT changes FROM strategy_actions WHERE "
-                                     "kind='decision' AND state='undone' "
-                                     "ORDER BY undone_at DESC LIMIT ?", (UNDONE_SCAN,)):
+    for (changes_json,) in c.execute(
+        "SELECT changes FROM strategy_actions WHERE kind='decision' AND state='undone' ORDER BY undone_at DESC LIMIT ?",
+        (UNDONE_SCAN,),
+    ):
         if any(_same(x.get("change") or {}) == key for x in (H._json(changes_json, None) or {}).get("done") or []):
             return "the owner undid this same change in an earlier decision, so making it again stays theirs"
     return None
 
 
-FIELDS = ("status", "step_id", "step_rank", "owner_id", "rank", "note", "closed_at", "closed_by_id", "version", "private",
-          "guest")
+FIELDS = (
+    "status",
+    "step_id",
+    "step_rank",
+    "owner_id",
+    "rank",
+    "note",
+    "closed_at",
+    "closed_by_id",
+    "version",
+    "private",
+    "readers",
+)
 
 
 def _snapshot(row):
@@ -328,19 +359,29 @@ def _apply(c, change, goal_id, reason):
     """Make one change as the Strategy Bot; returns what Undo needs: the task, and its fields before and after."""
     do = change["do"]
     if do == "create":
-        made = H.task_create(c, STRATEGY_BOT, change["title"],
-                             (change["body"] + "\n\n" if change["body"] else "") +
-                             f"Made by the {strategy_bot.name(c)} on its own: {reason}",
-                             change["owner"], goal_id=goal_id or None, lane="company")
+        made = H.task_create(
+            c,
+            STRATEGY_BOT,
+            change["title"],
+            (change["body"] + "\n\n" if change["body"] else "")
+            + f"Made by the {strategy_bot.name(c)} on its own: {reason}",
+            change["owner"],
+            goal_id=goal_id or None,
+            lane="company",
+        )
         return {"task_id": made["id"], "made": True, "before": None, "after": _snapshot(H.task(c, made["id"]))}
     row = H.task(c, change["task_id"])
     before = _snapshot(row)
     if do == "reorder":
-        H.task_update(c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner_id"], top=True), mover=True, quiet=True)
+        H.task_update(
+            c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner_id"], top=True), mover=True, quiet=True
+        )
     elif do == "reassign":
         H.task_update(c, STRATEGY_BOT, row["id"], owner=change["owner"], mover=True)
     else:
-        H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}", strict=False)
+        H.task_close(
+            c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}", strict=False
+        )
         c.execute("UPDATE tasks SET closed_by_id=? WHERE id=?", (STRATEGY_BOT, row["id"]))
     _bump(c, row["id"])
     return {"task_id": row["id"], "made": False, "before": before, "after": _snapshot(H.task(c, row["id"]))}
@@ -360,9 +401,13 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
     if not is_strategy_bot(actor) or H.VIA.get():
         H.refuse(c, actor, "identity", f"Only the {strategy_bot.name(c)} decides alone, and only for itself")
     if not acts(c):
-        H.refuse(c, actor, "state",
-                 f"The {strategy_bot.name(c)} acts on its own only at level 3, which the owner chooses "
-                 "in Settings; propose a recovery instead (POST /api/v2/goal-proposals)")
+        H.refuse(
+            c,
+            actor,
+            "state",
+            f"The {strategy_bot.name(c)} acts on its own only at level 3, which the owner chooses "
+            "in Settings; propose a recovery instead (POST /api/v2/goal-proposals)",
+        )
     reason = " ".join(str(reason or "").split())[:1000]
     if not reason:
         H.refuse(c, actor, "lint", "say why, in a sentence the owner reads in the log")
@@ -393,8 +438,14 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
             except H.Refused as exc:
                 c.execute("ROLLBACK TO strategy_change")
                 c.execute("RELEASE strategy_change")
-                left.append({"change": change, "text": describe(c, change, caller), "rule": exc.rule,
-                             "why": _refusal(c, H.task(c, change.get("task_id") or ""), exc)})
+                left.append(
+                    {
+                        "change": change,
+                        "text": describe(c, change, caller),
+                        "rule": exc.rule,
+                        "why": _refusal(c, H.task(c, change.get("task_id") or ""), exc),
+                    }
+                )
                 continue
             c.execute("RELEASE strategy_change")
             text = describe(c, change, caller)
@@ -404,13 +455,22 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
             done.append({"change": change, "text": text, **out})
     finally:
         ACTION.reset(token)
-    return _log(c, kind="decision", reason=reason, goal_id=goal_id, done=done, left=left, action_id=action_id,
-                state="done" if done else "proposed")
+    return _log(
+        c,
+        kind="decision",
+        reason=reason,
+        goal_id=goal_id,
+        done=done,
+        left=left,
+        action_id=action_id,
+        state="done" if done else "proposed",
+    )
 
 
 # ----------------------------------------------------------------------------- the log and its proposals
 def _owner(c):
     from . import people as P, views
+
     roster = views.roster(c) or {}
     person = P.person(roster.get("default_user"), roster) or {}
     return H.human_actor(person["id"]) if person.get("id") else None
@@ -427,15 +487,23 @@ def _propose(c, reason, left):
     if not owner:
         return None, "No owner to propose it to yet"
     # The item is a company task: a private task is named there by no title.
-    said = [(_say(c, x["text"], _task_of(x), _company(c), PRIVATE), _say(c, x["why"], _task_of(x), _company(c),
-                                                                         PRIVATE)) for x in left]
+    said = [
+        (_say(c, x["text"], _task_of(x), _company(c), PRIVATE), _say(c, x["why"], _task_of(x), _company(c), PRIVATE))
+        for x in left
+    ]
     lines = "\n".join(f"- {text}: {why}" for text, why in said)
     # One item per thing proposed: the same thing tried again finds the item already waiting (a duplicate).
-    title = (f"Decide on the {strategy_bot.name(c)}'s proposal: {said[0][0]}" if len(left) == 1 else
-             f"Decide on {len(left)} changes the {strategy_bot.name(c)} proposed: {reason}")[:200]
-    body = (f"Please decide whether to make these changes yourself; the {strategy_bot.name(c)} may not make them.\n"
-            + (f"Why it wanted them: {reason}\n" if reason else "") + lines +
-            "\nNothing changed. Make the change yourself if you agree, or close this to leave it.")
+    title = (
+        f"Decide on the {strategy_bot.name(c)}'s proposal: {said[0][0]}"
+        if len(left) == 1
+        else f"Decide on {len(left)} changes the {strategy_bot.name(c)} proposed: {reason}"
+    )[:200]
+    body = (
+        f"Please decide whether to make these changes yourself; the {strategy_bot.name(c)} may not make them.\n"
+        + (f"Why it wanted them: {reason}\n" if reason else "")
+        + lines
+        + "\nNothing changed. Make the change yourself if you agree, or close this to leave it."
+    )
     c.execute("SAVEPOINT strategy_propose")
     try:
         # Private, between the owner and the Strategy Bot that asks: it names company tasks by their titles, which a
@@ -452,15 +520,31 @@ def _propose(c, reason, left):
 
 def _log(c, *, kind, reason, state, done=(), left=(), goal_id=None, action_id=None):
     proposal, note = _propose(c, reason, list(left)) if left else (None, "")
-    row = {"id": action_id or H.new_id(), "created_at": H.now(), "actor": STRATEGY_BOT, "kind": kind,
-           "reason": reason or "", "goal_id": goal_id or None, "state": state, "proposal_task": proposal,
-           "note": note,
-           "changes": H._dump({"done": [_logged(c, x) for x in done], "left": [_logged(c, x) for x in left]})}
-    c.execute("INSERT INTO strategy_actions (id, created_at, actor, kind, reason, goal_id, state, proposal_task, note, "
-              "changes) VALUES (:id, :created_at, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
-              ":changes)", row)
-    H.event(c, STRATEGY_BOT, "strategy_bot." + ("decided" if kind == "decision" else "proposed"), row["id"],
-            {"kind": kind, "done": len(done), "left": len(left)})
+    row = {
+        "id": action_id or H.new_id(),
+        "created_at": H.now(),
+        "actor": STRATEGY_BOT,
+        "kind": kind,
+        "reason": reason or "",
+        "goal_id": goal_id or None,
+        "state": state,
+        "proposal_task": proposal,
+        "note": note,
+        "changes": H._dump({"done": [_logged(c, x) for x in done], "left": [_logged(c, x) for x in left]}),
+    }
+    c.execute(
+        "INSERT INTO strategy_actions (id, created_at, actor, kind, reason, goal_id, state, proposal_task, note, "
+        "changes) VALUES (:id, :created_at, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
+        ":changes)",
+        row,
+    )
+    H.event(
+        c,
+        STRATEGY_BOT,
+        "strategy_bot." + ("decided" if kind == "decision" else "proposed"),
+        row["id"],
+        {"kind": kind, "done": len(done), "left": len(left)},
+    )
     return row["id"]
 
 
@@ -484,7 +568,7 @@ def _stored(c, action_id):
 
 def reads(c, visible):
     """Whether a reader may open a task, by the SQL that decides what they read (auth.task_sql): a private task's
-    parties and guest, and a company task unless its owner or requester is a bot hidden from them."""
+    parties and readers, and a company task unless its owner or requester is a bot hidden from them."""
     return lambda row: bool(c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible})", (row["id"],)).fetchone())
 
 
@@ -498,6 +582,7 @@ def _as_read_by(c, can_read, row):
     """An entry as a reader sees it. Each line names its task as it is now, by its title only when they may open it
     (`_say`); a task they can't open loses its id and its words (title, body, note) everywhere in the line, and a
     refusal on it says only its rule. One task they can't open does not hide the whole log."""
+
     def readable(task_id):
         found = H.task(c, str(task_id)) if task_id else None
         return bool(found) and can_read(found)
@@ -527,17 +612,21 @@ def _as_read_by(c, can_read, row):
     if row.get("proposal_task") and not readable(row["proposal_task"]):
         row["proposal_task"] = None
     if row.get("undo"):
-        restored, kept = [line(x) for x in row["undo"].get("restored") or []], \
-                         [line(x) for x in row["undo"].get("kept") or []]
+        restored, kept = (
+            [line(x) for x in row["undo"].get("restored") or []],
+            [line(x) for x in row["undo"].get("kept") or []],
+        )
         row["undo"] = {"restored": restored, "kept": kept, "text": _undo_text(restored, kept)}
     return row
 
 
 def receipt(row):
     """What the Strategy Bot is told of its own decision: each line as it may read it, without the task fields Undo
-    keeps (owner, status, queue place, guest). The log with those is the owner's (GET /api/v2/strategy-bot/log)."""
+    keeps (owner, status, queue place, readers). The log with those is the owner's (GET /api/v2/strategy-bot/log)."""
+
     def item(x):
         return {k: v for k, v in x.items() if k not in ("before", "after")}
+
     return {**row, "done": [item(x) for x in row["done"]], "left": [item(x) for x in row["left"]]}
 
 
@@ -547,10 +636,12 @@ def log(c, visible, before=None, limit=LOG_PAGE):
     same instant are never skipped between pages. A bare time is read as before that time."""
     limit = max(1, min(int(limit or LOG_PAGE), LOG_PAGE))
     at, _, after_id = str(before or "").partition("|")
-    rows = c.execute("SELECT id, created_at FROM strategy_actions WHERE (?='' OR created_at<? OR "
-                     "(?!='' AND created_at=? AND id<?)) "
-                     "ORDER BY created_at DESC, id DESC LIMIT ?",
-                     (at, at, after_id, at, after_id, limit + 1)).fetchall()
+    rows = c.execute(
+        "SELECT id, created_at FROM strategy_actions WHERE (?='' OR created_at<? OR "
+        "(?!='' AND created_at=? AND id<?)) "
+        "ORDER BY created_at DESC, id DESC LIMIT ?",
+        (at, at, after_id, at, after_id, limit + 1),
+    ).fetchall()
     items = [entry(c, r[0], visible) for r in rows[:limit]]
     last = rows[limit - 1] if len(rows) > limit else None
     return {"items": items, "next_before": f"{last[1]}|{last[0]}" if last else None}
@@ -567,20 +658,25 @@ def undo(c, actor, action_id):
     if not row:
         H.refuse(c, actor, "not-found", f"no Strategy Bot decision {action_id}")
     if row["state"] != "done":
-        H.refuse(c, actor, "duplicate", "this decision was " + ("undone already" if row["state"] == "undone" else
-                                                                "a proposal; nothing was changed to undo"))
+        H.refuse(
+            c,
+            actor,
+            "duplicate",
+            "this decision was "
+            + ("undone already" if row["state"] == "undone" else "a proposal; nothing was changed to undo"),
+        )
     restored, kept = [], []
     token = ACTION.set(action_id)
     try:
         for item in _per_task(row["done"]):
             task = H.task(c, item["task_id"])
-            note = lambda text, task_id=item["task_id"]: kept.append({"task_id": task_id, "text": text})  # noqa: E731
+            note = lambda text, task_id=item["task_id"]: kept.append({"task_id": task_id, "text": text})
             if not task:
                 note(f"{item['text']}: the task is gone")
                 continue
             if not item.get("made") and _was_private(c, item, task):
                 # The decision never acts on a private task (_bot_task); one logged as private before it is left
-                # alone, so nothing is refused and its guest keeps it.
+                # alone, so nothing is refused and its readers keep it.
                 note(f"{TASK} is private, so Undo leaves it as it is")
                 continue
             c.execute("SAVEPOINT strategy_undo")
@@ -599,8 +695,10 @@ def undo(c, actor, action_id):
     finally:
         ACTION.reset(token)
     result = {"restored": restored, "kept": kept}
-    c.execute("UPDATE strategy_actions SET state='undone', undone_at=?, undone_by=?, undo=? WHERE id=?",
-              (H.now(), actor, H._dump(result), action_id))
+    c.execute(
+        "UPDATE strategy_actions SET state='undone', undone_at=?, undone_by=?, undo=? WHERE id=?",
+        (H.now(), actor, H._dump(result), action_id),
+    )
     H.event(c, actor, "strategy_bot.undone", action_id, {"restored": len(restored), "kept": len(kept)})
     return action_id
 
@@ -620,10 +718,12 @@ def _per_task(done):
 def _later(c, task_id, fields, since, action_id):
     """Who last changed any of these task event fields after the decision, or None."""
     marks = ",".join("?" * len(fields))
-    found = c.execute(f"SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ({marks}) "
-                      "AND created_at>? "
-                      "AND coalesce(action_id,'')!=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                      (task_id, *fields, since, action_id)).fetchone()
+    found = c.execute(
+        f"SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ({marks}) "
+        "AND created_at>? "
+        "AND coalesce(action_id,'')!=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (task_id, *fields, since, action_id),
+    ).fetchone()
     return found[0] if found else None
 
 
@@ -654,9 +754,9 @@ def _unmake(c, actor, task, item, since, note):
         if who:
             note(f"{TASK}, which it made, was changed since by {_name(c, who)}, so it stays open")
             return None
-    H.task_close(c, H.KEEPER, task["id"],
-                 f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} made this task on its "
-                 "own")
+    H.task_close(
+        c, H.KEEPER, task["id"], f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} made this task on its own"
+    )
     return f"Closed {TASK}, which it made"
 
 
@@ -672,11 +772,6 @@ def _restore(c, actor, task, item, since, note):
             note(f"{TASK}: {PLAIN[field]} was changed since by {_name(c, who)}, so their change stays")
         else:
             back.append(field)
-    if "owner_id" in back and task.get("guest") and task["guest"] != before.get("guest"):
-        # A new owner drops the guest (task_update): a guest given the task since keeps it, so its owner stays, with
-        # its place in that owner's queue.
-        back = [f for f in back if f not in ("owner_id", "rank")]
-        note(f"{TASK} has a guest now, so its owner stays")
     if not back:
         return None
     put = {}
@@ -695,20 +790,29 @@ def _restore(c, actor, task, item, since, note):
     # A task private since the decision (moved under a private task) is not the owner's to write: Tico puts it back.
     H.task_update(c, H.KEEPER if H.task_private(c, task) else actor, task["id"], mover=True, **put)
     if "status" in back:
-        c.execute("UPDATE tasks SET closed_at=?, closed_by_id=? WHERE id=?",
-                  (before.get("closed_at"), before.get("closed_by_id"), task["id"]))
+        c.execute(
+            "UPDATE tasks SET closed_at=?, closed_by_id=? WHERE id=?",
+            (before.get("closed_at"), before.get("closed_by_id"), task["id"]),
+        )
     return f"{TASK}: {', '.join(PLAIN[f] for f in back)} put back"
 
 
 def _tell(c, actor, task, held_by):
     """Tell each bot the Undo changed things for: the task's owner now, and the bot the decision gave it to."""
-    said = (f"{_name(c, actor)} undid a decision the {strategy_bot.name(c)} made on its own; "
-            "this task is back as it was before it")
+    said = (
+        f"{_name(c, actor)} undid a decision the {strategy_bot.name(c)} made on its own; "
+        "this task is back as it was before it"
+    )
     for bot in dict.fromkeys((task["owner_id"], held_by)):
         if bot and H.is_bot(bot):
-            H._wake(c, task, bot, said + ("." if bot == task["owner_id"] else
-                                          f", with {_name(c, task['owner_id'])}. It is no longer yours."),
-                    {"wake": "assignment"} if bot == task["owner_id"] else None)
+            H._wake(
+                c,
+                task,
+                bot,
+                said
+                + ("." if bot == task["owner_id"] else f", with {_name(c, task['owner_id'])}. It is no longer yours."),
+                {"wake": "assignment"} if bot == task["owner_id"] else None,
+            )
 
 
 def _undo_text(restored, kept):

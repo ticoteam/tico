@@ -3,7 +3,7 @@
 from types import MappingProxyType
 from typing import Any
 
-from .store import H
+from .store import H, readiness_document
 from . import bot_settings as BS
 
 START_SECONDS = 180
@@ -18,13 +18,18 @@ CREATE TABLE IF NOT EXISTS start_places(
 def restore_waits(c):
     """An upgrade preserves the same legacy waits the live event reader recognises."""
     from .login_waits import wait
+
     H.add_column(c, "start_places", "managed", "INTEGER NOT NULL DEFAULT 0")
-    for row in c.execute("SELECT a.id,a.created_at FROM attempts a WHERE a.state='leased' "
-                         "AND NOT EXISTS(SELECT 1 FROM start_places p WHERE p.attempt_id=a.id)").fetchall():
+    for row in c.execute(
+        "SELECT a.id,a.created_at FROM attempts a WHERE a.state='leased' "
+        "AND NOT EXISTS(SELECT 1 FROM start_places p WHERE p.attempt_id=a.id)"
+    ).fetchall():
         payload = wait(c, row['id'])
         reason = ('shared login' if payload.get('login') else 'pre-start requirements') if payload else ''
-        c.execute("INSERT INTO start_places(attempt_id,start_until,wait_reason,waiting_since) VALUES(?,?,?,?)",
-                  (row['id'], None, reason, row['created_at'] if reason else None))
+        c.execute(
+            "INSERT INTO start_places(attempt_id,start_until,wait_reason,waiting_since) VALUES(?,?,?,?)",
+            (row['id'], None, reason, row['created_at'] if reason else None),
+        )
 
 
 def ready_waiting(c, runner_id):
@@ -32,14 +37,19 @@ def ready_waiting(c, runner_id):
     claim waiter order and held_starts ask once per computer."""
     from . import read_cache
     from .org_turns import REASON
+
     values = read_cache.cache(c)
     key = ("start_places.ready_waiting", runner_id)
     if values is not None and key in values:
         return values[key]
-    out = bool(c.execute("SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
-                         "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "
-                         "AND (p.wait_reason LIKE 'computer busy%' OR p.wait_reason=?) LIMIT 1",
-                         (runner_id, H.now(), REASON)).fetchone())
+    out = bool(
+        c.execute(
+            "SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
+            "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "
+            "AND (p.wait_reason LIKE 'computer busy%' OR p.wait_reason=?) LIMIT 1",
+            (runner_id, H.now(), REASON),
+        ).fetchone()
+    )
     if values is not None:
         values[key] = out
     return out
@@ -47,6 +57,7 @@ def ready_waiting(c, runner_id):
 
 MEMORY_HOLD = 'computer busy: memory'
 NOT_REPORTING = 'computer not reporting'
+ALLOCATION_REPORTING = 'harness_allocation_v1'
 
 
 def hold_rows(c, runner_ids):
@@ -54,13 +65,13 @@ def hold_rows(c, runner_ids):
     ids = sorted({rid for rid in runner_ids if rid})
     out = {}
     for start in range(0, len(ids), 500):
-        part = ids[start:start + 500]
+        part = ids[start : start + 500]
         for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({','.join('?' * len(part))})", part):
             out[row['id']] = row
     return out
 
 
-def computer_hold(c, runner_id, now=None, status=None, row=None):
+def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False, harness_allocated=False):
     """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
 
     - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
@@ -69,7 +80,8 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
       has never sampled is not held: older runners never sent samples.
     - Memory at 85% or more: "computer busy: memory N%". It is admitted again below 80%; between the two it keeps
       the state its newest sample set (performance.ingest), so the queue does not flap.
-    A person's own message skips this at each caller, as it skips the overload hold. `row` is the computer's runner
+    A person's own message skips CPU overload and stale reports; only Linux memory holds it. macOS Memory Used
+    includes reclaimable memory, so people on Macs and computers with an unknown platform pass. `row` is the computer's runner
     row from hold_rows when the caller has it: the same columns, read once for all its computers."""
     from .performance import load_status
 
@@ -82,20 +94,25 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
     def diagnostics_on():
         found = runner()
         return bool(found) and found['revoked_at'] is None and found['performance'] == 'on'
+
+    if person and (not runner() or runner()['platform'] != 'linux'):
+        return None
     if status is None:
         if not diagnostics_on():
             return None
-        status = load_status(c, runner_id, now)
+        status = load_status(c, runner_id, now, include_memory=not harness_allocated)
     latest = status['latest_sample']
     if latest is None:
         # Samples past retention are gone, but a computer that reported before still reports nothing now.
         if not diagnostics_on():
             return None
-        return (NOT_REPORTING, NOT_REPORTING) if runner()['last_sampled_at'] else None
+        return (NOT_REPORTING, NOT_REPORTING) if not person and runner()['last_sampled_at'] else None
     if latest['stale']:
-        return NOT_REPORTING, NOT_REPORTING
-    if status['overloaded']:
+        return None if person else (NOT_REPORTING, NOT_REPORTING)
+    if status['overloaded'] and not person:
         return 'computer busy', 'computer busy'
+    if harness_allocated:
+        return None
     mem = latest['mem_pct']
     if mem is None:
         return None
@@ -109,21 +126,8 @@ def memory_holds(mem, was_held):
     """Whether a memory reading (percent) holds new starts: at MEM_HOLD_AT or more, or between the two bars while the
     computer is already held (`runners.memory_hold`, set by performance.ingest in reading order)."""
     from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR
+
     return mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and bool(was_held))
-
-
-def memory_held(c, runner_id, now=None):
-    """Whether this computer's memory alone holds new starts, whatever else computer_hold reports. Sustained memory over
-    90% also marks the computer overloaded, and computer_hold then names only the generic "computer busy": a caller that
-    gates on memory asks here. Computers that are off, revoked, silent or never sampled are not memory-held."""
-    from .performance import load_status
-    found = c.execute("SELECT memory_hold,performance,revoked_at FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
-    if not found or found['revoked_at'] is not None or found['performance'] != 'on':
-        return False
-    latest = load_status(c, runner_id, now)['latest_sample']
-    if latest is None or latest['stale'] or latest['mem_pct'] is None:
-        return False
-    return memory_holds(latest['mem_pct'], found['memory_hold'])
 
 
 def held(c, runner_id):
@@ -133,24 +137,33 @@ def held(c, runner_id):
     waiter order and Health capacity fences ask once per computer. Read-only: callers share one map.
     """
     from . import read_cache
+
     values = read_cache.cache(c)
     key = ("start_places.held", runner_id)
     if values is not None and key in values:
         return values[key]
     now = H.now()
-    out = MappingProxyType({r[0]: r[1] for r in c.execute(
-        "SELECT a.bot_id,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-        "WHERE a.runner_id=? AND a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
-        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot_id",
-        (runner_id, now, now))})
+    out = MappingProxyType(
+        {
+            r[0]: r[1]
+            for r in c.execute(
+                "SELECT a.bot_id,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+                "WHERE a.runner_id=? AND a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
+                "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot_id",
+                (runner_id, now, now),
+            )
+        }
+    )
     if values is not None:
         values[key] = out
     return out
 
 
 # The explicit state IN is what lets SQLite search attempts_runner_state (runner_id, state); the OR alone does not.
-LIVE_SQL = ("SELECT a.bot_id,count(*) FROM attempts a WHERE a.runner_id=? AND a.state IN ('leased','running') "
-            "AND (a.state='running' OR a.lease_until>?) GROUP BY a.bot_id")
+LIVE_SQL = (
+    "SELECT a.bot_id,count(*) FROM attempts a WHERE a.runner_id=? AND a.state IN ('leased','running') "
+    "AND (a.state='running' OR a.lease_until>?) GROUP BY a.bot_id"
+)
 
 
 def live(c, runner_id):
@@ -161,6 +174,7 @@ def live(c, runner_id):
     Cached for the read snapshot, like `held`.
     """
     from . import read_cache
+
     values = read_cache.cache(c)
     key = ("start_places.live", runner_id)
     if values is not None and key in values:
@@ -176,7 +190,8 @@ def live(c, runner_id):
 # 48 ms on Tico Team's 37k attempts, 0.1 ms over the live ones.
 LIVE_TOTALS_SQL = (
     "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease "
-    "WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) GROUP BY a.runner_id")
+    "WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) GROUP BY a.runner_id"
+)
 
 
 def live_totals(c):
@@ -190,7 +205,8 @@ def live_totals(c):
 HELD_TOTALS_SQL = (
     "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease LEFT JOIN start_places p "
     "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) "
-    "AND (a.state='running' OR p.start_until>? OR p.attempt_id IS NULL OR p.managed=0) GROUP BY a.runner_id")
+    "AND (a.state='running' OR p.start_until>? OR p.attempt_id IS NULL OR p.managed=0) GROUP BY a.runner_id"
+)
 
 
 def held_totals(c):
@@ -217,6 +233,51 @@ def turn_limit(runner):
     if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities"], []) or []):
         return setting
     return min(setting, reported)
+
+
+# One build at once per this many bytes of a computer's reported disk. A turn on a task with a worktree on the computer
+# adds its own checkout and the setup's node_modules or Cargo target, so a small disk fills after a few of them.
+BUILD_DISK_BYTES = 15 * 10**9
+# The builds at once when the computer has not reported its disk.
+BUILD_UNKNOWN = 4
+# Never fewer than this many, however small the disk, so a second repo turn is not held behind the first.
+BUILD_FLOOR = 2
+# The wait a turn shows when its computer already runs its builds at once. Only a turn on a task with a worktree
+# on that computer waits for it; any other turn starts as usual.
+BUILD_WAIT = "builds at once"
+
+
+def build_limit(runner):
+    """The most turns this computer may run at once on tasks with a worktree on it: one per BUILD_DISK_BYTES of its
+    reported disk, at least BUILD_FLOOR, or BUILD_UNKNOWN without a disk report. Never more than `turn_limit`."""
+    total = (readiness_document(runner["readiness"]).get("disk") or {}).get("total_bytes")
+    limit = max(BUILD_FLOOR, total // BUILD_DISK_BYTES) if isinstance(total, int) and total > 0 else BUILD_UNKNOWN
+    return min(limit, turn_limit(runner))
+
+
+# A turn works on a repo here when its task has a worktree link for this computer that is not removed: the rule the
+# worktree inventory uses for a live tree. attempts.task_id is the task the claim gave the turn, so no other lookup is needed.
+BUILD_TASK_SQL = (
+    "EXISTS(SELECT 1 FROM task_links l WHERE l.task_id=a.task_id AND l.kind='worktree' "
+    "AND l.computer_id=a.runner_id AND coalesce(l.state,'unknown')<>'removed')"
+)
+BUILDS_HELD_SQL = (
+    "SELECT count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+    "WHERE a.runner_id=? AND a.id IS NOT ? AND a.task_id IS NOT NULL AND a.state IN ('leased','running') "
+    "AND (a.state='running' OR (a.lease_until>? AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) "
+    "AND " + BUILD_TASK_SQL
+)
+
+
+def builds_held(c, runner_id, exclude=None):
+    """Turns that hold a place on this computer and work in a worktree here: what `build_limit` is checked against."""
+    now = H.now()
+    return c.execute(BUILDS_HELD_SQL, (runner_id, exclude, now, now)).fetchone()[0]
+
+
+def is_build(c, aid):
+    """Whether the turn's task has a worktree on the computer it is claimed on (a build turn)."""
+    return bool(c.execute("SELECT " + BUILD_TASK_SQL + " FROM attempts a WHERE a.id=?", (aid,)).fetchone()[0])
 
 
 # Claims stop once a computer holds this many times its turn limit in claimed work, waiting turns included. A parked
@@ -254,12 +315,15 @@ def held_counts(c, bots):
     """{bot: the turns it holds on every computer} for every bot in `bots`, in set queries: bot_held's predicate,
     grouped by bot."""
     from .hubdb import chunks
+
     now = H.now()
     counts = {}
     for part in chunks(bots):
         for bot, count in c.execute(
-                "SELECT a.bot_id,count(*) FROM attempts a WHERE a.bot_id IN (" + ",".join("?" * len(part)) + ") "
-                "AND (a.state='running' OR (a.state='leased' AND a.lease_until>?)) GROUP BY a.bot_id", (*part, now)):
+            "SELECT a.bot_id,count(*) FROM attempts a WHERE a.bot_id IN (" + ",".join("?" * len(part)) + ") "
+            "AND (a.state='running' OR (a.state='leased' AND a.lease_until>?)) GROUP BY a.bot_id",
+            (*part, now),
+        ):
             counts[bot] = count
     return {bot: counts.get(bot, 0) for bot in bots}
 
@@ -268,13 +332,18 @@ def bot_held(c, bot, exclude=None):
     """Turns the bot holds on every computer together: what its "Turns at once" is checked against. A turn holds its
     place from its claim until it ends, whether it is starting, parked on a wait or running: a parked turn still
     belongs to the bot, so the bot's next one cannot start beside it. `exclude` leaves out one attempt."""
-    return c.execute("SELECT count(*) FROM attempts a WHERE a.bot_id=? AND a.id IS NOT ? AND (a.state='running' "
-                     "OR (a.state='leased' AND a.lease_until>?))", (bot, exclude, H.now())).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM attempts a WHERE a.bot_id=? AND a.id IS NOT ? AND (a.state='running' "
+        "OR (a.state='leased' AND a.lease_until>?))",
+        (bot, exclude, H.now()),
+    ).fetchone()[0]
 
 
 def claim(c, aid):
-    c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
-              (aid, H.shift(H.now(), seconds=START_SECONDS)))
+    c.execute(
+        "INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
+        (aid, H.shift(H.now(), seconds=START_SECONDS)),
+    )
 
 
 def admit(c, aid, runner, settings=None):
@@ -292,13 +361,19 @@ def admit(c, aid, runner, settings=None):
 
 def waiting(c, aid, reason):
     """Only a pre-start wait releases a place; a model already executing keeps its place."""
-    if not c.execute("SELECT 1 FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-                     "WHERE a.id=? AND a.state='leased' AND (p.start_until IS NULL OR p.start_until>?)", (aid, H.now())).fetchone():
+    if not c.execute(
+        "SELECT 1 FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+        "WHERE a.id=? AND a.state='leased' AND (p.start_until IS NULL OR p.start_until>?)",
+        (aid, H.now()),
+    ).fetchone():
         return
-    c.execute("INSERT INTO start_places(attempt_id,wait_reason,waiting_since) VALUES(?,?,?) "
-              "ON CONFLICT(attempt_id) DO UPDATE SET start_until=NULL,wait_reason=excluded.wait_reason,"
-              "waiting_since=CASE WHEN start_places.wait_reason=excluded.wait_reason THEN "
-              "coalesce(start_places.waiting_since,excluded.waiting_since) ELSE excluded.waiting_since END", (aid, reason, H.now()))
+    c.execute(
+        "INSERT INTO start_places(attempt_id,wait_reason,waiting_since) VALUES(?,?,?) "
+        "ON CONFLICT(attempt_id) DO UPDATE SET start_until=NULL,wait_reason=excluded.wait_reason,"
+        "waiting_since=CASE WHEN start_places.wait_reason=excluded.wait_reason THEN "
+        "coalesce(start_places.waiting_since,excluded.waiting_since) ELSE excluded.waiting_since END",
+        (aid, reason, H.now()),
+    )
 
 
 def managed(c, aid):
@@ -311,45 +386,69 @@ def is_waiting(c, aid):
 
 def overdue(c):
     # The redundant IN lets the read walk attempts_live_lease, not every attempt ever run.
-    return [r[0] for r in c.execute(
-        "SELECT a.id FROM attempts a JOIN start_places p ON p.attempt_id=a.id WHERE a.state='leased' "
-        "AND a.state IN ('leased','running') AND p.start_until<=?", (H.now(),))]
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT a.id FROM attempts a JOIN start_places p ON p.attempt_id=a.id WHERE a.state='leased' "
+            "AND a.state IN ('leased','running') AND p.start_until<=?",
+            (H.now(),),
+        )
+    ]
 
 
 def from_person(c, job_id):
     """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
-    Such a turn starts on an overloaded computer and ahead of the turns waiting there: the load is the bots' own work,
+    Such a turn passes CPU overload and runs ahead of the turns waiting there, when memory permits: the load is the bots' own work,
     and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
     a rule's wake), or a bot's message, is not one, even when a person's act caused it; the keeper's carrier of a
     person's message is one (H.person_sent_sql). Two primary-key reads."""
-    return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          f"WHERE j.id=? AND {H.person_sent_sql()}", (job_id,)).fetchone())
+    return bool(
+        c.execute(
+            f"SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=? AND {H.person_sent_sql()}",
+            (job_id,),
+        ).fetchone()
+    )
 
 
 def person_queued(c, runner_id):
     """Whether a person's message waits in this computer's queue: only then does a held claim look for a job."""
-    return bool(c.execute("SELECT 1 FROM assignments x JOIN jobs j ON j.bot_id=x.bot AND j.state='queued' AND j.held=0 "
-                          f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {H.person_sent_sql()} "
-                          "LIMIT 1", (runner_id,)).fetchone())
+    return bool(
+        c.execute(
+            "SELECT 1 FROM assignments x JOIN jobs j ON j.bot_id=x.bot AND j.state='queued' AND j.held=0 "
+            f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {H.person_sent_sql()} "
+            "LIMIT 1",
+            (runner_id,),
+        ).fetchone()
+    )
 
 
-def reserve(c, attempt, settings=None):
+def reserve(c, attempt, settings=None, *, harness_allocated=False):
     """Called inside the API writer transaction; two contenders cannot win the last place."""
     aid, rid = attempt['id'], attempt['runner_id']
     if attempt['stop_requested_at']:
         return {"reserved": False, "stop": True}
+    # Admission precedes allocation. A runner with a real process keeps its existing grant: revoking it here
+    # leaves that process alive and renewing, and its own memory can prevent the computer from ever recovering.
+    place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
+    # An older runner cannot distinguish preparation from allocation, so memory cannot revoke its existing grant.
+    legacy_grant = bool(
+        place and place['start_until'] and ALLOCATION_REPORTING not in (H._json(runner['capabilities'], []) or [])
+    )
     person = from_person(c, attempt['job_id'])
-    hold = None if person else computer_hold(c, rid)
+    hold = computer_hold(c, rid, row=runner, person=person, harness_allocated=harness_allocated or legacy_grant)
     if hold:
         waiting(c, aid, hold[0])
         return {"reserved": False, "waiting": hold[1]}
-    place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
     if place and place['start_until']:
         return {"reserved": place['start_until'] > H.now(), "start_until": place['start_until']}
     from . import org_turns
+
     # Admission is claim's job: a turn already counted in the company's in-use total (waiting, or an unmanaged
     # live lease) takes its place without raising the count, so waiters cannot freeze a stopped company.
-    counted = (place and place['wait_reason']) or (attempt['lease_until'] > H.now() and not (place and place['managed']))
+    counted = (place and place['wait_reason']) or (
+        attempt['lease_until'] > H.now() and not (place and place['managed'])
+    )
     if settings and not counted and org_turns.observe(c, settings, detailed=False)['at_stop']:
         waiting(c, aid, org_turns.REASON)
         return {'reserved': False, 'waiting': org_turns.REASON}
@@ -361,18 +460,27 @@ def reserve(c, attempt, settings=None):
     if bot_cap is not None and bot_held(c, attempt['bot_id'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
         return {'reserved': False, 'waiting': BOT_WAIT}
-    capacity = turn_limit(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
+    # A build turn waits for a build slot on its computer; a turn with no repo work is not counted and is not held here.
+    if is_build(c, aid) and builds_held(c, rid, exclude=aid) >= build_limit(runner):
+        waiting(c, aid, BUILD_WAIT)
+        return {'reserved': False, 'waiting': BUILD_WAIT}
+    capacity = turn_limit(runner)
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
-    ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
-                      "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "
-                      "AND (p.wait_reason LIKE 'computer busy%' OR p.wait_reason=?) AND (a.created_at,a.id)<(?,?) LIMIT 1",
-                      (rid, H.now(), org_turns.REASON, attempt['created_at'], aid)).fetchone()
+    ahead = c.execute(
+        "SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
+        "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "
+        "AND (p.wait_reason LIKE 'computer busy%' OR p.wait_reason=?) AND (a.created_at,a.id)<(?,?) LIMIT 1",
+        (rid, H.now(), org_turns.REASON, attempt['created_at'], aid),
+    ).fetchone()
     if sum(held(c, rid).values()) >= capacity or (ahead and not person):
         waiting(c, aid, 'computer busy')
         return {"reserved": False, "waiting": "computer busy"}
     until = H.shift(H.now(), seconds=START_SECONDS)
-    c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1) ON CONFLICT(attempt_id) "
-              "DO UPDATE SET start_until=excluded.start_until,managed=1,wait_reason='',waiting_since=NULL", (aid, until))
+    c.execute(
+        "INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1) ON CONFLICT(attempt_id) "
+        "DO UPDATE SET start_until=excluded.start_until,managed=1,wait_reason='',waiting_since=NULL",
+        (aid, until),
+    )
     return {"reserved": True, "start_until": until}
 
 
@@ -385,23 +493,31 @@ def summary(c, runner_id, settings, default=None, *, classify=True):
     its warning level, where its stuck and queue checks already name why a bot is not starting. Paused bots and a
     busy computer still read as waits."""
     from .read_cache import value
-    return value(c, ("start_summary", runner_id, bool(classify)),
-                 lambda: _summaries(c, (runner_id,), settings, default, classify)[runner_id])
+
+    return value(
+        c,
+        ("start_summary", runner_id, bool(classify)),
+        lambda: _summaries(c, (runner_id,), settings, default, classify)[runner_id],
+    )
 
 
 def summaries(c, runner_ids, settings, default=None, *, classify=True):
     """`summary` for many computers in two scans. Each computer's counts are the ones `summary` would build
     on its own, including the same claim refusal for each queued bot (unless `classify=False`, as `summary`)."""
     from .read_cache import value
+
     ids = tuple(sorted({rid for rid in runner_ids if rid}))
-    return value(c, ("start_summaries", ids, bool(classify)),
-                 lambda: _summaries(c, ids, settings, default, classify))
+    return value(c, ("start_summaries", ids, bool(classify)), lambda: _summaries(c, ids, settings, default, classify))
 
 
 def _summaries(c, runner_ids, settings, default=None, classify=True):
     from . import performance
-    out: dict[str, dict[str, Any]] = {rid: dict(running=0, starting=0, waiting=0, queued=0,
-                                                start_seconds=START_SECONDS) for rid in runner_ids}
+    from .batch_work import report, storage_error
+    from .cloud_machines import ASLEEP, STALE, resting
+
+    out: dict[str, dict[str, Any]] = {
+        rid: dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS) for rid in runner_ids
+    }
     groups = {rid: {} for rid in runner_ids}
     if not runner_ids:
         return out
@@ -414,9 +530,12 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
 
     now = H.now()
     marks = ",".join("?" * len(runner_ids))
-    for row in c.execute("SELECT a.runner_id,a.state,a.created_at,a.lease_until,p.start_until,p.wait_reason,"
-                         "p.waiting_since,p.managed FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-                         f"WHERE a.runner_id IN ({marks}) AND a.state IN ('leased','running')", runner_ids):
+    for row in c.execute(
+        "SELECT a.runner_id,a.state,a.created_at,a.lease_until,p.start_until,p.wait_reason,"
+        "p.waiting_since,p.managed FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+        f"WHERE a.runner_id IN ({marks}) AND a.state IN ('leased','running')",
+        runner_ids,
+    ):
         rid = row['runner_id']
         if row['state'] == 'running':
             out[rid]['running'] += 1
@@ -426,26 +545,58 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             out[rid]['starting'] += 1
         else:
             out[rid]['queued'] += 1
-    from .execution import claim_refusal
+    from .execution import claim_refusal, queued_reasons
     from .store import readiness_document
-    runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)}
+
+    runners = {
+        row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)
+    }
     statuses = performance.load_statuses(c, runner_ids)
-    holds = {}      # a computer's hold, asked once and only for a computer with queued work
-    reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
-               'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
-               'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',
-               'bot_limit': 'at its turn limit'}
-    for row in c.execute(f"SELECT a.runner_id,j.bot_id,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,b.state bot_state "
-                         "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
-                         f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
-                         "GROUP BY a.runner_id,j.bot_id", runner_ids):
+    asleep = resting(c)
+    holds = {}  # a computer's hold, asked once and only for a computer with queued work
+    reasons = {
+        'cooling_off': 'quota',
+        'limit': 'spending limit',
+        'not_ready': 'computer readiness',
+        'readiness_unknown': 'computer readiness',
+        'sign_in_rejected': 'sign-in',
+        'draining': 'bot paused',
+        'run_hold': 'stopped runs',
+        'backoff': 'a failed run',
+        'budget': 'run budget',
+        'bot_limit': 'at its turn limit',
+        'task_wait': 'a snooze, prerequisite, person or check',
+        'task_next_run': 'the next run or a stored resume condition',
+    }
+    for row in c.execute(
+        f"SELECT a.runner_id,j.bot_id,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,b.state bot_state "
+        "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
+        f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
+        "GROUP BY a.runner_id,j.bot_id",
+        runner_ids,
+    ):
         rid = row['runner_id']
         runner = runners.get(rid)
         ready = readiness_document(runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
+        if not why and rid in asleep:
+            # A sleeping computer cannot refresh its samples. Explain each job's claim hold instead of its last load.
+            counted = 0
+            if classify:
+                try:
+                    for job, refused in queued_reasons(c, settings, rid, row['bot_id'], default, ignore_refusals=STALE):
+                        reason = reasons.get(refused, 'pre-start requirements') if refused else ASLEEP
+                        add(rid, reason, 1, job['created_at'])
+                        counted += 1
+                except Exception as exc:
+                    if storage_error(exc):
+                        raise
+                    report('computer queue check', row['bot_id'], exc, logger='tico.health')
+            if counted < row['n']:
+                add(rid, ASLEEP, row['n'] - counted, row['oldest'])
+            continue
         if not why and runner and classify:
-            refused, _ = claim_refusal(c, settings, runner, row['bot_id'], row['config'], False, ready,
-                                       default=default)
+            refused, _ = claim_refusal(c, settings, runner, row['bot_id'], row['config'], False, ready, default=default)
             why = reasons.get(refused, 'pre-start requirements') if refused else ''
         if not why:
             if rid not in holds:
@@ -467,8 +618,11 @@ def describe(counts):
         since = H.parse_ts(wait['oldest'])
         minutes = max(0, int((now - since).total_seconds() / 60)) if now is not None and since is not None else 0
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
-        reason = ("waiting: " + wait['reason'] if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at '))
-                  else "waiting for " + wait['reason'])
+        reason = (
+            "waiting: " + wait['reason']
+            if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at ', 'asleep;', BUILD_WAIT))
+            else "waiting for " + wait['reason']
+        )
         parts.append(f"{wait['count']} {reason} (oldest {age})")
     if not counts['waiting']:
         parts.append('0 waiting')

@@ -14,6 +14,7 @@ The bot may say it is ready, with a short summary of what it learned; only a per
 manager, their managers, the owner) marks onboarding complete, which makes it Active and starts its routines
 (backend/onboarding.py `onboarded`).
 """
+
 import json
 import uuid
 
@@ -26,21 +27,29 @@ RECRUITING, ONBOARDING, ACTIVE = "recruiting", "onboarding", "active"
 SEAT_PREFIX = "seat:"
 TITLE_MAX, DESCRIPTION_MAX, SUMMARY_MAX = 120, 8000, 2000
 
-SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-          "reports_to TEXT NOT NULL DEFAULT '', team TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL, "
-          "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)")
+SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
+    "reports_to TEXT NOT NULL DEFAULT '', team TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL, "
+    "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)"
+)
 
 
 # Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for
 # a chart model's text), when an earlier release's Strategy Bot drafted it and the task that asked it to, and the bot
 # that filled the seat.
-COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
-           ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"),
-           # A cloud agent this seat asks Tico to connect (backend/cloud_agents.py): its id, its name for `other`, where
-           # the request stands, the support ticket that asked, and the first task waiting for the agent.
-           ("agent", "TEXT NOT NULL DEFAULT ''"), ("agent_name", "TEXT NOT NULL DEFAULT ''"),
-           ("request_state", "TEXT NOT NULL DEFAULT ''"), ("request_ticket", "TEXT NOT NULL DEFAULT ''"),
-           ("first_task", "TEXT NOT NULL DEFAULT ''"))
+COLUMNS = (
+    ("description_by", "TEXT NOT NULL DEFAULT ''"),
+    ("drafted_at", "TEXT"),
+    ("draft_task", "TEXT NOT NULL DEFAULT ''"),
+    ("filled_by", "TEXT NOT NULL DEFAULT ''"),
+    # A cloud agent this seat asks Tico to connect (backend/cloud_agents.py): its id, its name for `other`, where
+    # the request stands, the support ticket that asked, and the first task waiting for the agent.
+    ("agent", "TEXT NOT NULL DEFAULT ''"),
+    ("agent_name", "TEXT NOT NULL DEFAULT ''"),
+    ("request_state", "TEXT NOT NULL DEFAULT ''"),
+    ("request_ticket", "TEXT NOT NULL DEFAULT ''"),
+    ("first_task", "TEXT NOT NULL DEFAULT ''"),
+)
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
 # wrote seats then, so it reads as a person's words.
 EARLIER = "earlier"
@@ -48,10 +57,12 @@ EARLIER = "earlier"
 # reserved as `filing` before Tico hears of it, so a repeat waits for the request in flight; it is `filed` once the seat
 # and its ticket are kept. A reservation older than FILING_STALE_SECONDS never came back, and its key may be used again.
 # `made` says the request made its seat, so releasing the request closes the seat rather than only clearing it.
-REQUESTS = ("CREATE TABLE IF NOT EXISTS seat_requests(id TEXT PRIMARY KEY, actor TEXT NOT NULL, "
-            "request_key TEXT NOT NULL, request_hash TEXT NOT NULL, seat_id TEXT NOT NULL DEFAULT '', "
-            "state TEXT NOT NULL, ticket_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
-            "made INTEGER NOT NULL DEFAULT 0)")
+REQUESTS = (
+    "CREATE TABLE IF NOT EXISTS seat_requests(id TEXT PRIMARY KEY, actor TEXT NOT NULL, "
+    "request_key TEXT NOT NULL, request_hash TEXT NOT NULL, seat_id TEXT NOT NULL DEFAULT '', "
+    "state TEXT NOT NULL, ticket_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+    "made INTEGER NOT NULL DEFAULT 0)"
+)
 FILING_STALE_SECONDS = 120
 # A seat's cloud agent request (`request_state`): `filing` while Tico is told, `requested` once its ticket is kept,
 # `canceling` while a cancel is told to Tico, and `canceled` once the cancel is finished. A seat with an open request
@@ -91,6 +102,35 @@ def is_onboarding(c, slug):
     return stage(onboarding_state(c, slug)) == ONBOARDING
 
 
+def claim_message_sql(bot="j.bot_id", message="m"):
+    """The bot states from which claim takes this message, including onboarding's sender exceptions."""
+    return (
+        f"EXISTS(SELECT 1 FROM bots claim_bot LEFT JOIN bot_config claim_config ON claim_config.bot=claim_bot.id "
+        f"WHERE claim_bot.id={bot} AND claim_bot.state='active' AND ("
+        + H.person_sent_sql(message)
+        + f" OR coalesce(claim_config.onboarding_state,'') NOT IN {statuses.PARKED_SQL} "
+        f"OR {message}.sender_id='bot:'||coalesce(claim_config.reports_to,'')))"
+    )
+
+
+def claims_message(c, slug, message):
+    """Use claim's state gate before a question has a queue row, and when Health reads an old one."""
+    from .read_cache import one
+
+    message = dict(message or {})
+    refs = message.get("refs") or {}
+    refs = refs if isinstance(refs, str) else H._dump(refs)
+    return bool(
+        one(
+            c,
+            "SELECT "
+            + claim_message_sql("candidate.bot")
+            + " FROM (SELECT ? bot) candidate CROSS JOIN (SELECT ? sender_id,? refs) m",
+            (slug, message.get("sender_id") or "", refs),
+        )[0]
+    )
+
+
 def _bot_slug(actor):
     actor = str(actor or "")
     return actor[4:] if actor.startswith("bot:") else ""
@@ -123,13 +163,18 @@ def refuse_send(c, who, to, conversation=None, what="a message"):
         return
     if to is not None and may_talk_to(c, slug, to, conversation):
         return
-    raise Problem("onboarding", f"You are still onboarding, so you can't send {what} to anyone but your manager yet. "
-                  "Answer in chat or ask your manager; a person above you marks onboarding complete when you are ready",
-                  409)
+    raise Problem(
+        "onboarding",
+        f"You are still onboarding, so you can't send {what} to anyone but your manager yet. "
+        "Answer in chat or ask your manager; a person above you marks onboarding complete when you are ready",
+        409,
+    )
 
 
 def _manager_actor(c, slug):
-    row = c.execute(f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)).fetchone()
+    row = c.execute(
+        f"SELECT bc.reports_to,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (slug,)
+    ).fetchone()
     if not row:
         return ""
     reports = str(row["reports_to"] or (json.loads(row["config"] or "{}") or {}).get("reports_to") or "")
@@ -138,6 +183,7 @@ def _manager_actor(c, slug):
 
 def _person_above(c, pid, slug):
     from . import people as P, views
+
     archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
     return P.manages(pid, "bot", slug, views.roster(c), views.entries(c), archived, True)
 
@@ -145,8 +191,11 @@ def _person_above(c, pid, slug):
 def may_complete(auth, c, who, slug):
     """Whether this caller may mark the bot's onboarding complete: the owner, or a person above it on the org chart.
     Not the bot itself, another bot, a co-owner or an admin who is not above it."""
-    return (who.role in ("owner", "human") and (not who.via or who.confirmed or who.via == "botops")
-            and auth.manages(c, who, "bot", slug))
+    return (
+        who.role in ("owner", "human")
+        and (not who.via or who.confirmed or who.via == "botops")
+        and auth.manages(c, who, "bot", slug)
+    )
 
 
 def ready(c, who, slug, summary):
@@ -173,10 +222,21 @@ def ready_of(config_json):
 
 # ------------------------------------------------------------------ seats
 def _seat(row):
-    return {"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
-            "description": row["description"], "reports_to": row["reports_to"], "team": row["team"],
-            "created_at": row["created_at"], "created_by": row["created_by"], "updated_at": row["updated_at"],
-            "agent": row["agent"], "agent_name": row["agent_name"], "request_state": row["request_state"]}
+    return {
+        "id": row["id"],
+        "kind": "seat",
+        "stage": RECRUITING,
+        "title": row["title"],
+        "description": row["description"],
+        "reports_to": row["reports_to"],
+        "team": row["team"],
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+        "updated_at": row["updated_at"],
+        "agent": row["agent"],
+        "agent_name": row["agent_name"],
+        "request_state": row["request_state"],
+    }
 
 
 def seats(c):
@@ -195,7 +255,7 @@ def _reports_to(c, value, seat_id=""):
     laid out from setup has managers that are still Recruiting); never to nobody, itself or a seat under it."""
     value = str(value or "").strip()
     if value.startswith(SEAT_PREFIX):
-        parent = value[len(SEAT_PREFIX):]
+        parent = value[len(SEAT_PREFIX) :]
         seat(c, parent)
         if seat_id and seat_id in _seat_chain(c, parent):
             raise Problem("hierarchy", "A seat cannot report to itself or to a seat under it", 422)
@@ -240,11 +300,14 @@ def refuse_if_requested(row, c=None):
     flight past its window is recovered first, so the change goes ahead; returns the seat as it now is."""
     if c is not None and row["request_state"] in (FILING, CANCELING):
         from .cloud_agents import _recover_stale
+
         _recover_stale(c, row["id"])
         row = seat(c, row["id"])
     state = row["request_state"]
     if state in (FILING, CANCELING):
-        raise Problem(state, "This seat's cloud agent request is in progress. Try again in a moment.", 409, retryable=True)
+        raise Problem(
+            state, "This seat's cloud agent request is in progress. Try again in a moment.", 409, retryable=True
+        )
     if state and state != CANCELED:
         raise Problem("requested", "This seat has a cloud agent request: cancel the request first", 409)
     return row
@@ -272,7 +335,7 @@ def _seat_chain(c, seat_id):
             break
         chain.append(seat_id)
         reports = str(row["reports_to"] or "")
-        seat_id = reports[len(SEAT_PREFIX):] if reports.startswith(SEAT_PREFIX) else ""
+        seat_id = reports[len(SEAT_PREFIX) :] if reports.startswith(SEAT_PREFIX) else ""
     return chain
 
 
@@ -282,7 +345,7 @@ def _anchor(c, reports_to):
     seen = set()
     while reports_to.startswith(SEAT_PREFIX) and reports_to not in seen:
         seen.add(reports_to)
-        row = c.execute("SELECT reports_to FROM seats WHERE id=?", (reports_to[len(SEAT_PREFIX):],)).fetchone()
+        row = c.execute("SELECT reports_to FROM seats WHERE id=?", (reports_to[len(SEAT_PREFIX) :],)).fetchone()
         reports_to = str(row["reports_to"] or "") if row else ""
     return "" if reports_to.startswith(SEAT_PREFIX) else reports_to
 
@@ -325,9 +388,11 @@ def _insert(c, actor, title, description, reports_to, team, description_by=None)
     now, seat_id = H.now(), uuid.uuid4().hex
     description = str(description or "")[:DESCRIPTION_MAX]
     by = (actor if description.strip() else "") if description_by is None else str(description_by)
-    c.execute("INSERT INTO seats(id,title,description,reports_to,team,created_at,created_by,updated_at,updated_by,description_by) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?)", (seat_id, _clean_title(title), description, reports_to,
-                                              str(team or "").strip(), now, actor, now, actor, by))
+    c.execute(
+        "INSERT INTO seats(id,title,description,reports_to,team,created_at,created_by,updated_at,updated_by,description_by) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (seat_id, _clean_title(title), description, reports_to, str(team or "").strip(), now, actor, now, actor, by),
+    )
     H.event(c, actor, "seat.created", seat_id, {"reports_to": reports_to})
     return seat_id
 
@@ -350,8 +415,15 @@ def lay_out(c, actor, roles):
         role = roles[key]
         parent = str(role.get("reports_to") or "")
         reports_to = (SEAT_PREFIX + place(parent, (*path, key))) if parent in roles else _reports_to(c, parent)
-        made[key] = _insert(c, actor, role["title"], role.get("description") or "", reports_to,
-                            role.get("team") or "", role.get("description_by", "chart"))
+        made[key] = _insert(
+            c,
+            actor,
+            role["title"],
+            role.get("description") or "",
+            reports_to,
+            role.get("team") or "",
+            role.get("description_by", "chart"),
+        )
         return made[key]
 
     for key in roles:
@@ -363,8 +435,9 @@ def create_seats(auth, c, who, seats):
     """Add one confirmed group of Recruiting seats; the caller's chain rule applies to every seat."""
     if not seats or len(seats) > 50:
         raise Problem("seats", "Add between 1 and 50 seats at a time", 422)
-    return {"seats": [create_seat(auth, c, who, item.title, item.description, item.reports_to, item.team)
-                       for item in seats]}
+    return {
+        "seats": [create_seat(auth, c, who, item.title, item.description, item.reports_to, item.team) for item in seats]
+    }
 
 
 def update_seat(auth, c, who, seat_id, fields):
@@ -390,9 +463,15 @@ def update_seat(auth, c, who, seat_id, fields):
         c.execute("UPDATE seats SET " + ",".join(k + "=?" for k in values) + " WHERE id=?", (*values.values(), seat_id))
         if "description" in values:
             from .recruiting import end_draft
+
             end_draft(c, row, "Someone wrote the job description themselves, so theirs stays")
-        H.event(c, who.actor, "seat.updated", seat_id,
-                {"fields": sorted(k for k in values if k not in ("updated_at", "updated_by", "description_by"))})
+        H.event(
+            c,
+            who.actor,
+            "seat.updated",
+            seat_id,
+            {"fields": sorted(k for k in values if k not in ("updated_at", "updated_by", "description_by"))},
+        )
     return _seat(seat(c, seat_id))
 
 
@@ -403,6 +482,7 @@ def close_seat(auth, c, who, seat_id):
     row = refuse_if_requested(row, c)
     c.execute("UPDATE seats SET closed_at=?,closed_by=? WHERE id=?", (H.now(), who.actor, seat_id))
     from .recruiting import end_draft
+
     end_draft(c, row, "The seat was taken off the org chart")
     H.event(c, who.actor, "seat.closed", seat_id, {})
     return {"id": seat_id, "closed": True}
@@ -414,11 +494,16 @@ def fill_seat(c, who, seat_id, bot):
     row = seat(c, seat_id)
     row = refuse_if_requested(row, c)
     now = H.now()
-    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
-              (now, who.actor, bot, now, who.actor, seat_id))
-    c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
-              (bot, now, who.actor, SEAT_PREFIX + seat_id))
+    c.execute(
+        "UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
+        (now, who.actor, bot, now, who.actor, seat_id),
+    )
+    c.execute(
+        "UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+        (bot, now, who.actor, SEAT_PREFIX + seat_id),
+    )
     from .recruiting import end_draft
+
     end_draft(c, row, "The seat was filled")
     H.event(c, who.actor, "seat.filled", seat_id, {"bot": bot})
 
@@ -428,10 +513,11 @@ def org_parent(seat_row, roster, employees, archived=(), all_seats=None, bare_pe
     is on the chart, else under its person, as a bot reporting there would (backend/people.py `org_parent`). A closed
     seat above it is passed over for whatever that seat answered to. `all_seats` is {id: row}, closed seats too."""
     from . import people as P
+
     all_seats = all_seats or {}
     reports, seen = str(seat_row["reports_to"] or ""), {seat_row["id"]}
     while reports.startswith(SEAT_PREFIX):
-        parent = all_seats.get(reports[len(SEAT_PREFIX):])
+        parent = all_seats.get(reports[len(SEAT_PREFIX) :])
         if not parent or parent["id"] in seen:
             reports = ""
             break
@@ -440,9 +526,14 @@ def org_parent(seat_row, roster, employees, archived=(), all_seats=None, bare_pe
         seen.add(parent["id"])
         reports = str(parent["reports_to"] or "")
     probe = "seat:" + seat_row["id"]
-    return P.org_parent("bot", probe, roster, {**(employees or {}), probe: {"reports_to": reports,
-                                                                           "team": seat_row["team"] or ""}}, archived,
-                       bare_people)
+    return P.org_parent(
+        "bot",
+        probe,
+        roster,
+        {**(employees or {}), probe: {"reports_to": reports, "team": seat_row["team"] or ""}},
+        archived,
+        bare_people,
+    )
 
 
 def all_seats(c):
@@ -454,6 +545,7 @@ def chart_seats(c, roster, employees, archived=(), may_see=lambda slug: True):
     where it hangs. One under a bot the caller may not see hangs from the nearest thing above that bot they may, as
     that bot's own reports do on the chart."""
     from . import people as P
+
     every, out, bare = all_seats(c), [], True
     for row in every.values():
         if row["closed_at"]:
@@ -462,7 +554,17 @@ def chart_seats(c, roster, employees, archived=(), may_see=lambda slug: True):
         while parent.startswith("b:") and parent not in seen and not may_see(parent[2:]):
             seen.add(parent)
             parent = P.org_parent("bot", parent[2:], roster, employees, archived, bare)
-        out.append({"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
-                    "description": row["description"], "team": row["team"], "reports_to": row["reports_to"],
-                    "created_at": row["created_at"], "org_parent": parent})
+        out.append(
+            {
+                "id": row["id"],
+                "kind": "seat",
+                "stage": RECRUITING,
+                "title": row["title"],
+                "description": row["description"],
+                "team": row["team"],
+                "reports_to": row["reports_to"],
+                "created_at": row["created_at"],
+                "org_parent": parent,
+            }
+        )
     return sorted(out, key=lambda seat: (seat["created_at"], seat["id"]))

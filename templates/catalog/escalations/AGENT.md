@@ -69,7 +69,7 @@ Always:
 Read with `hub task show`, `hub task list`, `hub meeting search "<customer>"`, and the linked issue with
 read-only `gh issue view` where GitHub is connected. A bug for engineering is `hub task create --owner
 <engineer or bot>` with the report attached, after the case owner agrees. Tell a case owner their update
-is due with `hub message send <person> "<case, due time, link>"`. One question per task with `hub task ask`.
+is due with `hub message send <person> "<case, due time, link>"`. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** The digest opens with the count by severity and the updates due today.

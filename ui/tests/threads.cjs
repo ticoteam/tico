@@ -2,7 +2,8 @@
 // Threads link and its Catch up count, the thread rail (Pinned, Threads, Find, Browse) beside one thread, the pin,
 // Catch up, New thread, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
 // answers), a message shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
-// New DM, a server without the rail, and a teammate who may see a bot but not read it getting no Home.
+// New DM, a server without the rail (its empty pane: the picture and New thread), and a teammate who may see a bot
+// but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -146,10 +147,10 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json(bob ? {id: 'bob', name: 'Bob', role: 'member', registered: true} : {id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
       my_access: bob ? {see: true, read: false, write: false} : {see: true, read: true, write: true}}]);
@@ -680,26 +681,26 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
-    assert.ok(tabs.includes('home') && tabs.includes('dm'), 'Home and DM: ' + tabs);
+    assert.ok(tabs.includes('home') && !tabs.includes('dm'), 'one chat tab, Home; DM sits behind Incognito: ' + tabs);
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
-    // The Home's actions (the call and the menu) sit in the page's top line; the thread has no title line.
-    await page.locator('#bot-top #bot-top-acts [data-thv-menu]').waitFor();
+    // The Home's actions (the call and Members) sit in the page's top line; the thread has no title line.
+    await page.locator('#bot-top #bot-top-acts').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-title').count(), 0);
-    // Wide, the top tabs give way to Tasks beside the thread; the switch above the thread picks Home or DM.
-    assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
-    await page.locator('#pane-chat [data-talk="dm"]').click();
+    // Wide, the top tabs give way to Tasks beside the thread; the incognito toggle above the thread picks Home or DM.
+    assert.equal(await page.locator('#bot-incognito').getAttribute('aria-pressed'), 'false');
+    await page.locator('#bot-incognito').click();
     await page.waitForFunction(() => location.hash === '#/bot/ops/dm');
-    await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
+    await page.locator('#bot-incognito[aria-pressed="true"]').waitFor();
     await page.locator('#bot-thread .thv-composer .p-text').waitFor();
     await shot(page, 'bot-dm-desktop');
     // A draft survives a switch to Home and back.
     await page.locator('#bot-thread .thv-composer .p-text').fill('Half a thought');
-    await page.locator('#pane-chat [data-talk="home"]').click();
+    await page.locator('#bot-incognito').click();
     await page.getByText('Weekly numbers are in the doc.').waitFor();
-    await page.locator('#pane-chat [data-talk="dm"]').click();
-    await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
+    await page.locator('#bot-incognito').click();
+    await page.locator('#bot-incognito[aria-pressed="true"]').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').inputValue(), 'Half a thought');
 
     // A person's Home under their profile: updates live on the Updates page, never as cards in a Home.
@@ -791,7 +792,49 @@ let browser = null;
     assert.equal(await cu.locator('.cu-you').count(), 1, 'it says the viewer is named');
     assert.match(await cu.locator('.cu-msgs').innerText(), /Booked for Friday\.\s*…/, 'a clipped message ends in …');
     await themed(page, 'catch-up');
+    // A reply: Send shows once there is text, and the sent message shows on the card, which stays until Mark read.
+    const reply = cu.locator('.cu-reply input'), sendBtn = cu.locator('.cu-send');
+    assert.equal(await sendBtn.isVisible(), false, 'no Send while the box is empty');
+    await reply.fill('On it.');
+    await sendBtn.waitFor();
+    await themed(page, 'catch-up-typing');
+    await sendBtn.click();
+    await cu.locator('.cu-msg', {hasText: 'On it.'}).waitFor();
+    assert.equal(seen.posts.at(-1).text, 'On it.');
+    assert.equal(await reply.inputValue(), '');
+    assert.equal(await sendBtn.isVisible(), false);
+    assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3', 'the card stays after a reply');
+    // Mark read can be taken back: nothing goes to the server while Undo shows.
     await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    assert.equal(await cu.locator('.cu-pos').textContent(), '2 of 3');
+    await cu.locator('.cu-undo-pill', {hasText: 'Marked read'}).waitFor();
+    if (shots) await page.evaluate(() => clearTimeout(CU.undo?.timer));    // the screenshots take longer than Undo shows
+    await themed(page, 'catch-up-undo');
+    await cu.locator('[data-cu-undo]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 11'}).waitFor();
+    assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3');
+    assert.match(await cu.locator('.cu-msgs').innerText(), /On it\./, 'the sent reply is still on the card');
+    assert.deepEqual(seen.readAll, [], 'an undone Mark read sends nothing');
+    // A draft stays with its card through Mark read and Undo.
+    await reply.fill('Half a thought');
+    await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    assert.equal(await cu.locator('.cu-reply input').inputValue(), '');
+    await cu.locator('[data-cu-undo]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 11'}).waitFor();
+    assert.equal(await cu.locator('.cu-reply input').inputValue(), 'Half a thought');
+    assert.equal(await sendBtn.isVisible(), true);
+    await cu.locator('.cu-reply input').fill('');
+    await cu.locator('[data-cu-read]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
+    // The next action makes the last one final: Later sends the read it followed.
+    await cu.locator('[data-cu-later]').click();
+    await cu.locator('.cu-card h3', {hasText: 'Bea, Cy'}).waitFor();
+    for (let i = 0; i < 40 && !seen.readAll.length; i++) await page.waitForTimeout(50);
+    assert.deepEqual(seen.readAll, ['t11']);
+    // Ctrl+Z undoes too (here a Later).
+    await page.keyboard.press('Control+z');
     await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
     assert.equal(await cu.locator('.cu-pos').textContent(), '2 of 3');
     await cu.locator('[data-cu-later]').click();
@@ -802,7 +845,11 @@ let browser = null;
     assert.equal(await cu.locator('.cu-pos').textContent(), '3 of 3', 'what was put off comes last');
     await cu.locator('[data-cu-mute]').click();
     await cu.getByText('All caught up').waitFor();
-    for (let i = 0; i < 40 && seen.readAll.length < 3; i++) await page.waitForTimeout(50);
+    await cu.locator('.cu-undo-pill', {hasText: 'Muted'}).waitFor();
+    assert.deepEqual(seen.readAll, ['t11', 't-gdm'], 'the mute waits while Undo shows');
+    // Undo goes by itself after a few seconds, and then the mute and read go out.
+    await cu.locator('.cu-undo').waitFor({state: 'detached', timeout: 8000});
+    for (let i = 0; i < 40 && (seen.readAll.length < 3 || seen.follows.at(-1) !== 'muted'); i++) await page.waitForTimeout(50);
     assert.deepEqual(seen.readAll, ['t11', 't-gdm', 't4']);
     assert.equal(seen.follows.at(-1), 'muted');
     await page.keyboard.press('Escape');
@@ -879,7 +926,7 @@ let browser = null;
     await page.locator('#nav-threads:not([hidden])').waitFor();
     assert.equal(await page.locator('#nav-threads .nav-badge').isVisible(), false);
     assert.equal(await page.locator('.bot-threads-link').count(), 0);
-    assert.equal(await page.locator('#pane-chat [data-talk]').count(), 0);
+    assert.equal(await page.locator('#bot-incognito').count(), 0);
     assert.ok(!seen.homes.includes('bot:ops'), 'the Home is never asked for');
     await shot(page, 'bob-bot-desktop');
     assert.deepEqual(seen.errors, []);
@@ -934,6 +981,13 @@ let browser = null;
     assert.ok(cuBox.width >= 389 && cuBox.y + cuBox.height <= navBox.y + 1, 'above the tab bar, the full width: ' + JSON.stringify([cuBox, navBox]));
     assert.ok(await sideways(page) <= 390);
     await themed(page, 'catch-up', true);
+    await page.locator('#catch-up [data-cu-read]').tap();
+    await page.locator('#catch-up .cu-undo-pill', {hasText: 'Marked read'}).waitFor();
+    assert.ok(await sideways(page) <= 390, 'Undo fits the phone');
+    if (shots) await page.evaluate(() => clearTimeout(CU.undo?.timer));
+    await themed(page, 'catch-up-undo', true);
+    await page.locator('#catch-up [data-cu-undo]').tap();
+    await page.locator('#catch-up .cu-undo').waitFor({state: 'detached'});
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('#catch-up')?.open);
     await page.locator('#thread-rail [data-tr-new]').tap();
@@ -996,7 +1050,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     const tabs = page.locator('#btabs [data-bt]');
     await tabs.first().waitFor();
-    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Home', 'DM']);
+    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Chat', 'Tasks']);
     for (const width of [390, 320]) {
       await page.setViewportSize({width, height: 700});
       for (const box of await tabs.evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 36, `a tab at ${width}: ` + JSON.stringify(box));
@@ -1004,10 +1058,10 @@ let browser = null;
     }
     await page.setViewportSize({width: 390, height: 844});
     await shot(page, 'bot-tabs-phone');
-    await page.locator('#btabs [data-bt="dm"]').tap();
-    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#btabs [data-bt="dm"]').getAttribute('aria-selected') === 'true');
-    await page.locator('#btabs [data-bt="home"]').tap();
-    await page.waitForFunction(() => document.querySelector('#btabs [data-bt="home"]').getAttribute('aria-selected') === 'true');
+    await page.locator('#bot-incognito').tap();
+    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'true');
+    await page.locator('#bot-incognito').tap();
+    await page.waitForFunction(() => document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'false');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
 
     // A person's page starts a DM with them; your own does not offer one.
@@ -1143,6 +1197,44 @@ let browser = null;
     assert.equal(await page.locator('#tree [data-org="b:ops"] .tree-dm').textContent(), '2');
     assert.equal(await page.locator('#tree [data-org="p:bea"] .tree-dm').textContent(), '1');
     await page.locator('.tr-empty [data-tr-new]').waitFor();    // nothing pinned, nothing opened before: New thread
+    // The picture of a thread, its heading and its one sentence, then New thread, which still opens the dialog.
+    const empty = page.locator('.tr-empty');
+    assert.equal(await empty.locator('h2').innerText(), 'Talk with your team here');
+    assert.equal(await empty.locator('p').innerText(), 'Share conversations with your bots and anything else the team should see.');
+    const picture = await empty.locator('.tr-diagram').boundingBox();
+    assert.ok(picture && picture.width > 300 && picture.width <= 360, 'the picture is drawn, at most 360px wide: ' + JSON.stringify(picture));
+    await themed(page, 'empty');
+    // A narrower desktop window (the picture scales with its pane) and a very short one (844x260): the block starts on
+    // screen, its pane scrolls, and New thread can be scrolled into reach.
+    await page.setViewportSize({width: 844, height: 260});
+    // Wait until the pane has taken this window's height and overflows it, before measuring or scrolling it.
+    await page.waitForFunction(() => { const e = document.querySelector('.tr-empty'); return !!e && e.scrollHeight > e.clientHeight; });
+    const fit = await empty.locator('.empty-state').evaluate(e => ({top: Math.round(e.getBoundingClientRect().top),
+      picture: Math.round(e.querySelector('.tr-diagram').getBoundingClientRect().width),
+      pane: Math.round(e.parentElement.getBoundingClientRect().width)}));
+    assert.ok(fit.top >= 0 && fit.picture <= fit.pane, 'the block starts on screen, the picture fits its pane: ' + JSON.stringify(fit));
+    await empty.evaluate(e => { e.scrollTop = e.scrollHeight; });
+    assert.ok(await empty.locator('[data-tr-new]').evaluate(b => b.getBoundingClientRect().bottom <= innerHeight),
+      'New thread is in reach once the pane scrolls');
+    await empty.locator('[data-tr-new]').click();
+    await page.locator('#thread-new[open]').waitFor();
+    assert.ok(await sideways(page) <= 844, 'no sideways scroll');
+    await page.locator('#thread-new .nt-x').click();
+    await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    railOff = false;
+  }
+  // On a phone the pane is not drawn with no thread open: the rail is the screen, so there is no picture there. railOff
+  // is the case above (nothing pinned, nothing opened), where a desktop window would draw the picture.
+  {
+    railOff = true;
+    const {page, seen} = await open(browser, 'ana', {phone: true});
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('#thread-rail [data-list="threads"] .tr-row[data-thread="t11"]').waitFor();
+    assert.equal(await page.locator('#thread-pane').isVisible(), false);
+    assert.equal(await page.locator('.tr-empty').count(), 0);
+    assert.ok(await sideways(page) <= 390, 'no sideways scroll on the rail');
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;

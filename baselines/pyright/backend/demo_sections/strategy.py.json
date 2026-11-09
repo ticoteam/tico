@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/demo_sections/strategy.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 15,
+                    "endColumn": 23,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

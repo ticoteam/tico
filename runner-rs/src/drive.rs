@@ -22,7 +22,16 @@ use crate::util::{mark, text_of, truthy};
 
 /// The event kinds the outbox keeps as rows. A drain's rows are written together, in arrival order, and before any
 /// other write to the outbox.
-const STREAMED: [&str; 8] = ["delta", "message", "tokens", "status", "error", "tool", "diagnostic", "turn_failed"];
+const STREAMED: [&str; 8] = [
+    "delta",
+    "message",
+    "tokens",
+    "status",
+    "error",
+    "tool",
+    "diagnostic",
+    "turn_failed",
+];
 
 /// An event as the outbox keeps it: borrowed when no string in it holds a secret, scrubbed when one does.
 fn scrubbed<'a>(redactor: Option<&Arc<Redactor>>, v: &'a Value) -> Cow<'a, Value> {
@@ -41,7 +50,11 @@ pub fn from_person(message: &Value) -> bool {
 
 /// How long a turn whose lease is lost keeps reading what its harness already said. A model that finished while this
 /// computer was asleep has its whole answer waiting in the pipe; one still working is not waited for.
-const SALVAGE: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(10) };
+const SALVAGE: Duration = if cfg!(test) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_secs(10)
+};
 
 /// One metered stretch of a turn: the primary harness, then a fallback's.
 pub struct Segment {
@@ -92,12 +105,18 @@ and what comes next, then end this turn. It continues right after the other turn
 impl Runner {
     /// Writes the rows a drain gathered, in one transaction and in arrival order, then wakes the outbox poster. A
     /// failed write takes the whole batch with it, and its error ends the drive the way a failed append always has.
-    async fn write_rows(&self, d: &Drive<'_>, rows: &mut Vec<(String, String)>) -> Result<(), String> {
+    async fn write_rows(
+        &self,
+        d: &Drive<'_>,
+        rows: &mut Vec<(String, String)>,
+    ) -> Result<(), String> {
         if rows.is_empty() {
             return Ok(());
         }
         let (aid, batch) = (d.aid.to_string(), std::mem::take(rows));
-        self.state.off(move |s| s.append_batch(&aid, &batch)).await?;
+        self.state
+            .off(move |s| s.append_batch(&aid, &batch))
+            .await?;
         d.wake.notify_one();
         Ok(())
     }
@@ -115,13 +134,21 @@ impl Runner {
     ) -> Result<Drove, Fail> {
         let (aid, host, thread) = (d.aid, d.host, d.thread);
         self.drain.register(aid);
-        if !self.drain.start(aid) { return Err(Fail::runtime(crate::drain::WAITING)); }
+        if !self.drain.start(aid) {
+            return Err(Fail::runtime(crate::drain::WAITING));
+        }
         // A host whose native goal keeps running across turns (`goal_runs_across_turns`): a completed turn is not
         // the end of the run, and a clear it reports is checked against the goal.
         let across_turns = crate::harness_tools::caps(d.runtime, "").goal_runs_across_turns;
-        let scrub = |t: &str| d.redactor.map(|r| r.scrub_text(t).into_owned()).unwrap_or_else(|| t.to_string());
-        let (mut reply, mut tokens, mut outcome) = (String::new(), json!({}), "interrupted".to_string());
-        let (mut limited, mut capacity, mut retryable, mut acted, mut complete) = (false, false, false, false, false);
+        let scrub = |t: &str| {
+            d.redactor
+                .map(|r| r.scrub_text(t).into_owned())
+                .unwrap_or_else(|| t.to_string())
+        };
+        let (mut reply, mut tokens, mut outcome) =
+            (String::new(), json!({}), "interrupted".to_string());
+        let (mut limited, mut capacity, mut retryable, mut acted, mut complete) =
+            (false, false, false, false, false);
         let mut continues = false;
         let mut earlier = String::new();
         let mut earlier_tokens: Option<Value> = None;
@@ -132,7 +159,14 @@ impl Runner {
         let mut rows: Vec<(String, String)> = vec![];
         // Set once the lease is lost: until then the turn's remaining output is read, and nothing more is asked of the hub.
         let mut salvage: Option<Instant> = None;
-        let answer = |earlier: &str, reply: &str| [earlier, reply].iter().filter(|t| !t.is_empty()).cloned().collect::<Vec<_>>().join("\n\n");
+        let answer = |earlier: &str, reply: &str| {
+            [earlier, reply]
+                .iter()
+                .filter(|t| !t.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
         let spent = |earlier: &Option<Value>, tokens: &Value| match earlier {
             None => tokens.clone(),
             Some(e) => {
@@ -145,7 +179,9 @@ impl Runner {
         };
         let chat_goal = goal.chat_goal.clone();
         let mut goal_running = chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
-        let revision = chat_goal.as_ref().map_or(Value::Null, |g| g["updated_at"].clone());
+        let revision = chat_goal
+            .as_ref()
+            .map_or(Value::Null, |g| g["updated_at"].clone());
         let goal_id = chat_goal.as_ref().map_or(Value::Null, |g| g["id"].clone());
         let mut tried: HashSet<String> = HashSet::new();
         let mut pausing: Option<String> = None;
@@ -181,21 +217,56 @@ impl Runner {
                 // A quarantine's Stop says why (Dev 573): the turn ends with that reason, never read as a lost computer.
                 let reason = d.flags.stop_reason.lock().unwrap().clone();
                 if let Some(why) = &reason {
-                    let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": why}));
+                    let _ = self
+                        .state
+                        .append(aid, "diagnostic", &json!({"end_reason": why}));
                 }
                 goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: false });
+                return Ok(Drove {
+                    outcome: "interrupted".into(),
+                    reply: answer(&earlier, &reply),
+                    tokens: spent(&earlier_tokens, &tokens),
+                    limited: false,
+                    acted,
+                    capacity: false,
+                    continues: false,
+                    retryable: false,
+                    turn,
+                    yielded: false,
+                });
             }
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: true });
+                return Ok(Drove {
+                    outcome: "interrupted".into(),
+                    reply: answer(&earlier, &reply),
+                    tokens: spent(&earlier_tokens, &tokens),
+                    limited: false,
+                    acted,
+                    capacity: false,
+                    continues: false,
+                    retryable: false,
+                    turn,
+                    yielded: true,
+                });
             }
             if yielding.is_some_and(|by| Instant::now() >= by) {
                 // No safe point within the grace: the work so far stays in the worktree and on the task.
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: true });
+                return Ok(Drove {
+                    outcome: "interrupted".into(),
+                    reply: answer(&earlier, &reply),
+                    tokens: spent(&earlier_tokens, &tokens),
+                    limited: false,
+                    acted,
+                    capacity: false,
+                    continues: false,
+                    retryable: false,
+                    turn,
+                    yielded: true,
+                });
             }
             let late = Instant::now() >= d.limit;
             if d.flags.lost.load(Ordering::SeqCst) && salvage.is_none() {
@@ -207,12 +278,27 @@ impl Runner {
             // left, so only the window ends a salvage that has not seen the turn end.
             let salvaged = salvage.is_some_and(|until| Instant::now() >= until);
             if self.stopping() || salvaged || late {
-                goal.failure = Some(if late { "Run time limit reached" } else if self.stopping() { "The computer stopped" } else { "The execution lease expired" }.into());
+                goal.failure = Some(
+                    if late {
+                        "Run time limit reached"
+                    } else if self.stopping() {
+                        "The computer stopped"
+                    } else {
+                        "The execution lease expired"
+                    }
+                    .into(),
+                );
                 let _ = host.interrupt(thread, &turn).await;
-                let why = if late { format!("Timeout: {}", d.limit_name) }
-                    else if self.stopping() { "Runner stopped during execution".into() }
-                    else { "Computer lost or heartbeat stopped (execution lease expired)".into() };
-                let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": why}));
+                let why = if late {
+                    format!("Timeout: {}", d.limit_name)
+                } else if self.stopping() {
+                    "Runner stopped during execution".into()
+                } else {
+                    "Computer lost or heartbeat stopped (execution lease expired)".into()
+                };
+                let _ = self
+                    .state
+                    .append(aid, "diagnostic", &json!({"end_reason": why}));
                 return Err(Fail::runtime(why));
             }
             while let Ok(ev) = rx.try_recv() {
@@ -232,7 +318,9 @@ impl Runner {
                 if kind == "thread_confirmed" {
                     // Its `session_id` where the harness names the session apart from the thread (Claude), else the thread.
                     if let Some(f) = d.fresh {
-                        let session = Some(text_of(&event["session_id"])).filter(|s| !s.is_empty()).unwrap_or_else(|| thread.to_string());
+                        let session = Some(text_of(&event["session_id"]))
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| thread.to_string());
                         // A local save error must not discard a completed answer queued behind this event.
                         // Settlement retries the save outside the cancellable drive and retains completed work.
                         if self.confirm_thread(f, &session).await.is_err() {
@@ -247,7 +335,12 @@ impl Runner {
                     turn = event_turn.clone();
                     if fresh {
                         // Codex starts a new turn for each continuation of an unmet goal.
-                        let last = reply.trim().rsplit("\n\n").next().unwrap_or_default().to_string();
+                        let last = reply
+                            .trim()
+                            .rsplit("\n\n")
+                            .next()
+                            .unwrap_or_default()
+                            .to_string();
                         self.write_rows(d, &mut rows).await?;
                         stuck!(scrub(&last), goals::MAX_CODEX_GOAL_TRIES);
                     }
@@ -267,7 +360,11 @@ impl Runner {
                         }
                         None => reading["origin"] = json!("login"),
                     }
-                    crate::profiles::remember_weekly(profile, &text_of(&segment.config["runtime"]), &reading);
+                    crate::profiles::remember_weekly(
+                        profile,
+                        &text_of(&segment.config["runtime"]),
+                        &reading,
+                    );
                 }
                 if kind == "goal" {
                     let continued = truthy(event.get("tried"));
@@ -281,7 +378,9 @@ impl Runner {
                         // Not while salvaging: the native query can wait two minutes or fail, and the answer behind
                         // this event is what the salvage is for. The goal event is only filed on the lapsed run anyway.
                         if across_turns && goal_running && salvage.is_none() {
-                            event = host.reconcile_codex_clear(thread, event, &text_of(&g["objective"])).await?;
+                            event = host
+                                .reconcile_codex_clear(thread, event, &text_of(&g["objective"]))
+                                .await?;
                         }
                         if truthy(event.get("objective")) {
                             event["objective"] = goals::tico_objective(&event["objective"]);
@@ -322,13 +421,25 @@ impl Runner {
                 }
                 if kind == "background_kept" {
                     // Watched after the run; a command still running at the run's time limit is killed then.
-                    let deadline = crate::util::epoch_s() + d.limit.saturating_duration_since(Instant::now()).as_secs_f64();
-                    crate::afterwatch::keep(&self.state.directory, aid, d.bot, d.session, deadline, &event, d.redactor);
+                    let deadline = crate::util::epoch_s()
+                        + d.limit
+                            .saturating_duration_since(Instant::now())
+                            .as_secs_f64();
+                    crate::afterwatch::keep(
+                        &self.state.directory,
+                        aid,
+                        d.bot,
+                        d.session,
+                        deadline,
+                        &event,
+                        d.redactor,
+                    );
                     continue;
                 }
                 if kind == "diagnostic" && event["background_wait"].is_object() {
                     // What ending the wait saved: the rest of the run's time, which the wait would have held.
-                    event["background_wait"]["minutes_saved"] = json!(d.limit.saturating_duration_since(Instant::now()).as_secs() / 60);
+                    event["background_wait"]["minutes_saved"] =
+                        json!(d.limit.saturating_duration_since(Instant::now()).as_secs() / 60);
                 }
                 if STREAMED.contains(&kind.as_str()) {
                     let clean = scrubbed(d.redactor, &event);
@@ -339,7 +450,11 @@ impl Runner {
                     if kind == "message" && (truthy(event.get("final")) || reply.is_empty()) {
                         reply = text_of(&clean["text"]);
                     }
-                    let saved = if kind == "turn_failed" { "error".to_string() } else { kind.clone() };
+                    let saved = if kind == "turn_failed" {
+                        "error".to_string()
+                    } else {
+                        kind.clone()
+                    };
                     rows.push((saved, clean.to_string()));
                     if kind == "tokens" {
                         tokens = event.clone();
@@ -347,18 +462,34 @@ impl Runner {
                     }
                 }
                 if kind == "turn_completed" {
-                    outcome = if event["status"] == "interrupted" { "interrupted".into() } else { "completed".into() };
+                    outcome = if event["status"] == "interrupted" {
+                        "interrupted".into()
+                    } else {
+                        "completed".into()
+                    };
                     if outcome == "interrupted" {
                         // This is a host's acknowledged end, unlike losing its connection or timing out.
-                        self.state.append(aid, "diagnostic", &json!({"interruption_complete": true}))?;
+                        self.state.append(
+                            aid,
+                            "diagnostic",
+                            &json!({"interruption_complete": true}),
+                        )?;
                     }
                     // A turn that gave the login up ends here, between a native goal's turns too; a goal that runs
                     // across turns is not continued once the lease is lost.
-                    complete = yielding.is_some() || salvage.is_some() || !(goal_running && across_turns && outcome == "completed");
-                } else if kind == "turn_failed" || (kind == "error" && truthy(event.get("host_restart"))) {
+                    complete = yielding.is_some()
+                        || salvage.is_some()
+                        || !(goal_running && across_turns && outcome == "completed");
+                } else if kind == "turn_failed"
+                    || (kind == "error" && truthy(event.get("host_restart")))
+                {
                     outcome = "failed".into();
                     let error = text_of(&event["error"]);
-                    goal.failure = Some(if error.is_empty() { "The harness stopped".into() } else { scrub(&error) });
+                    goal.failure = Some(if error.is_empty() {
+                        "The harness stopped".into()
+                    } else {
+                        scrub(&error)
+                    });
                     limited = truthy(event.get("limit"));
                     capacity = limited && hosts::is_capacity(&error);
                     if capacity && acted {
@@ -387,7 +518,10 @@ impl Runner {
                     complete = true;
                 }
             } else if let Some(p) = pausing.clone() {
-                if pause_ready || pause_at.elapsed() >= Duration::from_secs_f64(goals::GOAL_PAUSE_WAIT_S) || host.active_turn(thread).as_deref() != Some(p.as_str()) {
+                if pause_ready
+                    || pause_at.elapsed() >= Duration::from_secs_f64(goals::GOAL_PAUSE_WAIT_S)
+                    || host.active_turn(thread).as_deref() != Some(p.as_str())
+                {
                     pausing = None;
                     clearing = true;
                     match host.start_goal(thread, "pause", "", d.effort).await {
@@ -396,16 +530,28 @@ impl Runner {
                             outcome = "interrupted".into();
                         }
                         Err(e) => {
-                            self.state.append(aid, "diagnostic", &json!({"text": format!("The goal could not be cleared: {e}")}))?;
+                            self.state.append(
+                                aid,
+                                "diagnostic",
+                                &json!({"text": format!("The goal could not be cleared: {e}")}),
+                            )?;
                             outcome = "completed".into();
                             complete = true;
                         }
                     }
                 }
             }
-            if complete && outcome == "completed" && !carried.is_empty() && !goal.controlled && yielding.is_none() && salvage.is_none() {
+            if complete
+                && outcome == "completed"
+                && !carried.is_empty()
+                && !goal.controlled
+                && yielding.is_none()
+                && salvage.is_none()
+            {
                 // Not on a failed or stopped turn: those settle the attempt, inputs included.
-                turn = self.carry_inputs(aid, host, thread, carried, d.effort).await?;
+                turn = self
+                    .carry_inputs(aid, host, thread, carried, d.effort)
+                    .await?;
                 outcome = "interrupted".into();
                 complete = false;
                 earlier = answer(&earlier, &reply);
@@ -423,7 +569,10 @@ impl Runner {
                     if goal_running {
                         let latest = self.client.get(&format!("attempts/{aid}/goal")).await?;
                         let latest = &latest["goal"];
-                        if !latest.is_object() || latest["id"] != goal_id || latest["updated_at"] != revision {
+                        if !latest.is_object()
+                            || latest["id"] != goal_id
+                            || latest["updated_at"] != revision
+                        {
                             goal.controlled = true;
                             let _ = host.interrupt(thread, &turn).await;
                             // An explicit goal control settles this run so its queued successor can claim.
@@ -432,18 +581,29 @@ impl Runner {
                             outcome = "completed".into();
                         }
                     }
-                    if let Some(held) = d.login.as_ref().filter(|h| !complete && yielding.is_none() && pausing.is_none() && !clearing && h.due(Instant::now())) {
+                    if let Some(held) = d.login.as_ref().filter(|h| {
+                        !complete
+                            && yielding.is_none()
+                            && pausing.is_none()
+                            && !clearing
+                            && h.due(Instant::now())
+                    }) {
                         yielding = Some(Instant::now() + held.grace());
                         let note = held.yielded();
-                        self.state.append(aid, "status", &json!({"yielding": note}))?;
+                        self.state
+                            .append(aid, "status", &json!({"yielding": note}))?;
                         d.wake.notify_one();
-                        if !host.supports_steer() || host.steer(thread, &turn, YIELD_ASK).await.is_err() {
+                        if !host.supports_steer()
+                            || host.steer(thread, &turn, YIELD_ASK).await.is_err()
+                        {
                             // Nothing to ask: the turn is interrupted at once and continues after the waiter.
                             yielding = Some(Instant::now());
                         }
                     }
                     if !complete && host.supports_steer() {
-                        let messages = self.receive_inputs(aid, host, thread, &turn, carried).await?;
+                        let messages = self
+                            .receive_inputs(aid, host, thread, &turn, carried)
+                            .await?;
                         if messages.iter().any(from_person) {
                             tries().take(&goal.tries_key);
                         }
@@ -489,10 +649,25 @@ impl Runner {
         }
         let mut text = answer(&earlier, &reply);
         if let Some(p) = &goal.paused {
-            text = if text.is_empty() { p.clone() } else { format!("{text}\n\n{p}") };
+            text = if text.is_empty() {
+                p.clone()
+            } else {
+                format!("{text}\n\n{p}")
+            };
         }
         let yielded = yielding.is_some() && outcome != "failed";
-        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, acted, capacity, continues, retryable, turn, yielded })
+        Ok(Drove {
+            outcome,
+            reply: text,
+            tokens: spent(&earlier_tokens, &tokens),
+            limited,
+            acted,
+            capacity,
+            continues,
+            retryable,
+            turn,
+            yielded,
+        })
     }
 }
 
@@ -533,7 +708,14 @@ mod tests {
                         request.extend_from_slice(&buffer[..n]);
                     };
                     let text = String::from_utf8_lossy(&request[..head]).to_string();
-                    let length = text.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                    let length = text
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
                     while request.len() < head + 4 + length {
                         let n = socket.read(&mut buffer).await.unwrap_or(0);
                         if n == 0 {
@@ -541,17 +723,42 @@ mod tests {
                         }
                         request.extend_from_slice(&buffer[..n]);
                     }
-                    let path = text.lines().next().unwrap_or_default().split_whitespace().nth(1).unwrap_or_default().to_string();
-                    let body: Value = serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
+                    let path = text
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or_default()
+                        .to_string();
+                    let body: Value =
+                        serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
                     kept.lock().unwrap().push(format!("{path} {body}"));
-                    let (status, answer) = if let Some(why) = stop_reason.filter(|_| path.ends_with("/renew")) {
-                        ("200 OK", json!({"lease_until": "x", "lease_seconds": 90, "stop": true, "stop_reason": why}))
-                    } else if stop_reason.is_some() && (path.ends_with("/inputs") || path.ends_with("/goal")) {
+                    let (status, answer) = if let Some(why) =
+                        stop_reason.filter(|_| path.ends_with("/renew"))
+                    {
+                        (
+                            "200 OK",
+                            json!({"lease_until": "x", "lease_seconds": 90, "stop": true, "stop_reason": why}),
+                        )
+                    } else if stop_reason.is_some()
+                        && (path.ends_with("/inputs") || path.ends_with("/goal"))
+                    {
                         ("200 OK", json!({"messages": []}))
-                    } else if ["/renew", "/inputs", "/goal"].iter().any(|p| path.ends_with(p)) || path.contains("/inputs/") {
-                        ("409 Conflict", json!({"error": {"code": "stale_lease", "detail": "Execution ownership expired; stop this attempt", "retryable": false}}))
+                    } else if ["/renew", "/inputs", "/goal"]
+                        .iter()
+                        .any(|p| path.ends_with(p))
+                        || path.contains("/inputs/")
+                    {
+                        (
+                            "409 Conflict",
+                            json!({"error": {"code": "stale_lease", "detail": "Execution ownership expired; stop this attempt", "retryable": false}}),
+                        )
                     } else {
-                        ("200 OK", json!({"ack_seq": body["events"].as_array().and_then(|e| e.last()).map_or(json!(0), |l| l["seq"].clone())}))
+                        (
+                            "200 OK",
+                            json!({"ack_seq": body["events"].as_array().and_then(|e| e.last()).map_or(json!(0), |l| l["seq"].clone())}),
+                        )
                     };
                     let answer = answer.to_string();
                     let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
@@ -564,18 +771,34 @@ mod tests {
     }
 
     fn runner_at(url: &str) -> (Runner, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("tico-salvage-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-salvage-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
-        (Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()), dir)
+        (
+            Runner::new(
+                config,
+                client,
+                crate::state::State::open(&dir.join("state")).unwrap(),
+            ),
+            dir,
+        )
     }
 
     fn flags(lost: bool) -> Flags {
-        Flags { lost: AtomicBool::new(lost), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
-                done_notify: Notify::new(), deadline: Mutex::new(Instant::now()) }
+        Flags {
+            lost: AtomicBool::new(lost),
+            stopped: AtomicBool::new(false),
+            stop_reason: Mutex::new(None),
+            done: AtomicBool::new(false),
+            harness_allocated: Arc::new(AtomicBool::new(false)),
+            start_acknowledged: AtomicBool::new(false),
+            done_notify: Notify::new(),
+            deadline: Mutex::new(Instant::now()),
+        }
     }
 
     /// The model's last words for `turn` on `thread`, the way the Claude host reports a finished turn.
@@ -587,24 +810,77 @@ mod tests {
     }
 
     /// Drive one Acme turn on `host` against `runner`; `feed` gets the host's event sender.
-    async fn drive_turn(runner: &Runner, host: &Host, rx: &mut UnboundedReceiver<Value>, f: &Flags, thread: &str) -> Result<Drove, Fail> {
-        drive_with(runner, host, rx, f, thread, "claude", None, BTreeMap::new()).await.0
+    async fn drive_turn(
+        runner: &Runner,
+        host: &Host,
+        rx: &mut UnboundedReceiver<Value>,
+        f: &Flags,
+        thread: &str,
+    ) -> Result<Drove, Fail> {
+        drive_with(runner, host, rx, f, thread, "claude", None, BTreeMap::new())
+            .await
+            .0
     }
 
     /// `drive_turn` with a Tico chat goal and inputs a steer refused, handing back what is still carried after.
     #[allow(clippy::too_many_arguments)]
-    async fn drive_with(runner: &Runner, host: &Host, rx: &mut UnboundedReceiver<Value>, f: &Flags, thread: &str, runtime: &str, chat_goal: Option<Value>,
-                        mut carried: BTreeMap<String, Value>) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
+    async fn drive_with(
+        runner: &Runner,
+        host: &Host,
+        rx: &mut UnboundedReceiver<Value>,
+        f: &Flags,
+        thread: &str,
+        runtime: &str,
+        chat_goal: Option<Value>,
+        mut carried: BTreeMap<String, Value>,
+    ) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
-        let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
-                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None, fresh: None };
-        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api", subscription: None };
-        let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
+        let d = Drive {
+            limit_name: "max_run_minutes (60 minutes)",
+            aid: "acme-late",
+            host,
+            thread,
+            effort: None,
+            limit: Instant::now() + Duration::from_secs(60),
+            flags: f,
+            wake: &wake,
+            redactor: None,
+            runtime,
+            bot: "acme",
+            session: thread,
+            login: None,
+            fresh: None,
+        };
+        let mut segment = Segment {
+            meter: Meter::default(),
+            config: json!({}),
+            profile: None,
+            billing: "api",
+            subscription: None,
+        };
+        let mut goal = GoalRun {
+            chat_goal,
+            controlled: false,
+            failure: None,
+            paused: None,
+            tries_key: ("acme".into(), thread.into()),
+        };
         let mut rejected = None;
-        let drove = tokio::time::timeout(Duration::from_secs(10), runner.drive(&d, rx, "turn-1".into(), &mut segment, &mut carried, &mut rejected, &mut goal))
-            .await
-            .expect("the drive ends");
+        let drove = tokio::time::timeout(
+            Duration::from_secs(10),
+            runner.drive(
+                &d,
+                rx,
+                "turn-1".into(),
+                &mut segment,
+                &mut carried,
+                &mut rejected,
+                &mut goal,
+            ),
+        )
+        .await
+        .expect("the drive ends");
         (drove, carried, goal)
     }
 
@@ -621,10 +897,16 @@ mod tests {
             tx.send(json!({"kind": "turn_failed", "thread_id": "th-cap", "turn_id": "turn-1", "limit": true,
                            "error": "Selected model is at capacity. Please try a different model."})).unwrap();
             let f = flags(false);
-            let drove = drive_turn(&runner, &host, &mut rx, &f, "th-cap").await.unwrap_or_else(|e| panic!("refused: {}", e.text));
+            let drove = drive_turn(&runner, &host, &mut rx, &f, "th-cap")
+                .await
+                .unwrap_or_else(|e| panic!("refused: {}", e.text));
             assert_eq!(drove.outcome, "failed");
             // Before it acted the short capacity hold and a fresh retry or fallback are safe; after, only its thread.
-            assert_eq!((drove.limited, drove.capacity, drove.continues), (!acted, !acted, acted), "acted: {acted}");
+            assert_eq!(
+                (drove.limited, drove.capacity, drove.continues),
+                (!acted, !acted, acted),
+                "acted: {acted}"
+            );
             std::fs::remove_dir_all(dir).ok();
         }
     }
@@ -637,14 +919,29 @@ mod tests {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
             tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": status})).unwrap();
-            let drove = drive_turn(&runner, &host, &mut rx, &flags(true), "th-1").await.unwrap();
+            let drove = drive_turn(&runner, &host, &mut rx, &flags(true), "th-1")
+                .await
+                .unwrap();
             assert_eq!(drove.outcome, status);
-            let events: Vec<Value> = sent.lock().unwrap().iter().filter_map(|request| {
-                let (path, body) = request.split_once(' ')?;
-                path.ends_with("/events").then(|| serde_json::from_str::<Value>(body).unwrap())
-            }).flat_map(|body| body["events"].as_array().cloned().unwrap_or_default()).collect();
-            assert_eq!(events.iter().any(|e| e["kind"] == "diagnostic" && e["payload"]["interruption_complete"] == true),
-                       status == "interrupted", "{events:?}");
+            let events: Vec<Value> = sent
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|request| {
+                    let (path, body) = request.split_once(' ')?;
+                    path.ends_with("/events")
+                        .then(|| serde_json::from_str::<Value>(body).unwrap())
+                })
+                .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+                .collect();
+            assert_eq!(
+                events
+                    .iter()
+                    .any(|e| e["kind"] == "diagnostic"
+                        && e["payload"]["interruption_complete"] == true),
+                status == "interrupted",
+                "{events:?}"
+            );
             std::fs::remove_dir_all(dir).ok();
         }
     }
@@ -656,8 +953,10 @@ mod tests {
         let secret = "synthetic-granted-secret".to_string();
         let redactor = Arc::new(Redactor::new(&[secret.clone()]));
         let (tx, mut rx) = runner.attempt_events("diagnostics", Some(redactor));
-        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("failure {secret}")})).unwrap();
-        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("last failure {secret}")})).unwrap();
+        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("failure {secret}")}))
+            .unwrap();
+        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("last failure {secret}")}))
+            .unwrap();
         tx.send(json!({"kind": "_diagnostics_drained"})).unwrap();
         assert_eq!(rx.recv().await.unwrap()["kind"], "_diagnostics_drained");
         let tails = runner.state.pending_stderr(Some("diagnostics")).unwrap();
@@ -668,19 +967,62 @@ mod tests {
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx));
         let f = flags(false);
         let wake = Notify::new();
-        let d = Drive { aid: "diagnostics", host: &host, thread: "th", effort: None,
-            limit: Instant::now(), limit_name: "max_run_minutes (60 minutes)", flags: &f, wake: &wake,
-            redactor: None, runtime: "claude", bot: "acme", session: "th", login: None, fresh: None };
-        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api", subscription: None };
-        let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "th".into()) };
-        let err = runner.drive(&d, &mut rx, "turn".into(), &mut segment, &mut BTreeMap::new(), &mut None, &mut goal).await.err().unwrap();
+        let d = Drive {
+            aid: "diagnostics",
+            host: &host,
+            thread: "th",
+            effort: None,
+            limit: Instant::now(),
+            limit_name: "max_run_minutes (60 minutes)",
+            flags: &f,
+            wake: &wake,
+            redactor: None,
+            runtime: "claude",
+            bot: "acme",
+            session: "th",
+            login: None,
+            fresh: None,
+        };
+        let mut segment = Segment {
+            meter: Meter::default(),
+            config: json!({}),
+            profile: None,
+            billing: "api",
+            subscription: None,
+        };
+        let mut goal = GoalRun {
+            chat_goal: None,
+            controlled: false,
+            failure: None,
+            paused: None,
+            tries_key: ("acme".into(), "th".into()),
+        };
+        let err = runner
+            .drive(
+                &d,
+                &mut rx,
+                "turn".into(),
+                &mut segment,
+                &mut BTreeMap::new(),
+                &mut None,
+                &mut goal,
+            )
+            .await
+            .err()
+            .unwrap();
         assert_eq!(err.text, "Timeout: max_run_minutes (60 minutes)");
-        assert!(runner.state.pending("diagnostics").unwrap().iter().any(|e| e["payload"]["end_reason"] == err.text));
+        assert!(runner
+            .state
+            .pending("diagnostics")
+            .unwrap()
+            .iter()
+            .any(|e| e["payload"]["end_reason"] == err.text));
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
-    async fn an_answer_that_finished_while_the_computer_slept_is_handed_in_completed_after_the_renewal_is_refused() {
+    async fn an_answer_that_finished_while_the_computer_slept_is_handed_in_completed_after_the_renewal_is_refused(
+    ) {
         // QA case A/B: the runner was paused past the lease and the cleanup; the model finished meanwhile. On wake the
         // renewer hears 409 first (`lost`), with the whole answer still waiting in the host's stream.
         let (url, seen) = lapsed_hub().await;
@@ -691,9 +1033,21 @@ mod tests {
             tx.send(ev).unwrap();
         }
         let f = flags(true);
-        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-1").await.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
-        assert!(!seen.lock().unwrap().iter().any(|p| p.contains("/inputs") || p.contains("/goal ")), "nothing more was asked of the hub");
+        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-1")
+            .await
+            .unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!(
+            (drove.outcome.as_str(), drove.reply.as_str()),
+            ("completed", "Acme's renewal summary is ready.")
+        );
+        assert!(
+            !seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p.contains("/inputs") || p.contains("/goal ")),
+            "nothing more was asked of the hub"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -708,7 +1062,12 @@ mod tests {
         let host = Host::Claude(claude);
         let watched = seen.clone();
         let feed = tokio::spawn(async move {
-            while !watched.lock().unwrap().iter().any(|p| p.contains("/inputs ")) {
+            while !watched
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p.contains("/inputs "))
+            {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             for ev in answer_events("th-2", "turn-1") {
@@ -716,12 +1075,25 @@ mod tests {
             }
         });
         let f = flags(false);
-        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-2").await.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-2")
+            .await
+            .unwrap_or_else(|e| panic!("refused: {}", e.text));
         feed.await.unwrap();
         assert_eq!(drove.outcome, "completed");
         assert_eq!(drove.reply, "Acme's renewal summary is ready.");
-        assert!(f.lost.load(Ordering::SeqCst), "the refusal counts as a lost lease");
-        assert_eq!(seen.lock().unwrap().iter().filter(|p| p.contains("/inputs ")).count(), 1, "inputs are asked for once, not after the refusal");
+        assert!(
+            f.lost.load(Ordering::SeqCst),
+            "the refusal counts as a lost lease"
+        );
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .filter(|p| p.contains("/inputs "))
+                .count(),
+            1,
+            "inputs are asked for once, not after the refusal"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -735,15 +1107,26 @@ mod tests {
         let host = Host::Claude(claude);
         tx.send(json!({"kind": "delta", "thread_id": "th-3", "turn_id": "turn-1", "text": "Acme's renewal"})).unwrap();
         let (f, began) = (flags(true), Instant::now());
-        let err = drive_turn(&runner, &host, &mut rx, &f, "th-3").await.err().expect("not completed");
-        assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
-        assert!(began.elapsed() >= SALVAGE && began.elapsed() < SALVAGE + Duration::from_secs(3), "{:?}", began.elapsed());
+        let err = drive_turn(&runner, &host, &mut rx, &f, "th-3")
+            .await
+            .err()
+            .expect("not completed");
+        assert_eq!(
+            err.text,
+            "Computer lost or heartbeat stopped (execution lease expired)"
+        );
+        assert!(
+            began.elapsed() >= SALVAGE && began.elapsed() < SALVAGE + Duration::from_secs(3),
+            "{:?}",
+            began.elapsed()
+        );
         drop(tx);
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
-    async fn a_renewal_answered_with_a_quarantine_stop_ends_the_turn_with_that_reason_not_as_lost() {
+    async fn a_renewal_answered_with_a_quarantine_stop_ends_the_turn_with_that_reason_not_as_lost()
+    {
         // Dev 573: the hub answers a quarantined bot's renewal with a Stop and its reason, instead of the stale lease
         // that read as a lost computer, waited out SALVAGE and lapsed the attempt.
         let why = "Quarantined: 10 refusals today, resumes about 10:05 UTC";
@@ -755,18 +1138,47 @@ mod tests {
         let host = Host::Claude(claude);
         tx.send(json!({"kind": "delta", "thread_id": "th-q", "turn_id": "turn-1", "text": "Acme's renewal"})).unwrap();
         let f = Arc::new(flags(false));
-        let renewer = crate::lease::spawn(&runner.client, "acme-late".into(), f.clone(), Duration::from_millis(20));
+        let renewer = crate::lease::spawn(
+            &runner.client,
+            "acme-late".into(),
+            f.clone(),
+            Duration::from_millis(20),
+        );
         let began = Instant::now();
-        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-q", "claude", None, BTreeMap::new()).await;
+        let (drove, _, goal) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-q",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
         renewer.abort();
         let drove = drove.unwrap_or_else(|e| panic!("ended as a failure: {}", e.text));
-        assert_eq!(drove.outcome, "interrupted", "stopped, the way a person's Stop ends a turn");
+        assert_eq!(
+            drove.outcome, "interrupted",
+            "stopped, the way a person's Stop ends a turn"
+        );
         assert!(!f.lost.load(Ordering::SeqCst), "never the lost-lease path");
         // Measured for the record, not limited: a wall-clock bound on this test failed under box load.
         eprintln!("renewal stop elapsed: {:?}", began.elapsed());
         assert_eq!(goal.failure.as_deref(), Some(why));
-        let reasons: Vec<Value> = runner.state.pending("acme-late").unwrap().iter().map(|e| e["payload"]["end_reason"].clone()).filter(|r| !r.is_null()).collect();
-        assert_eq!(reasons, vec![json!(why)], "the end reason is the quarantine's, never a lost computer");
+        let reasons: Vec<Value> = runner
+            .state
+            .pending("acme-late")
+            .unwrap()
+            .iter()
+            .map(|e| e["payload"]["end_reason"].clone())
+            .filter(|r| !r.is_null())
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![json!(why)],
+            "the end reason is the quarantine's, never a lost computer"
+        );
         assert!(seen.lock().unwrap().iter().any(|p| p.contains("/renew ")));
         drop(tx);
         std::fs::remove_dir_all(dir).ok();
@@ -787,9 +1199,14 @@ mod tests {
             }
         });
         let f = flags(true);
-        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-4").await.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-4")
+            .await
+            .unwrap_or_else(|e| panic!("refused: {}", e.text));
         feed.await.unwrap();
-        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
+        assert_eq!(
+            (drove.outcome.as_str(), drove.reply.as_str()),
+            ("completed", "Acme's renewal summary is ready.")
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -800,9 +1217,19 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
         let (f, began) = (flags(true), Instant::now());
-        let err = drive_turn(&runner, &host, &mut rx, &f, "th-5").await.err().expect("not completed");
-        assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
-        assert!(began.elapsed() < SALVAGE + Duration::from_secs(1), "{:?}", began.elapsed());
+        let err = drive_turn(&runner, &host, &mut rx, &f, "th-5")
+            .await
+            .err()
+            .expect("not completed");
+        assert_eq!(
+            err.text,
+            "Computer lost or heartbeat stopped (execution lease expired)"
+        );
+        assert!(
+            began.elapsed() < SALVAGE + Duration::from_secs(1),
+            "{:?}",
+            began.elapsed()
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -815,13 +1242,28 @@ mod tests {
         for ev in answer_events("th-6", "turn-1") {
             tx.send(ev).unwrap();
         }
-        let carried: BTreeMap<String, Value> = [("m-1".to_string(), json!({"id": "m-1", "body": "Also add Q3.", "from_actor": "human:ana"}))].into();
+        let carried: BTreeMap<String, Value> = [(
+            "m-1".to_string(),
+            json!({"id": "m-1", "body": "Also add Q3.", "from_actor": "human:ana"}),
+        )]
+        .into();
         let f = flags(true);
-        let (drove, left, _) = drive_with(&runner, &host, &mut rx, &f, "th-6", "claude", None, carried).await;
+        let (drove, left, _) =
+            drive_with(&runner, &host, &mut rx, &f, "th-6", "claude", None, carried).await;
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
-        assert_eq!(left.keys().collect::<Vec<_>>(), ["m-1"], "still carried, so the result reports it undelivered");
-        assert!(!seen.lock().unwrap().iter().any(|p| p.contains("/inputs")), "nothing acknowledged");
+        assert_eq!(
+            (drove.outcome.as_str(), drove.reply.as_str()),
+            ("completed", "Acme's renewal summary is ready.")
+        );
+        assert_eq!(
+            left.keys().collect::<Vec<_>>(),
+            ["m-1"],
+            "still carried, so the result reports it undelivered"
+        );
+        assert!(
+            !seen.lock().unwrap().iter().any(|p| p.contains("/inputs")),
+            "nothing acknowledged"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -848,11 +1290,31 @@ mod tests {
             }
         });
         let f = flags(false);
-        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &f, "th-7", "claude", Some(acme_goal()), BTreeMap::new()).await;
+        let (drove, _, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-7",
+            "claude",
+            Some(acme_goal()),
+            BTreeMap::new(),
+        )
+        .await;
         feed.await.unwrap();
-        assert_eq!(drove.unwrap_or_else(|e| panic!("refused: {}", e.text)).outcome, "completed");
+        assert_eq!(
+            drove
+                .unwrap_or_else(|e| panic!("refused: {}", e.text))
+                .outcome,
+            "completed"
+        );
         assert!(f.lost.load(Ordering::SeqCst));
-        let asked = seen.lock().unwrap().iter().filter(|p| p.contains("/goal ") || p.contains("/inputs")).count();
+        let asked = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.contains("/goal ") || p.contains("/inputs"))
+            .count();
         assert_eq!(asked, 1, "one goal read, refused; no inputs or goal after");
         std::fs::remove_dir_all(dir).ok();
     }
@@ -867,7 +1329,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_goal_reaching_its_cap_in_the_buffered_output_starts_no_pause_after_the_lease_is_lost() {
+    async fn a_goal_reaching_its_cap_in_the_buffered_output_starts_no_pause_after_the_lease_is_lost(
+    ) {
         let (url, seen) = lapsed_hub().await;
         let (runner, dir) = runner_at(&url);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -878,17 +1341,35 @@ mod tests {
             tx.send(ev).unwrap();
         }
         let f = flags(true);
-        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-8", "claude", None, BTreeMap::new()).await;
+        let (drove, _, goal) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-8",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
+        assert_eq!(
+            (drove.outcome.as_str(), drove.reply.as_str()),
+            ("completed", "Acme's renewal summary is ready.")
+        );
         assert!(goal.paused.is_none(), "no pause, so no /goal clear turn");
-        let said = format!("{:?} {:?}", seen.lock().unwrap(), runner.state.pending("acme-late").unwrap());
+        let said = format!(
+            "{:?} {:?}",
+            seen.lock().unwrap(),
+            runner.state.pending("acme-late").unwrap()
+        );
         assert!(!said.contains("could not be cleared"), "{said}");
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
-    async fn a_pause_waiting_when_the_lease_is_lost_ends_with_the_answer_and_starts_no_clear_turn() {
+    async fn a_pause_waiting_when_the_lease_is_lost_ends_with_the_answer_and_starts_no_clear_turn()
+    {
         let (url, seen) = lapsed_hub().await;
         let (runner, dir) = runner_at(&url);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -911,15 +1392,41 @@ mod tests {
             drop(completed);
         });
         let began = Instant::now();
-        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-9", "claude", None, BTreeMap::new()).await;
+        let (drove, _, goal) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-9",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
         later.await.unwrap();
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
         assert_eq!(drove.outcome, "completed");
-        assert!(drove.reply.starts_with("Acme's renewal summary is ready.") && drove.reply.contains("Goal paused after"), "{}", drove.reply);
+        assert!(
+            drove.reply.starts_with("Acme's renewal summary is ready.")
+                && drove.reply.contains("Goal paused after"),
+            "{}",
+            drove.reply
+        );
         assert!(goal.paused.is_some());
-        assert!(began.elapsed() < SALVAGE + Duration::from_secs(1), "bounded: {:?}", began.elapsed());
-        let said = format!("{:?} {:?}", seen.lock().unwrap(), runner.state.pending("acme-late").unwrap());
-        assert!(!said.contains("could not be cleared"), "no /goal clear turn was tried: {said}");
+        assert!(
+            began.elapsed() < SALVAGE + Duration::from_secs(1),
+            "bounded: {:?}",
+            began.elapsed()
+        );
+        let said = format!(
+            "{:?} {:?}",
+            seen.lock().unwrap(),
+            runner.state.pending("acme-late").unwrap()
+        );
+        assert!(
+            !said.contains("could not be cleared"),
+            "no /goal clear turn was tried: {said}"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
     #[tokio::test]
@@ -941,11 +1448,29 @@ mod tests {
             }
         });
         let f = flags(false);
-        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &f, "th-10", "claude", Some(acme_goal()), BTreeMap::new()).await;
+        let (drove, _, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-10",
+            "claude",
+            Some(acme_goal()),
+            BTreeMap::new(),
+        )
+        .await;
         feed.await.unwrap();
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
-        let asked = seen.lock().unwrap().iter().filter(|p| p.contains("/goal ") || p.contains("/inputs")).count();
+        assert_eq!(
+            (drove.outcome.as_str(), drove.reply.as_str()),
+            ("completed", "Acme's renewal summary is ready.")
+        );
+        let asked = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.contains("/goal ") || p.contains("/inputs"))
+            .count();
         assert_eq!(asked, 1, "one goal read, refused; nothing after");
         std::fs::remove_dir_all(dir).ok();
     }
@@ -964,10 +1489,27 @@ mod tests {
             tx.send(ev).unwrap();
         }
         let f = flags(true);
-        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &f, "th-11", "codex", Some(acme_goal()), BTreeMap::new()).await;
-        assert_eq!(codex.requests_started(), 0, "salvage must read the queued answer without asking the harness");
+        let (drove, _, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-11",
+            "codex",
+            Some(acme_goal()),
+            BTreeMap::new(),
+        )
+        .await;
+        assert_eq!(
+            codex.requests_started(),
+            0,
+            "salvage must read the queued answer without asking the harness"
+        );
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
+        assert_eq!(
+            (drove.outcome.as_str(), drove.reply.as_str()),
+            ("completed", "Acme's renewal summary is ready.")
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -979,17 +1521,34 @@ mod tests {
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx));
         runner.drain.register("acme-late");
         assert!(runner.drain.start("acme-late"));
-        runner.drain.begin(Instant::now() - Duration::from_secs(crate::drain::DEFAULT_LIMIT_S));
+        runner
+            .drain
+            .begin(Instant::now() - Duration::from_secs(crate::drain::DEFAULT_LIMIT_S));
         let mut f = flags(false);
         *f.deadline.get_mut().unwrap() = Instant::now() + Duration::from_secs(60);
         let original = acme_goal();
-        let (result, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-drain", "codex", Some(original.clone()), BTreeMap::new()).await;
+        let (result, _, goal) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-drain",
+            "codex",
+            Some(original.clone()),
+            BTreeMap::new(),
+        )
+        .await;
         let result = result.unwrap();
         assert_eq!(result.outcome, "interrupted");
         assert!(result.yielded);
         assert_eq!(goal.chat_goal, Some(original));
         assert!(goal.failure.is_none() && goal.paused.is_none() && !goal.controlled);
-        assert!(!runner.state.pending("acme-late").unwrap().iter().any(|e| e["kind"] == "goal"));
+        assert!(!runner
+            .state
+            .pending("acme-late")
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "goal"));
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1005,22 +1564,63 @@ mod tests {
             tx.send(ev).unwrap();
         }
         let (f, began) = (flags(true), Instant::now());
-        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-12", "codex", Some(acme_goal()), BTreeMap::new()).await;
+        let (drove, _, goal) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-12",
+            "codex",
+            Some(acme_goal()),
+            BTreeMap::new(),
+        )
+        .await;
         let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!((drove.outcome.as_str(), drove.reply.as_str()), ("completed", "Acme's renewal summary is ready."));
-        assert!(began.elapsed() < SALVAGE, "ended on the completed turn, not the window: {:?}", began.elapsed());
+        assert_eq!(
+            (drove.outcome.as_str(), drove.reply.as_str()),
+            ("completed", "Acme's renewal summary is ready.")
+        );
+        assert!(
+            began.elapsed() < SALVAGE,
+            "ended on the completed turn, not the window: {:?}",
+            began.elapsed()
+        );
         assert!(goal.paused.is_none() && !goal.controlled);
-        assert!(!seen.lock().unwrap().iter().any(|p| p.contains("/goal ") || p.contains("/inputs")));
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p.contains("/goal ") || p.contains("/inputs")));
         std::fs::remove_dir_all(dir).ok();
     }
 
     /// The outbox rows of `aid` in seq order, as (seq, kind, payload).
     fn stored_rows(runner: &Runner, aid: &str) -> Vec<(i64, String, Value)> {
-        runner.state.with(|c| {
-            let mut stmt = c.prepare("SELECT seq, kind, payload FROM events WHERE attempt_id = ?1 ORDER BY seq")?;
-            let rows = stmt.query_map([aid], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
-            rows.map(|row| row.map(|(seq, kind, text)| (seq, kind, serde_json::from_str(&text).unwrap_or(Value::Null)))).collect()
-        }).unwrap()
+        runner
+            .state
+            .with(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT seq, kind, payload FROM events WHERE attempt_id = ?1 ORDER BY seq",
+                )?;
+                let rows = stmt.query_map([aid], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })?;
+                rows.map(|row| {
+                    row.map(|(seq, kind, text)| {
+                        (
+                            seq,
+                            kind,
+                            serde_json::from_str(&text).unwrap_or(Value::Null),
+                        )
+                    })
+                })
+                .collect()
+            })
+            .unwrap()
     }
 
     #[tokio::test]
@@ -1029,15 +1629,54 @@ mod tests {
         let (runner, dir) = runner_at(&url);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
-        for kind in ["delta", "tool", "message", "tokens", "delta", "diagnostic", "status", "delta"] {
+        for kind in [
+            "delta",
+            "tool",
+            "message",
+            "tokens",
+            "delta",
+            "diagnostic",
+            "status",
+            "delta",
+        ] {
             tx.send(json!({"kind": kind, "thread_id": "th-1", "turn_id": "turn-1", "text": format!("{kind} text")})).unwrap();
         }
         tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": "completed"})).unwrap();
-        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &flags(true), "th-1", "claude", None, BTreeMap::new()).await;
-        assert_eq!(drove.unwrap_or_else(|e| panic!("refused: {}", e.text)).outcome, "completed");
+        let (drove, _, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &flags(true),
+            "th-1",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
+        assert_eq!(
+            drove
+                .unwrap_or_else(|e| panic!("refused: {}", e.text))
+                .outcome,
+            "completed"
+        );
         let rows = stored_rows(&runner, "acme-late");
-        let kinds: Vec<(i64, &str)> = rows.iter().map(|(seq, kind, _)| (*seq, kind.as_str())).collect();
-        assert_eq!(kinds, vec![(1, "delta"), (2, "tool"), (3, "message"), (4, "tokens"), (5, "delta"), (6, "diagnostic"), (7, "status"), (8, "delta")]);
+        let kinds: Vec<(i64, &str)> = rows
+            .iter()
+            .map(|(seq, kind, _)| (*seq, kind.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (1, "delta"),
+                (2, "tool"),
+                (3, "message"),
+                (4, "tokens"),
+                (5, "delta"),
+                (6, "diagnostic"),
+                (7, "status"),
+                (8, "delta")
+            ]
+        );
         assert_eq!(rows[2].2["text"], "message text");
         std::fs::remove_dir_all(dir).ok();
     }
@@ -1049,34 +1688,82 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
         for text in ["first", "second"] {
-            tx.send(json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": text})).unwrap();
+            tx.send(
+                json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": text}),
+            )
+            .unwrap();
         }
         tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": "interrupted"})).unwrap();
-        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &flags(true), "th-1", "claude", None, BTreeMap::new()).await;
-        assert_eq!(drove.unwrap_or_else(|e| panic!("refused: {}", e.text)).outcome, "interrupted");
+        let (drove, _, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &flags(true),
+            "th-1",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
+        assert_eq!(
+            drove
+                .unwrap_or_else(|e| panic!("refused: {}", e.text))
+                .outcome,
+            "interrupted"
+        );
         let rows = stored_rows(&runner, "acme-late");
-        let kinds: Vec<(i64, &str)> = rows.iter().map(|(seq, kind, _)| (*seq, kind.as_str())).collect();
+        let kinds: Vec<(i64, &str)> = rows
+            .iter()
+            .map(|(seq, kind, _)| (*seq, kind.as_str()))
+            .collect();
         assert_eq!(kinds, vec![(1, "delta"), (2, "delta"), (3, "diagnostic")]);
-        assert_eq!((rows[1].2["text"].as_str(), rows[2].2["interruption_complete"].as_bool()), (Some("second"), Some(true)));
+        assert_eq!(
+            (
+                rows[1].2["text"].as_str(),
+                rows[2].2["interruption_complete"].as_bool()
+            ),
+            (Some("second"), Some(true))
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
-    async fn a_failed_drain_write_ends_the_drive_with_the_store_error_and_keeps_only_the_rows_before_it() {
+    async fn a_failed_drain_write_ends_the_drive_with_the_store_error_and_keeps_only_the_rows_before_it(
+    ) {
         let (url, _sent) = lapsed_hub().await;
         let (runner, dir) = runner_at(&url);
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
-        runner.state.append("acme-late", "status", &json!({"yielded": "kept"})).unwrap();
+        runner
+            .state
+            .append("acme-late", "status", &json!({"yielded": "kept"}))
+            .unwrap();
         runner.state.with(|c| c.execute_batch("CREATE TRIGGER refuse_delta BEFORE INSERT ON events WHEN NEW.kind = 'delta' BEGIN SELECT RAISE(ABORT, 'planted failure'); END;")).unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
-        tx.send(json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": "lost"})).unwrap();
-        tx.send(json!({"kind": "tool", "thread_id": "th-1", "turn_id": "turn-1", "name": "ls"})).unwrap();
+        tx.send(json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": "lost"}))
+            .unwrap();
+        tx.send(json!({"kind": "tool", "thread_id": "th-1", "turn_id": "turn-1", "name": "ls"}))
+            .unwrap();
         tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": "completed"})).unwrap();
-        let (drove, _, _) = drive_with(&runner, &host, &mut rx, &flags(true), "th-1", "claude", None, BTreeMap::new()).await;
-        let Err(e) = drove else { panic!("the drain's write should have failed the drive") };
+        let (drove, _, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &flags(true),
+            "th-1",
+            "claude",
+            None,
+            BTreeMap::new(),
+        )
+        .await;
+        let Err(e) = drove else {
+            panic!("the drain's write should have failed the drive")
+        };
         assert!(e.text.starts_with("runner.sqlite:"), "{}", e.text);
-        let kinds: Vec<String> = stored_rows(&runner, "acme-late").into_iter().map(|(_, kind, _)| kind).collect();
+        let kinds: Vec<String> = stored_rows(&runner, "acme-late")
+            .into_iter()
+            .map(|(_, kind, _)| kind)
+            .collect();
         assert_eq!(kinds, vec!["status".to_string()]);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -1098,12 +1785,48 @@ mod tests {
             tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": "completed"})).unwrap();
             runner.state.record(&json!({"id": "acme-late"})).unwrap();
             let (f, wake) = (flags(true), Notify::new());
-            let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "acme-late", host: &host, thread: "th-1", effort: None, limit: Instant::now() + Duration::from_secs(3600),
-                            flags: &f, wake: &wake, redactor: None, runtime: "claude", bot: "acme", session: "th-1", login: None, fresh: None };
-            let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api", subscription: None };
-            let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "th-1".into()) };
+            let d = Drive {
+                limit_name: "max_run_minutes (60 minutes)",
+                aid: "acme-late",
+                host: &host,
+                thread: "th-1",
+                effort: None,
+                limit: Instant::now() + Duration::from_secs(3600),
+                flags: &f,
+                wake: &wake,
+                redactor: None,
+                runtime: "claude",
+                bot: "acme",
+                session: "th-1",
+                login: None,
+                fresh: None,
+            };
+            let mut segment = Segment {
+                meter: Meter::default(),
+                config: json!({}),
+                profile: None,
+                billing: "api",
+                subscription: None,
+            };
+            let mut goal = GoalRun {
+                chat_goal: None,
+                controlled: false,
+                failure: None,
+                paused: None,
+                tries_key: ("acme".into(), "th-1".into()),
+            };
             let (before, began) = (crate::state::APPENDS.load(Ordering::SeqCst), Instant::now());
-            let drove = runner.drive(&d, &mut rx, "turn-1".into(), &mut segment, &mut BTreeMap::new(), &mut None, &mut goal).await;
+            let drove = runner
+                .drive(
+                    &d,
+                    &mut rx,
+                    "turn-1".into(),
+                    &mut segment,
+                    &mut BTreeMap::new(),
+                    &mut None,
+                    &mut goal,
+                )
+                .await;
             let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
             micros.push(began.elapsed().as_secs_f64() * 1e6);
             commits.push(crate::state::APPENDS.load(Ordering::SeqCst) - before);

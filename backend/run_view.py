@@ -13,7 +13,7 @@ from datetime import timezone
 from fastapi import Request
 
 from .store import H, Problem
-from . import login_holds, login_waits, run_diagnostics, runs, task_privacy as privacy
+from . import login_holds, login_waits, run_diagnostics, runs, start_places, task_privacy as privacy
 from .turns import TOOL_START, TOOL_BACKGROUNDED, clip, seconds
 
 ATTEMPT_LIMIT, NODE_LIMIT, SUMMARY_CHARS = 20, 50, 120
@@ -23,8 +23,9 @@ LIVE = ("leased", "running")
 DECISIONS = ("job.reconcile", "job.auto_reconcile")
 LEASE = {"attempt.lease-grace": "grace", "attempt.lease-restored": "restored"}
 # Read by action and target (store index events_action_target), never by scanning events since a time.
-RECOVERY_SQL = ("action IN ('job.reconcile','job.auto_reconcile','job.retry','attempt.lease-grace',"
-                "'attempt.lease-restored')")
+RECOVERY_SQL = (
+    "action IN ('job.reconcile','job.auto_reconcile','job.retry','attempt.lease-grace','attempt.lease-restored')"
+)
 
 
 def failure_reason(state, result_json, end_reason=None):
@@ -35,9 +36,18 @@ def failure_reason(state, result_json, end_reason=None):
         result = json.loads(result_json or "{}") or {}
     except (ValueError, TypeError):
         result = {}
-    reason = login_holds.failure_line(result) or end_reason or result.get("error") or result.get("reason") or result.get("message")
-    return clip(reason, 280) if reason else (
-        "Lease expired before completion" if state == "expired" else "Attempt failed before completion")
+    reason = (
+        login_holds.failure_line(result)
+        or end_reason
+        or result.get("error")
+        or result.get("reason")
+        or result.get("message")
+    )
+    return (
+        clip(reason, 280)
+        if reason
+        else ("Lease expired before completion" if state == "expired" else "Attempt failed before completion")
+    )
 
 
 def work(rows, live):
@@ -55,12 +65,31 @@ def work(rows, live):
             if key in agents:
                 agents[key]["background"] = True
             elif key not in shells:
-                shells[key] = {"id": key, "tool": clip(p.get("tool") or "tool", 60), "summary": "",
-                               "parent_id": p.get("parent_id"), "status": None, "started_at": at, "ended": None}
+                shells[key] = {
+                    "id": key,
+                    "tool": clip(p.get("tool") or "tool", 60),
+                    "summary": "",
+                    "parent_id": p.get("parent_id"),
+                    "status": None,
+                    "started_at": at,
+                    "ended": None,
+                }
         elif agent:
-            node = agents.setdefault(key, {"id": key, "parent_id": agent.get("parent_id") or p.get("parent_id"),
-                                           "type": None, "model": None, "status": None, "background": False,
-                                           "tool_uses": None, "duration_ms": None, "started_at": at, "ended": None})
+            node = agents.setdefault(
+                key,
+                {
+                    "id": key,
+                    "parent_id": agent.get("parent_id") or p.get("parent_id"),
+                    "type": None,
+                    "model": None,
+                    "status": None,
+                    "background": False,
+                    "tool_uses": None,
+                    "duration_ms": None,
+                    "started_at": at,
+                    "ended": None,
+                },
+            )
             node["type"] = clip(agent.get("type") or node["type"] or "agent", 60)
             node["model"] = clip(agent.get("model"), 80) or node["model"]
             for field in ("tool_uses", "duration_ms"):
@@ -71,8 +100,15 @@ def work(rows, live):
                 node["status"], node["ended"] = status, at
         elif p.get("background"):
             if key not in shells and status in TOOL_START:
-                shells[key] = {"id": key, "tool": clip(p.get("tool") or "tool", 60), "summary": clip(p.get("summary"), SUMMARY_CHARS),
-                               "parent_id": p.get("parent_id"), "status": None, "started_at": at, "ended": None}
+                shells[key] = {
+                    "id": key,
+                    "tool": clip(p.get("tool") or "tool", 60),
+                    "summary": clip(p.get("summary"), SUMMARY_CHARS),
+                    "parent_id": p.get("parent_id"),
+                    "status": None,
+                    "started_at": at,
+                    "ended": None,
+                }
             elif key in shells and status not in TOOL_START:
                 shells[key]["status"], shells[key]["ended"] = status, at
     for node in (*agents.values(), *shells.values()):
@@ -104,14 +140,28 @@ def decision_note(actor, detail):
 
 
 # The job's state beside a recovery decision: a saved choice still waiting for its lane is held.
-JOB_WORDS = {"uncertain": "Held", "canceled": "Canceled", "queued": "Queued", "leased": "Running", "running": "Running",
-             "input": "Running", "completed": "Done"}
+JOB_WORDS = {
+    "uncertain": "Held",
+    "canceled": "Canceled",
+    "queued": "Queued",
+    "leased": "Running",
+    "running": "Running",
+    "input": "Running",
+    "completed": "Done",
+}
 
 
 def decided_by(actor):
     """Who made a recovery decision: Tico's own auto-reconcile, BotOps, a person, or another bot (an operator)."""
-    return ("tico" if actor == H.KEEPER else "botops" if actor == "bot:" + H.FLEET_MAINTAINER
-            else "person" if H.is_human(actor) else "bot")
+    return (
+        "tico"
+        if actor == H.KEEPER
+        else "botops"
+        if actor == "bot:" + H.FLEET_MAINTAINER
+        else "person"
+        if H.is_human(actor)
+        else "bot"
+    )
 
 
 def recovery(c, job_ids):
@@ -122,20 +172,28 @@ def recovery(c, job_ids):
     job's current try, and only then does `state` carry the job's state: a later try's stop is not the decision's."""
     out = {}
     for part in H.chunks(sorted(set(job_ids))):
-        for r in c.execute("SELECT r.job_id,r.attempt_id,r.decision,r.note,r.actor,r.created_at,j.state AS job_state,"
-                           "j.attempt_id AS job_attempt FROM job_recovery r JOIN jobs j ON j.id=r.job_id "
-                           f"WHERE r.job_id IN ({','.join('?' * len(part))})", part):
+        for r in c.execute(
+            "SELECT r.job_id,r.attempt_id,r.decision,r.note,r.actor,r.created_at,j.state AS job_state,"
+            "j.attempt_id AS job_attempt FROM job_recovery r JOIN jobs j ON j.id=r.job_id "
+            f"WHERE r.job_id IN ({','.join('?' * len(part))})",
+            part,
+        ):
             current = r["job_attempt"] == r["attempt_id"]
-            out[r["job_id"]] = {"decision": "resume" if r["decision"] == "resume" else "dismiss",
-                                "attempt_id": r["attempt_id"], "current": current,
-                                "state": r["job_state"] if current else None,
-                                "by": r["actor"], "by_kind": decided_by(r["actor"]),
-                                "at": r["created_at"], "note": decision_note(r["actor"], {"note": r["note"]})}
+            out[r["job_id"]] = {
+                "decision": "resume" if r["decision"] == "resume" else "dismiss",
+                "attempt_id": r["attempt_id"],
+                "current": current,
+                "state": r["job_state"] if current else None,
+                "by": r["actor"],
+                "by_kind": decided_by(r["actor"]),
+                "at": r["created_at"],
+                "note": decision_note(r["actor"], {"note": r["note"]}),
+            }
     return out
 
 
 def decision_label(decided, name):
-    """"Canceled: dismissed by BotOps at 09:50Z, <note>": the job's state, the decision, who, when (UTC) and the
+    """ "Canceled: dismissed by BotOps at 09:50Z, <note>": the job's state, the decision, who, when (UTC) and the
     note, as one line. Once the job has moved to a later try the state is not this decision's, so the line says only
     what was decided: "Resumed by BotOps at 09:50Z, <note>". `name` turns the decider's actor into a person's name."""
     who = "Tico's auto-reconcile" if decided["by_kind"] == "tico" else name(decided["by"])
@@ -143,8 +201,11 @@ def decision_label(decided, name):
     at = at and at.astimezone(timezone.utc)
     verb = "resumed" if decided["decision"] == "resume" else "dismissed"
     state = decided.get("state")
-    line = ((f"{JOB_WORDS.get(state, str(state).capitalize())}: {verb}" if state else verb.capitalize())
-            + f" by {who}" + (f" at {at.strftime('%H:%M')}Z" if at else ""))
+    line = (
+        (f"{JOB_WORDS.get(state, str(state).capitalize())}: {verb}" if state else verb.capitalize())
+        + f" by {who}"
+        + (f" at {at.strftime('%H:%M')}Z" if at else "")
+    )
     return line + (f", {decided['note']}" if decided.get("note") else "")
 
 
@@ -163,12 +224,20 @@ def next_step(attempt, tries, job, decisions, retries):
     if attempt["state"] in LIVE:
         return None
     if job["state"] == "uncertain":
-        return {"kind": "waiting", "by": None, "at": None,
-                "note": "Stopped partway after it may have acted: waiting for a person to decide whether to run it again."}
+        return {
+            "kind": "waiting",
+            "by": None,
+            "at": None,
+            "note": "Stopped partway after it may have acted: waiting for a person to decide whether to run it again.",
+        }
     if job["state"] in ("queued", "leased"):
         by = next((r for r in reversed(retries) if r["at"] >= (attempt["finished_at"] or attempt["created_at"])), None)
-        return {"kind": "queued", "by": by and by["by"], "at": by and by["at"],
-                "note": "Queued to run again by hand." if by else "Queued to run again."}
+        return {
+            "kind": "queued",
+            "by": by and by["by"],
+            "at": by and by["at"],
+            "note": "Queued to run again by hand." if by else "Queued to run again.",
+        }
     return None
 
 
@@ -187,13 +256,16 @@ def run_view(c, auth, who, tid):
             return True
         except Problem:
             return False
+
     # The page limit counts only runs this reader can open: hidden newer runs must not push theirs off the page.
     turns = []
     for row in c.execute(
-            "SELECT a.id,a.bot_id AS bot,a.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,"
-            "a.result,a.stop_requested_at,a.wake,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
-            "JOIN messages m ON m.id=j.message_id WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
-            (tid, SCAN_LIMIT)):
+        "SELECT a.id,a.bot_id AS bot,a.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,"
+        "a.result,a.stop_requested_at,a.wake,m.conversation_id,p.wait_reason FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id LEFT JOIN start_places p ON p.attempt_id=a.id "
+        "WHERE a.task_id=? ORDER BY a.created_at DESC LIMIT ?",
+        (tid, SCAN_LIMIT),
+    ):
         r = dict(row)
         if readable(r):
             turns.append(r)
@@ -202,38 +274,54 @@ def run_view(c, auth, who, tid):
     ids = [r["id"] for r in turns]
     jobs = sorted({r["job_id"] for r in turns})
     # A blocked checkpoint is no checkpoint: no prompt or stall report uses it either.
-    task = c.execute("SELECT checkpoint,checkpoint_at,checkpoint_by_id,checkpoint_blocked FROM tasks WHERE id=?", (tid,)).fetchone()
-    checkpoint = ({"text": task["checkpoint"], "at": task["checkpoint_at"], "by": task["checkpoint_by_id"]}
-                  if task and (task["checkpoint"] or "").strip() and not task["checkpoint_blocked"] else None)
+    task = c.execute(
+        "SELECT checkpoint,checkpoint_at,checkpoint_by_id,checkpoint_blocked FROM tasks WHERE id=?", (tid,)
+    ).fetchone()
+    checkpoint = (
+        {"text": task["checkpoint"], "at": task["checkpoint_at"], "by": task["checkpoint_by_id"]}
+        if task and (task["checkpoint"] or "").strip() and not task["checkpoint_blocked"]
+        else None
+    )
     if not ids:
         return {"task_id": tid, "checkpoint": checkpoint, "runs": []}
     marks, job_marks = ",".join("?" * len(ids)), ",".join("?" * len(jobs))
     job_rows = {r["id"]: r for r in H._rows(c.execute(f"SELECT id,state FROM jobs WHERE id IN ({job_marks})", jobs))}
     # Tries are counted over every attempt of the job, not only the ones this page shows.
     tries = {}
-    for r in H._rows(c.execute(f"SELECT id,job_id,created_at FROM attempts WHERE job_id IN ({job_marks}) ORDER BY created_at",
-                               jobs)):
+    for r in H._rows(
+        c.execute(f"SELECT id,job_id,created_at FROM attempts WHERE job_id IN ({job_marks}) ORDER BY created_at", jobs)
+    ):
         tries.setdefault(r["job_id"], []).append(r)
     decisions, retries, lease = {}, {}, {}
-    for e in c.execute(f"SELECT created_at,actor,action,target,detail FROM events WHERE {RECOVERY_SQL} AND target IN "
-                       f"({job_marks},{marks}) ORDER BY created_at", (*jobs, *ids)):
+    for e in c.execute(
+        f"SELECT created_at,actor,action,target,detail FROM events WHERE {RECOVERY_SQL} AND target IN "
+        f"({job_marks},{marks}) ORDER BY created_at",
+        (*jobs, *ids),
+    ):
         detail = json.loads(e["detail"] or "{}") or {}
         if e["action"] in DECISIONS and detail.get("attempt_id"):
             decisions[detail["attempt_id"]] = {
                 "kind": "resumed" if detail.get("decision") == "resume" else "dismissed",
-                "by": e["actor"], "at": e["created_at"], "note": decision_note(e["actor"], detail)}
+                "by": e["actor"],
+                "at": e["created_at"],
+                "note": decision_note(e["actor"], detail),
+            }
         elif e["action"] == "job.retry":
             retries.setdefault(e["target"], []).append({"by": e["actor"], "at": e["created_at"]})
         elif e["action"] in LEASE:
             lease.setdefault(e["target"], []).append({"kind": LEASE[e["action"]], "at": e["created_at"]})
     events = {aid: [] for aid in ids}
-    for r in c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN ({marks}) "
-                       "AND kind='tool' AND (json_extract(payload,'$.subagent') IS NOT NULL OR "
-                       "json_extract(payload,'$.background') IS NOT NULL OR "
-                       "json_extract(payload,'$.status')=?) ORDER BY attempt_id,seq", (*ids, TOOL_BACKGROUNDED)):
+    for r in c.execute(
+        f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN ({marks}) "
+        "AND kind='tool' AND (json_extract(payload,'$.subagent') IS NOT NULL OR "
+        "json_extract(payload,'$.background') IS NOT NULL OR "
+        "json_extract(payload,'$.status')=?) ORDER BY attempt_id,seq",
+        (*ids, TOOL_BACKGROUNDED),
+    ):
         if privacy.content_readable(c, actor, dict(r)):
             events[r["attempt_id"]].append((json.loads(r["payload"]), r["created_at"]))
     from .usage_records import ran_on
+
     made = ran_on(c, ids)
     saved = recovery(c, jobs)
     out = []
@@ -241,28 +329,50 @@ def run_view(c, auth, who, tid):
         job_tries = tries.get(r["job_id"], [])
         live = r["state"] in LIVE
         subagents, background = work(events[r["id"]], live)
-        out.append({
-            "id": r["id"], "bot": r["bot"], "job": r["job_id"],
-            **run_diagnostics.metadata(c, r["id"]),
-            "try": next((n for n, t in enumerate(job_tries, 1) if t["id"] == r["id"]), 1), "tries": len(job_tries),
-            "state": runs.state(r["state"]), "outcome": r["exit"], "created_at": r["created_at"], "started_at": r["started_at"],
-            "finished_at": r["finished_at"], "took_s": seconds(r["started_at"], r["finished_at"]), "ran_on": made.get(r["id"]),
-            "lease_until": r["lease_until"] if live else None, "lease": lease.get(r["id"], []),
-            "reason": failure_reason(r["state"], r["result"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
-            # Waiting for its ChatGPT login, or where it ran instead of its own harness and why (backend/login_waits.py).
-            "waiting": login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None,
-            "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
-            # Stopped to let another turn have the shared login; its job continues next.
-            "paused": login_waits.paused(c, r["id"], r["state"], r["result"], r["stop_requested_at"]),
-            "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
-                              retries.get(r["job_id"], [])),
-            # The job's state now and its recovery decision when that decision was about this try (job_recovery); the
-            # decision's own `state` is set only while it is about the job's current try.
-            "job_state": (job_rows.get(r["job_id"]) or {}).get("state"),
-            "decision": decision if (decision := saved.get(r["job_id"])) and decision["attempt_id"] == r["id"] else None,
-            "subagents": subagents, "background": background,
-            # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
-            "wake": H._json(r["wake"])})
+        out.append(
+            {
+                "id": r["id"],
+                "bot": r["bot"],
+                "job": r["job_id"],
+                **run_diagnostics.metadata(c, r["id"]),
+                "try": next((n for n, t in enumerate(job_tries, 1) if t["id"] == r["id"]), 1),
+                "tries": len(job_tries),
+                "state": runs.state(r["state"]),
+                "outcome": r["exit"],
+                "created_at": r["created_at"],
+                "started_at": r["started_at"],
+                "finished_at": r["finished_at"],
+                "took_s": seconds(r["started_at"], r["finished_at"]),
+                "ran_on": made.get(r["id"]),
+                "lease_until": r["lease_until"] if live else None,
+                "lease": lease.get(r["id"], []),
+                "reason": failure_reason(r["state"], r["result"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
+                # Memory and login waits, or where it ran instead of its own harness and why (backend/login_waits.py).
+                "waiting": (
+                    "Waiting: " + r["wait_reason"]
+                    if r["state"] == "leased" and (r["wait_reason"] or "").startswith(start_places.MEMORY_HOLD)
+                    else login_waits.waiting(c, r["id"], r["bot"], who, auth)
+                    if live
+                    else None
+                ),
+                "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
+                # Stopped to let another turn have the shared login; its job continues next.
+                "paused": login_waits.paused(c, r["id"], r["state"], r["result"], r["stop_requested_at"]),
+                "next": next_step(
+                    r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions, retries.get(r["job_id"], [])
+                ),
+                # The job's state now and its recovery decision when that decision was about this try (job_recovery); the
+                # decision's own `state` is set only while it is about the job's current try.
+                "job_state": (job_rows.get(r["job_id"]) or {}).get("state"),
+                "decision": decision
+                if (decision := saved.get(r["job_id"])) and decision["attempt_id"] == r["id"]
+                else None,
+                "subagents": subagents,
+                "background": background,
+                # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
+                "wake": H._json(r["wake"]),
+            }
+        )
     return {"task_id": tid, "checkpoint": checkpoint, "runs": out}
 
 

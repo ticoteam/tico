@@ -8,12 +8,15 @@ from clients.tico import APIError
 
 # The last few lines that say something went wrong, for a support bundle (backend/diagnostics.py); it is
 # the same text the runner prints, kept in memory only and sent only in a heartbeat the server reads.
-TROUBLE = re.compile(r"error|fail|unavailable|refused|rejected|interrupted|cannot|could not|not updating|exception|limit", re.I)
+TROUBLE = re.compile(
+    r"error|fail|unavailable|refused|rejected|interrupted|cannot|could not|not updating|exception|limit", re.I
+)
 RECENT = collections.deque(maxlen=50)
 
 
 def log(line, *, diagnostic=False):
-    from .redact import scrub_log            # a running turn's secrets never reach the log
+    from .redact import scrub_log  # a running turn's secrets never reach the log
+
     line = scrub_log(line)
     print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True)
     if diagnostic or TROUBLE.search(line):
@@ -50,8 +53,18 @@ class Outage:
         Tico runner: cloud reachable again after 3m40s (47 failures)
     """
 
-    def __init__(self, prefix, down="cloud unavailable", still="still unavailable", up="cloud reachable again",
-                 *, progress=60, cap=15, clock=time.monotonic, out=None):
+    def __init__(
+        self,
+        prefix,
+        down="cloud unavailable",
+        still="still unavailable",
+        up="cloud reachable again",
+        *,
+        progress=60,
+        cap=15,
+        clock=time.monotonic,
+        out=None,
+    ):
         self.prefix, self.down, self.still, self.up = prefix, down, still, up
         self.progress, self.cap, self.clock = progress, cap, clock
         self.out = out or log

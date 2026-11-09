@@ -9,6 +9,13 @@ It stays available when your Tico server or bot computer stops.
 Sign in with your Tico account and select your company from the **Company** menu.
 The page shows only companies you belong to.
 
+In Tico, open your account menu at the bottom of the left navigation and choose **Admin**.
+Only the owner and admins see it. It appears for organizations using Tico account sign-in, companies with a Tico Cloud account, and self-run servers
+linked to a Tico company in Settings. It opens the default browser from the desktop app, or a new tab on the web.
+A linked server uses the portal address supplied by its company connection, and a Cloud company uses its account's
+billing address when available; otherwise it opens the portal home.
+The browser uses its own Tico account session, so you may need to sign in and select your company.
+
 ## Before approval
 
 While you wait, the page shows **You’re on the waitlist**.
@@ -137,8 +144,8 @@ server up. Collect, Clean up, Check health, Learn, Suggest, Dream and other inte
 Tico then records "server.sleep" in History and asks to stop the
 server, passing the time of the next routine, Maintenance run, daily job, release hour or send retry as its wake-up time.
 
-A sleeping server starts again when a webhook arrives at an address through Tico Gateway (Settings > Webhooks >
-Through Tico Gateway), when that routine time comes, or when someone signs in at your account page. A server Tico stopped
+A sleeping server starts again when a webhook arrives at an address through Tico Gateway (Settings > Models > Tico
+Gateway > Webhooks), when that routine time comes, or when someone signs in at your account page. A server Tico stopped
 because the balance ran out never starts on its own, and webhooks sent to it wait at Tico Gateway until it runs again.
 If the stop request fails, Health says so and the server keeps running.
 

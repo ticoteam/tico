@@ -1,8 +1,8 @@
 // Automations without a bot beside them (ui/app/automations*.js) against the fake hub in support/automations-fake.cjs.
 // A bot's proposal (a pending version) shows "Proposed" on the version chip and waits in Versions: View diff, Discard
 // (DELETE), Turn on (restore). A draft (off, its first version pending) shows Pending in the list, and Turn on turns it
-// on. + New makes a blank one, off, at once; Ask beside it opens the Ask panel. An old #/automations/bot link opens
-// the list. Computer, then phone.
+// on. The + makes a blank one, off, at once; the header has no Ask. An old #/automations/bot link opens the list.
+// Computer, then phone.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
@@ -15,7 +15,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations', proposal: true});
       await page.waitForSelector('tr.au-row[data-row="au_inbox"] .pill:text-is("Pending")');
       assert.equal(await page.locator('.au-side').isVisible(), false, 'no side panel on the list');
-      assert.equal(await page.locator('.au-ph [data-ask-open]').getAttribute('aria-label'), 'Ask');
+      assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, 'no Ask on Automations');
       await page.locator('tr.au-row[data-row="au_inbox"] a').click();
       await page.waitForSelector('.au-card[data-open="f1"]');
       assert.equal(await page.locator('.au-ver').innerText(), 'v7 · Proposed');
@@ -65,7 +65,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, hash: '#/automations/bot'});
       await page.waitForSelector('tr.au-row[data-row="au_inbox"]');
       assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'list');
-      await page.getByRole('button', {name: '+ New'}).click();
+      await page.getByRole('button', {name: 'New automation'}).click();
       await page.locator('.au-newm [data-new="schedule"]').click();
       await page.waitForFunction(() => document.querySelector('#au-root').dataset.screen === 'detail' && /New automation/.test(document.querySelector('.au-name')?.textContent));
       const made = writes.filter(w => w.method === 'POST' && w.path === '/api/v2/automations');

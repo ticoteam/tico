@@ -11,7 +11,7 @@ with a gap list on top. Prices, terms and undocumented answers are gaps with an 
     hub task show <id>
 
 Read `knowledge/deals/<deal>.md` and the discovery call. Note the deadline, the required format and who
-signs off internally. If there is no call and no note, ask once with `hub task ask <id>` for the buyer's
+signs off internally. If there is no call and no note, ask once with `hub task question "<question>" --on <person> --parent <id>` for the buyer's
 three priorities.
 
 ## 2. A proposal

@@ -1,4 +1,4 @@
-"""Settings > Google's team list (GET /api/v2/google/people, backend/google_workspace.py team_statuses): admins only,
+"""Tools' team list (GET /api/v2/google/people, backend/google_workspace.py team_statuses): admins only,
 people and never bots, and each mailbox's state by the same rule the server uses to pick a credential: a live personal
 grant, then the Workspace key's domain, then a Connect Google attempt. Google is never asked (`google_call` replaced);
 the key is a throwaway RSA key and the domain is acme.example."""
@@ -12,7 +12,14 @@ from backend import routines
 from backend.store import H, encode
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_google_workspace import (  # noqa: F401  (fixtures)
-    MAILBOX, connected, fresh_state, google, keys, personal, private)
+    MAILBOX,
+    connected,
+    fresh_state,
+    google,
+    keys,
+    personal,
+    private,
+)
 
 PEOPLE = "/api/v2/google/people"
 
@@ -24,8 +31,13 @@ def set_roster(api, people):
 
 def bot_mailboxes(monkeypatch, *boxes):
     """The message bot mailboxes the roster would list: (address, person_id, bot)."""
-    monkeypatch.setattr(routines, "message_bot_mailboxes", lambda c, roster=None: [
-        {"address": address, "person_id": person, "bot": bot, "declared": True} for address, person, bot in boxes])
+    monkeypatch.setattr(
+        routines,
+        "message_bot_mailboxes",
+        lambda c, roster=None: [
+            {"address": address, "person_id": person, "bot": bot, "declared": True} for address, person, bot in boxes
+        ],
+    )
 
 
 def test_only_an_admin_reads_the_team_list(api):
@@ -39,24 +51,27 @@ def test_each_person_has_one_state_and_bots_hidden_and_gone_people_are_left_out(
     # The Workspace key covers acme.example; Ben's message bot declares his acme.example mailbox though he signs in
     # elsewhere, and the company inbox bot's mailbox belongs to no person.
     bot_mailboxes(monkeypatch, (MAILBOX, "inbox", "inbox"), ("ben@acme.example", "ben", "inbox-ben"))
-    set_roster(api, [
-        {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-        {"id": "ben", "name": "Ben", "email": "ben@other.example"},
-        {"id": "cara", "email": "cara@other.example"},
-        {"id": "dan", "email": "dan@other.example"},
-        {"id": "gus", "email": "gus@other.example"},
-        {"id": "hal", "email": "hal@acme.example"},
-        {"id": "ida", "email": "ida@other.example"},
-        {"id": "jo", "email": "jo@acme.example", "hidden": True},
-        {"id": "kim", "email": "kim@acme.example", "directory_left": True},
-        {"id": "lee"},
-    ])
+    set_roster(
+        api,
+        [
+            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+            {"id": "ben", "name": "Ben", "email": "ben@other.example"},
+            {"id": "cara", "email": "cara@other.example"},
+            {"id": "dan", "email": "dan@other.example"},
+            {"id": "gus", "email": "gus@other.example"},
+            {"id": "hal", "email": "hal@acme.example"},
+            {"id": "ida", "email": "ida@other.example"},
+            {"id": "jo", "email": "jo@acme.example", "hidden": True},
+            {"id": "kim", "email": "kim@acme.example", "directory_left": True},
+            {"id": "lee"},
+        ],
+    )
     connected(api, private)
-    personal(api, "ana", "ana@acme.example")                              # a live grant wins over the key
+    personal(api, "ana", "ana@acme.example")  # a live grant wins over the key
     personal(api, "cara", "cara@other.example", status="failed", holder=None, grant=None)
     personal(api, "gus", "gus@other.example", status="signing_in", holder=None, grant=None)
-    personal(api, "hal", "hal@acme.example", status="failed", holder=None, grant=None)   # covered: the key reads it
-    personal(api, "ida", "old-ida@other.example")                        # a grant for an address that is not hers now
+    personal(api, "hal", "hal@acme.example", status="failed", holder=None, grant=None)  # covered: the key reads it
+    personal(api, "ida", "old-ida@other.example")  # a grant for an address that is not hers now
     answer = api.get(PEOPLE, headers=headers("ana-test")).json()
     assert answer["more"] is False
     got = {p["person_id"]: (p["mailbox"], p["status"]) for p in answer["people"]}
@@ -73,7 +88,7 @@ def test_each_person_has_one_state_and_bots_hidden_and_gone_people_are_left_out(
 
 def test_without_a_workspace_key_a_covered_domain_is_just_not_connected(api, monkeypatch):
     bot_mailboxes(monkeypatch)
-    personal(api, "ben", "ben@acme.example", status="failed")             # a live grant that Google refused
+    personal(api, "ben", "ben@acme.example", status="failed")  # a live grant that Google refused
     answer = api.get(PEOPLE, headers=headers("ana-test")).json()
     got = {p["person_id"]: p["status"] for p in answer["people"]}
     assert got == {"ana": "none", "ben": "failing", "cara": "none"}
@@ -83,12 +98,15 @@ def test_a_reassigned_mailbox_shows_the_grant_on_it_as_the_server_picks_a_creden
     # Ana's old mailbox now belongs to Ben's message bot, and Ana's refused grant on it is still live: the server
     # reads that mailbox with her grant (authority 'personal'), so Ben is failing, not covered by the Workspace key.
     bot_mailboxes(monkeypatch, (MAILBOX, "inbox", "inbox"), ("old-ana@acme.example", "ben", "inbox-ben"))
-    set_roster(api, [
-        {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-        {"id": "ben", "email": "ben@other.example"},
-        {"id": "cara", "email": "cara@acme.example"},
-        {"id": "dan", "email": "dan@other.example"},
-    ])
+    set_roster(
+        api,
+        [
+            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+            {"id": "ben", "email": "ben@other.example"},
+            {"id": "cara", "email": "cara@acme.example"},
+            {"id": "dan", "email": "dan@other.example"},
+        ],
+    )
     connected(api, private)
     personal(api, "ana", "Old-Ana@acme.example", status="failed")
     personal(api, "dan", "dan@other.example", status="signing_in", holder=None, grant=None)
@@ -110,6 +128,7 @@ def people_statements(api, monkeypatch, after=""):
     store.row_cache = type(store.row_cache)()
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction"):
+
             def traced(opened=getattr(store, name)):
                 @contextlib.contextmanager
                 def borrowed():
@@ -119,7 +138,9 @@ def people_statements(api, monkeypatch, after=""):
                             yield c
                         finally:
                             c.set_trace_callback(None)
+
                 return borrowed()
+
             patched.setattr(store, name, traced)
         response = api.get(PEOPLE, params={"after": after} if after else None, headers=headers("ana-test"))
     assert response.status_code == 200, response.text
@@ -129,8 +150,10 @@ def people_statements(api, monkeypatch, after=""):
 def test_the_team_list_takes_the_same_statements_for_two_thousand_people(api, private, google, monkeypatch):
     """Each person's mailbox was found by scanning every bot mailbox, and each message bot cost two reads: 2000 people
     with 200 message bots must cost what 20 people with 5 do."""
-    bots = {f"mb{n:03d}": {"name": f"mb{n:03d}", "runtime": "fake", "status": "archived" if n == 3 else "active"}
-            for n in range(200)}
+    bots = {
+        f"mb{n:03d}": {"name": f"mb{n:03d}", "runtime": "fake", "status": "archived" if n == 3 else "active"}
+        for n in range(200)
+    }
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, bots, [])
         for n, slug in enumerate(bots):
@@ -155,9 +178,9 @@ def test_the_team_list_takes_the_same_statements_for_two_thousand_people(api, pr
     big, many = people_statements(api, monkeypatch)
     assert len(small["people"]) == 21 and big["more"] is True and len(big["people"]) == W.PEOPLE_MAX
     got = {p["person_id"]: (p["mailbox"], p["status"]) for p in big["people"]}
-    assert got["p0000"] == ("box0@acme.example", "workspace")       # the bot's declared mailbox
-    assert got["p0001"] == ("p1@other.example", "connected")        # no declaration: the person's email
-    assert got["p0003"] == ("p3@other.example", "none")             # an archived bot stands for nobody
+    assert got["p0000"] == ("box0@acme.example", "workspace")  # the bot's declared mailbox
+    assert got["p0001"] == ("p1@other.example", "connected")  # no declaration: the person's email
+    assert got["p0003"] == ("p3@other.example", "none")  # an archived bot stands for nobody
     assert few > 0 and many == few, (few, many)
 
 
@@ -166,12 +189,12 @@ def test_the_team_list_pages_on_to_person_501_at_the_same_statements(api, monkey
     people += [{"id": f"p{n:04d}", "name": f"P{n:04d}", "email": f"p{n}@acme.example"} for n in range(W.PEOPLE_MAX + 1)]
     people.append({"id": "gone", "name": "P0499x", "email": "gone@acme.example", "directory_left": True})
     set_roster(api, people)
-    people_statements(api, monkeypatch)             # the first request also sets up the admin's sign-in
+    people_statements(api, monkeypatch)  # the first request also sets up the admin's sign-in
     first, one = people_statements(api, monkeypatch)
     assert len(first["people"]) == W.PEOPLE_MAX and first["more"] is True
-    assert first["next"] == first["people"][-1]["person_id"] == "p0498"     # Ana sorts first
+    assert first["next"] == first["people"][-1]["person_id"] == "p0498"  # Ana sorts first
     second, two = people_statements(api, monkeypatch, after=first["next"])
-    assert [p["person_id"] for p in second["people"]] == ["p0499", "p0500"]   # person 501 and the one after
+    assert [p["person_id"] for p in second["people"]] == ["p0499", "p0500"]  # person 501 and the one after
     assert second["more"] is False and second["next"] is None
     assert one == two, (one, two)
     # A cursor on someone hidden or gone since keeps its place by name; one off the roster is refused.
@@ -185,7 +208,9 @@ def test_a_page_stops_at_its_byte_budget_and_long_names_are_cut(api):
     """Names come from the directory, unbounded: each row's name and mailbox are cut at CELL_MAX characters, and a
     page stops at PAGE_BYTES of rows as well as at PEOPLE_MAX, with `next` its last row."""
     people = [{"id": "ana", "name": "Ana", "email": "ana@acme.example", "primary_for": ["*"]}]
-    people += [{"id": f"p{n:04d}", "name": f"P{n:04d} " + "名" * 5000, "email": f"p{n}@acme.example"} for n in range(400)]
+    people += [
+        {"id": f"p{n:04d}", "name": f"P{n:04d} " + "名" * 5000, "email": f"p{n}@acme.example"} for n in range(400)
+    ]
     set_roster(api, people)
     first = api.get(PEOPLE, headers=headers("ana-test")).json()
     rows = first["people"]
@@ -202,10 +227,14 @@ def test_a_person_id_too_long_to_be_a_cursor_is_left_out_and_the_whole_answer_fi
     """The person id is the page cursor and is never cut, so one over CELL_MAX characters stays off the list (and the
     log says so); the byte budget holds the whole answer, the first row and `next` included."""
     long_id = "x" * (W.CELL_MAX + 1)
-    people = [{"id": "ana", "name": "Ana", "email": "ana@acme.example", "primary_for": ["*"]},
-              {"id": long_id, "name": "Long", "email": "long@acme.example"}]
-    people += [{"id": f"p{n:04d}" + "名" * (W.CELL_MAX - 5), "name": "名" * 5000, "email": f"p{n}@acme.example"}
-               for n in range(400)]
+    people = [
+        {"id": "ana", "name": "Ana", "email": "ana@acme.example", "primary_for": ["*"]},
+        {"id": long_id, "name": "Long", "email": "long@acme.example"},
+    ]
+    people += [
+        {"id": f"p{n:04d}" + "名" * (W.CELL_MAX - 5), "name": "名" * 5000, "email": f"p{n}@acme.example"}
+        for n in range(400)
+    ]
     set_roster(api, people)
     seen, after = [], None
     with caplog.at_level("WARNING", logger="tico.google"):

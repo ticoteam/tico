@@ -3,11 +3,11 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-INVALID = "invalid"                 # the request is malformed or breaks an invariant
-DENIED = "denied"                   # rights, view or a who-may rule says no
-NOT_AVAILABLE = "not_available"     # an action kind a later phase delivers
+INVALID = "invalid"  # the request is malformed or breaks an invariant
+DENIED = "denied"  # rights, view or a who-may rule says no
+NOT_AVAILABLE = "not_available"  # an action kind a later phase delivers
 NOT_FOUND = "not_found"
-CONFLICT = "conflict"               # the state moved under the request (already reversed, already closed)
+CONFLICT = "conflict"  # the state moved under the request (already reversed, already closed)
 PERIOD_CLOSED = "period_closed"
 UNBALANCED = "unbalanced"
 
@@ -18,13 +18,14 @@ class Named:
     without them, for an asker who may not see one. A refusal's record keeps `fallback` as its reason and the rest
     here, so a replay names the budgets again only where the asker may see them now (spec §7.5). `numbers` marks a
     template that carries amounts too: the asker then needs the budget's numbers, not only its name."""
+
     budgets: tuple[str, ...]
     template: str
     fallback: str
     numbers: bool = False
     cards: tuple[str, ...] = ()
-    plain: str = ""     # the same sentence without amounts, for a reader who may see the names but not the figures
-    on: str = ""        # the day the figures were judged: each budget's and card's period is the one holding it
+    plain: str = ""  # the same sentence without amounts, for a reader who may see the names but not the figures
+    on: str = ""  # the day the figures were judged: each budget's and card's period is the one holding it
 
 
 class FinanceError(Exception):
