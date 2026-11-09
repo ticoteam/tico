@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend import releases, replication
+from backend import models_preset, releases, replication
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
@@ -13,6 +13,8 @@ from backend.enqueue import enqueue_stored
 from backend.tests.usage_rows import segment
 from backend import bot_settings as BS
 from backend.tests.helpers.health import health_of
+from backend.tests.helpers.gateway_connection import KEY, delete, fake_gateway, save, setup
+from backend.tests.helpers.onboarding import TOKEN
 
 
 @pytest.fixture(autouse=True)
@@ -724,6 +726,96 @@ def test_a_computer_with_no_bots_and_no_company_default_is_asked_to_sign_in_on_t
     assert not runtimes["codex"]["sign_in"] and not runtimes["codex"]["needed"] and runtimes["codex"]["signable"]
     assert "sign in to Claude Code" in checks["computer_signin"]["summary"]
     assert "Codex" not in checks["computer_signin"]["summary"]
+
+
+def _claude_signed_out_on_an_isolated_computer(api, runner, *, isolated):
+    """Claude Code installed and not signed in on `runner`, Pi installed, and one active claude bot there (`writer`)."""
+    readiness = {
+        "schema_version": 1,
+        "isolated": isolated,
+        "runtimes": {
+            "claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"},
+            "pi": {"installed": True, "authenticated": "missing"},
+        },
+        "bots": {
+            "writer": {
+                "ready": False,
+                "runtime": "claude",
+                "model": "claude-opus-5-5",
+                "repository_present": True,
+                "configuration_valid": True,
+                "problems": ["Claude login required"],
+                "sign_in": "missing",
+            }
+        },
+    }
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (H.now(), json.dumps(readiness), runner),
+        )
+
+
+def test_a_bot_the_gateway_runs_while_claude_code_is_signed_out_is_not_an_alarm(environment, monkeypatch):
+    """Under the recommended choice with the Tico AI Gateway connected, a claude bot whose Claude Code is not signed in
+    on an isolated computer runs its turns on the Gateway (models_preset.waiting): Models says so instead of "No online
+    computer is signed in", the computer's Claude login is not an unavailable login, and no sign-in alarm is raised.
+    Under the subscriptions choice, with the Gateway off, or on a computer that does not run bots as their own user,
+    the same computer keeps its three alarms."""
+    api = environment()
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake, token=TOKEN)
+
+    def choose(preset):
+        revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
+        body = {
+            "enabled": ["openai", "anthropic"],
+            "runtime": "claude",
+            "model": "claude-opus-5-5",
+            "preset": preset,
+            "expected_revision": revision,
+        }
+        assert api.put("/api/v2/providers", headers=signed_in(), json=body).status_code == 200
+
+    def alarms():
+        checks = health_of(api)[1]
+        return checks["models"], checks.get("computer_logins"), checks.get("computer_signin")
+
+    choose(models_preset.RECOMMENDED)
+    runner = enrolled(api)
+    add_bot(api, "writer")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('writer','ana')")
+        BS.write(c, "writer", {"runtime": "claude", "model": "claude-opus-5-5"})
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('writer',?,1,?,'t')",
+            (runner, H.now()),
+        )
+    _claude_signed_out_on_an_isolated_computer(api, runner, isolated=True)
+    models, logins, signin = alarms()
+    assert (
+        models["status"] == "ok" and models["summary"] == "Bots run on Tico AI Gateway until Claude Code is signed in."
+    )
+    assert logins is None and signin is None
+
+    # The same computer, the same bot: the choice or the computer (or the Gateway) decides, not the bot.
+    def keeps_its_alarms():
+        models, logins, signin = alarms()
+        assert models["status"] == "bad" and models["summary"] == "No online computer is signed in to your model."
+        assert logins["status"] == "bad" and "Claude Code" in logins["summary"]
+        assert signin["status"] == "warn" and "sign in to Claude Code" in signin["summary"]
+
+    choose("subscriptions")
+    keeps_its_alarms()
+    choose(models_preset.RECOMMENDED)
+    _claude_signed_out_on_an_isolated_computer(api, runner, isolated=False)
+    keeps_its_alarms()
+    _claude_signed_out_on_an_isolated_computer(api, runner, isolated=True)
+    assert alarms()[0]["status"] == "ok"
+    delete(api, "providers/gateway", token=TOKEN)
+    keeps_its_alarms()
 
 
 def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
