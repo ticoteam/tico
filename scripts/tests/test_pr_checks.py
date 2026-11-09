@@ -1143,8 +1143,12 @@ def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
         job = jobs[name]
         assert job["permissions"] == {"contents": "read", "actions": "write"}, name
         cancel = job["steps"][-1]
-        assert cancel["if"] == "failure()" and cancel["run"] == 'gh run cancel "$GITHUB_RUN_ID"', name
-        assert cancel["env"] == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
+        # It names what failed first (every leg then ends "cancelled"), and the cancel is its last line.
+        lines = cancel["run"].strip().splitlines()
+        assert cancel["if"] == "failure()" and lines[-1] == 'gh run cancel "$GITHUB_RUN_ID"', name
+        assert any(line.startswith('echo "::error title=') for line in lines), name
+        env = {k: v for k, v in cancel["env"].items() if k not in ("SUITE", "SHARD")}
+        assert env == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
     # Only the two heavy legs and the plan (which cancels superseded queue groups) may cancel; every other job keeps the
     # workflow's read-only token.
     assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "factory-sim", "plan"}
