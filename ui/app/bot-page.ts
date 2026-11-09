@@ -37,6 +37,8 @@ const botLimited = (e: Employee | null | undefined) => !!e?.my_access && !e.my_a
 const botPersonName = (id: string | null | undefined) => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
 // The open bot page (BotPageView, ui/types/bot-page.d.ts); null when no bot page is open.
 let BOT: BotPageView | null = null;
+// BOT where only an open bot page can reach (the old code read BOT.x there and threw when it was null).
+const botNow = (): BotPageView => BOT!;
 function botStopped() {
   BOT?.settingsCleanup?.();
   if (BOT?.thread) threadUnmount(BOT.thread.view);
@@ -408,7 +410,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     button.disabled = true;
     if (result) result.textContent = 'Resuming…';
     try {
-      const tab = BOT!.tab;
+      const tab = botNow().tab;
       await quarantineResume(slug);
       await refresh(true);
       BOT = null;
@@ -545,7 +547,7 @@ function showBotTab(tab: string | null | undefined) {
   else botThreadStop();
   const incognitoOn = $('#bot-incognito');
   if (incognitoOn) { incognitoOn.setAttribute('aria-pressed', String(BOT.thread?.kind === 'dm')); incognitoOn.hidden = !chat; }
-  const once = (key: string, fn: (slug: string) => unknown) => { if (BOT && !BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
+  const once = (key: string, fn: (slug: string) => unknown) => { const bot = botNow(); if (!bot.loaded.has(key)) { bot.loaded.add(key); fn(bot.slug); } };
   if (split || view === 'tasks') {
     once('tasks', loadBotTasksV2);
     once('files', (slug: string) => window.botFiles?.mount($('#bot-files'), {slug, get, esc, openFile: openFileLink}));

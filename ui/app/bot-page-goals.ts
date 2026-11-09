@@ -68,8 +68,7 @@ function botGoalRender(slug: string, goals: GkGoal[] | undefined) {
     $('#bot-goal-set').onclick = () => void botGoalAdd(slug);
     return;
   }
-  const [g, ...rest] = goals;
-  if (!g) return;   // goals is not empty here (the return above), so g is always there
+  const [g, ...rest] = goals as [GkGoal, ...GkGoal[]];   // not empty here (the return above)
   el.dataset.status = 'set';
   el.innerHTML = `<button type="button" class="bot-goal-main" id="bot-goal-btn" aria-haspopup="menu" aria-expanded="false"
       aria-label="Goal: ${esc(g.title)}${rest.length ? `, ${rest.length} more` : ''}" title="${esc(goals.map(x => x.title).join('\n'))}">
