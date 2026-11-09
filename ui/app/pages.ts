@@ -189,7 +189,7 @@ async function pagesEditAudience(state: PageFullState) {
     await accessEditor({name: state.page.title, singleAudience: true,
       initialData: {see: level, read: level, write: level, teams: Array.isArray(result) ? result : result.groups || []},
       save: (audience: import('../types/api').AccessAudience) => patch('/v2/pages/' + encodeURIComponent(state.id), {audience: audience.everyone ? null : audience}),
-      after: (saved: import('../types/api').PageShown) => { if (PG === state) { state.page = saved.page; pageFullDraw(state); } }});
+      after: (saved: SaSaved) => { if (PG === state) { state.page = saved.page as import('../types/api').Page; pageFullDraw(state); } }});
   } catch (error) { toast(errorMessage(error, ''), true); }
 }
 function pagesAccessRefresh() {
