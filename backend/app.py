@@ -477,12 +477,16 @@ def create_app(settings=None):
             demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
         # Sign-in's own threads, one pool per run of the app: an app built and served again and again (a demo build,
         # every test) would otherwise keep 16 idle threads, and the app they hold, for the life of the process.
-        app.state.auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+        # A test can run the same app's lifespan inside another (two clients on one app), so each run keeps its own
+        # pool and clears the shared slot only while that slot is still its own.
+        auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+        app.state.auth_pool = auth_pool
         try:
             yield
         finally:
             # First, so nothing below that raises can skip it; requests are done by the time the server shuts down.
-            auth_pool, app.state.auth_pool = app.state.auth_pool, None
+            if app.state.auth_pool is auth_pool:
+                app.state.auth_pool = None
             auth_pool.shutdown(wait=False, cancel_futures=True)
             stop.set()
             if start_jobs_task:

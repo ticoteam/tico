@@ -75,3 +75,16 @@ def test_outside_a_run_sign_in_uses_the_default_pool(tmp_path):
         client.close()
         app.state.store.close()
     assert app.state.auth_pool is None and auth_threads() == before
+
+
+def test_a_run_inside_another_run_of_the_same_app_ends_cleanly(tmp_path):
+    """Two clients on one app (the contract test's fixtures): the inner run ends first and the outer one still ends
+    without error, each shutting down only its own pool."""
+    app = create_app(api_settings(tmp_path))
+    before = auth_threads()
+    with TestClient(app) as outer:
+        with TestClient(app) as inner:
+            inner.get("/api/v2/me", headers=SIGNED_IN)
+        outer.get("/api/v2/me", headers=SIGNED_IN)  # the inner run took its pool; the outer's requests still sign in
+    assert app.state.auth_pool is None
+    assert settle(before) == before
