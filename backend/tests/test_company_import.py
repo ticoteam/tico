@@ -1688,19 +1688,13 @@ def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporat
     assert stored_line(api, "bookkeeper") == hired.json()["bot"]
 
 
-def test_a_new_company_files_growth_work_in_growth_experiments_and_has_no_marketing_board(environment):
-    """Review finding 6: a company set up with company_default has Growth Experiments and no unmanaged Marketing board
-    beside it, not even after a restart; the Growth Team Manager files its ideas there."""
+def test_a_new_company_files_growth_work_in_growth_experiments(environment):
+    """Review finding 6: a company set up with company_default has Growth Experiments, and the Growth Team Manager files
+    its ideas there. The Marketing board stays for the Growth page and the older growth templates."""
     api = environment()
     preview_and_import(api, default_chart_text())
     types = types_of(api)
-    assert "Growth Experiments" in types and "Marketing" not in types
-    assert not rows(api, "SELECT id FROM task_types WHERE id='idea'")
-    from backend import marketing_tasks
-
-    with api.app.state.store.transaction() as c:
-        assert marketing_tasks.ensure(c) is None  # the boot seed does not bring it back
-    assert not rows(api, "SELECT id FROM task_types WHERE id='idea'")
+    assert "Growth Experiments" in types and "Marketing" in types
     root = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "growth-team-manager"
     for path in [root / "AGENT.md", *sorted((root / "playbooks").glob("*.md"))]:
         assert "--type idea" not in path.read_text(), path.name

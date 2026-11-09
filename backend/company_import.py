@@ -757,14 +757,14 @@ def new_company(c):
 def finish_new_company(onboarding, c, who, seats, made, teams):
     """The finish every way a new company is set up shares (a company file, the setup page's chart, or no chart at all):
     the chart's live seats get their bots (_go_live), then company_default's factories and pipelines with each one's
-    manager (_factory_setup), then the boot's Marketing board goes, since Growth Experiments holds that work now. Only for
-    a new company (new_company), and once: a company already set up, or one finished before, is left as it is. True
+    manager (_factory_setup). The boot's Marketing board stays: the Growth page and older growth templates still read it
+    (no manager, so the Task Manager covers it), while the Growth Team Manager files experiments in Growth Experiments.
+    Only for a new company (new_company), and once: a company already set up, or one finished before, is left as it is. True
     when it ran."""
     if O.load(c).get(FINISHED_KEY) or not new_company(c):
         return False
     _go_live(onboarding, c, who, seats, made, teams)
-    if _factory_setup(c, who, made):
-        MT.retire(c, who.actor)
+    _factory_setup(c, who, made)
     record = O.load(c)
     record[FINISHED_KEY] = H.now()
     onboarding._store(c, record, who.actor)

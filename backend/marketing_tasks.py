@@ -10,10 +10,6 @@ The type keeps the id `idea` it was seeded with, so the tasks filed under it and
 that name; then the names it had before, Idea or Growth idea, are the fallbacks. A file from before the names changed
 gets them from its migration (backend/migrations, marketing step names), which renames only a step still under its old
 default name.
-
-A company set up with the default org (pipeline_setup's `company_default`) files growth work in its Growth Experiments
-pipeline instead, so setup retires the still-empty Marketing type there (`retire`) and the boot seed no longer brings it
-back. Every company set up before keeps its Marketing type as it is.
 """
 
 from . import hubdb as H
@@ -39,7 +35,6 @@ STEPS = (
 )
 STEP_IDS = {"idea": f"{TYPE_ID}-open", "testing": f"{TYPE_ID}-doing"}
 TERMINAL = ("won", "lost", "inconclusive", "dropped")
-RETIRED_KEY = "marketing_tasks.retired"  # registry_metadata: when setup retired the type (`retire`)
 
 
 def step_id(key):
@@ -58,11 +53,8 @@ def finished_step_ids():
 
 def ensure(c):
     """The Marketing task type and its steps, under the type's own id. A step missing from an older seed is added; one a
-    team renamed keeps its name. Returns the type id, or None when the team's own types already use every name or setup
-    retired the type (`retire`)."""
+    team renamed keeps its name. Returns the type id, or None when the team's own types already use every name."""
     if not H._one(c, "SELECT id FROM task_types WHERE id=?", (TYPE_ID,)):
-        if H._one(c, "SELECT 1 FROM registry_metadata WHERE key=?", (RETIRED_KEY,)):
-            return None
         taken = {r[0].lower() for r in c.execute("SELECT name FROM task_types")}
         name = next((n for n in TYPE_NAMES if n.lower() not in taken), None)
         if not name:
@@ -85,19 +77,3 @@ def ensure(c):
                 (sid, TYPE_ID, name, position, status),
             )
     return TYPE_ID
-
-
-def retire(c, actor):
-    """Setup of a new company with the default org: the Marketing type goes while nothing is filed under it, and the boot
-    seed (`ensure`) never makes it again, since Growth Experiments holds that work. A type with tasks stays. True when it
-    went."""
-    if not H._one(c, "SELECT id FROM task_types WHERE id=?", (TYPE_ID,)):
-        return False
-    if H._one(c, "SELECT id FROM tasks WHERE type_id=? LIMIT 1", (TYPE_ID,)):
-        return False
-    H.type_delete(c, actor, TYPE_ID, mover=True)
-    c.execute(
-        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (RETIRED_KEY, H.now()),
-    )
-    return True

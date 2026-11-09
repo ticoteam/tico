@@ -195,8 +195,7 @@ second). It reaches no computer.
   Active on day one.
 - **A new company's first Create ends like an import** (`company_import.finish_new_company`): the live seats' bots, then the default
   factories and their nine pipelines, once, best effort, and only while the company has no task type beyond the ones every server
-  starts with. Its Marketing board goes while it is empty: growth ideas are filed in Growth Experiments. A company set up before
-  keeps its Marketing board. **With nothing picked**, the chart is the default one: the chart formula's own
+  starts with. **With nothing picked**, the chart is the default one: the chart formula's own
   (`backend/company_file/chart_formula.py`, no segment or bet, the default channels), the chart the public setup page's file
   gives a company that picked nothing, so it starts with the same live bots and seats.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
