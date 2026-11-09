@@ -25,15 +25,11 @@ type BotEditRow = Employee & {
   template?: string | null;
   runtime?: string | null;
   resolved_runtime?: string | null;
-  shared_from?: unknown;
+  shared_from?: string | null;
 };
 // A computer as the editor reads it: the settings roster's row plus the fields its rows draw.
-type AppReport = {ready?: boolean; state?: string; detail?: string};
-type MachineRow = SettingsMachine & {
-  accepts_member_bots?: boolean;
-  browser_exit?: {sharing?: boolean; bots: string[]} | null;
-  readiness?: {appdriver?: {apps?: Record<string, AppReport>}} | null;
-};
+type AppReport = MachineApp;
+type MachineRow = DeviceMachine;
 // The model a new bot starts on: a catalogue row, or the empty fallback.
 type FallbackModel = Partial<SettingsModel & {default_effort?: string; harnesses?: string[]; runtime?: string}>;
 // A held change's run: given the revision to save at, the revision after it.
@@ -315,7 +311,7 @@ function settingsEditBot(slug = '', inline = false) {
     else dialog.addEventListener('close', cleanup);
     rows.addEventListener('click', (event: MouseEvent) => {
       const access = eventElement(event)?.closest<HTMLElement>('[data-edit-access]'), owners = eventElement(event)?.closest<HTMLElement>('[data-edit-owners]'), botOwners = eventElement(event)?.closest<HTMLElement>('[data-edit-bot-owners]');
-      if (access) void settingsEditAccess(access.dataset.editAccess, {stage: (run: BotRun, policy: unknown) => {
+      if (access) void settingsEditAccess(access.dataset.editAccess!, {stage: (run: BotRun, policy: SaPolicy) => {
         const cell = rows.querySelector('[data-access-summary]'); if (cell) cell.textContent = accessSummary(policy);
         stage('access', 'access', run);
       }});
@@ -328,15 +324,15 @@ function settingsEditBot(slug = '', inline = false) {
         stage('co-owners', 'owners', run);
       }});
       const mail = eventElement(event)?.closest<HTMLElement>('[data-edit-mail]');
-      if (mail) void settingsEditMail(mail.dataset.editMail, null, {stage: (run: BotRun, m: unknown) => {
+      if (mail) void settingsEditMail(mail.dataset.editMail!, null, {stage: (run: BotRun, m: SaMailSettings) => {
         const cell = rows.querySelector('[data-mail-summary]'); if (cell) cell.textContent = mailSettingText(m);
         stage('mail', 'mail sending', run);
       }});
       const credential = eventElement(event)?.closest<HTMLElement>('[data-agent-credential]'), revoke = eventElement(event)?.closest<HTMLElement>('[data-agent-revoke]'), pairing = eventElement(event)?.closest<HTMLElement>('[data-agent-pair]');
       if (credential || revoke || pairing) touched = true;
-      if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
-      if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
-      if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke);
+      if (pairing) void settingsAgentPair(pairing.dataset.agentPair!);
+      if (credential) void settingsAgentCredential(credential.dataset.agentCredential!);
+      if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke!);
       const replace = eventElement(event)?.closest<HTMLButtonElement>('[data-bot-cloud-replace]');
       if (replace) void cloudMachineReplace(String(replace.dataset.botCloudReplace), replace);
     });
@@ -400,8 +396,9 @@ function settingsEditBot(slug = '', inline = false) {
     rows.addEventListener('tico:choice', (event: Event) => {
       const box = eventElement(event)?.closest<HTMLElement & {picker?: {valid(): boolean; value(): string; changed(): boolean}}>('[data-bot-choice][data-kind=task]'), select: HTMLSelectElement | null | undefined = rows.querySelector('[data-task-effort]');
       if (!box?.picker?.valid() || !select) return;
+      // Only settingsBotEditorRows(e) draws a Task model picker, so e (and bot) is a bot here.
       const bot = S.emps.find(row => row.id === slug) || e, value = box.picker.value();
-      const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot, choice?.model || ''));
+      const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot!, choice?.model || ''));
       // Picking the task model back as it was shows its effort as it was, unless Task effort itself was changed.
       const held = box.picker.changed() || select.dataset.touched ? select.value : select.dataset.current || '';
       const effort = efforts.includes(held) ? held : choice?.effort || '';

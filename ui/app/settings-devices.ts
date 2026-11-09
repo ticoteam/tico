@@ -9,7 +9,7 @@ interface DeviceAgent extends BotAgent {
   detail?: string;
 }
 interface DeviceAppDelivery {
-  computer?: string;
+  computer?: string | null;
   computer_label?: string;
   app_label?: string;
   app?: string;

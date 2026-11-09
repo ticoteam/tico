@@ -4,7 +4,7 @@
 
 // A model choice as a bot row stores it (its own model, `fallback`, `task_model`): older rows say runtime and effort.
 interface SettingsBotChoice {
-  harness?: string | undefined; runtime?: string | undefined; model?: string | null | undefined; reasoning_effort?: string | null | undefined; effort?: string | null | undefined;
+  harness?: string | null | undefined; runtime?: string | undefined; model?: string | null | undefined; reasoning_effort?: string | null | undefined; effort?: string | null | undefined;
 }
 // A bot's task settings (backend/task_models.py `stored`): a task model, a task effort and a task context length.
 interface SettingsTaskModel extends SettingsBotChoice { compact_at?: number | null; }
@@ -25,7 +25,7 @@ interface SettingsCatalogCard { slug: string; name?: string; summary?: string; w
 interface SettingsChoiceKindSpec { name: string; of: (e: SettingsBot) => SettingsBotChoice | null | undefined; none?: boolean | string; }
 // A bot row as the Bots settings read it (GET /api/employees): its model choices, revision and readiness.
 interface SettingsBot extends CloudMachineBot {
-  model?: string; runtime?: string; effort?: string; reasoning_effort?: string; resolved_model?: string; resolved_runtime?: string;
+  model?: string; runtime?: string; effort?: string; reasoning_effort?: string; resolved_model?: string; resolved_runtime?: string | null;
   fallback?: SettingsBotChoice | null; task_model?: SettingsTaskModel | null; task_model_warning?: string | null;
   revision?: number; role?: string; description?: string; can_manage?: boolean;
   readiness?: { gateway?: string | null; problems?: string[] } | null;

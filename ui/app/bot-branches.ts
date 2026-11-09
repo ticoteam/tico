@@ -3,7 +3,7 @@
 
 // A branch is a roster row that follows another bot (`shared_from`), with its own revision and profile (settings-bot-editor.ts).
 interface BranchRow extends Employee {
-  shared_from?: string;
+  shared_from?: string | null;
   revision?: number;
   profile?: { name?: string; summary?: string } | null;
 }
