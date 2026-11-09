@@ -950,13 +950,19 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
     )
     # The venv key names the exact Python its job set up: each job restoring or saving it sets Python up first, as
     # `python`, and only PR checks' restore-only action reads it there (a pull request or queue group saves nothing).
-    for doc, action in ((pr, "actions/cache/restore@"), (warm, "actions/cache@")):
+    # Every reader, not just one, has the warmer's exact path and key, or it would never hit.
+    venv_with = {"path": "${{ runner.temp }}/venv", "key": venv}
+    for doc, action, expected in (
+        (pr, "actions/cache/restore@", venv_with),
+        (warm, "actions/cache@", {**venv_with, "lookup-only": True}),
+    ):
         for name, job in doc["jobs"].items():
             steps = job.get("steps", [])
-            at = [i for i, step in enumerate(steps) if (step.get("with") or {}).get("key") == venv]
+            at = [i for i, step in enumerate(steps) if "venv" in str((step.get("with") or {}).get("key", ""))]
             if not at:
                 continue
             assert len(at) == 1 and action in steps[at[0]]["uses"], name
+            assert steps[at[0]]["with"] == expected, name
             setup = [i for i, step in enumerate(steps) if "actions/setup-python@" in step.get("uses", "")]
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
