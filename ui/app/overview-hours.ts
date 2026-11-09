@@ -5,10 +5,10 @@
 // Totals from GET /api/v2/overview/bot-hours (backend/bot_hours.py): the last 7 days and one row a week, Monday to
 // Sunday in the company's time zone. The server keeps the answer a minute; the card asks again at most every 5.
 const HOURS_EVERY = 5 * 60e3;
-const hoursTimes = r => `${r < 10 ? r.toFixed(1) : Math.round(r)}×`;
-const hoursNum = h => h < 10 ? String(Math.round(h * 10) / 10) : Math.round(h).toLocaleString();
-const hoursWeek = day => new Date(day + 'T12:00:00').toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
-const hoursPoint = w => `Week of ${hoursWeek(w.week)}${w.so_far ? ' (so far)' : ''}: ${hoursNum(w.bot_hours)} bot hours · `
+const hoursTimes = (r: number) => `${r < 10 ? r.toFixed(1) : Math.round(r)}×`;
+const hoursNum = (h: number) => h < 10 ? String(Math.round(h * 10) / 10) : Math.round(h).toLocaleString();
+const hoursWeek = (day: string) => new Date(day + 'T12:00:00').toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+const hoursPoint = (w: BotHoursWeek) => `Week of ${hoursWeek(w.week)}${w.so_far ? ' (so far)' : ''}: ${hoursNum(w.bot_hours)} bot hours · `
   + `${hoursNum(w.human_hours)} human hours${w.ratio == null ? '' : ' · ' + hoursTimes(w.ratio)}`;
 
 async function overviewHoursLoad() {
@@ -16,7 +16,7 @@ async function overviewHoursLoad() {
   if (!state || state.hoursLoading) return;
   state.hoursLoading = true; state.hoursAt = Date.now();
   try {
-    const data = await get('/v2/overview/bot-hours');
+    const data = await get<BotHours>('/v2/overview/bot-hours');
     S.lastRead.hours = data;
     if (OVERVIEW_PAGE === state && !sameData(data, state.hours)) { state.hours = data; overviewHoursDraw(); }
   } catch { // The card stays as it was (a first visit's empty card goes away); the next refresh asks again.
@@ -30,14 +30,14 @@ function overviewHoursMaybe() {
 }
 
 // One line, bot hours per human hour a week; a dashed Parity line at 1×; the week still going is dotted and hollow.
-function overviewHoursChart(weeks) {
+function overviewHoursChart(weeks: BotHoursPoint[]) {
   const W = 300, H = 72, pad = {l: 6, r: 6, t: 8, b: 8};
   const top = Math.max(1, ...weeks.map(w => w.ratio)) * 1.15;
-  const x = i => weeks.length < 2 ? W / 2 : pad.l + i * (W - pad.l - pad.r) / (weeks.length - 1);
-  const y = r => pad.t + (1 - r / top) * (H - pad.t - pad.b);
-  const pts = weeks.map((w, i) => [x(i), y(w.ratio)]);
+  const x = (i: number) => weeks.length < 2 ? W / 2 : pad.l + i * (W - pad.l - pad.r) / (weeks.length - 1);
+  const y = (r: number) => pad.t + (1 - r / top) * (H - pad.t - pad.b);
+  const pts: [number, number][] = weeks.map((w, i) => [x(i), y(w.ratio)]);
   const done = weeks.filter(w => !w.so_far).length;
-  const path = list => list.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)}`).join('');
+  const path = (list: [number, number][]) => list.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)}`).join('');
   const solid = pts.slice(0, done), dotted = pts.slice(Math.max(0, done - 1));
   const step = weeks.length < 2 ? W : (W - pad.l - pad.r) / (weeks.length - 1);
   return `<svg class="ovh-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
@@ -48,7 +48,7 @@ function overviewHoursChart(weeks) {
     <line class="ovh-cross" y1="0" y2="${H}" x1="-9" x2="-9" vector-effect="non-scaling-stroke"/>
     ${weeks.map((w, i) => `<rect class="ovh-hit" data-i="${i}" x="${(x(i) - step / 2).toFixed(1)}" y="0" width="${step.toFixed(1)}" height="${H}"/>`).join('')}
   </svg>
-  ${pts.map(([px, py], i) => `<i class="ovh-dot${weeks[i].so_far ? ' ovh-dot-so-far' : ''}" data-i="${i}"
+  ${pts.map(([px, py], i) => `<i class="ovh-dot${weeks[i]?.so_far ? ' ovh-dot-so-far' : ''}" data-i="${i}"
     style="left:${(px / W * 100).toFixed(2)}%;top:${(py / H * 100).toFixed(2)}%"></i>`).join('')}
   <span class="ovh-parity-label" style="top:${(y(1) / H * 100).toFixed(2)}%">Parity 1×</span>
   <div class="ovh-tip" role="status" hidden></div>`;
@@ -57,14 +57,15 @@ function overviewHoursChart(weeks) {
 // Before its first answer the card holds a line's place, so the campus below does not jump when it lands; a return
 // visit draws the last answer at once (S.lastRead.hours) and the read that follows redraws it only if it changed.
 function overviewHoursDraw() {
-  const el = OVERVIEW_PAGE && $('#overview-hours');
-  if (!el) return;
-  const d = OVERVIEW_PAGE.hours ||= S.lastRead.hours;
+  const state = OVERVIEW_PAGE;
+  const el: HTMLElement | null = state && $('#overview-hours');
+  if (!state || !el) return;
+  const d = state.hours ||= S.lastRead.hours;
   if (!d) {
     el.innerHTML = '<span class="ovh-title">Bot hours vs human hours</span><p class="ovh-head" aria-hidden="true">&nbsp;</p>';
     return;
   }
-  const last = d.last_7_days || {}, weeks = (d.weeks || []).filter(w => w.ratio != null);
+  const last = d.last_7_days, weeks = (d.weeks || []).filter((w): w is BotHoursPoint => w.ratio != null);
   let body, plot = false;
   if (!d.first_run) {
     body = `<p class="ovh-head">No bot work yet</p><p class="ovh-note"><a href="#/settings" data-ovh-bots>Bots</a></p>`;
@@ -73,7 +74,7 @@ function overviewHoursDraw() {
       <p class="ovh-note">Add people to the org chart to compare</p>`;
   } else {
     const chart = plot = !!(last.full && weeks.length);
-    body = `<p class="ovh-head"><strong class="tnum">${hoursTimes(last.ratio)}</strong> bot hours per human hour · last 7 days</p>
+    body = `<p class="ovh-head"><strong class="tnum">${last.ratio == null ? '' : hoursTimes(last.ratio)}</strong> bot hours per human hour · last 7 days</p>
       ${chart ? `<div class="ovh-plot">${overviewHoursChart(weeks)}</div>` : '<p class="ovh-note">Chart fills in as weeks pass</p>'}
       <p class="ovh-note">Bot hours = time bots spent working (pauses over ${d.gap_minutes || 30} min left out). Human hours =
         people in your org chart × ${d.hours_per_person || 40} h a week.</p>`;
@@ -81,25 +82,29 @@ function overviewHoursDraw() {
   el.hidden = false;
   el.classList.toggle('has-plot', !!plot);
   el.innerHTML = `<span class="ovh-title">Bot hours vs human hours</span>${body}`;
-  el.querySelector('[data-ovh-bots]')?.addEventListener('click', ev => { ev.stopPropagation(); SETTINGS_TAB = 'bots'; });
-  if (plot) overviewHoursHover(el.querySelector('.ovh-plot'), weeks);
+  el.querySelector<HTMLElement>('[data-ovh-bots]')?.addEventListener('click', ev => { ev.stopPropagation(); SETTINGS_TAB = 'bots'; });
+  if (plot) overviewHoursHover(el.querySelector<HTMLElement>('.ovh-plot'), weeks);
 }
 
 // Hover (or tap) anywhere in a week's column shows its numbers; the table holds the same numbers without hovering.
-function overviewHoursHover(plot, weeks) {
-  const tip = plot.querySelector('.ovh-tip'), cross = plot.querySelector('.ovh-cross'), dots = plot.querySelectorAll('.ovh-dot');
-  const show = i => {
+function overviewHoursHover(plot: HTMLElement | null, weeks: BotHoursPoint[]) {
+  if (!plot) return;
+  const tip = plot.querySelector<HTMLElement>('.ovh-tip'), cross = plot.querySelector<SVGLineElement>('.ovh-cross'), dots = plot.querySelectorAll<HTMLElement>('.ovh-dot');
+  if (!tip || !cross) return;
+  const show = (i: number) => {
     const w = weeks[i], dot = dots[i]; if (!w || !dot) return;
     tip.textContent = hoursPoint(w); tip.hidden = false;
     // Centred on the point, kept inside the chart's width so a phone never scrolls sideways.
     const width = plot.clientWidth, centre = parseFloat(dot.style.left) / 100 * width;
     tip.style.left = Math.max(0, Math.min(width - tip.offsetWidth, centre - tip.offsetWidth / 2)) + 'px';
-    const hit = plot.querySelector(`.ovh-hit[data-i="${i}"]`), cx = Number(hit.getAttribute('x')) + Number(hit.getAttribute('width')) / 2;
-    cross.setAttribute('x1', cx); cross.setAttribute('x2', cx);
+    const hit = plot.querySelector(`.ovh-hit[data-i="${i}"]`);
+    if (!hit) return;
+    const cx = Number(hit.getAttribute('x')) + Number(hit.getAttribute('width')) / 2;
+    cross.setAttribute('x1', String(cx)); cross.setAttribute('x2', String(cx));
     dots.forEach((d, j) => d.classList.toggle('on', j === i));
   };
-  const hide = () => { tip.hidden = true; cross.setAttribute('x1', -9); cross.setAttribute('x2', -9); dots.forEach(d => d.classList.remove('on')); };
-  const at = ev => {
+  const hide = () => { tip.hidden = true; cross.setAttribute('x1', '-9'); cross.setAttribute('x2', '-9'); dots.forEach(d => d.classList.remove('on')); };
+  const at = (ev: MouseEvent) => {
     const box = plot.getBoundingClientRect(), f = (ev.clientX - box.left) / box.width;
     return Math.max(0, Math.min(weeks.length - 1, Math.round(f * (weeks.length - 1))));
   };

@@ -284,9 +284,21 @@ interface V2State {
   wentAway?: WentAway | null;
 }
 
+/** One week of GET /api/v2/overview/bot-hours (backend/bot_hours.py), the Overview's bot-hours card. */
+interface BotHoursWeek { week: string; bot_hours: number; people: number; human_hours: number; ratio: number | null; so_far: boolean }
+/** A week the card can plot: one with a ratio. */
+type BotHoursPoint = BotHoursWeek & { ratio: number };
+interface BotHours {
+  zone: string; now: string; first_run: string | null; people: number; hours_per_person: number; gap_minutes: number;
+  last_7_days: { bot_hours: number; human_hours: number; ratio: number | null; full: boolean };
+  weeks: BotHoursWeek[];
+}
+
 /** The copies each page keeps for its next visit (S.lastRead). Pages not listed here keep their own shape. */
 interface LastRead {
   automations?: { list?: unknown[]; groups?: unknown; stats?: unknown; range?: string; maint?: unknown; heart?: unknown };
+  /** The Overview's bot-hours answer (overview-hours.ts). */
+  hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
   places?: Record<string, unknown>;
   [page: string]: unknown;
