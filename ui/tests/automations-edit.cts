@@ -2,23 +2,31 @@
 // rules, Decide (set, level, questions, the last run's bars) and LLM (runs as, prompt) each save the flow with one PATCH
 // that makes a new version; Versions restores one; on a computer the spend chip, "+" between steps (no Paths except at the
 // end of a list), a step's own switch and Delete step. A phone edits in a sheet from the bottom; a computer in the right panel.
-const {chromium} = require('playwright');
+import type {Browser, Page} from 'playwright';
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
-async function flow(browser, viewport) {
+type Question = {type: string; instructions: string; criteria: Record<string, string>};
+type Step = {id: string; type: string; enabled: boolean; set: string; level: string; prompt: string; do: string;
+  args: Record<string, unknown>; rules: {when: unknown[]; match: string}[]; questions: Record<string, Question>;
+  paths: {steps: Step[]}[]; otherwise: {steps: unknown[]}};
+type Flow = {steps: Step[]};
+
+async function flow(browser: Browser, viewport: AutomationsFakeSupport.Viewport) {
   const o = await openAutomations(browser, {viewport, hash: '#/automations/au_inbox'});
   await o.page.waitForSelector('.au-card[data-open="f1"]');
   return o;
 }
-const ver = page => page.locator('.au-ver').innerText();
-async function saved(page, writes, n) {
+const ver = (page: Page) => page.locator('.au-ver').innerText();
+async function saved(page: Page, writes: AutomationsFakeSupport.Write[], n: number): Promise<Flow> {
   await page.locator('.au-save').click();
-  await page.waitForFunction(v => document.querySelector('.au-ver')?.textContent === v && document.querySelector('.au-ed').hidden, 'v' + n);
-  const w = writes.at(-1);
+  await page.waitForFunction((v: string) => document.querySelector('.au-ver')?.textContent === v && (document.querySelector('.au-ed') as HTMLElement).hidden, 'v' + n);
+  const w = writes.at(-1)!;
   assert.equal(w.method, 'PATCH');
   assert.equal(w.path, '/api/v2/automations/au_inbox');
-  return w.body;
+  return w.body as Flow;
 }
 
 (async () => {
@@ -27,11 +35,11 @@ async function saved(page, writes, n) {
     // A phone: Filter, Decide, LLM, then Versions, each in a sheet.
     {
       const {page, errors, writes} = await flow(browser, PHONE);
-      const end = await page.locator('.au-add-end').first().boundingBox(), plus = await page.locator('[data-add="root|1"]').boundingBox();
+      const end = (await page.locator('.au-add-end').first().boundingBox())!, plus = (await page.locator('[data-add="root|1"]').boundingBox())!;
       assert.ok(end.height >= 40 && plus.width >= 28, 'thumb-sized "+" and Add step');
       await page.locator('.au-card[data-open="f1"]').click();
       await page.waitForSelector('#au-root.ed-open .au-ed:not([hidden])');
-      const sheet = await page.locator('.au-side').boundingBox();
+      const sheet = (await page.locator('.au-side').boundingBox())!;
       assert.ok(Math.abs(sheet.y + sheet.height - PHONE.height) < 2 && sheet.y > 80, 'the editor is a sheet at the bottom');
       assert.equal(await page.locator('.au-scrim').isVisible(), true);
       assert.equal(await page.evaluate(() => document.activeElement?.closest('.au-ed') == null), true, 'no keyboard pops over the sheet');
@@ -43,10 +51,10 @@ async function saved(page, writes, n) {
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-edit-filter');
       let body = await saved(page, writes, 8);
-      assert.deepEqual(body.steps[0].rules[0].when, [{field: 'message.from', op: 'contains', value: 'newsletter'}, {field: 'message.subject', op: 'contains', value: 'invoice'}]);
-      assert.equal(body.steps[0].rules[0].match, 'all');
-      assert.equal(body.steps[1].set, 'mail-triage@1');
-      assert.equal('questions' in body.steps[1], false, 'a saved set goes back as the set alone');
+      assert.deepEqual(body.steps[0]!.rules[0]!.when, [{field: 'message.from', op: 'contains', value: 'newsletter'}, {field: 'message.subject', op: 'contains', value: 'invoice'}]);
+      assert.equal(body.steps[0]!.rules[0]!.match, 'all');
+      assert.equal(body.steps[1]!.set, 'mail-triage@1');
+      assert.equal('questions' in body.steps[1]!, false, 'a saved set goes back as the set alone');
       assert.match(await page.locator('.au-card[data-open="f1"]').innerText(), /subject has “invoice”/);
 
       // Decide: the set's questions, last run's bars; a new question makes them the step's own.
@@ -67,13 +75,13 @@ async function saved(page, writes, n) {
       assert.equal(writes.length, before);
       await page.fill('[data-b="qs.4.ask"]', 'Is it urgent?');
       body = await saved(page, writes, 9);
-      const d = body.steps[1];
+      const d = body.steps[1]!;
       assert.equal(d.level, 'high');
       assert.equal('set' in d, false);
       assert.deepEqual(Object.keys(d.questions), ['bucket', 'is_ask', 'money', 'legal', 'urgent']);
-      assert.deepEqual(Object.keys(d.questions.bucket.criteria), ['needs-owner', 'reply', 'route', 'archive', 'watch']);
+      assert.deepEqual(Object.keys(d.questions.bucket!.criteria), ['needs-owner', 'reply', 'route', 'archive', 'watch']);
       assert.deepEqual(d.questions.urgent, {type: 'noul', instructions: 'Is it urgent?'});
-      assert.equal(d.questions.money.instructions, 'Is it about money?');
+      assert.equal(d.questions.money!.instructions, 'Is it about money?');
       assert.match(await page.locator('.au-card[data-open="dc1"]').innerText(), /Custom questions[\s\S]*urgent/);
 
       // LLM inside a path: who it runs as, and the prompt.
@@ -84,7 +92,7 @@ async function saved(page, writes, n) {
       await page.fill('[data-b="step.prompt"]', 'Draft a short reply. Never promise dates.');
       await shot(page, 'phone-edit-llm');
       body = await saved(page, writes, 10);
-      assert.equal(body.steps[2].paths[0].steps[0].prompt, 'Draft a short reply. Never promise dates.');
+      assert.equal(body.steps[2]!.paths[0]!.steps[0]!.prompt, 'Draft a short reply. Never promise dates.');
       assert.match(await page.locator('.au-card[data-open="l1s"]').innerText(), /Never promise dates/);
 
       // Versions: the current one says so; an older one restores as a new version.
@@ -94,10 +102,10 @@ async function saved(page, writes, n) {
       await shot(page, 'phone-versions');
       await page.locator('.au-vr:has-text("v7") [data-op="restore"]').click();
       await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v11');
-      assert.deepEqual(writes.at(-1), {method: 'POST', path: '/api/v2/automations/au_inbox/versions/7/restore', body: {}});
+      assert.deepEqual(writes.at(-1)!, {method: 'POST', path: '/api/v2/automations/au_inbox/versions/7/restore', body: {}});
       assert.match(await page.locator('.au-card[data-open="dc1"]').innerText(), /mail-triage v1/);
       await page.locator('.au-scrim').click({position: {x: 10, y: 10}});
-      await page.waitForFunction(() => !document.querySelector('#au-root').classList.contains('ed-open'));
+      await page.waitForFunction(() => !document.querySelector('#au-root')!.classList.contains('ed-open'));
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -107,7 +115,7 @@ async function saved(page, writes, n) {
       const {page, errors, writes} = await flow(browser, DESKTOP);
       await page.locator('.au-card[data-open="l1s"]').click();
       await page.waitForSelector('.au-ed:not([hidden]) [data-b="step.prompt"]');
-      assert.ok((await page.locator('.au-side').boundingBox()).x > 1000, 'the editor sits on the right');
+      assert.ok(((await page.locator('.au-side').boundingBox())!).x > 1000, 'the editor sits on the right');
       assert.equal(await page.locator('.au-scrim').isVisible(), false);
       await shot(page, 'desktop-edit-llm');
       await page.locator('.au-ed [data-op="close"]').click();
@@ -117,18 +125,18 @@ async function saved(page, writes, n) {
       await page.locator('[data-spend]').click();
       assert.equal(await page.locator('[data-b="value"]').inputValue(), '5');
       await page.locator('.au-save').click();
-      await page.waitForFunction(() => document.querySelector('.au-ed').hidden);
-      assert.deepEqual(writes.at(-1).body, {spend_cap: {per_30m: 5}});
+      await page.waitForFunction(() => (document.querySelector('.au-ed') as HTMLElement).hidden);
+      assert.deepEqual(writes.at(-1)!.body, {spend_cap: {per_30m: 5}});
       await page.locator('[data-spend]').click();
       await page.fill('[data-b="value"]', '3.5');
       await page.locator('.au-save').click();
-      await page.waitForFunction(() => document.querySelector('[data-spend]')?.textContent.includes('$3.50 / 30 min'));
-      assert.deepEqual(writes.at(-1).body, {spend_cap: {per_30m: 3.5}});
+      await page.waitForFunction(() => document.querySelector('[data-spend]')?.textContent!.includes('$3.50 / 30 min'));
+      assert.deepEqual(writes.at(-1)!.body, {spend_cap: {per_30m: 3.5}});
       assert.equal(await ver(page), 'v7', 'a spend limit is not a new version');
       await page.locator('[data-spend]').click();
       await page.locator('[data-op="nocap"]').click();
-      await page.waitForFunction(() => document.querySelector('[data-spend]')?.textContent.includes('Bot’s limit'));
-      assert.deepEqual(writes.at(-1).body, {spend_cap: null});
+      await page.waitForFunction(() => document.querySelector('[data-spend]')?.textContent!.includes('Bot’s limit'));
+      assert.deepEqual(writes.at(-1)!.body, {spend_cap: null});
 
       // "+": none after Paths; Paths only at the end of a list without one.
       assert.equal(await page.locator('[data-add="root|2"]').count(), 1);
@@ -150,19 +158,19 @@ async function saved(page, writes, n) {
       await page.fill('[data-b="step.args.name"]', 'Later');
       assert.equal(await page.locator('[data-op="del"]').count(), 0, 'a new step has nothing to delete');
       let body = await saved(page, writes, 8);
-      const added = body.steps[2].paths[0].steps;
+      const added = body.steps[2]!.paths[0]!.steps;
       assert.equal(added.length, 3);
-      assert.deepEqual({type: added[2].type, do: added[2].do, args: added[2].args, enabled: added[2].enabled}, {type: 'action', do: 'label', args: {name: 'Later'}, enabled: true});
+      assert.deepEqual({type: added[2]!.type, do: added[2]!.do, args: added[2]!.args, enabled: added[2]!.enabled}, {type: 'action', do: 'label', args: {name: 'Later'}, enabled: true});
 
       await page.locator('[data-step="dc1"]').click();
-      await page.waitForFunction(() => document.querySelector('.au-card[data-open="dc1"]').classList.contains('off'));
-      assert.equal(writes.at(-1).body.steps[1].enabled, false);
+      await page.waitForFunction(() => document.querySelector('.au-card[data-open="dc1"]')!.classList.contains('off'));
+      assert.equal((writes.at(-1)!.body as Flow).steps[1]!.enabled, false);
       assert.equal(await ver(page), 'v9');
 
       await page.locator('.au-card[data-open="a3"]').click();
       await page.locator('[data-op="del"]').click();
       await page.waitForFunction(() => !document.querySelector('.au-card[data-open="a3"]'));
-      assert.deepEqual(writes.at(-1).body.steps[2].otherwise.steps, []);
+      assert.deepEqual((writes.at(-1)!.body as Flow).steps[2]!.otherwise.steps, []);
       assert.equal(await sideways(page), false);
       assert.deepEqual(errors, []);
       await page.close();

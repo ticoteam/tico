@@ -1,21 +1,22 @@
 // Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-dots.cjs
 // The requirement dots on a pipeline's cards (their names on tap or hover), a ticket's requirements with Mark met (its ⋯
 // asks for a why), and the board's ▶ count. A ticket with no requirements gets no dots. Desktop, dark and light.
-const {chromium} = require('playwright');
+import type * as PipelineFixtureSupport from './support/pipeline-fixture.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {install} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {install} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     for (const theme of ['dark', 'light']) {
       const context = await browser.newContext({viewport: {width: 1440, height: 940}, serviceWorkers: 'block'});
-      await context.addInitScript(([theme]) => {
+      await context.addInitScript(([theme]: [string]) => {
         try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
-      }, [theme]);
+      }, [theme] as [string]);
       const page = await context.newPage();
-      const errors = [];
+      const errors: string[] = [];
       page.on('pageerror', e => errors.push(e.message));
       const state = await install(page);
       await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
@@ -44,7 +45,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       const chip = page.locator('[data-col="build"] .pipe-play-chip');
       assert.equal((await chip.innerText()).trim(), '1');
       assert.equal(await chip.getAttribute('aria-label'), '1 for you');
-      const chipBox = await chip.boundingBox(), countBox = await page.locator('[data-col="build"] header .cnt').boundingBox();
+      const chipBox = (await chip.boundingBox())!, countBox = (await page.locator('[data-col="build"] header .cnt').boundingBox())!;
       assert.ok(Math.abs(chipBox.height - countBox.height) <= 1, 'the chip is as tall as the count');
 
       // Open the ticket: its requirements, and Mark met on the waiting one with a why.
@@ -66,9 +67,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       assert.equal(state.posts.length, 0, 'no mark without a why');
       await page.locator('.task-req[data-req-id="r-shots"] input[name=why]').fill('Checked shot 2 myself');
       await page.locator('.task-req[data-req-id="r-shots"] [data-req-mark] button[type=submit]').click();
-      await page.waitForFunction(() => document.querySelector('.task-req[data-req-id="r-shots"]')?.dataset.state === 'met', null, {timeout: t(5000)});
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('.task-req[data-req-id="r-shots"]')?.dataset.state === 'met', null, {timeout: t(5000)});
       assert.deepEqual(state.posts.map(p => p.path), ['tasks/D52/requirements/r-shots/mark-met'], 'one mark-met post');
-      assert.equal(state.posts[0].body.why, 'Checked shot 2 myself');
+      assert.equal((state.posts[0] as {body: {why: string}}).body.why, 'Checked shot 2 myself');
       assert.deepEqual(errors, [], 'no page errors');
       await context.close();
     }

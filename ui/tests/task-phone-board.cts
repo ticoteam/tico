@@ -3,41 +3,48 @@
 // picker, ⋯, ✎, the run button and +) with ✎ a 44 px target, the stage chips and their edge fades, one stage's cards with
 // the swipe hint under the last card (none on an empty stage), the activity bar's manager name read from Hub and its
 // "ask:" line, and General's chips in its Hub step order.
-const {chromium} = require('playwright');
+import type {Browser, Page} from 'playwright';
+import type * as PipelineFixtureSupport from './support/pipeline-fixture.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {install, type: devType} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {install, type: devType} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+
+// Page globals from the Tasks app (the page defines them; this spec reads and pokes them).
+declare const S: {emps: Record<string, unknown>[]};
+declare const TASKS_ST: unknown;
+declare function tasksRender(state: unknown): void;
 
 const HOST = 'http://tico-ui.test';
 const GENERAL = {id: 'general', name: 'General', role: null, manager: null, has_requirements: false, steps: [
   ['Open', 'open'], ['Doing', 'doing'], ['Review', 'review'], ['Ready', 'ready'], ['Done', 'done'], ['Closed', 'closed']].map(([name, status], i) =>
   ({id: 'g-' + status, name, status, position: i, type_id: 'general', limit_minutes: null}))};
-const generalTask = (id, title, status) => ({id, title, body: '', owner_id: 'bot:b2', requester_id: 'human:ana', status, lane: 'company', version: 1,
+const generalTask = (id: string, title: string, status: string) => ({id, title, body: '', owner_id: 'bot:b2', requester_id: 'human:ana', status, lane: 'company', version: 1,
   labels: [], links: [], parts: {total: 0, done: 0}, rank: 1, created_at: '2026-11-07T12:00:00Z', updated_at: '2026-11-07T12:00:00Z',
   step_since: '2026-11-07T12:00:00Z', type_id: 'general', type: {id: 'general', name: 'General'}, step_id: 'g-' + status,
   step: {id: 'g-' + status, name: status, status, type_id: 'general'}});
 const MANAGER = {id: 'pm-1', slug: 'product-manager', display_name: 'Product Pipeline Manager', status: 'active', kind: 'bot', role: 'bot', name: 'Product Pipeline Manager'};
 
-const isPhoneOk = async page => page.evaluate(() => document.documentElement.scrollWidth <= 390);
+const isPhoneOk = async (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= 390);
 // Contrast of the ✎ icon against the page background, from the computed colours (WCAG ratio).
-const contrast = page => page.evaluate(() => {
-  const lum = rgb => { const [r, g, b] = rgb.map(v => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
-  const parse = css => css.match(/[\d.]+/g).slice(0, 3).map(Number);
-  const fg = parse(getComputedStyle(document.querySelector('#task-pipeline-edit')).color);
+const contrast = (page: Page) => page.evaluate(() => {
+  const lum = (rgb: number[]) => { const [r, g, b] = rgb.map(v => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }) as [number, number, number]; return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const parse = (css: string) => css.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+  const fg = parse(getComputedStyle(document.querySelector('#task-pipeline-edit')!).color);
   const bg = parse(getComputedStyle(document.body).backgroundColor);
-  const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+  const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x) as [number, number];
   return (a + 0.05) / (b + 0.05);
 });
 
 // Opens the Tasks board on a phone for one theme and one board. `general` swaps in General's steps and tasks; the rest of the
 // fake server (install) answers the Dev tickets pipeline, whose manager and ✎ are on.
-async function openBoard(browser, theme, board, {manager = null} = {}) {
+async function openBoard(browser: Browser, theme: string, board: string, {manager = null}: {manager?: unknown} = {}) {
   const context = await browser.newContext({viewport: {width: 390, height: 844}, serviceWorkers: 'block', hasTouch: true});
-  await context.addInitScript(([theme, board]) => {
+  await context.addInitScript(([theme, board]: [string, string]) => {
     try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', board); } catch {}
-  }, [theme, board]);
+  }, [theme, board] as [string, string]);
   const page = await context.newPage();
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await install(page, {manager: board === 'dev-tickets', refuseMove: true});
   await page.route(HOST + '/api/employees', route => route.fulfill({contentType: 'application/json', body: JSON.stringify([MANAGER])}));
@@ -57,7 +64,7 @@ async function openBoard(browser, theme, board, {manager = null} = {}) {
 }
 
 // Each stage chip's name, without its count.
-const chipNames = page => page.locator('#task-body .pchip').evaluateAll(els => els.map(el => el.textContent.replace(/\d+/g, '').replace(/[·•]/g, '').trim()));
+const chipNames = (page: Page) => page.locator('#task-body .pchip').evaluateAll((els: Element[]) => els.map(el => el.textContent!.replace(/\d+/g, '').replace(/[·•]/g, '').trim()));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -69,22 +76,22 @@ const chipNames = page => page.locator('#task-body .pchip').evaluateAll(els => e
       {
         const {context, page, errors} = await openBoard(browser, theme, 'dev-tickets');
         const header = await page.evaluate(() => ['#task-scope', '#task-more', '#task-pipeline-edit', '#task-play', '#task-new'].map(sel => {
-          const el = document.querySelector(sel);
+          const el = document.querySelector<HTMLElement>(sel);
           if (!el || el.hidden || !el.getClientRects().length) return null;
           const b = el.getBoundingClientRect();
           return {sel, x: b.x, y: b.y, w: b.width, h: b.height};
-        }).filter(Boolean));
+        }).filter(Boolean) as {sel: string; x: number; y: number; w: number; h: number}[]);
         // T1: the five controls share one row, in order, all on the screen.
         assert.equal(header.length, 5, label + ': the picker, ⋯, ✎, the run button and + are all shown');
-        const mid = item => item.y + item.h / 2;
-        assert.ok(header.every(item => Math.abs(mid(item) - mid(header[0])) <= 1), label + ': one row');
-        assert.ok(header.every((item, i) => i === 0 || item.x > header[i - 1].x), label + ': left to right in order');
+        const mid = (item: {y: number; h: number}) => item.y + item.h / 2;
+        assert.ok(header.every(item => Math.abs(mid(item) - mid(header[0]!)) <= 1), label + ': one row');
+        assert.ok(header.every((item, i) => i === 0 || item.x > header[i - 1]!.x), label + ': left to right in order');
         assert.ok(header.every(item => item.x >= 0 && item.x + item.w <= 390), label + ': all on the screen');
         // T2: ✎ is the same icon size as ⋯ and +, with a tap area of at least 44 × 44 px, and visible in this theme.
-        const edit = header.find(item => item.sel === '#task-pipeline-edit'), more = header.find(item => item.sel === '#task-more'), add = header.find(item => item.sel === '#task-new');
+        const edit = header.find(item => item.sel === '#task-pipeline-edit')!, more = header.find(item => item.sel === '#task-more')!, add = header.find(item => item.sel === '#task-new')!;
         assert.ok(Math.abs(edit.w - more.w) <= 1 && Math.abs(edit.h - more.h) <= 1 && Math.abs(edit.w - add.w) <= 1 && Math.abs(edit.h - add.h) <= 1, label + ': ✎ is the size of ⋯ and +');
         const reach = await page.evaluate(() => {
-          const before = getComputedStyle(document.querySelector('#task-pipeline-edit'), '::before');
+          const before = getComputedStyle(document.querySelector('#task-pipeline-edit')!, '::before');
           return {w: parseFloat(before.width), h: parseFloat(before.height)};
         });
         assert.ok(reach.w >= 44 && reach.h >= 44, label + ': ✎ reaches a 44 px target (' + JSON.stringify(reach) + ')');
@@ -127,8 +134,8 @@ const chipNames = page => page.locator('#task-body .pchip').evaluateAll(els => e
         assert.notEqual(await row.evaluate(el => getComputedStyle(el).maskImage), 'none', label + ' General: the fade is drawn');
         // T5: scrolled to the last chip: no fade on the right, and one on the left.
         await row.evaluate(el => { el.scrollLeft = el.scrollWidth; });
-        await page.waitForFunction(() => !document.querySelector('#task-body .pchips').classList.contains('fade-r')
-          && document.querySelector('#task-body .pchips').classList.contains('fade-l'), null, {timeout: t(3000)});
+        await page.waitForFunction(() => !document.querySelector('#task-body .pchips')!.classList.contains('fade-r')
+          && document.querySelector('#task-body .pchips')!.classList.contains('fade-l'), null, {timeout: t(3000)});
         // T7: a stage with no cards shows no swipe hint: Doing has none.
         await page.locator('#task-body .pchip', {hasText: 'Doing'}).click();
         await page.waitForSelector('#task-body .pipe-stage', {state: 'attached'});
@@ -137,12 +144,12 @@ const chipNames = page => page.locator('#task-body .pchip').evaluateAll(els => e
         // T6: on a stage with cards, the hint sits under the last card.
         await page.locator('#task-body .pchip', {hasText: 'Open'}).click();
         await page.waitForSelector('#task-body .pipe-next', {state: 'attached'});
-        const hint = await page.locator('#task-body .pipe-next').boundingBox();
-        const card = await page.locator('#task-body .pipe-stage-cards .bcard').last().boundingBox();
+        const hint = (await page.locator('#task-body .pipe-next').boundingBox())!;
+        const card = (await page.locator('#task-body .pipe-stage-cards .bcard').last().boundingBox())!;
         assert.ok(hint.y - (card.y + card.height) <= 24, label + ' General: the hint sits under the last card');
         // T1 for General: ✎ is a rights answer; the four controls that show share one row.
-        const row1 = await page.evaluate(() => ['#task-scope', '#task-more', '#task-new'].map(sel => { const b = document.querySelector(sel).getBoundingClientRect(); return b.y + b.height / 2; }));
-        assert.ok(row1.every(y => Math.abs(y - row1[0]) <= 1), label + ' General: the header is one row');
+        const row1 = await page.evaluate(() => ['#task-scope', '#task-more', '#task-new'].map(sel => { const b = document.querySelector(sel)!.getBoundingClientRect(); return b.y + b.height / 2; }));
+        assert.ok(row1.every(y => Math.abs(y - row1[0]!) <= 1), label + ' General: the header is one row');
         assert.ok(await isPhoneOk(page), label + ' General: no sideways scroll');
         assert.deepEqual(errors, [], label + ' General: no page errors');
         await context.close();

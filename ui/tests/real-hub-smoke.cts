@@ -1,18 +1,20 @@
 // The real-hub helper (ui/tests/support/real-hub.cjs) on a real hub seeded with the scenario org:
 // the owner opens the app on a phone and on a desktop and the shell renders, and a non-owner teammate signs in as
 // itself. The reference for writing a real-hub test (ui/README.md).
-const {chromium} = require('playwright');
+import type {Page} from 'playwright';
+import type * as RealHubSupport from './support/real-hub.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {startHub, pageAs} = require('./support/real-hub.cjs');
-const {t} = require('./support/load.cjs');
+const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
+const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
 
-const whoami = page => page.evaluate(async () => (await fetch('/api/v2/me', {cache: 'no-store'})).json());
+const whoami = (page: Page) => page.evaluate(async () => (await fetch('/api/v2/me', {cache: 'no-store'})).json());
 
 (async () => {
   const hub = await startHub({seeds: ['org']});
   let browser;
   try {
-    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
     assert.deepEqual(Object.keys(hub.tokens).sort(),
       ['ana', 'builder-claude', 'builder-openai', 'dana', 'engineering-lead', 'omar', 'priya', 'release-manager']);
 
@@ -21,7 +23,7 @@ const whoami = page => page.evaluate(async () => (await fetch('/api/v2/me', {cac
       try {
         await page.waitForFunction(() => {
           const who = document.querySelector('#account .account-email')?.textContent || '';
-          return who !== '' && who !== 'Signing in…' && document.querySelector('#main')?.children.length > 0;
+          return who !== '' && who !== 'Signing in…' && document.querySelector('#main')?.children.length! > 0;
         }, null, {timeout: t(20000)});
         assert.equal(await page.evaluate(() => innerWidth), phone ? 390 : 1440, 'the viewport is the one asked for');
         assert.equal(await page.locator('#account .account-email').innerText(), 'dana@acme.example');

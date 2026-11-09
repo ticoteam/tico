@@ -3,14 +3,16 @@
 // on its own (title, owner, colour, metric, target, due, Remove), a sheet on a phone and a side panel on a computer;
 // tapping a line opens its goal, or a new one for its owner when they have none; "+" on every line (and a long press on
 // a phone) adds a goal for that owner, a group's for its lead; the name still opens the owner's panel. A member gets only their own goals to set and reads the rest.
-const {chromium} = require('playwright');
+import type {Page} from 'playwright';
+import type * as StrategyFakeSupport from './support/strategy-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs');
+const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs') as typeof StrategyFakeSupport;
 
 const HASH = '#/strategy/goals';
-const goalWrites = writes => writes.filter(w => w.path.startsWith('/api/v2/goals')).map(w => [w.path, w.body]);
-const longPress = (page, selector) => page.evaluate(async sel => {
-  const el = document.querySelector(sel), r = el.getBoundingClientRect();
+const goalWrites = (writes: StrategyFakeSupport.StrategyWrite[]) => writes.filter(w => w.path.startsWith('/api/v2/goals')).map(w => [w.path, w.body]);
+const longPress = (page: Page, selector: string) => page.evaluate(async (sel: string) => {
+  const el = document.querySelector<HTMLElement>(sel)!, r = el.getBoundingClientRect();
   const touch = new Touch({identifier: 1, target: el, clientX: r.x + 40, clientY: r.y + r.height / 2});
   el.dispatchEvent(new TouchEvent('touchstart', {touches: [touch], targetTouches: [touch], changedTouches: [touch], bubbles: true}));
   await new Promise(done => setTimeout(done, 650));
@@ -26,7 +28,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       const {page, errors, writes} = await openStrategy(browser, {viewport: PHONE, hash: HASH});
       await page.locator('#goal-tree .gt-row[data-goal="g-co"]').waitFor();
       assert.equal(await page.locator('#goal-strategy, .gst').count(), 0, 'no Strategy line');
-      const plus = await page.locator('#goal-new').boundingBox(), h1 = await page.locator('.rd-strat-head h1').boundingBox();
+      const plus = (await page.locator('#goal-new').boundingBox())!, h1 = (await page.locator('.rd-strat-head h1').boundingBox())!;
       assert(Math.abs((plus.y + plus.height / 2) - (h1.y + h1.height / 2)) < 12, '+ Goal sits beside the title');
       assert.equal(await page.locator('#goal-tree .gt-row[data-owner="human:ben"] [data-goal-add]').isVisible(), true, '"+" shows on a phone');
       assert.equal(await sideways(page), false, 'no sideways scroll');
@@ -38,7 +40,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await sheet.waitFor();
       assert.equal(await page.locator('#goal-panel[open]').count(), 0, 'the goal, not the owner panel');
       assert.equal(await sheet.locator('.gs-h').innerText(), 'Goal');
-      const box = await sheet.boundingBox();
+      const box = (await sheet.boundingBox())!;
       assert(Math.abs(box.y + box.height - 844) <= 2 && box.width >= 388, 'a sheet at the bottom');
       assert.equal(await sheet.locator('select[name="owner"]').inputValue(), 'company');
       assert.equal(await sheet.locator('input[name="metric"]').inputValue(), 'Paying customers');
@@ -46,19 +48,19 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       assert.equal(await sheet.locator('input[name="due"]').inputValue(), '2026-12-31');
       assert.equal(await sheet.locator('select[name="status"]').count(), 1, 'the colour');
       assert.equal(await sheet.locator('[data-goal-remove]').count(), 1);
-      assert.equal(await page.evaluate(() => { const b = document.querySelector('#goal-sheet .tmodal-body'); return b.scrollWidth > b.clientWidth + 1; }), false, 'nothing sideways in the sheet');
+      assert.equal(await page.evaluate(() => { const b = document.querySelector<HTMLElement>('#goal-sheet .tmodal-body')!; return b.scrollWidth > b.clientWidth + 1; }), false, 'nothing sideways in the sheet');
       await shot(page, 'phone-goal-sheet');
       // A target goes with its date: clearing the date saves nothing and asks for it.
       await sheet.locator('input[name="title"]').fill('Reach 120 paying customers');
       await sheet.locator('input[name="target"]').fill('120');
       await sheet.locator('input[name="due"]').fill('');
       await sheet.locator('button[type="submit"]').click();
-      assert.equal(await page.evaluate(() => document.activeElement?.name), 'due');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.name), 'due');
       assert.deepEqual(goalWrites(writes), []);
       await sheet.locator('input[name="due"]').fill('2027-03-31');
       await sheet.locator('button[type="submit"]').click();
       await page.locator('#goal-sheet[open]').waitFor({state: 'detached'}).catch(() => {});
-      await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
+      await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#goal-sheet')?.open);
       assert.deepEqual(goalWrites(writes), [
         ['/api/v2/goals/g-co', {title: 'Reach 120 paying customers'}],
         ['/api/v2/goals/g-co/kpis/k-cust', {kind: 'improve', target: 120, deadline: '2027-03-31', baseline: 20, baseline_at: '2026-09-01'}]]);
@@ -71,7 +73,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       assert.equal(await sheet.locator('input[name="title"]').inputValue(), 'Book 40 demos a month', 'the line opens its goal');
       await sheet.locator('[data-gs-close]').click();
       const sdr = page.locator('#goal-tree .gt-row[data-owner="bot:sdr"]:not(.gt-cont)');
-      const past = await sdr.evaluate(li => li.querySelector('.gt-name').getBoundingClientRect().right - li.getBoundingClientRect().left + 24);
+      const past = await sdr.evaluate(li => li.querySelector<HTMLElement>('.gt-name')!.getBoundingClientRect().right - li.getBoundingClientRect().left + 24);
       await sdr.click({position: {x: past, y: 18}});
       await sheet.waitFor();
       assert.equal(await sheet.locator('.gs-h').innerText(), 'New goal', 'a line with no goal adds one');
@@ -96,7 +98,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await sheet.locator('input[name="target"]').fill('10');
       await sheet.locator('input[name="due"]').fill('2026-12-31');
       await sheet.locator('button[type="submit"]').click();
-      await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
+      await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#goal-sheet')?.open);
       assert.deepEqual(goalWrites(writes), [
         ['/api/v2/goals', {title: 'Close 10 deals', owner: 'human:ben'}],
         ['/api/v2/goals/g-3/kpis', {name: 'Deals closed', kind: 'improve', target: 10, deadline: '2026-12-31'}]]);
@@ -105,7 +107,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       writes.length = 0;
       await page.locator('#goal-tree .gt-row[data-goal="g-3"] .gt-goal').click();
       await sheet.locator('[data-goal-remove]').click();
-      await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
+      await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#goal-sheet')?.open);
       assert.deepEqual(goalWrites(writes), [['/api/v2/goals/g-3/status', {status: 'dropped', note: ''}]]);
       await page.waitForFunction(() => !document.querySelector('#goal-tree [data-goal="g-3"]'));
 
@@ -140,11 +142,11 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await sheet.locator('select[name="owner"]').selectOption('company');
       assert.equal(await sheet.locator('select[name="parent"]').isDisabled(), true, 'a company goal supports nothing');
       await sheet.locator('input[name="title"]').fill('Ship the Acme mobile app');
-      const box = await sheet.boundingBox();
+      const box = (await sheet.boundingBox())!;
       assert(box.x + box.width >= 1438 && box.height >= 898 && box.width <= 482, 'a side panel on the right');
       await shot(page, 'desktop-goal-sheet');
       await sheet.locator('button[type="submit"]').click();
-      await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
+      await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#goal-sheet')?.open);
       assert.deepEqual(goalWrites(writes), [['/api/v2/goals', {title: 'Ship the Acme mobile app', owner: 'company'}]]);
 
       // Hand Sales Lead's goal to the SDR, and Details opens the owner's panel.
@@ -152,7 +154,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await page.locator('#goal-tree .gt-row[data-goal="g-sales"] .gt-goal').click();
       await sheet.locator('select[name="owner"]').selectOption('bot:sdr');
       await sheet.locator('button[type="submit"]').click();
-      await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
+      await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#goal-sheet')?.open);
       assert.deepEqual(goalWrites(writes), [['/api/v2/goals/g-sales', {owner: 'bot:sdr'}]]);
       await page.locator('#goal-tree .gt-row[data-owner="bot:sdr"][data-goal="g-sales"] .gt-goal').click();
       await sheet.locator('[data-gs-details]').click();
@@ -172,7 +174,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       assert.equal(await sheet.locator('select[name="owner"]').isDisabled(), true);
       await sheet.locator('[data-goal-cancel]').click();
       await page.locator('#goal-new').click();
-      assert.deepEqual(await sheet.locator('select[name="owner"] option').evaluateAll(os => os.map(o => o.value)), ['human:cara']);
+      assert.deepEqual(await sheet.locator('select[name="owner"] option').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)), ['human:cara']);
       if (viewport === PHONE) await shot(page, 'phone-goal-sheet-member');
       await sheet.locator('[data-goal-cancel]').click();
       assert.equal(await page.locator('#goal-tree .gt-row[data-owner="human:ben"] [data-goal-add]').count(), 0, "no + on someone else's line");

@@ -1,15 +1,19 @@
-// Automations (redesign, ui/app/automations*.js) against the fake hub in support/automations-fake.cjs. The page opens on
-// the overview: one dense row per automation grouped by trigger, no switches, filters on the left (behind a Filters
-// button on a phone), a 5m/1h/24h/7d range kept across visits, and a Runs tab of every run newest first. A row opens
-// the flow with a "‹ Automations" link back that keeps the filters, tab and range. Inside, the header switch turns it
-// off, Runs lists dense rows, a tap opens a run's steps, More reads the next page; ⋯ deletes, but not a built-in.
-const {chromium} = require('playwright');
+// Automations (redesign, ui/app/automations*.js) against the fake hub in support/automations-fake.cjs: the overview is one
+// dense row per automation grouped by trigger, no switches, filters on the left (behind a Filters button on a phone), a
+// 5m/1h/24h/7d range kept across visits, and a Runs tab of every run newest first. A row opens the flow with a "‹
+// Automations" link back that keeps the filters, tab and range. Inside, the header switch turns it off, Runs lists dense
+// rows, a tap opens a run's steps, More reads the next page; ⋯ deletes, but not a built-in.
+import type {Page} from 'playwright';
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
-const rows = page => page.locator('tr.au-row').evaluateAll(r => r.map(x => x.dataset.row));
-const groups = page => page.locator('tr.au-grp').evaluateAll(r => r.map(x => x.dataset.agrp));
-const screen = page => page.locator('#au-root').getAttribute('data-screen');
+type Box = {x: number; y: number; width: number; height: number};
+
+const rows = (page: Page) => page.locator('tr.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row));
+const groups = (page: Page) => page.locator('tr.au-grp').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.agrp));
+const screen = (page: Page) => page.locator('#au-root').getAttribute('data-screen');
 
 (async () => {
   const browser = await chromium.launch();
@@ -81,8 +85,8 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       assert.equal(await first.getAttribute('aria-expanded'), 'true');
       const lines = await page.locator('.au-rx .au-sl').allInnerTexts();
       assert.equal(lines.length, 5);
-      assert.match(lines[1], /reply 82%/);
-      assert.match(lines[2], /Reply/);
+      assert.match(lines[1]!, /reply 82%/);
+      assert.match(lines[2]!, /Reply/);
       await shot(page, 'phone-runs');
       await first.click();
       assert.equal(await page.locator('.au-rx').count(), 0);
@@ -94,7 +98,7 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
 
       // Back goes to the list, still filtered.
       await page.locator('.au-crumb .au-up').click();
-      await page.waitForFunction(() => document.querySelector('#au-root').dataset.screen === 'list');
+      await page.waitForFunction(() => (document.querySelector('#au-root') as HTMLElement).dataset.screen === 'list');
       assert.deepEqual(await rows(page), ['au_inbox']);
       assert.equal(await page.locator('[data-ftrig="message"]').getAttribute('aria-pressed'), 'true');
       assert.deepEqual(errors, []);
@@ -106,18 +110,18 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
     {
       const W = 320, {page, errors} = await openAutomations(browser, {viewport: {width: W, height: 640}});
       await page.waitForSelector('tr.au-row');
-      const box = sel => page.locator(sel).boundingBox();
+      const box = (sel: string) => page.locator(sel).boundingBox();
       for (const tab of ['list', 'runs']) {
         await page.locator(`[data-tab="${tab}"]`).click();
-        const b = {};
+        const b: Record<string, Box | null> = {};
         for (const sel of ['.au-tabs', '.au-range', '.au-q', '[data-filters]', '.au-new']) {
           b[sel] = await box(sel);
-          assert.ok(b[sel] && b[sel].x >= 0 && b[sel].x + b[sel].width <= W, `${tab}: ${sel} fits`);
+          assert.ok(b[sel] && b[sel]!.x >= 0 && b[sel]!.x + b[sel]!.width <= W, `${tab}: ${sel} fits`);
         }
-        const mid = x => x.y + x.height / 2;
-        assert.ok(Math.abs(mid(b['.au-tabs']) - mid(b['.au-range'])) < 2, `${tab}: tabs and range share a row`);
-        assert.ok(Math.abs(mid(b['.au-q']) - mid(b['.au-new'])) < 2 && b['.au-q'].y > b['.au-tabs'].y, `${tab}: search row under it`);
-        assert.ok(b['.au-new'].width >= 40 && b['[data-filters]'].width >= 40, `${tab}: + and filters are full-size targets`);
+        const mid = (x: Box) => x.y + x.height / 2;
+        assert.ok(Math.abs(mid(b['.au-tabs']!) - mid(b['.au-range']!)) < 2, `${tab}: tabs and range share a row`);
+        assert.ok(Math.abs(mid(b['.au-q']!) - mid(b['.au-new']!)) < 2 && b['.au-q']!.y > b['.au-tabs']!.y, `${tab}: search row under it`);
+        assert.ok(b['.au-new']!.width >= 40 && b['[data-filters]']!.width >= 40, `${tab}: + and filters are full-size targets`);
         assert.equal(await sideways(page), false);
       }
       await page.locator('[data-tab="list"]').click();
@@ -153,7 +157,7 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       assert.equal((await page.locator('.au-new').innerText()).trim(), '');
       assert.equal(await page.locator('.au-new').getAttribute('aria-label'), 'New automation');
       const plus = await page.evaluate(() => {
-        const r = s => document.querySelector(s).getBoundingClientRect();
+        const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
         const add = r('.au-new'), range = r('.au-range');
         return {h: add.height, w: add.width, rangeH: range.height, mid: add.top + add.height / 2, rangeMid: range.top + range.height / 2};
       });
@@ -167,16 +171,16 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       assert.equal(await page.locator('[data-ftrig="message"]').isVisible(), true);
       assert.equal(await page.locator('.au-side').isVisible(), false, 'no side panel until an editor opens');
       assert.equal(await page.locator('.au-range [aria-pressed="true"]').innerText(), '1h');
-      const runsOf = id => page.locator(`tr.au-row[data-row="${id}"] td.au-n`).first();
-      await page.waitForFunction(() => document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n').innerText === '4');
+      const runsOf = (id: string) => page.locator(`tr.au-row[data-row="${id}"] td.au-n`).first();
+      await page.waitForFunction(() => (document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n') as HTMLElement).innerText === '4');
       assert.match(await page.locator('tr.au-row[data-row="au_inbox"]').innerText(), /now/, 'its last run');
 
       await page.locator('.au-range [data-range="24h"]').click();
-      await page.waitForFunction(() => document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n').innerText === '30');
+      await page.waitForFunction(() => (document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n') as HTMLElement).innerText === '30');
       await page.reload();
       await page.waitForSelector('tr.au-row');
       assert.equal(await page.locator('.au-range [aria-pressed="true"]').innerText(), '24h', 'the range is kept');
-      await page.waitForFunction(() => document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n')?.innerText === '30');
+      await page.waitForFunction(() => (document.querySelector('tr.au-row[data-row="au_inbox"] td.au-n') as HTMLElement | null)?.innerText === '30');
       assert.equal(await runsOf('au_deploy').innerText(), '0');
 
       // Sort by most failures puts the one with failures first.
@@ -210,8 +214,8 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       await page.waitForSelector('.au-card[data-open="trigger"]');
       await shot(page, 'desktop-flow');
       await page.locator('.au-hd [data-on-cur]').click();
-      await page.waitForFunction(() => !document.querySelector('.au-hd [data-on-cur]').checked);
-      assert.deepEqual(writes.at(-1), {method: 'PATCH', path: '/api/v2/automations/au_inbox', body: {enabled: false}});
+      await page.waitForFunction(() => !(document.querySelector('.au-hd [data-on-cur]') as HTMLInputElement).checked);
+      assert.deepEqual(writes.at(-1)!, {method: 'PATCH', path: '/api/v2/automations/au_inbox', body: {enabled: false}});
 
       // A slow answer for an automation already left (an answer or a failure) never lands on the one now open.
       for (const fail of [false, true]) {
@@ -237,7 +241,7 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       page.once('dialog', d => d.dismiss());
       await page.locator('.au-hd [data-on-cur]').click();
       assert.equal(await page.locator('.au-hd [data-on-cur]').isChecked(), true);
-      assert.notEqual(writes.at(-1).path, '/api/v2/automations/au_tasks');
+      assert.notEqual(writes.at(-1)!.path, '/api/v2/automations/au_tasks');
 
       // Any other: ⋯ Delete, once confirmed, goes and leaves the list.
       await page.evaluate(() => { location.hash = '#/automations/au_deploy'; });
@@ -245,10 +249,10 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       await page.locator('[data-more]').click();
       page.once('dialog', d => d.accept());
       await page.locator('.au-menu [data-mi="delete"]').click();
-      await page.waitForFunction(() => document.querySelector('#au-root').dataset.screen === 'list');
+      await page.waitForFunction(() => (document.querySelector('#au-root') as HTMLElement).dataset.screen === 'list');
       await page.waitForSelector('tr.au-row[data-row="au_inbox"]');
       assert.equal(await page.locator('tr.au-row[data-row="au_deploy"]').count(), 0);
-      assert.deepEqual(writes.at(-1), {method: 'DELETE', path: '/api/v2/automations/au_deploy', body: {}});
+      assert.deepEqual(writes.at(-1)!, {method: 'DELETE', path: '/api/v2/automations/au_deploy', body: {}});
       assert.equal(await sideways(page), false);
       assert.deepEqual(errors, []);
       await page.close();

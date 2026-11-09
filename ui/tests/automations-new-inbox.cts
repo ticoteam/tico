@@ -2,12 +2,14 @@
 // person's email inbox offers Person and Bot only (a channel adds Group and Other); a refused template fill shows in
 // the dialog and saves nothing; Create POSTs the filled template's steps and destinations with Turn on now as
 // switched, then opens the new automation as a board; the dialog fits a phone with no sideways scroll.
-const {chromium} = require('playwright');
+import type {Page} from 'playwright';
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
-const kinds = page => page.locator('.au-nd [data-kind]').evaluateAll(els => els.map(e => e.dataset.kind));
-async function openDialog(page) {
+const kinds = (page: Page) => page.locator('.au-nd [data-kind]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.kind));
+async function openDialog(page: Page) {
   await page.locator('.au-new').click();
   await page.locator('.au-newm [data-new="inbox"]').click();
   await page.waitForSelector('dialog.au-nd-new[open] [data-tid="founder"]');
@@ -58,11 +60,12 @@ async function openDialog(page) {
       const posts = writes.filter(w => w.method === 'POST' && w.path === '/api/v2/automations');
       assert.equal(posts.length, 1);
       const filled = filledTemplate('founder', 'person:dana', 'dana@acme.example');
-      assert.equal(posts[0].body.enabled, true);
-      assert.equal(posts[0].body.owner, 'person:dana');
-      assert.deepEqual(posts[0].body.trigger, {type: 'message', inbox: 'dana@acme.example'});
-      assert.deepEqual(posts[0].body.steps, filled.steps);
-      assert.deepEqual(posts[0].body.destinations, filled.destinations);
+      const post = posts[0]!;
+      assert.equal(post.body.enabled, true);
+      assert.equal(post.body.owner, 'person:dana');
+      assert.deepEqual(post.body.trigger, {type: 'message', inbox: 'dana@acme.example'});
+      assert.deepEqual(post.body.steps, filled.steps);
+      assert.deepEqual(post.body.destinations, filled.destinations);
       assert.match(await page.evaluate(() => location.hash), /^#\/automations\/au_\d+$/);
       assert.equal(await page.locator('.au-dest[data-board^="dest:"]:not(.au-dest-add)').count(), 4);
       assert.equal(await page.locator('[data-bmode="draft"]').getAttribute('aria-pressed'), 'true');
@@ -78,7 +81,7 @@ async function openDialog(page) {
       await page.locator('.au-nd [data-tid="blank"]').click();
       await page.locator('.au-nd [data-go]').click();
       await page.waitForSelector('.au-board');
-      const post = writes.find(w => w.method === 'POST');
+      const post = writes.find(w => w.method === 'POST')!;
       assert.equal(post.body.enabled, false);
       assert.equal(post.body.name, 'Blank');
       assert.deepEqual(errors, []);
@@ -90,11 +93,11 @@ async function openDialog(page) {
       const {page, errors} = await openAutomations(browser, {viewport: PHONE});
       await page.waitForSelector('tr.au-row');
       await openDialog(page);
-      const box = await page.locator('dialog.au-nd').boundingBox();
+      const box = (await page.locator('dialog.au-nd').boundingBox())!;
       assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width + 1, 'the dialog fits the phone');
       assert.ok(await page.locator('.au-nd [data-go]').isVisible());
       assert.equal(await sideways(page), false);
-      const tp = await page.locator('.au-nd [data-tid="founder"]').boundingBox();
+      const tp = (await page.locator('.au-nd [data-tid="founder"]').boundingBox())!;
       assert.ok(tp.height >= 44, 'a template is a full-size tap target');
       await shot(page, 'new-inbox-phone');
       assert.deepEqual(errors, []);

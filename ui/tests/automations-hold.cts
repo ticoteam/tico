@@ -2,17 +2,18 @@
 // automation shows "On hold" on its row, and inside "On hold · N held" with Release and Drop for whoever may change it;
 // its held runs read "Held" in Runs. Release sends {action: release} and the line goes; a viewer without rights sees the
 // line but no buttons.
-const {chromium} = require('playwright');
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, DESKTOP, PHONE, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, DESKTOP, PHONE, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
 const HOLD = {rule: 'sustained', since: '2026-10-29T09:15:00Z', held: 3, dropped: 0, task: 'task_hold'};
 
-function held(fx) {
-  const a = fx.automations.find(x => x.id === 'au_deploy');
+function held(fx: AutomationsFakeSupport.AutomationsFixture) {
+  const a = fx.automations.find(x => x.id === 'au_deploy')! as {hold: unknown};
   a.hold = {...HOLD};
 }
-const heldRuns = db => {
+const heldRuns = (db: AutomationsFakeSupport.AutomationsDb) => {
   const now = Date.now();
   db.runs.au_deploy = Array.from({length: 3}, (_, i) => ({id: 'run_h' + i, automation_id: 'au_deploy', version: 1,
     trigger_ref: 'webhook:trg_1:d' + i, started_at: new Date(now - i * 60000).toISOString(), finished_at: null, status: 'held',
@@ -37,8 +38,8 @@ const heldRuns = db => {
       if (viewport === DESKTOP) {
         await page.locator('.au-hd [data-hold="release"]').click();
         await page.waitForFunction(() => !document.querySelector('.au-hd .au-hold'));
-        assert.deepEqual(writes.at(-1), {method: 'POST', path: '/api/v2/automations/au_deploy/held', body: {action: 'release'}});
-        await page.waitForFunction(() => !document.querySelector('tr.au-rr .au-ro')?.textContent.includes('Held'));
+        assert.deepEqual(writes.at(-1)!, {method: 'POST', path: '/api/v2/automations/au_deploy/held', body: {action: 'release'}});
+        await page.waitForFunction(() => !document.querySelector('tr.au-rr .au-ro')?.textContent!.includes('Held'));
       }
       assert.deepEqual(errors, []);
       await page.close();

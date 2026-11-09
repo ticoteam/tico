@@ -1,16 +1,18 @@
 // Library › Directory on a real hub seeded with the scenario org and the Directory's rows (evals/redesign/seeds.py
 // "directory", the same rows as the demo): the list → a person → their organization → a place, on a desktop and a
 // phone. Set TICO_DIRECTORY_SHOTS to a folder to keep a screenshot of each page.
-const {chromium} = require('playwright');
+import type {Page} from 'playwright';
+import type * as RealHubSupport from './support/real-hub.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {startHub, pageAs} = require('./support/real-hub.cjs');
-const {t} = require('./support/load.cjs');
+const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
+const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
 
 const SHOTS = process.env.TICO_DIRECTORY_SHOTS || '';
-const shot = async (page, name) => { if (!SHOTS) return; await page.waitForTimeout(600); await page.screenshot({path: path.join(SHOTS, `directory-${name}.png`), fullPage: true}); };
+const shot = async (page: Page, name: string) => { if (!SHOTS) return; await page.waitForTimeout(600); await page.screenshot({path: path.join(SHOTS, `directory-${name}.png`), fullPage: true}); };
 
-async function flow(page, tag) {
+async function flow(page: Page, tag: string) {
   await page.goto(page.url().split('#')[0] + '#/library/directory');
   // The list: People first, the seeded people with their organization, relationship and where they are known from.
   const jane = page.locator('[data-dir-row="person/jane-ortiz"]');
@@ -28,7 +30,7 @@ async function flow(page, tag) {
   assert.equal(await page.locator('[data-dir-row]').getAttribute('data-dir-row'), 'person/raj-patel');
   assert.match(page.url(), /q=Ra/);
   await page.goto(page.url().split('#')[0] + '#/library/directory?link=customer_of');
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-dir-row]')].map(r => r.dataset.dirRow).join() === 'person/jane-ortiz,person/sam-brooks', null, {timeout: t(10000)});
+  await page.waitForFunction(() => [...(document.querySelectorAll('[data-dir-row]') as unknown as Iterable<HTMLElement>)].map(r => r.dataset.dirRow).join() === 'person/jane-ortiz,person/sam-brooks', null, {timeout: t(10000)});
   await page.goto(page.url().split('#')[0] + '#/library/directory');
   await jane.waitFor({timeout: t(10000)});
   await shot(page, `list-${tag}`);
@@ -80,11 +82,11 @@ async function flow(page, tag) {
   const hub = await startHub({seeds: ['org', 'toured', 'directory']});
   let browser;
   try {
-    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
     for (const phone of [false, true]) {
       const page = await pageAs(browser, hub, 'dana', {phone});
       try {
-        await page.waitForFunction(() => document.querySelector('#main')?.children.length > 0, null, {timeout: t(20000)});
+        await page.waitForFunction(() => document.querySelector('#main')?.children.length! > 0, null, {timeout: t(20000)});
         await flow(page, phone ? 'phone' : 'desktop');
         if (phone) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
         else {

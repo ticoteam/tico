@@ -5,45 +5,59 @@
 // it, the Engineering Lead's Rules tab shows the rule and its settings, a teammate who manages nothing reads the rule
 // without Save or Retire, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also
 // saves each screen at 1440 and 390, light and dark, into that directory.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {startHub, pageAs} = require('./support/real-hub.cjs');
-const {t} = require('./support/load.cjs');
+import type * as RealHubSupport from './support/real-hub.cjs';
+import type {Browser, Page} from 'playwright';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
+const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
 
+interface Source { id: string; name: string; kind: string }
+interface Rule {
+  id: string; status: string; version: number; description?: string; text?: string;
+  who: {bots: {id: string}[]; outside_editions?: boolean}; with: {groups: {id: string}[]};
+  where: unknown[]; if_broken: string; reviewer: {id: string}; can_edit: boolean;
+}
+interface Due {
+  id: string; status: string; due_on: string; repeats: string; replaces: string; task_days: number; routine_id: string;
+  history: {satisfied_by: string}[];
+}
+// The page's globals this spec reads (app/ scripts loaded by the Rules page).
+interface PageWin { ticoTheme: {set: (theme: string) => void} }
 // A write as the page's own teammate, the way the app sends one.
-const api = (page, method, p, body) => page.evaluate(async ([method, p, body]) => {
+const api = (page: Page, method: string, p: string, body?: unknown) => page.evaluate(async ([method, p, body]: [string, string, unknown]) => {
   const r = await fetch('/api' + p, {method, cache: 'no-store', headers: {'content-type': 'application/json', 'Idempotency-Key': crypto.randomUUID()},
-                                     body: body === undefined ? undefined : JSON.stringify(body)});
+                                     body: body === undefined ? undefined : JSON.stringify(body)} as RequestInit);
   const json = await r.json().catch(() => ({}));
   return {status: r.status, json};
-}, [method, p, body]);
-const ok = async (page, method, p, body) => {
+}, [method, p, body] as [string, string, unknown]);
+const ok = async <T extends unknown = Record<string, unknown>>(page: Page, method: string, p: string, body?: unknown): Promise<T> => {
   const {status, json} = await api(page, method, p, body);
   assert.ok(status < 300, `${method} ${p}: ${status} ${JSON.stringify(json)}`);
-  return json;
+  return json as T;
 };
-const ready = page => page.waitForFunction(() => {
+const ready = (page: Page) => page.waitForFunction(() => {
   const who = document.querySelector('#account .account-email')?.textContent || '';
-  return who !== '' && who !== 'Signing in…' && document.querySelector('#main')?.children.length > 0;
+  return who !== '' && who !== 'Signing in…' && (document.querySelector('#main')?.children.length as number) > 0;
 }, null, {timeout: t(20000)});
-const go = async (page, hash) => { await page.evaluate(h => { location.hash = h; }, hash); };
-const hashParam = async (page, k) => new URLSearchParams((await page.evaluate(() => location.hash)).split('?')[1]).get(k);
+const go = async (page: Page, hash: string) => { await page.evaluate(h => { location.hash = h; }, hash); };
+const hashParam = async (page: Page, k: string) => new URLSearchParams((await page.evaluate(() => location.hash)).split('?')[1]).get(k)!;
 const LEAD = '#/rules?party=' + encodeURIComponent('bot:engineering-lead');
-const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISOString().slice(0, 10); };
+const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); return d.toISOString().slice(0, 10); };
 
 (async () => {
   const hub = await startHub({seeds: ['org', 'groups', 'toured']});
-  let browser;
+  let browser: Browser | undefined;
   try {
-    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
 
     // The Engineering Lead suggests three rules from a vendor: a bot's rule always waits in Suggested.
     const bot = await pageAs(browser, hub, 'engineering-lead');
-    const source = (await ok(bot, 'POST', '/v2/rule-sources', {name: 'Northwind Supply', kind: 'vendor'})).source;
+    const source = (await ok<{source: Source}>(bot, 'POST', '/v2/rule-sources', {name: 'Northwind Supply', kind: 'vendor'})).source;
     for (const text of ['Send invoices within 30 days', 'Keep delivery records for 2 years', 'Report outages within 24 hours']) {
-      const made = await ok(bot, 'POST', '/v2/rules', {kind: 'external', text, who: {bots: ['engineering-lead']}, source_id: source.id});
+      const made = await ok<Rule>(bot, 'POST', '/v2/rules', {kind: 'external', text, who: {bots: ['engineering-lead']}, source_id: source.id});
       assert.equal(made.status, 'suggested');
     }
 
@@ -64,7 +78,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await modal.locator('button[type=submit]').click();
     await page.waitForFunction(() => /[?&]rule=/.test(location.hash) && /party=bot%3Aengineering-lead/.test(location.hash), null, {timeout: t(10000)});
     const ruleId = await hashParam(page, 'rule');
-    let rule = await ok(page, 'GET', '/v2/rules/' + ruleId);
+    let rule = await ok<Rule>(page, 'GET', '/v2/rules/' + ruleId);
     assert.equal(rule.status, 'active');
     assert.deepEqual(rule.who.bots.map(b => b.id), ['engineering-lead']);
     assert.equal(rule.with.groups.length, 1);
@@ -75,7 +89,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await go(page, '#/rules?rule=' + ruleId);
     const follow = page.locator(`#ru-side form[data-rule="${ruleId}"] .ru-follow`);
     await follow.waitFor({timeout: t(10000)});
-    assert.match(await follow.textContent(), /^\S.* follows this with Engineering\.$/);
+    assert.match((await follow.textContent())!, /^\S.* follows this with Engineering\.$/);
     assert.deepEqual(await page.locator('#ru-side [data-ru-seg="if_broken"] button').allInnerTexts(), ['Stop', 'Ask first', 'Warn']);
     assert.equal(await page.locator('#ru-side .ru-reviewer').isHidden(), true);
     await page.locator('#ru-side [data-ru-seg="if_broken"] [data-v="escalate"]').click();
@@ -85,7 +99,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
 
     // A teammate named @slug in a rule's text is a mention chip; in a party's rules (all bots' rules, folded until
     // opened) it opens the teammate, not the rule.
-    const named = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Ask @engineering-lead before you merge.', who: {all_bots: true}});
+    const named = await ok<Rule>(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Ask @engineering-lead before you merge.', who: {all_bots: true}});
     await go(page, '#/overview');
     await page.locator('#ru-root').waitFor({state: 'detached', timeout: t(10000)});   // so Rules reads them again
     await go(page, LEAD);
@@ -93,7 +107,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     const chip = page.locator(`.rr-panel a.rr-rule[data-rule="${named.id}"] .ru-at`);
     await chip.waitFor({timeout: t(10000)});
     assert.equal(await chip.getAttribute('data-href'), '#/bot/engineering-lead');
-    assert.ok((await chip.textContent()).startsWith('@'));
+    assert.ok((await chip.textContent())!.startsWith('@'));
     await chip.click();
     await page.waitForFunction(() => location.hash.startsWith('#/bot/engineering-lead'), null, {timeout: t(10000)});
     await go(page, '#/rules?rule=' + named.id);
@@ -113,21 +127,21 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await threaded.locator('select[name=reviewer]').selectOption('dana');
     await threaded.locator('button[type=submit]').click();
     await page.waitForFunction(id => { const r = new URLSearchParams(location.hash.split('?')[1]).get('rule'); return r && r !== id; }, ruleId, {timeout: t(10000)});
-    const threadRule = await ok(page, 'GET', '/v2/rules/' + await hashParam(page, 'rule'));
+    const threadRule = await ok<Rule>(page, 'GET', '/v2/rules/' + await hashParam(page, 'rule'));
     assert.deepEqual(threadRule.where, []);
     assert.equal(threadRule.if_broken, 'escalate');
     assert.equal(threadRule.reviewer.id, 'dana');
     // Outside editions travels with the rule: shown in its Who, and still set after a save that doesn't touch Who.
-    let outside = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Never name a customer outside the company', who: {outside_editions: true}});
+    let outside = await ok<Rule>(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Never name a customer outside the company', who: {outside_editions: true}});
     assert.equal(outside.who.outside_editions, true);
-    outside = await ok(page, 'POST', '/v2/rules/' + outside.id, {version: outside.version, text: 'Never name a customer outside Acme'});
+    outside = await ok<Rule>(page, 'POST', '/v2/rules/' + outside.id, {version: outside.version, text: 'Never name a customer outside Acme'});
     assert.equal(outside.who.outside_editions, true);
     await go(page, '#/rules?rule=' + outside.id);
     await page.waitForFunction(() => document.querySelector('#ru-side [data-unchip="outside_editions"]'), null, {timeout: t(10000)});
     await page.locator('#ru-side form:not([data-old]) textarea[name=description]').fill('Editions go through this.');
     await page.locator('#ru-side button[type=submit]').click();
-    await page.waitForFunction(() => document.querySelector('#ru-side textarea[name=description]')?.value === 'Editions go through this.', null, {timeout: t(10000)});
-    assert.equal((await ok(page, 'GET', '/v2/rules/' + outside.id)).who.outside_editions, true, 'a panel save keeps it');
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#ru-side textarea[name=description]')?.value === 'Editions go through this.', null, {timeout: t(10000)});
+    assert.equal((await ok<Rule>(page, 'GET', '/v2/rules/' + outside.id)).who.outside_editions, true, 'a panel save keeps it');
     await go(page, '#/rules?rule=' + ruleId);
 
     // Edit it in the side panel.
@@ -135,13 +149,13 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await page.waitForFunction(id => document.querySelector(`#ru-side form[data-rule="${id}"]`), ruleId, {timeout: t(10000)});
     await side.locator('textarea[name=description]').fill('Production means the live site.');
     await side.locator('[data-ru-seg="if_broken"] [data-v="warn"]').click();
-    await page.evaluate(() => { document.querySelector('#ru-side form').dataset.old = '1'; });   // the panel redraws after a save
+    await page.evaluate(() => { document.querySelector<HTMLFormElement>('#ru-side form')!.dataset.old = '1'; });   // the panel redraws after a save
     await side.locator('button[type=submit]').click();
     await page.waitForFunction(async id => {
-      const r = await (await fetch('/api/v2/rules/' + id, {cache: 'no-store'})).json();
+      const r = (await (await fetch('/api/v2/rules/' + id, {cache: 'no-store'})).json()) as {if_broken: string; version: number};
       return r.if_broken === 'warn' && r.version === 2;
     }, ruleId, {timeout: t(10000)});
-    rule = await ok(page, 'GET', '/v2/rules/' + ruleId);
+    rule = await ok<Rule>(page, 'GET', '/v2/rules/' + ruleId);
     assert.equal(rule.description, 'Production means the live site.');
 
     // A save on a version someone else has moved past is refused; the panel reloads what is stored now.
@@ -149,9 +163,9 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await ok(page, 'POST', '/v2/rules/' + ruleId, {version: rule.version, text: 'Ask Omar before a production deploy'});
     await side.locator('textarea[name=description]').fill('A stale edit');
     await side.locator('button[type=submit]').click();
-    await page.waitForFunction(() => document.querySelector('#ru-side textarea[name=text]')?.value === 'Ask Omar before a production deploy'
-      && document.querySelector('#ru-side .ru-status')?.textContent.trim() !== '', null, {timeout: t(10000)});
-    rule = await ok(page, 'GET', '/v2/rules/' + ruleId);
+    await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#ru-side textarea[name=text]')?.value === 'Ask Omar before a production deploy'
+      && document.querySelector('#ru-side .ru-status')?.textContent!.trim() !== '', null, {timeout: t(10000)});
+    rule = await ok<Rule>(page, 'GET', '/v2/rules/' + ruleId);
     assert.equal(rule.version, 3);
     assert.equal(rule.description, 'Production means the live site.', 'the stale save wrote nothing');
 
@@ -168,27 +182,27 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.ok(dueId);
     await satisfy.click();
     await page.locator('#ru-side .ru-mark').waitFor({timeout: t(10000)});   // its History has the mark
-    const due = (await ok(page, 'GET', '/v2/rules/due?next=400d')).due.find(d => d.id === dueId);
+    const due = (await ok<{due: Due[]}>(page, 'GET', '/v2/rules/due?next=400d')).due.find(d => d.id === dueId)!;
     assert.equal(due.status, 'upcoming', 'a yearly due date moves on to next year');
-    assert.equal(due.history[0].satisfied_by, 'human:dana');
+    assert.equal(due.history[0]!.satisfied_by, 'human:dana');
 
     // A change to Repeats starts again from the date shown (next year's), not the first date ever set, so the
     // satisfied one stays behind instead of coming back overdue.
-    await page.waitForFunction(d => document.querySelector('#ru-side input[name=due]')?.value === d, due.due_on, {timeout: t(10000)});
+    await page.waitForFunction(d => document.querySelector<HTMLInputElement>('#ru-side input[name=due]')?.value === d, due.due_on, {timeout: t(10000)});
     await side.locator('select[name=repeats]').selectOption('once');
     await side.locator('button[type=submit]').click();
     await page.waitForFunction(id => { const q = new URLSearchParams(location.hash.split('?')[1]); return q.get('due') && q.get('due') !== id; },
       dueId, {timeout: t(10000)});
-    const liveId = new URLSearchParams((await page.evaluate(() => location.hash)).split('?')[1]).get('due');
-    const live = await ok(page, 'GET', '/v2/rule-due/' + liveId);
+    const liveId = new URLSearchParams((await page.evaluate(() => location.hash)).split('?')[1]).get('due')!;
+    const live = await ok<Due>(page, 'GET', '/v2/rule-due/' + liveId);
     assert.equal(live.due_on, due.due_on);
     assert.equal(live.repeats, 'once');
     assert.equal(live.status, 'upcoming');
     assert.equal(live.replaces, dueId);
     // The ended row's address opens the live one. Open it only once the live row's panel has finished drawing:
     // a draw still in flight when the hash moves back makes the ended row's open give way and never redirect.
-    await page.waitForFunction(id => document.querySelector('#ru-side')?.dataset.open?.startsWith('due:' + id + ':')
-      && document.querySelector('#ru-side select[name=repeats]')?.value === 'once', liveId, {timeout: t(10000)});
+    await page.waitForFunction(id => document.querySelector<HTMLElement>('#ru-side')?.dataset.open?.startsWith('due:' + id + ':')
+      && document.querySelector<HTMLSelectElement>('#ru-side select[name=repeats]')?.value === 'once', liveId, {timeout: t(10000)});
     await go(page, `#/rules/due?due=${dueId}`);
     await page.waitForFunction(id => location.hash.includes('due=' + id), liveId, {timeout: t(10000)});
 
@@ -197,17 +211,17 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await side.locator('input[name=task_days]').fill('10');
     await side.locator('button[type=submit]').click();
     await side.locator('.ru-routine').waitFor({timeout: t(10000)});
-    const linked = await ok(page, 'GET', '/v2/rule-due/' + liveId);
+    const linked = await ok<Due>(page, 'GET', '/v2/rule-due/' + liveId);
     assert.equal(linked.task_days, 10);
     assert.equal(await side.locator('.ru-routine').getAttribute('href'), '#/automations/' + linked.routine_id);
-    assert.equal((await ok(page, 'GET', '/v2/automations/' + linked.routine_id)).trigger.rule_due_id, liveId);
+    assert.equal((await ok<{trigger: {rule_due_id: string}}>(page, 'GET', '/v2/automations/' + linked.routine_id)).trigger.rule_due_id, liveId);
     await go(page, '#/rules/due');
     await page.waitForFunction(id => /10 days before/.test(document.querySelector(`a.ru-row[data-due="${id}"] [data-l=Routine]`)?.textContent || ''),
       liveId, {timeout: t(10000)});
 
     // A second, earlier date on the same rule (the hub's clock decides overdue or due soon): the panel lists both,
     // the most urgent first.
-    const sooner = await ok(page, 'POST', `/v2/rules/${ruleId}/due`, {first_due: day(-3), repeats: 'once', owner: 'human:dana'});
+    const sooner = await ok<Due>(page, 'POST', `/v2/rules/${ruleId}/due`, {first_due: day(-3), repeats: 'once', owner: 'human:dana'});
     await go(page, `#/rules?rule=${ruleId}`);
     await page.waitForFunction(() => document.querySelectorAll('#ru-side .ru-duebox').length === 2, null, {timeout: t(10000)});
     assert.equal(await side.locator('.ru-duebox').first().getAttribute('data-due'), sooner.id);
@@ -227,7 +241,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await ok(page, 'POST', '/v2/reach/lines', {sender: 'bot:engineering-lead', receiver: 'human:priya', per_day: 3});
     await go(page, '#/overview');
     await go(page, '#/bot/engineering-lead/rules');
-    const reachRow = text => page.locator('#bot-rules .ru-setting', {has: page.locator('.ru-txt', {hasText: text})});
+    const reachRow = (text: string) => page.locator('#bot-rules .ru-setting', {has: page.locator('.ru-txt', {hasText: text})});
     await reachRow('Up to 40 chats a day').locator('.ru-txt').waitFor({timeout: t(15000)});
     assert.doesNotMatch(await reachRow('Up to 40 chats a day').locator('.ru-txt').innerText(), /default/, 'its own cap has no source');
     assert.match(await reachRow('Up to 999 tasks a day').locator('.ru-txt').innerText(), /Up to 999 tasks a day.*default/s);
@@ -253,7 +267,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     const group = page.locator(`.ru-sg[data-group="${source.id}"]`);
     await group.locator('[data-ru-add-all]').click();
     await group.waitFor({state: 'detached', timeout: t(15000)});
-    const counts = await ok(page, 'GET', '/v2/rules/counts');
+    const counts = await ok<{suggested: number; external: number}>(page, 'GET', '/v2/rules/counts');
     assert.equal(counts.suggested, 0);
     assert.equal(counts.external, 3);
     await page.context().close();
@@ -269,18 +283,18 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
 
 // Each screen at 1440 and 390, light and dark: Internal with a party's panel and with the rule's panel, External, Due with its panel,
 // Suggested, Add rule and the bot's Rules tab.
-async function shots(browser, hub, bot, {ruleId, dueId}) {
-  const dir = process.env.RULES_SHOTS;
+async function shots(browser: Browser, hub: RealHubSupport.Hub, bot: Page, {ruleId, dueId}: {ruleId: string; dueId: string}) {
+  const dir = process.env.RULES_SHOTS!;
   fs.mkdirSync(dir, {recursive: true});
   // More to look at: a second internal rule, and suggestions from a customer waiting in Suggested.
   const dana = await pageAs(browser, hub, 'dana');
-  await ok(dana, 'POST', '/v2/rules', {kind: 'internal', text: 'Reply to customers within one business day', who: {groups: [(await ok(dana, 'GET', '/v2/rules/' + ruleId)).with.groups[0].id]}});
+  await ok(dana, 'POST', '/v2/rules', {kind: 'internal', text: 'Reply to customers within one business day', who: {groups: [(await ok<Rule>(dana, 'GET', '/v2/rules/' + ruleId)).with.groups[0]!.id]}});
   await ok(dana, 'POST', '/v2/rules', {kind: 'internal', text: 'Log every refund in the ledger', who: {all_bots: true}, if_broken: 'escalate'});
   await dana.context().close();
-  const customer = (await ok(bot, 'POST', '/v2/rule-sources', {name: 'Contoso Retail', kind: 'customer'})).source;
+  const customer = (await ok<{source: Source}>(bot, 'POST', '/v2/rule-sources', {name: 'Contoso Retail', kind: 'customer'})).source;
   for (const text of ['Ship orders within 2 business days', 'Use the customer portal for returns'])
     await ok(bot, 'POST', '/v2/rules', {kind: 'external', text, who: {all_bots: true}, source_id: customer.id});
-  const screens = [
+  const screens: [string, string, string, ((page: Page) => Promise<void>)?][] = [
     ['reach', LEAD, '.rr-panel[data-party="bot:engineering-lead"]'],
     ['internal', `${LEAD}&rule=${ruleId}`, `#ru-side form[data-rule="${ruleId}"]`],
     ['external', '#/rules/external', '.ru-ext a.ru-row'],
@@ -294,7 +308,7 @@ async function shots(browser, hub, bot, {ruleId, dueId}) {
       const page = await pageAs(browser, hub, 'dana', {phone});
       try {
         await ready(page);
-        await page.evaluate(v => window.ticoTheme.set(v), theme);
+        await page.evaluate(v => (window as unknown as PageWin).ticoTheme.set(v), theme);
         for (const [name, hash, wait, act] of screens) {
           await go(page, '#/overview');
           await go(page, hash);

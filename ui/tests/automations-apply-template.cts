@@ -5,23 +5,30 @@
 // with the old prompt (8,000 characters at most, refused before Apply past that); a switched-off step's replacement
 // stays off; Blank's Sort, which goes, never renames the old step; a refused fill shows in the dialog and saves
 // nothing; the dialog fits a phone.
-const {chromium} = require('playwright');
+import type {Browser, Page} from 'playwright';
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+
+type Question = {type: string; instructions: string; criteria: Record<string, string>};
+type Step = {id: string; type: string; enabled: boolean; as: string; model: string; out: string; prompt: string;
+  choose: Record<string, unknown>; questions: Record<string, Question>};
+type Flow = {destinations: {id: string}[]; steps: Step[]};
 
 const PROMPT = 'Read my mail. Draft replies to customers; leave anything about money for me.';
-const old = (id, owner, inbox, step = {}) => ({id, name: 'Inbox ' + id, owner_id: owner, enabled: true, builtin: false, version: 3,
+const old = (id: string, owner: string, inbox: string, step: Record<string, unknown> = {}) => ({id, name: 'Inbox ' + id, owner_id: owner, enabled: true, builtin: false, version: 3,
   trigger: {type: 'message', inbox},
   steps: [{id: 'read', type: 'llm', as: owner.startsWith('person:') ? 'assistant:' + owner.slice(7) : undefined, prompt: PROMPT,
     out: 'triage', model: 'claude-sonnet', ...step}]});
-const tweak = fx => fx.automations.push(old('au_old', 'person:dana', 'dana@acme.example'),
+const tweak = (fx: AutomationsFakeSupport.AutomationsFixture) => fx.automations.push(old('au_old', 'person:dana', 'dana@acme.example'),
   old('au_team', 'group:engineering', 'slack:#eng'), old('au_omar', 'person:omar', 'omar@acme.example'),
   old('au_off', 'group:engineering', 'slack:#eng', {enabled: false}),
   old('au_long', 'group:engineering', 'slack:#eng', {prompt: 'x'.repeat(8001)}),
   old('au_edge', 'group:engineering', 'slack:#eng', {prompt: 'x'.repeat(8000)}),
   old('au_sorted', 'person:dana', 'dana@acme.example', {id: 'sort', out: 'sort'}));
 // Apply a template and hand back the PATCH it sent.
-async function apply(page, writes, tid) {
+async function apply(page: Page, writes: AutomationsFakeSupport.Write[], tid: string): Promise<Flow> {
   await openApply(page);
   await page.locator(`.au-nd [data-tid="${tid}"]`).click();
   await page.waitForSelector('.au-nd .au-nd-dests li');
@@ -29,10 +36,10 @@ async function apply(page, writes, tid) {
   await page.waitForFunction(() => !document.querySelector('dialog.au-nd'));
   const w = writes.filter(x => x.method === 'PATCH');
   assert.equal(w.length, 1);
-  return w[0].body;
+  return w[0]!.body as Flow;
 }
-const open = (browser, id, viewport = DESKTOP) => openAutomations(browser, {viewport, hash: '#/automations/' + id, tweak});
-async function openApply(page) {
+const open = (browser: Browser, id: string, viewport: AutomationsFakeSupport.Viewport = DESKTOP) => openAutomations(browser, {viewport, hash: '#/automations/' + id, tweak});
+async function openApply(page: Page) {
   await page.locator('[data-more]').click();
   await page.locator('.au-menu [data-mi="apply"]').click();
   await page.waitForSelector('dialog.au-nd-apply[open] [data-tid="founder"]');
@@ -57,13 +64,13 @@ async function openApply(page) {
       assert.equal(await page.locator('dialog.au-nd').count(), 0);
       const w = writes.filter(x => x.method === 'PATCH');
       assert.equal(w.length, 1);
-      assert.equal(w[0].path, '/api/v2/automations/au_old');
-      const {body} = w[0], filled = filledTemplate('founder', 'person:dana', 'dana@acme.example');
+      assert.equal(w[0]!.path, '/api/v2/automations/au_old');
+      const body = w[0]!.body as Flow, filled = filledTemplate('founder', 'person:dana', 'dana@acme.example') as Flow;
       for (const k of ['name', 'trigger', 'enabled', 'owner']) assert.ok(!(k in body), `${k} stays as it was`);
       assert.deepEqual(body.destinations, filled.destinations);
       assert.deepEqual(body.steps.map(s => s.id), ['rules', 'ask', 'route', 'read']);
-      assert.deepEqual(body.steps[1].questions, filled.steps[1].questions);
-      const llm = body.steps[3];
+      assert.deepEqual(body.steps[1]!.questions, filled.steps[1]!.questions);
+      const llm = body.steps[3]!;
       assert.equal(llm.prompt, PROMPT, 'the old prompt is the instructions');
       assert.equal(llm.out, 'triage');
       assert.equal(llm.model, 'claude-sonnet');
@@ -92,11 +99,11 @@ async function openApply(page) {
       await page.waitForSelector('.au-nd .au-nd-dests li');
       await page.locator('.au-nd [data-go]').click();
       await page.waitForSelector('.au-board');
-      const {body} = writes.find(x => x.method === 'PATCH');
+      const body = writes.find(x => x.method === 'PATCH')!.body as Flow;
       assert.equal(body.steps.filter(s => s.type === 'llm').length, 0);
-      const sort = body.steps.find(s => s.type === 'decide' && s.questions.route);
-      assert.equal(sort.questions.route.instructions, PROMPT);
-      assert.deepEqual(Object.keys(sort.questions.route.criteria), ['me', 'legal', 'eng', 'archive']);
+      const sort = body.steps.find(s => s.type === 'decide' && s.questions.route)!;
+      assert.equal(sort.questions.route!.instructions, PROMPT);
+      assert.deepEqual(Object.keys(sort.questions.route!.criteria), ['me', 'legal', 'eng', 'archive']);
       assert.equal(await page.locator('[data-bmode="sort"]').count(), 0, 'Sort only: no mode to switch');
       assert.deepEqual(errors, []);
       await page.close();
@@ -145,7 +152,7 @@ async function openApply(page) {
       const {page, errors, writes} = await open(browser, 'au_edge');
       await page.waitForSelector('.au-card[data-open="read"]');
       const body = await apply(page, writes, 'founder');
-      assert.equal(body.steps.find(s => s.questions?.route).questions.route.instructions.length, 8000);
+      assert.equal(body.steps.find(s => s.questions?.route)!.questions.route!.instructions.length, 8000);
       await page.waitForSelector('.au-board');
       assert.deepEqual(errors, []);
       await page.close();
@@ -181,7 +188,7 @@ async function openApply(page) {
       await openApply(page);
       await page.locator('.au-nd [data-tid="founder"]').click();
       await page.waitForSelector('.au-nd .au-nd-dests li');
-      const box = await page.locator('dialog.au-nd').boundingBox();
+      const box = (await page.locator('dialog.au-nd').boundingBox())!;
       assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width + 1, 'the dialog fits the phone');
       assert.ok(await page.locator('.au-nd [data-go]').isVisible());
       assert.equal(await sideways(page), false);

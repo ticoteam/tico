@@ -1,6 +1,16 @@
 // Two real browser viewers share the pending panel, with a deliberately slow and failing write.
+import type {IncomingMessage, ServerResponse} from 'node:http';
+interface Item {version: number; id: string; section: string; text: string; detail: {owner: string; body: string};
+  status: string; created_by: string; proposed_task_id?: string | null | undefined; result_ref?: string | null | undefined;
+  updated_by?: string | undefined}
+interface PendingDraft {flight: unknown; error: unknown; patch: Record<string, unknown>; dirty: Record<string, string>}
+interface PageMeet {open?: boolean; items: {m1: {sections: {task: Item[]}}}; pendingDrafts: Map<string, unknown>}
+interface PageWin {copiedText?: string}
+declare const MEET: PageMeet;
+declare function meetPendingDraft(meet: PageMeet, id: string): PendingDraft;
+declare function meetItemsLoad(meet: PageMeet, id: string): void;
 require('./support/browser.cjs');
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs');
@@ -9,14 +19,14 @@ const sharedCode = fs.readFileSync(path.join(__dirname, '../../build/ui/app/shar
 const code = fs.readFileSync(path.join(__dirname, '../../build/ui/app/meetings.js'), 'utf8');
 // meetings reads the shared helpers the app bundle defines first (eventElement, errorMessage and friends).
 const helperCode = ['dom', 'errors'].map(n => fs.readFileSync(path.join(__dirname, `../../build/ui/app/${n}.js`), 'utf8')).join('\n');
-const item = {version:1, id:'i1', section:'task', text:'Draft', detail:{owner:'human:ben', body:'Initial'}, status:'proposed', created_by:'human:ana'};
-const streams = new Set(), sessions = new Map(), errors = [];
-let hold = null, release = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0, linked = 0, lastSend;
-const emit = (topic, data) => { for (const res of streams) res.write(`event: ${topic}\ndata: ${JSON.stringify(data)}\n\n`); };
+const item: Item = {version:1, id:'i1', section:'task', text:'Draft', detail:{owner:'human:ben', body:'Initial'}, status:'proposed', created_by:'human:ana'};
+const streams = new Set<ServerResponse>(), sessions = new Map<string, string | string[] | undefined>(), errors: string[] = [];
+let hold: Promise<void> | null = null, release: ((value?: void) => void) | null = null, fail = false, writes = 0, inflight = 0, maxInflight = 0, sent = 0, linked = 0, lastSend: unknown;
+const emit = (topic: string, data: unknown) => { for (const res of streams) res.write(`event: ${topic}\ndata: ${JSON.stringify(data)}\n\n`); };
 const actors = () => [...new Set(sessions.values())].map(id => ({actor:'human:' + id, name:id === 'ana' ? 'Ana' : 'Sam'}));
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  const answer = (body, status=200) => { res.writeHead(status, {'Content-Type':'application/json'}); res.end(JSON.stringify(body)); };
+const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url!, 'http://localhost');
+  const answer = (body: unknown, status=200) => { res.writeHead(status, {'Content-Type':'application/json'}); res.end(JSON.stringify(body)); };
   if (url.pathname === '/helpers.js') { res.writeHead(200, {'Content-Type':'text/javascript'}); return res.end(helperCode); }
   if (url.pathname === '/shared-edit.js') { res.writeHead(200, {'Content-Type':'text/javascript'}); return res.end(sharedCode); }
   if (url.pathname === '/meetings.js') { res.writeHead(200, {'Content-Type':'text/javascript'}); return res.end(code); }
@@ -43,7 +53,7 @@ const server = http.createServer(async (req, res) => {
     streams.add(res); res.write('event: ready\ndata: {}\n\n');
     req.on('close', () => streams.delete(res)); return;
   }
-  const body = req.method === 'POST' ? JSON.parse(await new Promise(resolve => { let b='';req.on('data', c=>b+=c);req.on('end',()=>resolve(b)); })) : {};
+  const body = req.method === 'POST' ? JSON.parse(await new Promise(resolve => { let b='';req.on('data', (c: Buffer) => b+=c);req.on('end',()=>resolve(b)); })) : {};
   if (url.pathname === '/api/v2/presence') {
     if (req.method === 'POST') {
       if (body.gone) sessions.delete(body.session_id); else sessions.set(body.session_id, req.headers['x-viewer']);
@@ -72,10 +82,10 @@ const server = http.createServer(async (req, res) => {
   }
   answer({});
 });
-function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
+function pauseWrite() { hold = new Promise<void>(resolve => { release=resolve; }); }
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const browser=await chromium.launch({headless:true,channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser=await chromium.launch({headless:true,channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     const a=await browser.newPage({viewport:{width:1200,height:900}}), b=await browser.newPage({viewport:{width:390,height:844}});
     for(const page of [a,b]) page.on('pageerror', e=>errors.push(e.message));
@@ -88,9 +98,9 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     await title.fill('Newer draft');
     await b.getByRole('textbox',{name:'Details',exact:true}).fill('Sam changed the details');
     await b.locator('#blur').click();
-    await b.waitForFunction(()=>MEET.items.m1.sections.task[0].detail.body==='Sam changed the details');
+    await b.waitForFunction(()=>MEET.items.m1.sections.task[0]!.detail.body==='Sam changed the details');
     assert.equal(await title.inputValue(),'Newer draft','incoming changes preserve the focused title');
-    release();
+    release!();
     await a.getByRole('button',{name:'Retry',exact:true}).waitFor();
     assert.equal(await title.inputValue(),'Newer draft');
     await a.getByText(/Current: Draft/).waitFor();
@@ -101,17 +111,17 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     await a.locator('[data-add="task"]').click();
     const addText=a.getByRole('textbox',{name:'What to add',exact:true});
     await addText.fill('Keep typing here');
-    await addText.evaluate(el=>el.setSelectionRange(5,11));
+    await addText.evaluate(el=>(el as HTMLInputElement).setSelectionRange(5,11));
     item.detail.body='Another live edit'; item.version++; emit('meeting_items',{meeting_id:'m1',kind:'items'});
-    await a.waitForFunction(()=>MEET.items.m1.sections.task[0].detail.body==='Another live edit');
+    await a.waitForFunction(()=>MEET.items.m1.sections.task[0]!.detail.body==='Another live edit');
     assert.equal(await addText.inputValue(),'Keep typing here');
-    assert.deepEqual(await addText.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,5,11]);
+    assert.deepEqual(await addText.evaluate(el=>[document.activeElement===el,(el as HTMLInputElement).selectionStart,(el as HTMLInputElement).selectionEnd]),[true,5,11]);
     await a.locator('form[data-new] [data-cancel]').click();
     await a.locator('#blur').click();
     fail=true; await title.fill('Retry words'); await a.locator('#blur').click();
     await a.getByRole('button',{name:'Retry',exact:true}).waitFor();
     item.text='Remote edit'; emit('meeting_items',{meeting_id:'m1',kind:'items'});
-    await a.waitForFunction(()=>MEET.items.m1.sections.task[0].text==='Remote edit');
+    await a.waitForFunction(()=>MEET.items.m1.sections.task[0]!.text==='Remote edit');
     assert.equal(await title.inputValue(),'Retry words','a failed save keeps its draft');
     await a.getByRole('button',{name:'Retry',exact:true}).click();
     await a.waitForFunction(()=>!meetPendingDraft(MEET,'i1').error);
@@ -120,7 +130,7 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     await title.fill('Final words');
     item.detail.body='B saved before Send'; item.version++;
     await a.getByRole('button',{name:'Create',exact:true}).click();
-    release();
+    release!();
     await a.getByText(/Current:.*B saved before Send/).waitFor();
     assert.equal(sent,0,'a conflicted autosave prevents Send');
     assert.equal(await title.inputValue(),'Final words');
@@ -134,32 +144,32 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
     pauseWrite(); await title.fill('Title only');
     await a.waitForFunction(()=>!!meetPendingDraft(MEET,'i1').flight);
     const details=a.getByRole('textbox',{name:'Details',exact:true});
-    await details.evaluate(el=>{el.focus();el.setSelectionRange(2,4);});
+    await details.evaluate(el=>{el.focus();(el as HTMLInputElement).setSelectionRange(2,4);});
     await b.getByRole('textbox',{name:'Details',exact:true}).fill('B saved focused Details');
     await b.locator('#blur').click();
-    await b.waitForFunction(()=>MEET.items.m1.sections.task[0].detail.body==='B saved focused Details');
-    release();
+    await b.waitForFunction(()=>MEET.items.m1.sections.task[0]!.detail.body==='B saved focused Details');
+    release!();
     await a.getByRole('button',{name:'Retry',exact:true}).waitFor();
     assert.equal(await title.inputValue(),'Title only');
     assert.equal(await details.inputValue(),'B saved focused Details');
-    assert.deepEqual(await details.evaluate(el=>[document.activeElement===el,el.selectionStart,el.selectionEnd]),[true,2,4]);
+    assert.deepEqual(await details.evaluate(el=>[document.activeElement===el,(el as HTMLInputElement).selectionStart,(el as HTMLInputElement).selectionEnd]),[true,2,4]);
     assert.equal(await a.evaluate(()=>meetPendingDraft(MEET,'i1').dirty.text),'Final words');
     const version=item.version;
-    await a.getByRole('button',{name:'Create',exact:true}).evaluate(el=>el.click());
+    await a.getByRole('button',{name:'Create',exact:true}).evaluate(el=>(el as HTMLElement).click());
     await a.locator('[data-pending="i1"]').waitFor({state:'detached'});
     assert.deepEqual(lastSend,{text:'Title only',force:false,version});
     assert.equal(item.detail.body,'B saved focused Details');
     assert.equal(item.version,version+1);
     assert.equal(sent,2);
-    for (const [action, inFlight] of [['Create', true], ['Dismiss', false]]) {
+    for (const [action, inFlight] of [['Create', true], ['Dismiss', false]] as const) {
       for (const page of [a,b]) await page.evaluate(()=>MEET.pendingDrafts.clear());
       item.status='proposed'; item.version++; emit('meeting_items',{meeting_id:'m1',kind:'items'});
       await a.locator('[data-pending="i1"] [data-send]').waitFor();
       await b.locator('[data-pending="i1"] [data-send]').waitFor();
       if (inFlight) pauseWrite();
       await a.evaluate(() => {
-        for (const [key,value] of [['text','My unsaved title'],['body','My unsaved details']]) {
-          const field=document.querySelector(`[data-pending-field="${key}"]`);
+        for (const [key,value] of [['text','My unsaved title'],['body','My unsaved details']] as const) {
+          const field=document.querySelector<HTMLInputElement>(`[data-pending-field="${key}"]`)!;
           field.value=value; field.dispatchEvent(new Event('input',{bubbles:true}));
         }
       });
@@ -171,11 +181,11 @@ function pauseWrite() { hold = new Promise(resolve => { release=resolve; }); }
       assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
       assert.equal(await closed.locator('textarea,input,select').count(),0);
       if (inFlight) {
-        release();
+        release!();
         await a.waitForFunction(()=>!meetPendingDraft(MEET,'i1').flight);
         assert.match(await closed.locator('pre').textContent(),/My unsaved details/);
         await closed.getByRole('button',{name:'Copy',exact:true}).click();
-        assert.match(await a.evaluate(()=>window.copiedText),/My unsaved title[\s\S]*My unsaved details/);
+        assert.match(await a.evaluate(()=>(window as unknown as PageWin).copiedText),/My unsaved title[\s\S]*My unsaved details/);
       } else await closed.getByRole('button',{name:'Close',exact:true}).click();
       await closed.waitFor({state:'detached'});
       await a.evaluate(()=>meetItemsLoad(MEET,'m1'));

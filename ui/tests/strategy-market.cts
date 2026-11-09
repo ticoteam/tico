@@ -5,23 +5,25 @@
 // draws posts per day by source over two weeks, the spike lighting its posts, with the destinations under Settings.
 // An old view's address scrolls to its question. No briefing and no listening leave those questions out; an empty
 // market keeps its empty state. A phone first, then a computer.
-const {chromium} = require('playwright');
+import type {Page} from 'playwright';
+import type * as StrategyFakeSupport from './support/strategy-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs');
+const {openStrategy, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs') as typeof StrategyFakeSupport;
 
-const texts = (page, sel) => page.locator(sel).allInnerTexts().then(a => a.map(t => t.trim()));
+const texts = (page: Page, sel: string) => page.locator(sel).allInnerTexts().then(a => a.map(t => t.trim()));
 const QUESTIONS = ['What changed?', 'Where is the money going?', 'Who are we up against?', 'How does it reach buyers?', 'What are buyers saying?'];
 
 // The question is at the top of the page's scroll, or the page is scrolled to its end with the question in view.
-const scrolledTo = (page, key) => page.evaluate(k => {
-  const shell = document.querySelector('#market-shell'), top = document.querySelector('#mkt-q-' + k).getBoundingClientRect().top - shell.getBoundingClientRect().top;
+const scrolledTo = (page: Page, key: string) => page.evaluate((k: string) => {
+  const shell = document.querySelector<HTMLElement>('#market-shell')!, top = document.querySelector<HTMLElement>('#mkt-q-' + k)!.getBoundingClientRect().top - shell.getBoundingClientRect().top;
   return Math.abs(top) <= 30 || (shell.scrollTop >= shell.scrollHeight - shell.clientHeight - 1 && top < shell.clientHeight);
 }, key);
 
-async function onePage(page, tag) {
+async function onePage(page: Page, tag: string) {
   await page.locator('.mkt-pg').waitFor();
   await page.locator('.mkt-map .mkt-box').first().waitFor();
-  assert.ok(await page.evaluate(() => document.querySelector('.strat-tabs').getBoundingClientRect().bottom <= document.querySelector('.mkt-top').getBoundingClientRect().top + document.querySelector('#market-shell').scrollTop + 1), tag + ': the tabs, then the page');
+  assert.ok(await page.evaluate(() => document.querySelector<HTMLElement>('.strat-tabs')!.getBoundingClientRect().bottom <= document.querySelector<HTMLElement>('.mkt-top')!.getBoundingClientRect().top + document.querySelector<HTMLElement>('#market-shell')!.scrollTop + 1), tag + ': the tabs, then the page');
   assert.equal(await page.locator('.mkt-top h2').innerText(), 'Market');
   assert.equal(await page.locator('.mkt-name').innerText(), 'Release tooling, Global', tag + ': the market\'s name');
   assert.equal(await page.locator('.mkt-top a', {hasText: 'Open map'}).getAttribute('href'), '#/strategy/market/map');
@@ -54,9 +56,9 @@ async function onePage(page, tag) {
   const first = page.locator('.rdm-row').first();
   assert.match(await first.locator('.rdm-t').innerText(), /^Anyone moved their release checks to Acme\?/, tag + ': newest first');
   assert.equal(await first.getAttribute('href'), 'https://reddit.example/r/devops/acme-1', tag + ': a line opens the post');
-  assert.ok(await page.locator('.rdm-row').evaluateAll(rows => rows.every(r => r.getBoundingClientRect().height <= 44)), tag + ': one line each');
+  assert.ok(await page.locator('.rdm-row').evaluateAll((rows: Element[]) => rows.every(r => r.getBoundingClientRect().height <= 44)), tag + ': one line each');
   await page.locator('.rdm-spk').click();
-  assert.deepEqual(await page.locator('.rdm-row.hl').evaluateAll(r => r.map(x => x.dataset.rdmItem)), ['li_6', 'li_5'], tag + ': the spike lights its posts');
+  assert.deepEqual(await page.locator('.rdm-row.hl').evaluateAll((r: Element[]) => r.map(x => (x as HTMLElement).dataset.rdmItem)), ['li_6', 'li_5'], tag + ': the spike lights its posts');
   assert.equal(await page.locator('[data-listen-dest="leads"]').isVisible(), false, tag + ': destinations folded');
   assert.equal(await sideways(page), false, tag + ': no sideways scroll');
 }
@@ -97,9 +99,9 @@ async function onePage(page, tag) {
       assert.equal(await page.locator('.mkt-two').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 2, tag + ': the treemap beside Size vs growth');
       assert.equal(await page.locator('.rdm-row').first().locator('.rdm-d').innerText(), 'leads', tag + ': where a post went');
       await page.evaluate(() => { location.hash = '#/strategy/market/briefing'; });
-      await page.waitForFunction(() => Math.abs(document.querySelector('#mkt-q-changed').getBoundingClientRect().top - document.querySelector('#market-shell').getBoundingClientRect().top) <= 30);
+      await page.waitForFunction(() => Math.abs(document.querySelector<HTMLElement>('#mkt-q-changed')!.getBoundingClientRect().top - document.querySelector<HTMLElement>('#market-shell')!.getBoundingClientRect().top) <= 30);
       await page.evaluate(() => { location.hash = '#/strategy/market'; });
-      await page.waitForFunction(() => document.querySelector('#market-shell').scrollTop === 0);
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('#market-shell')!.scrollTop === 0);
       await shot(page, 'desktop-market');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
@@ -124,12 +126,12 @@ async function onePage(page, tag) {
     }
     // Review screenshots, when TICO_UI_SHOTS names a folder: the whole page at 1280 and 400 wide, light and dark, the
     // window as tall as the page so nothing is cut off.
-    for (const [name, width] of process.env.TICO_UI_SHOTS ? [['desktop', 1280], ['phone', 400]] : []) {
+    for (const [name, width] of (process.env.TICO_UI_SHOTS ? [['desktop', 1280], ['phone', 400]] : []) as [string, number][]) {
       const {page} = await openStrategy(browser, {viewport: {width, height: 900}, hash: '#/strategy/market'});
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       for (const theme of ['light', 'dark']) {
         await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
-        const height = await page.evaluate(() => { const s = document.querySelector('#market-shell'); return Math.ceil(s.getBoundingClientRect().top + s.scrollHeight + 80); });
+        const height = await page.evaluate(() => { const s = document.querySelector<HTMLElement>('#market-shell')!; return Math.ceil(s.getBoundingClientRect().top + s.scrollHeight + 80); });
         await page.setViewportSize({width, height});
         await page.waitForTimeout(300);
         await shot(page, `market-${name}-${theme}`);

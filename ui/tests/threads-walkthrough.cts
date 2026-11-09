@@ -7,13 +7,15 @@
 //   - the words "channel" and "room", raw ids and JSON showing in the visible text.
 // Screenshots go to TICO_SHOTS, or $RUNNER_TEMP/remote/threads-walkthrough on a RunsOn VM (its folder is uploaded as
 // the run's artifact), or .remote-runs/threads-walkthrough here. Run: node ui/tests/threads-walkthrough.cjs
-const {chromium} = require('playwright');
+import type {Browser, Page} from 'playwright';
+import type * as RealHubSupport from './support/real-hub.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const {startHub, pageAs} = require('./support/real-hub.cjs');
-const {t} = require('./support/load.cjs');
+const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
+const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
 
 const REPO = path.join(__dirname, '..', '..');
 const SHOTS = process.env.TICO_SHOTS || path.join(process.env.RUNNER_TEMP ? path.join(process.env.RUNNER_TEMP, 'remote')
@@ -30,23 +32,29 @@ const HELD = 'Q4 price list: 40 percent off';
 const ONLY = process.env.WALK_ONLY ? new RegExp(process.env.WALK_ONLY) : null;
 
 fs.mkdirSync(SHOTS, {recursive: true});
-const results = [], audit = [], pageErrors = [];
+interface Result {journey: string; step: string; ok: boolean; error?: string | undefined}
+interface Finding {shot: string; kind: string; text: string}
+interface PageError {journey: string; phone: boolean; error: string | undefined}
+interface Thread {id: string}
+interface Group {id: string; name: string}
+interface World {plan: Thread; kickoff: Thread; risks: Thread; draft: Thread; secret: Thread; dm: Thread; eng?: Group; teamThread?: Thread}
+const results: Result[] = [], audit: Finding[] = [], pageErrors: PageError[] = [];
 let seq = 0;
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, t(ms)));
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, t(ms)));
 
 // One API call as a teammate, by token (as the existing real-hub tests make them).
-async function api(hub, teammate, method, p, body) {
+async function api(hub: RealHubSupport.Hub, teammate: string, method: string, p: string, body?: unknown) {
   const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + hub.tokens[teammate],
     'content-type': 'application/json', ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})},
-    body: body === undefined ? undefined : JSON.stringify(body)});
+    body: (body === undefined ? undefined : JSON.stringify(body)) as string});
   const json = await r.json().catch(() => ({}));
   assert.ok(r.status < 300, `${method} ${p} as ${teammate}: ${r.status} ${JSON.stringify(json)}`);
   return json;
 }
 
 // Builder-claude: everyone may see it, only Dana may read or write its Home (as real-hub.cjs sets it up).
-async function restrictBot(hub) {
+async function restrictBot(hub: RealHubSupport.Hub) {
   const current = await api(hub, 'dana', 'GET', `/v2/bots/${BOT}/access`);
   const everyone = {everyone: true, people: [], teams: [], bots: []};
   const dana = {everyone: false, people: ['dana'], teams: [], bots: []};
@@ -54,7 +62,7 @@ async function restrictBot(hub) {
 }
 
 // Priya's Home: only she reads it, so a peer reads it only as her manager (people.manages).
-async function restrictPerson(hub) {
+async function restrictPerson(hub: RealHubSupport.Hub) {
   const current = await api(hub, 'dana', 'GET', '/v2/humans/priya/access');
   const everyone = {everyone: true, people: [], teams: [], bots: []};
   const priya = {everyone: false, people: ['priya'], teams: [], bots: []};
@@ -65,9 +73,9 @@ async function restrictPerson(hub) {
 const COPY = /\b(channels?|rooms?)\b/gi;
 const RAW_ID = /\b(?:t|h|m|msg|call|gi|bot|human|person|team)[-_:][0-9a-f]{8,}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}\b/gi;
 const JSON_SHAPE = /[{\[]\s*"[a-z_]+"\s*:/g;
-function scanText(text, shot) {
-  const found = [];
-  for (const [kind, re] of [['copy', COPY], ['raw-id', RAW_ID], ['json', JSON_SHAPE]]) {
+function scanText(text: string, shot: string) {
+  const found: Finding[] = [];
+  for (const [kind, re] of [['copy', COPY], ['raw-id', RAW_ID], ['json', JSON_SHAPE]] as const) {
     for (const m of text.matchAll(re)) {
       const at = m.index;
       found.push({shot, kind, text: text.slice(Math.max(0, at - 50), at + m[0].length + 30).replace(/\s+/g, ' ')});
@@ -78,7 +86,7 @@ function scanText(text, shot) {
 }
 
 // A screenshot of the page as it is now. Phone shots also record any sideways scroll.
-async function snap(page, label, phone) {
+async function snap(page: Page, label: string, phone: boolean) {
   await sleep(500);
   const name = `${String(++seq).padStart(3, '0')}-${label}-${phone ? 'phone' : 'desktop'}`;
   await page.screenshot({path: path.join(SHOTS, name + '.png')});
@@ -92,34 +100,35 @@ async function snap(page, label, phone) {
 }
 
 // One step inside a journey. A failure shoots the screen as it is and records it, and the journey goes on.
-async function step(page, label, phone, name, fn) {
+async function step(page: Page, label: string, phone: boolean, name: string, fn: () => Promise<unknown>) {
   try {
     await fn();
     results.push({journey: name, step: label, ok: true});
   } catch (error) {
-    const message = String(error.message || error).split('\n')[0];
+    const message = String((error as Error).message || error).split('\n')[0];
     results.push({journey: name, step: label, ok: false, error: message});
     try { await snap(page, 'FAILED-' + label.replace(/\W+/g, '-'), phone); } catch { /* the page is gone */ }
   }
 }
 
 // A journey at both widths. `who` is the teammate; `body(page, phone, name)` runs the steps.
-async function journey(browser, hub, name, who, body, {phones = [false, true]} = {}) {
+async function journey(browser: Browser, hub: RealHubSupport.Hub, name: string, who: string,
+  body: (page: Page, phone: boolean, name: string) => Promise<void>, {phones = [false, true]}: {phones?: boolean[]} = {}) {
   if (ONLY && !ONLY.test(name)) return;
   for (const phone of phones) {
     let page;
     try {
       page = await pageAs(browser, hub, who, {phone});
     } catch (error) {
-      results.push({journey: name, step: 'open the page', ok: false, error: String(error.message).split('\n')[0]});
+      results.push({journey: name, step: 'open the page', ok: false, error: String((error as Error).message).split('\n')[0]});
       continue;
     }
-    page.on('pageerror', error => pageErrors.push({journey: name, phone, error: String(error.message).split('\n')[0]}));
+    page.on('pageerror', error => pageErrors.push({journey: name, phone, error: String((error as Error).message).split('\n')[0]}));
     page.on('dialog', dialog => dialog.accept());
     try {
       await body(page, phone, name + (phone ? ' (phone)' : ' (desktop)'));
     } catch (error) {
-      results.push({journey: name, step: 'journey', ok: false, error: String(error.message).split('\n')[0]});
+      results.push({journey: name, step: 'journey', ok: false, error: String((error as Error).message).split('\n')[0]});
     } finally {
       await page.context().close().catch(() => {});
     }
@@ -128,7 +137,7 @@ async function journey(browser, hub, name, who, body, {phones = [false, true]} =
 
 // The "One thing needs you" card is the seeded runner's old version (the world's runner says so), not a threads screen:
 // close it, so it does not cover the sidebar, the bot's switch or a composer.
-async function dismissRunnerCard(page) {
+async function dismissRunnerCard(page: Page) {
   const card = page.getByText('One thing needs you');
   if (await card.count() && await card.first().isVisible().catch(() => false)) {
     await page.getByRole('button', {name: 'Close', exact: true}).first().click({timeout: 3000}).catch(() => {});
@@ -136,23 +145,23 @@ async function dismissRunnerCard(page) {
 }
 
 // A click that fails says what sits at the control's centre, so a phone-only failure shows what covers it (no screenshot needed).
-async function clickOrExplain(page, selector, label) {
+async function clickOrExplain(page: Page, selector: string, label: string) {
   try {
     await page.locator(selector).first().click({timeout: 10000});
   } catch {
     const info = await page.evaluate(sel => {
-      const el = document.querySelector(sel);
+      const el = document.querySelector<HTMLButtonElement>(sel);
       if (!el) return 'no element';
       const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
       return JSON.stringify({rect: [r.x, r.y, r.width, r.height].map(Math.round), disabled: el.disabled,
-        hit: hit ? hit.tagName + '.' + String(hit.className).slice(0, 60) : 'none', hitText: hit ? hit.textContent.trim().slice(0, 60) : ''});
+        hit: hit ? hit.tagName + '.' + String(hit.className).slice(0, 60) : 'none', hitText: hit ? hit.textContent!.trim().slice(0, 60) : ''});
     }, selector).catch(e => 'evaluate failed: ' + String(e.message).split('\n')[0]);
     throw new Error(`${label} click failed (${selector}): ${info}`);
   }
 }
 
 // Whether a hold listed for a thread holds this text. The list omits the text; the hold's own view (its author reads it) has it.
-async function heldWithText(hub, threadId, text) {
+async function heldWithText(hub: RealHubSupport.Hub, threadId: string, text: string) {
   const {holds} = await api(hub, 'dana', 'GET', `/v2/rule-holds?thread=${threadId}`);
   for (const h of holds) {
     const view = await api(hub, 'dana', 'GET', `/v2/rule-holds/${h.id}`);
@@ -161,7 +170,7 @@ async function heldWithText(hub, threadId, text) {
   return false;
 }
 
-const shell = (page, route, waitFor = '#main') => async () => {
+const shell = (page: Page, route: string, waitFor = '#main') => async () => {
   await page.goto(page.url().split('#')[0] + route);
   await page.locator(waitFor).first().waitFor({state: 'attached', timeout: WAIT});
   await dismissRunnerCard(page);
@@ -170,7 +179,7 @@ const shell = (page, route, waitFor = '#main') => async () => {
 
 // A message's own action (React, Reply or Copy). The bar shows on hover (threads.css: .th-msg:hover .th-acts); a phone
 // has no hover, so there the click goes to the button itself, as the long press's sheet would.
-async function messageAct(page, text, label, phone) {
+async function messageAct(page: Page, text: string, label: string, phone: boolean) {
   const row = page.locator('[data-message]', {hasText: text}).first();
   const button = row.locator(`.th-acts [aria-label="${label}"]`);
   if (phone) { await button.dispatchEvent('click'); return; }
@@ -186,7 +195,7 @@ async function messageAct(page, text, label, phone) {
 (async () => {
   const hub = await startHub({seeds: ['org', 'groups', 'connection', 'toured', 'judge']});
   let browser;
-  const S = {};
+  const S = {} as World;
   try {
     // ------------------------------------------------------------------ the world the journeys start from
     S.plan = await api(hub, 'dana', 'POST', '/v2/threads', {title: 'Launch plan', audience: 'company', members: [], body: PLAN});
@@ -196,7 +205,7 @@ async function messageAct(page, text, label, phone) {
     S.draft = await api(hub, 'dana', 'POST', `/v2/threads/${S.plan.id}/messages`, {text: 'Price list draft v1', kind: 'say'});
     S.secret = await api(hub, 'dana', 'POST', '/v2/threads', {title: 'Pricing review', audience: 'members', members: [], body: SECRET});
     const groups = await api(hub, 'dana', 'GET', '/v2/groups');
-    S.eng = (groups.groups || groups).find(g => g.name === 'Engineering');
+    S.eng = (groups.groups || groups).find((g: Group) => g.name === 'Engineering');
     if (S.eng) {
       S.teamThread = await api(hub, 'dana', 'POST', '/v2/threads', {title: 'Engineering standup', audience: 'team',
         audience_group_id: S.eng.id, members: [], body: 'Standup notes go here.'});
@@ -207,7 +216,7 @@ async function messageAct(page, text, label, phone) {
     await api(hub, 'priya', 'POST', `/v2/threads/${priyaHome.id}/messages`, {text: HOME_NOTE, kind: 'say'});
     await restrictBot(hub);
     await restrictPerson(hub);
-    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
 
     // ------------------------------------------------------------------ dashboard and Company tab
     await journey(browser, hub, 'dashboard', 'dana', async (page, phone, name) => {
@@ -230,8 +239,8 @@ async function messageAct(page, text, label, phone) {
       });
       // Arranging is by the grip on each card (.dash-grip), still in edit mode: drag the last card's grip to the top.
       await step(page, 'arrange cards', phone, name, async () => {
-        const from = await page.locator('.dash-grip').last().boundingBox();
-        const to = await page.locator('.dash-grip').first().boundingBox();
+        const from = (await page.locator('.dash-grip').last().boundingBox())!;
+        const to = (await page.locator('.dash-grip').first().boundingBox())!;
         await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
         await page.mouse.down();
         await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {steps: 12});
@@ -263,7 +272,7 @@ async function messageAct(page, text, label, phone) {
         await page.locator(`#thread-browse li[data-thread="${S.plan.id}"]`).waitFor({timeout: WAIT});
         await snap(page, 'browse-threads', phone);
         await page.keyboard.press('Escape');
-        await page.waitForFunction(() => !document.querySelector('#thread-browse')?.open, null, {timeout: WAIT});
+        await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-browse')?.open, null, {timeout: WAIT});
       });
       await step(page, 'Catch up', phone, name, async () => {
         const open = page.locator('#thread-rail [data-tr-catch]:not([hidden])');
@@ -385,7 +394,7 @@ async function messageAct(page, text, label, phone) {
     await journey(browser, hub, 'group page', 'dana', async (page, phone, name) => {
       if (!S.eng) { results.push({journey: name, step: 'find the Engineering group', ok: false, error: 'no group named Engineering'}); return; }
       await step(page, 'group Home', phone, name, async () => {
-        await shell(page, '#/team/' + encodeURIComponent(S.eng.id))();
+        await shell(page, '#/team/' + encodeURIComponent(S.eng!.id))();
         await snap(page, 'group-home', phone);
       });
       await step(page, 'group Access editor', phone, name, async () => {
@@ -444,7 +453,7 @@ async function messageAct(page, text, label, phone) {
     // ------------------------------------------------------------------ calls: start (Dana), join (Omar), end, action items
     for (const phone of ONLY && !ONLY.test('calls') ? [] : [false, true]) {
       const name = 'call' + (phone ? ' (phone)' : ' (desktop)');
-      let dana, omar;
+      let dana!: Page, omar!: Page;
       try {
         dana = await pageAs(browser, hub, 'dana', {phone});
         omar = await pageAs(browser, hub, 'omar', {phone: false});
@@ -478,7 +487,7 @@ async function messageAct(page, text, label, phone) {
           await snap(dana, 'call-action-items', phone);
         });
       } catch (error) {
-        results.push({journey: name, step: 'journey', ok: false, error: String(error.message).split('\n')[0]});
+        results.push({journey: name, step: 'journey', ok: false, error: String((error as Error).message).split('\n')[0]});
       } finally {
         await dana?.context().close().catch(() => {});
         await omar?.context().close().catch(() => {});
@@ -514,7 +523,7 @@ async function messageAct(page, text, label, phone) {
     console.log('threads-walkthrough: done');
   } catch (error) {
     console.error('threads-walkthrough: setup failed:', error);
-    results.push({journey: 'setup', step: 'world', ok: false, error: String(error.message || error).split('\n')[0]});
+    results.push({journey: 'setup', step: 'world', ok: false, error: String((error as Error).message || error).split('\n')[0]});
   } finally {
     const failed = results.filter(r => !r.ok);
     const report = {shots: SHOTS, shots_taken: seq, failed, page_errors: pageErrors, audit, results};

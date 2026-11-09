@@ -3,17 +3,21 @@
 // on one scrolls to it), and nothing scrolls the page sideways; a path's name opens the Paths editor at that path, where
 // "+ Path" and "+ Condition" add a path with its condition, saved as one PATCH. A computer shows the paths side by side
 // and stops offering "+ Path" at 10.
-const {chromium} = require('playwright');
+import type {Page} from 'playwright';
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+
+type Flow = {steps: {paths: unknown[]}[]};
 
 // The path strip needs no scrolling, and no step name in it is cut (two lines at most, each word whole).
-const fits = page => page.evaluate(() => {
-  const strip = document.querySelector('.au-paths');
-  const clipped = [...strip.querySelectorAll('.au-ct')].filter(t => t.scrollHeight > t.clientHeight + 1 || t.scrollWidth > t.clientWidth + 1).map(t => t.textContent);
+const fits = (page: Page) => page.evaluate(() => {
+  const strip = document.querySelector('.au-paths')!;
+  const clipped = [...(strip.querySelectorAll('.au-ct') as unknown as Element[])].filter(t => t.scrollHeight > t.clientHeight + 1 || t.scrollWidth > t.clientWidth + 1).map(t => t.textContent);
   return {strip: strip.scrollWidth <= strip.clientWidth + 1, clipped};
 });
-const selectedDot = page => page.evaluate(() => [...document.querySelectorAll('.au-dots [data-dot]')].findIndex(d => d.getAttribute('aria-selected') === 'true'));
+const selectedDot = (page: Page) => page.evaluate(() => [...(document.querySelectorAll('.au-dots [data-dot]') as unknown as Element[])].findIndex(d => d.getAttribute('aria-selected') === 'true'));
 
 (async () => {
   const browser = await chromium.launch();
@@ -27,12 +31,12 @@ const selectedDot = page => page.evaluate(() => [...document.querySelectorAll('.
       assert.equal(await page.locator('.au-dots').isVisible(), true);
       assert.equal(await strip.evaluate(el => getComputedStyle(el).scrollSnapType.includes('x')), true);
       assert.equal(await selectedDot(page), 0);
-      const w = await strip.evaluate(el => ({col: el.children[0].getBoundingClientRect().width, box: el.clientWidth}));
+      const w = await strip.evaluate(el => ({col: el.children[0]!.getBoundingClientRect().width, box: el.clientWidth}));
       assert.ok(w.col < w.box && w.col > w.box * 0.7, 'one path fills most of the screen, the next peeks in');
-      await strip.evaluate(el => { el.scrollLeft = el.children[1].offsetLeft - el.offsetLeft; });
-      await page.waitForFunction(() => document.querySelectorAll('.au-dots [data-dot]')[1].getAttribute('aria-selected') === 'true');
+      await strip.evaluate((el: HTMLElement) => { el.scrollLeft = (el.children[1] as HTMLElement).offsetLeft - el.offsetLeft; });
+      await page.waitForFunction(() => document.querySelectorAll('.au-dots [data-dot]')[1]!.getAttribute('aria-selected') === 'true');
       await page.locator('.au-dots [data-dot="other"]').click();
-      await page.waitForFunction(() => document.querySelectorAll('.au-dots [data-dot]')[2].getAttribute('aria-selected') === 'true');
+      await page.waitForFunction(() => document.querySelectorAll('.au-dots [data-dot]')[2]!.getAttribute('aria-selected') === 'true');
       assert.ok(await strip.evaluate(el => el.scrollLeft > 0));
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-paths');
@@ -52,7 +56,7 @@ const selectedDot = page => page.evaluate(() => [...document.querySelectorAll('.
       await shot(page, 'phone-paths-edit');
       await page.locator('.au-save').click();
       await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v8');
-      const p = writes.at(-1).body.steps[2];
+      const p = (writes.at(-1)!.body as Flow).steps[2]!;
       assert.equal(p.paths.length, 3);
       assert.deepEqual(p.paths[2], {name: 'Route', when: [{field: 'd1.bucket', op: 'is', value: 'route', min: 0.6}], steps: []});
       assert.equal(await page.locator('.au-dots [data-dot]').count(), 4);

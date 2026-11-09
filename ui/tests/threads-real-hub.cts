@@ -7,11 +7,13 @@
 // Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
 // on the rail, sees its composer, and the page does not scroll sideways. Dana, on a phone, finds a late sub-thread reply
 // on its root's row, reads DMs by who they are with, and switches a bot's Home and DM.
-const {chromium} = require('playwright');
+import type {Locator} from 'playwright';
+import type * as RealHubSupport from './support/real-hub.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const {startHub, pageAs} = require('./support/real-hub.cjs');
-const {t} = require('./support/load.cjs');
+const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
+const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
 
 const PLAN = 'Launch is Tuesday';
 const SECRET = 'Pricing war room only';
@@ -21,10 +23,10 @@ const HOME_NOTE = 'Standup moves to ten';
 const BOT = 'builder-claude';
 
 // One API call as a teammate, by token: the same shape the counsel journey uses (ui/tests/org-rules-counsel.cjs).
-async function api(hub, teammate, method, p, body) {
+async function api(hub: RealHubSupport.Hub, teammate: string, method: string, p: string, body?: unknown) {
   const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + hub.tokens[teammate],
     'content-type': 'application/json', ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})},
-    body: body === undefined ? undefined : JSON.stringify(body)});
+    body: (body === undefined ? undefined : JSON.stringify(body)) as string});
   const json = await r.json().catch(() => ({}));
   assert.ok(r.status < 300, `${method} ${p} as ${teammate}: ${r.status} ${JSON.stringify(json)}`);
   return json;
@@ -33,7 +35,7 @@ async function api(hub, teammate, method, p, body) {
 // Builder-claude's access: everyone may see it (so it is in the chart and the bot list), and only Dana may read or write
 // its Home. Omar sees the bot without reading its Home; Dana is the manager up the chart (builder-claude reports to
 // engineering-lead, who reports to Dana).
-async function restrictBot(hub) {
+async function restrictBot(hub: RealHubSupport.Hub) {
   const current = await api(hub, 'dana', 'GET', `/v2/bots/${BOT}/access`);
   const everyone = {everyone: true, people: [], teams: [], bots: []};
   const dana = {everyone: false, people: ['dana'], teams: [], bots: []};
@@ -43,7 +45,7 @@ async function restrictBot(hub) {
 
 // Priya's Home: Dana, the owner, reads it; a teammate who only sees Priya reads it only if he manages her (people.manages).
 // Priya's read audience names only herself, so the org chart decides who reads her Home.
-async function restrictPerson(hub) {
+async function restrictPerson(hub: RealHubSupport.Hub) {
   const current = await api(hub, 'dana', 'GET', '/v2/humans/priya/access');
   const everyone = {everyone: true, people: [], teams: [], bots: []};
   const priya = {everyone: false, people: ['priya'], teams: [], bots: []};
@@ -63,7 +65,7 @@ async function restrictPerson(hub) {
       {text: RISKS, kind: 'say', parent_message_id: kickoff.id});
     await restrictBot(hub);
     await restrictPerson(hub);
-    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
 
     // Dana, desktop: the company thread shows its message and takes a reply.
     const dana = await pageAs(browser, hub, 'dana');
@@ -89,12 +91,12 @@ async function restrictPerson(hub) {
       return dana.locator('#thread-settings[open] #ths-keep');
     };
     // The select saves as it changes; the panel then closes.
-    const setKeep = async (select, days) => {
+    const setKeep = async (select: Locator, days: string) => {
       const saved = dana.waitForResponse(r => r.request().method() === 'PATCH' && r.url().includes('/v2/threads/'), {timeout: t(15000)});
       await select.selectOption(days);
       await saved;
       await dana.locator('#thread-settings .tmodal-x').click();
-      await dana.waitForFunction(() => !document.querySelector('#thread-settings')?.open, null, {timeout: t(15000)});
+      await dana.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-settings')?.open, null, {timeout: t(15000)});
     };
     await dana.goto(hub.url + '/#/thread/' + plan.id);
     await dana.getByText(PLAN).waitFor({timeout: t(15000)});
@@ -198,7 +200,7 @@ async function restrictPerson(hub) {
 
     // Dana, phone. Omar answers in the old sub-thread: the rail still shows only roots, the root's row carries the reply,
     // and tapping it opens the root with the reply in it. Opening the sub-thread adds no row for it.
-    const late = await api(hub, 'omar', 'POST', `/v2/threads/${plan.id}/messages`, {text: 'A late risk from Omar', kind: 'say', parent_message_id: kickoff.id});
+    await api(hub, 'omar', 'POST', `/v2/threads/${plan.id}/messages`, {text: 'A late risk from Omar', kind: 'say', parent_message_id: kickoff.id});
     const pair = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya']});
     const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar'], title: 'Launch trio'});
     await api(hub, 'priya', 'POST', `/v2/threads/${(pair.thread || pair).id}/messages`, {text: 'Got a minute?', kind: 'say'});
@@ -234,7 +236,7 @@ async function restrictPerson(hub) {
 
     // The same phone: a bot's Home and DM are named in the top line, and each one switches the page.
     await phone.goto(hub.url + '/#/bot/' + BOT + '/home');
-    const selected = tab => phone.waitForFunction(name => document.querySelector(`#btabs [data-bt="${name}"]`)?.getAttribute('aria-selected') === 'true',
+    const selected = (tab: string) => phone.waitForFunction(name => document.querySelector(`#btabs [data-bt="${name}"]`)?.getAttribute('aria-selected') === 'true',
       tab, {timeout: t(15000)});
     await selected('home');
     // 9d11efec7: a phone has one chat tab; the DM is Incognito, the toggle in the top line (aria-pressed = DM).
@@ -265,7 +267,7 @@ async function restrictPerson(hub) {
     await talk.context().close();
 
     const groups = await api(hub, 'dana', 'GET', '/v2/groups');
-    const eng = (groups.groups || groups).find(g => g.name === 'Engineering');
+    const eng = (groups.groups || groups).find((g: {name: string}) => g.name === 'Engineering');
     for (const isPhone of [false, true]) {
       const tag = isPhone ? 'phone' : 'desktop';
       const page = await pageAs(browser, hub, 'dana', {phone: isPhone});
@@ -286,7 +288,7 @@ async function restrictPerson(hub) {
       await share.locator('.thd-aud-word').waitFor({timeout: t(15000)});
       await page.waitForLoadState('networkidle');
       assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the row label is the only Who can read`);
-      const word = await share.locator('.thd-aud-word').boundingBox();
+      const word = (await share.locator('.thd-aud-word').boundingBox())!;
       assert.ok(word.height < 26, `${tag}: A team stays on one line (${word.height}px)`);
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
       await share.locator('[data-close]').first().click();
@@ -295,7 +297,7 @@ async function restrictPerson(hub) {
       await page.goto(hub.url + '/#/team/' + encodeURIComponent(eng.id));
       await page.locator('#dash-home').waitFor({timeout: t(15000)});
       const off = await page.evaluate(() => {
-        const home = document.querySelector('#dash-home').getBoundingClientRect(), grid = document.querySelector('#dash-grid');
+        const home = document.querySelector<HTMLElement>('#dash-home')!.getBoundingClientRect(), grid = document.querySelector<HTMLElement>('#dash-grid')!;
         const box = grid.getBoundingClientRect(), css = getComputedStyle(grid);
         return [home.left - box.left - parseFloat(css.paddingLeft), box.right - parseFloat(css.paddingRight) - home.right];
       });
@@ -306,7 +308,7 @@ async function restrictPerson(hub) {
       await page.locator('#person-access-edit').click();
       await page.locator('#access-editor[open] [name="preset"][value="custom"]').check();
       const save = await page.evaluate(() => {
-        const b = document.querySelector('#access-editor[open] [type=submit]'), r = b.getBoundingClientRect();
+        const b = document.querySelector<HTMLElement>('#access-editor[open] [type=submit]')!, r = b.getBoundingClientRect();
         return {inside: r.top >= 0 && r.bottom <= innerHeight, top: b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))};
       });
       assert.deepEqual(save, {inside: true, top: true}, `${tag}: Save can be reached`);
@@ -317,7 +319,7 @@ async function restrictPerson(hub) {
       await page.locator('#bot-editor [data-edit-access]').first().click();
       await page.locator('#access-editor.bot-settings-panel [name="preset"][value="custom"]').check();
       const inPlace = await page.evaluate(() => {
-        const b = document.querySelector('#access-editor.bot-settings-panel [type=submit]');
+        const b = document.querySelector<HTMLElement>('#access-editor.bot-settings-panel [type=submit]')!;
         b.scrollIntoView({block: 'center'});
         const r = b.getBoundingClientRect();
         return {inside: r.top >= 0 && r.bottom <= innerHeight, top: b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))};

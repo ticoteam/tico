@@ -3,9 +3,10 @@
 // (DELETE), Turn on (restore). A draft (off, its first version pending) shows Pending in the list, and Turn on turns it
 // on. The + makes a blank one, off, at once; the header has no Ask. An old #/automations/bot link opens the list.
 // Computer, then phone.
-const {chromium} = require('playwright');
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
 (async () => {
   const browser = await chromium.launch();
@@ -26,11 +27,11 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       await card.getByRole('button', {name: 'View diff'}).click();
       assert.deepEqual(await card.locator('.au-diff .add').allTextContents(), ['+ filter subject has “receipt” → Archive']);
       assert.equal(await card.locator('.au-diff .del').count(), 0);
-      assert.ok((await page.locator('.au-side').boundingBox()).x > 1000, 'Versions sits on the right');
+      assert.ok(((await page.locator('.au-side').boundingBox())!).x > 1000, 'Versions sits on the right');
       await shot(page, 'desktop-proposal');
       await card.getByRole('button', {name: 'Discard'}).click();
       await card.waitFor({state: 'detached'});
-      assert.deepEqual(writes.at(-1), {method: 'DELETE', path: '/api/v2/automations/au_inbox/versions/8', body: {}});
+      assert.deepEqual(writes.at(-1)!, {method: 'DELETE', path: '/api/v2/automations/au_inbox/versions/8', body: {}});
       assert.equal(await page.locator('.au-ver').innerText(), 'v7');
       await page.locator('.au-ed [data-op="close"]').click();
       assert.equal(await page.locator('.au-side').isVisible(), false);
@@ -52,7 +53,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       await card.waitFor();
       await card.getByRole('button', {name: 'Turn on'}).click();
       await card.waitFor({state: 'detached'});
-      assert.deepEqual(writes.at(-1), {method: 'POST', path: '/api/v2/automations/au_draft/versions/1/restore', body: {}});
+      assert.deepEqual(writes.at(-1)!, {method: 'POST', path: '/api/v2/automations/au_draft/versions/1/restore', body: {}});
       assert.equal(await page.locator('.au-hd [data-on-cur]').isChecked(), true);
       await page.locator('.au-crumb .au-up').click();
       await page.waitForSelector('tr.au-row[data-row="au_draft"]');
@@ -67,16 +68,16 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'list');
       await page.getByRole('button', {name: 'New automation'}).click();
       await page.locator('.au-newm [data-new="schedule"]').click();
-      await page.waitForFunction(() => document.querySelector('#au-root').dataset.screen === 'detail' && /New automation/.test(document.querySelector('.au-name')?.textContent));
+      await page.waitForFunction(() => (document.querySelector('#au-root') as HTMLElement).dataset.screen === 'detail' && /New automation/.test(document.querySelector('.au-name')?.textContent!));
       const made = writes.filter(w => w.method === 'POST' && w.path === '/api/v2/automations');
       assert.equal(made.length, 1);
-      assert.equal(made[0].body.enabled, false);
+      assert.equal(made[0]!.body.enabled, false);
       const sw = page.locator('.au-hd [data-on-cur]');
       assert.equal(await sw.isVisible(), true, 'the switch shows on a phone');
       assert.equal(await sw.isChecked(), false);
       await sw.click();
-      await page.waitForFunction(() => document.querySelector('.au-hd [data-on-cur]')?.checked);
-      assert.deepEqual([writes.at(-1).method, writes.at(-1).body], ['PATCH', {enabled: true}]);
+      await page.waitForFunction(() => (document.querySelector('.au-hd [data-on-cur]') as HTMLInputElement | null)?.checked);
+      assert.deepEqual([writes.at(-1)!.method, writes.at(-1)!.body], ['PATCH', {enabled: true}]);
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-new');
       assert.deepEqual(errors, []);

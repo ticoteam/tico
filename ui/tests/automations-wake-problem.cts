@@ -1,15 +1,16 @@
 // A "What wakes" automation whose wake rule names a step its type does not have (GET payload `problems`) says so in one
 // warning line: on its row in the list and in its detail header. A clean automation shows no line. Against the fake hub in
 // support/automations-fake.cjs; a computer.
-const {chromium} = require('playwright');
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, DESKTOP, sideways} = require('./support/automations-fake.cjs');
+const {openAutomations, DESKTOP, sideways} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
 (async () => {
   const browser = await chromium.launch();
   try {
     const problems = [{rule: 'rule_qa', step: 'QA Fixes', why: 'The wake rule names step "QA Fixes", which its task type does not have.'}];
-    const tweak = fx => Object.assign(fx.automations.find(a => a.id === 'au_inbox'), {problems});
+    const tweak = (fx: AutomationsFakeSupport.AutomationsFixture) => Object.assign(fx.automations.find(a => a.id === 'au_inbox')!, {problems});
     const {page, errors} = await openAutomations(browser, {viewport: DESKTOP, viewer: 'dana', tweak});
     await page.waitForSelector('tr.au-row[data-row="au_inbox"]');
     const line = '.au-warn';

@@ -2,12 +2,14 @@
 // event reads as a few words everywhere (the list's Trigger column, the trigger card, a wake rule's condition, the
 // editor), never its dotted id (task.done, tico.notice, tico.builtin.*); the id is only the chip's tooltip, and the
 // editor still saves it; Custom… takes a name the catalog does not list, saved as typed. A phone first, then a computer.
-const {chromium} = require('playwright');
+import type {Page} from 'playwright';
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
 const base = {owner_id: 'person:dana', enabled: true, version: 1, steps: []};
-const tweak = fx => fx.automations.push(
+const tweak = (fx: AutomationsFakeSupport.AutomationsFixture) => fx.automations.push(
   // The built-ins the converter writes (backend/redesign_migration.py): read only, with rules on internal event names.
   {...base, id: 'au_wakes', name: 'What wakes bots', builtin: true, readonly: true, can_edit: false,
     trigger: {type: 'event', name: 'tico.builtin.wakes'},
@@ -21,7 +23,7 @@ const tweak = fx => fx.automations.push(
   {...base, id: 'au_custom', name: 'Deploys', trigger: {type: 'event', name: 'custom.deploy_finished'}},
 );
 const RAW = /tico\.|task\.done|custom\.|status_or_relation|builtin/;
-const rowText = (page, id) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt`).innerText();
+const rowText = (page: Page, id: string) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt`).innerText();
 
 (async () => {
   const browser = await chromium.launch();
@@ -36,7 +38,7 @@ const rowText = (page, id) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt
       assert.doesNotMatch(await page.locator('.au-tbl').innerText(), RAW, 'no dotted ids in the list');
       // Search still finds one by its words.
       await page.locator('.au-q').fill('task finished');
-      assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => x.dataset.row)), ['au_done']);
+      assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), ['au_done']);
       await page.locator('.au-q').fill('');
       await shot(page, 'phone-events-list');
 
@@ -78,7 +80,7 @@ const rowText = (page, id) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt
       await pick.selectOption('task.done');
       await page.locator('.au-ed .au-save').click();
       await page.waitForFunction(() => document.querySelector('.au-trig .au-c1')?.textContent === 'Task finished');
-      const saved = writes.find(w => w.method === 'PATCH' && w.body?.trigger);
+      const saved = writes.find(w => w.method === 'PATCH' && w.body?.trigger)!;
       assert.deepEqual(saved.body.trigger, {type: 'event', name: 'task.done'});
       // A name of one's own: Custom… and a box for it; saved exactly as typed.
       await page.locator('.au-card[data-open="trigger"]').click();
@@ -91,7 +93,7 @@ const rowText = (page, id) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt
       await shot(page, 'desktop-events-custom');
       await page.locator('.au-ed .au-save').click();
       await page.waitForFunction(() => document.querySelector('.au-trig .au-c1')?.textContent === 'Deploy finished');
-      assert.deepEqual(writes.filter(w => w.method === 'PATCH' && w.body?.trigger).at(-1).body.trigger, {type: 'event', name: 'custom.deploy_finished'});
+      assert.deepEqual(writes.filter(w => w.method === 'PATCH' && w.body?.trigger).at(-1)!.body.trigger, {type: 'event', name: 'custom.deploy_finished'});
       // Back to a catalog event drops the box.
       await page.locator('.au-card[data-open="trigger"]').click();
       assert.equal(await pick.locator('option:checked').innerText(), 'Custom…');

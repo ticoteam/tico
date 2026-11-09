@@ -4,17 +4,37 @@
 // list survives task updates and link changes without a reread (taskMeetings, phone and desktop); open meeting details
 // apply authorized task and link events without rereading the linked-task list (linkedTasks, phone and desktop).
 // Each keeps its own assertions and names itself in a failure ("[taskMeetings] ...").
-const {chromium} = require('playwright');
+import type {Browser, Page} from 'playwright';
+import type * as RealHubSupport from './support/real-hub.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {startHub, pageAs} = require('./support/real-hub.cjs');
-const {t} = require('./support/load.cjs');
-const e2e = require('./support/e2e.cjs');
+const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
+const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
+const e2e = require('./support/e2e.cjs') as E2E;
+
+// The e2e helper (ui/tests/support/e2e.cjs) is JavaScript with no declaration file: its surface, as this spec uses it.
+interface E2E {
+  open: (browser: Browser, hub: RealHubSupport.Hub, who: string, options?: {phone?: boolean; hash?: string}) => Promise<Page>;
+  go: (page: Page, hash: string) => unknown;
+  must: (hub: RealHubSupport.Hub, who: string, method: string, path: string, body: unknown, what?: string)
+    => Promise<{id?: string; meeting?: {id?: string}}>;
+  assertClean: (page: Page, where: string) => void;
+  drawn: (page: Page, selector: string, ready: (text: string) => boolean, what: string) => Promise<string>;
+  shot: (page: Page, name: string) => unknown;
+}
+interface Ctx {hub: RealHubSupport.Hub; browser: Browser}
+// Page globals the app defines, read by the page functions below.
+interface PageWin {heldMeeting?: Element | null; heldLinkedTask?: Element | null}
+declare const MEET: {open?: boolean; linkedTasks?: Record<string, unknown>};
+declare const TASK_CHAT: {data: {task: {id: string; title: string}}; dialog: Element};
+declare function liveConnected(): boolean;
+declare function taskModalShow(task: unknown, dialog: unknown): void;
 
 // The viewport a step is on, named in a failure ("[name, phone] ...").
 let viewport = '';
 
 // e2e-meetings: the import, the list and the review page, at each width.
-async function meetingsImport({hub, browser}) {
+async function meetingsImport({hub, browser}: Ctx) {
   const {open, go, must, assertClean, drawn, shot} = e2e;
   const LINE = 'We agreed to ship the beta on Nov 3 if the review queue stays under six hours.';
   for (const phone of [true, false]) {
@@ -49,9 +69,9 @@ async function meetingsImport({hub, browser}) {
 }
 
 // task-meetings: a task's Meetings list.
-async function taskMeetings({hub, browser}) {
+async function taskMeetings({hub, browser}: Ctx) {
       const request = await browser.newContext({extraHTTPHeaders: {Authorization: 'Bearer ' + hub.tokens.dana}});
-      const call = async (method, path, data) => {
+      const call = async (method: string, path: string, data?: unknown) => {
         const r = await request.request.fetch(hub.url + '/api/v2/' + path, {
           method, data, headers: {'Idempotency-Key': require('node:crypto').randomUUID()},
         });
@@ -64,7 +84,7 @@ async function taskMeetings({hub, browser}) {
       for (const phone of [true, false]) {
     viewport = phone ? 'phone' : 'desktop';
         const page = await pageAs(browser, hub, 'dana', {phone});
-        const errors = [];
+        const errors: string[] = [];
         page.on('pageerror', e => errors.push(e.message));
         try {
           await page.goto(hub.url + '/#/task/' + task.id);
@@ -88,7 +108,7 @@ async function taskMeetings({hub, browser}) {
           await linked.click();
           await page.locator('[data-task-meetings] h3').waitFor({timeout: t(20000)});
           await call('DELETE', `meetings/${meeting.id}/tasks/${task.id}`);
-          await page.waitForFunction(() => document.querySelector('[data-task-meetings]')?.hidden, null, {timeout: t(20000)});
+          await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-task-meetings]')?.hidden, null, {timeout: t(20000)});
           assert.equal(await page.locator('[data-task-meetings]').isHidden(), true);
           assert.deepEqual(errors, []);
         } finally { await page.context().close(); }
@@ -113,7 +133,7 @@ async function taskMeetings({hub, browser}) {
           await page.waitForFunction(() => document.querySelectorAll('[data-meeting-id]').length === 25 && liveConnected(), null, {timeout: t(20000)});
           const before = reads;
           const retained = meetings[0].id;
-          await page.evaluate(id => { window.heldMeeting = document.querySelector(`[data-meeting-id="${id}"]`); }, retained);
+          await page.evaluate(id => { (window as unknown as PageWin).heldMeeting = document.querySelector(`[data-meeting-id="${id}"]`); }, retained);
           const title = 'Review recurring plans ' + (phone ? 'on phone' : 'on desktop');
           const changed = await call('POST', 'tasks/' + expandedTask.id, {version: expandedTask.version, title});
           expandedTask = changed.task || changed;
@@ -129,7 +149,7 @@ async function taskMeetings({hub, browser}) {
           await call('DELETE', `meetings/${extra.id}/tasks/${expandedTask.id}`);
           await list.locator(`[data-meeting-id="${extra.id}"]`).waitFor({state: 'detached', timeout: t(20000)});
           assert.equal(await list.locator('[data-meeting-id]').count(), 25);
-          assert.equal(await page.evaluate(id => window.heldMeeting === document.querySelector(`[data-meeting-id="${id}"]`), retained), true, 'existing rows survive link changes');
+          assert.equal(await page.evaluate(id => (window as unknown as PageWin).heldMeeting === document.querySelector(`[data-meeting-id="${id}"]`), retained), true, 'existing rows survive link changes');
           assert.equal(reads, before, 'link events patch rows without rereading meetings');
         } finally { await page.context().close(); }
       }
@@ -137,9 +157,9 @@ async function taskMeetings({hub, browser}) {
 }
 
 // meeting-linked-tasks: the meeting pane's linked tasks.
-async function linkedTasks({hub, browser}) {
+async function linkedTasks({hub, browser}: Ctx) {
       const request = await browser.newContext({extraHTTPHeaders: {Authorization: 'Bearer ' + hub.tokens.dana}});
-      const call = async (method, path, data) => {
+      const call = async (method: string, path: string, data?: unknown) => {
         const reply = await request.request.fetch(hub.url + '/api/v2/' + path, {method, data,
           headers: {'Idempotency-Key': require('node:crypto').randomUUID()}});
         assert.equal(reply.status(), 200, await reply.text());
@@ -153,7 +173,7 @@ async function linkedTasks({hub, browser}) {
         let task = await call('POST', 'tasks', {title: 'Review the public plan on ' + surface, body: 'Review the plan.', owner: 'human:dana', private: false});
         const hidden = await call('POST', 'tasks', {title: 'Private review on ' + surface, body: 'Private.', owner: 'human:dana', private: true});
         const page = await pageAs(browser, hub, 'priya', {phone});
-        const errors = [];
+        const errors: string[] = [];
         let reads = 0;
         page.on('pageerror', error => errors.push(error.message));
         page.on('request', req => { if (req.method() === 'GET' && new URL(req.url()).pathname === `/api/v2/meetings/${meeting.id}/tasks`) reads++; });
@@ -166,13 +186,13 @@ async function linkedTasks({hub, browser}) {
           await row.waitFor({timeout: t(20000)});
           assert.match(await row.innerText(), /Review the public plan/);
           assert.equal(await page.locator(`[data-linked-task="${hidden.id}"]`).count(), 0);
-          await page.evaluate(id => { window.heldLinkedTask = document.querySelector(`[data-linked-task="${id}"]`); }, task.id);
+          await page.evaluate(id => { (window as unknown as PageWin).heldLinkedTask = document.querySelector(`[data-linked-task="${id}"]`); }, task.id);
           task = await call('POST', 'tasks/' + task.id, {version: task.version, title: 'Review the final plan on ' + surface, status: 'doing'});
           await page.waitForFunction(id => {
             const text = document.querySelector(`[data-linked-task="${id}"]`)?.textContent || '';
             return text.includes('Review the final plan') && text.toLowerCase().includes('doing');
           }, task.id, {timeout: t(20000)});
-          assert.equal(await page.evaluate(id => window.heldLinkedTask === document.querySelector(`[data-linked-task="${id}"]`), task.id), true);
+          assert.equal(await page.evaluate(id => (window as unknown as PageWin).heldLinkedTask === document.querySelector(`[data-linked-task="${id}"]`), task.id), true);
           await call('DELETE', `meetings/${meeting.id}/tasks/${task.id}`);
           await row.waitFor({state: 'detached', timeout: t(20000)});
           await call('POST', `meetings/${meeting.id}/tasks`, {task_ids: [task.id]});
@@ -191,11 +211,11 @@ async function linkedTasks({hub, browser}) {
   const hub = await startHub({seeds: ['org', 'toured', 'finance']})   // e2e-meetings' seeds, less Gina: Finance set up, or the page's finance read is a 404;
   let browser;
   try {
-    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
     for (const [name, step] of Object.entries({meetingsImport, taskMeetings, linkedTasks})) {
       viewport = '';
       try { await step({hub, browser}); }
-      catch (error) { error.message = `[${name}${viewport ? ', ' + viewport : ''}] ${error.message}`; throw error; }
+      catch (error) { (error as Error).message = `[${name}${viewport ? ', ' + viewport : ''}] ${(error as Error).message}`; throw error; }
     }
     console.log('meeting-linked-tasks: ok');
   } finally { await browser?.close(); await hub.stop(); }

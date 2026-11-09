@@ -2,25 +2,30 @@
 // Review mode: ▶ opens the queue; Approve moves on with a 10-second Undo; ⌘/Ctrl+⏎ approves only while the note has
 // focus; send-back needs a note; a refused approval (the work changed) reloads the queue; the phone layout stacks and
 // does not scroll sideways. Desktop 1440 and phone 390, dark and light.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const {install} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+import type * as PipelineFixtureSupport from './support/pipeline-fixture.cjs';
+import type {Browser} from 'playwright';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {install} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+
+// What the fake server records for a post: the item's path, and the body the page sent.
+type Post = {path: string; body: {note?: string; work_version?: number; requirement_version?: number; attachment_id?: string; stage_visit_id?: string}};
 
 const SIZES = [{width: 1440, height: 940, phone: false}, {width: 390, height: 844, phone: true}];
 // Waits for something the fake server records (a claim, a read) without a fixed sleep.
-async function until(check, ms = 5000) {
+async function until(check: () => boolean, ms = 5000) {
   const end = Date.now() + ms;
   while (!check()) { if (Date.now() > end) throw new Error('timed out waiting for the server to record it'); await new Promise(r => setTimeout(r, 50)); }
 }
 
-async function openReview(browser, {width, height, theme, refuseApprove = false, touch = false, claimedBy = null, validate = false}) {
+async function openReview(browser: Browser, {width, height, theme, refuseApprove = false, touch = false, claimedBy = null, validate = false}: {width: number; height: number; theme: string; refuseApprove?: boolean; touch?: boolean; claimedBy?: string | null; validate?: boolean}) {
   const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', ...(touch ? {isMobile: true, hasTouch: true} : {})});
-  await context.addInitScript(([theme]) => {
+  await context.addInitScript(([theme]: [string]) => {
     try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
-  }, [theme]);
+  }, [theme] as [string]);
   const page = await context.newPage();
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   const state = await install(page, {refuseApprove, claimedBy, validate});
   await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
@@ -43,28 +48,28 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
         const label = `${theme} ${size.width}`;
 
         // The two Message buttons share one row; Mark met is a quiet text button under Approve, outside that row.
-        const toAssignee = await page.locator('[data-review-send="assignee"]').boundingBox();
-        const toManager = await page.locator('[data-review-send="manager"]').boundingBox();
+        const toAssignee = (await page.locator('[data-review-send="assignee"]').boundingBox())!;
+        const toManager = (await page.locator('[data-review-send="manager"]').boundingBox())!;
         // A name that wraps (the manager's, at 390 px) makes the row two lines tall; the row stays one row.
         assert.ok(Math.abs(toAssignee.y - toManager.y) < 2 && toAssignee.height <= 52, label + ': the Message buttons share one row');
         assert.equal(await page.locator('.pipe-review-sendback [data-review-send="met"]').count(), 0, label + ': Mark met is not in the row');
-        const approveBox = await page.locator('.pipe-review-approve').boundingBox();
-        const metBox = await page.locator('.pipe-review-met').boundingBox();
+        const approveBox = (await page.locator('.pipe-review-approve').boundingBox())!;
+        const metBox = (await page.locator('.pipe-review-met').boundingBox())!;
         assert.ok(metBox.y >= approveBox.y + approveBox.height - 1, label + ': Mark met sits under Approve');
 
         // Layout: no sideways scroll; on a phone the decision sits under the attachment, not beside it.
         const scroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
         assert.ok(scroll, 'no horizontal page scroll');
-        const mainBox = await page.locator('.pipe-review-main').boundingBox();
-        const sideBox = await page.locator('.pipe-review-side').boundingBox();
+        const mainBox = (await page.locator('.pipe-review-main').boundingBox())!;
+        const sideBox = (await page.locator('.pipe-review-side').boundingBox())!;
         if (size.phone) assert.ok(sideBox.y >= mainBox.y + mainBox.height - 2, 'the phone stacks the decision below');
         else assert.ok(sideBox.x >= mainBox.x + mainBox.width - 2, 'the desktop puts the decision beside');
         if (size.phone) {
           // A phone: a 44px round × to exit, ‹ › at 44px, and the stage under the count.
-          const exit = await page.locator('.pipe-review-exit').boundingBox();
+          const exit = (await page.locator('.pipe-review-exit').boundingBox())!;
           assert.ok(exit.width === 44 && exit.height === 44, label + ': Exit is a 44px round button');
           for (const sel of ['[data-review-prev]', '[data-review-next]']) {
-            const box = await page.locator(sel).boundingBox();
+            const box = (await page.locator(sel).boundingBox())!;
             assert.ok(box.width === 44 && box.height === 44, label + ': ' + sel + ' is 44px');
           }
           assert.equal((await page.locator('.pipe-review-stage').innerText()).trim(), 'Build', label + ': the stage sits under the count');
@@ -83,8 +88,8 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
         await page.locator('.pipe-review textarea[name=note]').fill('Shot 2 still shows the old card');
         await page.locator('[data-review-send="assignee"]').click();
         await page.waitForFunction(() => document.querySelector('.pipe-review-count')?.textContent.includes('For you · 1 of 1'), null, {timeout: t(5000)});
-        assert.deepEqual(state.posts.map(p => p.path), ['tasks/D52/requirements/r-shots/send-back'], 'send-back posts to the item');
-        assert.equal(state.posts[0].body.note, 'Shot 2 still shows the old card');
+        assert.deepEqual((state.posts as Post[]).map(p => p.path), ['tasks/D52/requirements/r-shots/send-back'], 'send-back posts to the item');
+        assert.equal((state.posts as Post[])[0]!.body.note, 'Shot 2 still shows the old card');
 
         // Approve the last item with ⌘⏎ from the note, then Undo within the toast.
         await page.locator('.pipe-review textarea[name=note]').fill('Looks right');
@@ -92,10 +97,10 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
         await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter');
         await page.waitForSelector('.pipe-review-toast', {timeout: t(5000)});
         assert.match(await page.locator('.pipe-review-toast').innerText(), /Approved\s*·\s*Undo/);
-        assert.equal(state.posts.at(-1).path, 'tasks/D61/requirements/r-spec61/approve', 'approval posts to the item');
+        assert.equal((state.posts as Post[]).at(-1)!.path, 'tasks/D61/requirements/r-spec61/approve', 'approval posts to the item');
         await page.locator('[data-review-undo]').click();
         await page.waitForFunction(() => document.querySelector('.pipe-review-count')?.textContent.includes('For you · 1 of 1'), null, {timeout: t(5000)});
-        assert.equal(state.posts.at(-1).path, 'decisions/dec-1/undo', 'undo posts the decision');
+        assert.equal((state.posts as Post[]).at(-1)!.path, 'decisions/dec-1/undo', 'undo posts the decision');
         assert.equal(await page.locator('.pipe-review-toast').count(), 0, 'the toast goes once undone');
 
         assert.deepEqual(errors, [], 'no page errors');
@@ -106,7 +111,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
     // A touch phone has no keyboard to hint at: Esc and ⌘⏎ are not drawn where no hover is possible.
     {
       const {context, page, errors} = await openReview(browser, {width: 390, height: 844, theme: 'light', touch: true});
-      const drawn = await page.locator('.pipe-review kbd').evaluateAll(els => els.filter(el => el.getClientRects().length > 0).length);
+      const drawn = await page.locator('.pipe-review kbd').evaluateAll((els: Element[]) => els.filter((el: Element) => el.getClientRects().length > 0).length);
       assert.equal(drawn, 0, 'no key hints on a touch phone');
       assert.deepEqual(errors, [], 'touch phone: no page errors');
       await context.close();
@@ -116,7 +121,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
     // note it goes to the server, the item leaves the queue, and the notice names the follow-up. Other stages do not show it.
     {
       const {context, page, state, errors} = await openReview(browser, {width: 1440, height: 940, theme: 'light', validate: true});
-      const dialogs = [];
+      const dialogs: string[] = [];
       page.on('dialog', d => { dialogs.push(d.message()); void d.dismiss(); });
       assert.equal(await page.locator('[data-review-not-validated]').count(), 1, 'Validate shows Not validated');
       await page.locator('[data-review-not-validated]').click();
@@ -125,17 +130,17 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
       assert.equal(state.posts.length, 0, 'an empty note posts nothing');
       await page.locator('.pipe-review textarea[name=note]').fill('Screenshots never validated');
       await page.locator('[data-review-not-validated]').click();
-      await until(() => state.posts.some(p => p.path.endsWith('/not-validated')));
-      assert.deepEqual(state.posts.map(p => p.path), ['tasks/D70/requirements/r-val70/not-validated'], 'Not validated posts to the item');
-      assert.equal(state.posts[0].body.note, 'Screenshots never validated', 'the note is the reason sent');
-      assert.equal(state.posts[0].body.work_version, 3, 'Not validated names the work version the reviewer saw');
-      assert.equal(state.posts[0].body.requirement_version, 1, 'and the requirement version');
-      assert.equal(state.posts[0].body.attachment_id, 'c1', 'and the attachment the reviewer saw');
-      assert.equal(state.posts[0].body.stage_visit_id, 'v-validate', 'and the stage visit');
+      await until(() => (state.posts as Post[]).some(p => p.path.endsWith('/not-validated')));
+      assert.deepEqual((state.posts as Post[]).map(p => p.path), ['tasks/D70/requirements/r-val70/not-validated'], 'Not validated posts to the item');
+      assert.equal((state.posts as Post[])[0]!.body.note, 'Screenshots never validated', 'the note is the reason sent');
+      assert.equal((state.posts as Post[])[0]!.body.work_version, 3, 'Not validated names the work version the reviewer saw');
+      assert.equal((state.posts as Post[])[0]!.body.requirement_version, 1, 'and the requirement version');
+      assert.equal((state.posts as Post[])[0]!.body.attachment_id, 'c1', 'and the attachment the reviewer saw');
+      assert.equal((state.posts as Post[])[0]!.body.stage_visit_id, 'v-validate', 'and the stage visit');
       await page.waitForFunction(() => document.querySelector('.pipe-review-notice')?.textContent.includes('follow-up'), null, {timeout: t(5000)});
       assert.equal((await page.locator('.pipe-review-notice').innerText()).trim(), 'Back to In development · follow-up D71 filed');
       assert.equal(await page.locator('[data-review-not-validated]').count(), 0, 'the next item is not at Validate');
-      assert.equal(await page.locator('.pipe-review-count').first().innerText().then(s => s.trim()), 'For you · 1 of 2');
+      assert.equal(await page.locator('.pipe-review-count').first().innerText().then((s: string) => s.trim()), 'For you · 1 of 2');
       assert.deepEqual(dialogs, [], 'no native dialog');
       assert.deepEqual(errors, [], 'not validated: no page errors');
       await context.close();
@@ -155,7 +160,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
       await page.waitForSelector('.pipe-review-claim', {timeout: t(5000)});
       assert.match(await page.locator('.pipe-review-claim').innerText(), /Bob is reviewing/, 'another reviewer is named');
       assert.equal(await page.locator('.pipe-review-approve').isDisabled(), true, 'Approve waits while another reviewer holds the item');
-      assert.deepEqual(state.posts.filter(p => p.path.endsWith('/approve')), [], 'no approval is sent for a claimed item');
+      assert.deepEqual((state.posts as Post[]).filter(p => p.path.endsWith('/approve')), [], 'no approval is sent for a claimed item');
       assert.deepEqual(errors, [], 'claimed: no page errors');
       await context.close();
     }
@@ -182,7 +187,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
       await new Promise(r => setTimeout(r, 4000));
       await page.locator('.pipe-review-approve').click();
       await page.waitForFunction(() => document.querySelector('.pipe-review-toast')?.textContent.includes('Undo'), null, {timeout: t(5000)});
-      assert.equal(state.posts.at(-1).path, 'tasks/D61/requirements/r-spec61/approve', 'the second approval posts');
+      assert.equal((state.posts as Post[]).at(-1)!.path, 'tasks/D61/requirements/r-spec61/approve', 'the second approval posts');
       await new Promise(r => setTimeout(r, 7000));
       assert.equal(await page.locator('.pipe-review-toast').count(), 1, 'the second Undo window is still open after 7 seconds');
       assert.deepEqual(errors, [], 'undo windows: no page errors');
@@ -196,7 +201,7 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
         try { localStorage.setItem('tico.theme', 'dark'); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
       });
       const page = await context.newPage();
-      const errors = [];
+      const errors: string[] = [];
       page.on('pageerror', e => errors.push(e.message));
       const state = await install(page, {refuseApprove: true});
       await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');

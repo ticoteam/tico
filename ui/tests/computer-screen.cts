@@ -3,22 +3,42 @@
 // so a click reaches the computer at once, with View one tap away; at View a view session and no switch. It draws what
 // a pretend VNC server sends and says when the computer did not answer (close code 4404). Every request and socket is
 // intercepted.
-const {chromium} = require('playwright');
+import type * as PageSupport from './support/page.cjs';
+import type * as RoutesSupport from './support/routes.cjs';
+import type * as FakeVncSupport from './support/fake-vnc.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
+const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs') as typeof FakeVncSupport;
+
+// Page globals from app/settings and app/screen (the page defines them; this spec only reads them).
+declare const SETTINGS_DATA: {machines: {screen: string}[]};
+declare const S: {route: string};
+
+interface Computer {
+  id: string;
+  label: string;
+  owner_id: string;
+  bots: unknown[];
+  platform: string;
+  last_seen_at: string;
+  readiness: Record<string, unknown>;
+  screen: string;
+  screen_available: boolean;
+}
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, ...(process.env.TICO_BROWSER_CHANNEL === undefined ? {channel: 'chrome'} : process.env.TICO_BROWSER_CHANNEL ? {channel: process.env.TICO_BROWSER_CHANNEL} : {})});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const computer = (id, label, more) => ({id, label, owner_id: 'ana', bots: [], platform: 'linux', last_seen_at: new Date().toISOString(),
+    const computer = (id: string, label: string, more?: Partial<Computer>): Computer => ({id, label, owner_id: 'ana', bots: [], platform: 'linux', last_seen_at: new Date().toISOString(),
       readiness: {}, screen: 'off', screen_available: false, ...more});
-    const machines = [computer('c1', 'Build server', {screen_available: true}), computer('c2', 'Old Mac')];
-    const writes = [], sessions = [], heard = [];
+    const machines: Computer[] = [computer('c1', 'Build server', {screen_available: true}), computer('c2', 'Old Mac')];
+    const writes: {mode: string}[] = [], sessions: {control: boolean}[] = [], heard: number[] = [];
     let answer = true;
     await page.routeWebSocket(/\/screen\/ws\?ticket=/, ws => {
       if (answer) fakeVnc(ws, undefined, heard); else ws.close({code: 4404, reason: 'computer did not answer'});
@@ -26,10 +46,10 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     await exposeRoutedSockets(page);
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/novnc/') && fs.existsSync(uiFile(p.slice(1))))
         return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile(p.slice(1)), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -44,12 +64,12 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
       if (p === '/api/v2/needs-you') return json({items: []});
       if (p === '/api/v2/operations') return json({machines, services: []});
       if (p === '/api/v2/computers/c1/screen') {
-        const body = req.postDataJSON(); writes.push(body);
-        machines[0].screen = body.mode;
+        const body = req.postDataJSON() as {mode: string}; writes.push(body);
+        machines[0]!.screen = body.mode;
         return json({id: 'c1', screen: body.mode, screen_available: true});
       }
       if (p === '/api/v2/computers/c1/screen/sessions') {
-        const body = req.postDataJSON(); sessions.push(body);
+        const body = req.postDataJSON() as {control: boolean}; sessions.push(body);
         return json({session_id: 's' + sessions.length, ticket: 't' + sessions.length, control: body.control, width: 1440, height: 900,
                      ws_path: `/api/v2/runners/c1/screen/ws?ticket=t${sessions.length}`});
       }
@@ -68,7 +88,7 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     // All three stay choices here; the bot page's Turn on picks Control only.
     await page.locator('[data-screen-toggle=c1]').check();
-    await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'control');
+    await page.waitForFunction(() => SETTINGS_DATA.machines[0]!.screen === 'control');
     assert.deepEqual(writes, [{mode: 'control'}]);
     await page.locator('#set-machines .bot-screen-open').click();
     // The viewer at Control: a control session first, the picture drawn, and a click reaches the computer at once.
@@ -103,7 +123,7 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=c1]').click();
     await page.locator('[data-screen-mode=c1]').selectOption('view');
-    await page.waitForFunction(() => SETTINGS_DATA.machines[0].screen === 'view');
+    await page.waitForFunction(() => SETTINGS_DATA.machines[0]!.screen === 'view');
     await page.locator('#set-machines .bot-screen-open').click();
     await page.waitForFunction(() => document.querySelector('#scr-state')?.textContent === 'View');
     assert.deepEqual(sessions.at(-1), {control: false});

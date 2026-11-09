@@ -6,28 +6,39 @@
 // first, a page and More, a folded failure with its count, and a tap opens each step's line. The minute poll skips a
 // hidden page and reads once on coming back; a poll leaves a focused interval select alone. A member reads it with every
 // control off; a phone fits.
-const {chromium} = require('playwright');
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type {Page} from 'playwright';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {openAutomations, PHONE, DESKTOP, sideways} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
-const until = async (fn, what, ms = 6000) => {
+type HeartBeat = {id: string; started_at: string; total_ms: number; did: number; failed: number;
+  steps: {key: string; name: string; text: string; ms: number; error: string | null}[]};
+type HeartDb = {interval_s: number; beats: HeartBeat[]; beats_24h: number};
+type HeartPageWin = {ticoTheme: {set: (v: string) => void}};
+// Page globals from ui/app/automations-heartbeat.ts, which the page loads.
+declare const AU: {hbBusy: boolean; hbPoll: unknown};
+declare function auHeartLoad(au: typeof AU): Promise<void>;
+declare function auHeartPoll(au: typeof AU): void;
+
+const until = async (fn: () => boolean | Promise<boolean>, what: string, ms = 6000) => {
   for (const end = Date.now() + ms; !(await fn());) {
     if (Date.now() > end) throw new Error('timed out waiting for ' + what);
     await new Promise(r => setTimeout(r, 50));
   }
 };
-const idle = page => page.waitForFunction(() => AU && !AU.hbBusy);
+const idle = (page: Page) => page.waitForFunction(() => AU && !AU.hbBusy);
 // Screenshots in both themes, with animations stopped.
-async function themed(page, name) {
+async function themed(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   require('node:fs').mkdirSync(dir, {recursive: true});
   for (const theme of ['dark', 'light']) {
-    await page.evaluate(v => window.ticoTheme.set(v), theme);
+    await page.evaluate(v => (window as unknown as HeartPageWin).ticoTheme.set(v), theme);
     await page.screenshot({path: path.join(dir, `${name}-${theme}.png`), animations: 'disabled'});
   }
-  await page.evaluate(() => window.ticoTheme.set('dark'));
+  await page.evaluate(() => (window as unknown as HeartPageWin).ticoTheme.set('dark'));
 }
 
 (async () => {
@@ -61,11 +72,11 @@ async function themed(page, name) {
       assert.equal(await page.locator('[data-hb-interval]').inputValue(), '10');
       assert.deepEqual(await page.locator('[data-hb-interval] option').allInnerTexts(), ['5 s', '10 s', '15 s', '20 s', '30 s', '45 s', '60 s']);
       // Grouped by kind, in step order inside each.
-      assert.deepEqual(await page.locator('.hb-group').evaluateAll(g => g.map(x => x.dataset.hbKind)), ['due', 'recovery', 'poll']);
+      assert.deepEqual(await page.locator('.hb-group').evaluateAll(g => (g as HTMLElement[]).map(x => x.dataset.hbKind)), ['due', 'recovery', 'poll']);
       assert.deepEqual(await page.locator('.hb-kind').evaluateAll(h => h.map(x => x.textContent)), ['Due times', 'Recovery', 'Outside polls']);
-      assert.deepEqual(await page.locator('.mt-step').evaluateAll(r => r.map(x => x.dataset.hbStep)),
+      assert.deepEqual(await page.locator('.mt-step').evaluateAll(r => (r as HTMLElement[]).map(x => x.dataset.hbStep)),
         ['due_reminders', 'ask_deadlines', 'stall_checks', 'queue_check', 'github_sync']);
-      const step = k => page.locator(`.mt-step[data-hb-step="${k}"]`);
+      const step = (k: string) => page.locator(`.mt-step[data-hb-step="${k}"]`);
       assert.match(await step('due_reminders').innerText(), /Due reminders[\s\S]*1 reminder sent[\s\S]*Every beat[\s\S]*24 did[\s\S]*0 failed[\s\S]*3 ms/);
       assert.match(await step('github_sync').locator('[data-hb-ms]').innerText(), /^1\.2 s$/);
       assert.match(await step('stall_checks').locator('[data-hb-every]').innerText(), /^Every minute$/);
@@ -123,7 +134,7 @@ async function themed(page, name) {
       assert.ok(writes.every(w => w.method === 'PUT'), 'paging writes nothing');
 
       // The safety poll: a new beat lands on top, the open one stays open and the older page stays.
-      db.heart.beats.unshift({id: 'hbt_101', started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
+      (db.heart as HeartDb).beats.unshift({id: 'hbt_101', started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
         steps: [{key: 'due_reminders', name: 'Due reminders', text: '2 reminders sent', ms: 4, error: null}]});
       await page.evaluate(() => auHeartLoad(AU));
       assert.equal(await page.locator('tr.au-rr').first().getAttribute('data-hb-beat'), 'hbt_101');
@@ -132,17 +143,17 @@ async function themed(page, name) {
       assert.equal(await page.evaluate(() => !!AU.hbPoll), true, 'polls while open');
 
       // A hidden page skips the minute's read; coming back reads once.
-      const addBeat = id => db.heart.beats.unshift({id, started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
+      const addBeat = (id: string) => (db.heart as HeartDb).beats.unshift({id, started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
         steps: [{key: 'due_reminders', name: 'Due reminders', text: '3 reminders sent', ms: 4, error: null}]});
       addBeat('hbt_102');
       await page.evaluate(async () => {
         Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
         const real = window.setTimeout;
-        let tick = null;
-        window.setTimeout = fn => { tick = fn; return 0; };
+        let tick = null as (() => void) | null;
+        window.setTimeout = ((fn: () => void) => { tick = fn; return 0; }) as unknown as typeof window.setTimeout;
         auHeartPoll(AU);
         window.setTimeout = real;
-        await tick();
+        await tick!();
       });
       assert.equal(await page.locator('tr.au-rr').first().getAttribute('data-hb-beat'), 'hbt_101', 'no read while hidden');
       await page.evaluate(() => {
@@ -154,17 +165,17 @@ async function themed(page, name) {
       // A poll while the interval select is focused leaves it alone and moves only the meta line.
       await page.getByRole('tab', {name: 'Steps'}).click();
       await page.waitForSelector('.mt-step[data-hb-step]');
-      db.heart.beats_24h = 9000;
+      (db.heart as HeartDb).beats_24h = 9000;
       const kept = await page.evaluate(async () => {
-        const sel = document.querySelector('[data-hb-interval]');
+        const sel = document.querySelector<HTMLElement>('[data-hb-interval]')!;
         sel.dataset.mark = '1';
         sel.focus();
         await auHeartLoad(AU);
-        return document.querySelector('[data-hb-interval]').dataset.mark;
+        return document.querySelector<HTMLElement>('[data-hb-interval]')!.dataset.mark;
       });
       assert.equal(kept, '1');
       assert.match(await page.locator('[data-hb-meta]').innerText(), /9,000 in 24 h$/);
-      await page.evaluate(async () => { document.activeElement.blur(); await auHeartLoad(AU); });
+      await page.evaluate(async () => { (document.activeElement as HTMLElement).blur(); await auHeartLoad(AU); });
       assert.equal(await page.locator('[data-hb-interval]').getAttribute('data-mark'), null, 'drawn again once it is left');
 
       // Back on the list, the row has the saved interval and the poll stops.
@@ -214,7 +225,7 @@ async function themed(page, name) {
       const {page, errors} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true});
       await page.waitForSelector('tr.au-row[data-row="system-jobs"]');
       assert.equal(await page.locator('tr.au-row[data-row="heartbeat"]').count(), 0);
-      assert.equal(await page.locator('tr.au-row[data-row="system-jobs"]').evaluate(r => r.previousElementSibling?.dataset.row), 'maintenance');
+      assert.equal(await page.locator('tr.au-row[data-row="system-jobs"]').evaluate(r => (r.previousElementSibling as HTMLElement | null)?.dataset.row), 'maintenance');
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -4,34 +4,46 @@
 // (Collect is always on), beta and consent pills; a row opens How often and, for Find stuck and Dream, the
 // number of bots; Learn shows its beta numbers. Each control saves one PATCH; Run now posts and follows the run; Runs
 // lists the run history and a tap opens each step's line. A member reads it with every control off; a phone fits.
-const {chromium} = require('playwright');
+import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type {Page} from 'playwright';
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs');
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
 
-const until = async (fn, what, ms = 6000) => {
+type MaintStep = {key: string; consent?: boolean};
+type MaintRun = {id: string; occurrence_key?: string; trigger?: string; step: string | null; started_at: string;
+  finished_at: string | null; heartbeat_at: string; ok: boolean | null; result: string; cost_usd: number; steps: unknown[]};
+type MaintDb = {live: MaintRun | null; runs: MaintRun[]; steps: MaintStep[]};
+type MaintWriteBody = {steps?: {max_bots?: number}[]};
+type MaintPageWin = {ticoTheme: {set: (v: string) => void}};
+// Page global from ui/app/automations-maintenance.ts, which the page loads.
+declare const AU: {mtBusy: boolean};
+declare function auMaintLoad(au: typeof AU): Promise<void>;
+
+const until = async (fn: () => boolean | Promise<boolean>, what: string, ms = 6000) => {
   for (const end = Date.now() + ms; !(await fn());) {
     if (Date.now() > end) throw new Error('timed out waiting for ' + what);
     await new Promise(r => setTimeout(r, 50));
   }
 };
-const idle = page => page.waitForFunction(() => AU && !AU.mtBusy);
-const steps = page => page.locator('.mt-step').evaluateAll(r => r.map(x => x.dataset.mtStep));
-const finish = mt => {
+const idle = (page: Page) => page.waitForFunction(() => AU && !AU.mtBusy);
+const steps = (page: Page) => page.locator('.mt-step').evaluateAll(r => (r as HTMLElement[]).map(x => x.dataset.mtStep));
+const finish = (mt: MaintDb) => {
   const at = new Date().toISOString();
-  Object.assign(mt.live, {finished_at: at, heartbeat_at: at, ok: true, result: mt.live.steps.length ? '1 ran' : 'Nothing ran'});
+  Object.assign(mt.live!, {finished_at: at, heartbeat_at: at, ok: true, result: mt.live!.steps.length ? '1 ran' : 'Nothing ran'});
   mt.live = null;
 };
 // Screenshots in both themes, with animations stopped.
-async function themed(page, name) {
+async function themed(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   require('node:fs').mkdirSync(dir, {recursive: true});
   for (const theme of ['dark', 'light']) {
-    await page.evaluate(v => window.ticoTheme.set(v), theme);
+    await page.evaluate(v => (window as unknown as MaintPageWin).ticoTheme.set(v), theme);
     await page.screenshot({path: path.join(dir, `${name}-${theme}.png`), animations: 'disabled'});
   }
-  await page.evaluate(() => window.ticoTheme.set('dark'));
+  await page.evaluate(() => (window as unknown as MaintPageWin).ticoTheme.set('dark'));
 }
 
 (async () => {
@@ -52,7 +64,7 @@ async function themed(page, name) {
       await page.waitForSelector('tr.au-arow[data-aid="maintenance"]');
       const first = page.locator('tr.au-arow[data-aid="maintenance"]').first();
       assert.match(await first.innerText(), /Maintenance/);
-      const tapped = (await first.getAttribute('data-arun')).slice(4);
+      const tapped = (await first.getAttribute('data-arun'))!.slice(4);
       await first.click();
       await page.waitForSelector(`tr.au-rr.open[data-mt-run="${tapped}"]`);
       await page.goBack();
@@ -66,13 +78,13 @@ async function themed(page, name) {
       assert.match(await page.locator('[data-mt-meta]').innerText(), /^Last run .+ · next .+/);
       assert.deepEqual(await steps(page), ['collect', 'clean_up', 'check_health', 'find_stuck', 'learn', 'suggest', 'update', 'dream']);
       assert.deepEqual(await page.locator('.mt-step .mt-n').allInnerTexts(), ['1', '2', '3', '4', '5', '6', '7', '8']);
-      const step = k => page.locator(`.mt-step[data-mt-step="${k}"]`);
+      const step = (k: string) => page.locator(`.mt-step[data-mt-step="${k}"]`);
       assert.equal(await step('collect').locator('input[role="switch"]').count(), 0, 'Collect has no switch');
       assert.match(await step('collect').innerText(), /Always/);
       assert.equal(await page.locator('.mt-step [data-mt-on]').count(), 7);
       assert.match(await step('learn').locator('.pill.beta').innerText(), /Beta/);
       assert.equal(await step('learn').locator('[data-mt-on]').isChecked(), false, 'Learn is off by default');
-      const suggest = db.maint.steps.find(x => x.key === 'suggest');
+      const suggest = (db.maint as MaintDb).steps.find(x => x.key === 'suggest')!;
       assert.equal(await step('suggest').locator('[data-mt-consent]').getAttribute('href'), '#/settings/general/settings-privacy');
       suggest.consent = true;
       await page.evaluate(() => auMaintLoad(AU));
@@ -94,7 +106,7 @@ async function themed(page, name) {
       assert.equal(await page.locator('[data-mt-pause]').isDisabled(), true);
       assert.equal(await page.locator('.mt select:not([disabled]),.mt input:not([disabled])').count(), 0, 'busy disables settings');
       // A queued change redraws the saved value and sends nothing.
-      await page.locator('[data-mt-schedule]').evaluate(t => { t.value = '6h'; t.dispatchEvent(new Event('change', {bubbles: true})); });
+      await page.locator('[data-mt-schedule]').evaluate((t: HTMLSelectElement) => { t.value = '6h'; t.dispatchEvent(new Event('change', {bubbles: true})); });
       assert.equal(await page.locator('[data-mt-schedule]').inputValue(), 'hourly');
       assert.equal(await page.locator('[data-mt-schedule]').isDisabled(), true);
       assert.equal(writes.length, 1);
@@ -106,7 +118,7 @@ async function themed(page, name) {
       // A switch.
       await step('check_health').locator('[data-mt-on]').click();
       await until(() => writes.length === 2, 'the switch save');
-      assert.deepEqual(writes.at(-1).body, {steps: [{key: 'check_health', enabled: false}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'check_health', enabled: false}]});
       await page.waitForSelector('.mt-step.off[data-mt-step="check_health"]');
       await idle(page);
 
@@ -120,7 +132,7 @@ async function themed(page, name) {
       assert.equal(await bots.inputValue(), '10');
       await bots.fill('5'); await bots.press('Tab');
       await until(() => writes.length === 3, 'the bots save');
-      assert.deepEqual(writes.at(-1).body, {steps: [{key: 'find_stuck', max_bots: 5}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'find_stuck', max_bots: 5}]});
       await idle(page);
       assert.equal(await step('find_stuck').locator('[data-mt-bots]').inputValue(), '5');
       await step('find_stuck').locator('[data-mt-bots]').fill('25');
@@ -130,7 +142,7 @@ async function themed(page, name) {
       const every = step('find_stuck').locator('[data-mt-every]');
       await every.fill('12'); await every.press('Tab');
       await until(() => writes.length === 4, 'the custom save');
-      assert.deepEqual(writes.at(-1).body, {steps: [{key: 'find_stuck', frequency: 'custom', custom_every: 12, custom_unit: 'hours'}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'find_stuck', frequency: 'custom', custom_every: 12, custom_unit: 'hours'}]});
       await idle(page);
       assert.match(await step('find_stuck').locator('.mt-when').innerText(), /Every 12 hours/);
 
@@ -140,16 +152,16 @@ async function themed(page, name) {
       assert.equal(await step('update').locator('[data-mt-bots]').count(), 0, 'Update takes no number of bots');
       await step('update').locator('[data-mt-often]').selectOption('week');
       await until(() => writes.length === 5, 'the How often save');
-      assert.deepEqual(writes.at(-1).body, {steps: [{key: 'update', frequency: 'week'}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'update', frequency: 'week'}]});
       await idle(page);
       assert.match(await step('update').locator('.mt-when').innerText(), /Once a week/);
       await step('update').locator('[data-mt-often]').selectOption('custom');
       await until(() => writes.length === 6, 'the custom How often save');
-      assert.deepEqual(writes.at(-1).body, {steps: [{key: 'update', frequency: 'custom', custom_every: 2, custom_unit: 'hours'}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'update', frequency: 'custom', custom_every: 2, custom_unit: 'hours'}]});
       await idle(page);
       await step('update').locator('[data-mt-unit]').selectOption('days');
       await until(() => writes.length === 7, 'the unit save');
-      assert.deepEqual(writes.at(-1).body, {steps: [{key: 'update', frequency: 'custom', custom_every: 2, custom_unit: 'days'}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'update', frequency: 'custom', custom_every: 2, custom_unit: 'days'}]});
       await idle(page);
       assert.match(await step('update').locator('.mt-when').innerText(), /Every 2 days/);
       // Every-run steps have no How often to pick.
@@ -172,7 +184,7 @@ async function themed(page, name) {
       assert.equal(await page.locator('[data-mt-cap]').inputValue(), '50');
       await page.selectOption('[data-mt-cap]', '100');
       await until(() => writes.length === 8, 'the cap save');
-      assert.deepEqual(writes.at(-1).body, {monthly_cap_usd: 100});
+      assert.deepEqual(writes.at(-1)!.body, {monthly_cap_usd: 100});
       await idle(page);
       assert.equal(await page.locator('[data-mt-cap]').inputValue(), '100');
       await themed(page, 'maintenance-settings-desktop');
@@ -181,12 +193,12 @@ async function themed(page, name) {
       page.once('dialog', d => d.accept());
       await page.locator('[data-mt-pause]').click();
       await until(() => writes.length === 9, 'the pause save');
-      assert.deepEqual(writes.at(-1).body, {paused: true});
+      assert.deepEqual(writes.at(-1)!.body, {paused: true});
       await idle(page);
       assert.match(await page.locator('[data-mt-meta]').innerText(), /paused/);
       await page.locator('[data-mt-pause]').click();
       await until(() => writes.length === 10, 'the unpause save');
-      assert.deepEqual(writes.at(-1).body, {paused: false});
+      assert.deepEqual(writes.at(-1)!.body, {paused: false});
       await idle(page);
 
       // Run now: one POST, Running… until the follow reads it finished.
@@ -195,7 +207,7 @@ async function themed(page, name) {
       assert.deepEqual(writes.at(-1), {method: 'POST', path: '/api/v2/maintenance/run', body: {}});
       await page.waitForSelector('[data-mt-now][disabled]');
       assert.match(await page.locator('[data-mt-now]').innerText(), /Running/);
-      finish(db.maint);
+      finish(db.maint as MaintDb);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       assert.equal(await page.locator('[data-mt-now]').innerText(), 'Run now');
 
@@ -234,9 +246,9 @@ async function themed(page, name) {
       const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true});
       await page.waitForSelector('tr.au-row[data-row="maintenance"]');
       const at = new Date().toISOString();
-      db.maint.live = {id: 'mrun_live', occurrence_key: 'schedule:' + at, trigger: 'schedule', step: null,
+      (db.maint as MaintDb).live = {id: 'mrun_live', occurrence_key: 'schedule:' + at, trigger: 'schedule', step: null,
         started_at: at, finished_at: null, heartbeat_at: at, ok: null, result: '', cost_usd: 0, steps: []};
-      db.maint.runs.unshift(db.maint.live);
+      (db.maint as MaintDb).runs.unshift((db.maint as MaintDb).live!);
       await page.locator('tr.au-row[data-row="maintenance"] a').click();
       await page.waitForSelector('[data-mt-now][disabled]');
       assert.match(await page.locator('[data-mt-meta]').innerText(), /Running/);
@@ -246,7 +258,7 @@ async function themed(page, name) {
       await page.locator('[data-mt-more]').click();
       await until(async () => await page.locator('tr.au-rr').count() === 31, 'older runs');
       await page.locator('.au-pane').evaluate(p => { p.scrollTop = 80; });
-      finish(db.maint);
+      finish(db.maint as MaintDb);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       await page.waitForSelector('tr.au-rr[data-mt-run="mrun_live"] .au-dot.ok');
       assert.equal(await page.locator('tr.au-rr').count(), 31);
@@ -271,7 +283,7 @@ async function themed(page, name) {
       await page.waitForSelector('.mt-step');
       await page.locator('[data-mt-now]').click();
       await page.waitForSelector('[data-mt-now][disabled]');
-      const step = k => page.locator(`.mt-step[data-mt-step="${k}"]`);
+      const step = (k: string) => page.locator(`.mt-step[data-mt-step="${k}"]`);
       await step('find_stuck').locator('[data-mt-open]').click();
       const bots = step('find_stuck').locator('[data-mt-bots]');
       await bots.fill('7');
@@ -279,8 +291,8 @@ async function themed(page, name) {
       assert.equal(await bots.inputValue(), '7');
       assert.equal(await bots.evaluate(el => el === document.activeElement), true, 'the field keeps focus');
       await bots.press('Tab');
-      await until(() => writes.some(w => w.body?.steps?.[0]?.max_bots === 7), 'the bots save');
-      finish(db.maint);
+      await until(() => writes.some(w => (w.body as MaintWriteBody).steps?.[0]?.max_bots === 7), 'the bots save');
+      finish(db.maint as MaintDb);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       await page.getByRole('tab', {name: 'Runs'}).click();
       await page.waitForSelector('tr.au-rr[data-mt-run="mrun_now"]');
@@ -324,13 +336,13 @@ async function themed(page, name) {
     }
 
     // System jobs sits beside Maintenance: a built-in row that opens in place on Tico's own jobs (settings-recurring.js).
-    for (const [viewport, size] of [[DESKTOP, 'desktop'], [PHONE, 'phone']]) {
+    for (const [viewport, size] of [[DESKTOP, 'desktop'], [PHONE, 'phone']] as const) {
       const {page, errors} = await openAutomations(browser, {viewport, maintenance: true});
       await page.waitForSelector('tr.au-row[data-row="system-jobs"]');
       for (const id of ['maintenance', 'system-jobs'])
         assert.equal(await page.locator(`tr.au-row[data-row="${id}"] .pill`, {hasText: 'Built-in'}).count(), 1, id + ' says Built-in');
-      assert.equal(await page.locator('tr.au-row[data-row="system-jobs"]').evaluate(r => r.previousElementSibling?.dataset.row || r.previousElementSibling?.dataset.agrp), 'maintenance');
-      await page.evaluate(() => window.ticoTheme.set('dark'));
+      assert.equal(await page.locator('tr.au-row[data-row="system-jobs"]').evaluate(r => (r.previousElementSibling as HTMLElement | null)?.dataset.row || (r.previousElementSibling as HTMLElement | null)?.dataset.agrp), 'maintenance');
+      await page.evaluate(() => (window as unknown as MaintPageWin).ticoTheme.set('dark'));
       assert.equal(await sideways(page), false);
       await shot(page, `automations-builtins-${size}-dark`);
       await page.locator('tr.au-row[data-row="system-jobs"] a').click();
