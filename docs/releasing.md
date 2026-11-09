@@ -82,7 +82,7 @@ Tico's own releases (ticoteam/tico) ship from release windows (one every hour, 1
   a file a failing test uses (a review, so Tico routes it to the pull request's owner). With more than three such
   pull requests and only pytest tests failing, the bisect job on RunsOn runs the failing tests at the commits between
   the last green run and the red one, twice each, and reviews only the merge where they first fail. A mix of results is
-  flaky: nothing is reviewed, and the test is a candidate for `scripts/flaky-tests.json`. One open `main-red` issue lists
+  flaky: nothing is reviewed, and the test is a candidate for `ci/quarantine/` (see Quarantined tests). One open `main-red` issue lists
   the suspects, the verdict and the likely flaky tests. The next green run on main closes it. See
   `scripts/main_red.py`.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update

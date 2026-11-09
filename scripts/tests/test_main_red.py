@@ -482,7 +482,7 @@ def test_a_mixed_probe_is_flaky_and_posts_nothing(tmp_path, monkeypatch):
     assert result["bisect"] == "flaky"
     assert api.posts == []
     body = api.issue_bodies[-1]
-    assert "scripts/flaky-tests.json" in body and "`%s`" % TEST_A in body
+    assert "ci/quarantine/" in body and "`%s`" % TEST_A in body
 
 
 def test_a_red_candidate_that_passes_twice_is_flaky_and_posts_nothing(tmp_path, monkeypatch):
