@@ -508,7 +508,10 @@ async function taskSave(d, id, body, then, field) {
 // open to the steps behind them), what changed is a one-line marker between them, and while the owner's run works a
 // "Working" line shows its newest step, with Stop for whoever may stop it. The box says it in the task (a comment),
 // which wakes its bot. `taskChatStop` and `taskChatLoad` keep their names: the router and the chat cards call them.
-/** @type {any} bridged: ui/app/refresh.ts reads it on every live change; typed when this file converts */ let TASK_CHAT = null;
+/** The open task's conversation: ui/app/refresh.ts reads it on every live change. */
+// The fields read in other files (data, rendered, cid, stopped...) are not typed here yet: unknown until those files convert.
+interface TaskChatState { dialog: HTMLDialogElement & {taskLive?: unknown; [key: string]: unknown}; host: Element | null; path: string; id: unknown; poll: number; sending: boolean; reading: boolean; liveOff?: () => void; [key: string]: unknown; }
+let TASK_CHAT: TaskChatState | null = null;
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 const TASK_DRAFTS = new Map();         // an unsent comment, per task, kept across redraws until it is sent or cleared
 function taskChatStop() {

@@ -327,6 +327,51 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
     return made["id"], "opened"
 
 
+def private_finance_run(c, who) -> bool:
+    """Whether a run may make Finance actions (`hub finance act`) while it works the Bookkeeper's own private work: the
+    Books check and Watch tasks, which the system opens for it (`deliver`) and no person files. Every task the run
+    carries must be one of them, and the run must be the Bookkeeper's own; anything else keeps the private refusal.
+    Nothing here widens who reads a task or lets anyone publish it: the task stays private (task_privacy.guard_write)."""
+    from . import task_privacy as TP
+
+    if not getattr(who, "attempt_id", None) or who.role != "bot" or who.actor != ACTOR:
+        return False
+    carried = TP.attempt_tasks(c, who.attempt_id)
+    return bool(carried) and all(_own_private_work(c, tid) for tid in carried)
+
+
+# The Finance actions a private Books check or Watch run may make: the categorize and receipt-match writes its checks
+# need. Every other kind is refused from there, money included (a bill approval, a payment, a card): the Bookkeeper
+# does not spend or approve from work no person filed (Chris, Nov 8).
+PRIVATE_FINANCE_KINDS = frozenset({"categorize", "attach"})
+PRIVATE_FINANCE_REFUSAL = (
+    "The Books check and Watch may only categorize rows (never ignore one) and attach receipts from their private task; "
+    "this action is refused there."
+)
+
+
+def private_finance_kind_allowed(c, who, kind: str, payload=None) -> bool:
+    """Whether this action may run for `who`: anything outside a private Books check or Watch run; inside one, only
+    PRIVATE_FINANCE_KINDS, and a categorize never ignores a row (ignoring reverses the row's entry, so a row a payment
+    paid would go back to owed)."""
+    if not private_finance_run(c, who):
+        return True
+    if kind not in PRIVATE_FINANCE_KINDS:
+        return False
+    return not (kind == "categorize" and isinstance(payload, dict) and payload.get("ignore"))
+
+
+def _own_private_work(c, task_id: str) -> bool:
+    row = H.task(c, task_id)
+    return bool(
+        row
+        and row["owner_id"] == ACTOR
+        and row["requester_id"] == H.KEEPER
+        and H.task_private(c, row)
+        and row["title"].startswith((TITLE + " (", WATCH_TITLE + " ("))
+    )
+
+
 # ----------------------------------------------------------------------------- watch and the rules digest
 WATCH_HINTS = {
     "runway": "cash covers little burn: tell the owner once, with the number",
