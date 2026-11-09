@@ -1,6 +1,8 @@
 """Closing or finishing a task closes open descendants, with the usual history and close permissions."""
 
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -10,14 +12,14 @@ from backend import task_reads
 from backend import task_relations as TR
 from backend.config import Settings
 from backend.store import Store
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 ANA, BEN, CMO, SEO = "human:ana", "human:ben", "bot:cmo", "bot:seo"
 
 
-def hub(path):
+def _built_hub(path):
     # The full schema, so a subtask's reader is worked out as the hub does (bot access reads bot_config).
     Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
     c = H.connect(path)
@@ -28,7 +30,32 @@ def hub(path):
         {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cmo", "seo")},
         {"people": [{"id": "ana", "email": "ana@acme.example"}, {"id": "ben", "email": "ben@acme.example"}]},
     )
+    c.commit()
     return c
+
+
+_TEMPLATE = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _hub_template(tmp_path_factory):
+    """Where this module's one built hub lives; hub() builds it on first use (once per worker), never shared beyond."""
+    _TEMPLATE["factory"] = tmp_path_factory
+    yield
+    _TEMPLATE.clear()
+
+
+def hub(path):
+    """A fresh hub at `path`: a copy (SQLite backup) of this module's built hub, so each test still starts from the same
+    empty, fully initialized database without paying Store.initialize again."""
+    if "path" not in _TEMPLATE:
+        template = _TEMPLATE["factory"].mktemp("finish-children-hub") / "hub.db"
+        with closing(_built_hub(template)):
+            pass
+        _TEMPLATE["path"] = template
+    with closing(sqlite3.connect(_TEMPLATE["path"])) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    return H.connect(path)
 
 
 def make(c, actor, title, owner, parent=None):
@@ -146,7 +173,7 @@ def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_i
     )
     assert not H.task_private_readable(c, ANA, secret)
     before = [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, visible, secret)]
-    with pytest.raises(H.Refused, match="The open subtask a subtask is not yours") as exc:
+    with pytest.raises(H.Refused, match="An open subtask under it is not yours to close") as exc:
         if operation == "close":
             H.task_close(c, ANA, parent["id"])
         else:
@@ -419,7 +446,7 @@ def test_cascade_bumps_child_version_and_rejects_a_prepared_update(api, operatio
 
 @pytest.mark.parametrize("run_state", ["leased", "running", "input"])
 def test_a_cascaded_child_with_a_live_run_gets_the_direct_close_notice(api, run_state):
-    from backend.tests.test_api import assign, claim, ready, runner
+    from backend.tests.helpers.api import assign, claim, ready, runner
 
     machine = runner(api)
     assign(api, machine, "cpo")
@@ -456,8 +483,8 @@ def test_a_cascaded_child_with_a_live_run_gets_the_direct_close_notice(api, run_
 
 
 def test_a_runner_goal_finish_keeps_its_event_batch_and_final_result_with_unclosable_children(api):
-    from backend.tests.test_api import claim
-    from backend.tests.test_chat_goals import task_goal_world
+    from backend.tests.helpers.api import claim
+    from backend.tests.helpers.chat_goals import task_goal_world
 
     machine, parent = task_goal_world(api)
     attempt = claim(api, machine)
@@ -709,7 +736,7 @@ def test_rolled_back_completion_does_not_suppress_a_later_unblock_in_the_same_wr
     "error", [H.Refused("close", "State changed after preflight"), RuntimeError("Close hook failed")]
 )
 def test_automatic_finish_rolls_back_a_failed_descendant_and_its_queued_triggers(api, monkeypatch, error):
-    from backend.tests.test_task_trigger_rules import rule
+    from backend.tests.helpers.task_trigger_rules import rule
 
     with api.app.state.store.transaction() as c:
         parent = make(c, "bot:ops", "Plan the launch", "bot:ops")

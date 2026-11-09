@@ -81,7 +81,13 @@ from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, route as error_route
-from .execution import Execution, bot_repository, flag_cut, reset_bot_sessions
+from .execution import (
+    AWAKE_GAP,
+    Execution,
+    bot_repository,
+    flag_cut,
+    reset_bot_sessions,
+)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -106,6 +112,7 @@ from .screen import listing as screen_listing
 from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
+from .github_app import CALLBACK_PATH as GITHUB_APP_CALLBACK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, encode
@@ -176,7 +183,7 @@ def create_app(settings=None):
         # The default pool is min(32, cpus + 4) threads, about 6 on the server. Long waits (every
         # open chat stream's polls, uploads) filled it, and
         # every request's sign-in queued behind them for seconds. Give the loop a
-        # roomier pool, and sign-in its own (AUTH_POOL below).
+        # roomier pool, and sign-in its own (app.state.auth_pool, made below and shut down on the way out).
         from concurrent.futures import ThreadPoolExecutor
 
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico"))
@@ -459,9 +466,19 @@ def create_app(settings=None):
             from . import demo
 
             demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
+        # Sign-in's own threads, one pool per run of the app: an app built and served again and again (a demo build,
+        # every test) would otherwise keep 16 idle threads, and the app they hold, for the life of the process.
+        # A test can run the same app's lifespan inside another (two clients on one app), so each run keeps its own
+        # pool and clears the shared slot only while that slot is still its own.
+        auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+        app.state.auth_pool = auth_pool
         try:
             yield
         finally:
+            # First, so nothing below that raises can skip it; requests are done by the time the server shuts down.
+            if app.state.auth_pool is auth_pool:
+                app.state.auth_pool = None
+            auth_pool.shutdown(wait=False, cancel_futures=True)
             stop.set()
             if start_jobs_task:
                 await start_jobs_task  # short, and each in its own transaction: let it finish
@@ -553,18 +570,7 @@ def create_app(settings=None):
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # Field names and reasons are useful; invalid input can hold credentials and is never echoed.
-        def reason(error):
-            if (
-                error["type"] == "extra_forbidden"
-                and tuple(error["loc"])[-1:] == ("manager",)
-                and request.url.path.startswith("/api/v2/task-types")
-            ):
-                return M.MANAGER_FIXED
-            return error["msg"]
-
-        detail = "; ".join(
-            ".".join(str(part) for part in error["loc"]) + ": " + reason(error) for error in exc.errors()
-        )
+        detail = "; ".join(".".join(str(part) for part in error["loc"]) + ": " + error["msg"] for error in exc.errors())
         return JSONResponse({"error": {"code": "validation", "detail": detail, "retryable": False}}, status_code=422)
 
     app.state.observability = telemetry
@@ -696,10 +702,9 @@ def create_app(settings=None):
         "script-src " + " ".join(["'self'", *hashes]) + "; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
     )
 
-    from concurrent.futures import ThreadPoolExecutor
     from .timing import Timing
 
-    AUTH_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
+    app.state.auth_pool = None  # the lifespan's own, while it runs; outside it sign-in uses the loop's default pool
     app.state.timing = Timing()
     app.state.timing.recorder = recorder
     app.state.flight = recorder
@@ -866,9 +871,20 @@ def create_app(settings=None):
             )
             if request.url.path != "/api/v2/runners/enroll" and not agent_door:
                 began = time.perf_counter()
-                who = await asyncio.get_running_loop().run_in_executor(
-                    AUTH_POOL, auth.authenticate, request.headers, request.url.path, request.method
-                )
+                try:
+                    who = await asyncio.get_running_loop().run_in_executor(
+                        app.state.auth_pool, auth.authenticate, request.headers, request.url.path, request.method
+                    )
+                except Problem as exc:
+                    # GitHub's return for the App's setup (backend/github_app.py) comes in the browser, which may hold no owner
+                    # session: only the missing identity passes, and the route parks the code. Any other refusal stands.
+                    if (
+                        exc.code != "identity"
+                        or request.url.path != GITHUB_APP_CALLBACK_PATH
+                        or request.method != "GET"
+                    ):
+                        raise
+                    return await call_next(request)
                 if who.support:
                     # Again on the path as sent, still percent-encoded: the gate then reads the address the router
                     # will, not a decoded one that could differ from it.
@@ -2110,7 +2126,7 @@ def create_app(settings=None):
         """Online computers counted by state (backend/runner_versions.py): current, updating, needs_update, ..."""
         counts = {}
         with store.read() as c:
-            cutoff = H.shift(H.now(), seconds=-views.AWAKE_GAP)
+            cutoff = H.shift(H.now(), seconds=-AWAKE_GAP)
             known = runner_versions.load(c)
             for row in c.execute(
                 "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)
@@ -3620,7 +3636,8 @@ def create_app(settings=None):
             due = delivery.defer(c, owner, "task", row["id"], task_id=row["id"], defer_for=body.defer_for)
         if run_model:
             task_run_models.set_choice(c, who.actor, row["id"], run_model, note="Set when the task was filed")
-        task_caps.record(c, row["id"], who.actor, owner)  # a send, counted against the sender's cap for this owner
+        # A send, counted against the sender's cap for this owner, at the moment the task was made.
+        task_caps.record(c, row["id"], who.actor, owner, at=row["created_at"])
         if gate:
             ask_ingest.record(c, ingest, gate, row["id"])
         for source_row in kept:
@@ -3987,6 +4004,7 @@ def create_app(settings=None):
             # The warning line goes on the change itself, where the recipient reads it.
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
+        over_cap = False
         if body.close:
             if any(
                 v is not None
@@ -4100,6 +4118,7 @@ def create_app(settings=None):
             if fields.get("owner") and body.owner and new_owner != row["owner_id"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")
+            over_cap = bool(after and after.get("over_cap"))
             for verdict, gate in waits:
                 # A wait on a person asks in a card of its own (hubdb._ask_in_subtask): that card is what reaches
                 # their Needs you, so the gate's row names it.
@@ -4109,6 +4128,7 @@ def create_app(settings=None):
         return {
             **({"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)} if view else {}),
             **({"warnings": warnings} if warnings else {}),
+            **({"over_cap": True} if over_cap else {}),
             **(ask_ingest.reply(*gates) if not body.close else {}),
             **org_rule_check.answer(rule_gate),
         }
@@ -4134,6 +4154,11 @@ def create_app(settings=None):
                 caller,
                 lambda c: reach_update(c, caller, auth.task(c, caller, auth.resolve_task(c, caller, tid)), body),
             )
+        if body.waiting_on:
+            with store.read() as c:
+                refusal = question_tasks.chat_refusal(caller, H.resolve_actor(c, body.waiting_on))
+            if refusal:
+                raise Problem("validation", refusal, 422)
         if body.owner:
             with store.read() as c:
                 try:
@@ -5917,6 +5942,9 @@ def create_app(settings=None):
 
     audit_log.install(app, store, auth)
     task_caps.install(app, store, auth, mutate)
+    from . import ci_runs
+
+    ci_runs.install(app, store, auth, mutate)  # CI build time: a builder's remote-run permit, a ticket's extension
     from . import org_rules
 
     # Org rule checks first: their /api/v2/rules/stats and /check come before org_rules' /api/v2/rules/{rule_id}.

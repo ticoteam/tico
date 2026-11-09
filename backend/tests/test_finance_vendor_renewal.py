@@ -6,7 +6,7 @@ from datetime import date
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import ap as AP
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
 def _vendor(c, name="Acme Supplies") -> str:

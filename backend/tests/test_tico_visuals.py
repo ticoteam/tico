@@ -11,10 +11,10 @@ import urllib.request
 
 from backend import file_metadata, tico_storage
 from backend import visuals as V
-from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_storage_delivery import task
-from backend.tests.test_tico_storage import ADDRESS, SIGNING, Owner, on, tico  # noqa: F401
-from backend.tests.test_visuals import task_with_file
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.storage_delivery import task
+from backend.tests.helpers.tico_storage import ADDRESS, SIGNING, Owner, on, tico  # noqa: F401
+from backend.tests.helpers.visuals import task_with_file
 
 PAGE = '<p>funnel</p><img src="https://tracker.example/p.gif"><script>steal()</script>'
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'

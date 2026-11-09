@@ -4,7 +4,7 @@ from fastapi import Request
 
 from . import hubdb as H
 from . import models as M
-from . import pipeline_engine, pipeline_rights
+from . import pipeline_engine, pipeline_requirements as PR, pipeline_rights
 from .store import Problem
 
 
@@ -24,10 +24,14 @@ def install_task_types(app, store, auth, mutate, mover):
             listed = [typ for typ in listed if typ["id"] in shown]
             # Each pipeline says whether this caller may change its rules: the check a move's override uses.
             editable = pipeline_rights.editable_pipeline_ids(c, who.actor, [typ["id"] for typ in listed])
+            # The cards this caller reads, by the rule its task list reads with: a stage's count never names more.
+            visible = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
             for typ in listed:
                 typ["can_edit_rules"] = typ["id"] in editable
                 # Whether it has any requirement, so the pipeline keeps its plain layout without one.
                 typ["has_requirements"] = pipeline_engine.has_requirements(c, typ["id"])
+                # Each stage's held count: the cards this caller reads, or every card for the editor who sets its caps.
+                pipeline_engine.add_held(c, typ, visible, enforced=typ["can_edit_rules"])
             return {"types": listed}
 
     @app.get("/api/v2/task-types/{type_id}")
@@ -39,6 +43,8 @@ def install_task_types(app, store, auth, mutate, mover):
             # Named by id or by name; a pipeline the caller may not see is not found, whichever way it was named.
             if not row or not pipeline_rights.may_see(c, who.actor, row["id"]):
                 raise Problem("not_found", "Task type not found", 404)
+            visible = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
+            pipeline_engine.add_held(c, row, visible, enforced=pipeline_rights.may_edit_rules(c, who.actor, row["id"]))
             return {"type": row}
 
     @app.get("/api/v2/check-pool-candidates")
@@ -84,20 +90,24 @@ def install_task_types(app, store, auth, mutate, mover):
             who = request.state.identity
             require_mover(c, who)
             steps = [step.model_dump() for step in body.steps] if body.steps is not None else None
-            return {
-                "type": H.type_update(
-                    c,
-                    who.actor,
-                    type_id,
-                    body.name,
-                    steps,
-                    mover=True,
-                    bots=body.bots,
-                    numbered=body.numbered,
-                    steps_only=body.steps_only,
-                    default_visibility=body.default_visibility,
-                )
-            }
+            type_after = H.type_update(
+                c,
+                who.actor,
+                type_id,
+                body.name,
+                steps,
+                mover=True,
+                bots=body.bots,
+                numbered=body.numbered,
+                steps_only=body.steps_only,
+                default_visibility=body.default_visibility,
+            )
+            if body.manager is not None:  # the pipeline's owner and admins; the active-bot check is set_manager's
+                if type_after is None:
+                    raise Problem("not_found", "No such task type", 404)
+                PR.set_manager(c, who.actor, type_after["id"], body.manager)
+                type_after = H.type_get(c, type_after["id"])
+            return {"type": type_after}
 
         return mutate(request, body, work)
 

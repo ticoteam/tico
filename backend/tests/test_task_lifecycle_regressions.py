@@ -7,7 +7,7 @@ import pytest
 
 from backend import github as G, hubdb as H, milestone_waits as MW
 from backend import task_delete as TD, task_relations as TR, task_rules as R, worktree_waits as WW
-from backend.tests.test_github import api, get, post, pr_event, PR  # noqa: F401
+from backend.tests.helpers.github import api, get, post, pr_event, PR  # noqa: F401
 
 AT = "2026-10-26T12:00:00.000000Z"
 OLD = "2026-10-25T11:00:00.000000Z"
@@ -38,7 +38,66 @@ def age(c, task_id):
     )
 
 
-def test_keeper_notices_do_not_restart_auto_close_but_team_messages_do(c):
+def isolated(c, subtests, *checks):
+    """Run each check from the same fresh database: a savepoint rolled back after each one, so one hub serves them all.
+    A check is (function, *args); its subtest is named after the original test and parametrize id."""
+    for check, *args in checks:
+        with subtests.test(check.__name__.lstrip("_") + (f"[{args[0]}]" if args else "")):
+            c.execute("SAVEPOINT isolated_check")
+            try:
+                check(c, *args)
+            finally:
+                c.execute("ROLLBACK TO isolated_check")
+                c.execute("RELEASE isolated_check")
+
+
+def test_activity_clocks_ignore_keeper_notices_and_computed_webhooks(c, subtests):
+    isolated(
+        c,
+        subtests,
+        (_keeper_notices_do_not_restart_auto_close_but_team_messages_do,),
+        *((_computed_mergeability_webhook_never_counts_as_task_activity, m) for m in (True, False)),
+    )
+
+
+def test_blockers_and_waits_keep_their_tasks_waiting_and_refuse_ancestor_loops(c, subtests):
+    isolated(
+        c,
+        subtests,
+        (_declined_blocker_releases_waiter_with_one_wake_after_last_blocker,),
+        *((_child_cannot_wait_for_its_own_parent, kind) for kind in ("blocks", "blocked_by")),
+        (_reparenting_cannot_turn_an_existing_blocker_into_an_ancestor,),
+        *((_worktree_wait_is_visible_and_keeps_its_task_waiting, state) for state in ("waiting", "reserved")),
+    )
+
+
+def test_finishing_a_parent_closes_its_subtasks_and_person_cards(c, subtests):
+    isolated(
+        c,
+        subtests,
+        *(
+            (_finishing_bot_task_closes_subtasks_and_declining_retires_only_generated_asks, status)
+            for status in ("done", "declined", "closed")
+        ),
+        (_finishing_parent_closes_shared_person_card_and_releases_other_dependents,),
+    )
+
+
+def test_milestone_waits_resume_once(c, subtests):
+    isolated(
+        c,
+        subtests,
+        (_milestone_wake_resumes_waiter_once,),
+        *((_milestone_resume_with_obsolete_step_notifies_owner_once, retained) for retained in ("closed", "missing")),
+        (_milestone_keeps_waiting_when_another_wait_remains,),
+    )
+
+
+def test_trashed_task_prevents_its_step_changing_before_restore(c, subtests):
+    isolated(c, subtests, *((_trashed_task_prevents_its_step_changing_before_restore, e) for e in ("status", "remove")))
+
+
+def _keeper_notices_do_not_restart_auto_close_but_team_messages_do(c):
     task = create(c, "Finished export")
     H.task_update(c, "bot:cmo", task["id"], status="done")
     age(c, task["id"])
@@ -64,7 +123,7 @@ def test_keeper_notices_do_not_restart_auto_close_but_team_messages_do(c):
     assert H.task(c, task["id"])["status"] == "closed"
 
 
-def test_declined_blocker_releases_waiter_with_one_wake_after_last_blocker(c):
+def _declined_blocker_releases_waiter_with_one_wake_after_last_blocker(c):
     waiter = create(c, "Build export")
     blockers = [create(c, title, owner="bot:cpo") for title in ("Pick columns", "Pick format")]
     for blocker in blockers:
@@ -90,8 +149,7 @@ def test_declined_blocker_releases_waiter_with_one_wake_after_last_blocker(c):
     assert wakes() == 1
 
 
-@pytest.mark.parametrize("kind", ["blocks", "blocked_by"])
-def test_child_cannot_wait_for_its_own_parent(c, kind):
+def _child_cannot_wait_for_its_own_parent(c, kind):
     parent = create(c, "Prepare launch")
     child = create(c, "Prepare launch copy", parent_id=parent["id"])
     a, b = (parent, child) if kind == "blocks" else (child, parent)
@@ -104,7 +162,7 @@ def test_child_cannot_wait_for_its_own_parent(c, kind):
     assert TR.blocker_ids(c, parent["id"]) == [child["id"]]
 
 
-def test_reparenting_cannot_turn_an_existing_blocker_into_an_ancestor(c):
+def _reparenting_cannot_turn_an_existing_blocker_into_an_ancestor(c):
     parent = create(c, "Prepare launch")
     child = create(c, "Prepare launch copy")
     grandchild = create(c, "Review launch copy", parent_id=child["id"])
@@ -114,8 +172,7 @@ def test_reparenting_cannot_turn_an_existing_blocker_into_an_ancestor(c):
     assert TR.parent_of(c, child["id"]) is None
 
 
-@pytest.mark.parametrize("state", ["waiting", "reserved"])
-def test_worktree_wait_is_visible_and_keeps_its_task_waiting(c, state):
+def _worktree_wait_is_visible_and_keeps_its_task_waiting(c, state):
     task = create(c, "Build task fix")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
     WW.ensure(c)
@@ -134,8 +191,7 @@ def test_worktree_wait_is_visible_and_keeps_its_task_waiting(c, state):
     assert H.wait_detail(c, row) is None
 
 
-@pytest.mark.parametrize("status", ["done", "declined", "closed"])
-def test_finishing_bot_task_closes_subtasks_and_declining_retires_only_generated_asks(c, status):
+def _finishing_bot_task_closes_subtasks_and_declining_retires_only_generated_asks(c, status):
     parent = create(c, "Prepare export")
     card = H._ask_in_subtask(c, "bot:cmo", parent, "human:ana", "Which format should the export use?")
     ordinary = H.task_create(
@@ -158,7 +214,7 @@ def test_finishing_bot_task_closes_subtasks_and_declining_retires_only_generated
     assert not H.unanswered_ask(c, H.task(c, card["id"]))
 
 
-def test_finishing_parent_closes_shared_person_card_and_releases_other_dependents(c):
+def _finishing_parent_closes_shared_person_card_and_releases_other_dependents(c):
     root = create(c, "Prepare campaign")
     first = create(c, "Prepare campaign export", parent_id=root["id"])
     second = create(c, "Prepare campaign report", parent_id=root["id"])
@@ -173,7 +229,7 @@ def test_finishing_parent_closes_shared_person_card_and_releases_other_dependent
     assert H.task(c, card["id"])["status"] == "closed"
 
 
-def test_milestone_wake_resumes_waiter_once(c):
+def _milestone_wake_resumes_waiter_once(c):
     typ = H.type_create(c, "human:ana", "Delivery", [{"name": "Build", "status": "doing"}], mover=True)
     task = create(c, "Build after merge", type=typ["id"], step="Build")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
@@ -188,8 +244,7 @@ def test_milestone_wake_resumes_waiter_once(c):
     assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == count
 
 
-@pytest.mark.parametrize("retained", ["closed", "missing"])
-def test_milestone_resume_with_obsolete_step_notifies_owner_once(c, retained):
+def _milestone_resume_with_obsolete_step_notifies_owner_once(c, retained):
     typ = H.type_create(
         c,
         "human:ana",
@@ -215,7 +270,7 @@ def test_milestone_resume_with_obsolete_step_notifies_owner_once(c, retained):
     assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cpo'").fetchone()[0] == other + 1
 
 
-def test_milestone_keeps_waiting_when_another_wait_remains(c):
+def _milestone_keeps_waiting_when_another_wait_remains(c):
     task = create(c, "Build after both merges")
     H.task_update(c, "bot:cmo", task["id"], status="waiting")
     for n in (1, 2):
@@ -226,8 +281,7 @@ def test_milestone_keeps_waiting_when_another_wait_remains(c):
     assert H.task(c, task["id"])["status"] != "waiting"
 
 
-@pytest.mark.parametrize("edit", ["status", "remove"])
-def test_trashed_task_prevents_its_step_changing_before_restore(c, edit):
+def _trashed_task_prevents_its_step_changing_before_restore(c, edit):
     typ = H.type_create(c, "human:ana", "Editorial", [{"name": "Write", "status": "doing"}], mover=True)
     task = create(c, "Write campaign", owner="human:ana", type=typ["id"], step="Write")
     result = TD.delete_tasks(c, [task["id"]], apply=True, actor="human:ana")
@@ -304,8 +358,7 @@ def test_opening_task_refreshes_links_without_touching_tasks_or_close_timer(api,
                 assert "GitHub" in history[0]["note"] and "merged" in history[0]["new"]
 
 
-@pytest.mark.parametrize("mergeable", [True, False])
-def test_computed_mergeability_webhook_never_counts_as_task_activity(c, mergeable):
+def _computed_mergeability_webhook_never_counts_as_task_activity(c, mergeable):
     task = create(c, "Build export")
     H.task_link(c, "human:ana", task["id"], PR, kind="pr", mover=True)
     G.pull_request(c, pr_event("synchronize", head={"sha": "head", "ref": "export"}))

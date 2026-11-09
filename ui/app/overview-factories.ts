@@ -101,7 +101,8 @@ function ofHTML(map: OfMap): string {
       <div class="of-factories">${live.map(box).join('')}</div></div>`;
 }
 
-// Draw the lines once the boxes have a size: one curve per edge, input circles to their pipeline.
+// Draw the lines once the boxes have a size: one curve per edge, input circles to their pipeline's factory.
+// The lines sit above the boxes; a line between two pipelines in one factory runs inside that box.
 function ofLines(map: OfMap): void {
   const stage = document.getElementById('of-stage'), svg = document.getElementById('of-lines');
   if (!stage || !svg) return;
@@ -125,6 +126,7 @@ function ofLines(map: OfMap): void {
   }
   // A loop is a line back from its last pipeline to its first, labelled like the others: laps · median lap.
   for (const loop of map.loops ?? []) {
+    if (!loop.laps) continue;
     const first = rect(loop.pipelines[0] ?? ''), last = rect(loop.pipelines[loop.pipelines.length - 1] ?? '');
     if (!first || !last || loop.pipelines.length < 2) continue;
     const x1 = last.left + last.width / 2 - origin.left, y1 = last.bottom - origin.top;
@@ -133,11 +135,13 @@ function ofLines(map: OfMap): void {
     const label = loop.median_lap_minutes == null ? `${loop.laps} laps` : `${loop.laps} · ${ofAge(loop.median_lap_minutes)}`;
     paths += `<text class="of-edge-l of-loop-l tnum" x="${((x1 + x2) / 2).toFixed(1)}" y="${(Math.max(y1, y2) + 44).toFixed(1)}" text-anchor="middle">${esc(label)}</text>`;
   }
+  // The input circles sit in a row above the map, so each drops straight down into the top of its pipeline's factory box.
   for (const i of map.inputs) {
-    const dot = document.querySelector(`[data-of-in="${CSS.escape(i.to)}"] .of-dot`)?.getBoundingClientRect(), b = rect(i.to);
-    if (!dot || !b) continue;
-    const x1 = dot.right - origin.left, y1 = dot.top + dot.height / 2 - origin.top, x2 = b.left - origin.left, y2 = b.top + 14 - origin.top;
-    paths += `<path class="of-edge of-edge-in" d="M${x1},${y1} C${x1 + 40},${y1} ${x2 - 40},${y2} ${x2},${y2}" style="stroke-width:${width(i.count)}"></path>`;
+    const dot = document.querySelector(`[data-of-in="${CSS.escape(i.to)}"] .of-dot`)?.getBoundingClientRect();
+    const box = stage.querySelector(`[data-of-pl="${CSS.escape(i.to)}"]`)?.closest('.of-factory')?.getBoundingClientRect();
+    if (!dot || !box) continue;
+    const x = Math.min(Math.max(dot.left + dot.width / 2, box.left + 8), box.right - 8) - origin.left;
+    paths += `<path class="of-edge of-edge-in" d="M${x},${dot.bottom - origin.top} L${x},${box.top - origin.top}" style="stroke-width:${width(i.count)}"></path>`;
   }
   svg.innerHTML = paths;
 }

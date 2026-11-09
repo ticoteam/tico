@@ -23,84 +23,15 @@ from backend import strategy as S
 from backend import task_relations as TR
 from backend import wake_presets as WP
 from backend import bot_settings as BS
+from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE, with_legacy_run_tables
 
 # The table's DDL: migration 0070 owns it (bot_settings.py has none).
 _BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
 
-EMPLOYEES = {
-    "coo": {
-        "display_name": "COO",
-        "status": "active",
-        "host": "keeper",
-        "runtime": "codex",
-        "model": "gpt-6-astra",
-        "reasoning_effort": "medium",
-        "dir": "/tmp/emp-coo",
-    },
-    "cmo": {"display_name": "CMO", "status": "active", "host": "keeper", "runtime": "codex"},
-    "seo": {"display_name": "SEO", "status": "active", "runtime": "grok"},
-    "analytics": {"display_name": "Analytics", "status": "active"},
-    "legal": {"display_name": "Legal", "status": "active"},
-    "game": {"display_name": "Project Game", "status": "planned"},
-    "coach": {"display_name": "Coach", "status": "paused"},
-}
-PEOPLE = {
-    "people": [
-        {
-            "id": "ana",
-            "name": "Ana Rivera",
-            "email": "ana@acme.example",
-            "team": "leadership",
-            "primary_for": ["marketing"],
-        },
-        {"id": "ben", "name": "Ben", "email": "ben@acme.example", "team": "product", "primary_for": ["product"]},
-    ]
-}
 
-ANA = H.human_actor("ana")
-CMO = H.bot_actor("cmo")
 SEO = H.bot_actor("seo")
 COO = H.bot_actor("coo")
 ANALYTICS = H.bot_actor("analytics")
-
-# The run table as an install from before migration 0072 had it: a run's record in `turns` (the attempts table keeps
-# the lease). Its usage went to usage_facts in migration 0053, which also dropped turn_usage_segments.
-LEGACY_TURNS = (
-    "CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, "
-    "trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT, input_tokens INTEGER, "
-    "cached_tokens INTEGER, output_tokens INTEGER, model TEXT, provider TEXT, est_cost_usd REAL, "
-    "billing TEXT, trigger_kind TEXT, trigger_source TEXT, writes INTEGER, outcome TEXT, "
-    "did_nothing INTEGER, purpose TEXT)"
-)
-
-
-def with_legacy_run_tables(conn):
-    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0072, so
-    the numbered steps and the migrations run on them again as on an install from before it."""
-    conn.execute("DELETE FROM schema_migrations WHERE version>='0072' AND version NOT LIKE 'legacy%'")
-    conn.execute(LEGACY_TURNS)
-    conn.commit()
-
-
-class HubCase(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.dir.cleanup)
-        self.conn = H.connect(Path(self.dir.name) / "hub.db")
-        self.addCleanup(self.conn.close)
-        H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
-
-    def before(self, version):
-        """The database as an install from before migration `version` left it: H.connect has applied every migration
-        file (hubdb.migrate), so the records from that one on are forgotten and migrations.apply runs them again."""
-        self.conn.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (version,))
-        self.conn.commit()
-
-    def refused(self, rule, fn, *a, **kw):
-        with self.assertRaises(H.Refused) as got:
-            fn(*a, **kw)
-        self.assertEqual(got.exception.rule, rule, got.exception.detail)
-        return got.exception
 
 
 # ----------------------------------------------------------------------------- schema, connect
@@ -482,6 +413,41 @@ class Rule1Identity(HubCase):
 
 
 # ----------------------------------------------------------------------------- rule 2
+class Rule2Reach(HubCase):
+    def test_a_template_name_reaches_the_one_live_bot_built_from_it_and_nothing_when_two_are(self):
+        BS.update(self.conn, "cmo", {"template": "marketing-lead"})  # a template's `--owner marketing-lead`
+        task = H.task_create(self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead")
+        self.assertEqual(H.task(self.conn, task["id"])["owner_id"], CMO)
+
+        # A bot's slug or a person's id names that one first, whatever a template calls it.
+        BS.update(self.conn, "seo", {"template": "coo"})
+        self.assertEqual(H.resolve_actor(self.conn, "coo"), COO)
+        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+
+        # Two live bots built from the template: the name still reaches nobody.
+        BS.update(self.conn, "seo", {"template": "marketing-lead"})
+        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        self.refused(
+            "reach", H.task_create, self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead"
+        )
+
+        # An archived bot is off the roster, so the one live bot is the only match again.
+        self.conn.execute("UPDATE bots SET state='archived' WHERE slug='seo'")
+        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+
+        # An open seat set up from the template claims the name too, until a bot fills it (the seat closes).
+        now = H.now()
+        self.conn.execute(
+            "INSERT INTO seats(id,title,reports_to,created_at,created_by,updated_at,updated_by,template) "
+            "VALUES('seat-marketing-lead','Marketing lead','',?,?,?,?,'marketing-lead')",
+            (now, CMO, now, CMO),
+        )
+        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        self.conn.execute("UPDATE seats SET closed_at=? WHERE id='seat-marketing-lead'", (now,))
+        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+
+        # A template no bot is built from is still no one.
+        self.assertIsNone(H.resolve_actor(self.conn, "product-lead"))
 
 
 # ----------------------------------------------------------------------------- rule 3

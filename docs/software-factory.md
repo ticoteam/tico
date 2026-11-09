@@ -9,19 +9,18 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Builder | `builder` (Builder), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
+| 1 | Builder | `builder` (Builder), set to build | Builds the change and does every fix step; Tico merges it once it is approved |
 | 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
-| 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
-| 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |
-| 5 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
-| 6 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
-| 7 | Technical Writer | `docs-writer` (Technical Writer) | After each release, gets one task listing its tickets, updates the help docs for the changes people will see and writes the release notes |
-| 8 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
+| 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change; every change gets one |
+| 4 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
+| 5 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
+| 6 | Technical Writer | `docs-writer` (Technical Writer) | After each release, gets one task listing its tickets, updates the help docs for the changes people will see and writes the release notes |
+| 7 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
 Two leads sit above the line. **Head of Product** (`product-lead`) decides *what* to build: it triages feature ideas,
 writes the spec and acceptance tests, and keeps the roadmap. **Head of Engineering** (`engineering-lead`) decides
 *how*: it splits an approved spec into Dev tickets, picks the Builder and sets the merge rules. A small team can
-skip Reviewer 2, or let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and QA, and add the
+let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and Reviewer 2, and add the
 rest as your release pace grows.
 
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
@@ -42,7 +41,6 @@ approval before merge even when the team's task review policy allows a fixes-onl
 - **For reliability, turn effort up.** Higher effort on the Builder, the reviewers and QA catches more before
   release.
 - **To save money:**
-  - drop Reviewer 2
   - run the reviewers on lower-effort or cheaper models, in a different family from the Builder where one is available
   - don't cut the Builder
 
@@ -57,14 +55,17 @@ approval before merge even when the team's task review policy allows a fixes-onl
    its model), or use a check model on a subtask (see [Tasks](tasks.md)).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
    reason on the ticket. There is no second round of the same review after fixes.
-4. **QA runs tests it didn't write.** Head of Product writes the acceptance tests in Given/When/Then form. Each is
-   tagged *check live*, *watch live* (unsafe to trigger in production: payments, sending, deleting, third-party
-   actions) or *not checkable live*.
+4. Validation skills attach evidence (tests, screenshots) to the ticket; a person approves each release from its notes and before/after screenshots.
 5. **No person in the loop by default**, except where Tico requires one: publishing, spending, sending and hiring.
    Each release asks a person for one approval, covering its roadmap moves, release notes and docs.
 6. **A blocked ticket stays at its step** and says why it is blocked and who it waits on.
 
 ## Dev tickets: the steps
+
+The Builder opens its PR as a draft and pushes freely: a draft runs no CI and gets no review request. When the change
+is done it runs the checks its pull request would run on its own computer (in Tico's repository,
+`python3 scripts/pr_checks.py local --ready`, which prints a receipt line for the ticket) and marks the PR ready once.
+Each push to a ready PR runs CI again, so fixes go in one push.
 
 A bot PR on a General task, or any board with no check steps, uses the company's Dev ticket review pools too.
 Tico files `Review 1: PR #N` with the PR link and head, then Review 2 if the ticket flow has two reviews.
@@ -81,9 +82,12 @@ history; its clear PR number still prevents a second review. New requests, saved
 follow the same reader rule. If the number is unclear, Tico leaves the request as it is and logs it for review.
 A push closes the old request as superseded and gets a new review;
 an old-head approval never clears the new head. Changes wake the owner with the findings. Once the current head
-has all required approvals and green checks, Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`.
-If the owner lacks repo write access, an existing repo manager, Release Manager or repo owner with write access
-gets the merge task. This grants no new access and does not change the repo's merge rules.
+has all required approvals and green checks, Tico merges it itself when the card is a bot's and the company's GitHub
+App reaches the repository: it adds the PR to the merge queue at that head, or merges it there when the branch has no
+queue ([Tico merges](releasing.md#tico-merges)). A red queue run or a conflict goes to the pipeline's manager, not the
+Builder. Otherwise Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`. If the owner lacks repo write
+access, an existing repo manager, Release Manager or repo owner with write access gets the merge task. This grants no new access and
+does not change the repo's merge rules.
 The merge is of the approved head: a push after approval needs new reviews, so non-blocking notes go in a follow-up PR.
 
 Forwarded review and QA notes keep the source check's readers, even when a later public check sends them.
@@ -93,8 +97,9 @@ Merge tasks hold the work instructions; their approval notice keeps the checks' 
 The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at most three new checks per reviewer
 per hour and within each pool's open-check limit. A settled approval at the current head that has no saved outcome
 runs the next step once: Review 2 when needed, else the merge handoff when checks are green. This also applies when
-a hold clears; an old-head approval does not count. Conflicting PRs go back to the owner to resolve. A branch behind
-main does not: the merge queue tests it on current main. A ticket whose PR already merged needs no open PR for a check after the merge (Post Release QA); a review before the
+a hold clears; an old-head approval does not count. Conflicting PRs go back to the owner to resolve, unless they are
+approved and Tico merges them: then the pipeline's manager resolves it. A branch behind
+main does not: the merge queue tests it on current main. A ticket whose PR already merged needs no open PR for a check after the merge (Post Release QA, on a board that has that step); a review before the
 merge still needs one. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
 read the task gets no request. Health names visible bot PRs open over 24 hours without a review and the wait reason.
 
@@ -108,22 +113,30 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | In Progress | doing | Builder | Building |
 | Review 1 | review | Builder | Reviewer 1 comments |
 | Review 1 Fixes | doing | Builder | Builder acts on the feedback (skipped if there is none) |
-| Review 2 | review | Builder | Reviewer 2 comments on the updated change (skipped for small changes) |
-| Review 2 Fixes | doing | Builder | Builder acts on the feedback, then moves the ticket to In QA; the merge follows QA's pass |
-| In QA | review | Builder | QA runs the acceptance tests |
-| QA Fixes | doing | QA | A test failed; the Builder fixes it and moves the ticket back to In QA |
-| Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake. A published release moves the ticket on to the next step by itself |
-| Post Release QA | review | Release Manager | Shipped; QA runs the *check live* tests and watches the *watch live* items for 48 hours |
-| Done | done | QA | Post-release QA passed |
+| Review 2 | review | Builder | Reviewer 2 comments on the updated change. Always runs. Its approval is the last review before the merge |
+| Review 2 Fixes | doing | Builder | Builder acts on the feedback; once CI is green on the new head, the ticket merges |
+| Pending Release | review | Merge | Merged; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake. A published release moves the ticket on to the next step by itself |
+| Done | done | Release | Shipped in a published release |
 | Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate, superseded or dropped ticket |
 
 Done and Closed fold into one strip at the end of the board: those tickets are under the Done and Closed tabs. A waiting
 ticket stays at its step with a Waiting tag.
 
-- **Small changes** skip Review 2. Use Reviewer 2 for sign-in, permissions, customer data, billing and anything that
-  sends.
-- **Changes nobody will see** skip In QA and QA Fixes.
-- **A failure after release** goes back to QA Fixes for a hotfix, or the Release Manager rolls back.
+- **Review 2 always runs**, for every change.
+- **On a board without QA steps, an unanswered check is filed again, never passed on.** When a check passes its hour with
+  no verdict, Tico closes it, records who did not answer, and files the same check for the same head to another free pool
+  bot, preferring another model family than the Builder. The bot that did not answer is passed over for that refile and
+  taken again only when no other bot is free. A second review goes to a different bot than the first wherever one is
+  free, in this order: a bot that has not timed out on the ticket; a bot that timed out earlier on the ticket, which may
+  only have been busy; a bot that reviewed an earlier round, only when no other bot is left in the pool (a bot that timed
+  out earlier counts as left); and last the bot just refiled. With every bot busy, rate-limited or offline the check waits
+  at its step as "Waiting for a reviewer", and the retry files it once one frees up. On a board with QA steps, an unanswered review keeps
+  its old timeout: the round is skipped and the ticket moves on.
+- **A board that already has QA steps** (In QA, QA Fixes, Post Release QA) keeps them. On it, Review 2's changes go to
+  Review 2 Fixes and the Builder moves the ticket to In QA, a QA pass makes the merge next, and a change nobody will see
+  skips In QA and QA Fixes with the `skip-qa` tag.
+- **A failure after release** goes back to QA Fixes for a hotfix on a board with QA steps; otherwise the Release Manager
+  rolls back.
 - **Reviewers and Security only comment.** They never move a ticket: a reviewer or Security bot that tries is refused
   and told to finish its review task with a verdict (`hub task done <id> --verdict approve|changes --head <sha>`). QA
   gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged, even while the ticket
@@ -137,9 +150,9 @@ ticket stays at its step with a Waiting tag.
   Builder’s move to merge or move on. An old-head verdict needs a new review. A check still open names its owner
   even after a push, and an unfiled check names its pool and wait reason. Human subtasks are not check verdicts.
   Private check owners and verdicts stay hidden; incomplete evidence cannot approve a merge or move on.
-- **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
-  wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the type's
-  **What wakes** automation on the Automations page.
+- **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with an editable rule: **Pending Release**
+  is a note to the Release Manager. A board with QA steps also gets **QA Fixes**, which wakes the Builder, and **In QA**,
+  which wakes QA only. Change them in the type's **What wakes** automation on the Automations page.
 - **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
   on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
   work. After 4 hours at the step, the type's manager (Head of Engineering), or else the owner's manager, is listed on the task roundup as late, to unblock or reroute it, and again every seven days while it stays late. Owners are not woken for a status: a quiet ticket is listed on its owner's task roundup, once per run (three times a day by default). A step's flow sets its own late hours (`late_hours`), on any board; a Dev step without one uses 4. `status_hours` no longer wakes anyone.
@@ -174,6 +187,17 @@ one is at Pending Release or later, and Shipped when every one is Done ([Public 
 rule). In Settings → Tasks, give Spec and Approved the public step name "Planned", and Building and Ready to ship
 "In progress"; otherwise each step shows publicly under its own name. Shipped goes out with the release notes, after
 post-release QA. Publishing a roadmap is covered in [Public roadmaps](roadmaps.md).
+
+## Visual specs
+
+A spec can be a visual page. The product manager publishes it on the card with `hub page publish <file.html> --spec
+--task <card>`. The publish is refused on any task that isn't a Product roadmap card. The page's styles are inlined
+at publish, so its mockups read as Tico does. Approval is the pipeline's: the page is attached to the Review stage's
+Spec approved requirement, and a person approves it. When the card leaves Review, the spawn link files the
+Engineering ticket under it with the spec attached. Every ticket filed under the card, and their own children
+(review, QA), gets the spec's page link and text in its body. A spec that is narrowed to some readers, on a private
+card or on a members-only pipeline gives the link only, and a ticket filed with neutral text gets nothing. Build
+instructions are in `templates/catalog/product-manager/skills/build-the-spec-page/SKILL.md`.
 
 ## When Security holds a release
 

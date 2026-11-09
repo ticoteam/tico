@@ -10,24 +10,11 @@ from backend import judge as B
 from backend import providers
 from backend.config import Settings
 from backend.store import Store
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_judge import QUESTIONS, FakeJudge, events, fake
-from backend.tests.test_slack_gateway import gateway, hub  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.judge import QUESTIONS, FakeJudge, events, fake
+from backend.tests.helpers.slack_gateway import gateway, hub  # noqa: F401
 from clients import judge as J
-
-DOWN = J.JudgeError("unavailable", "TypeSafe did not answer: TimeoutError", retryable=True)
-
-
-def spend(api, usd, ts=None, actor="bot:ops"):
-    """A past decision call that cost `usd`, this month unless `ts` says otherwise."""
-    with api.app.state.store.transaction() as c:
-        H.event(c, actor, "judge.spend", "mail-triage@1", {"cost_usd": usd})
-        if ts:
-            c.execute(
-                "UPDATE events SET created_at=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
-                "ORDER BY rowid DESC LIMIT 1)",
-                (ts,),
-            )
+from backend.tests.helpers.judge_spend import DOWN, spend
 
 
 def priced(settings, rate_in=0.5, rate_out=2.0):
@@ -236,7 +223,7 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
     """One engine serves a whole batch, so the cap is counted call by call, not only when the engine is made."""
     from backend import learnings as L
     from backend.listening import judge_pending
-    from backend.tests.test_listening import FakeJudge as Listener, _bots, _post, _token
+    from backend.tests.helpers.listening import FakeJudge as Listener, _bots, _post, _token
 
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
@@ -378,7 +365,7 @@ def test_two_processes_admitted_at_once_pass_the_cap_by_at_most_the_larger_reser
     Gateway.ask in the gateway's own process (its own meter) both checked before either answer is written; each
     answers 1000 tokens in, 0 out, on Jev. Each admits a call only if it fits with its own most, so the month ends
     at most the larger reservation over the cap. Before the fix both were let in at $0.009999: $0.010083 written."""
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     hub.settings.decisions_monthly_usd = 0.01
     with hub.transaction() as c:
@@ -436,7 +423,7 @@ def test_two_processes_admitted_at_once_pass_the_cap_by_at_most_the_larger_reser
 
 def test_slack_without_a_jev_key_holds_each_call_at_the_company_models_price(gateway, hub, monkeypatch):
     """No TypeSafe key: the company's own model answers Slack, so a call is held at its price, not Jev's."""
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     class Company(S.CappedJudge):
         model = "a-model-with-no-list-price"  # held at the ceiling, about $0.21 a call
@@ -646,7 +633,7 @@ def test_the_nightly_learnings_ask_jev_once_and_briefly_with_the_fallback_behind
 
 
 def test_the_listening_judge_gets_the_fallback_when_jev_is_down_and_waits_at_the_cap(api, monkeypatch):
-    from backend.tests.test_listening import FakeJudge as Listener, _bots, _post, _token
+    from backend.tests.helpers.listening import FakeJudge as Listener, _bots, _post, _token
 
     _bots(api)
     listening = _token(api, "listening")
@@ -683,7 +670,7 @@ def test_the_listening_judge_gets_the_fallback_when_jev_is_down_and_waits_at_the
 
 
 def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cost(gateway, hub):
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     first = S.send(
         gateway,
@@ -709,7 +696,7 @@ def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cos
 def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gateway, hub):
     """A big fleet is asked in several calls. Each answered call is counted as it returns (a `judge.spend` row, not
     one of the sender's daily calls), so a later failure, its retries and the final failure lose none and add none."""
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     S.add_bots(hub, 50)  # 56 bots: two calls a message
     down = J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True)
@@ -755,7 +742,7 @@ def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gatew
 
 
 def test_slack_stops_a_big_fleet_at_the_cap_partway_and_routes_to_the_assistant(gateway, hub):
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     S.add_bots(hub, 50)  # 56 bots: two calls a message
     hub.settings.decisions_monthly_usd = 1.0
@@ -872,9 +859,9 @@ def test_a_gateway_calls_cached_input_is_billed_at_the_cached_rate_not_the_input
     assert B.cost_usd(settings, medium, both) == 4.0  # 2.50 + 0.25 + 1.25
 
 
-def test_a_rule_check_calls_spend_counts_under_its_set_in_the_readout(api):
-    # Org rule checks meter under their own budget (`rules.spend`, org_rule_check.BUDGET), not `judge.spend`. The
-    # readout's cost per set must include that spend, or a set that runs at Decide Medium reads $0.
+def test_an_old_rules_spend_row_still_counts_under_its_set_in_the_readout(api):
+    # Org rule checks once metered under a budget of their own and wrote `rules.spend` rows; they write `judge.spend`
+    # now. The rows already written stay, and the readout's cost per set still counts them as past spend.
     with api.app.state.store.transaction() as c:
         H.event(
             c,
@@ -899,26 +886,3 @@ def test_a_rule_check_calls_spend_counts_under_its_set_in_the_readout(api):
         )
     sets = {row["set"]: row for row in get(api, "decisions/readout")["sets"]}
     assert sets["rule-check"]["cost_usd"] == 0.00875
-
-
-def test_the_rules_cap_is_saved_in_maintenance_then_the_environment_then_fifty_and_apart_from_decides(api):
-    from backend import org_rule_check as K
-
-    store = api.app.state.store
-    settings = store.settings
-    settings.rules_monthly_usd = 50.0
-    with store.read() as c:
-        assert B.budget_cap(c, settings, K.BUDGET) == 50.0
-    with store.transaction() as c:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('maintenance', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (json.dumps({"rules_monthly_cap_usd": 80}),),
-        )
-    with store.read() as c:
-        assert B.budget_cap(c, settings, K.BUDGET) == 80.0
-        assert B.budget_cap(c, settings) == settings.decisions_monthly_usd  # Decide's own cap is not the rules one
-    settings.rules_monthly_usd = 20.0  # the environment holds only while nothing is saved
-    with store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='maintenance'", (json.dumps({}),))
-    with store.read() as c:
-        assert B.budget_cap(c, settings, K.BUDGET) == 20.0

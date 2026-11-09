@@ -1,6 +1,6 @@
 """computer_details loads active assignments once per snapshot, not once per computer."""
 
-from backend.tests.test_api import api, assign, runner  # noqa: F401
+from backend.tests.helpers.api import assign, runner  # noqa: F401
 from backend import views
 
 

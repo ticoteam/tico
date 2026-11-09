@@ -23,13 +23,16 @@ export PYRIGHT_BASE_REF="$base" LINT_BASE_REF="$base"
 check python3 scripts/check_migration_order.py --base "$base" --head "$head" --base-name main
 check bash scripts/lint.sh
 check python3 -m backend.openapi_v2 --check
+check python3 scripts/build_api_docs.py --check
 check python3 scripts/check_wire_contract.py
+check python3 scripts/check_test_imports.py --base "$base"
 check bash scripts/check_types.sh
 check bash scripts/check_ui_types.sh --base "$base"
 # Biome comes from node_modules, which the plan job's install (scripts/ci_install.sh) has already made.
 [ -d node_modules ] || check npm ci --ignore-scripts --no-audit --no-fund --silent
 check bash scripts/check_ui_lint.sh --base "$base"
 check python3 scripts/check_ui_strict.py --base "$base"
+check python3 scripts/check_node_types.py
 check bash scripts/check_ui_routes.sh --base "$base"
 check python3 scripts/check_ui_source_suffixes.py
 check bash scripts/shell_lint.sh

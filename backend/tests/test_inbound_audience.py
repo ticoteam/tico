@@ -4,27 +4,9 @@ messages, search, the cursor, waits, a message and its code. The owner and admin
 
 Ana owns the company, Ben is an admin (a member after `as_member`), Cara is a member in East, under Sales."""
 
-from backend.tests.test_api import api, as_member, get, headers, put, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_groups import roster_of, set_roster
-from backend.tests.test_inbound import page, seed
-
-
-def narrow(api):
-    doc = roster_of(api)
-    doc["org_groups"] = {
-        **(doc.get("org_groups") or {}),
-        "sales": {"name": "Sales"},
-        "east": {"name": "East", "parent": "sales"},
-        "ops-team": {"name": "Operations"},
-    }
-    for person in doc["people"]:
-        if person["id"] == "cara":
-            person["team"] = "east"
-    set_roster(api, doc)
-    svc = seed(api)
-    svc.ingest(page(1, inbox="ibx_b", ident="ses:msg:ibx_b", body="Your verification code is 123456."))
-    svc.ingest(page(2, inbox="ibx_a", ident="ses:msg:ibx_a", body="Hello from Acme."))
-    return svc
+from backend.tests.helpers.api import as_member, get, headers, put, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.helpers.inbound import page
+from backend.tests.helpers.inbound_audience import narrow
 
 
 def reads(api, token):

@@ -34,14 +34,19 @@ def block_outside_network(reason):
 
 
 def populate(workdir, out):
-    from backend.tests.test_api import api  # the checkout's fixture: its seeding, bots and people
+    try:  # the checkout's api fixture: its seeding, bots and people
+        from backend.tests.helpers.api_app import api_client
+    except ImportError:  # a ref from before the fixture's body left backend/tests/test_api.py
+        from backend.tests.test_api import api
+
+        api_client = api.__wrapped__
     from e2e import renames, scenario
     from e2e.normalize import normalize
     from e2e.server import serve, settings_for, snapshot
 
     workdir = Path(workdir)
     (workdir / "fixture").mkdir(parents=True, exist_ok=True)
-    fixture = api.__wrapped__(workdir / "fixture", None)
+    fixture = api_client(workdir / "fixture", None)
     client = next(fixture)
     try:
         ids = scenario.populate(client)

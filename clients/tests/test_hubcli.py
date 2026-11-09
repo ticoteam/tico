@@ -77,6 +77,7 @@ SUBCOMMANDS = [
     "approval",
     "webhook",
     "pipeline",
+    "pipeline-manager",
     "brief",
     "mcp",
     "origin",

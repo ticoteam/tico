@@ -55,6 +55,12 @@ REQUIRED = {
     "jobs-what-did-bot-do",
     "jobs-find-doc",
     "jobs-task-for-person",
+    "admin-close-all-except-mine",
+    "admin-close-all-yes-after-count",
+    "admin-close-all-and-stop-bots",
+    "admin-close-over-cap-splits",
+    "admin-close-done-keeps-mine",
+    "admin-close-done-including-mine",
 }
 
 
@@ -575,3 +581,86 @@ def test_rerun_errors_selects_only_the_errored_samples(tmp_path):
     for r in rows:
         (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
     assert live.errored_samples(tmp_path) == {("a", 2), ("b", 1)}
+
+
+def test_bulk_echo_counts_only_the_ids_a_call_names():
+    """A canned count stands unless the call names task ids: the CLI's --where-id values, or an MCP filter's ids. A UUID
+    under another flag, such as a pipeline (--where-type), is not an id, so the filter's canned counts are kept."""
+    # bulk_echo lives in the fake hub's shared core (FAKE_CORE), not at the runner's top level: exec it, as _hub_answer does.
+    ns = {}
+    exec(live.FAKE_CORE, ns)
+    bulk_echo = ns["bulk_echo"]
+    canned = {"dry_run": True, "matched": 150, "changed": 150, "skipped": 0}
+    pipeline = "7b3e9a10-9600-4000-8000-000000000009"
+    by_pipeline = ["task", "bulk", "close", "--where-type", pipeline, "--where-status", "open", "--dry-run"]
+    assert bulk_echo(canned, by_pipeline)["matched"] == 150
+    assert bulk_echo(canned, ["task", "bulk", "close", "--where-id", pipeline, "--dry-run"])["matched"] == 1
+    as_mcp = ["task", "bulk", "close", "--filter", json.dumps({"ids": [pipeline]}), "--dry-run"]
+    assert bulk_echo(canned, as_mcp)["matched"] == 1
+
+
+def test_the_over_cap_case_answers_the_filter_asked_for_and_never_a_wider_one(tmp_path, monkeypatch, cases):
+    """The exact filter asked for (open, not hers) is over the cap and is refused whole. A part by owner or pipeline keeps
+    the status open and gets its count. A wider status, or no status, gets no count, so widening is never rewarded."""
+    case = next(c for c in cases if c["id"] == "admin-close-over-cap-splits")
+    answer = _hub_answer(tmp_path, monkeypatch, case["hub"])
+    keep = ["--where-not-owner", "me", "--dry-run"]
+    text, code = answer(["task", "bulk", "close", "--where-status", "open", *keep], "cli")
+    assert code == 1 and "too_many" in text
+    text, code = answer(
+        ["task", "bulk", "close", "--where-status", "open", "--where-owner", "copywriter", *keep], "cli"
+    )
+    assert code == 0 and json.loads(text)["matched"] == 80
+    for widened in (["--where-status", "doing"], []):
+        _, code = answer(["task", "bulk", "close", *widened, *keep], "cli")
+        assert code == 1, widened
+
+
+def test_the_except_mine_cases_check_the_exclusion_names_the_caller(cases):
+    """`--where-not-owner` must name the caller (me, or Dana's own id) on the dry run and on the close. Another owner is
+    someone else's exclusion, so a close that leaves out cmo's tasks is not the one asked for."""
+    dry = next(c for c in cases if c["id"] == "admin-close-all-except-mine")
+    yes = next(c for c in cases if c["id"] == "admin-close-all-yes-after-count")
+
+    def passes(case, line):
+        return any(re.search(rx, line) for rx in case["must"] if not rx.startswith("reply:"))
+
+    for line in (
+        "task bulk close --where-not-owner me --dry-run",
+        "task bulk close --where-not-owner human:dana --dry-run",
+        'task bulk close --filter {"exclude_owner": "me"} --dry-run',
+    ):
+        assert passes(dry, line), line
+    for line in (
+        "task bulk close --where-not-owner cmo --dry-run",
+        "task bulk close --where-not-owner ops --dry-run",
+        'task bulk close --filter {"exclude_owner": "cmo"} --dry-run',
+    ):
+        assert not passes(dry, line), line
+    assert passes(yes, "task bulk close --where-not-owner me")
+    assert not passes(yes, "task bulk close --where-not-owner cmo")
+    assert not passes(yes, 'task bulk close --filter {"exclude_owner": "cmo"}')
+
+
+def test_a_close_of_done_tasks_keeps_the_callers_own_by_default(cases):
+    """A close of all done tasks keeps the caller's own tasks; only an explicit "including mine" takes them."""
+    keep = next(c for c in cases if c["id"] == "admin-close-done-keeps-mine")
+    everything = next(c for c in cases if c["id"] == "admin-close-done-including-mine")
+
+    def hits(case, key, line):
+        return [rx for rx in case.get(key) or [] if not rx.startswith("reply:") and re.search(rx, line)]
+
+    plain = "task bulk close --where-status done --dry-run"
+    assert hits(keep, "must_not", plain), "a done close without keep-mine must be forbidden"
+    assert not hits(keep, "must_not", plain.replace("--dry-run", "--where-not-owner me --dry-run"))
+    assert hits(keep, "must", "task bulk close --where-status done --where-not-owner me --dry-run")
+    assert hits(everything, "must", plain)
+    assert not hits(everything, "must_not", plain)
+
+
+def test_the_filter_close_playbook_keeps_mine_by_default_and_chunks_by_id():
+    """Job 12a: keeping the caller's tasks is the default, and a part still over the cap is closed by id chunks of up to 100."""
+    text = (EVALS.parents[1] / "templates/catalog/assistant/playbooks/jobs.md").read_text()
+    job = text[text.index("12a.") : text.index("\n13. ")]
+    assert "Keep mine is the default" in job and "--where-not-owner me" in job
+    assert "--where-id" in job and "up to 100" in job and "chunk" in job

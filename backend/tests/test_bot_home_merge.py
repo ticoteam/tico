@@ -6,6 +6,8 @@ old room lands in the Home, whichever path writes it: the API, the central write
 Fictional people only: ana (owner), ben and cara; the bots come from the api fixture.
 """
 
+import json
+
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
@@ -13,12 +15,9 @@ from backend import bot_home_merge, rooms, threads, visuals
 from backend.auth import Identity
 from backend.blobs import register
 from backend.files import series
-from backend.store import H, task_message_page
-from backend.tests.test_api import api, headers, post, restrict  # noqa: F401  (the fixture; post is a helper)
-from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
-    private_run,
-    private_tasks_have_an_unrelated_manager,
-)
+from backend.store import H, encode, task_message_page
+from backend.tests.helpers.api import headers, post, restrict  # noqa: F401
+from backend.tests.helpers.threads_private_execution import private_run, private_tasks_have_an_unrelated_manager  # noqa: F401
 
 PEOPLE = ("human:ana", "human:ben", "human:cara")
 
@@ -386,7 +385,7 @@ def test_a_moved_rooms_read_marks_are_discarded_for_root_and_sub_threads(api):
 def test_a_tasks_history_is_read_from_its_room_and_the_homes_it_is_in(api, ops_rooms):
     """Finding 5: a task whose messages were written in a room reads them from the room, the Home they moved into, and the
     Home it is in now, even after that Home is archived and a new one takes the writes."""
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post  # noqa: F401
 
     task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
     task_id = task["id"] if "id" in task else task["task"]["id"]
@@ -491,7 +490,7 @@ def test_an_unread_home_message_between_moved_messages_stays_unread(api):
 def test_a_tasks_history_keeps_every_home_through_two_archives(api, ops_rooms):
     """Finding 3 (P2): a task's history reads every Home its bot has had, archived ones included. Each comment written
     through the old room after its Home was archived lands in the next Home, and all three stay in the task's history."""
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post  # noqa: F401
 
     task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
     task_id = task["id"] if "id" in task else task["task"]["id"]
@@ -705,3 +704,107 @@ def test_a_file_the_home_already_has_under_its_name_keeps_its_room_scope_and_sta
         )
     assert readable(api, moved) == b"# Ana" and readable(api, own) == b"# Home"
     assert attachable(api, ops_rooms["home"], moved) == [moved]
+
+
+# An owner with no viewer: a human with no record in the humans registry (teammate_access._viewer_for is None). fay is on
+# the roster, so the bot can write to fay, but no record reads fay. fay's chat with ops moves into the Home like everyone's,
+# and a new one goes there too, so one chat is never split between the Home and a personal room (owner decision, Nov 7).
+
+
+@pytest.fixture
+def fay_room(api, ops_rooms):
+    """fay had a personal chat with ops before Homes, where ops wrote; then fay's humans record went and fay stayed on the
+    roster, so no viewer reads fay (the bot can still write to fay, and no one can write as fay)."""
+    with store(api).transaction() as c:
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster["people"].append({"id": "fay", "email": "fay@acme.example"})
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+        c.execute("INSERT INTO humans(id,name,email) VALUES('fay','Fay','fay@acme.example')")
+        cid = room(c, "human:fay", "ops")
+        first = say(c, "bot:ops", "human:fay", "Ops before the move", cid)["id"]
+        c.execute("DELETE FROM humans WHERE id='fay'")
+    with store(api).read() as c:
+        assert threads.actor_viewer(c, "human:fay") is None
+    return {"room": cid, "message": first}
+
+
+def test_an_owner_with_no_viewer_gets_the_home_from_home_for_chat(api, ops_rooms, fay_room):
+    merge(api)
+    with store(api).transaction() as c:
+        assert bot_home_merge.home_for_chat(c, "human:fay", "ops", create=False) == ops_rooms["home"]
+        assert not bot_home_merge.chat_home_missing(c, "human:fay", "ops")
+
+
+def test_a_new_chat_with_an_owner_with_no_viewer_is_the_home(api, ops_rooms, fay_room):
+    """Where a new message with no room named goes (hubdb.chat_home), and where the person's chat opens (rooms.personal_room,
+    hubdb.chats_with): the Home, not a new personal room beside it. No write runs as fay: the identity rule refuses a
+    human with no record, so the routing is what a new message from them would take."""
+    merge(api)
+    home = ops_rooms["home"]
+    with store(api).transaction() as c:
+        assert H.chat_home(c, "human:fay", "bot:ops", create=False) == home
+        assert rooms.personal_room(c, "human:fay", "ops")["id"] == home
+        assert [row["id"] for row in H.chats_with(c, "human:fay", "bot:ops")] == [home]
+    with store(api).read() as c:
+        assert not seqs(c, fay_room["room"])
+
+
+def test_the_one_time_move_carries_an_owner_with_no_viewer_old_chat_into_the_home(api, ops_rooms, fay_room):
+    summary = merge(api)
+    assert not summary["errors"] and not summary["skipped"], summary
+    home = ops_rooms["home"]
+    with store(api).read() as c:
+        assert fay_room["message"] in seqs(c, home)
+        assert not seqs(c, fay_room["room"])
+        assert c.execute("SELECT 1 FROM home_merges WHERE conversation_id=?", (fay_room["room"],)).fetchone()
+
+
+def test_an_owner_whose_viewer_is_refused_the_home_keeps_none_and_is_not_moved(api, ops_rooms):
+    with store(api).transaction() as c:
+        cara_room = room(c, "human:cara", "ops")
+        cara_message = say(c, "human:cara", "bot:ops", "Cara before the move", cara_room)["id"]
+        restrict(
+            c,
+            "ops",
+            see={"people": ["ana", "ben", "cara"]},
+            read={"people": ["ana", "ben"]},
+            write={"people": ["ana", "ben"]},
+        )
+    summary = merge(api)
+    assert {"bot": "ops", "room": cara_room, "reason": "its owner may not read the Home"} in summary["skipped"], summary
+    with store(api).transaction() as c:
+        assert bot_home_merge.home_for_chat(c, "human:cara", "ops", create=False) is None
+        assert seqs(c, cara_room) == [cara_message]
+        assert not c.execute("SELECT 1 FROM home_merges WHERE conversation_id=?", (cara_room,)).fetchone()
+
+
+def test_the_federated_check_still_applies_to_an_owner_with_no_viewer(api, ops_rooms, fay_room):
+    """Federation's tables were dropped by migration 0058; a stand-in table with the column the check reads stands for a
+    Home linked to another install."""
+    merge(api)
+    home = ops_rooms["home"]
+    with store(api).transaction() as c:
+        assert bot_home_merge.home_for_chat(c, "human:fay", "ops", create=False) == home
+        c.execute("CREATE TABLE federation_threads(thread_id TEXT NOT NULL)")
+        c.execute("INSERT INTO federation_threads(thread_id) VALUES(?)", (home,))
+        assert bot_home_merge.home_for_chat(c, "human:fay", "ops", create=False) is None
+
+
+def test_an_actor_that_is_not_a_person_with_no_viewer_keeps_none(api, ops_rooms):
+    """Only a human with no record is an owner with no viewer; another actor with no viewer keeps the answer None."""
+    merge(api)
+    with store(api).transaction() as c:
+        assert threads.actor_viewer(c, "service:ci") is None
+        assert bot_home_merge.home_for_chat(c, "service:ci", "ops", create=False) is None
+
+
+def test_an_owner_with_no_viewer_and_an_archived_home_gets_a_new_home_on_the_first_chat(api, ops_rooms, fay_room):
+    """A chat whose bot Home was archived makes the bot's Home with create, as the first message of a new chat does."""
+    merge(api)
+    old = ops_rooms["home"]
+    with store(api).transaction() as c:
+        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), old))
+        assert bot_home_merge.chat_home_missing(c, "human:fay", "ops")
+        made = bot_home_merge.home_for_chat(c, "human:fay", "ops")
+        assert made and made != old
+        assert H.chat_home(c, "human:fay", "bot:ops") == made

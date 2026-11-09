@@ -1,10 +1,7 @@
 """Getting started: every tick is computed from live state, and each person keeps their own choices."""
 
-import json
-
-from backend.store import H
-
-from backend.tests.test_onboarding import as_person, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in
+from backend.tests.helpers.getting_started import add_bot
 
 
 def items(api, headers=None):
@@ -16,37 +13,10 @@ def body_of(api):
     return api.get("/api/v2/getting-started", headers=signed_in()).json()
 
 
-def heartbeat(api, runner_id, *, seconds_ago=0, runtimes=None):
-    """A runner's last word, as the heartbeat stores it."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
-            (
-                H.shift(H.now(), seconds=-seconds_ago),
-                json.dumps({"schema_version": 1, "runtimes": runtimes or {}, "bots": {}}),
-                runner_id,
-            ),
-        )
-
-
-def enrolled(api):
-    machine(api)
-    with api.app.state.store.read() as c:
-        return c.execute("SELECT id FROM runners").fetchone()["id"]
-
-
 def activate(api, *slugs):
     with api.app.state.store.transaction() as c:
         for slug in slugs:
             c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-
-
-def add_bot(api, slug, state="active"):
-    with api.app.state.store.transaction() as c:
-        H.sync_registry(c, {slug: {"name": slug, "status": state}}, None)
-
-
-SIGNED_IN = {"codex": {"installed": True, "authenticated": "ready"}}
 
 
 def test_each_person_sees_only_what_they_can_act_on(environment):

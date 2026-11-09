@@ -52,10 +52,26 @@ interface PipelineAttachment {
   detail?: string;
 }
 
-/** One item of the ▶ queue: a requirement of one ticket that waits on this reviewer. Built from the queue row. */
+/** The ▶ queue's forms: a requirement to review, a question of the reader's that holds a card, or a subtask of theirs. */
+type PipelineReviewForm = 'review' | 'question' | 'subtask';
+
+/** One item of the ▶ queue: a requirement of one ticket that waits on this reviewer, or (question, subtask) a task of the
+    reader's on that ticket. Built from the queue row. A question or subtask has no requirement and no attachments. */
 interface PipelineReviewItem {
+  form: PipelineReviewForm;
+  /** The ticket on the board: the card a question holds or a subtask belongs to, else the reviewed ticket. */
   task_id: string;
+  /** The requirement reviewed (review items only; '' for the other forms). */
   requirement_id: string;
+  /** The question or subtask itself (the other forms). */
+  subject_id?: string | null;
+  subject_title?: string;
+  subject_version?: number;
+  /** A question's ask, as the question card reads it (the same shape as a Needs you item's ask). */
+  ask?: Record<string, unknown> | null;
+  /** The card a question holds ("holds up" on the question card). */
+  holds_up?: { id: string; title: string } | null;
+  since?: string;
   task_title?: string;
   stage_name?: string;
   pipeline_id?: string;
@@ -63,6 +79,15 @@ interface PipelineReviewItem {
   stage_id?: string;
   /** The assignee for "Message <assignee>", or null. */
   assignee?: { id: string; name: string } | null;
+  /** The pipeline's manager bot for "Message <manager>", or null (the button is then not offered). */
+  manager: { id: string; name: string } | null;
+  /** The card, shown when nothing is attached: the ticket's body, acceptance criteria and checkpoint. */
+  body: string;
+  acceptance_criteria: string[];
+  checkpoint: string;
+  /** A subtask's files, as the task page lists them (empty for the other forms). */
+  task_files?: TfAttachment[];
+  /** Why it is the viewer's, in words: the requirement and the pipeline ("Screenshots · Dev tickets"), with who sent it. */
   why: string;
   /** The bot's note, or empty. */
   bot_note: string;
@@ -72,8 +97,12 @@ interface PipelineReviewItem {
   can_mark_met?: boolean;
   /** Whether the viewer may send it Not validated (the server's follow-up rule, D66). */
   can_not_validate?: boolean;
-  /** The attachment and the stage visit the item shows, which Not validated names back to the server. */
+  /** The requirement's attachment (never a file on the ticket), and the stage visit the item shows: Not validated names
+      them back to the server. */
   attachment_id?: string | null;
+  /** The attachment is a page the reader cannot open: the server sends it removed, with no id, digest or address. Approve
+      is not offered for it; the one line says why. */
+  attachment_removed?: boolean;
   stage_visit_id?: string | null;
   attachments: PipelineAttachment[];
   /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
@@ -140,6 +169,9 @@ interface ServerDot {
   name: string;
   state: ServerReqState;
 }
+/** A board dot as it arrives: a server dot, one already mapped, or a ticket's requirement as the API schema types it
+    (ui/types/api.d.ts Task.requirements: a record each). */
+type BoardDotRow = ServerDot | PipelineRequirement | Record<string, unknown>;
 
 /** One requirement of GET /api/v2/tasks/{id}/requirements (the ticket's detail row). `decision` is who decided it (the judge
     and its actor) and under which requirement version; `attachments` is the newest few, as read views. */
@@ -160,6 +192,7 @@ interface ServerRequirementDetail {
 }
 
 interface ServerQueueItem {
+  form: 'review';
   task_id: string;
   title: string;
   pipeline_id: string;
@@ -171,9 +204,10 @@ interface ServerQueueItem {
   requirement_version: number;
   kind: string;
   work_version: number;
-  /** The evidence the item waits on, with its content address (queue read view). */
-  attachment: { id: string; source: 'file' | 'blob' | 'link'; url: string | null; file_id?: string | null;
-    file_version?: number | null; format: PipelineReqAttachment['format']; name: string; href: string | null } | null;
+  /** What the item shows, with its content address (queue read view). `ticket` is a file on the ticket itself, shown
+      when nothing is attached to the requirement: it is not the requirement's evidence. */
+  attachment: { id: string; source: 'file' | 'blob' | 'link' | 'ticket'; url: string | null; file_id?: string | null;
+    file_version?: number | null; format: PipelineReqAttachment['format'] | 'text'; name: string; href: string | null; removed?: boolean } | null;
   attachment_digest: string | null;
   why: string;
   since: string;
@@ -181,6 +215,12 @@ interface ServerQueueItem {
   claimed_by: string | null;
   claimed_by_me: boolean;
   assignee: { id: string; name: string } | null;
+  /** The pipeline's manager bot, or null. */
+  manager: { id: string; name: string } | null;
+  /** The ticket's body, acceptance criteria and checkpoint: the card shown when nothing is attached. */
+  body: string;
+  acceptance_criteria: string[];
+  checkpoint: string;
   bot_note: string;
   moves_to: { stage_id: string; name: string } | null;
   /** The claimant, else the configured reviewer. */
@@ -188,6 +228,31 @@ interface ServerQueueItem {
   can_mark_met: boolean;
   can_not_validate: boolean;
   stage_visit_id: string | null;
+}
+
+/** A question or subtask of the reader's on an open card (backend pipeline_review._held_items). */
+interface ServerHeldItem {
+  form: 'question' | 'subtask';
+  task_id: string;
+  title: string;
+  number: number | null;
+  pipeline_id: string;
+  pipeline: string;
+  stage_id: string | null;
+  stage: string;
+  subject_id: string;
+  subject_title: string;
+  subject_version: number;
+  ask: Record<string, unknown> | null;
+  holds_up: { id: string; title: string } | null;
+  why: string;
+  since: string;
+  late: boolean;
+  reviewer_id: string;
+  /** A subtask's body, acceptance criteria and files (empty for a question). */
+  body: string;
+  acceptance_criteria: string[];
+  task_files: TfAttachment[];
 }
 
 interface ServerRun {
@@ -227,17 +292,27 @@ const REQ_STATE: Record<ServerReqState, PipelineReqState> = {
 };
 
 /** A board dot as the requirement the view shows: the server's `none` is the UI's `missing`; a dot already mapped passes
-    through. The board has no reviewer, so next_actor is null. */
-function requirementFromDot(dot: ServerDot | PipelineRequirement): PipelineRequirement {
+    through. The board has no reviewer, so next_actor is null. A ticket's dots come as the schema types them
+    (BoardDotRow: a loose record each). */
+function requirementFromDot(dot: BoardDotRow): PipelineRequirement {
   const state = dot.state as string;
   const mapped = (REQ_STATE as Record<string, PipelineReqState>)[state] ?? (state as PipelineReqState);
   return { ...dot, state: mapped, next_actor: ('next_actor' in dot ? dot.next_actor : null) ?? null } as PipelineRequirement;
+}
+
+/** Who sent the item to the viewer, for the server's code; a reviewer's own item names nobody. */
+const REVIEW_SENT_BY: Record<string, string> = { sent_back: 'Sent back to you', backup: 'Asked as backup' };
+
+/** "Why you": who sent it (if anyone), the requirement, and the pipeline, as "Spec approved · Product". */
+function reviewWhy(row: ServerQueueItem): string {
+  return [REVIEW_SENT_BY[row.why], row.requirement, row.pipeline].filter(Boolean).join(' · ');
 }
 
 /** A queue row, as the review view shows it. The row has one attachment; the view takes a list. */
 function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
   const a = row.attachment;
   return {
+    form: 'review',
     task_id: row.task_id,
     requirement_id: row.requirement_id,
     task_title: row.title,
@@ -245,7 +320,11 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     pipeline_id: row.pipeline_id,
     stage_id: row.stage_id,
     assignee: row.assignee ?? null,
-    why: row.why,
+    manager: row.manager ?? null,
+    body: row.body ?? '',
+    acceptance_criteria: row.acceptance_criteria ?? [],
+    checkpoint: row.checkpoint ?? '',
+    why: reviewWhy(row),
     bot_note: row.bot_note ?? '',
     reviewer_id: row.reviewer_id ?? null,
     can_mark_met: !!row.can_mark_met,
@@ -259,7 +338,8 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     work_version: row.work_version,
     attachment_digest: row.attachment_digest,
     requirement_version: row.requirement_version,
-    attachment_id: a?.id ?? null,
+    attachment_id: a && a.source !== 'ticket' ? a.id : null,
+    attachment_removed: a?.removed === true,
     stage_visit_id: row.stage_visit_id ?? null,
   };
 }
@@ -319,7 +399,7 @@ function managerViewFromRail(rail: ServerRail): PipelineManagerView {
 }
 
 /** The ticket's requirements on the board (their dots), for the card's requirement dots. */
-function pipelineBoardDots(dots: (ServerDot | PipelineRequirement)[]): PipelineRequirement[] {
+function pipelineBoardDots(dots: BoardDotRow[]): PipelineRequirement[] {
   return dots.map(requirementFromDot);
 }
 
@@ -331,9 +411,61 @@ async function pipelineTaskRequirements(taskId: string): Promise<PipelineRequire
 }
 
 /** The reviewer's queue for one pipeline: Late items first, then the oldest. */
+/** A question or subtask of the reader's, as the ▶ view shows it. The review-only fields take their empty values. */
+function heldItemFromRow(row: ServerHeldItem): PipelineReviewItem {
+  return {
+    form: row.form,
+    task_id: row.task_id,
+    requirement_id: '',
+    task_title: row.title,
+    stage_name: row.stage,
+    pipeline_id: row.pipeline_id,
+    stage_id: row.stage_id ?? '',
+    subject_id: row.subject_id,
+    subject_title: row.subject_title,
+    subject_version: row.subject_version,
+    ask: row.ask,
+    holds_up: row.holds_up,
+    since: row.since,
+    assignee: null,
+    manager: null,
+    body: row.body ?? '',
+    acceptance_criteria: row.acceptance_criteria ?? [],
+    checkpoint: '',
+    task_files: row.task_files ?? [],
+    why: row.why,
+    bot_note: '',
+    reviewer_id: row.reviewer_id,
+    can_mark_met: false,
+    can_not_validate: false,
+    attachments: [],
+    claim: null,
+    moves_to: null,
+    late: row.late,
+    work_version: 0,
+    attachment_digest: null,
+    requirement_version: 0,
+    attachment_id: null,
+    stage_visit_id: null,
+  };
+}
+
 async function pipelineReviewQueue(pipelineId: string): Promise<PipelineReviewQueue> {
-  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/review/queue`)) as { items: ServerQueueItem[] };
-  return { items: res.items.map(reviewItemFromRow) };
+  const res = await get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/review/queue`)) as { items: (ServerQueueItem | ServerHeldItem)[] };
+  return { items: res.items.map(row => row.form === 'review' ? reviewItemFromRow(row) : heldItemFromRow(row)) };
+}
+
+/** Done on a subtask of the reader's: the task is finished, as its own Done does (the Decide card's call, decide.ts), with
+    the note typed in the box when there is one. */
+async function pipelineSubjectDone(item: PipelineReviewItem, note = ''): Promise<void> {
+  await post(`/v2/tasks/${encodeURIComponent(item.subject_id ?? '')}`,
+    { status: 'done', version: item.subject_version ?? 1, ...(note ? { note } : {}) }, newRequestId());
+}
+
+/** Send back on a subtask of the reader's: it is declined with the note, which goes to its owner as the answer does. */
+async function pipelineSubjectBack(item: PipelineReviewItem, note: string): Promise<void> {
+  await post(`/v2/tasks/${encodeURIComponent(item.subject_id ?? '')}`,
+    { status: 'declined', version: item.subject_version ?? 1, note }, newRequestId());
 }
 
 /**
@@ -466,18 +598,17 @@ interface PipelineSettings {
   name: string;
   prefix: string | null;
   goal: string | null;
-  /** A key of judge_models, or null for the default judge. */
-  judge_model: string | null;
   visibility: 'company' | 'members';
   factory_id: string | null;
   owner_id: string | null;
   manager_id: string | null;
   /** Actor references, human:<id> or bot:<slug>. Only a members-only pipeline keeps a list. */
   members: string[];
-  /** The judge models a pipeline may be given, in the order the server lists them. */
-  judge_models: string[];
-  /** The judge a pipeline has when its judge_model is null. */
-  default_judge_model: string;
+  /** The stuck rule: null is the default in stuck_rule_defaults. */
+  stuck_after_hours: number | null;
+  ask_person_after_hours: number | null;
+  question_expiry_days: number | null;
+  stuck_rule_defaults: {stuck_after_hours: number; ask_person_after_hours: number; question_expiry_days: number};
 }
 
 /** A live factory, as GET /v2/factories lists it. */
@@ -498,7 +629,8 @@ async function pipelineSettings(pipelineId: string): Promise<PipelineSettings> {
 }
 
 /**
- * Save some of a pipeline's settings: a field left out stays as it is. An empty goal or a null judge_model clears it;
+ * Save some of a pipeline's settings: a field left out stays as it is. An empty goal clears it, and an empty manager_id
+ * clears the manager (a bot's id, active only; the server refuses any other);
  * visibility "members" takes the pipeline out of its factory, which the server clears.
  */
 async function pipelinePatchSettings(pipelineId: string, fields: Record<string, unknown>): Promise<void> {

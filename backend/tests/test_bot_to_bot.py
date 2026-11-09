@@ -5,7 +5,7 @@ Builder sample, Oct 18: 74 of 168 wakes were QA updates, a bot telling another b
 
 from backend import bot_to_bot as B
 from backend import hubdb as H
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
 from backend.tests.hold_rows import set_holds
 
 
@@ -321,7 +321,7 @@ def test_a_held_message_or_comment_tells_its_sender_how_to_wake_the_bot_now(api)
 def test_a_held_message_with_a_file_keeps_its_hold_and_tells_its_sender(api):
     # Dev 328 Review 1: adding the file rewrote the message's references and dropped the hold mark.
     import base64
-    from backend.tests.test_files import publish
+    from backend.tests.helpers.files import publish
 
     r = setup(api)
     token = ops_token(api, r)

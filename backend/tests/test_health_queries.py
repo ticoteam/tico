@@ -1,40 +1,16 @@
 """GET /api/v2/health reads each computer, its bots and its failed runs in batches, so the statements it takes grow by a
 constant (at most one a computer, for a computer's login hold) rather than by a few a computer or a bot."""
 
-import contextlib
 import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from backend import health, queue_refusals as Q
 from backend.store import H, encode
-from backend.tests.test_api import api, headers, post, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_run_backoff import at, setup
-from backend.tests.test_status_reads import busy
-
-
-def counted(api, monkeypatch, path, token="ana-test"):
-    """GET `path` as `token`: the body, and the statements on the page's read snapshot. Each request starts from cold
-    roster caches, as a poll from a new process would."""
-    store, seen = api.app.state.store, []
-    store.roster_rows.clear()
-    with monkeypatch.context() as patched:
-        opened = store.read_transaction
-
-        @contextlib.contextmanager
-        def traced():
-            with opened() as c:
-                c.set_trace_callback(seen.append)
-                try:
-                    yield c
-                finally:
-                    c.set_trace_callback(None)
-
-        # Background workers borrow store.read too; their periodic reads are not the page's work.
-        patched.setattr(store, "read_transaction", traced)
-        response = api.get(path, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json(), len(seen)
+from backend.tests.helpers.api import post, runner
+from backend.tests.helpers.run_backoff import at, setup
+from backend.tests.helpers.status_reads import busy
+from backend.tests.helpers.health_queries import counted
 
 
 def test_health_statement_count_excludes_background_media_reads(api, monkeypatch):

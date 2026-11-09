@@ -1,6 +1,6 @@
 """A bot's question task to a person goes ahead on the bot's default when it is safe to, and closes on its date."""
 
-from backend.tests.test_api import api, headers, post  # noqa: F401  (fixture)
+from backend.tests.helpers.api import headers, post  # noqa: F401  (fixture)
 from backend import ask_deadlines, question_tasks as QT, team_rules
 from backend.store import H
 
@@ -60,7 +60,7 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
         assert ask_deadlines.sweep(c)["went_ahead"] == []
 
 
-def test_a_task_handed_to_a_person_closes_after_two_weeks_and_an_undated_question_waits_for_the_batch(api):
+def test_a_task_handed_to_a_person_closes_after_a_week_and_an_old_undated_question_expires(api):
     with api.app.state.store.transaction() as c:
         _, old = _ask(c, "Which logo do we use?", days=15)
         handed = H.task_create(c, "bot:ops", "Sign the venue form", "x", "human:ana", lint=False)
@@ -76,10 +76,12 @@ def test_a_task_handed_to_a_person_closes_after_two_weeks_and_an_undated_questio
             )
         H.task_comment(c, "human:ana", touched["id"], "Still looking, give me a few days")
         done = ask_deadlines.sweep(c)
-    # Undated questions go back to their bot in the weekday batch (backend/still_needed.py), never one by one here.
-    assert done["expired"] == [] and done["closed"] == [handed["id"]]
+    # Undated questions go back to their bot in the weekday batch (backend/still_needed.py); one still open past
+    # EXPIRE_DAYS (7) expires here with a note telling the asker to ask again.
+    assert done["expired"] == [old["id"]] and done["closed"] == [handed["id"]]
     with api.app.state.store.read() as c:
-        assert QT.is_open(H.task(c, old["id"]))
+        gone = H.task(c, old["id"])
+        assert not QT.is_open(gone) and "expired" in gone["note"] and "ask again if it still matters" in gone["note"]
         closed = H.task(c, handed["id"])
         assert closed["status"] == "closed" and "expired" in closed["note"]
         assert H.task(c, touched["id"])["status"] == "open"
@@ -105,7 +107,7 @@ def test_a_task_handed_to_a_person_closes_after_two_weeks_and_an_undated_questio
         assert card["id"] not in ask_deadlines.sweep(c)["closed"]
         assert H.task(c, card["id"])["status"] == "open" and H.task(c, task["id"])["status"] == "waiting"
 
-    # A go-ahead date after day 14 is refused when asked; here one is set anyway: the question waits for its date,
+    # A go-ahead date after day EXPIRE_DAYS is refused when asked; here one is set anyway: the question waits for its date,
     # then goes ahead and closes.
     with api.app.state.store.transaction() as c:
         _, far = _ask(
@@ -135,8 +137,8 @@ def test_a_bot_date_never_beats_the_teams_days_and_the_cli_must_say_the_kind(api
 
 def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refused(api):
     from datetime import datetime, timedelta, timezone
-    from backend.tests.test_api import setup_attempt
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.mcp import call
 
     _, _, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
@@ -182,7 +184,7 @@ def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refu
         },
         token=attempt["token"],
     )
-    assert err and "more than 14 days" in str(out)
+    assert err and f"more than {ask_deadlines.EXPIRE_DAYS} days" in str(out)
 
 
 def test_a_due_routine_occurrence_survives_the_sweep_and_an_ordinary_handed_task_does_not(api):

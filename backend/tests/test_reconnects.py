@@ -8,7 +8,7 @@ import json
 
 from backend import hubdb as H
 from backend import reconnects as R
-from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401
 from backend import bot_settings as BS
 
 
@@ -30,7 +30,7 @@ def heartbeat(api, machine, signed_in):
 
 
 def codex_bot(api):
-    from backend.tests.test_subscriptions import set_runtime
+    from backend.tests.helpers.subscriptions import set_runtime
 
     machine = runner(api)
     assign(api, machine, "ops")
@@ -191,7 +191,7 @@ def ops_machine(api):
 
 def botops_turn(api, title="Connect the Acme CRM for ops"):
     from backend.store import encode
-    from backend.tests.test_api import ready
+    from backend.tests.helpers.api import ready
 
     with api.app.state.store.transaction() as c:
         if not c.execute("SELECT 1 FROM bots WHERE id='botops'").fetchone():

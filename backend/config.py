@@ -343,6 +343,11 @@ class Settings:
     gateway_key: str = field(default="", repr=False)
     gateway_url: str = ""
     typesafe_api_key: str = field(default="", repr=False)
+    # CI build time (backend/ci_runs.py): the VM-minutes of remote test runs one dev ticket's builder may start (one
+    # extension of half of it is a manager's to grant), and the USD a job-minute costs on a 4-vCPU runner (scaled by
+    # vCPUs; hosted runners cost 0). The company's daily CI share is the Finance budget "CI", not a setting here.
+    ci_minutes_per_ticket: int = 120
+    ci_rate_per_job_minute: float = 0.0016
     # How many calls to the server's own models one actor may make in a UTC day, by role: decisions
     # (`judge.call`, Slack routing included) and, counted apart, market asks (`market.ask`). backend/judge.py.
     decisions_daily_calls_owner: int = 20_000
@@ -355,10 +360,8 @@ class Settings:
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
-    # Org rule checks (backend/org_rule_check.py): their own monthly USD cap, apart from Decide's, so checks and
-    # screening never spend each other's (a cap saved in Automations > Maintenance wins); how many `hub rules check` drafts one bot
-    # may check in a UTC day; and how many checks run at once (past that, an output goes through unchecked, `busy`).
-    rules_monthly_usd: float = 50.0
+    # Org rule checks (backend/org_rule_check.py) spend from Decide's monthly cap above. How many `hub rules check` drafts
+    # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
     # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
@@ -409,6 +412,10 @@ class Settings:
     # demo is one someone put on a non-loopback address on purpose; it is read-only.
     demo: bool = False
     demo_public: bool = False
+    # The demo's own build (backend/demo_seed.py): its app runs with `demo` off so it takes the seed's writes, and like
+    # the demo it asks no decision model. The seed's provider keys are made up, so a call is a refused key or a timeout,
+    # whichever the network gives, and two builds of one date would differ (test_demo_company's same-date test).
+    demo_build: bool = False
     # TICO_REHEARSAL=1: a copy of real data run to see whether a migration works. Nothing runs on a timer and nothing
     # leaves the server: no scheduler, directory sync, backups, release check, usage count, support or HQ calls,
     # GitHub or Slack, telemetry or updater (docs/install.md, "Rehearse a migration"). Migrations run as usual.
@@ -672,6 +679,8 @@ class Settings:
             gateway_key="" if rehearsal else _gateway_key(),
             gateway_url=_gateway_url(),
             typesafe_api_key="" if rehearsal else _typesafe_key(),
+            ci_minutes_per_ticket=max(0, int(os.environ.get("TICO_CI_MINUTES_PER_TICKET", "") or 120)),
+            ci_rate_per_job_minute=max(0.0, float(os.environ.get("TICO_CI_RATE_PER_JOB_MINUTE", "") or 0.0016)),
             decisions_daily_calls_owner=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_OWNER", "") or 20_000)),
             decisions_daily_calls_human=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_HUMAN", "") or 5_000)),
             decisions_daily_calls_bot=max(0, int(os.environ.get("TICO_DECISIONS_DAILY_CALLS_BOT", "") or 5_000)),
@@ -682,7 +691,6 @@ class Settings:
             decisions_jev_usd_per_mtok_output=max(
                 0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)
             ),
-            rules_monthly_usd=max(0.0, float(os.environ.get("TICO_RULES_MONTHLY_USD", "") or 50.0)),
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",

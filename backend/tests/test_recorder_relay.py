@@ -13,7 +13,7 @@ from websockets.http11 import Headers, Response
 from clients import gateway as G
 from backend import gateway_connection, providers, recorder_relay
 from backend.store import H, digest
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
 
 HUMAN, BOT = "ana-test", "synthetic-recorder-bot-agent"
 OFF = {"transcribe": False, "assist": False, "stream": False}

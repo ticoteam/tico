@@ -19,15 +19,7 @@ from backend.finance.core import mirror as M
 from backend.finance.core import xero as X
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT,
-    OWNER,
-    account,
-    act,
-    books,
-    finance_template,
-    store,
-)
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store
 
 LATER = "2026-10-15T13:00:00.000000Z"
 LATER2 = "2026-10-15T14:00:00.000000Z"

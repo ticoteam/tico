@@ -6,9 +6,9 @@ import pytest
 
 from backend import read_cache
 from backend.store import H
-from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_read_batches import privacy_parties  # noqa: F401
-from backend.tests.test_task_privacy_reads import traced_get
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.helpers.read_batches import privacy_parties  # noqa: F401
+from backend.tests.helpers.task_privacy_reads import traced_get
 
 
 def seed_turns(c, start, end, parent=None, tag="t"):
@@ -93,7 +93,7 @@ def test_operations_does_not_query_each_computer(api):
                 "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?, 'ana',?,?)",
                 (f"rn{n}", f"Mac {n}", f"th{n}", H.now()),
             )
-    from backend.tests.test_task_privacy_reads import traced
+    from backend.tests.helpers.task_privacy_reads import traced
 
     _, text = traced(api, lambda: get(api, "operations"))
     joined = "\n".join(text)

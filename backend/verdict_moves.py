@@ -4,11 +4,12 @@ What a check step does with a verdict is set on the step (backend/step_flow.py),
 filed while its ticket sat at a check step, finished on the head the ticket's pull request is at now while the ticket
 is still at that step, moves the ticket as Tico (`after_verdict` marks it, `after_capture` moves it once the judging
 attempt is recorded):
-- approve or pass -> the step's `on_pass`; when that is the merge, the builder is woken to merge once CI is green;
+- approve or pass -> the step's `on_pass`; when that is the merge, Tico merges it once CI is green (or wakes the builder);
 - changes, fail, or a check finished with no verdict (its comments are the feedback) -> the step's `on_fail`, and the
   builder is woken once, with the verdict and the head. A pass at a head that one of those already stands on at the
   step goes there too: a later round at the same head clears nothing (`_verdict_at`).
-Tico never merges: the builder does, woken once per head (`merge_wake`). The merge moves the ticket to the type's
+Tico merges a bot's ticket itself when the GitHub App reaches its repository (backend/merge_arm.py); otherwise the
+builder does, woken once per head (`merge_wake`). The merge moves the ticket to the type's
 `on_merge` step from any earlier step (`merged`), and green CI on a new head at a step with `after_green` moves it on
 to its next check (`checks_done`). A ticket entering a step whose `skip_tag` it carries goes on to the step's
 `on_pass` (`skip`), and a check open past its step's `timeout_hours` is closed and its round skipped (`timeouts`).
@@ -26,6 +27,7 @@ import json
 import logging
 
 from . import hubdb as H
+from . import merge_arm
 from . import review_gate
 from . import pr_identity as PR
 from . import step_flow as F
@@ -196,6 +198,11 @@ def move(c, row, target, why, *, sources=()):
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
         c.execute("RELEASE verdict_move")
+        if exc.rule == "stage_full":
+            from . import pipeline_engine
+
+            # The stage it moves to is full (D68): it waits where it is, and the manager lists it as waiting for room.
+            pipeline_engine.record_waiting(c, H.KEEPER, row["id"], exc)
         notice = getattr(exc, "review_gate", None)
         if notice:
             review_gate.notify(c, H.KEEPER, notice)
@@ -438,6 +445,14 @@ def _passed(c, ticket, step, why, *, sources=()):
         target = F.merge_step(c, ticket["type_id"]) if is_merged(c, ticket) else None
         if not target:
             ready = merge_ready(c, ticket)
+            if ready and merge_arm.tico_merges(c, ticket, ready[0]):
+                # Tico arms the merge itself on its next sweep (backend/merge_arm.py): nothing for the builder to do.
+                return {
+                    "moved": None,
+                    "handoff": None,
+                    "quiet": True,
+                    "say": f"{why}. Tico merges PR #{ready[0].get('number') or '?'} at head {ready[1][:12]}.",
+                }
             if ready:
                 _merge_woken(c, ticket, ready[1])
             return {
@@ -739,6 +754,8 @@ def merge_wake(c, row, snapshots=None):
         ready = row and merge_ready(c, row)
     if ready and _queued(ready[0], ready[1]):
         return False  # GitHub already has it in the merge queue at this head: nothing to merge again
+    if ready and merge_arm.tico_merges(c, row, ready[0]):
+        return False  # Tico arms the merge itself (backend/merge_arm.py)
     sources = (merge_sources(c, row, ready[1], pr=ready[0]) or [row["id"]]) if ready else []
     if ready and F.pr_checks(c, row):
         recipient = merge_recipient(c, row, ready[0])
@@ -886,11 +903,40 @@ def skip(c, row):
     return out
 
 
+def _refile(c, ticket, step, hours, at):
+    """A check step with `on_timeout: refile` never passes its ticket on by the timeout. Each check still open `hours`
+    after it was filed is closed, with the bot that left it unanswered named, and filed again to another free pool bot
+    (or the ticket waits at the step for one, as any check does). The clock is the check's own filing time, so the new
+    check gets its full hours."""
+    from . import check_pools
+
+    stale = [
+        ch
+        for ch in _checks(c, ticket, step)
+        if ch["status"] in H.ACTIVE_STATUSES and (at - H.parse_ts(ch["created_at"])).total_seconds() >= hours * 3600
+    ]
+    if not stale:
+        return
+    for check in stale:
+        slug = H.actor_id(check["owner_id"])
+        note = f"No verdict in {hours:g} h from {slug}; Tico closed the check and filed it again."
+        H.task_close(c, H.KEEPER, check["id"], note=note, strict=False)
+        H._task_event(c, ticket["id"], H.KEEPER, "check_refiled", slug, f"{step['id']}:{check['id']}", note)
+    found = check_pools.pool(c, step["id"])
+    if not found:
+        return
+    pool_step, slugs, limit = found
+    row = H.task(c, ticket["id"])
+    refiled = ", ".join(H.actor_id(ch["owner_id"]) for ch in stale)
+    check_pools._dispatch(c, row, pool_step, slugs, limit, check_pools._prs(c, row, pool_step), None, refiled=refiled)
+
+
 def timeouts(c, at=None):
     """Skip the round of each ticket at a check step past the step's `timeout_hours` with no verdict Tico acted on
     there: its open checks are closed and the ticket goes on as if the check passed with no comments. The clock starts
     when the ticket entered the step, so a check left open, one judged on an old head and one closed unanswered all end
-    the same way. Returns the tickets moved on."""
+    the same way. A step with `on_timeout: refile` is never skipped: `_refile` files its unanswered check again instead.
+    Returns the tickets moved on."""
     at = H.parse_ts(at or H.now())
     skipped = []
     timed = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow LIKE '%timeout_hours%'")]
@@ -898,11 +944,16 @@ def timeouts(c, at=None):
         hours = F.of(step).get("timeout_hours")
         if not hours or not F.is_check(step):
             continue
+        refile = F.of(step).get("on_timeout") == F.REFILE
         for (ticket_id,) in c.execute(
             f"SELECT id FROM tasks WHERE step_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
             (step["id"], *H.ACTIVE_STATUSES),
         ).fetchall():
             ticket = _ticket(c, H.task(c, ticket_id))
+            if refile:
+                if ticket:
+                    _refile(c, ticket, step, hours, at)
+                continue
             entered = c.execute(
                 "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
                 "AND new=? "

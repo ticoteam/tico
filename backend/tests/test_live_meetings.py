@@ -10,52 +10,11 @@ from starlette.requests import Request
 from backend import live_meetings as live_meetings_module
 from backend import gateway_connection, providers, task_models
 from backend.auth import Identity
-from backend.store import H, digest, encode
-from backend.tests.test_api import api, assign, get, headers, post, restrict, runner  # noqa: F401
-from backend.tests.test_new_bot_flows import create_bot
+from backend.store import H, encode
+from backend.tests.helpers.api import assign, get, headers, post, restrict, runner  # noqa: F401
+from backend.tests.helpers.new_bot_flows import create_bot
 from backend import bot_settings as BS
-
-
-@pytest.fixture
-def live(api):
-    settings = api.app.state.store.settings
-    settings.test_identities.update(
-        {
-            "ops-live": Identity("bot:ops", "bot", agent="hermes"),
-            "finance-live": Identity("bot:finance", "bot", agent="hermes"),
-        }
-    )
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-            ("ops", "hermes", digest("synthetic-ops-agent"), H.now(), "human:ana"),
-        )
-        c.execute(
-            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-            ("finance", "hermes", digest("synthetic-finance-agent"), H.now(), "human:ana"),
-        )
-    yield api
-    assert settle(api)
-
-
-def ready(api, r, bots, capabilities=("private_lanes_v1",)):
-    """A current runner: it advertises private lanes, so it takes a private meeting's turns (execution.PRIVATE_LANES)."""
-    return post(
-        api,
-        "runners/heartbeat",
-        {
-            "version": "test",
-            "platform": "test",
-            "capabilities": list(capabilities),
-            "readiness": {bot: True for bot in bots},
-        },
-        token=r["token"],
-    )
-
-
-def settle(api):
-    """Wait for the meeting routing a write started off its request (live_meetings.Routing)."""
-    return api.app.state.live_meeting_routing.settle(timeout=60)
+from backend.tests.helpers.live_meetings import attach, chunk, live, ready, settle
 
 
 def connect(api, *, title="Replay", client_id=None, fallback=30, reply_cap=3, cooldown_seconds=60):
@@ -68,21 +27,6 @@ def connect(api, *, title="Replay", client_id=None, fallback=30, reply_cap=3, co
     if client_id:
         body["client_id"] = client_id
     return post(api, "live-meetings", body)
-
-
-def attach(api, mid, *bots, token="ana-test"):
-    return post(api, f"live-meetings/{mid}/bots", {"bots": list(bots)}, token=token)
-
-
-def chunk(api, mid, seq, start, end, text="Transcript", *, token="ana-test", expected=200):
-    response = api.post(
-        "/api/v2/live-meetings/" + mid + "/chunks",
-        json={"chunks": [{"seq": seq, "speaker": "Ana", "start_ms": start, "end_ms": end, "text": text}]},
-        headers=headers(token),
-    )
-    assert response.status_code == expected, response.text
-    settle(api)
-    return response.json() if expected == 200 else response
 
 
 def test_connect_is_explicit_team_visible_and_second_human_must_join_to_chat(live):
@@ -1221,12 +1165,6 @@ def test_a_failed_decision_keeps_its_code_and_never_its_detail(live):
     assert "synthetic-private-words" not in json.dumps({k: v for k, v in trace.items() if k != "decision_input"})
 
 
-def test_the_meeting_view_says_its_meeting_model(live):
-    assert connect(live)["meeting_model"] is None
-    own = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
-    assert get(live, f"live-meetings/{own['id']}")["meeting_model"] == ""
-
-
 def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_openrouter(live, monkeypatch):
     settings = live.app.state.store.settings
     gateway_on(live, monkeypatch)
@@ -1648,6 +1586,7 @@ def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkey
     assert get(live, f"live-meetings/{plain['id']}")["meeting_model_effective"] == MEETING
     own = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
     assert (own["meeting_model"], own["meeting_model_effective"]) == ("", "")
+    assert get(live, f"live-meetings/{own['id']}")["meeting_model"] == ""  # the read says it too
 
 
 def test_recorder_discard_ends_without_filing_or_bot_runs(live):

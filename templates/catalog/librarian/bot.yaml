@@ -8,7 +8,7 @@ reasoning_effort: medium
 max_run_minutes: 45
 
 # The routines this bot starts with. The server seeds them once, when the Librarian is built in; from
-# then on they are Automations: `hub automation list --owner bot:librarian` lists them and
+# then on they are Automations: `hub automation list` lists them and
 # `hub automation update <id>` changes one (docs/routines.md).
 routines:
   - id: refresh-the-map

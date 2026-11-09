@@ -211,7 +211,7 @@ function systemRoutinesBind(el: Element) {
     void systemRoutineWrite(key, () => post('/v2/system-routines/' + encodeURIComponent(key) + '/run', {}));
   };
 }
-async function renderSystemRoutines(force: boolean | undefined) {
+async function renderSystemRoutines(force?: boolean | undefined) {
   const el: Element | null = $('#set-system-routines'); if (!el) return;
   if (SYSTEM_ROUTINES && !el.querySelector('[data-sysr-list]')) { el.innerHTML = systemRoutinesHTML(SYSTEM_ROUTINES); systemRoutinesBind(el); }
   if (!force && SYSTEM_ROUTINES && Date.now() - SYSTEM_ROUTINES_AT < 60000) return;

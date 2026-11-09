@@ -9,7 +9,6 @@ import types
 
 from backend import read_deps
 from backend.store import H, encode
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 
 
 def backlog(store, n):

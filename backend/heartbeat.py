@@ -158,6 +158,11 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     refresh_pending_checks(github_app)
     # A merge-queue removal that was not a merge is read afresh before its owner is woken (github.refresh_queue_removals).
     refresh_queue_removals(github_app)
+    # Tico merges approved work itself, at most once a minute: it arms the merge, re-arms one GitHub dropped, hands a red
+    # or conflicting one to the pipeline manager, and moves merged cards to their merged step (backend/merge_arm.py).
+    from . import merge_arm
+
+    merge_arm.sweep(github_app, paced=True)
     # An open pull request's conflict with a moved base sends no event: read the unknown and stale ones (github.refresh_conflicts).
     refresh_conflicts(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
@@ -240,7 +245,12 @@ def call_sweeps(ctx: Context) -> tuple[str, bool]:
 
 
 # ----------------------------------------------------------------------------- the steps, in the order they run
-MINUTE, TEN_MINUTES, HOUR = timedelta(minutes=1), timedelta(minutes=10), timedelta(hours=1)
+MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
+    timedelta(minutes=1),
+    timedelta(minutes=5),
+    timedelta(minutes=10),
+    timedelta(hours=1),
+)
 STEPS = [
     Step("github_sync", "GitHub sync", "poll", None, github_sync, capture="github_wakes", loop=True),
     Step("personal_alerts", "Personal alerts", "poll", None, personal_alerts, capture="scheduler", loop=True),
@@ -280,6 +290,10 @@ STEPS = [
         failure="milestone_waits",
         capture="scheduler",
     ),
+    # CI build time: the repository's recent workflow runs recorded and priced into Finance (backend/ci_runs.py).
+    Step(
+        "ci_sweep", "CI build time", "recovery", FIVE_MINUTES, S.step_ci_sweep, failure="ci_sweep", capture="scheduler"
+    ),
     Step(
         "due_reminders",
         "Due reminders",
@@ -317,6 +331,7 @@ STEPS = [
         capture="scheduler",
     ),
     Step("approval_expiry", "Approval expiry", "due", HOUR, S.step_approval_expiry, failure="approval_expiry"),
+    Step("stuck_cards", "Stuck cards", "recovery", TEN_MINUTES, S.step_stuck_cards, failure="stuck_cards"),
     Step(
         "repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True
     ),

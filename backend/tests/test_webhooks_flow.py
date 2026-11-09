@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 from backend import hook_relay
 from backend import hubdb as H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_event_rules import rule as rule_row
-from backend.tests.test_triggers import hook
-from backend.tests.test_triggers_incoming import as_bot
-from backend.tests.test_wake_rules import jobs, setup
-from backend.tests.test_webhooks import net  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.event_rules import rule as rule_row
+from backend.tests.helpers.triggers import hook
+from backend.tests.helpers.triggers_incoming import as_bot
+from backend.tests.helpers.wake_rules import jobs, setup
+from backend.tests.helpers.webhooks import net  # noqa: F401
 
 
 def wake_rule(api, **when):
@@ -104,7 +104,7 @@ def test_a_rule_that_ignores_a_call_heard_it_so_its_maker_gets_no_unheard_note(a
 
 def test_a_call_a_rule_forwards_reaches_the_outgoing_endpoint_signed(api, net):
     from backend import webhook_delivery as D
-    from backend.tests.test_webhooks import make, run, verify
+    from backend.tests.helpers.webhooks import make, run, verify
 
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     endpoint = make(api, events=["custom.*"], token="ana-test")
@@ -183,7 +183,7 @@ def test_a_signed_call_through_the_gateway_relay_is_checked_accepted_and_judged_
 
 
 def test_one_send_rule_for_two_triggers_sends_each_call_even_when_both_carry_the_same_delivery_id(api, net):
-    from backend.tests.test_webhooks import make, run
+    from backend.tests.helpers.webhooks import make, run
 
     first = post(api, "triggers", {"name": "Shop"})["trigger"]
     second = post(api, "triggers", {"name": "Blog"})["trigger"]

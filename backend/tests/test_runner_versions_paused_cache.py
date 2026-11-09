@@ -1,6 +1,5 @@
 """paused reuses the release row for the read snapshot."""
 
-from backend.tests.test_api import api  # noqa: F401
 from backend import runner_versions
 from backend import read_cache
 

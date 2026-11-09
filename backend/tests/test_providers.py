@@ -4,7 +4,6 @@ and the only thing that decides a bot's runtime and model when the bot names non
 import pytest
 
 from backend import providers as P
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend import bot_settings as BS
 
 
@@ -26,7 +25,7 @@ def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none
     """Found by the Linux rehearsal: onboarding creates bots that follow the company default, and
     the runner got an empty runtime from the claim, so no turn ever started."""
     from backend.store import encode
-    from backend.tests.test_api import claim, post, put, runner, assign, ready
+    from backend.tests.helpers.api import claim, post, put, runner, assign, ready
 
     put(api, "providers", {"enabled": ["openai"], "runtime": "codex", "model": "gpt-6-luna", "expected_revision": 0})
     with api.app.state.store.transaction() as c:
@@ -41,7 +40,7 @@ def test_a_claimed_attempt_carries_the_company_default_for_a_bot_that_names_none
 
 def test_a_bot_set_to_haiku_5_5_at_xhigh_runs_that_model_at_that_effort(api):
     """A Settings model change is what the runner's next claim carries: `--model` and `--effort` come from it."""
-    from backend.tests.test_api import claim, post, put, runner, assign, ready
+    from backend.tests.helpers.api import claim, post, put, runner, assign, ready
 
     put(
         api,
@@ -78,7 +77,7 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
     """The runtime mark's hover reads harness, model and effort ("Codex GPT 6.1 Sol High"): the bot's
     reasoning_effort, else an older config `effort`, else its stored row; none, or no runtime, sends none."""
     from backend.store import encode
-    from backend.tests.test_api import put
+    from backend.tests.helpers.api import put
 
     put(
         api,

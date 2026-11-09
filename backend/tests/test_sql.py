@@ -12,8 +12,9 @@ from types import SimpleNamespace
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, as_member, assign, claim, headers, post, ready, runner
+from backend.tests.helpers.api import as_member, headers, post, ready
 from backend import bot_settings as BS
+from backend.tests.helpers.sql import column, query, world
 
 SECRET_TABLES = (
     "credentials",
@@ -41,16 +42,6 @@ REJECTED = (
 )
 
 
-def query(api, sql, token="ana-test", expected=200, **body):
-    r = api.post("/api/v2/sql", json={"sql": sql, **body}, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def column(api, sql, token="ana-test"):
-    return sorted(row[0] for row in query(api, sql, token)["rows"])
-
-
 def error(api, sql, token="ana-test"):
     return query(api, sql, token, expected=422)["error"]["detail"]
 
@@ -58,7 +49,7 @@ def error(api, sql, token="ana-test"):
 def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(api, monkeypatch):
     from backend import sql as S, views
     from backend.auth import Identity
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     store, auth = api.app.state.store, api.app.state.auth
     who = Identity("human:cara", "human", email="cara@acme.example")
@@ -125,34 +116,6 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
             fresh.close()
     finally:
         held.close()
-
-
-@pytest.fixture
-def world(api):
-    """Two people's private Tico rooms, a private bot's task, and a ops turn granted Ana's room."""
-    with api.app.state.store.transaction() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS _litestream_seq(id INTEGER PRIMARY KEY, seq INTEGER)")
-        c.execute("INSERT INTO _litestream_seq VALUES(1, 1)")
-    ana_room = post(api, "chat/ops", {"text": "Ana private context."})["conversation_id"]
-    steven_room = post(api, "chat/ops", {"text": "Ben private context."}, token="ben-test")["conversation_id"]
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    attempt = claim(api, machine)
-    with api.app.state.store.transaction() as c:  # a person's Mac: its credential reads as them
-        c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (machine["runner_id"],))
-    private = post(api, "tasks", {"owner": "inbox", "title": "Sort the inbox", "body": "Private to Ana."})
-    coo_task = post(api, "tasks", {"owner": "ops", "title": "Summarize the week", "body": "For ops."})
-    finance_task = post(api, "tasks", {"owner": "finance", "title": "Close the books", "body": "For finance."})
-    return {
-        "ana_room": ana_room,
-        "steven_room": steven_room,
-        "machine": machine,
-        "attempt": attempt,
-        "private": private,
-        "coo_task": coo_task,
-        "finance_task": finance_task,
-    }
 
 
 def test_the_sql_page_examples_all_run(api):
@@ -618,8 +581,8 @@ def test_every_guarded_view_prepares_for_each_caller(api, world):
 
 def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, world, monkeypatch):
     from backend import sql as S
-    from backend.tests.test_page_audience import edit
-    from backend.tests.test_pages import page
+    from backend.tests.helpers.page_audience import edit
+    from backend.tests.helpers.pages import page
 
     made = page(api, world['attempt'])
     assert made.status_code == 200, made.text
@@ -1290,8 +1253,8 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
     from backend import assistant
-    from backend.tests.test_api import setup_attempt
-    from backend.tests.test_mcp import call, rpc
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.mcp import call, rpc
 
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
@@ -1412,7 +1375,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
 def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner_reads(api):
     import sqlite3
     from backend import assistant, sql as S
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.assistant import assistant_turn
 
     # Mint a real personal token, so authentication sets via_token rather than a test identity shortcut.
     personal = post(api, "me/tokens", {"label": "synthetic owner script"})["token"]
@@ -1531,7 +1494,7 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
     from backend import sql as S
     from backend.auth import Identity
     from backend.store import H, encode
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     store, auth = api.app.state.store, api.app.state.auth
     people = [

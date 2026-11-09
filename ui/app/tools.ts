@@ -11,7 +11,7 @@
      #/tools/address/<id>, #/tools/address/outbox     one mailing address, letters out  │ (ui/app/inboxes*.js)
      #/tools/settings[/<section>], #/tools/messages   mail and number settings, texts   ┘
      #/tools/keys[/<service> | /credentials/<id>]     every credential, by tool (ui/app/redesign-library.ts)
-     #/tools/webhooks[/<id>]                          outgoing webhooks, and one (ui/app/settings-webhooks.js)
+     #/tools/webhooks[/<id>]                          outgoing webhooks, and one (ui/app/settings-webhooks.ts)
      #/tools/<service>                                a declared tool's page, Slack's and GitHub's (same file)
    The old homes of all of it redirect here (toolsRoute): Library › Tools and › Connections, Settings › Inboxes and
    the tabs it replaced, #/integrations and #/credentials.

@@ -2,7 +2,7 @@
 AI or reach people, the books, and the nightly auto dream), Run now, who may change them (owner and admins; enforced on the server), the
 flat list's WHEN/THEN rows, department tag and search words, and the stale review and Topic changed switches moved from
 Settings > General > Team. Routines spec tests 3-9 and 12, task-rules spec tests 1-3 (built-in rows). Ana owns the
-team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
+team, Ben is an admin, Cara a member (backend/tests/helpers/api_app.py). Synthetic fixtures only."""
 
 import json
 import time
@@ -13,8 +13,8 @@ from backend import system_routines as SR
 from backend import team_rules
 from backend.scheduler import Scheduler, stamp
 from backend.store import H
-from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
-from backend.tests.test_stale_review import FakeDecide
+from backend.tests.helpers.api import get, post, put  # noqa: F401  (fixture)
+from backend.tests.helpers.stale_review import FakeDecide
 
 TIMED = {
     "stale_review",

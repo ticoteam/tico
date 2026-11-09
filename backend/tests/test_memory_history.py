@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend.memory_history import MAX_DOCUMENT_BYTES, MAX_REPORT_BYTES
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
 
 SHA = "a" * 40
 

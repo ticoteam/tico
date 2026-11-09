@@ -4,9 +4,9 @@ work or a named outside action holds it for review, never run again by itself wh
 
 from backend import run_diagnostics
 from backend.store import H
-from backend.tests.test_api import api, claim, expire, get, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
-from backend.tests.test_execution_review import aged, job_state, sweep
-from backend.tests.test_held_runs import botops
+from backend.tests.helpers.api import claim, expire, get, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
+from backend.tests.helpers.execution_review import aged, job_state, sweep
+from backend.tests.helpers.held_runs import botops
 
 LOST = "Computer lost or heartbeat stopped"
 HELD = "held for review instead of running again"
@@ -387,7 +387,7 @@ def test_a_person_stop_is_unchanged(api):
 
 
 def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_following_their_turn(api):
-    from backend.tests.test_task_lanes import new_task, task_bot
+    from backend.tests.helpers.task_lanes import new_task, task_bot
 
     machine = task_bot(api, lanes=True)
     task = new_task(api, 'Check the files')

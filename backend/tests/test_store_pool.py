@@ -479,7 +479,7 @@ def test_app_shutdown_closes_the_store_pool(tmp_path):
     from fastapi.testclient import TestClient
 
     from backend.app import create_app
-    from backend.tests.test_api import api_settings
+    from backend.tests.helpers.api import api_settings
 
     app = create_app(api_settings(tmp_path))
     with TestClient(app):

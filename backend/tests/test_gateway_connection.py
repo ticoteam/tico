@@ -12,10 +12,10 @@ import pytest
 
 from backend.credentials import CredentialCipher
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, runner  # noqa: F401
-from backend.tests.test_credentials import FakeKMS
-from backend.tests.test_decide_gateway import answer_all
-from backend.tests.test_judge import QUESTIONS
+from backend.tests.helpers.api import assign, claim, get, headers, post, put, runner  # noqa: F401
+from backend.tests.helpers.credentials import FakeKMS  # noqa: F401
+from backend.tests.helpers.decide_gateway import answer_all  # noqa: F401
+from backend.tests.helpers.judge import QUESTIONS  # noqa: F401
 from clients import gateway as G
 from backend import bot_settings as BS
 
@@ -122,6 +122,9 @@ def fake_gateway():
         yield fake
     finally:
         fake.server.shutdown()
+        # Closed, not just stopped: a Gateway gone afterwards refuses the connection at once instead of holding it
+        # for the client's 8 s timeout. Both land in check's one "unreachable" branch (URLError/TimeoutError/OSError).
+        fake.server.server_close()
 
 
 def ready(api, r, bots):
@@ -406,11 +409,10 @@ def test_the_key_goes_only_to_an_https_or_exact_loopback_url_and_never_follows_a
         (lambda f: f.active(KEY, 0.8), "warning", "warn", "80% of its monthly Gateway cap"),
         (lambda f: f.active(KEY, 1.0), "cap_reached", "bad", "Gateway cap reached"),
         (lambda f: f.refuse(KEY, 429, "cap_reached"), "cap_reached", "bad", "Gateway cap reached"),
-        (lambda f: f.refuse(KEY, 429, "cap_reached", flat=True), "cap_reached", "bad", "Gateway cap reached"),
         (lambda f: f.revoked(KEY), "revoked", "bad", "Not working: key not recognised"),
-        (lambda f: f.revoked(KEY, flat=True), "revoked", "bad", "Not working: key not recognised"),
         (lambda f: None, "unknown", "bad", "Not working: key not recognised"),
-        (lambda f: f.refuse(KEY, 401, "unknown_key", flat=True), "unknown", "bad", "Not working: key not recognised"),
+        # The flat error shape reads to the same state (the every-code test below runs both shapes of each code), so
+        # its word reaches settings and health the same way; one shape per state here.
     ],
 )
 def test_the_gateways_word_on_the_key_reaches_settings_and_the_owners_health(
@@ -432,14 +434,20 @@ def test_the_gateways_word_on_the_key_reaches_settings_and_the_owners_health(
         assert "gateway" not in {r["id"] for r in get(api, "health", "ben-test")["checks"]}
 
 
-@pytest.mark.parametrize("flat", [False, True])
-@pytest.mark.parametrize("code", list(ERRORS))
-def test_every_gateway_code_on_the_key_endpoint_reads_plainly(code, flat):
+def test_every_gateway_code_on_the_key_endpoint_reads_plainly(subtests):
+    """Every code in both shapes against one fake Gateway (each refuse() replaces what the key answers)."""
+    with fake_gateway() as fake:
+        for code in ERRORS:
+            for flat in (False, True):
+                with subtests.test(code=code, flat=flat):
+                    _every_gateway_code_on_the_key_endpoint_reads_plainly(fake, code, flat)
+
+
+def _every_gateway_code_on_the_key_endpoint_reads_plainly(fake, code, flat):
     """Each row of the Gateway's table, in both its shapes: only a refused key says the connection is not working,
     the cap says so, and the rest say nothing about the key (never the Gateway's raw text, never the key)."""
-    with fake_gateway() as fake:
-        fake.refuse(KEY, ERRORS[code][0], code, flat)
-        seen = G.check(KEY, fake.url)
+    fake.refuse(KEY, ERRORS[code][0], code, flat)
+    seen = G.check(KEY, fake.url)
     state = {
         "unknown_key": "unknown",
         "revoked_key": "revoked",

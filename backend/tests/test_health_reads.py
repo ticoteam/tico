@@ -1,41 +1,14 @@
 """The health checks read the company's settings once a page, and each bot's own rows once for all the bots."""
 
-import contextlib
 import re
 from collections import Counter
 
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_assigned_start import advance, cancel, clock, sweep  # noqa: F401
-from backend.tests.test_status_reads import busy, setup
-from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.assigned_start import advance, cancel, clock, sweep  # noqa: F401
+from backend.tests.helpers.status_reads import busy, setup
+from backend.tests.helpers.task_lanes import new_task, task_bot
 from backend.tests.hold_rows import set_holds
-
-
-def counted(api, monkeypatch, path, token="ana-test", trace=None):
-    """GET `path` as `token`: the body, and the statements it took on the one snapshot it read."""
-    store, seen = api.app.state.store, []
-    if trace is not None:
-        seen = trace
-    store.roster_rows.clear()  # per-store caches start empty, so every count is the same count
-    with monkeypatch.context() as patched:
-        for name in ("read", "read_transaction"):
-
-            def traced(opened=getattr(store, name)):
-                @contextlib.contextmanager
-                def borrowed():
-                    with opened() as c:
-                        c.set_trace_callback(lambda q: seen.append(q))
-                        try:
-                            yield c
-                        finally:
-                            c.set_trace_callback(None)
-
-                return borrowed()
-
-            patched.setattr(store, name, traced)
-        response = api.get(path, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json(), len(seen)
+from backend.tests.helpers.health_reads import counted
 
 
 def warmed(api, monkeypatch, path, trace):
@@ -153,7 +126,7 @@ def stuck_company(api, monkeypatch, count):
     on a blocker, a few running, and a refusal Health has watched for over 12 hours on each."""
     from backend import health
     from backend.store import H, encode
-    from backend.tests.test_run_backoff import at
+    from backend.tests.helpers.run_backoff import at
 
     monkeypatch.setattr(
         health,
@@ -193,7 +166,7 @@ def stuck_company(api, monkeypatch, count):
 def refuse_queues(api, monkeypatch, slugs):
     """Each of these bots' queues refused for over 12 hours, as stuck_company leaves them."""
     from backend.store import H, encode
-    from backend.tests.test_run_backoff import at
+    from backend.tests.helpers.run_backoff import at
 
     at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with api.app.state.store.transaction() as c:
@@ -210,7 +183,7 @@ def refuse_queues(api, monkeypatch, slugs):
 def test_refused_queue_checks_read_the_company_limit_once_for_all_bots(api, monkeypatch):
     # Each refused queue's claim check read the company's limit default fresh: its budget cutoffs (the Finance book
     # first, one read a bot) and every period's spend. One pass over the refused queues shares that default now.
-    from backend.tests.test_run_backoff import at
+    from backend.tests.helpers.run_backoff import at
 
     machine = setup(api, monkeypatch, tasks=2)
     at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")

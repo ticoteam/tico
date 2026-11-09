@@ -7,30 +7,8 @@ The fixture's people are ana (owner), ben (an Admin through bot_admins) and cara
 import uuid
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
-
-
-def make_pipeline(api, name, owner="human:ana"):
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(
-            c, H.KEEPER, name, [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
-        )
-        c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (owner, typ["id"]))
-    return typ["id"]
-
-
-def send(api, method, path, body, token="ana-test", expected=200):
-    r = api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def settings(api, pipeline, body, token="ana-test", expected=200):
-    return send(api, "PATCH", f"pipelines/{pipeline}/settings", body, token, expected)
-
-
-def read_settings(api, pipeline, token="ana-test"):
-    return get(api, f"pipelines/{pipeline}/settings", token)
+from backend.tests.helpers.api import get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.pipeline_settings_j import make_pipeline, read_settings, send, settings  # noqa: F401
 
 
 def seen_on_overview(api, token):
@@ -38,32 +16,27 @@ def seen_on_overview(api, token):
     return {p["id"] for p in get(api, "pipelines/overview?period=7d", token)["pipelines"]}
 
 
-def test_the_owner_sets_goal_and_judge_and_a_plain_member_changes_nothing(api):
+def test_the_owner_sets_the_goal_and_a_plain_member_changes_nothing(api):
     pipeline = make_pipeline(api, "Launches")
 
-    out = settings(api, pipeline, {"goal": "  Ship launches on time  ", "judge_model": "jev"})
-    assert out["goal"] == "Ship launches on time" and out["judge_model"] == "jev"
+    out = settings(api, pipeline, {"goal": "  Ship launches on time  "})
+    assert out["goal"] == "Ship launches on time"
     read = read_settings(api, pipeline)
-    assert read["goal"] == out["goal"] and read["judge_models"] == ["haiku-5.5", "jev", "sonnet"]
-    assert read["default_judge_model"] == "haiku-5.5"
+    assert read["goal"] == out["goal"] and "judge_model" not in read and "judge_models" not in read
 
-    # A field left out stays as it is.
-    settings(api, pipeline, {"goal": "Keep going"})
-    assert read_settings(api, pipeline)["judge_model"] == "jev"
-
-    # An empty goal clears it, and a null judge model takes the default back.
-    out = settings(api, pipeline, {"goal": "", "judge_model": None})
-    assert out["goal"] is None and out["judge_model"] is None
+    # An empty goal clears it.
+    out = settings(api, pipeline, {"goal": ""})
+    assert out["goal"] is None
 
     settings(api, pipeline, {"goal": "Nope"}, token="cara-test", expected=403)
     assert read_settings(api, pipeline)["goal"] is None
 
 
-def test_a_judge_model_must_be_one_the_judge_offers_and_a_long_goal_is_refused(api):
+def test_the_judge_model_is_not_a_setting_and_a_long_goal_is_refused(api):
     pipeline = make_pipeline(api, "Judged")
-    settings(api, pipeline, {"judge_model": "gpt-9"}, expected=422)
+    settings(api, pipeline, {"judge_model": "jev"}, expected=422)  # every pipeline is judged by Jev: no choice to send
     settings(api, pipeline, {"goal": "x" * 201}, expected=422)
-    assert read_settings(api, pipeline)["judge_model"] is None
+    assert read_settings(api, pipeline)["goal"] is None
 
 
 def test_a_private_pipeline_leaves_its_factory_and_refuses_one(api):

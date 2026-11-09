@@ -1,20 +1,38 @@
 """The pipeline engine (Track A): requirement states, the work version, the move gate with its override and the move-back
 rule, visits, the counting rule for earlier stages, set-based dots, and the off switch."""
 
+import sqlite3
+
 import pytest
 
 from backend import hubdb as H
 from backend import pipeline_engine as E
-from backend.tests.test_pipeline_foundation import ANA, boot, hub, insert, rows, step_id
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, insert, rows, step_id
+from backend.tests.helpers.pipeline_engine import BEN, T0, decide, requirement, states
 
-BEN = "human:ben"
 CHRIS = "human:chris"
-T0 = "2026-11-07T09:00:00.000000Z"
+
+
+_BOOTED = []
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _booted(tmp_path_factory):
+    """One booted hub database per module on each worker (Store.initialize is ~3 s); every test's pipeline() starts
+    from its own copy of it, so each test still gets a fresh database."""
+    path = tmp_path_factory.mktemp("pipeline-engine") / "hub.sqlite"
+    boot(path)
+    _BOOTED[:] = [path]
+    yield
+    _BOOTED.clear()
 
 
 def pipeline(tmp_path):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    with sqlite3.connect(_BOOTED[0]) as source, sqlite3.connect(path) as copy:
+        source.backup(copy)
+    source.close()
+    copy.close()
     c = hub(path)
     board = H.type_create(
         c,
@@ -32,51 +50,9 @@ def pipeline(tmp_path):
     return c, board
 
 
-def requirement(c, board, stage, name, kind="approval", needs=None, reviewed_by="person", **extra):
-    ident = H.new_id()
-    values = {
-        "id": ident,
-        "pipeline_id": board["id"],
-        "pipeline_stage_id": step_id(c, board["id"], stage),
-        "name": name,
-        "kind": kind,
-        "needs": __import__("json").dumps(needs or {}),
-        "reviewed_by": reviewed_by,
-        "created_at": T0,
-        "updated_at": T0,
-    }
-    values.update(extra)
-    insert(c, "stage_requirements", **values)
-    return ident
-
-
-def decide(c, task, req, verdict="met", judge="person", version=None, **extra):
-    row = c.execute("SELECT work_revision FROM tasks WHERE id=?", (task,)).fetchone()
-    stage = c.execute("SELECT pipeline_stage_id, version FROM stage_requirements WHERE id=?", (req,)).fetchone()
-    insert(
-        c,
-        "stage_decisions",
-        id=H.new_id(),
-        task_id=task,
-        pipeline_stage_id=stage[0],
-        stage_requirement_id=req,
-        requirement_version=version or stage[1],
-        work_version=row[0],
-        judge=judge,
-        verdict=verdict,
-        created_at=H.now(),
-        **extra,
-    )
-
-
 def card(c, board, step="Drafting", owner=ANA):
     n = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
     return H.task_create(c, ANA, f"Spec number {n} for the board", "", owner, type=board["id"], step=step, lint=False)
-
-
-def states(c, task):
-    row = dict(c.execute("SELECT id, type_id, step_id, status FROM tasks WHERE id=?", (task,)).fetchone())
-    return {d["name"]: d["state"] for d in E.dots_many(c, [row]).get(task, [])}
 
 
 def refused(fn):

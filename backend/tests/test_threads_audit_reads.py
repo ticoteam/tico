@@ -11,8 +11,8 @@ from backend import task_privacy, thread_attention, threads, updates, views
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.old_asks import old_ask
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_teammate_access import NOBODY, acme, set_access, sql_column, who  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.teammate_access import NOBODY, acme, set_access, sql_column, who  # noqa: F401
 from backend.tests.threads_e2e import add_member, call, create_thread, ok, remove_member, say, timeline
 
 

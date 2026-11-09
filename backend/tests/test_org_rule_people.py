@@ -17,11 +17,11 @@ from backend import threads as T
 from backend import views
 from backend.auth import Identity
 from backend.store import H, Problem
-from backend.tests.test_api import get, headers, post  # noqa: F401
-from backend.tests.test_org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
-from backend.tests.test_org_rules import api, as_bot, org, rule  # noqa: F401
-from backend.tests.test_thread_api import new_thread, say  # noqa: F401
-from backend.tests.test_bot_home_merge import merge as merge_homes, room as chat_room_with
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.org_rule_check import COLOR, bodies, chat, color_rule, events, hold_row, ruled  # noqa: F401
+from backend.tests.helpers.org_rules import as_bot, org, rule  # noqa: F401
+from backend.tests.helpers.thread_api import new_thread, say  # noqa: F401
+from backend.tests.helpers.bot_home_merge import merge as merge_homes, room as chat_room_with
 
 EVERYONE = {"everyone": True}
 
@@ -218,9 +218,9 @@ def test_a_persons_message_goes_through_unchecked_when_the_check_fails(ruled, mo
         monkeypatch.setitem(K.DEADLINES, "low", 0.2)
         judge.hold = threading.Event()
     elif how == "budget":
-        api.app.state.store.settings.rules_monthly_usd = 1.0
+        api.app.state.store.settings.decisions_monthly_usd = 1.0
         with api.app.state.store.transaction() as c:
-            H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
+            H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     else:
         judge.fail = RuntimeError("provider down")
     got = write(api, "cara-test", "Our favorite color is gold.")

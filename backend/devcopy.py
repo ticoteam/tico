@@ -209,6 +209,9 @@ EMPTY = (
     "connector_reports",
     "github_app",
     "github_app_states",
+    # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.
+    "github_user_token",
+    "github_user_states",
     "granola_connections",
     "meeting_importers",
     "live_meeting_bots",
@@ -334,6 +337,8 @@ HISTORY = {
     "entity_mentions": "created_at",
     # The linker's run trace: the entities a bot run looked up.
     "entity_lookups": "created_at",
+    # CI build time (backend/ci_runs.py): the repository's workflow runs and builder permits, priced into Finance.
+    "ci_runs": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
@@ -548,6 +553,7 @@ KEEP = (
             "storage_moves",
             "strategy_bets",
             "strategy_versions",
+            "stuck_spells",
             "system_runs",
             "tags",
             "task_assets",
@@ -575,6 +581,7 @@ KEEP = (
             "usage_meter_reads",
             "budget_nodes",
             "task_caps",
+            "ci_run_extensions",  # a ticket's one extension of its CI minutes (backend/ci_runs.py)
             "reach_settings",
             "reach_lines",
             # The five change logs before migration 0064 moved them into history_events. A copy of a database from before that

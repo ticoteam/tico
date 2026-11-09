@@ -20,5 +20,5 @@
     "types": []
   },
   "include": ["./**/*.js", "./**/*.ts", "./types/**/*.d.ts"],
-  "exclude": ["./vendor/**", "./assets/**", "./node_modules/**", "./observability-vendors.ts"]
+  "exclude": ["./vendor/**", "./assets/**", "./node_modules/**", "./observability-vendors.ts", "./sw.ts"]
 }

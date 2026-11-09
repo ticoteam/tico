@@ -24,34 +24,54 @@ python -m pytest -q                            # the default Python suite, in pa
 
 npm ci
 npx playwright install chromium
-npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cjs)
+npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cts)
 ```
 
 Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
 the merge queue runs them again on the merged result before a change lands. The default run leaves out
 tests marked `@pytest.mark.slow` (real git, Docker, servers, long timers) and the browser scripts outside the core
-list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cjs --all` run them, and the release check does. Run
+list; `python -m pytest -q -m slow` and `node scripts/ui-tests.cts --all` run them, and the release check does. Run
 them too when you change what they cover. To run less while you work: `python -m pytest -q backend/tests/test_x.py`
-for one file, `node scripts/ui-tests.cjs <name>` for one browser script. If you touch `app/`, also run `cargo check`
+for one file, `node scripts/ui-tests.cts <name>` for one browser script. If you touch `app/`, also run `cargo check`
 there. `python3 scripts/remote.py -- <command>` runs a command on a fresh VM instead: it exits 75 when it never dispatched
 the run and 76 when the run ended without a result; any other code is the command's own (`--help` lists them).
 
 ## Before you push
 
-`scripts/check.sh` is the fast local gate. It runs each static check that applies to what you changed (the Python
-lint baseline, shellcheck, actionlint, cargo fmt, the migration order, the UI API types and basedpyright on the
-backend against its baseline), one line per check with its time, and exits non-zero if one fails. It compares against the merge-base
-with origin/main, so committed, uncommitted and new files are all checked. `scripts/check.sh --all` runs every check
-on every tracked file; CI runs the same checks. Turn on the pre-push hook once per clone:
+`scripts/check.sh` is the local gate, and the pre-push hook runs it. The hook is expected in every clone, bots' included.
+Turn it on once (every worktree of the clone shares the setting):
 
 ```bash
 git config core.hooksPath .githooks
-git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
 ```
 
-After that, each `git push` runs `scripts/check.sh` first. To push without it once, use `git push --no-verify`.
-The second line makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
-conflicting; without it git merges that file as text. The lint and type baselines need no driver: each source file's
+Each `git push` then runs, in order: a quiet `git fetch origin main` (20 seconds at most; an offline push goes on with the
+main fetched last time), `scripts/check.sh`, and `scripts/check_conflicts.sh`. A failure stops the push and prints what to
+do. `check.sh` prints one line per check with its time; a check whose inputs did not change prints SKIP.
+
+`check.sh` runs the checks CI's static job runs, on what you changed: the Python lint baseline and ruff format, shellcheck,
+actionlint, the migration order, the UI API types, UI strict (every script TypeScript), node types (the scripts/ and
+recorder/ TypeScript), the UI source suffix check, the
+OpenAPI spec (generated, never committed), Biome,
+the UI's API paths, the runner wire contract, and basedpyright on the backend against its baseline. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
+file, which is what CI's static job runs on each pull request.
+
+`scripts/check_conflicts.sh` asks git whether the pushed commit merges into origin/main. When it would not, the push stops,
+the conflicting files are listed, and the fix is to rebase onto origin/main, resolve, continue and push again. It needs git
+2.40 or later; an older git, or a missing origin/main, is reported as skipped and does not fail.
+
+To push past the hook once, use `git push --no-verify`. The pull request's static checks still run on the commit.
+
+Where the local gate differs from CI:
+
+- Uncommitted and untracked files are checked locally; CI checks only the pushed commit. The hook says so when the tree is dirty.
+- The baselines (ruff, tsc, UI strict, Biome, API paths) compare with origin/main as the hook last fetched it. CI compares with the pull request's base at the time of its run, so a base that moved since the fetch can differ.
+- `check.sh` uses the Python and Node on your PATH. CI uses a pinned Python 3.15 venv and Node 22 with `npm ci`.
+- `check.sh` runs cargo fmt on the Rust crates; CI's static job does not (the merge queue's rust lint does).
+- Tests, clippy, the desktop app, the recorder and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.
+- Diff-aware skips: a check is skipped only when no file it reads changed. A skip that should have run is a bug in its trigger.
+
+The lint and type baselines need no merge driver: each source file's
 findings are one file under `baselines/ruff/` and `baselines/pyright/`, so two branches that fix different files change
 different files and merge as text. (GitHub's "Update branch" button and the merge queue merge as text too; the merge
 queue runs no drivers at all, which is why the baselines are split.) `ruff-baseline.toml` and `.basedpyright/baseline.json`
@@ -61,7 +81,8 @@ ruff against `ruff-baseline.toml`, which extends `ruff.toml`; `ruff.toml` never 
 and `uvx ruff@0.15.9 format` needs no generated file. A branch from before the split tracks the old single files: rebase
 it, then run
 `python3 scripts/lint_baseline.py --migrate` and `python3 scripts/pyright_baseline.py --migrate` on its own counts and
-entries, and commit. The generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writes it.
+entries, and commit. The generated `ui/types/api.d.ts` and the API spec are not committed: `scripts/check_ui_types.sh`
+writes the first, and `python3 -m backend.openapi_v2` prints the second.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
@@ -75,6 +96,9 @@ all seconds long. Each counts findings per file against its own baseline file: `
 merge. The counts only shrink: after you fix findings, lower the baseline with
 `python3 scripts/check_ui_strict.py --write` (or `python3 scripts/ui_baseline.py tsc --write`, or `biome`).
 `ui/index.html` must keep the blank lines: `python3 scripts/ui_baseline.py migrate` adds them.
+The TypeScript that Node runs directly outside `ui/` (the `.cts` and `.mts` scripts under `scripts/` and `recorder/`)
+has its own strict check with no baseline, `python3 scripts/check_node_types.py`: each folder's `tsconfig.json` extends
+`tsconfig.node.json`, which `ui/tests/tsconfig.json` extends too, and every TypeScript file outside `ui/` must be in one.
 The UI's API calls are checked against the backend's routes by `bash scripts/check_ui_routes.sh`: it imports the app and
 walks its routes (no server), and counts the calls that match no route per file in `ui/routes-baseline.json`, which
 only shrinks the same way. Fix a call by pointing it at the route it should reach; the baseline is written with
@@ -111,7 +135,7 @@ uv pip compile backend/requirements-dev.in --python-version 3.15 -o backend/requ
 Upgrade a small compatible group with `--upgrade-package NAME` on the first command, then regenerate
 the development lock. Keep major migrations separate. After changing the browser SDK pins in
 `package.json`, run `npm run build:observability` and the real SDK privacy and retry tests in
-`node scripts/ui-tests.cjs telemetry`. The desktop GLib backport and its provenance checks are
+`node scripts/ui-tests.cts telemetry`. The desktop GLib backport and its provenance checks are
 documented in `app/vendor/README.md`; retain them when updating Cargo locks.
 
 ## Developer Certificate of Origin
@@ -157,9 +181,11 @@ company already owns, so their commits need no sign-off, and their pull requests
 ## How we work
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
-- Draft PRs run no CI. Mark the PR ready for review to start its checks (lint and the selected tests); each later push runs them again.
-- Once the PR is reviewed, its `checks` pass, and the tests you touched pass with `scripts/remote.py`, enqueue it with
-  `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
+- Open the PR as a draft (`gh pr create --draft`). Draft PRs run no CI, so push as often as you like.
+- When it is done, run `python3 scripts/pr_checks.py local --ready`: it runs the tests the PR checks select for your
+  change on your computer, prints a receipt line naming the head commit, and marks the PR ready after a pass. Marking it
+  ready starts its checks (lint and the selected tests); each later push runs them again, so batch your fixes.
+- Once the PR is reviewed and its `checks` pass, enqueue it with `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
 - After a queue failure, fix it and get green PR checks before you enqueue again.
 - Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
 - If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
@@ -168,13 +194,13 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 ## Releases
 
-Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
+Release notes are on each release's approval issue (label release-approval).
 
-A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
-14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
-GitHub Actions validates main's head and ships the first green candidate to Tico Team's install (the canary). Stable
-(TIDY) takes a canary release only after a person with write access approves its release notes, on that release's
-`release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major production issues only.
-The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The details are in
-[docs/releasing.md](docs/releasing.md#release-windows), and the approval steps are in
+A release is a version tag, and contributors do not tag. Tico releases on its own, at any hour: whenever main has
+merged work past the newest release and no candidate is in flight, GitHub Actions validates main's head and ships the
+first green candidate to Tico Team's install (the canary). Stable (TIDY) takes it once it is approved: automatically
+when its notes list no High risk item and `RELEASE_NEEDS_PERSON` is off (the default), otherwise by a person with write
+access on that release's `release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major
+production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The
+details are in [docs/releasing.md](docs/releasing.md#the-release-train), and the approval steps are in
 [docs/releasing.md](docs/releasing.md#approval).

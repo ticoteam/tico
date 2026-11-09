@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Tico's own release windows (docs/releasing.md#release-windows). The canary (Tico Team) takes each green candidate
-automatically. Stable (TIDY) takes a canary release only after someone approves its release notes.
+"""Tico's own release train (docs/releasing.md#the-release-train). The canary (Tico Team) takes each green candidate
+automatically. Stable (TIDY) takes a canary release once it is approved: by a person, or by the Release Manager when no
+person is needed (docs/releasing.md#approval).
 
     python3 scripts/release_train.py guard              should the release job run for this event (read-only)
-    python3 scripts/release_train.py window             act: promote approved releases (a window opens, or the backstop
-                                                        runs), then ship a green candidate or validate main
+    python3 scripts/release_train.py step               act: promote the approved release, then ship a green candidate or
+                                                        validate main
     python3 scripts/release_train.py promote            canary -> stable, when the canary's release is approved
     python3 scripts/release_train.py hotfix --reason "..." [--sha SHA] [--promote-stable true|false]
                                                 [--override-hold true|false]
-    python3 scripts/release_train.py status             the window, what canary and stable run, the approvals, the next step
+    python3 scripts/release_train.py status             what canary and stable run, the approvals, the next step
     python3 scripts/release_train.py notes BASE HEAD    the release notes for HEAD since BASE (read-only)
     python3 scripts/release_train.py shots-into-approval VERSION FILE
                                                         put the pictures (release-shots' markdown FILE, or the failure
@@ -18,36 +19,38 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
 
     GITHUB_TOKEN, GITHUB_REPOSITORY        the Actions token and repository
     GITHUB_EVENT_NAME                      schedule, push, workflow_run or workflow_dispatch
-    SCHEDULE                               schedule only: the cron that fired (a window cron, or the backstop)
+    SCHEDULE                               schedule only: the cron that fired (the backstop)
     RUN_EVENT, RUN_CONCLUSION, RUN_TITLE,  workflow_run only: the Release validation run that finished
     RUN_URL
     CANARY_URL, CANARY_UPDATE_KEY          the canary install (Tico Team) and its update key (docs/service-keys.md)
     STABLE_URL, STABLE_UPDATE_KEY          the stable install and its update key
     RELEASE_HOLD                           any value holds promotion to stable (a hotfix too, unless override_hold)
     RELEASE_TRAINS                         `on` lets schedules, pushes and finished runs act; a manual run always acts
+    RELEASE_NEEDS_PERSON                   `on`: every release waits for a person's approval. Anything else (the
+                                           default): a release whose notes list no High risk item needs no person
     GITHUB_ACTOR                           hotfix only: who overrode a hold
 
 Approval: each candidate that reaches the canary gets an open issue, "Release vX.Y.Z: awaiting approval" (label
 release-approval), whose body is its release notes. A person with write access approves it by adding the `approved` label
-or commenting `/approve` (a bot or app never counts); the `hold` label keeps it from stable. Promotion takes the canary's release to stable at a
-window's open and at the backstop, only when it is approved, not held and healthy, and then closes its issue. A newer
-release on the canary closes the older issues, with a link to the new one.
+or commenting `/approve` (a bot or app never counts). With RELEASE_NEEDS_PERSON not `on`, the Release Manager approves a
+release whose notes list no High risk item and were not cut short. The `hold` label keeps it from stable. Promotion takes
+the canary's release to stable on each job run, only when it is approved, not held and healthy, and then closes its
+issue, saying who approved it. A newer release on the canary closes the older issues, with a link to the new one.
 
-A release is published as not latest and marked latest (the GitHub release and the images' `latest` tags) only once the
-canary runs it healthy, so new installs, update checks and desktop apps never get a release the canary has not run. The
-image tags move with `docker buildx imagetools` (the workflow logs in to ghcr.io first).
-
-Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends. A window stays
-open until a vX.Y.Z release is published after it. Nothing is stored: every run works the state out from
-GitHub. Installs are read and updated only through the routes an update key reaches (GET and POST
-/api/v2/system/update, POST /api/v2/system/update/check; backend/service_keys.py), never /healthz, which a proxy may not
-route. The HTTP helper is the Release Manager's (templates/catalog/release-notes/software/rollout.py). Standard library
-only.
+There are no release windows: a candidate is validated and shipped whenever main has moved past the newest release
+and no candidate is in flight, at any hour. A release is published as not latest and marked latest (the GitHub release
+and the images' `latest` tags) only once the canary runs it healthy, so new installs, update checks and desktop apps
+never get a release the canary has not run. The image tags move with `docker buildx imagetools` (the workflow logs in to
+ghcr.io first). Nothing is stored: every run works the state out from GitHub. Installs are read and updated only through
+the routes an update key reaches (GET and POST /api/v2/system/update, POST /api/v2/system/update/check;
+backend/service_keys.py), never /healthz, which a proxy may not route. The HTTP helper is the Release Manager's
+(templates/catalog/release-notes/software/rollout.py). Standard library only.
 """
 
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
+import http.client
 import importlib.util
 import json
 import os
@@ -64,14 +67,9 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
 NOTES_PATH = ROOT / "scripts/release_notes.py"
-LOS_ANGELES = ZoneInfo("America/Los_Angeles")
-# Window starts in Los Angeles wall-clock time: every hour on the hour, 07:00 to 21:00, every day (15 a day).
-WINDOWS = tuple((hour, 0) for hour in range(7, 22))
-# GitHub's crons are UTC only: every UTC hour a window can start at, under PDT (UTC-7) or PST (UTC-8): 14:00 to 04:00
-# UTC under PDT and 15:00 to 05:00 under PST, so 14 to 23 and 0 to 5 (train.yml lists the same ones).
-CRONS = ["0 %d * * *" % hour for hour in (*range(14, 24), *range(0, 6))]
-# A backstop for a missed event (a workflow_run that does not fire, say): it takes a step in an open window like a push
-# does, never opens one, and promotes an approved canary release. Minutes 5, 25 and 45: never a window's minute (00 or 30).
+LOS_ANGELES = ZoneInfo("America/Los_Angeles")  # times in the log read as the team's clock
+# A backstop for a missed event (a workflow_run that does not fire, say): it takes a step like a push does, and runs the
+# job for a release waiting for stable or for latest. Minutes 5, 25 and 45.
 BACKSTOP_CRON = "5-59/20 * * * *"
 STABLE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 TITLE = re.compile(r"^Validate ([0-9a-f]{40}) as (v\S+) from (v\S+)(?: \(incremental on ([0-9a-f]{40})\))?$")
@@ -88,11 +86,15 @@ APPROVED = "approved"
 HOLD = "hold"
 WRITE_LEVELS = ("admin", "maintain", "write")  # the repository roles that may approve
 APPROVAL_TITLE = re.compile(r"^Release (v\d+\.\d+\.\d+): awaiting approval$")
+# How a release is approved when no person is needed: RELEASE_NEEDS_PERSON is not `on` and the notes list no High risk
+# item. The issue says so when stable takes it.
+AUTO_APPROVED = "approved automatically (no high-risk items; RELEASE_NEEDS_PERSON is off)"
 APPROVE_FOOTER = (
     "---\n"
     "Approve: a person with write access adds the `approved` label or comments `/approve`. Hold: add the `hold` label.\n"
-    "Stable (TIDY) takes an approved release at the next window or backstop run (every 20 minutes), unless it is held or a"
-    " health check fails."
+    "With RELEASE_NEEDS_PERSON off, a release with no High risk item needs no person: it is approved automatically.\n"
+    "Stable (TIDY) takes an approved release at the next train run (the backstop runs every 20 minutes), unless it is"
+    " held or a health check fails."
 )
 SHOTS_HEADING = "## What it looks like"
 SHOTS_START, SHOTS_END = "<!-- release-shots:start -->", "<!-- release-shots:end -->"
@@ -189,63 +191,12 @@ def parse_time(text):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def cron_time(cron):
-    """(hour, minute), in UTC, of a cron such as "30 14 * * *"."""
-    minute, hour = cron.split()[:2]
-    return int(hour), int(minute)
-
-
-def window_starts_on(day):
-    """The window starts on a Los Angeles calendar date, as UTC datetimes: the day type comes from that date."""
-    return [
-        datetime(day.year, day.month, day.day, hour, minute, tzinfo=LOS_ANGELES).astimezone(timezone.utc)
-        for hour, minute in WINDOWS
-    ]
-
-
-def window_start(now):
-    """The latest window start at or before now (UTC), by the Los Angeles date. Yesterday's first window is always at
-    or before now, so there is always one."""
-    now = now.astimezone(timezone.utc)
-    today = now.astimezone(LOS_ANGELES).date()
-    return max(start for day in (today - timedelta(days=1), today) for start in window_starts_on(day) if start <= now)
-
-
-def next_window(now):
-    """The first window start after now (UTC). It is never more than a day away."""
-    now = now.astimezone(timezone.utc)
-    today = now.astimezone(LOS_ANGELES).date()
-    return min(start for day in (today, today + timedelta(days=1)) for start in window_starts_on(day) if start > now)
-
-
-def window_cron_opens(cron, now):
-    """Whether a window cron that fired at now opens a window: its own UTC time must be the latest window start at or
-    before now. So a late cron still opens the window that is current, however late, and a superseded window opens
-    nothing. The off-season twin of a cron (15:30 UTC is 08:30 PDT) is never a window start, so it opens nothing and
-    does what a push does."""
-    now = now.astimezone(timezone.utc) + SKEW
-    hour, minute = cron_time(cron)
-    fired = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if fired > now:
-        fired -= timedelta(days=1)
-    return window_start(now) == fired
-
-
-def window_opens(env, now):
-    """Whether this run opens a window: a manual run, or a window cron that is the current window's start."""
-    event = env.get("GITHUB_EVENT_NAME", "")
-    schedule = env.get("SCHEDULE", "")
-    return event == "workflow_dispatch" or (
-        event == "schedule" and schedule in CRONS and window_cron_opens(schedule, now)
-    )
-
-
 def is_backstop(env):
     return env.get("GITHUB_EVENT_NAME") == "schedule" and env.get("SCHEDULE") == BACKSTOP_CRON
 
 
 def hhmm(when):
-    """A window time as the Los Angeles clock shows it, such as 07:30 PST."""
+    """A time as the Los Angeles clock shows it, such as 07:30 PST."""
     return when.astimezone(LOS_ANGELES).strftime("%H:%M %Z")
 
 
@@ -321,7 +272,8 @@ class GitHub:
                         return exc.code, json.loads(raw or b"{}"), ""
                     except ValueError:
                         return exc.code, {"message": raw[:300].decode("utf-8", "replace")}, ""
-            except (urllib.error.URLError, OSError) as exc:
+            # A reply cut short (IncompleteRead) is as passing as a 502, so it is retried too.
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
                 if attempt < 2:
                     time.sleep(5 * (attempt + 1))
                     continue
@@ -693,7 +645,7 @@ def catch_up_latest(gh, env):
     mark_latest(gh, version)
 
 
-# ---- the window: what to do now ----
+# ---- the train: what to do now ----
 
 
 def event_run(env):
@@ -709,7 +661,7 @@ def event_run(env):
 
 def unpublished(gh, now, tag, plan):
     """The newest tag has no published release: its Release workflow is running, or it failed. One that failed is run
-    again once, 30 minutes after the first started (the window job ships it as if it were new: Release workflow, canary,
+    again once, 30 minutes after the first started (the train job ships it as if it were new: Release workflow, canary,
     latest); after two runs it is reported for a person (docs/releasing.md#a-release-that-did-not-publish)."""
     runs = gh.workflow_runs("release.yml", tag)
     busy = next((run for run in runs if run.get("status") != "completed"), None)
@@ -748,10 +700,12 @@ def unpublished(gh, now, tag, plan):
 
 
 def plan_step(gh, now, finished=None, manual=False, checkout=None):
-    """What the open window does next, worked out from GitHub alone (and, for an incremental validation, the checkout's
-    diff). Returns {"action": "none" | "wait" | "ship" | "dispatch", "why", ...}: "red" is a candidate of this window that
-    did not pass, "stuck" a tag whose release did not publish, and "held" a full validation that a cancelled or unnamed-red
-    run in the last 24 hours holds back, all to report. A manual run validates main's head again even after a red or
+    """What the train does next, worked out from GitHub alone (and, for an incremental validation, the checkout's diff).
+    There are no windows: whenever the newest release is published and main has moved past it, the first green candidate
+    ships, or main's head is validated when no validation is running. Returns {"action": "none" | "wait" | "ship" |
+    "dispatch", "why", ...}: "red" is a candidate of the next release that did not pass, "stuck" a tag whose release did
+    not publish, and "held" a full validation that a cancelled or unnamed-red run in the last 24 hours holds back, all to
+    report. A manual run validates main's head again even after a red or
     cancelled run. A dispatch is a full validation (mode "full") or an incremental one on the anchor (mode "incremental",
     with its plan): docs/releasing.md#incremental-validation. At most one full validation is dispatched automatically in
     24 hours, whatever its outcome."""
@@ -759,13 +713,11 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     newest = newest_stable(tags)
     if not newest:
         raise Fail("no vX.Y.Z tag to release after")
-    start = window_start(now)
     # previous: the release a candidate is compared with (the newest tag, unless the candidate is a tag being published again)
     plan = {
         "action": "none",
         "newest": newest,
         "previous": newest,
-        "start": start,
         "red": None,
         "held": None,
         "stuck": None,
@@ -773,17 +725,6 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     published = gh.release(newest)
     if not published or published.get("draft"):
         return unpublished(gh, now, newest, plan)
-    published_at = parse_time(published.get("published_at"))
-    if published_at is None:
-        plan["why"] = "%s has no publication time; holding" % newest
-        return plan
-    if published_at >= start:
-        plan["why"] = "window closed: %s was published after the %s window opened; the next opens at %s" % (
-            newest,
-            hhmm(start),
-            hhmm(next_window(now)),
-        )
-        return plan
     version = next_patch(newest)
     plan["version"] = version
     runs = gh.validation_runs()
@@ -797,7 +738,7 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
     head = gh.head("main")
     plan["sha"] = head
     if gh.compare(newest, head) != "ahead":
-        plan["why"] = "window open since %s; main is at %s, nothing new" % (hhmm(start), newest)
+        plan["why"] = "main is at %s, nothing new" % newest
         return plan
     head_failed = None
     records = []  # every release's validations, newest first: the anchor and the red validation are read from them
@@ -810,13 +751,8 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             continue  # an earlier release's validation can anchor or supersede a red one, but ships nothing here
         sha = parsed[0]
         if run.get("conclusion") == "success":
-            finished_at = parse_time(run.get("updated_at"))
-            # The first green candidate of this window ships: one that finished after it opened, or main's head.
-            if (
-                (sha == head or (finished_at and finished_at >= start))
-                and gh.compare(newest, sha) == "ahead"
-                and gh.contains("main", sha)
-            ):
+            # The newest green candidate of the next release ships: it was validated after the newest release.
+            if gh.compare(newest, sha) == "ahead" and gh.contains("main", sha):
                 plan.update(
                     action="ship",
                     sha=sha,
@@ -830,11 +766,11 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
         plan["red"] = {"sha": head, "conclusion": head_failed.get("conclusion"), "url": head_failed.get("html_url")}
     if stopped:
         # The ceiling holds full validations until 00:00 UTC; a real red above is still reported, a stop is only a hold.
-        plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), CEILING_HOLD))
+        plan.update(action="wait", why=CEILING_HOLD)
         return plan
     busy = next((run for run in gh.recent_runs("ci.yml") if run.get("status") in UNFINISHED), None)
     if busy:
-        plan.update(action="wait", why="window open since %s; waiting for %s" % (hhmm(start), busy.get("html_url")))
+        plan.update(action="wait", why="waiting for %s" % busy.get("html_url"))
         return plan
 
     def main_has(sha):
@@ -857,7 +793,7 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             since = checkout.tokens_since(red["sha"], head) if checkout is not None and red["sha"] != head else None
             go, why = increment.red_rule(red, head, since)
             if not go:
-                plan.update(action="wait", why="window open since %s; %s" % (hhmm(start), why))
+                plan.update(action="wait", why=why)
                 return plan
     # At most one full validation is dispatched automatically in 24 hours, whatever its outcome: a cancelled or
     # unnamed-red one waits for a person (a manual run still dispatches). The chain of incrementals still runs a full
@@ -869,7 +805,7 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
                 "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to "
                 "validate again" % (full_recent["url"], full_recent["conclusion"])
             )
-            plan.update(action="wait", held=text, why="window open since %s; %s" % (hhmm(start), text))
+            plan.update(action="wait", held=text, why=text)
             return plan
         plan.update(
             action="dispatch",
@@ -889,8 +825,8 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
             note("Incremental plan failed: %s: %s" % (type(exc).__name__, exc))
             plan.update(
                 action="wait",
-                why="window open since %s; the incremental plan on %s cannot be made (%s: %s)"
-                % (hhmm(start), anchor["sha"][:12], type(exc).__name__, exc),
+                why="the incremental plan on %s cannot be made (%s: %s)"
+                % (anchor["sha"][:12], type(exc).__name__, exc),
             )
             return plan
     plan.update(
@@ -937,33 +873,32 @@ def cmd_guard(gh, env, now):
     """Read-only, outside the release concurrency group: decides whether the release job runs at all, so a push that
     finds nothing to do never enters the `release` environment or queues behind (or displaces) a hotfix."""
     event = env.get("GITHUB_EVENT_NAME", "")
-    schedule = env.get("SCHEDULE", "")
-    opening = window_opens(env, now)
     go = False
     if event != "workflow_dispatch" and env.get("RELEASE_TRAINS", "").strip() != "on":
-        note("Release windows are off (repository variable RELEASE_TRAINS is not `on`)")
+        note("The release train is off (repository variable RELEASE_TRAINS is not `on`)")
     else:
         busy = hotfix_busy(gh)
         if busy:
             note("A hotfix is running (%s); it reports itself, and the next event acts after it" % busy.get("html_url"))
-            opening = False
-        elif opening:
+        elif event == "workflow_dispatch":
             go = True
-            note("Window step: %s" % ("window opens (%s)" % schedule if event == "schedule" else "manual run"))
+            note("Train step: manual run")
         else:
             plan = plan_step(gh, now, event_run(env))
             lines = problems(plan)
             go = plan["action"] in ("ship", "dispatch") or bool(lines and not reported(gh, lines))
-            note("Window step: %s" % plan["why"])
+            note("Train step: %s" % plan["why"])
             # The guard cannot read the canary (no environment), so only the backstop checks a lagging latest and an
-            # approved release waiting for stable: at most every 20 minutes. The window job decides on the canary.
+            # approved release waiting for stable: at most every 20 minutes. The train job decides on the canary. While
+            # RELEASE_HOLD or a release-blocker holds stable, an approved release does not run the job.
             if not go and is_backstop(env):
                 lagging = lagging_latest(gh)
-                pending = None if lagging else pending_approval(gh)
+                held = lagging or holds(env.get("RELEASE_HOLD", ""), gh.issues(BLOCKER_LABEL))
+                pending = None if held else pending_approval(gh, env)
                 if lagging or pending:
                     go = True
                     note(
-                        "Window step: %s"
+                        "Train step: %s"
                         % (
                             "%s is published but not latest" % lagging
                             if lagging
@@ -1075,7 +1010,7 @@ def approver_of(gh, account):
     return login if gh.permission(login) else ""
 
 
-def approval_state(gh, issue):
+def person_approval(gh, issue):
     """(who approved, held). The approver is the approver_of the account that added the `approved` label, or of the
     account that commented `/approve` (the newest such comment that counts); "" when neither did. `held` is the hold label."""
     names = {str(label.get("name") or "") for label in issue.get("labels") or []}
@@ -1096,11 +1031,41 @@ def approval_state(gh, issue):
     return approver, HOLD in names
 
 
-def pending_approval(gh):
+def needs_person(env):
+    """Whether the repository variable RELEASE_NEEDS_PERSON is `on`: every release then waits for a person."""
+    return (env.get("RELEASE_NEEDS_PERSON") or "").strip().lower() == "on"
+
+
+def why_person(issue, env):
+    """Why this release needs a person's approval, or "" when it is approved automatically: RELEASE_NEEDS_PERSON is on,
+    its notes list a High risk item, or its notes were cut short (a high-risk item may be missing). The notes are the
+    approval issue's body, as the train wrote them (scripts/release_notes.py)."""
+    body = str(issue.get("body") or "")
+    if needs_person(env):
+        return "RELEASE_NEEDS_PERSON is on"
+    if release_notes.high_risk(body):
+        return "its notes list a High risk item"
+    if release_notes.cut_short(body):
+        return "its notes were cut short, so a High risk item may be missing"
+    return ""
+
+
+def approval_state(gh, issue, env):
+    """(approval, held, why a person is needed). `approval` says how the release was approved: "approved by @login" for
+    a person, AUTO_APPROVED when no person is needed (why_person), "" while it waits. A person's approval counts either
+    way."""
+    approver, held = person_approval(gh, issue)
+    if approver:
+        return "approved by @" + approver, held, ""
+    why = why_person(issue, env)
+    return ("" if why else AUTO_APPROVED), held, why
+
+
+def pending_approval(gh, env):
     """The oldest open approval record that is approved and not held, or None: stable may take it."""
     for version, issue in open_approvals(gh):
-        approver, held = approval_state(gh, issue)
-        if approver and not held:
+        approval, held, _ = approval_state(gh, issue, env)
+        if approval and not held:
             return version
     return None
 
@@ -1222,15 +1187,15 @@ def cmd_shots_into_approval(gh, version, path):
     return 0
 
 
-def approval_waits(approval, approver, held):
+def approval_waits(issue, approval, held, why=""):
     """Why the canary's release may not go to stable yet, from its approval record (None when there is none)."""
-    if approval is None:
+    if issue is None:
         return ["no open approval for this release"]
-    number = approval.get("number")
+    number = issue.get("number")
     if held:
         return ["#%s is on hold" % number]
-    if not approver:
-        return ["#%s is not approved yet" % number]
+    if not approval:
+        return ["#%s is not approved yet%s" % (number, " (a person must approve: %s)" % why if why else "")]
     return []
 
 
@@ -1265,8 +1230,9 @@ def holds(hold, blockers):
 
 
 def promote(gh, env):
-    """Canary -> stable, when the canary runs a stable release ahead of stable's, that release is approved and not held,
-    and the canary runs it healthy. Stable's update closes the release's approval record, and so do older ones."""
+    """Canary -> stable, when the canary runs a stable release ahead of stable's, that release is approved (by a person,
+    or automatically: approval_state) and not held, and the canary runs it healthy. Stable's update closes the release's
+    approval record, and older ones, saying how it was approved."""
     canary, stable = install("CANARY", env), install("STABLE", env)
     if not canary or not stable:
         note("Promote: skipped, " + missing("CANARY" if not canary else "STABLE"))
@@ -1286,12 +1252,12 @@ def promote(gh, env):
     if not parse_version(want) or not parse_version(have) or parse_version(want) <= parse_version(have):
         note("Promote: skipped, the canary's %s is not a stable release ahead of stable's %s" % (want, have))
         return
-    approval = find_approval(gh, want)
-    approver, held = approval_state(gh, approval) if approval else ("", False)
+    issue = find_approval(gh, want)
+    approval, held, why = approval_state(gh, issue, env) if issue else ("", False, "")
     waits, faults = promotion_gate(
         version=want,
         canary_status=status,
-        approval_waits=approval_waits(approval, approver, held),
+        approval_waits=approval_waits(issue, approval, held, why),
         hold=env.get("RELEASE_HOLD", ""),
         blockers=gh.issues(BLOCKER_LABEL),
     )
@@ -1300,9 +1266,9 @@ def promote(gh, env):
     if waits:
         note("Promote: holding %s on the canary, %s" % (want, "; ".join(waits)))
         return
-    note("Promote: stable %s -> %s (approved by %s)" % (have, want, approver))
+    note("Promote: stable %s -> %s (%s)" % (have, want, approval))
     update_install(stable, want)
-    retire_approvals(gh, want, "Promoted to stable (TIDY), approved by @%s." % approver, inclusive=True)
+    retire_approvals(gh, want, "Promoted to stable (TIDY), %s." % approval, inclusive=True)
 
 
 # ---- the release-train issue ----
@@ -1319,11 +1285,11 @@ def reported(gh, key):
     return bool(found) and marker(key) in gh.last_text(found[0])
 
 
-def report(gh, ok, lines, *, key=None, title_="Release window failing", close_title=None, extra=""):
+def report(gh, ok, lines, *, key=None, title_="Release train failing", close_title=None, extra=""):
     """Failure: comment on the open release-train issue, or open one; not again when its last comment is the same
     problem (`key`, the failure lines; default `lines`). Success: close the open one. With close_title and nothing open,
     a success files a closed record (hotfixes, a republished release). `extra` is more text under the lines."""
-    gh.ensure_label(ISSUE_LABEL, "d93f0b", "Release windows and hotfixes: open means a release step failed")
+    gh.ensure_label(ISSUE_LABEL, "d93f0b", "The release train and hotfixes: open means a release step failed")
     gh.ensure_label(BLOCKER_LABEL, "b60205", "Holds promotion of the canary release to stable")
     body = "\n".join(["Run: " + run_url(), ""] + ["- " + line for line in lines])
     if extra:
@@ -1347,11 +1313,11 @@ def report(gh, ok, lines, *, key=None, title_="Release window failing", close_ti
         gh.close(issue["number"])
 
 
-def cmd_window(gh, env, opening, now=None):
-    """The release job: at a window's open, or at the backstop, promote the approved canary release first; then ship the
-    first green candidate, or validate main's head. Reports a failure, or a completed window, on the release-train issue."""
+def cmd_step(gh, env, now=None):
+    """The train job, on any event: promote the approved canary release first, then ship the first green candidate, or
+    validate main's head. Reports a failure, or a shipped release, on the release-train issue."""
     now = now or datetime.now(timezone.utc)
-    failures, promoted, shipment = [], False, None
+    failures, shipment = [], None
 
     def step(name, action):
         try:
@@ -1365,9 +1331,8 @@ def cmd_window(gh, env, opening, now=None):
 
     record = None
     step("latest", lambda: catch_up_latest(gh, env))
-    if opening or is_backstop(env):
-        step("promote", lambda: promote(gh, env))
-        promoted = True
+    # Stable takes the canary's approved release before the canary moves on.
+    step("promote", lambda: promote(gh, env))
     plan = {}
     manual = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
     step(
@@ -1375,14 +1340,11 @@ def cmd_window(gh, env, opening, now=None):
         lambda: plan.update(plan_step(gh, now, event_run(env), manual=manual, checkout=increment.Checkout(ROOT))),
     )
     if plan:
-        note("Window: " + plan["why"])
+        note("Train: " + plan["why"])
         for line in problems(plan):
             failures.append(line)
             note("REPORTED " + line)
         if plan["action"] == "ship":
-            if not promoted:
-                # Stable takes the canary's approved release before the canary moves on.
-                step("promote", lambda: promote(gh, env))
 
             def ship():
                 nonlocal shipment, record
@@ -1438,7 +1400,7 @@ def cmd_window(gh, env, opening, now=None):
             close_title=record or ("Release %s republished" % plan["version"] if plan.get("republish") else None),
         )
     # shipped, version, sha and base were written when the candidate shipped (train.yml's shots job reads them), so each
-    # key is written once: GitHub keeps the last value of a key. Only the completion and a window that shipped nothing
+    # key is written once: GitHub keeps the last value of a key. Only the completion and a step that shipped nothing
     # are left to write here.
     values = {"reported": "true"}
     if shipment is None:
@@ -1583,18 +1545,19 @@ def cmd_hotfix(gh, env, sha, reason, promote_stable, override_hold=False):
 def cmd_status(gh, env, now):
     plan = plan_step(gh, now)
     out = {
-        "window_start": plan["start"].isoformat(),
-        "next_window": next_window(now).isoformat(),
         "newest_tag": plan["newest"],
         "next": plan["action"],
         "why": plan["why"],
         "hold": env.get("RELEASE_HOLD", ""),
+        "needs_person": needs_person(env),
         "blockers": [issue["number"] for issue in gh.issues(BLOCKER_LABEL)],
         "approvals": [],
     }
     for version, issue in open_approvals(gh):
-        approver, held = approval_state(gh, issue)
-        out["approvals"].append({"version": version, "number": issue["number"], "approved_by": approver, "held": held})
+        approval, held, why = approval_state(gh, issue, env)
+        out["approvals"].append(
+            {"version": version, "number": issue["number"], "approval": approval, "held": held, "needs_person": why}
+        )
     for role in ("CANARY", "STABLE"):
         target = install(role, env)
         status = update_status(target) if target else None
@@ -1618,7 +1581,7 @@ def main(argv=None, env=None, now=None):
     now = now or datetime.now(timezone.utc)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "command", choices=["guard", "window", "promote", "hotfix", "status", "notes", "shots-into-approval"]
+        "command", choices=["guard", "step", "promote", "hotfix", "status", "notes", "shots-into-approval"]
     )
     parser.add_argument("refs", nargs="*", help="notes: BASE HEAD; shots-into-approval: VERSION FILE")
     parser.add_argument("--sha", default="")
@@ -1630,8 +1593,8 @@ def main(argv=None, env=None, now=None):
     try:
         if args.command == "guard":
             return cmd_guard(gh, env, now)
-        if args.command == "window":
-            return cmd_window(gh, env, window_opens(env, now), now)
+        if args.command == "step":
+            return cmd_step(gh, env, now)
         if args.command == "hotfix":
             return cmd_hotfix(
                 gh,

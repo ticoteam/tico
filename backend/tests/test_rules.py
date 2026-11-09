@@ -6,8 +6,9 @@ import json
 
 from backend import hubdb as H
 from backend import rules as R
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_wake_rules import as_cause, claim, finish, jobs, news, parked_task, setup, skips
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.wake_rules import as_cause, claim, finish, jobs, news, parked_task, setup, skips
+from backend.tests.helpers.rules import plain_task
 
 
 def rule_row(
@@ -40,13 +41,6 @@ def rule_row(
     with api.app.state.store.transaction() as c:
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return {"rule": {**row, "params": params or {}}}
-
-
-def plain_task(c, title="Plain work", clear=True):
-    task = H.task_create(c, "bot:ops", title, "Do it", "bot:cpo")
-    if clear:
-        c.execute("DELETE FROM jobs")
-    return H.task(c, task["id"])
 
 
 def reopened(c, task):

@@ -18,33 +18,15 @@ import yaml
 from backend import judge as B
 from backend import slack_gateway as G
 from backend.config import Settings
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_judge import QUESTIONS
-from backend.tests.test_slack_gateway import DM, Clock, FakeSlack, envelope, hub, rows  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.judge import QUESTIONS
+from backend.tests.helpers.slack_gateway import DM, Clock, FakeSlack, envelope, hub, rows  # noqa: F401
 from clients import judge as J
+from backend.tests.helpers.decide_gateway import GATEWAY_URL, answer_all
 
 ROOT = Path(__file__).resolve().parents[2]
-GATEWAY_URL = "https://hq.example/v1/gateway/decisions"
 ANTHROPIC = J.LLM_URLS["anthropic"]
 SECRET = "the-secret-body-of-the-mail"
-
-
-def answer_all(questions):
-    """A right-shaped answer to every question asked."""
-    out = {}
-    for qid, q in questions.items():
-        if q["type"] == "choice":
-            names = list(q["criteria"])
-            out[qid] = {
-                "choice": names[-1],
-                "confidence": 0.8,
-                "probabilities": {n: (0.8 if n == names[-1] else 0.2 / (len(names) - 1)) for n in names},
-            }
-        elif q["type"] == "score":
-            out[qid] = {"score": 0.0, "confidence": 0.9, "probabilities": {"0": 0.9, "1": 0.1}}
-        else:
-            out[qid] = {"noul": 0.1}
-    return out
 
 
 class Internet:

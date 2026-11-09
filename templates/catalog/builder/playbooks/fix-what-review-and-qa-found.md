@@ -1,6 +1,6 @@
 # Fix what review and QA found
 
-Triggered by a ticket moving to a fix step (Review 1 Fixes, Review 2 Fixes or QA Fixes) with you as its owner, or by a
+Triggered by a ticket moving to a fix step (Review 1 Fixes, Review 2 Fixes, or QA Fixes on a board with QA) with you as its owner, or by a
 verdict on your ticket. Reviewers and QA only comment or give a verdict; the fixes and the decisions are yours.
 
 Outcome: each comment and each failed test is acted on or answered with one line of reason, and the ticket is moved to its
@@ -26,20 +26,22 @@ of reason. A blocking comment (a bug, a broken rule, or cost or data to undo) is
 ## 3. Fix
 
 Fix on the same branch. Write the test that would have caught the problem first, as in
-`playbooks/build-a-dev-ticket.md` step 3. Push with a normal push. Never force-push over a reviewer's commit.
+`playbooks/build-a-dev-ticket.md` step 3. Never force-push over a reviewer's commit.
 
-## 4. Check
+## 4. Check, then push once
 
-Run the checks at the new head and record the head commit. A check that did not run is "not checked".
+The pull request is ready, so every push runs CI. Make all the fixes first, run the checks on your computer at the new
+head as in `playbooks/build-a-dev-ticket.md` step 5, then push once with a normal push. Record the head commit. A check
+that did not run is "not checked".
 
 ## 5. Move on
 
-- Review 1 Fixes done: move to Review 2 for a change that needs a second review; otherwise move to In QA.
-- Review 2 Fixes done: move to In QA.
+- Review 1 Fixes done: move to Review 2.
+- Review 2 Fixes done: move to In QA when the board has it; otherwise the merge is next, once the checks are green.
 - QA Fixes done: move back to In QA, with the fix and the test that now covers the failing case.
 
     hub task update <id> --step "<step>" --note "<head sha>: fixed <list>; declined <list with one line each>; checks run <list>"
 
-When QA passes (or, for a change nobody will see, once its review fixes are done) the merge is next: merge then, under
+When QA passes, or once the review fixes are done on a board with no QA steps (or for a change nobody will see), the merge is next: merge then, under
 `skills/check-the-merge-rules-at-the-head/SKILL.md`, with the checks green at the head, and never before. The merge moves
 the ticket to Pending Release.

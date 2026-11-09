@@ -13,8 +13,8 @@ import pytest
 from backend import webhook_delivery as D
 from backend import webhooks as W
 from backend.tests.live import block_outside_network, live  # noqa: F401
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_webhooks import publish, verify
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.webhooks import publish, verify
 
 # The "Start something" recipe of docs/webhooks-zapier-make-n8n.md, with the trigger's type taken from the body's `type`.
 RECIPE = {

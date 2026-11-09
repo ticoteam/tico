@@ -3,20 +3,26 @@
    kept per person is whether they saw the tour. Strategy's Market tab, when empty (ui/market-page.ts), is
    where the market is asked for. */
 'use strict';
-let GS = null;                     // the last answer, or null when the server has none to give
+interface GsItem { id: string; done: boolean }
+interface GsAnswer { items: GsItem[]; can_build?: boolean; tour_seen?: boolean }
+interface GsTour {
+  root: HTMLDivElement; steps: [string, string, string][]; at: number; phone: boolean; opener: HTMLElement | null;
+  off?: () => void;
+}
+let GS: GsAnswer | null = null;                     // the last answer, or null when the server has none to give
 let GS_LOAD = 0;
 
-async function gsRefresh() {
+async function gsRefresh(): Promise<GsAnswer | null> {
   if (!S.me?.cloud) return null;
   const seq = ++GS_LOAD;
-  const data = await v2Get('/v2/setup/getting-started');
+  const data: GsAnswer | null = await v2Get('/v2/setup/getting-started');
   if (seq !== GS_LOAD) return GS;
   GS = data && Array.isArray(data.items) ? data : null;
   gsOrgHint();
   return GS;
 }
 
-async function gsState(change) {
+async function gsState(change: {tour: boolean}): Promise<void> {
   try {
     const next = await post('/v2/setup/getting-started/state', change);
     if (GS && next) GS = {...GS, tour_seen: next.tour};
@@ -24,15 +30,15 @@ async function gsState(change) {
 }
 
 // "Ask to add or edit your bots" (it opens Ask, ui/app/ask-panel.ts), for whoever may add bots, until there is one of your own.
-function gsOrgHint() {
+function gsOrgHint(): void {
   const line = $('#gs-org-hint');
   if (!line) return;
   const bot = GS?.items.find(item => item.id === 'first_bot');
-  line.hidden = !(bot && !bot.done && GS.can_build);
+  line.hidden = !(bot && !bot.done && GS?.can_build);
 }
 
 // ---------------------------------------------------------------- the tour
-const GS_STEPS = [
+const GS_STEPS: [string, string, string][] = [
   ['[data-nav="updates"]', 'Updates', 'Every bot posts a short update each day, and a fuller one on Fridays.'],
   ['[data-nav="tasks"]', 'Tasks', 'Work for bots and humans. Give a task an owner and it gets done, or comes back with a question.'],
   ['#nav-organisation', 'Team', 'Your team is listed here. Open a bot to chat, see its work and change its settings.'],
@@ -40,9 +46,9 @@ const GS_STEPS = [
   ['[data-nav="strategy"]', 'Strategy', 'How your team means to win, and a map of the market that a bot keeps current.'],
   ['[data-nav="meetings"]', 'Meetings', 'Connect a source or add notes, and bots pull out the tasks and follow-ups.'],
 ];
-let GS_TOUR = null;
+let GS_TOUR: GsTour | null = null;
 
-function gsTourStart() {
+function gsTourStart(): void {
   if (GS_TOUR) return;
   const phone = drawerMedia.matches;
   if (phone) setDrawer(true, false, $('#mobile-more'));
@@ -61,52 +67,65 @@ function gsTourStart() {
     <div class="gs-tour-actions"><button class="ghost" type="button" data-tour-skip>Skip</button>
       <button class="primary" type="button" data-tour-next>Next</button></div></div>`;
   document.body.appendChild(root);
-  const opener = document.activeElement;
-  GS_TOUR = {root, steps, at: 0, phone, opener};
-  const onKey = event => {
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const tour: GsTour = {root, steps, at: 0, phone, opener};
+  GS_TOUR = tour;
+  const onKey = (event: KeyboardEvent) => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); gsTourEnd(); }
     else if (event.key === 'Tab') {
-      const buttons = [...root.querySelectorAll('button')];
-      const i = buttons.indexOf(document.activeElement);
+      const buttons: (HTMLButtonElement | null)[] = [...root.querySelectorAll<HTMLButtonElement>('button')];
+      const focused = document.activeElement;
+      const i = buttons.indexOf(focused instanceof HTMLButtonElement ? focused : null);
       event.preventDefault();
-      buttons[(i + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length].focus();
+      buttons[(i + (event.shiftKey ? buttons.length - 1 : 1)) % buttons.length]?.focus();
     }
   };
-  const onFocus = event => { if (!root.contains(event.target)) root.querySelector('[data-tour-next]').focus(); };
+  const onFocus = (event: FocusEvent) => {
+    if (!(event.target instanceof Node && root.contains(event.target))) root.querySelector<HTMLButtonElement>('[data-tour-next]')?.focus();
+  };
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('focusin', onFocus);
   window.addEventListener('resize', gsTourPlace);
-  GS_TOUR.off = () => {
+  tour.off = () => {
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('focusin', onFocus);
     window.removeEventListener('resize', gsTourPlace);
   };
-  root.querySelector('[data-tour-skip]').onclick = () => gsTourEnd();
-  root.querySelector('[data-tour-next]').onclick = () => {
-    if (GS_TOUR.at === steps.length - 1) gsTourEnd(); else { GS_TOUR.at++; gsTourShow(); }
+  const skip = root.querySelector<HTMLButtonElement>('[data-tour-skip]');
+  if (skip) skip.onclick = () => gsTourEnd();
+  const next = root.querySelector<HTMLButtonElement>('[data-tour-next]');
+  if (next) next.onclick = () => {
+    if (tour.at === steps.length - 1) gsTourEnd(); else { tour.at++; gsTourShow(); }
   };
   gsTourShow();
-  root.querySelector('[data-tour-next]').focus();
+  next?.focus();
 }
 
-function gsTourShow() {
+function gsTourShow(): void {
+  if (!GS_TOUR) return;
   const {root, steps, at} = GS_TOUR;
-  const [selector, title, text] = steps[at];
-  root.querySelector('.gs-tour-count').textContent = `${at + 1} of ${steps.length}`;
-  root.querySelector('#gs-tour-title').textContent = title;
-  root.querySelector('.gs-tour-text').textContent = text;
-  root.querySelector('[data-tour-next]').textContent = at === steps.length - 1 ? 'Done' : 'Next';
+  const step = steps[at];
+  if (!step) return;
+  const [selector, title, text] = step;
+  const count = root.querySelector<HTMLElement>('.gs-tour-count'), heading = root.querySelector<HTMLElement>('#gs-tour-title');
+  const body = root.querySelector<HTMLElement>('.gs-tour-text'), next = root.querySelector<HTMLButtonElement>('[data-tour-next]');
+  if (!count || !heading || !body || !next) return;
+  count.textContent = `${at + 1} of ${steps.length}`;
+  heading.textContent = title;
+  body.textContent = text;
+  next.textContent = at === steps.length - 1 ? 'Done' : 'Next';
   $('#side ' + selector)?.scrollIntoView({block: 'nearest'});
   gsTourPlace();
 }
 
-function gsTourPlace() {
+function gsTourPlace(): void {
   if (!GS_TOUR) return;
   const {root, steps, at} = GS_TOUR;
-  const target = $('#side ' + steps[at][0]);
+  const target = $('#side ' + steps[at]?.[0]);
   if (!target) return;
   const box = target.getBoundingClientRect(), pad = 4;
-  const hole = root.querySelector('.gs-tour-hole'), card = root.querySelector('.gs-tour-card');
+  const hole = root.querySelector<HTMLElement>('.gs-tour-hole'), card = root.querySelector<HTMLElement>('.gs-tour-card');
+  if (!hole || !card) return;
   Object.assign(hole.style, {left: box.left - pad + 'px', top: box.top - pad + 'px',
     width: box.width + pad * 2 + 'px', height: Math.min(box.height, innerHeight - box.top) + pad * 2 + 'px'});
   const width = card.offsetWidth, height = card.offsetHeight;
@@ -121,10 +140,10 @@ function gsTourPlace() {
     top: Math.max(12, Math.min(box.top, innerHeight - height - 12)) + 'px'});
 }
 
-function gsTourEnd() {
+function gsTourEnd(): void {
   if (!GS_TOUR) return;
   const {root, phone, opener} = GS_TOUR;
-  GS_TOUR.off();
+  GS_TOUR.off?.();
   root.remove();
   GS_TOUR = null;
   if (phone) setDrawer(false, true);
@@ -137,7 +156,7 @@ function gsTourEnd() {
 window.gsStartTour = gsTourStart;
 window.gsBoot = function () {
   // The first look around, once per person, never over the wizard: the owner who just created the team has Show me
-  // around on that screen (ui/app/welcome.js), else gets it on the next visit, like someone who joins later.
+  // around on that screen (ui/app/welcome.ts), else gets it on the next visit, like someone who joins later.
   void gsRefresh().then(seen => {
     if (seen && !seen.tour_seen && !S.config?.onboarding_needed && S.route !== '#/welcome') gsTourStart();
   });
@@ -146,13 +165,14 @@ window.gsBoot = function () {
 };
 
 // ---------------------------------------------------------------- one listener for all of it
-document.addEventListener('click', event => {
+document.addEventListener('click', (event: MouseEvent) => {
   const t = event.target;
+  if (!(t instanceof Element)) return;
   if (t.closest('[data-gs-tour]')) { gsTourStart(); return; }
-  const link = t.closest('[data-gs-tab]');
+  const link = t.closest<HTMLElement>('[data-gs-tab]');
   if (link) {
     event.preventDefault();
-    SETTINGS_TAB = link.dataset.gsTab;
-    if (location.hash === link.getAttribute('href')) route(); else location.hash = link.getAttribute('href');
+    SETTINGS_TAB = String(link.dataset.gsTab);
+    if (location.hash === link.getAttribute('href')) route(); else location.hash = String(link.getAttribute('href'));
   }
 });

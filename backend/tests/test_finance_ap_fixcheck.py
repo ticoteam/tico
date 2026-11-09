@@ -13,8 +13,8 @@ from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core.errors import CONFLICT
 from backend.finance.store import banking as SK
-from backend.tests.test_finance_ap import _balance, _bill, _events, _ingest, _txn, _vendor
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_ap import _balance, _bill, _events, _ingest, _txn, _vendor
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     FakeMercury,
@@ -26,7 +26,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_payments import HOURS, _checking, _payee
 
 NOV = "2026-11-05T12:00:00.000000Z"
 DEC = "2026-12-03T12:00:00.000000Z"
@@ -254,9 +254,9 @@ def test_the_inbox_pages_each_kind_past_its_cap(books, monkeypatch):  # noqa: F8
 
 
 def test_a_card_charge_past_the_bill_search_waits_then_settles_its_hold_when_linked(books, monkeypatch):  # noqa: F811
-    from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_holds, _card_use
-    from backend.tests.test_finance_fixtures import MERCURY, sync_once
-    from backend.tests.test_finance_payments import HOURS
+    from backend.tests.helpers.finance_banking import _arrives, _card_for_eve, _card_holds, _card_use
+    from backend.tests.helpers.finance_fixtures import MERCURY, sync_once
+    from backend.tests.helpers.finance_payments import HOURS
 
     monkeypatch.setattr(FD, "OWING_MOST", 0)
     fake = FakeMercury()
@@ -274,10 +274,10 @@ def test_a_card_charge_past_the_bill_search_waits_then_settles_its_hold_when_lin
     with books.transaction() as c:
         row = c.execute("SELECT id, status, entry_id FROM fin_feed_txns WHERE card_id IS NOT NULL").fetchone()
         assert (row["status"], row["entry_id"]) == ("new", None)  # Grok 1, card side
-        assert (_balance(c, "2100"), _balance(c, "6100")) == (0, 4_500)
+        assert (_balance(c, "2101"), _balance(c, "6100")) == (0, 4_500)
         done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "feed_id": str(row["id"])})
         assert done.status == "committed", done
-        assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2100")) == (4_500, 0, -4_500)
+        assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2101")) == (4_500, 0, -4_500)
         assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
 
 

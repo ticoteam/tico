@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -15,6 +16,9 @@ from . import system_routines as SR
 from .batch_work import isolated
 from .store import H, encode
 from . import sources as SRC
+
+if TYPE_CHECKING:
+    from .heartbeat import Context
 
 LOG = logging.getLogger("tico.scheduler")
 
@@ -483,6 +487,15 @@ def step_thread_loop_guard(ctx):
     ), not resumed
 
 
+def step_ci_sweep(ctx: "Context") -> tuple[str, bool]:
+    # The repository's workflow runs since the last sweep: recorded, priced and posted to Finance (backend/ci_runs.py).
+    from . import ci_runs
+    from .store import H
+
+    settings = ctx.settings
+    return ci_runs.sweep(ctx.store, ctx.github_app, settings.release_repo, settings.ci_rate_per_job_minute, H.now())
+
+
 def step_go_live_expiry(ctx):
     # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
     from . import go_live
@@ -568,6 +581,22 @@ def step_approval_expiry(ctx):
         "held messages kept unsent": ended.get("held") or [],
     }
     return SR.words_of(acted, none="Nothing expired"), not any(acted.values())
+
+
+def step_stuck_cards(ctx: "Context") -> tuple[str, bool]:
+    # Every 10 minutes: the stuck rule wakes a pipeline's manager about a card that stopped moving, then asks a person
+    # (backend/stuck_cards.py). Plain SQL, no model.
+    from . import stuck_cards
+
+    store: Any = ctx.store  # Store.transaction is untyped
+    with store.transaction() as c:
+        done = stuck_cards.sweep(c, stamp(ctx.at))
+    acted = {
+        "managers woken": done["woken"],
+        "people asked": done["asked"],
+        "answers passed on": done["relayed"],
+    }
+    return SR.words_of(acted, none="No stuck cards"), not any(acted.values())
 
 
 class Scheduler:

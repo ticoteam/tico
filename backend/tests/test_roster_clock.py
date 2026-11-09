@@ -3,7 +3,7 @@ older or newer than the reader's own snapshot."""
 
 from backend import read_cache
 from backend.store import H
-from backend.tests.test_api import api, post  # noqa: F401  (fixture)
+from backend.tests.helpers.api import post  # noqa: F401  (fixture)
 from backend import bot_settings as BS
 
 CONFIGS = BS.ROW_SQL

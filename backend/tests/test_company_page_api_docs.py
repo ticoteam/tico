@@ -3,7 +3,6 @@
 Acme is the fictional company; ana-test is its owner (the base fixtures)."""
 
 from backend.openapi_v2 import spec
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 
 PREFIXES = (
     "/api/v2/company-page",

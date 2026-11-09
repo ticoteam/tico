@@ -10,7 +10,7 @@ is booked. Every expected number below is worked out by hand from these entries,
 
 from backend.finance import closing as CL
 from backend.finance import reads as FR
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
 
 SEP = ("2026-09-01", "2026-09-30")
 OCT = ("2026-10-01", "2026-10-31")

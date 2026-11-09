@@ -80,7 +80,7 @@
       },
       "task_model": null,
       "task_model_warning": "",
-      "team": null,
+      "team": "built-in",
       "temp": false,
       "template": "",
       "template_version": "",
@@ -615,7 +615,7 @@
         "sweeps": true,
         "takes": "all"
       },
-      "queued": 8,
+      "queued": 5,
       "repo": "emp-ops",
       "repo_url": "",
       "reports_to": null,

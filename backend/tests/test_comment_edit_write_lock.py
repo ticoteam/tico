@@ -15,7 +15,7 @@ import pytest
 
 from backend import idempotency_messages as IM
 from backend.store import H
-from backend.tests.test_tasks_board import api, post  # noqa: F401
+from backend.tests.helpers.tasks_board import api, post  # noqa: F401
 
 BIG = 20000
 

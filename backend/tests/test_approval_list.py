@@ -4,8 +4,8 @@ shows an approval the caller could not open with GET /api/v2/approvals/{aid}."""
 import json
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_batch import approval_for_ana
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.batch import approval_for_ana
 
 
 def listed(api, query="", token="ana-test"):

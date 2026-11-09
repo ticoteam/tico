@@ -4,7 +4,7 @@ Start here if your team wants its own web app on top of a running Tico: a custom
 different look for the same data. Tico's server is an HTTP API, and a separate web app can sign your humans in and
 use it from any address you allow. A working example that needs no build step is in
 [`examples/custom-frontend/`](../examples/custom-frontend/); the full contract is in [api.md](api.md) and
-[`openapi/v2.json`](openapi/v2.json).
+[the v2 spec](api.md#the-contract).
 
 In ten minutes you can have the example talking to your server:
 
@@ -190,7 +190,7 @@ curl -H "Authorization: Bearer $TICO_TOKEN" https://tico.example.com/api/v2/need
 
 All paths are under your server's address, and all need `Authorization: Bearer ...` except `/healthz` and the sign-in
 routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are trimmed to the fields a frontend uses;
-[`openapi/v2.json`](openapi/v2.json) has the full list.
+[The v2 spec](api.md#the-contract) has the full list.
 
 | Resource | Request | Answer |
 |---|---|---|
@@ -205,7 +205,7 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | Who can use a bot | `GET /api/v2/bots/{bot}/access` / `PUT` | `{"bot", "see": {"everyone": true, "people": [], "teams": [], "bots": []}, "read": {...}, "write": {...}, "revision", "you": {"see", "read", "write"}, "teams": [{"id", "name"}]}`. For the owner, bot administrators and the humans the bot reports up to; anyone else gets `403`. `PUT` takes `see`, `read`, `write` (each `{"everyone": true}` or lists of `people` ids, `teams` and `bots` slugs) and the `revision` you read; `409 version_conflict` if it moved. See [permissions.md](permissions.md). |
 | My DMs | `GET /api/v2/conversations?chat_with=ops` | `{"conversations": [{"id", "participants", "last_message_at"}]}`: my open chat with that bot, or its Home after its chats move there (none yet is an empty list). |
 | Messages | `GET /api/v2/conversations/{id}/messages` | `{"messages": [{"id", "sender_id": "human:ana", "sender_name": "Ana", "recipient_id": "bot:ops", "recipient_name": "Ops", "body", "created_at", "refs", "run": {"job_id", "run_id", "state": "started_run"\|"added_to_run"}}], "actors": {...}, "has_more", "next_before"}`. Oldest first, up to 200; `?before=<next_before>` pages back. `run` says which run took a message and is absent until one has; a bot's reply carries `run` and `answers` too ([below](#which-run-took-a-message)). |
-| Send to a bot | `POST /api/v2/chat/ops` `{"text": "Hello"}` | `{"conversation": {"id"}, "message": {"id", "body"}}`. Once the bot's chats have moved, it posts to the bot's Home, unless the sender may not read that Home; the Assistant and the Strategy Bot keep their DMs. Otherwise it opens the DM if needed. The reply arrives [live](#live-events). |
+| Send to a bot | `POST /api/v2/chat/ops` `{"text": "Hello"}` | `{"conversation": {"id"}, "message": {"id", "body"}}`. Once the bot's chats have moved, it posts to the bot's Home, unless the sender may not read that Home; the Assistant, the Strategy Bot and bots synced from another app keep their DMs, and the Librarian's per-person docs chats are rooms of their own that do not move to a Home. Otherwise it opens the DM if needed. The reply arrives [live](#live-events). |
 | Send in a thread | `POST /api/v2/conversations/{id}/messages` `{"text": "Again"}` | `{"message": {...}}` |
 | Tasks | `GET /api/v2/tasks?status=open,doing&owner=human:ana&limit=100` | `{"tasks": [{"id", "title", "body", "owner", "owner_name", "requester", "requester_name", "status", "due", "version", "labels", "number", "step_rank"}], "actors": {...}, "next_offset": null}`. Statuses: `open doing waiting review ready done declined`. `?offset=` pages. `?type=` and `?step=` (ids or names) and `?number=` filter, and `?sort=step` lists a type's board in order ([tasks.md](tasks.md)). To poll, keep the largest `updated_at` you have seen and ask `?updated_since=<it, ISO 8601 with a timezone>`: only tasks changed after it come back, closed ones included. Closing, reopening, commenting, a question asked or answered on it, a link or an attachment added or removed, a linked pull request's state and any change to its fields all change `updated_at`. `?brief=true` leaves out each task's `body` and `acceptance_criteria`; read one task for them. |
 | One task | `GET /api/v2/tasks/{id}` | `{"task": {...}, "events": [...], "comments": [...], "children": [...]}` |
@@ -219,7 +219,7 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | Remove a tool | `DELETE /api/v2/bots/{bot}/tools/{id}` | `{"removal": true, "task_id"}`: a BotOps task to take a declared tool out of `bot.yaml` (the id is from the list; `model` and `repo` cannot be removed). A `pending-…` id withdraws a request instead: `{"canceled": true}`. `POST /api/v2/bots/{bot}/tools/{id}/delete` does the same for clients that only send GET and POST (the `hub` CLI and MCP tools use it). |
 | Files | `GET /api/v2/bots/{bot}/files?limit=3&cursor=...` | `{"bot", "files": [{"id", "title", "kind", "locator", "scope", "version", "state", "synced", "open": {"type": "tico"\|"external", "url"}, "note", "task_title", "working", "github_url", "actor", "actor_name", "last_activity_at"}], "total", "next_cursor", "has_more", "can_manage"}`. Newest activity first; only what the caller may see, the total included. A stored file's `open.url` is a Tico route that needs the bearer; an `external` one opens at its provider. `PATCH /api/v2/files/{id}` with `{"promote": true}` or `{"archived": true}` (owner and bot administrators). See [files.md](files.md). |
 | Assistant | `GET /api/v2/assistant` | `{"available", "name", "can_turn_on", "room_id", "messages": [...], "execution", "actions": {...}, "pending": [...]}`: the caller's own private Assistant DM ([assistant.md](assistant.md)). `POST /api/v2/assistant/messages` `{"text"}` starts a bot run: poll `GET /api/v2/assistant` while `execution` is set (show "thinking"). A message with `refs.action` is a Confirm / Cancel card: `POST /api/v2/assistant/actions/{id}/confirm` or `/cancel` (the human's own session only). `POST /api/v2/assistant/turn-on` (owner) turns it on when `available` is false. Links in a reply are `[title](#/task/<id>)`-style in-app routes or `https:` links: map the `#/` ones to your own routes. |
-| Needs you | `GET /api/v2/needs-you` | `{"actor", "items": [{"id", "kind": "task"\|"question"\|"declined"\|"approval", "title", "first_line", "requester", ...}]}`. Every item, whatever its kind, has `id`, `kind`, `title`, `body` (or `null`), `subject` (`{"type", "id"}`: the task, message or approval it is about, or `null` for a card that stands for several things or a setting), `created_at` and `actions` (the writes that settle it: `answer`, `update`, `decide`, `add_reading` or `open`; the `NeedsYouItem` schema in docs/openapi/v2.json); the rest are the fields its card reads. `GET /api/v2/goals/needs-you` items have the same fields. A `send` approval also has `attachment_files`: for each of its payload's `attachments`, `{"file_id", "version"}` of a stored version with the approved sha256 and size that you may open (`/api/v2/files/{file_id}?v={version}`), or `null`. `?count=true` gives `{"actor", "count"}` for a badge. `?limit=50` sends a page of the same list, in the same order, with `count` (the whole list), `next` (pass it as `?cursor=` for the next page; `null` on the last) and `bots` (each bot's count over the whole list); a cursor from an older `version` starts again from the top, with `"restart": true`. Without `limit` or `cursor`, the whole list. |
+| Needs you | `GET /api/v2/needs-you` | `{"actor", "items": [{"id", "kind": "task"\|"question"\|"declined"\|"approval", "title", "first_line", "requester", ...}]}`. Every item, whatever its kind, has `id`, `kind`, `title`, `body` (or `null`), `subject` (`{"type", "id"}`: the task, message or approval it is about, or `null` for a card that stands for several things or a setting), `created_at` and `actions` (the writes that settle it: `answer`, `update`, `decide`, `add_reading` or `open`; the `NeedsYouItem` schema in the v2 spec, `GET /api/v2/openapi.json`); the rest are the fields its card reads. `GET /api/v2/goals/needs-you` items have the same fields. A `send` approval also has `attachment_files`: for each of its payload's `attachments`, `{"file_id", "version"}` of a stored version with the approved sha256 and size that you may open (`/api/v2/files/{file_id}?v={version}`), or `null`. `?count=true` gives `{"actor", "count"}` for a badge. `?limit=50` sends a page of the same list, in the same order, with `count` (the whole list), `next` (pass it as `?cursor=` for the next page; `null` on the last) and `bots` (each bot's count over the whole list); a cursor from an older `version` starts again from the top, with `"restart": true`. Without `limit` or `cursor`, the whole list. |
 | Answer a question | `POST /api/v2/tasks/{id}/answers` `{"target": {"task": "<id>"}, "answers": {"<question id>": ["<label>"]}, "other": "<text>"}` | A question is a task: answer it with its task id. Pick a label, or send `other` for a typed answer. Leave it open to say nothing. |
 | Decide an approval | `POST /api/v2/approvals/{id}` `{"decision": "approved", "note": ""}` | `decision` is `approved` or `declined`. The item's `id` is the approval id. |
 | Meetings | `GET /api/v2/meetings/search?q=roadmap&limit=20` | `{"results": [{"id", "title", "created_at", "excerpt", "passages": [...]}], "next_offset"}`. No `q` lists the newest. `GET /api/v2/meetings/transcript?id=...` reads one. |
@@ -332,7 +332,7 @@ GET /api/v2/tasks?lane=company&changed_after=<cursor>
 
 ### Which run took a message
 
-Messages sent while a bot is working are folded into its current run (`execution.label` reads "Working - follow-up
+Messages sent while a bot is working are folded into its current run (`execution.label` reads "Working — follow-up
 added"). The messages say so themselves, on the routes that return them (`/messages` and `/snapshot`):
 
 ```json
@@ -354,6 +354,9 @@ added"). The messages say so themselves, on the routes that return them (`/messa
   Use it to show one reply under both messages, and to tell "answered" from "waiting for the next run".
 - These are stored with the run, so they are the same after a restart or a reconnect. If a run fails and its
   messages are queued again, they get a new `run` when the next run takes them.
+- A send that repeats the words of a message whose run is still going is dismissed as a duplicate. The chat keeps
+  showing that run: `execution.label` reads "Working", not "Delivery dismissed". A send dismissed for any other reason
+  still reads "Delivery dismissed".
 
 ## Errors
 
@@ -375,6 +378,8 @@ request may succeed later. Some carry one extra fact beside them (a `sign_in` pa
 | 404 | `not_found` | Missing, or not visible to this human (the two look the same on purpose). |
 | 409 | `version_conflict` | The task changed since you read it; read again and reapply. |
 | 409 | `idempotency_conflict` | An `Idempotency-Key` was reused with a different body. Use a new key per action. |
+| 409 | `moved` | Who the message goes to, or its thread, changed while it was checked. Send it again (`retryable: true`). |
+| 409 | `recipient` | A question to `keeper` (the system) found no manager or company owner who can read and answer it. Set one who can read it. |
 | 413 | `too_large` | Over 2 MB (uploads 20 MB). |
 | 422 | `idempotency_key` | A write without an `Idempotency-Key`. |
 | 422 | `lint`, `date`, `hierarchy`... | A rule of the product refused the request. `detail` says what to change. |
@@ -410,12 +415,11 @@ Tico applies **no request-rate limit** to the API: it will answer as fast as it 
 ## Versioning
 
 The path carries the version: `/api/v2/`. The rules are in [api.md](api.md#stable-and-internal); in short, what is in
-`openapi/v2.json` only grows within v2, everything else is internal, and unknown response fields are to be ignored.
+The v2 spec only grows within v2, everything else is internal, and unknown response fields are to be ignored.
 `info.version` in the spec is the API version (`2.0.0`), not the server's; `GET /api/v2/config` has the server's `version`.
-Pin your generated client to the spec you built against and watch [CHANGELOG.md](../CHANGELOG.md), where API additions
-are listed under "Added".
+Pin your generated client to the spec you built against, and check `openapi/v2.json` in each release for additions.
 
-To generate a typed client, feed `openapi/v2.json` to any OpenAPI 3.1 generator (`openapi-typescript`, for one). Answers
+To generate a typed client, feed `GET /api/v2/openapi.json` (or the release's `openapi-v2.json`, the same document) to any OpenAPI 3.1 generator (`openapi-typescript`, for one). Answers
 are described loosely on purpose (`additionalProperties` is open), so treat the generated types as a floor.
 
 ## Security
@@ -448,7 +452,7 @@ are described loosely on purpose (`additionalProperties` is open), so treat the 
 the team chart (humans and bots nested by `reports_to`), a DM with any bot with the reply streaming in through
 `/api/v2/events`, the open tasks, and Needs you. It sets no cookies and puts everything on the page as text.
 
-`ui/tests/custom-frontend.cjs` runs it in a real browser against a real server on another origin, once with a local
+`ui/tests/custom-frontend.cts` runs it in a real browser against a real server on another origin, once with a local
 server (`TICO_AUTH_PROXY=none` with the owner token, the development shortcut the example offers only for a Tico on
 `localhost`) and once with built-in sign-in and PKCE against a stand-in identity provider. Run it with `npm run test:ui`.
 `backend/tests/test_frontend_access.py` covers the server side: CORS for allowed and other origins, preflights, the

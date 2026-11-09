@@ -55,7 +55,7 @@ def _line(text, limit=160):
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
     actor holding it (None for an external hold or an approval with nobody named), `what` a short subject. A child or
-    blocker hold also names its task (`task`)."""
+    blocker named by its title, or the task a blocked check waits on, also carries its id as `task`."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
 
     out = []
@@ -75,7 +75,16 @@ def holds(conn, row):
 
                 check = check_detail(conn, row) or False
                 if check:
-                    out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why"))})
+                    # The task the check waits on, as `task`: its live blocker (check_blocked.blocked), or for a
+                    # waiting check the task its own first hold names, as its reason does (words).
+                    held = H.task(conn, check["check"]) or {}
+                    if not held:
+                        named = None
+                    elif held.get("status") == "waiting":
+                        named = next(iter(holds(conn, held)), {}).get("task")
+                    else:
+                        named = TR.live_blocker(conn, held["id"], H.ACTIVE_STATUSES)
+                    out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why")), "task": named})
             continue
         out.append(_task_hold(conn, row, "child", child))
     own = {r[0] for r in conn.execute(TR.CHILD_IDS, (row["id"],))}
@@ -344,6 +353,8 @@ def unstrand(conn, at=None):
         for r in conn.execute(
             "SELECT t.id FROM task_holds h JOIN tasks t ON t.id=h.task_id WHERE h.kind='blocked' AND h.released_at IS NULL "
             "AND h.cause='stranded' AND t.status='waiting' AND t.owner_id LIKE 'bot:%' "
+            # A card On ice (D69) waits for the person who parked it: the pass leaves it, as every sweep does.
+            f"AND NOT {H.ON_ICE % 't'} "
             "AND coalesce(h.cleared_at,h.created_at)<=? ORDER BY h.created_at,t.id",
             (H.shift(at, hours=-GRACE_HOURS),),
         )
@@ -546,10 +557,17 @@ def change(conn, task_id, kind, **fields):
     if unknown:
         raise ValueError(f"task_holds has no {sorted(unknown)}")
     if fields:
+        # A new reason is progress for the stuck rule (backend/stuck_cards.py): keep when the reason last changed.
+        changed, args = "", []
+        if "reason" in fields:
+            from . import hubdb as H
+
+            changed = ",reason_changed_at=CASE WHEN reason IS ? THEN reason_changed_at ELSE ? END"
+            args = [fields["reason"], H.now()]
         conn.execute(
-            f"UPDATE task_holds SET {','.join(f'{name}=?' for name in fields)} "
+            f"UPDATE task_holds SET {','.join(f'{name}=?' for name in fields)}{changed} "
             "WHERE task_id=? AND kind=? AND released_at IS NULL",
-            (*fields.values(), task_id, kind),
+            (*fields.values(), *args, task_id, kind),
         )
 
 

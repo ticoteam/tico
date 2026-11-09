@@ -1,7 +1,6 @@
 """The repository webhook keeps a task's pull request links current; it never moves the task."""
 
 import hashlib
-import hmac
 import json
 import uuid
 from types import SimpleNamespace
@@ -13,86 +12,24 @@ from fastapi.testclient import TestClient
 from backend import github as G
 from backend import hubdb as H
 from backend.app import create_app
-from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
-from backend import bot_settings as BS
-
-SECRET = "hook-secret"
-PR = "https://github.com/ticoteam/tico/pull/412"
-
-
-@pytest.fixture
-def api(tmp_path):
-    app = create_app(
-        Settings(
-            db_path=tmp_path / "hub.db",
-            github_webhook_secret=SECRET,
-            release_commit="",
-            release_repo="ticoteam/tico",
-            test_identities={"ana-test": Identity("human:ana", "owner", "ana@acme.example")},
-        )
-    )
-    with TestClient(app) as client:
-        with app.state.store.transaction() as c:
-            bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo")}
-            H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
-            c.execute(
-                "INSERT INTO registry_metadata VALUES('people',?)",
-                (
-                    encode(
-                        {
-                            "people": [
-                                {"id": "ana", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]}
-                            ]
-                        }
-                    ),
-                ),
-            )
-            for slug, config in bots.items():
-                c.execute(
-                    'INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)',
-                    (slug, 'product' if slug == 'cpo' else 'marketing', 'ana'),
-                )
-                BS.write(c, slug, config)
-            c.execute(
-                "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
-            )
-        yield client
-
-
-def headers():
-    return {"Authorization": "Bearer ana-test", "Idempotency-Key": str(uuid.uuid4())}
-
-
-def post(api, path, body, expected=200):
-    r = api.post("/api/v2/" + path, json=body, headers=headers())
-    assert r.status_code == expected, r.text
-    data = r.json()
-    return data["task"] if isinstance(data, dict) and "task" in data and set(data) <= {"task", "readback"} else data
-
-
-def get(api, path):
-    r = api.get("/api/v2/" + path, headers=headers())
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def hook(api, event, payload, secret=SECRET, expected=200):
-    body = json.dumps(payload).encode()
-    sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    r = api.post(
-        G.PATH,
-        content=body,
-        headers={"X-Hub-Signature-256": sig, "X-GitHub-Event": event, "Content-Type": "application/json"},
-    )
-    assert r.status_code == expected, r.text
-    return r.json() if r.content else {}
-
-
-def pr_event(action, **over):
-    pr = {"html_url": PR, "draft": False, "merged": False, "merge_commit_sha": None, "merged_at": None, **over}
-    return {"action": action, "pull_request": pr, "repository": {"full_name": "ticoteam/tico"}}
+from backend.tests.helpers.github import (
+    PR,
+    _app,
+    _branch_pr,
+    _burst,
+    _prs,
+    _reconciler,
+    _status,
+    _suite,
+    api,
+    get,
+    headers,
+    hook,
+    post,
+    pr_event,
+)
 
 
 def test_a_bad_signature_is_refused_and_an_unset_secret_hides_the_path(api, tmp_path):
@@ -550,45 +487,8 @@ def test_a_review_request_puts_the_person_in_the_configured_role(api):
     assert roles() == {"reviewer": ["human:ana"]}
 
 
-def _burst(api, task_id):
-    """What a task's PR burst will send: grouped items, then each head's finished checks."""
-    from backend import repositories as R
-
-    with api.app.state.store.transaction() as c:
-        burst = R.metadata(c, 'github-task-wake:' + task_id)
-        return burst.get('items', []) + [d['item'] for d in burst.get('done', [])]
-
-
-def _app(api):
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created_at,created_by) "
-            "VALUES('app',1,'example-app','client','ticoteam',0,X'00',X'00',?,?)",
-            (H.now(), 'human:ana'),
-        )
-
-
 def _arm(api, task_id, armed=True, url=PR):
     return post(api, 'tasks/' + task_id + '/links', {'url': url, 'wake_once': armed})['links']
-
-
-def _suite(api, slug, status, conclusion=None, sha='a' * 40, id=None):
-    hook(
-        api,
-        'check_suite',
-        {
-            'action': 'completed' if status == 'completed' else 'requested',
-            'repository': {'full_name': 'ticoteam/tico'},
-            'check_suite': {
-                'id': id,
-                'status': status,
-                'conclusion': conclusion,
-                'head_sha': sha,
-                'app': {'slug': slug},
-                'pull_requests': [{'number': 412}],
-            },
-        },
-    )
 
 
 def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task(api):
@@ -656,10 +556,6 @@ def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task
     detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail'])
     assert 'wake_once' not in detail and detail['wake_once_fired']['item'].startswith('Checks finished')
     assert get(api, 'tasks/' + task['id'])['task']['status'] == task['status']
-
-
-def _status(api, context, state, sha='a' * 40):
-    hook(api, 'status', {'repository': {'full_name': 'ticoteam/tico'}, 'sha': sha, 'context': context, 'state': state})
 
 
 def test_wake_once_on_a_commit_status_that_finishes_last_names_it_when_it_fails(api):
@@ -1036,7 +932,6 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         [],
         {
             'ui/app/refresh.ts': code,
-            'CHANGELOG.md': '## [Unreleased]\n',
             'ui/app/pricing.js': 'price = 10\n',
             'app/flag.py': 'x=1\n',
             'app/loop.py': 'for item in items:\n    work(item)\ndone()\n',
@@ -1055,13 +950,12 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         )
         return merges[n]
 
-    # 412 the live desks (product, test, notes); 413 kept; 414 a two-character edit; 415 indentation only;
+    # 412 the live desks (product and test); 413 kept; 414 a two-character edit; 415 indentation only;
     # 416 adds a line that already exists elsewhere in the file; 417 renames a file and edits it.
     last = merge(
         412,
         base,
         ui__app__refresh_dot_js=live,
-        CHANGELOG_dot_md='## [Unreleased]\n- Desks move live\n',
         ui__tests__overview_live_dot_cjs='assert desk moved at once\n',
     )
     last = merge(413, last, ui__app__pricing_dot_js='price = 12 per seat\n')
@@ -1077,13 +971,12 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
     hook(
         api, 'pull_request', pr_event('closed', html_url=PR.replace('/412', '/417'), merged=True, merge_commit_sha=last)
     )
-    # The cut moves the notes and drops 416's pre-existing call, keeping the one 416 added.
+    # The cut drops 416's pre-existing call, keeping the one 416 added.
     cut = h.commit(
         'cut',
         [last],
         h.tree(
             last,
-            CHANGELOG_dot_md='## [0.3.55]\n- Desks move live\n',
             app__audit_dot_py=audit.replace('    audit_event()\n    return 1', '    return 1').replace(
                 '    return 2', '    audit_event()\n    return 2'
             ),
@@ -1095,7 +988,6 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         h.tree(
             cut,
             ui__app__refresh_dot_js=code,
-            CHANGELOG_dot_md='## [0.3.55]\n',
             ui__tests__overview_live_dot_cjs=None,
             app__flag_dot_py='x=1\n',
             app__loop_dot_py='for item in items:\n    work(item)\ndone()\n',
@@ -1188,60 +1080,9 @@ def _worktree(api, task_id, repo, branch, state='present', **detail):
     return link
 
 
-def _branch_pr(number, branch, repo='ticoteam/tico', head_repo=None, **over):
-    return {
-        'html_url': f'https://github.com/{repo}/pull/{number}',
-        'number': number,
-        'state': 'open',
-        'draft': False,
-        'merged': False,
-        'merge_commit_sha': None,
-        'merged_at': None,
-        'head': {'ref': branch, 'sha': 'b' * 40, 'repo': {'full_name': head_repo or repo}},
-        **over,
-    }
-
-
-def _prs(api, task_id):
-    """The task's PR links as stored; a task GET would start its own GitHub refresh."""
-    with api.app.state.store.read() as c:
-        return {
-            l['number']: {**l, 'detail': json.loads(l['detail'] or '{}')}
-            for l in H._rows(c.execute("SELECT * FROM task_links WHERE task_id=? AND kind='pr'", (task_id,)))
-        }
-
-
 def _worktree_detail(api, link):
     with api.app.state.store.read() as c:
         return json.loads(c.execute("SELECT detail FROM task_links WHERE id=?", (link,)).fetchone()[0])
-
-
-def _reconciler(api, monkeypatch, fetch, mint=None):
-    """The background pass against a fake GitHub; `run()` makes one pass and waits for it."""
-    import threading
-
-    service = api.app.state.github_app
-    with service.store.transaction() as c:
-        for repo in ('ticoteam/tico', 'ticoteam/tico-services'):
-            c.execute(
-                "INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at,default_branch) "
-                "VALUES(?,1,1,?,?,'main')",
-                (repo, 'human:ana', H.now()),
-            )
-    monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
-    monkeypatch.setattr(service, 'mint', mint or (lambda *args, **kw: ('test-token', 'later')))
-    monkeypatch.setattr(service, '_call', fetch)
-
-    def run(fresh=False):
-        if fresh:
-            service.worktree_reconcile_next = 0
-            service.__dict__.get('worktree_reconcile_cache', {}).clear()
-        G.reconcile_worktree_prs(service)
-        for worker in threading.enumerate():
-            if worker.name == 'tico-worktree-pr-reconcile':
-                worker.join(5)
-
-    return service, run
 
 
 def test_opened_non_engineering_pr_does_not_need_creation_qa(api):
@@ -1760,3 +1601,140 @@ def test_a_removal_for_a_pr_github_reads_as_merged_does_not_wake_the_owner(api, 
     reads = len(seen)
     G.refresh_queue_removals(service)
     assert len(seen) == reads
+
+
+def _task_state(api, task_id, status):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+
+
+def _merged(api):
+    return hook(api, 'pull_request', pr_event('closed', merged=True, merge_commit_sha='c' * 40, merged_at=H.now()))
+
+
+def _flush(api):
+    """Send every PR burst now, as the scheduler does once each is due."""
+    from backend import repositories as R
+
+    with api.app.state.store.transaction() as c:
+        for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
+            R.save_metadata(c, row['key'], {**R.metadata(c, row['key']), 'due': H.shift(H.now(), seconds=-1)})
+        return G.flush_wakes(c)
+
+
+def test_a_merge_wakes_the_bot_card_waiting_on_its_pull_request_once(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'waiting')
+    _merged(api)
+    assert len(_burst(api, task['id'])) == 1 and 'merged' in _burst(api, task['id'])[0]
+    assert _flush(api) == [task['id']]
+    with api.app.state.store.transaction() as c:
+        body = c.execute(
+            'SELECT body FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1', (task['owner_id'],)
+        ).fetchone()[0]
+    assert 'Carry this card on' in body
+    # GitHub redelivers the merge, and a read refresh finds the same merge: neither wakes the card again.
+    _merged(api)
+    with api.app.state.store.transaction() as c:
+        G.pull_request(
+            c, pr_event('refresh', merged=True, merge_commit_sha='c' * 40, merged_at=H.now()), read_refresh=True
+        )
+    assert _burst(api, task['id']) == []
+    assert _flush(api) == []
+
+
+def test_a_merge_does_not_wake_a_card_a_person_owns(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'waiting')
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (task['id'],))
+    _merged(api)
+    assert _burst(api, task['id']) == []
+
+
+def test_a_merge_does_not_wake_a_done_card(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'done')
+    _merged(api)
+    assert _burst(api, task['id']) == []
+
+
+def test_a_merge_wakes_the_card_blocked_on_the_pull_request_card_and_not_that_card(api):
+    from backend import task_relations as TR
+
+    pr_card = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
+    qa = post(api, 'tasks', {'owner': 'cmo', 'title': 'QA checkout', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, 'bot:cpo', pr_card['id'], qa['id'], 'blocks', H.now())
+    _task_state(api, qa['id'], 'waiting')
+    _merged(api)
+    assert _burst(api, pr_card['id']) == [], 'an open card is on its own step, not waiting'
+    assert len(_burst(api, qa['id'])) == 1
+
+
+def test_a_card_the_milestone_wait_woke_gets_no_second_wake_from_the_merge(api):
+    from backend import repositories as R
+    from backend import task_relations as TR
+
+    pr_card = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
+    waiter = post(api, 'tasks', {'owner': 'cmo', 'title': 'QA checkout', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        # Blocked on the pull request's card and waiting for the merge: the milestone wakes it, and the card's own
+        # blocker is still open, so it stays waiting and the merge would wake it again without the skip.
+        TR._insert(c, 'bot:cpo', pr_card['id'], waiter['id'], 'blocks', H.now())
+    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={'on': 'pr:' + PR}, headers=headers())
+    assert r.status_code == 200, r.text
+    _task_state(api, waiter['id'], 'waiting')
+    _merged(api)
+    with api.app.state.store.transaction() as c:
+        milestone = c.execute(
+            "SELECT count(*) FROM messages WHERE recipient_id=? AND body LIKE 'Milestone:%'", (waiter['owner_id'],)
+        ).fetchone()[0]
+        assert R.metadata(c, 'github-task-wake:' + waiter['id']) == {}
+    assert milestone == 1
+    assert _burst(api, waiter['id']) == []
+
+
+def test_a_stale_event_that_reopens_a_merged_pr_does_not_rearm_its_merge_wake(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
+    _task_state(api, task['id'], 'waiting')
+    _merged(api)
+    assert _flush(api) == [task['id']]
+    # An older edit, delivered late, still says the PR is open: the link reopens, and the next merge reading is no news.
+    hook(api, 'pull_request', pr_event('edited'))
+    _merged(api)
+    assert _burst(api, task['id']) == []
+    assert _flush(api) == []
+
+
+def test_a_parent_is_woken_once_for_a_merge_when_another_child_links_the_pr_later(api):
+    from backend import task_relations as TR
+
+    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
+    parent = post(api, 'tasks', {'owner': 'cmo', 'title': 'Release checkout', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, 'bot:cpo', child['id'], parent['id'], 'parent', H.now())
+    _task_state(api, parent['id'], 'waiting')
+    _merged(api)
+    assert len(_burst(api, parent['id'])) == 1
+    assert _flush(api) == [parent['id']]
+    late = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout again', 'body': 'x', 'links': [PR]})
+    _task_state(api, late['id'], 'waiting')
+    _merged(api)
+    assert _burst(api, parent['id']) == [], 'the parent already heard this merge through the first child'
+    assert len(_burst(api, late['id'])) == 1
+
+
+def test_a_private_card_is_not_named_to_a_parent_outside_its_readers(api):
+    from backend import task_relations as TR
+
+    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Secret checkout', 'body': 'x', 'links': [PR]})
+    parent = post(api, 'tasks', {'owner': 'cmo', 'title': 'Release', 'body': 'x'})
+    with api.app.state.store.transaction() as c:
+        TR._insert(c, 'bot:cpo', child['id'], parent['id'], 'parent', H.now())
+        c.execute('UPDATE tasks SET private=1 WHERE id=?', (child['id'],))
+    _task_state(api, parent['id'], 'waiting')
+    _merged(api)
+    items = _burst(api, parent['id'])
+    assert len(items) == 1
+    assert PR not in items[0] and 'Secret checkout' not in items[0]

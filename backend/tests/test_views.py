@@ -1,6 +1,5 @@
 from backend.store import H
-from backend.tests.test_api import (
-    api,
+from backend.tests.helpers.api import (
     as_member,
     headers,
     get,

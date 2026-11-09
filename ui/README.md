@@ -12,7 +12,12 @@ globals (`S`, `$`, `esc`, `get`, `post`, `route`, ...). A script is JavaScript o
                       (docs-page.ts, goals-kpis.ts, first-run.ts, support.ts, ...)
     assets/, vendor/  images, the text font (Inter) and the icon font, marked
     tests/*.cjs       browser tests (`npm run test:ui`)
-    sw.js             the service worker, served as /sw.js; it caches nothing (it lets the hashed bundle through to the browser cache)
+    sw.ts             the service worker, compiled to build/ui/sw.js and served as /sw.js; it caches nothing (below)
+
+The opening recovery card and its small stylesheet live in `index.html`, outside the bundles, so a failed asset
+download still leaves a styled Reload and Contact support screen. `theme.ts` dismisses it only after the app's
+`tico:app-loaded` event and all stylesheets have loaded without an asset error. Keep billing notices `hidden` in the
+markup: only a confirmed cloud access state may reveal them. A failed page load is not evidence of exhausted credit.
 
 ## One request each: the bundle
 
@@ -49,6 +54,16 @@ sha256, and the bundle and the server's `/tico/ui/<name>.ts` route serve the out
 to start on one (it compiles first when the checkout has Node and `npm ci`; so do pytest and `npm run test:ui`). The
 image compiles the UI in its own stage (Dockerfile `ui-build`) and ships only the output: the server image has no
 Node. `bash scripts/check_ui_types.sh` type-checks the `.ts` files with the rest.
+
+The service worker, `sw.ts`, is compiled the same way (to `build/ui/sw.js`, a classic script: no `import` or
+`export`) and served at the root as `/sw.js` with its map at `/sw.js.map` (backend/ui_bundle_routes.py), under either
+bundle setting. That URL never changes: `app/boot.ts` registers `/sw.js?v=…` with scope `/`, and an installed worker
+checks the same URL for updates (`updateViaCache: 'none'`, `Cache-Control: private, no-cache`). A missing or stale
+build is the same 503, never the `.ts` source. Its global is a `ServiceWorkerGlobalScope`, which the page's DOM lib
+contradicts, so it is its own program: `ui/tsconfig.worker.json` (lib `WebWorker`, every strict flag) checks it alone,
+and the page configs exclude it. Any finding there fails, with no baseline (`python3 scripts/check_ui_strict.py`, and
+`--worker-only` in `scripts/check_ui_types.sh`). The worker caches nothing: it lets the hashed bundle through to the
+browser cache and fetches the page itself past every cache.
 
 An open tab does not pick up a new release by itself. The config carries the release (`version`) and the served build
 (`ui_build`, the `?v=` of the two bundle tags joined by a dot); `app/notices.ts` compares both with what the page loaded with, on the
@@ -99,12 +114,12 @@ app bundle so it loads only when the person opens Overview.
 
 ## Browser tests on a real hub
 
-Most browser tests answer the API from fixtures (`support/page.cjs`, `support/routes.cjs`). A test that needs the real
-API shapes starts a hub instead: `support/real-hub.cjs` runs `support/real_hub_server.py`, which boots the scenario org
+Most browser tests answer the API from fixtures (`support/page.cts`, `support/routes.cts`). A test that needs the real
+API shapes starts a hub instead: `support/real-hub.cts` runs `support/real_hub_server.py`, which boots the scenario org
 (`evals/redesign/harness.py`) on a fresh temporary database and applies the named seeds in `evals/redesign/seeds.py`.
 
 ```js
-const {startHub, pageAs} = require('./support/real-hub.cjs');
+const {startHub, pageAs} = require('./support/real-hub.cts');
 const hub = await startHub({seeds: ['org']});
 const page = await pageAs(browser, hub, 'ana', {phone: true});   // 390×844 with touch; the default is 1440×900
 await page.context().close();
@@ -116,5 +131,5 @@ await hub.stop();                                                 // stops the h
 - To start a screen from some state, add a seed. It makes the state through the API as a teammate would, never by
   writing the database. A seed whose route is not built yet is skipped and listed in `hub.skipped`.
 - The clock is the scenario's fake clock, frozen at its start, so a seeded runner's heartbeat does not age out during a test.
-- Write the phone journey first; `real-hub-smoke.cjs` is the reference. The hub needs the backend requirements, in the
+- Write the phone journey first; `real-hub-smoke.cts` is the reference. The hub needs the backend requirements, in the
   Python named by `TICO_PYTHON` as for the other support servers.

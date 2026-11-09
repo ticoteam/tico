@@ -2,7 +2,7 @@
 
 import json
 
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
 
 
 def start(api):

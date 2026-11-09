@@ -12,8 +12,8 @@ import backend
 from backend import groups as Groups
 from backend import recruiting
 from backend.store import H, Problem
-from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_strategy_bot import as_bot
+from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
+from backend.tests.helpers.strategy_bot import as_bot
 
 BRIEF = "A Rust API and a React web app, deployed on AWS, with GitHub pull requests and flaky tests"
 CLOUD_ROLE = "Second pair of hands"

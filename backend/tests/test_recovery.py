@@ -1,11 +1,11 @@
 import json
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
 from backend.auth import Auth
 from backend.backup import restore_snapshot, snapshot
 from backend.config import Settings
 from backend.store import H, Problem, Store, encode
-from backend.tests.test_api import api, post, setup_attempt
+from backend.tests.helpers.api import post, setup_attempt
 
 import pytest
 
@@ -70,7 +70,7 @@ def test_restore_fences_credentials_and_preserves_uncertain_effects(api, tmp_pat
 def test_restart_gives_lapsed_leases_one_more_period_instead_of_expiring_them(api):
     from fastapi.testclient import TestClient
     from backend.app import create_app
-    from backend.tests.test_api import claim, expire
+    from backend.tests.helpers.api import claim, expire
 
     r, _, a = setup_attempt(api)
     post(api, f"attempts/{a['id']}/started", {"thread_id": "through-deploy"}, r["token"])
@@ -109,7 +109,7 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
     computer does not carry on resumes on the next sweep, a shell command and all, with nobody asked."""
     from fastapi.testclient import TestClient
     from backend.app import create_app
-    from backend.tests.test_api import claim, expire, ready
+    from backend.tests.helpers.api import claim, expire, ready
 
     r, _, a = setup_attempt(api)
     post(api, f"attempts/{a['id']}/started", {"thread_id": "cut-by-restart"}, r["token"])
@@ -196,8 +196,8 @@ def test_every_cloud_migration_number_is_used_once_and_in_order():
 @pytest.mark.parametrize("sweep", ["claim", "scheduler"])
 def test_stall_grace_survives_bounded_expiry_and_contact_between_chunks(api, monkeypatch, sweep):
     from backend.scheduler import Scheduler
-    from backend.tests.test_api import claim, headers
-    from backend.tests.test_attempt_contention import fleet
+    from backend.tests.helpers.api import claim, headers
+    from backend.tests.helpers.attempt_contention import fleet
 
     machine = fleet(api, attempts=10, trees=0)
     store, execution = api.app.state.store, api.app.state.execution
@@ -278,7 +278,7 @@ def test_stall_grace_survives_bounded_expiry_and_contact_between_chunks(api, mon
 @pytest.mark.parametrize("sweep", ["bounded", "scheduler"])
 def test_hard_start_deadlines_survive_chunked_stall_recovery(api, monkeypatch, sweep):
     from backend.scheduler import Scheduler
-    from backend.tests.test_attempt_contention import fleet
+    from backend.tests.helpers.attempt_contention import fleet
 
     fleet(api, attempts=12, trees=0)
     store, execution = api.app.state.store, api.app.state.execution

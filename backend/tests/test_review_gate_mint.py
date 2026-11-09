@@ -9,8 +9,8 @@ from jwt.exceptions import InvalidKeyError
 
 from backend import github_app, review_gate
 from backend.store import Problem
-from backend.tests.test_review_gate import api, get, HEAD, move, ticket
-from backend.tests.test_api import hold
+from backend.tests.helpers.review_gate import api, get, HEAD, move, ticket
+from backend.tests.helpers.api import hold
 
 
 @pytest.mark.parametrize(
@@ -159,7 +159,8 @@ def test_real_mint_failure_reaches_review_refusal(api, monkeypatch, failure, cau
     monkeypatch.setattr(
         github_app,
         '_client',
-        lambda: httpx.Client(base_url='https://example.test', transport=httpx.MockTransport(respond)),
+        # _client(base) takes the base URL the caller asked for; this stub answers every base with the mock transport.
+        lambda base=None: httpx.Client(base_url='https://example.test', transport=httpx.MockTransport(respond)),
     )
 
     response = move(api, task)

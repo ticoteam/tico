@@ -126,6 +126,7 @@ ALIASES = {
     "project manager": "meeting-notes",
     "goal manager": "goal-manager",
     "ceo bot": "goal-manager",
+    "strategy bot": "goal-manager",
     "librarian": "librarian",
     "assistant": "coo",
     "botops": "botops",

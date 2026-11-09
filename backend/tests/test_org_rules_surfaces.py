@@ -8,37 +8,15 @@ from pathlib import Path
 import pytest
 
 from backend import rule_due as D
-from backend.tests.test_api import api, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_automation_cli import Client
-from backend.tests.test_member_bots import botops, turn as botops_turn  # noqa: F401  (the botops fixture)
-from backend.tests.test_org_rules import org, rule as post_rule
+from backend.tests.helpers.api import headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401  (the botops fixture)
+from backend.tests.helpers.org_rules import org, rule as post_rule
 from clients import hubcli, hubtools, remotecli
 from clients.tico import APIError
+from backend.tests.helpers.org_rules_surfaces import cli, mcp
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def cli(api, token, *argv):
-    args = hubcli.parser().parse_args(["rules", *argv])
-    return remotecli.via_tool(Client(api, token), remotecli._rules_args(args))
-
-
-def mcp(api, name, arguments=None, token="ana-test"):
-    r = api.post(
-        "/api/v2/mcp",
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": name, "arguments": arguments or {}},
-        },
-        headers=headers(token),
-    )
-    assert r.status_code == 200, r.text
-    result = r.json()["result"]
-    payload = result.get("structuredContent")
-    return result["isError"], payload if payload is not None else json.loads(result["content"][0]["text"])
 
 
 def hide_quote(api, rule_id):

@@ -8,60 +8,18 @@ import pytest
 
 from backend import hubdb as H
 from backend import worktrees as W
-from backend.tests.test_github_app import api, gh, auth, connect, runner_token  # noqa: F401
-from backend.tests.test_repositories import catalog, put
+from backend.tests.helpers.github_app import api, gh, auth, connect
+from backend.tests.helpers.repositories import put
 from backend.enqueue import enqueue_stored
+from backend.tests.helpers.worktrees import mark_ready, post, prepared
 
 
-@pytest.fixture
-def prepared(api, gh):
-    catalog(api, gh)
-    runner_token(api, 'cmo')
-    put(api, 'repositories/Acme/product', {'enabled': True})
-    put(api, 'bots/cmo/repositories', {'mode': 'all'})
+def started_task(api, title):
+    """Another started task of cmo's (a worktree needs one), so several stories can share one prepared app."""
     with api.app_state.store.transaction() as c:
-        # TEMPORARY: task_links v2 is owned by the tasks engineer. Drop this block at merge.
-        columns = {
-            'repo': 'TEXT',
-            'number': 'INTEGER',
-            'branch': 'TEXT',
-            'computer_id': 'TEXT',
-            'path': 'TEXT',
-            'checks': 'TEXT',
-            'mergeable': 'TEXT',
-            'review_state': 'TEXT',
-            'pending_comments': 'INTEGER',
-            'detail': 'TEXT',
-            'updated_at': 'TEXT',
-        }
-        have = {r[1] for r in c.execute('PRAGMA table_info(task_links)')}
-        for name, kind in columns.items():
-            if name not in have:
-                c.execute(f'ALTER TABLE task_links ADD COLUMN {name} {kind}')
-        c.execute(
-            "UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
-            (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),),
-        )
-        task = H.task_create(c, 'human:ana', 'Build product', 'Implement product', 'bot:cmo')
-        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
-        other = H.task_create(c, 'human:ana', 'Other work', 'Implement docs', 'bot:cpo')
-        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
-        until = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-        c.execute(
-            "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m1','human:ana','bot:cmo','say','Work',?)",
-            (H.now(),),
-        )
-        enqueue_stored(c, 'm1')
-        job = c.execute("SELECT id FROM jobs WHERE message_id='m1'").fetchone()[0]
-        c.execute(
-            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('a1',?,'cmo','r1',1,'synthetic','running',?,?)",
-            (job, until, H.now()),
-        )
-    return api, task['id'], other['id']
-
-
-def post(api, path, body, token='owner-test'):
-    return api.post('/api/v2/' + path, json=body, headers={**auth(token), 'Idempotency-Key': uuid.uuid4().hex})
+        task = H.task_create(c, 'human:ana', title, 'Implement product', 'bot:cmo')
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task['id'],))
+    return task['id']
 
 
 def test_create_permissions_limit_old_computer_and_attach(prepared):
@@ -277,8 +235,18 @@ def test_no_app_accepts_computer_git_addresses_but_connected_app_keeps_grants(pr
     )
 
 
-def test_unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_removed(prepared):
+def test_an_exhausted_cleanup_keeps_work_until_an_unlink_finishes_it(prepared, subtests):
+    """Both stories on one app: the first ends with its link gone, so the second sees the same computer state."""
     api, tid, _ = prepared
+    with subtests.test('unlink retries exhausted cleanup with move rights'):
+        _unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_removed(api, tid)
+    with subtests.test('owner unlink finishes a missing worktree'):
+        _owner_unlink_finishes_a_missing_worktree_after_cleanup_gave_up(
+            api, started_task(api, 'Build the missing tree')
+        )
+
+
+def _unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_removed(api, tid):
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
     assert mark_ready(api, tid, link['link_id']).status_code == 200
     error = 'Worktree action failed; history kept. kept: ignored files'
@@ -340,9 +308,8 @@ def test_unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_
         assert not c.execute('SELECT 1 FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
 
 
-def test_owner_unlink_finishes_a_missing_worktree_after_cleanup_gave_up(prepared):
+def _owner_unlink_finishes_a_missing_worktree_after_cleanup_gave_up(api, tid):
     # The folder and its git registration were removed outside Tico after the computer stopped retrying.
-    api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
     assert mark_ready(api, tid, link['link_id']).status_code == 200
     error = 'Worktree action failed; history kept. kept: ignored files'
@@ -685,21 +652,6 @@ def test_a_released_worktree_refused_for_unpushed_commits_is_tried_again_after_a
     assert 'cleanup_gave_up' not in detail() and detail()['cleanup_attempts'] == 1
 
 
-def mark_ready(api, tid, link_id):
-    return api.patch(
-        f'/api/v2/tasks/{tid}/links/{link_id}',
-        json={
-            'state': 'present',
-            'checkout_state': 'ready',
-            'setup_pending': False,
-            'expected_head': 'a' * 40,
-            'checkout_target': 'refs/heads/tico/test',
-            'expected_base': 'b' * 64,
-        },
-        headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex},
-    )
-
-
 def test_initializing_checkout_stays_pending_until_checkout_and_setup_complete(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
@@ -920,10 +872,17 @@ def test_a_report_built_from_an_older_record_never_moves_it_forward_either(prepa
     assert state == 'pending' and detail['checkout_state'] == 'ready'
 
 
-@pytest.mark.parametrize('cleanup_requested', [False, True])
-@pytest.mark.parametrize('stamp', ['stale', 'equal', 'newer', 'unstamped'])
-def test_removed_heartbeat_respects_the_record_stamp(prepared, cleanup_requested, stamp):
-    api, tid, _ = prepared
+def test_removed_heartbeat_respects_the_record_stamp(prepared, subtests):
+    """Every stamp, with and without a cleanup request: one app, a started task of its own per case."""
+    api, _, _ = prepared
+    for cleanup_requested in (False, True):
+        for stamp in ('stale', 'equal', 'newer', 'unstamped'):
+            with subtests.test(cleanup_requested=cleanup_requested, stamp=stamp):
+                tid = started_task(api, f'Build product ({stamp}, cleanup {cleanup_requested})')
+                _removed_heartbeat_respects_the_record_stamp(api, tid, cleanup_requested, stamp)
+
+
+def _removed_heartbeat_respects_the_record_stamp(api, tid, cleanup_requested, stamp):
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
     assert mark_ready(api, tid, link['link_id']).status_code == 200
     changed = '2026-10-24T03:06:28.000000Z'
@@ -1615,8 +1574,18 @@ def test_a_checkout_stuck_past_the_deadline_fails_once_owned_and_retries_on_the_
     assert detail['checkout_state'] == 'queued' and 'pending_expired' not in detail
 
 
-def test_a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_registered_setup_command(prepared):
+def test_a_setup_retry_after_the_deadline_resumes_in_place_and_its_first_report_clears_the_failure(prepared, subtests):
+    """Both stories on one app, the second on a started task of its own; only the first reads the bot's message."""
     api, tid, _ = prepared
+    with subtests.test('a retry keeps the setup phase and names the registered setup command'):
+        _a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_registered_setup_command(api, tid)
+    with subtests.test('the registered setup retry clears the failure at its first report'):
+        _the_registered_setup_retry_after_the_deadline_clears_the_failure_at_its_first_report(
+            api, started_task(api, 'Build the setup retry')
+        )
+
+
+def _a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_registered_setup_command(api, tid):
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     proof = {'expected_head': 'a' * 40, 'checkout_target': 'refs/remotes/origin/main', 'expected_base': 'b' * 64}
     route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
@@ -1652,8 +1621,7 @@ def test_a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_register
     assert row['state'] == 'present' and 'pending_expired' not in json.loads(row['detail'])
 
 
-def test_the_registered_setup_retry_after_the_deadline_clears_the_failure_at_its_first_report(prepared):
-    api, tid, _ = prepared
+def _the_registered_setup_retry_after_the_deadline_clears_the_failure_at_its_first_report(api, tid):
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     proof = {'expected_head': 'a' * 40, 'checkout_target': 'refs/remotes/origin/main', 'expected_base': 'b' * 64}
     route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
@@ -1846,9 +1814,18 @@ def test_a_new_push_after_a_stale_push_was_cleared_resets_the_cleared_flag(prepa
     assert detail['pushed'] == 'd' * 40 and 'stale_push_cleared' not in detail
 
 
-@pytest.mark.parametrize('guard', ['merge_time', 'branch', 'repository', 'matching', 'legacy'])
-def test_finished_pr_must_match_the_working_allocation(prepared, guard):
-    api, tid, _ = prepared
+def test_finished_pr_must_match_the_working_allocation(prepared, subtests):
+    """Each guard on one app, a started task and pull request of its own per case."""
+    api, _, _ = prepared
+    for number, guard in enumerate(['merge_time', 'branch', 'repository', 'matching', 'legacy'], start=7):
+        with subtests.test(guard=guard):
+            with api.app_state.store.transaction() as c:  # each case starts, as prepared, with cmo's turn running
+                c.execute("UPDATE attempts SET state='running' WHERE id='a1'")
+            tid = started_task(api, f'Build product ({guard})')
+            _finished_pr_must_match_the_working_allocation(api, tid, guard, number)
+
+
+def _finished_pr_must_match_the_working_allocation(api, tid, guard, number):
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     assert mark_ready(api, tid, link['link_id']).status_code == 200
     allocation = '2026-10-23T08:00:00.500000Z'
@@ -1863,7 +1840,7 @@ def test_finished_pr_must_match_the_working_allocation(prepared, guard):
         detail['remote'] = {'at': H.now(), 'heads': ['a' * 40]}
         c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['link_id']))
         c.execute("UPDATE attempts SET state='completed' WHERE id='a1'")
-        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        pr = H.task_link(c, 'bot:cmo', tid, f'https://github.com/Acme/product/pull/{number}')
         # Late linking must not make a historical merge belong to the renewed allocation.
         c.execute(
             "UPDATE task_links SET state='merged',created_at=?,pr_merged_at=?,repo=?,branch=?,detail=? WHERE id=?",
@@ -1886,9 +1863,11 @@ def test_finished_pr_must_match_the_working_allocation(prepared, guard):
     response = post(api, 'runners/heartbeat', body, 'runner-test')
     assert response.status_code == 200, response.text
     released = guard in ('matching', 'legacy')
-    assert [(a['link_id'], a['action']) for a in response.json()['worktree_actions']] == (
-        [(link['link_id'], 'remove')] if released else []
-    )
+    # This case's link only: an earlier case's released tree keeps its own remove action until it is reported gone.
+    actions = [
+        (a['link_id'], a['action']) for a in response.json()['worktree_actions'] if a['link_id'] == link['link_id']
+    ]
+    assert actions == ([(link['link_id'], 'remove')] if released else [])
     with api.app_state.store.read() as c:
         held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
         assert held[link['link_id']]['clear'] == ('merged' if released else 'in_progress')
@@ -1959,7 +1938,7 @@ def test_owner_managers_provision_reports_worktrees_without_granting_repo_access
         else Identity('human:riley', 'human', 'riley@acme.example')
     )
     if manager == 'bot':
-        from backend.tests.test_github_app import _box
+        from backend.tests.helpers.github_app import _box
 
         _box(api)
         with api.app_state.store.transaction() as c:

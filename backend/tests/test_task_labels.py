@@ -3,9 +3,27 @@ it asked for, or one of a type it manages); a label on a public roadmap or one T
 
 import json
 
+import pytest
+
 from backend import hubdb as H
-from backend.tests.test_roadmaps import public_setup
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401 (fixture)
+from backend.tests.helpers.roadmaps import public_setup as roadmap_public_setup  # noqa: F401
+from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.tasks_board import bot_token as board_bot_token  # noqa: F401
+
+
+def public_setup(api):
+    """The public roadmap, set up once on the shared hub (`test_roadmaps.public_setup` creates its tags)."""
+    if getattr(api, "public_item", None) is None:
+        api.public_item = roadmap_public_setup(api)
+    return api.public_item
+
+
+def bot_token(api, slug="ops"):
+    """The bot's leased turn (`test_tasks_board.bot_token`), claimed once per bot on the shared hub."""
+    tokens = api.__dict__.setdefault("bot_tokens", {})
+    if slug not in tokens:
+        tokens[slug] = board_bot_token(api, slug)
+    return tokens[slug]
 
 
 def manage(api, type_name, slug):
@@ -31,7 +49,7 @@ def state(api, slug):
         return H.bot(c, slug)["state"]
 
 
-def test_a_bot_adds_and_removes_a_classification_label_on_its_own_roadmap_item(api):
+def _a_bot_adds_and_removes_a_classification_label_on_its_own_roadmap_item(api):
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research exports", "body": "x", "type": "Product roadmap"})
     assert label(api, item["id"], ["area-exports"], token)["labels"] == ["area-exports"]
@@ -46,7 +64,7 @@ def test_a_bot_adds_and_removes_a_classification_label_on_its_own_roadmap_item(a
     assert label(api, other["id"], ["area-imports"], token)["labels"] == ["area-imports"]
 
 
-def test_a_public_roadmap_label_takes_an_approval_both_ways_and_is_never_applied_silently(api):
+def _a_public_roadmap_label_takes_an_approval_both_ways_and_is_never_applied_silently(api):
     public_setup(api)
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research search", "body": "x", "type": "Product roadmap"})
@@ -73,7 +91,7 @@ def test_a_public_roadmap_label_takes_an_approval_both_ways_and_is_never_applied
     assert label(api, item["id"], [], "ben-test")["labels"] == []  # a person who is a mover, as before
 
 
-def test_a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task(api):
+def _a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task(api):
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research filters", "body": "x"})
     refused = label(api, item["id"], ["goal:on"], token, expected=403)["error"]
@@ -81,7 +99,7 @@ def test_a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task(api):
     assert get(api, "tasks/" + item["id"])["task"]["labels"] == []
 
 
-def test_a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_manage(api):
+def _a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_manage(api):
     manage(api, "Engineering", "ops")
     cpo = bot_token(api, "cpo")
     hidden = post(api, "tasks", {"owner": "ops", "title": "Review the contract", "body": "x", "private": True})
@@ -107,7 +125,7 @@ def test_a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_man
     assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
 
 
-def test_a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
+def _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research sorting", "body": "x"})
     for change in ({"lane": "company"}, {"number": 991}, {"lane": "company", "labels": ["area-sort"]}):
@@ -125,7 +143,7 @@ def test_a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
     label(api, other["id"], [], "priya-test", expected=403)  # a person who is not a mover, as before
 
 
-def test_a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat(api):
+def _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat(api):
     token = bot_token(api, "cpo")
     ticket = post(api, "tasks", {"owner": "cmo", "title": "Build imports", "body": "x", "type": "Engineering"})
     for _ in range(H.QUARANTINE_AT + 2):
@@ -159,7 +177,7 @@ def test_a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats
         assert hold["reason"] == f"{H.QUARANTINE_AT} repeated refusals today"
 
 
-def test_an_approval_for_a_public_label_never_carries_a_goal_label_and_is_used_once_on_a_public_task(api):
+def _an_approval_for_a_public_label_never_carries_a_goal_label_and_is_used_once_on_a_public_task(api):
     public_setup(api)
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research search", "body": "x", "type": "Product roadmap"})
@@ -184,7 +202,7 @@ def test_an_approval_for_a_public_label_never_carries_a_goal_label_and_is_used_o
     assert api.get("/public/roadmaps/roadmap/tasks/" + item["id"]).status_code == 404
 
 
-def test_label_refusals_on_different_tasks_each_count(api):
+def _label_refusals_on_different_tasks_each_count(api):
     token = bot_token(api, "cpo")
     tickets = [
         post(api, "tasks", {"owner": "cmo", "title": f"Build part {i}", "body": "x", "type": "Engineering"})
@@ -288,7 +306,7 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
     ]
 
 
-def test_the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label(api, monkeypatch):
+def _the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label(api, monkeypatch):
     """`hub task label --add roadmap --approval-id`: the way through a refused create names this command."""
     from clients import remotecli
     from clients.hubcli import parser
@@ -332,7 +350,7 @@ def test_the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label(
         assert c.execute("SELECT consumed_at FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
 
 
-def test_a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
+def _a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
     public_setup(api)
     made = post(
         api,
@@ -344,3 +362,51 @@ def test_a_mover_and_the_keeper_create_a_task_with_any_label_as_before(api):
     with api.app.state.store.transaction() as c:
         kept = H.task_create(c, H.KEEPER, "Refresh the map", "x", "bot:ops", labels=["goal:off"])
     assert get(api, "tasks/" + kept["id"])["task"]["labels"] == ["goal:off"]
+
+
+def _fresh(api, types):
+    """A check's starting point on the shared hub, as on a new one: no refusal recorded and no hold open, every bot
+    active, no task open (a title may be asked for again), the two types' managers and bots as set up, and bots asked
+    for approvals on the public labels once the roadmap is set up."""
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM refusals")
+        c.execute("UPDATE quarantine_holds SET released_at=? WHERE released_at IS NULL", (H.now(),))
+        c.execute("UPDATE bots SET state='active' WHERE slug IN ('ops','cpo','cmo')")
+        c.execute("UPDATE tasks SET status='closed' WHERE status NOT IN ('done','closed','declined')")
+        for name, (manager, bots) in types.items():
+            c.execute("UPDATE task_types SET manager=?, bots=? WHERE name=?", (manager, bots, name))
+    if getattr(api, "public_item", None) is not None:
+        post(api, "roadmaps/settings", {"bot_public_approval": True})
+
+
+def test_who_changes_a_tasks_labels(api, monkeypatch, subtests):
+    """Every label rule on one hub, each check from a fresh starting point (`_fresh`). The two refused-create checks
+    stay their own tests: they count the tags table, and `_fresh` keeps the tags earlier checks made, so on a shared
+    hub a tag leaked by a refused create (or a successful create of an unknown tag) would go unseen (3d7336456)."""
+    with api.app.state.store.read() as c:
+        types = {
+            r[0]: (r[1], r[2])
+            for r in c.execute(
+                "SELECT name, manager, bots FROM task_types WHERE name IN ('Engineering','Product roadmap')"
+            )
+        }
+    checks = (
+        _a_bot_adds_and_removes_a_classification_label_on_its_own_roadmap_item,
+        _a_public_roadmap_label_takes_an_approval_both_ways_and_is_never_applied_silently,
+        _a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task,
+        _a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_manage,
+        _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged,
+        _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat,
+        _an_approval_for_a_public_label_never_carries_a_goal_label_and_is_used_once_on_a_public_task,
+        _label_refusals_on_different_tasks_each_count,
+        _the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label,
+        _a_mover_and_the_keeper_create_a_task_with_any_label_as_before,
+    )
+    for check in checks:
+        with subtests.test(check.__name__):
+            _fresh(api, types)
+            if check is _the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label:
+                with pytest.MonkeyPatch.context() as mp:
+                    check(api, mp)
+            else:
+                check(api)

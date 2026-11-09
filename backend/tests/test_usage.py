@@ -9,7 +9,8 @@ from contextlib import closing
 import pytest
 
 from backend import hubdb, providers
-from backend.tests.test_api import api, as_member, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import as_member, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.usage import complete
 
 DAY = "2026-09-20"
 
@@ -17,14 +18,6 @@ DAY = "2026-09-20"
 def price(model, uncached, cached, output):
     inp, hit, out = providers.PRICES[model]
     return round((uncached * inp + cached * hit + output * out) / 1e6, 6)
-
-
-def complete(api, r, attempt, usage=None, **more):
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread-1"}, token=r["token"])
-    body = {"outcome": "completed", "text": "Done.", "last_seq": 0, "tokens_in": 3000, "tokens_out": 500, **more}
-    if usage is not None:
-        body["usage"] = usage
-    return post(api, f"attempts/{attempt['id']}/complete", body, token=r["token"])
 
 
 def turn(api, aid):
@@ -421,7 +414,7 @@ def test_results_with_no_counts_end_with_zero_usage_and_their_reason(api, outcom
 
 
 def test_a_run_whose_lease_runs_out_ends_with_zero_usage_and_no_result(api):
-    from backend.tests.test_api import expire
+    from backend.tests.helpers.api import expire
 
     r, _, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread-1"}, token=r["token"])
@@ -434,7 +427,7 @@ def test_a_run_whose_lease_runs_out_ends_with_zero_usage_and_no_result(api):
 
 
 def test_a_late_limited_result_keeps_usage_without_reopening_the_dismissed_job(api):
-    from backend.tests.test_execution_review import aged, finished_then_lapsed, settled
+    from backend.tests.helpers.execution_review import aged, finished_then_lapsed, settled
 
     r, _, attempt = finished_then_lapsed(api)
     aged(api, attempt["id"])
@@ -459,7 +452,7 @@ def test_a_late_limited_result_keeps_usage_without_reopening_the_dismissed_job(a
 
 
 def test_a_late_completed_result_keeps_measured_usage_without_reopening_the_dismissed_job(api):
-    from backend.tests.test_execution_review import aged, finished_then_lapsed, settled
+    from backend.tests.helpers.execution_review import aged, finished_then_lapsed, settled
 
     r, _, attempt = finished_then_lapsed(api)
     aged(api, attempt["id"])
@@ -518,7 +511,7 @@ def test_a_restore_zeroes_open_runs_and_keeps_a_finished_run_as_measured(api, tm
     )
     before = turn(api, done["id"])
     post(api, "chat/ops", {"text": "One more."})
-    from backend.tests.test_api import claim
+    from backend.tests.helpers.api import claim
 
     open_run = claim(api, r)
     post(api, f"attempts/{open_run['id']}/started", {"thread_id": "pre-disaster"}, token=r["token"])

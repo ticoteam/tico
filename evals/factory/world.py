@@ -46,8 +46,14 @@ class Refusal(Exception):
 class World:
     """One run of one scenario. Use as a context manager: it starts the clock and the server, and stops both."""
 
-    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0, signed_in=(), capacity=4):
+    def __init__(self, board, bots, tick_minutes=5, rng=None, ci_fail=0.0, signed_in=(), capacity=4, pipelines=()):
         self.board = board
+        # More pipelines beside the board's, each a `POST task-types` body (name, steps, ...), made through the API after
+        # the board is set up. None by default: a world that asks for none makes no extra call, so its ids, its turns and
+        # its results are the same as before (the run's ids come from a seeded generator, so one more call would shift
+        # them). Each one made is in `self.pipelines` by name, as the API answered it.
+        self.pipeline_specs = tuple(pipelines)
+        self.pipelines = {}
         self.bot_slugs = list(bots)
         self.roles = {}
         for slug, (role, _family) in bots.items() if isinstance(bots, dict) else []:
@@ -164,6 +170,9 @@ class World:
             self.post("bots/" + slug + "/assignment", {"runner_id": self.runner["runner_id"], "expected_generation": 0})
         self.heartbeat(self.bot_slugs)
         self.configure()
+        for spec in self.pipeline_specs:
+            made = self.post("task-types", spec)["type"]
+            self.pipelines[made["name"]] = made
         return self
 
     def configure(self):
@@ -373,6 +382,10 @@ class World:
         """Change a task; a refused change raises Refusal with the server's reason."""
         result = self.post("tasks/" + task_id, {"version": self.task(task_id)["version"], **fields}, token=token)
         return result if result is None else result.get("task", result)
+
+    def stage_id(self, pipeline, name):
+        """The id of one stage of a pipeline this world made (`pipelines`), by name."""
+        return next(st["id"] for st in self.pipelines[pipeline]["steps"] if st["name"] == name)
 
     def step_of(self, task):
         steps = {s["id"]: s["name"] for s in self.dev["steps"]}
@@ -600,6 +613,7 @@ class World:
 
         service = self.app.state.github_app
         self.github_reads, self.github_fault = True, None
+        self.workflow_runs, self.workflow_jobs = [], {}  # the repository's Actions runs, and each run's jobs (ci_runs)
         self.github_failed = []  # (when, fault) per read or mint that failed
         task_blocked._fresh["seen"].clear()
         task_blocked._fresh["tried"].clear()
@@ -673,6 +687,10 @@ class World:
                             }
                         )
                 return answer(200, {"check_runs": runs})
+            if path == f"/repos/{REPO}/actions/runs":
+                return answer(200, {"workflow_runs": self.workflow_runs})
+            if found := re.fullmatch(rf"/repos/{REPO}/actions/runs/(\d+)/jobs", path):
+                return answer(200, {"jobs": self.workflow_jobs.get(int(found[1]), [])})
             return answer(404, {"message": "Not Found"})
 
         service.row = lambda c=None: {"org": REPO.split("/")[0], "installation_id": 1, "app_id": 1}

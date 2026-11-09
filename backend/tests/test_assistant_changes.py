@@ -6,11 +6,11 @@ import json
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_api import setup_attempt  # noqa: F401
-from backend.tests.test_assistant import asked, assistant_turn, turn_message
-from backend.tests.test_automation_api import make
-from backend.tests.test_batch import approval_for_ana
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.api import setup_attempt  # noqa: F401
+from backend.tests.helpers.assistant import asked, assistant_turn, turn_message
+from backend.tests.helpers.automation_api import make
+from backend.tests.helpers.batch import approval_for_ana
 
 
 def task_row(api, task_id):

@@ -950,7 +950,7 @@ function botLatestFoldMore(host: HTMLElement): void {
 function botLatestSeen(): void {
   const u = BOT?.latest, host = $('#bot-latest');
   if (!u || !host || host.hidden || !host.offsetParent) return;
-  BOT.latest = null;
+  BOT!.latest = null;   // u is BOT's latest, so BOT is there
   updBadge(Math.max(0, (S.updUnread || 1) - 1));
   void post('/v2/updates/read', {ids: [u.id]}).catch(() => {});
 }

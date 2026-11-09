@@ -5,8 +5,8 @@ The media bodies are synthetic: an MP4 header followed by zeros, so nothing larg
 
 import hashlib
 
-from backend.tests.test_files import turn
-from backend.tests.test_api import api, headers  # noqa: F401  (fixtures)
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.api import headers  # noqa: F401  (fixtures)
 
 MB = 1024 * 1024
 MP4_HEAD = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"

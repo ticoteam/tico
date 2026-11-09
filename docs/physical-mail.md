@@ -142,11 +142,11 @@ there is no promised undo window.
 
 ## Tools
 
-Each address is a Letters in row in Tools (`#/tools?show=mail`), with open orders as Pending and the
+Each address is a row under Tools > Settings > Letters in (`#/tools/settings/letters-in`), with open orders as Pending and the
 email-in inbox as Mail by email (still listed, as Not in use, once it is turned off while letters it brought in remain,
 so a failed one can be retried). An address's page shows its Form 1583 progress until it is active, who reads it (an
 owner or admin gives and removes Read on that address there), its automations and its letters (date, sender, kind,
-scan, the task it went to, status), with Retry on a failed one for an owner or admin. Inboxes > Settings > Letters in
+scan, the task it went to, status), with Retry on a failed one for an owner or admin. Tools > Settings > Letters in
 has the addresses with Get an address (owner or admin: state, kind, monthly and scan prices), Bring your own (the
 intake inbox), Who can use it (Read and Remove on all addresses) and Legal mail (who receives legal letters).
 
@@ -204,7 +204,7 @@ same provider idempotency key; it never gets a fresh incident id to bypass dedup
 spend are visible in Alerts settings. Tests bypass quiet hours but still require consent and both spend caps.
 
 These controls use `/api/v2/alerts/me` and `/api/v2/alerts/company`, with `/me/phone`, `/me/phone/confirm` and `/me/test`
-subroutes (see [the v2 contract](openapi/v2.json)). The same actions are `hub alerts show|set|verify|confirm|remove|test|company`
+subroutes (see [the v2 contract](api.md#the-contract)). The same actions are `hub alerts show|set|verify|confirm|remove|test|company`
 and MCP's `hub_alerts_*`, offered only to people. `hub alerts test --accept-charge --operation-id <stable-id>` keeps
 retries to one paid test. They are personal settings, including in the Tauri app; Slack/BotOps directs you to them.
 HQ must deploy the person-scoped paging API and configure its signed Twilio opt-out webhook before personal

@@ -1,4 +1,4 @@
-// The page state of the Automations screen: AU, the `let` in ui/app/automations.js. It is set to a new object
+// The page state of the Automations screen: AU, the `let` in ui/app/automations.ts. It is set to a new object
 // when the page is entered (pageAutomations, literal plus auOverviewState() in automations-overview.js) and to null when
 // it is left (automationsStop). A few fields are added later by the file that first needs them; those are optional.
 // AU is reassigned, so a TypeScript reader calls automationsState() (ui/app/automations-state.ts) each time and narrows
@@ -18,11 +18,6 @@ interface AuRunList<R> {
   id?: string;
 }
 
-/** The editor open in the side panel (automations-editors.js auEdOpen): its kind, and what that kind needs. */
-interface AuEditor {
-  kind: 'board' | 'run' | 'spend' | 'step' | 'trigger' | 'versions';
-  [field: string]: unknown;
-}
 
 /** The overview's filters (automations-overview.js): the trigger kinds picked, and the words. */
 interface AuFilters {
@@ -52,17 +47,88 @@ interface AuAll {
   done?: boolean;
 }
 
+/* An automation's flow as the page reads and writes it (CONTRACT §2; automations-flow.ts draws it, automations-editors.js
+   edits it). api.d.ts types steps, trigger and destinations as plain records; these are the fields the page uses. */
+
+/** An action's arguments as the hub keeps them: text mostly, but a post_update's `to` is a list and a webhook's `data` an object. */
+type AuArgs = Record<string, unknown>;
+/** A rule's or a destination's action: {do, args}; older copies said just the name. */
+type AuThen = string | { do?: string; args?: AuArgs };
+/** A condition: a field, a check and a value; a yes/no or a choice can carry a minimum (0..1; '' or none for no minimum). */
+interface AuCond { field?: string; op?: string; value?: unknown; min?: number | string | null | undefined }
+/** A Filter rule: its conditions, its actions, the destination it goes to, and what runs after it. */
+interface AuRule { when?: AuCond[]; match?: string; then?: AuThen[]; to?: string | undefined; stop?: boolean; next?: string }
+/** A Decide question: yes/no ('noul') or a choice over criteria (a list of ids, or ids to words). */
+interface AuQuestion { type?: string; instructions?: unknown; criteria?: string[] | Record<string, string> }
+/** A saved question set (GET /v2/automations/question-sets), whose questions a Decide step on it reads. */
+type AuQuestionSet = import('./api').QuestionSets['sets'][number];
+/** One column of a Paths step, or its Otherwise. */
+interface AuPath { name?: string; when?: AuCond[]; steps?: AuStep[] }
+/** An llm step's choice of destinations: a draft or a reply turn that picks one. */
+interface AuChoose { mode?: string; to?: string[]; default?: string }
+/** A step: its id, kind and switch, and each kind's own fields (filter, decide, llm, find, bot_turn, paths, action). */
+interface AuStep {
+  id: string;
+  type: string;
+  enabled?: boolean;
+  out?: string;
+  rules?: AuRule[];
+  questions?: Record<string, AuQuestion>;
+  set?: string;
+  level?: string;
+  as?: string;
+  prompt?: string;
+  choose?: AuChoose;
+  bot?: string;
+  source?: string;
+  query?: string;
+  since?: string;
+  limit?: number;
+  paths?: AuPath[];
+  otherwise?: AuPath;
+  do?: string;
+  args?: AuArgs;
+}
+/** A destination of a board flow: where a rule, a question or the LLM sends a message, and what it does there. */
+interface AuDest { id: string; name?: string; color?: string | undefined; then?: AuThen[] }
+/** What starts an automation: its kind and that kind's fields. */
+interface AuTrigger { type?: string; filters?: AuCond[]; name?: string; inbox?: string; [field: string]: unknown }
+/** A flow: its steps, its destinations (a board's), and its trigger. */
+interface AuFlow { steps?: AuStep[]; destinations?: AuDest[] | null; trigger?: (AuTrigger & Partial<AuFlowTrigger>) | undefined }
+/** An automation as the page holds it (AU.cur): a row (AuRow) with steps and trigger always present (automations.ts
+    auNormal), and the fields a built-in or a system job carries. */
+type AuAutomation = AuRow & {
+  steps: AuStep[];
+  trigger: AuTrigger & Partial<AuFlowTrigger>;
+  description?: string;
+  owner?: string;
+  controls?: { schedule?: string };
+};
+/** An automation as the page keeps it (automations.ts auNormal): a list row or the open one. Its trigger is a flow's
+ *  (AuFlowTrigger, automations-editors.ts), each field present on its own kind; a built-in or read-only row says so. */
+type AuRow = Omit<import('./api').Automation, 'trigger' | 'hold' | 'last_run' | 'steps' | 'destinations'> & {
+  trigger?: Partial<AuFlowTrigger>; builtin?: boolean; readonly?: boolean;
+  /** The flow (AuStep, AuDest: automations-editors.ts); api.d.ts has each as a bare record. */
+  steps?: AuStep[]; destinations?: AuDest[] | null;
+  /** The last run as the list reads it: its status and when it started (api.d.ts has it as a bare record). */
+  last_run?: { status?: string | null; started_at?: string | null; [field: string]: unknown } | null;
+  /** The run guard's hold; null once a write says it is gone (automations.ts auHoldAct). */
+  hold?: import('./api').Automation['hold'] | null;
+  /** How many runs Release or Drop moved (POST .../held); the page drops it before keeping the row. */
+  moved?: number;
+};
+
 interface AutomationsState {
   // The list and its teams. automations.js auLoadList sets list, groups and listError; a row is an automation, or one
   // of the pseudo-rows the page adds (Maintenance, the Heartbeat, Sys jobs, Incoming webhooks), built to the same shape.
   /** Every automation the viewer may see, pseudo-rows first. null until the first read. */
-  list: Array<import('./api').Automation> | null;
+  list: AuRow[] | null;
   /** The message of a failed list read; '' when the list is good (automations.js auLoadList). */
   listError?: string;
   /** Teams from /v2/groups (automations.js auLoadList). */
   groups: Array<import('./api').Group>;
-  /** Question sets for the decide step (automations-editors.js); [] until read. */
-  sets: import('./api').QuestionSets['sets'] | null;
+  /** Question sets for the decide step (automations-editors.ts); [] until read. */
+  sets: AuSet[] | null;
   /** Templates for Apply template (automations-new.js). */
   templates?: import('./api').AutomationTemplates['templates'];
 
@@ -72,31 +138,31 @@ interface AutomationsState {
   /** The open automation's tab: Flow or Runs (automations.js auRouteParts). */
   view: AuView;
   /** The open automation as the server sent it, with steps and trigger present (automations.js auNormal). null until read. */
-  cur: import('./api').Automation | null;
-  /** The editor open in the side panel (automations-editors.js auEdOpen). */
-  ed: AuEditor | null;
+  cur: AuAutomation | null;
+  /** The editor open in the side panel (automations-editors.ts auEdOpen): AuEd, one type per kind. */
+  ed: AuEd | null;
   /** The ⋯ or + menu open over the page (automations.js auMenuOpen). */
   menu: { kind: 'add' | 'more'; at: string } | null;
   /** #au-root, set once in automations.js auShell. */
   root: HTMLElement | null;
   /** The open automation's run log (automations-runs.js auRunsLoad); null until the Runs tab is loaded. */
   runs: AuRunList<import('./api').AutomationRun> | null;
-  /** The last run, for the flow's bars; set undefined on a new visit (automations.js), null or a run (automations-editors.js, runs). */
-  lastRun?: import('./api').AutomationRun | null;
-  /** A run to open once its list is read (automations-overview.js, automations-editors.js; read in automations-runs.js). */
+  /** The last run, for the flow's bars; set undefined on a new visit (automations.js), null or a run (automations-editors.ts, runs). */
+  lastRun?: import('./api').AutomationRun | null | undefined;
+  /** A run to open once its list is read (automations-overview.js, automations-editors.ts; read in automations-runs.js). */
   openRun?: string | null;
   /** The flow's branch resize watcher (automations-flow.js); automations.js disconnects it on the Runs tab. */
   branchRO?: ResizeObserver;
 
   // Maintenance (automations-maintenance.js), its own screen.
   /** /v2/maintenance (automations.js auLoadList). */
-  maint: Record<string, unknown> | null;
+  maint: MaintView | null;
   /** The message of a failed maintenance read or save ('' when none). */
   maintError: string;
   /** Bumped on each save or read; a read that started before a save keeps the old values. */
   mtGen: number;
   /** Maintenance runs, read a page at a time (automations-maintenance.js). */
-  mtRuns: AuRunList<Record<string, unknown>> | null;
+  mtRuns: MaintRunList | null;
   /** Maintenance run rows the viewer opened. */
   mtOpen: Set<string>;
   /** Maintenance is saving (automations-maintenance.js). */
@@ -128,9 +194,9 @@ interface AutomationsState {
 
   // The overview (automations-overview.js auOverviewState and the list's controls).
   /** The time range, kept in localStorage (auRangeSaved). */
-  range: AuRange;
+  range: string;
   /** The overview's tab: the list or the Runs tab. */
-  tab: 'list' | 'runs';
+  tab: string;
   /** The filters (AuFilters). */
   f: AuFilters;
   /** The grouping the table shows, e.g. 'trigger' (automations-overview.js). */
@@ -148,7 +214,7 @@ interface AutomationsState {
   /** The Runs tab's rows for the current filter; null until read (automations-overview.js auAllLoad). */
   all: AuAll | null;
   /** The scroll position each tab was left at (automations-overview.js). */
-  scroll: { list: number; runs: number };
+  scroll: Record<string, number>;
   /** The timer that re-reads the Runs tab after a change (automations-overview.js). */
   allSoon?: number;
 }

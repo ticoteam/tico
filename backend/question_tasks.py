@@ -200,6 +200,16 @@ def is_open(row: dict[str, Any] | None) -> bool:
     return is_question(row) and not row.get("answer") and row.get("status") in H.ACTIVE_STATUSES
 
 
+def chat_refusal(who: Any, person: str | None) -> str | None:
+    """Why a question for `person` may not be filed as a task from `who`'s turn, or None. In the Assistant chat the
+    person is in, the question is asked in the reply (the Assistant's NEVER list): a chat turn acts as that person
+    (backend/auth.py chat_person, via "assistant"), so a question for that same person is refused. A question for anyone
+    else still files, as a background run's does."""
+    if getattr(who, "via", "") == "assistant" and person and person == who.actor:
+        return "Ask it in your reply: a question for the person you are chatting with is not filed as a task."
+    return None
+
+
 def asked_at(row: dict[str, Any]) -> str | None:
     """The question's clock: when it was asked, or last asked again (a new wording folded in)."""
     return row.get("asked_at") or row.get("created_at")
@@ -717,12 +727,16 @@ def take_recommendation(
 # ---- dates: ask_deadlines and still_needed run on question tasks --------------------------------------------------
 
 
-def open_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Open question tasks a bot put to a person, oldest question first."""
+def open_rows(conn: sqlite3.Connection, keeper: bool = False) -> list[dict[str, Any]]:
+    """Open question tasks a bot put to a person, oldest question first. A question On ice (D69) is left out, as a snoozed
+    one is: a parked card is never late, so no sweep sends it back or closes it on its date. `keeper` adds Tico's own
+    questions (the stuck rule's, backend/stuck_cards.py), which only the expiry sweep closes (backend/ask_deadlines.py)."""
+    askers = "(requester_id LIKE 'bot:%' OR requester_id=?)" if keeper else "requester_id LIKE 'bot:%'"
     rows: list[dict[str, Any]] = H._rows(
         conn.execute(
-            f"SELECT * FROM {H.TASKS} t WHERE {OPEN_SQL} "
-            "AND owner_id LIKE 'human:%' AND requester_id LIKE 'bot:%' ORDER BY coalesce(asked_at, created_at)"
+            f"SELECT * FROM {H.TASKS} t WHERE {OPEN_SQL} AND NOT {H.ON_ICE % 't'} "
+            f"AND owner_id LIKE 'human:%' AND {askers} ORDER BY coalesce(asked_at, created_at)",
+            (H.KEEPER,) if keeper else (),
         )
     )
     return [r for r in rows if not H.TS.snoozed(r)]

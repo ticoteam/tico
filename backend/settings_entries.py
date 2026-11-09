@@ -18,6 +18,9 @@ SETTINGS_FILES = sorted(
         "settings-access.ts",
         "settings-bot-editor.ts",
         "settings-bots.ts",
+        "settings-bots-choice.ts",
+        "settings-bots-tasks.ts",
+        "settings-bots-bulk.ts",
         "settings-strategy-bot.ts",
         "settings-company.ts",
         "settings-devices.ts",
@@ -30,7 +33,7 @@ SETTINGS_FILES = sorted(
         "settings-release.ts",
         "settings-repositories.ts",
         "settings-storage.ts",
-        "settings-webhooks.js",
+        "settings-webhooks.ts",
         "subscriptions.ts",
         "bot-budget.ts",
         "bot-profile.ts",
@@ -52,7 +55,7 @@ def _card(tab, card=""):
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, TASKS, REPOS = "Automations > System jobs", "Settings > Tasks", "Settings > General > Repositories"
 # Webhooks left Settings: incoming ones are on Automations, outgoing ones on Tools, their Gateway addresses a fold of
-# the Tico Gateway card on Models (ui/app/settings-webhooks.js).
+# the Tico Gateway card on Models (ui/app/settings-webhooks.ts).
 HOOKS_IN, HOOKS_OUT, HOOKS_GW = (
     "Automations > Incoming webhooks",
     "Tools > Webhooks",

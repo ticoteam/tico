@@ -7,9 +7,9 @@ import pytest
 
 from backend import automations
 from backend.store import H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_market import _librarian, _seed
-from backend.tests.test_strategy import add_bet, publish, write
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.market import _librarian, _seed
+from backend.tests.helpers.strategy import add_bet, publish, write
 
 WEEK = "2026-W44"
 
@@ -194,7 +194,7 @@ def test_market_labels_a_briefing_by_how_often_it_is_posted(seeded):
     from types import SimpleNamespace
 
     from backend import market_briefing as MB
-    from backend.tests.test_automation_api import NOTE_STEP
+    from backend.tests.helpers.automation_api import NOTE_STEP
 
     assert brief(seeded)["briefing"]["cadence"] == "weekly"
     made = {

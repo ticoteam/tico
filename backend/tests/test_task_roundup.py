@@ -11,99 +11,29 @@ import json
 import pytest
 
 from backend import bot_settings as BS
-from backend.enqueue import enqueue_stored
 from backend import question_tasks as QT, execution, still_needed, task_check_backs, task_roundup
 from backend import step_backlog as SB
 from backend import task_holds as TH
 from backend import task_relations as TR
 from backend.store import H
 from backend.tests.hold_rows import set_holds
-from backend.tests.test_api import api, claim  # noqa: F401
-from backend.tests.test_dev_ticket_rules import dev_type
-from backend.tests.test_step_backlog import board as backlog_board, tickets as backlog_tickets
-from backend.tests.test_task_lanes import task_bot
-
-DAY = "2026-11-03T14:00:00.000000Z"  # the 6am run (company time is Pacific, PST on this date); fixed for the tests
-NOON = H.shift(DAY, hours=6)  # the noon run, 20:00 UTC
-
-
-@pytest.fixture(autouse=True)
-def build_clock(monkeypatch):
-    """A list is built at its run's time unless a test moves the build clock, so the checkpoints the tests read are the runs'."""
-    monkeypatch.setattr(task_roundup, "_built_at", lambda: DAY)
-
-
-def ago(**kw):
-    return H.shift(DAY, **{k: -v for k, v in kw.items()})
-
-
-def task(c, title, owner="bot:finance"):
-    """Created at the fixed DAY clock, so the runs' cutoffs do not depend on the real date."""
-    made = H.task_create(c, H.human_actor("ana"), title, f"{title}, for the roundup.", owner)
-    c.execute("UPDATE tasks SET created_at=? WHERE id=?", (DAY, made["id"]))
-    return made
-
-
-def settle(c, tid, slug, turned):
-    """The task as it stood before its bot's last turn on it at `turned`: its own row, and its messages and history a day
-    older, so nothing has happened on it since the turn."""
-    conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
-    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (turned, tid))
-    c.execute("UPDATE messages SET created_at=? WHERE conversation_id=?", (H.shift(turned, days=-1), conv))
-    c.execute(
-        "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
-        (H.shift(turned, days=-1), tid),
-    )
-    c.execute(
-        "INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,message_id,task_id,exit,summary) "
-        "VALUES(?,?,?,?,'schedule',NULL,?,'done','')",
-        (H.new_id(), slug, turned, turned, tid),
-    )
-    started(c, tid, slug, turned)  # the turn was a run of the bot on the task
-
-
-def started(c, tid, slug, when):
-    """A run of the bot that carried the task at `when`: its attempt makes the task started, so it is not an assignment the
-    bot has yet to start (backend/assigned_start.py). The message that started the run is written before the turn."""
-    c.execute(
-        "INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r-roundup','box','ana','h',?)",
-        (when,),
-    )
-    conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (tid,)).fetchone()[0]
-    # Created a day before the turn, as settle dates its history: the task's assignment floor is its creation.
-    c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(when, days=-1), tid))
-    mid = H.new_id()
-    c.execute(
-        "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-        "VALUES(?,?,?,?,'task','',?,?)",
-        (mid, conv, H.human_actor("ana"), H.bot_actor(slug), json.dumps({"task": tid}), H.shift(when, days=-1)),
-    )
-    enqueue_stored(c, mid)
-    if not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (mid,)).fetchone():
-        # An external inbox gets no job (backend/enqueue.py): its run still needs one to attach to.
-        c.execute(
-            "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,'completed',?)",
-            (mid, mid, slug, when),
-        )
-    job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()[0]
-    c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
-    c.execute(
-        "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-        "VALUES(?,?,?,'r-roundup',1,?,'completed',?,?)",
-        (H.new_id(), job, slug, H.new_id(), when, when),
-    )
-
-
-def blocks(c, blocker, tid, when):
-    c.execute(
-        "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'blocks','human:ana',?)",
-        (blocker, tid, when),
-    )
-
-
-def complete_jobs(c, slug="finance"):
-    """The creation wakes ran: nothing is queued for the bot."""
-    c.execute("UPDATE jobs SET state='completed' WHERE bot_id=?", (slug,))
+from backend.tests.helpers.api import claim  # noqa: F401
+from backend.tests.helpers.dev_ticket_rules import dev_type
+from backend.tests.helpers.step_backlog import board as backlog_board, tickets as backlog_tickets
+from backend.tests.helpers.task_lanes import task_bot
+from backend.tests.helpers.task_roundup import (
+    DAY,
+    NOON,
+    ago,
+    blocks,
+    complete_jobs,
+    lists,
+    named_in,
+    only_list,
+    settle,
+    task,
+    build_clock,
+)
 
 
 def note(c, tid, sender, when):
@@ -114,27 +44,6 @@ def note(c, tid, sender, when):
         "VALUES(?,?,?,?,'notice','Check on it.',NULL,?)",
         (H.new_id(), conv, sender, H.bot_actor("finance"), when),
     )
-
-
-def lists(c, slug="finance"):
-    return [
-        row[0]
-        for row in c.execute(
-            "SELECT body FROM messages WHERE recipient_id=? AND refs LIKE '%task_roundup%' ORDER BY created_at",
-            (H.bot_actor(slug),),
-        ).fetchall()
-    ]
-
-
-def only_list(c, slug="finance"):
-    found = lists(c, slug)
-    assert len(found) == 1, found
-    return found[0]
-
-
-def named_in(body):
-    """How many task lines a list names (not the 'and K more' line)."""
-    return len([line for line in body.split("\n") if line.startswith("- ") and not line.startswith("- and ")])
 
 
 def test_a_task_blocked_on_a_person_with_nothing_new_is_not_listed_until_the_blocker_is_closed_before_the_turn(api):
@@ -2109,6 +2018,34 @@ def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not
         assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
         assert lists(c) == [], "the owner is not told about its own blocked task"
         assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
+
+
+def test_a_blocker_on_ice_puts_the_card_it_holds_on_no_bots_list(api):
+    """A waiting card whose blocker a person parked On ice (D69) is on no bot's list: the blocker waits on that person,
+    so its owner is not asked about it. Once the stage opens, the blocker's bot is listed again."""
+    from backend.tests.helpers.pipeline_foundation import step_id
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        stages = [{"name": "On ice", "status": "open"}, {"name": "Doing", "status": "doing"}]
+        typ = H.type_create(c, H.KEEPER, "Ice blockers", stages)["id"]
+        ice = step_id(c, typ, "On ice")
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (ice,))
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))[
+            "id"
+        ]
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (typ, ice, blocker))
+        assert task_roundup.run(c, DAY)["woke"] == []
+        assert lists(c, "ops") == [] and lists(c) == []
+        c.execute("UPDATE task_steps SET card_cap=NULL WHERE id=?", (ice,))  # the control: the stage opens
+        assert task_roundup.run(c, NOON)["woke"] == ["ops"]
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
 
 
 @pytest.mark.parametrize("state", ["running", "queued"])

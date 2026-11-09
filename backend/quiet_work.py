@@ -585,6 +585,7 @@ def stale(conn, at=None, hours=STALE_HOURS):
             conn.execute(
                 f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
                 "AND t.status='open' AND t.resume IS NULL AND t.snoozed_until IS NULL "
+                f"AND NOT {H.ON_ICE % 't'} "  # a card On ice (D69) waits on purpose: never quiet, unworked work
                 "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM history_events e "
                 "WHERE e.subject_type='task' AND e.subject_id=t.id AND e.kind=? AND e.new=?))",
                 (FIELD, RETURNED),

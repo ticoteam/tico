@@ -4,70 +4,13 @@ and a pass with nothing new writes nothing but the watermark. Spec section A acc
 
 import json
 
-import pytest
 
 from backend import hubdb as H
 from backend import stale_review as SR
 from backend import team_rules
-from backend.tests.test_tasks_board import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
 from clients import judge as J
-
-
-class FakeDecide:
-    """Answers `verdict` as told, as the Gateway would; `fail` raises instead."""
-
-    def __init__(self, verdict="update", confidence=0.9, provider=J.GATEWAY_PROVIDER):
-        self.verdict, self.confidence, self.provider = verdict, confidence, provider
-        self.calls, self.fail = [], None
-
-    def __call__(self, state, questions, label=None):
-        self.calls.append({"state": state, "questions": questions, "label": label})
-        if self.fail:
-            raise self.fail
-        return {
-            "model": J.GATEWAY_MODEL,
-            "provider": self.provider,
-            "usage": {"input_tokens": 300},
-            "ms": 90,
-            "cost_usd": 0.00002,
-            "answers": {"verdict": {"type": "choice", "choice": self.verdict, "confidence": self.confidence}},
-        }
-
-
-@pytest.fixture
-def stale(api):
-    """The switch on, and a task maker that backdates a task so it is not quiet by accident."""
-    store = api.app.state.store
-    with store.transaction() as c:
-        team_rules.save(c, "human:ana", {"stale_review": True})
-
-    def task(title, owner="bot:ops", status="review", requester="human:ana", days_ago=1, pr=None):
-        with store.transaction() as c:
-            row = H.task_create(c, requester, "Placeholder " + H.new_id(), "x", owner)
-            when = H.shift(H.now(), days=-days_ago)
-            c.execute(
-                "UPDATE tasks SET title=?,status=?,updated_at=?,created_at=? WHERE id=?",
-                (title, status, when, when, row["id"]),
-            )
-            if pr:
-                c.execute(
-                    "INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,pr_merged_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
-                    (
-                        H.new_id(),
-                        row["id"],
-                        "pr",
-                        "https://github.com/acme/site/pull/12",
-                        "PR",
-                        pr,
-                        "bot:ops",
-                        when,
-                        "2026-10-16T10:00:00Z",
-                    ),
-                )
-        return row["id"]
-
-    return api, store, task
+from backend.tests.helpers.stale_review import FakeDecide, stale
 
 
 def calls(store, label="stale-review@1"):
@@ -561,7 +504,15 @@ def test_the_pass_stops_before_the_hour_is_over(stale):
     assert done["calls"] == 1 and done["deferred"] == 2 and done["why"] == "time"
 
 
-def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
+def test_candidates_name_every_reason_and_the_quiet_rule(stale, subtests):
+    """One install for the two candidate-reason checks (SR.candidates only, no pass): the other reasons, then the
+    quiet rule. Each makes its own tasks with titles apart."""
+    for check in (_other_reasons_parent_blockers_snooze_and_twin_titles, _quiet_means_a_week_and_three_days_for_doing):
+        with subtests.test(check.__name__):
+            check(stale)
+
+
+def _other_reasons_parent_blockers_snooze_and_twin_titles(stale):
     api, store, task = stale
     parent = task("Launch plan", status="doing", days_ago=0)
     child = task("Launch copy", status="open", days_ago=0)
@@ -594,7 +545,7 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
     assert found[snoozed].startswith("Its snooze ended")
 
 
-def test_quiet_means_a_week_and_three_days_for_doing(stale):
+def _quiet_means_a_week_and_three_days_for_doing(stale):
     api, store, task = stale
     doing_quiet = task("Draft the pricing page", status="doing", days_ago=4)
     doing_fresh = task("Draft the launch post", status="doing", days_ago=2)

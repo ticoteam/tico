@@ -20,8 +20,9 @@ step. A person moves the task. The repository's webhook posts here signed with
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
 
 A merge queue (`enqueued`, `dequeued`) sets the link's `merge_queue` state. A removal from the queue for any reason but a
-merge wakes the owner once, after the maintenance pass has read the pull request and found it still open
-(`_queue_event`, `refresh_queue_removals`); nothing else about a queued pull request is news.
+merge is read by the maintenance pass first (`_queue_event`, `refresh_queue_removals`). One Tico queued itself is armed
+again or handed to the pipeline manager (backend/merge_arm.py); any other wakes the owner once when the pull request is
+still open. Nothing else about a queued pull request is news.
 
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
 running code was built from (`release.py` writes it from CI), and `ship_deployed` marks a merged
@@ -51,6 +52,7 @@ from . import step_flow
 from .batch_work import isolated
 from .store import Problem
 from . import bot_settings as BS
+from . import merge_arm
 from . import pr_identity as PR
 
 PATH = "/api/v2/github/webhook"  # under /api/v2: the runner hostname routes only that prefix
@@ -435,7 +437,7 @@ def refresh_queue_removals(service):
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
         rows = H._rows(
             c.execute(
-                "SELECT l.id,l.task_id,l.url,l.repo,l.number FROM task_links l "
+                "SELECT l.id,l.task_id,l.url,l.repo,l.number,l.detail FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
                 "WHERE l.kind='pr' AND l.state='open' AND json_extract(l.detail,'$.merge_queue.verify')=1 "
                 "AND l.number IS NOT NULL AND r.reachable=1 "
@@ -458,8 +460,14 @@ def refresh_queue_removals(service):
         except Exception:
             logging.getLogger("tico.github").exception("Queue removal read failed for %s #%s", r["repo"], r["number"])
             continue
+        jobs = None
+        queue = (H._json(r["detail"], {}) or {}).get("merge_queue") or {}
+        armed = ((H._json(r["detail"], {}) or {}).get("merge_arm") or {}).get("head")
+        if armed and armed == queue.get("head") and merge_arm.removal_kind(queue.get("reason")) == "check":
+            # A head Tico armed: the queue run's jobs tell a real failure from a cancelled run (merge_arm.removal).
+            jobs = merge_arm.queue_jobs(service, r["repo"], r["number"], H.shift(queue.get("at"), hours=-6))
         with service.store.transaction() as c:
-            _settle_removal(c, r["id"], pr)
+            _settle_removal(c, r["id"], pr, jobs)
 
 
 CONFLICT_READS_PER_PASS = 30
@@ -535,9 +543,11 @@ def refresh_conflicts(service: Any) -> int:
     return read
 
 
-def _settle_removal(c, link_id, pr):
-    """Clear a removal's `verify`; wake its owner once when the pull request is still open at the removed head."""
-    found = H._rows(c.execute("SELECT id,task_id,url,detail FROM task_links WHERE id=?", (link_id,)))
+def _settle_removal(c, link_id, pr, jobs=None):
+    """Clear a removal's `verify`. A pull request still open at the removed head is armed again or handed to its pipeline
+    manager when Tico armed that head (merge_arm.removal, with the queue run's `jobs`); otherwise its owner is woken
+    once and the card goes back a stage."""
+    found = H._rows(c.execute("SELECT id,task_id,url,number,detail FROM task_links WHERE id=?", (link_id,)))
     if not found:
         return
     link = found[0]
@@ -555,6 +565,9 @@ def _settle_removal(c, link_id, pr):
         return
     task = H.task(c, link["task_id"])
     H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
+    if (detail.get("merge_arm") or {}).get("head") == queue.get("head") and queue.get("head"):
+        merge_arm.removal(c, task, link, detail, reason, jobs)  # Tico armed it: the builder is not woken
+        return
     from . import pipeline_engine
 
     pipeline_engine.queue_ejected(c, link["task_id"], reason)  # the card goes back a stage with the reason
@@ -575,6 +588,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
     if not read_refresh and action in ("opened", "reopened", "edited", "ready_for_review"):
         registered |= register_named_pr(c, pr)
     links = _links_for(c, url)
+    merged = []  # the links this event merged for the first time (_merge_wakes)
     for link in links:
         task = H.task(c, link["task_id"])
         if not task:
@@ -672,6 +686,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             _queue_event(detail, action, payload, pr, detail.get("head_sha") or "")
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
+        if conflict_wake and merge_arm.approved(c, task, link["id"], ignore_conflict=True):
+            # An approved pull request that conflicts is its pipeline manager's to fix (merge_arm.sweep), not the builder's.
+            conflict_wake = False
         if mergeable == "conflict":
             detail["conflict_head"] = conflict_head
         elif mergeable == "clean":
@@ -681,6 +698,11 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             detail,
             check_flow=step_flow.has_flow(c, task.get("type_id")),
         )
+        # The merge's one wake (_merge_wakes), recorded with the link: a stale event that reopens the link, and a later
+        # reading of the same merge, cannot send it again.
+        merge_wake = state == "merged" and link["state"] not in ("merged", "shipped") and not detail.get("merged_wake")
+        if merge_wake:
+            detail["merged_wake"] = True
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if new_head:
             from . import pipeline_github_checks
@@ -696,6 +718,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             # A merge read on refresh has no webhook behind it, so its page is queued here too. queue() is idempotent:
             # a second merge event finds the page already queued and changes nothing.
             review_pages.queue(c, task, link["id"])
+            merge_arm.close_fix(c, link["url"])
+            if merge_wake:
+                merged.append(link)
         elif new_head and action == "synchronize" and state == "open":
             # A push at a check step whose check already finished needs a check of the new head.
             from . import check_pools, verdict_moves
@@ -750,7 +775,56 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
 
         target = milestone_waits.pr_target(url)
         woken = milestone_waits.happened(c, "pr_merged", target[0], url) if target else []
+    _merge_wakes(c, merged, url)
     return {"pr": url, "action": action, "tasks": len(links), **({"milestone_woken": woken} if woken else {})}
+
+
+def _merge_wakes(c, links, url):
+    """A linked pull request merged: each bot card waiting or blocked on it gets one wake, the card itself, the cards
+    it blocks and its parent. A card blocked on the merged card is blocked on it whatever its status, so it counts
+    without a hold. A person's card is not woken (the person sees it), and a card a milestone wait already woke for this
+    pull request (milestone_waits, any time before) is not woken again, and neither is a card a merge of this pull request
+    already woke through another of its links (`github-merge-wake:<task>` records the pull requests each card has been
+    woken for). A card other than the merged one hears the merge without the pull request's details when that card is
+    private: its readers may not see it. The caller passes only a merge's first reading."""
+    from . import milestone_waits, task_relations as TR
+    from .repositories import metadata, save_metadata
+
+    target = milestone_waits.pr_target(url)
+    pr_key = target[0] if target else url.lower()
+    seen = set()
+    if target and H._has_table(c, "task_milestone_waits"):
+        seen = {
+            r[0]
+            for r in c.execute(
+                "SELECT task_id FROM task_milestone_waits WHERE kind='pr_merged' AND target=? AND woke_at IS NOT NULL",
+                (target[0],),
+            )
+        }
+    carry = "Carry this card on: move it to its next stage, or close it if it is done."
+    for link in links:
+        own = f"{link['title']} merged: {url}. {carry}"
+        private = H.task_private(c, H.task(c, link["task_id"]))
+        other = f"A pull request on a card this card waits on merged. {carry}" if private else own
+        parent = TR.parent_of(c, link["task_id"])
+        candidates = [
+            (link["task_id"], False),
+            *((b, True) for b in TR.blocked_ids(c, link["task_id"])),
+            *([(parent, False)] if parent else []),
+        ]
+        for tid, blocked in candidates:
+            row = H.task(c, tid) if tid not in seen else None
+            if not row or not H.is_bot(row["owner_id"]) or row["status"] not in H.ACTIVE_STATUSES:
+                continue
+            if not (blocked or row["status"] == "waiting" or row.get("blocked_since")):
+                continue
+            key = "github-merge-wake:" + tid
+            woke = metadata(c, key).get("prs", [])
+            if pr_key in woke:
+                continue
+            seen.add(tid)
+            save_metadata(c, key, {"prs": [*woke, pr_key]})
+            queue_wake(c, row, own if tid == link["task_id"] else other)
 
 
 def release(c, payload, release_repo=""):
@@ -1872,9 +1946,8 @@ def refresh_deployed_tasks(service):
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
-# What a release kept of a pull request is read hunk by hunk: release notes move between sections at every cut and
-# tests are cut routinely, so the product files decide when the pull request has any.
-NOTES_FILES = {"CHANGELOG.md"}
+# What a release kept of a pull request is read hunk by hunk: tests are cut routinely, so the product files decide
+# when the pull request has any.
 TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
 
 
@@ -1931,7 +2004,6 @@ def change_kept(get, repo, merge, release):
     files = commit.get("files") or []
     if len(parents) > 1:  # a merge commit: the pull request is what it changed on top of main
         files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
-    files = [f for f in files if f.get("filename") not in NOTES_FILES]
     product = [f for f in files if not TEST_PATH.search(f["filename"])]
     if not (product or files):
         return None

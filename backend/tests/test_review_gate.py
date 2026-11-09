@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from backend import hubdb as H, review_gate, qa_defaults, test_receipts
-from backend.tests.test_github import api, get, headers, post, hook, pr_event, PR
-from backend.tests.test_api import hold
+from backend.tests.helpers.github import api, get, headers, post, hook, pr_event, PR  # noqa: F401
+from backend.tests.helpers.api import hold  # noqa: F401
 
 HEAD, OLD, BASE = 'a' * 40, 'b' * 40, 'c' * 40
 
@@ -54,8 +54,23 @@ def move(api, task, step='Review 1'):
     )
 
 
-def test_qa_pending_marker_is_scoped_to_each_links_task(api):
-    task = ticket(api)
+def test_qa_defaults_are_set_once_scoped_to_their_link_and_yield_to_the_author(api, monkeypatch, subtests):
+    """One install, a ticket per check (the only one holding PR #412): the pending marker's scope, the creation default
+    and the author's override, author labels over the path default, and a retry of incomplete PR paths."""
+    for n, check in enumerate(
+        (
+            _qa_pending_marker_is_scoped_to_each_links_task,
+            _task_and_pr_creation_qa_default_and_author_override_are_once,
+            _author_labels_override_pr_path_default,
+            _incomplete_pr_paths_are_retried_without_losing_pending_default,
+        )
+    ):
+        with subtests.test(check.__name__):
+            check(api, monkeypatch, n)
+
+
+def _qa_pending_marker_is_scoped_to_each_links_task(api, monkeypatch, n):
+    task = nth_ticket(api, n)
     plain = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
     with api.app.state.store.transaction() as c:
         c.execute(
@@ -142,8 +157,24 @@ def test_ci_is_first_names_failures_and_allows_pending(api, checks, allowed, nam
         assert len(notices(api, task)) == 1
 
 
-def test_owner_refusal_does_not_post_a_comment(api):
-    task = ticket(api)
+def test_review_moves_refuse_bad_evidence_and_unverifiable_github(api, monkeypatch, subtests):
+    """One install, a ticket per check (the only one holding PR #412). The two evidence checks run first, on the
+    unconfigured GitHub App; the three fresh-read checks then each patch the App with their own GitHub."""
+    for n, check in enumerate(
+        (
+            _owner_refusal_does_not_post_a_comment,
+            _removed_unrelated_and_wrong_actor_evidence_cannot_open_review,
+            _fresh_github_snapshot_head_and_checks_are_used_and_races_refuse,
+            _fresh_checks_failure_pending_and_status_failure_history,
+            _github_errors_and_head_changes_during_collection_refuse,
+        )
+    ):
+        with subtests.test(check.__name__):
+            check(api, monkeypatch, n)
+
+
+def _owner_refusal_does_not_post_a_comment(api, monkeypatch, n):
+    task = nth_ticket(api, n)
     with api.app.state.store.transaction() as c:
         try:
             review_gate.check(c, task['owner_id'], H.task(c, task['id']))
@@ -258,8 +289,8 @@ def test_destination_board_review_preflight_uses_fresh_github_and_refuses_atomic
     assert not hold(resumed).get('since') and not hold(resumed).get('reason')
 
 
-def test_fresh_github_snapshot_head_and_checks_are_used_and_races_refuse(api, monkeypatch):
-    task = ticket(api, f'Tests: head {HEAD}: 9 passed')
+def _fresh_github_snapshot_head_and_checks_are_used_and_races_refuse(api, monkeypatch, n):
+    task = nth_ticket(api, n, f'Tests: head {HEAD}: 9 passed')
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
@@ -304,8 +335,8 @@ def test_qa_path_table(paths, qa, note):
     assert result['qa'] is qa and bool(result['note']) is note
 
 
-def test_task_and_pr_creation_qa_default_and_author_override_are_once(api):
-    task = ticket(api, change_paths=['docs/help.md'])
+def _task_and_pr_creation_qa_default_and_author_override_are_once(api, monkeypatch, n):
+    task = nth_ticket(api, n, change_paths=['docs/help.md'])
     from backend.github import apply_creation_qa
 
     pr = {'html_url': PR, 'labels': []}
@@ -373,7 +404,12 @@ def test_gate_consumes_each_agreed_receipt_source(api):
         _consumes_source(api, ticket(api) if n == 0 else another_ticket(api, n), where)
 
 
-def another_ticket(api, n):
+def nth_ticket(api, n, receipt=None, **fields):
+    """A fold's n-th ticket: the first makes the board as ticket() does, later ones join it as the only PR holder."""
+    return ticket(api, receipt, **fields) if n == 0 else another_ticket(api, n, receipt, **fields)
+
+
+def another_ticket(api, n, receipt=None, **fields):
     """One more ticket of the same type for a table of rows in one test, the only task holding the PR link."""
     with api.app.state.store.read() as c:
         typ = H.type_get(c, 'Dev tickets')
@@ -387,11 +423,14 @@ def another_ticket(api, n):
             'type': typ['id'],
             'step': 'In Progress',
             'links': [PR],
+            **fields,
         },
     )
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_links WHERE task_id<>?", (task['id'],))
+        if receipt:
+            c.execute('UPDATE tasks SET note=? WHERE id=?', (receipt, task['id']))
     return get(api, 'tasks/' + task['id'])['task']
 
 
@@ -422,8 +461,8 @@ def _consumes_source(api, task, where):
     assert move(api, task).status_code == 200, where
 
 
-def test_fresh_checks_failure_pending_and_status_failure_history(api, monkeypatch):
-    task = ticket(api, f'Tests: head {HEAD}: 9 passed')
+def _fresh_checks_failure_pending_and_status_failure_history(api, monkeypatch, n):
+    task = nth_ticket(api, n, f'Tests: head {HEAD}: 9 passed')
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
@@ -457,7 +496,7 @@ def test_fresh_checks_failure_pending_and_status_failure_history(api, monkeypatc
 
 def test_creation_rule_runs_from_github_files_and_preserves_author_choice(api, monkeypatch):
     from backend import github as G
-    from backend.tests.test_github import _app, _reconciler
+    from backend.tests.helpers.github import _app, _reconciler  # noqa: F401
 
     _app(api)
     task = ticket(api)
@@ -481,8 +520,8 @@ def test_creation_rule_runs_from_github_files_and_preserves_author_choice(api, m
     assert not any(p.endswith('/files') for p in seen)  # never reclassify a later push
 
 
-def test_removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api):
-    task = ticket(api)
+def _removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api, monkeypatch, n):
+    task = nth_ticket(api, n)
     with api.app.state.store.transaction() as c:
         conv = H.conversation(c, task['conversation_id'])
         text = f'Tests: head {HEAD}: 9 passed, 0 failed'
@@ -501,7 +540,7 @@ def test_removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api):
 @pytest.mark.parametrize('reader', ['human:ana', 'bot:cpo'])
 def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, reader):
     task = ticket(api, private=False)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers  # noqa: F401
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -522,8 +561,8 @@ def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, r
     assert move(api, task).status_code == 200
 
 
-def test_github_errors_and_head_changes_during_collection_refuse(api, monkeypatch):
-    task = ticket(api, f'Tests: head {HEAD}: 9 passed')
+def _github_errors_and_head_changes_during_collection_refuse(api, monkeypatch, n):
+    task = nth_ticket(api, n, f'Tests: head {HEAD}: 9 passed')
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
@@ -550,8 +589,8 @@ def test_github_errors_and_head_changes_during_collection_refuse(api, monkeypatc
     assert current['step_id'] == task['step_id'] and not hold(current).get('since')
 
 
-def test_author_labels_override_pr_path_default(api):
-    task = ticket(api, change_paths=['ui/page.js'])
+def _author_labels_override_pr_path_default(api, monkeypatch, n):
+    task = nth_ticket(api, n, change_paths=['ui/page.js'])
     from backend.github import apply_creation_qa
 
     with api.app.state.store.transaction() as c:
@@ -565,10 +604,10 @@ def test_author_labels_override_pr_path_default(api):
         assert 'qa' in H.task_labels(H.task(c, other['id']))
 
 
-def test_incomplete_pr_paths_are_retried_without_losing_pending_default(api, monkeypatch):
+def _incomplete_pr_paths_are_retried_without_losing_pending_default(api, monkeypatch, n):
     from backend import github as G
 
-    task = ticket(api)
+    task = nth_ticket(api, n)
     service = api.app.state.github_app
     monkeypatch.setattr(
         service, '_call', lambda *a, **kw: SimpleNamespace(status_code=200, json=lambda: [{'filename': 'docs/help.md'}])

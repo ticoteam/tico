@@ -6,8 +6,7 @@ from backend import hubdb as H
 from backend import learnings
 from backend import profiles as P
 from backend.maintenance_steps import clean_up
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
-from backend.tests.test_profiles import add_bot, put
+from backend.tests.helpers.profiles import add_bot, put
 
 NOW = "2026-11-06T15:00:00Z"  # Nov 6 in the team's zone
 ENDED = "2026-11-03T12:00:00Z"  # Nov 3: an earlier night

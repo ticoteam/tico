@@ -376,6 +376,20 @@ class SettingsAdmin:
             else {}
         )
 
+    def template_private_default(self, template):
+        """The `private_tasks_default` the template's card declares: a bot made from it keeps its tasks private unless
+        the person says otherwise. False when the card declares none (or is missing), so no slug is named here."""
+        from pathlib import Path
+        import yaml
+
+        if not template:
+            return False
+        try:
+            manifest = yaml.safe_load((Path(self.settings.catalog_dir) / template / "card.yaml").read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            return False
+        return isinstance(manifest, dict) and manifest.get("private_tasks_default") is True
+
     def template_gateway(self, template):
         """The template's bot.yaml `gateway:` block ({level, fast}, docs/creating-bots.md), kept in the new bot's settings
         so a Gateway bot with no model of its own starts on that level; {} when it names none."""
@@ -616,7 +630,7 @@ class SettingsAdmin:
             "private_tasks_default": (
                 body.private_tasks_default
                 if "private_tasks_default" in body.model_fields_set
-                else body.template == "general-counsel"
+                else self.template_private_default(body.template)
             ),
             "model_managed_by": "cloud",
         }
@@ -842,8 +856,8 @@ class SettingsAdmin:
 
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
-        # The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper and the Brand Owner are
-        # built in: nobody archives them, the owner included.
+        # The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, the Brand Owner, the Updates
+        # Owner and the Automations Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
             "botops",
@@ -852,6 +866,8 @@ class SettingsAdmin:
             "task-manager",
             "bookkeeper",
             H.BRAND_OWNER,
+            "updates-owner",
+            "automations-owner",
         ):
             raise Problem(
                 "system_bot",
@@ -868,6 +884,10 @@ class SettingsAdmin:
                     if bot == "bookkeeper"
                     else "The Brand Owner"
                     if bot == H.BRAND_OWNER
+                    else "The Updates Owner"
+                    if bot == "updates-owner"
+                    else "The Automations Owner"
+                    if bot == "automations-owner"
                     else "The " + strategy_bot.name(c)
                 )
                 + " is built in to every team and cannot be archived or deleted; you can pause or rename it",

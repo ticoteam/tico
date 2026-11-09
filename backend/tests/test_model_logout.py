@@ -2,30 +2,12 @@
 signed out, even when the company gives every computer a model key."""
 
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
-from backend.tests.test_computer_signin import computer_asks, grant, new_computer, store, vault
-from backend.tests.test_getting_started import add_bot
-from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.computer_signin import computer_asks, grant, new_computer, store, vault
+from backend.tests.helpers.getting_started import add_bot
+from backend.tests.helpers.onboarding import environment, signed_in  # noqa: F401
 from backend import bot_settings as BS
-
-CAPABLE = ["model_sign_out_v1"]
-
-
-def online(api, capabilities=CAPABLE, token=None):
-    r = runner(api)
-    beat(api, r["token"], capabilities)
-    return r
-
-
-def beat(api, token, capabilities=CAPABLE, auth=None):
-    import uuid
-
-    r = api.post(
-        "/api/v2/runners/heartbeat",
-        json={"version": "test", "platform": "test", "readiness": {}, "capabilities": capabilities},
-        headers={**(auth or headers(token)), "Idempotency-Key": uuid.uuid4().hex},
-    )
-    assert r.status_code == 200, r.text
+from backend.tests.helpers.model_logout import CAPABLE, beat, online, pending, report
 
 
 def as_computer(api, token, path, body):
@@ -36,14 +18,6 @@ def as_computer(api, token, path, body):
     )
     assert r.status_code == 200, r.text
     return r.json()
-
-
-def report(api, r, lid, **body):
-    return post(api, f"runner-logins/{lid}/report", body, token=r["token"])
-
-
-def pending(api, r):
-    return get(api, "runner-logins", token=r["token"])["logins"]
 
 
 def cleared(api, rid):

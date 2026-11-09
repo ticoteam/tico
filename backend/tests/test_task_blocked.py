@@ -5,9 +5,9 @@ import json
 import pytest
 
 from backend import hubdb as H, task_snooze as TS
-from backend.tests.test_review_gate import api, ticket, move, HEAD, get
-from backend.tests.test_github import post
-from backend.tests.test_api import hold
+from backend.tests.helpers.review_gate import api, ticket, move, HEAD, get
+from backend.tests.helpers.github import post
+from backend.tests.helpers.api import hold
 from backend.tests.hold_rows import set_holds
 
 
@@ -222,7 +222,7 @@ def test_scheduler_clears_ci_hold_after_real_green_webhook(api, monkeypatch):
     from datetime import datetime, timezone
     from backend import review_gate
     from backend.scheduler import Scheduler
-    from backend.tests.test_github import _suite
+    from backend.tests.helpers.github import _suite
 
     task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed')
     store = api.app.state.store

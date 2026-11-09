@@ -54,6 +54,7 @@ TABLES = {
     rows.PresenceRow: "presences",
     rows.TaskCheckBackWakeRow: "task_check_back_wakes",
     rows.TaskHoldRow: "task_holds",
+    rows.StuckSpellRow: "stuck_spells",
     rows.QuarantineHoldRow: "quarantine_holds",
     rows.MaintenanceStepRow: "maintenance_steps",
     rows.MaintenanceRunRow: "maintenance_runs",
@@ -100,6 +101,8 @@ TABLES = {
     rows.SkillSuggestionRow: "skill_suggestions",
     rows.SkillDeviceRow: "skill_devices",
     rows.SkillDeviceCodeRow: "skill_device_codes",
+    rows.CiRunRow: "ci_runs",
+    rows.CiRunExtensionRow: "ci_run_extensions",
     rows.EntityActivityRow: "entity_activities",
     rows.EntityAttributeRow: "entity_attributes",
     rows.EntityConnectionRow: "entity_connections",
@@ -115,6 +118,8 @@ TABLES = {
     rows.EntityValueRow: "entity_values",
     rows.EntityViewRow: "entity_views",
     rows.LinkTypeRow: "link_types",
+    rows.FinStatementUploadRow: "fin_statement_uploads",
+    rows.FinStatementPreviewRow: "fin_statement_previews",
     rows.SetupHandoffRow: "setup_handoffs",
 }
 
@@ -123,6 +128,9 @@ TABLES = {
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset(
     {
+        # The owner's GitHub user token and its single-use states (backend/github_app.py, the personal-accounts migration).
+        "github_user_states",
+        "github_user_token",
         # Finance receipts (backend/finance/receipts.py): a Library file read and matched to a feed row.
         "fin_receipts",
         # Native threads (backend/threads.py, calls, Slack threads), merged before their row shapes.

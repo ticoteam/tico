@@ -4,22 +4,18 @@
 import pytest
 
 from backend import hubdb as H, rules, verdict_moves as V
-from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
-from backend.tests.usage_rows import segment
+from backend.tests.helpers.github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers.verdict_moves import BASE, HEAD, NEW, STEPS, builder_jobs, check, step, usage, verdict
 
-HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
-STEPS = [
+NO_QA_STEPS = [
     ("On Deck", "open"),
     ("In Progress", "doing"),
     ("Review 1", "review"),
     ("Review 1 Fixes", "doing"),
     ("Review 2", "review"),
     ("Review 2 Fixes", "doing"),
-    ("In QA", "review"),
-    ("QA Fixes", "doing"),
     ("Pending Release", "review"),
-    ("Post Release QA", "review"),
     ("Done", "done"),
 ]
 
@@ -31,30 +27,9 @@ def receipt(api, task, head=HEAD):
         )
 
 
-def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runtime=None):
-    turn = H.new_id()
-    c.execute(
-        "INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
-        (turn, bot, H.now(), H.now(), task_id),
-    )
-    runtime = runtime or ("claude" if provider == "anthropic" else "codex")
-    segment(
-        c,
-        turn,
-        input_tokens=20,
-        output_tokens=20,
-        model=model,
-        provider=provider,
-        runtime=runtime,
-        harness=runtime,
-        effort="high",
-    )
-    return turn
-
-
-def ticket(api, step="Review 1", labels=()):
+def ticket(api, step="Review 1", labels=(), steps=STEPS):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in steps])
         rules.seed_dev(c)
     task = post(
         api,
@@ -79,36 +54,9 @@ def ticket(api, step="Review 1", labels=()):
     return task
 
 
-def check(api, task, title="Review 1: PR #412", owner="bot:cmo", **ran):
-    """A check `owner` ran on the ticket; `ran` names the model it ran on (usage's model, provider, runtime)."""
-    with api.app.state.store.transaction() as c:
-        row = H.task_create(c, "bot:cpo", title, f"Check PR #412 head {HEAD}", owner, parent_id=task["id"], lint=False)
-        turn = usage(c, row["id"], H.actor_id(owner), **ran)
-        from backend.check_independence import capture_attempt
-
-        capture_attempt(c, task["id"], row["id"], HEAD, turn)
-        c.execute("DELETE FROM jobs")
-    return row
-
-
-def verdict(api, row, value, head=HEAD):
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, row["owner_id"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
-        turn = c.execute(
-            "SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (row["id"],)
-        ).fetchone()
-        if turn:
-            V.after_capture(c, row["id"], head, turn["id"])
-
-
-def step(api, task):
-    with api.app.state.store.read() as c:
-        return V.step_of(c, H.task(c, task["id"]))
-
-
 def flow(api, task, step_name, **settings):
     """Set one step's flow the way Settings > Tasks does: the whole type saved with its steps."""
-    from backend.tests.test_github import get, headers
+    from backend.tests.helpers.github import get, headers
 
     kind = get(api, "task-types/" + task["type_id"])["type"]
     steps = [
@@ -125,14 +73,6 @@ def flow(api, task, step_name, **settings):
 def checks_of(api, task):
     with api.app.state.store.read() as c:
         return [t for t in (H.task(c, i) for i in H.TR.child_ids(c, task["id"])) if t["status"] in H.ACTIVE_STATUSES]
-
-
-def builder_jobs(api):
-    with api.app.state.store.read() as c:
-        return [
-            H.message(c, r[0])
-            for r in c.execute("SELECT message_id FROM jobs WHERE bot_id='cpo' AND state='queued' ORDER BY rowid")
-        ]
 
 
 def step_events(api, task):
@@ -353,6 +293,44 @@ def test_a_board_without_qa_merges_after_its_last_review_once_ci_is_green(api):
     assert len([m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]) == 1, "once per head"
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
     assert step(api, task) == "Pending Release"
+
+
+def test_a_board_without_qa_merges_once_review_2_approves_and_ci_is_green(api):
+    """The Dev board's own settings, with no flow set here: a board without QA steps hands Review 2's approval to the
+    merge, which waits for green CI."""
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    verdict(api, check(api, task, "Review 2: PR #412"), "approve")
+    assert step(api, task) == "Review 2"
+    assert not builder_jobs(api), "nothing to do until CI is green"
+    _suite(api, "github-actions", "completed", "success", sha=HEAD)
+    merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD
+    hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
+    assert step(api, task) == "Pending Release"
+
+
+def test_a_board_without_qa_files_an_unanswered_review_2_again_and_never_passes_it_on(api):
+    """Review 2 on the recommended board is filed again, not skipped: the stale check is closed and the change stays at
+    Review 2, with no merge handed off by the timeout."""
+    from datetime import timedelta
+
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    review = check(api, task, "Review 2: PR #412")
+    with api.app.state.store.transaction() as c:
+        later = H.parse_ts(H.now()) + timedelta(hours=2)
+        assert V.timeouts(c, later.strftime("%Y-%m-%dT%H:%M:%S.%fZ")) == [], "a refile moves no ticket"
+        assert H.task(c, review["id"])["status"] == "closed"
+    assert step(api, task) == "Review 2"
+    with api.app.state.store.read() as c:
+        events = {
+            (r[0], r[1])
+            for r in c.execute(
+                "SELECT subject_id, kind FROM history_events WHERE subject_id IN (?, ?)", (task["id"], review["id"])
+            )
+        }
+    assert (task["id"], "check_refiled") in events, "the stale check is recorded as refiled"
+    assert not {kind for _, kind in events} & {"round_skipped", "verdict_move"}, "the timeout passes nothing on"
+    assert not [m for m in builder_jobs(api) if "merge PR" in str(m)], "no merge is handed off by the timeout"
 
 
 def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_recorded(api):
@@ -677,7 +655,7 @@ def test_a_verdict_given_while_the_ticket_was_held_moves_it_once_the_hold_clears
 
 def test_a_private_review_is_not_replayed_into_its_wider_parent_when_a_hold_clears(api):
     from backend.check_independence import capture_attempt
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     task = ticket(api)
     with api.app.state.store.transaction() as c:
@@ -948,7 +926,7 @@ def test_a_round_timed_out_after_a_fail_at_the_head_goes_to_on_fail_and_never_to
 def test_timeout_keeps_the_private_qa_verdict_source(api):
     import json
     from backend import task_privacy
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     task = ticket(api, step="In QA")
     with api.app.state.store.transaction() as c:

@@ -1,4 +1,4 @@
-"""A real Tico server on the owner sign-in link, for ui/tests/owner-link.cjs.
+"""A real Tico server on the owner sign-in link, for ui/tests/owner-link.cts.
 
     python3 ui/tests/support/owner_link_server.py
 

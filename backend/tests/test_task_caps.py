@@ -3,25 +3,15 @@
 The org here: ops reports to coo, coo to Ana (the owner). A cap on (ops, Ana) limits the tasks ops creates for Ana."""
 
 from backend import task_caps
-from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_migrations import restore_config
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.migrations import restore_config
+from backend.tests.helpers.task_caps import as_bot
 
 
 def report(api, bot, boss):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (boss, bot))
-
-
-def as_bot(api, slug, token):
-    """The bot signs in with its own agent credential, as the hub's agents do: one agents row per bot."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-            (slug, "test", "x-" + slug, H.now(), "human:ana"),
-        )
-    api.app.state.store.settings.test_identities[token] = Identity(f"bot:{slug}", "bot", agent="test")
 
 
 def org(api):

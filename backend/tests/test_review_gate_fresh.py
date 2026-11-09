@@ -8,9 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from backend import hubdb as H, task_blocked
-from backend.tests.test_github import api, headers, hook, post, pr_event, PR  # noqa: F401
-from backend.tests.test_review_gate import HEAD, OLD, BASE, ticket, get, move
-from backend.tests.test_api import hold
+from backend.tests.helpers.github import api, headers, hook, post, pr_event, PR  # noqa: F401
+from backend.tests.helpers.review_gate import HEAD, OLD, BASE, ticket, nth_ticket, get, move  # noqa: F401
+from backend.tests.helpers.api import hold  # noqa: F401
 
 STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}
@@ -136,9 +136,22 @@ def test_renamed_review_step_reads_fresh_ci_before_refusing_move(api, monkeypatc
     assert current['step']['name'] == 'In Progress' and 'CI failing' in hold(current)['reason']
 
 
-def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_head(api, monkeypatch):
-    task = ticket(api, STALE)
+def test_a_review_question_is_refused_unless_every_hosted_check_passes_then_filed_when_all_pass(api, subtests):
+    """One install and one leased bot (the builder asking): a Review question refused on a failing or a pending check,
+    then filed on all-green checks (last: an open question of Ana's refuses a duplicate). A ticket per check (the only
+    one holding the PR link), each with its own GitHub patch undone after it."""
     token = bot_token(api)
+    checks = [
+        (_review_question_is_refused_unless_every_hosted_check_passes, ('failure', 'CI failing at head ' + HEAD)),
+        (_review_question_is_refused_unless_every_hosted_check_passes, (None, 'newest receipt head: ' + OLD)),
+        (_review_question_is_filed_when_every_hosted_check_passes_at_the_current_head, ()),
+    ]
+    for n, (check, extra) in enumerate(checks):
+        with subtests.test(check.__name__, args=extra), pytest.MonkeyPatch.context() as mp:
+            check(api, mp, nth_ticket(api, n, STALE), token, *extra)
+
+
+def _review_question_is_filed_when_every_hosted_check_passes_at_the_current_head(api, monkeypatch, task, token):
     reads = github(api, monkeypatch, GREEN)
     r = ask(api, token, task)
     assert r.status_code == 200, r.text
@@ -182,13 +195,8 @@ def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypat
     assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
 
 
-@pytest.mark.parametrize(
-    'result,refusal', [('failure', 'CI failing at head ' + HEAD), (None, 'newest receipt head: ' + OLD)]
-)
-def test_review_question_is_refused_unless_every_hosted_check_passes(api, monkeypatch, result, refusal):
+def _review_question_is_refused_unless_every_hosted_check_passes(api, monkeypatch, task, token, result, refusal):
     """A failing check is named first (the gate reads CI before receipts); a pending one leaves the stale receipt."""
-    task = ticket(api, STALE)
-    token = bot_token(api)
     github(api, monkeypatch, {**GREEN, 'check 3': result})
     r = ask(api, token, task)
     assert r.status_code == 422 and refusal in r.text, r.text
@@ -202,8 +210,21 @@ def test_a_question_titled_otherwise_reads_no_github(api, monkeypatch):
     assert reads == []
 
 
-def test_blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch):
-    task = ticket(api, STALE)
+def test_blocked_gate_holds_clear_only_on_a_fresh_all_green_read(api, subtests):
+    """One install: a gate hold that clears on a fresh all-green read, then holds that stay on a failing or pending
+    check and read GitHub once per change. A ticket per check (the only one holding the PR link), each held while
+    GitHub is unconfigured, with its own GitHub patch undone after it."""
+    checks = [
+        (_blocked_gate_hold_clears_on_a_fresh_all_green_read, ()),
+        (_blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once_per_change, ('failure',)),
+        (_blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once_per_change, (None,)),
+    ]
+    for n, (check, extra) in enumerate(checks):
+        with subtests.test(check.__name__, args=extra), pytest.MonkeyPatch.context() as mp:
+            check(api, mp, nth_ticket(api, n, STALE), *extra)
+
+
+def _blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch, task):
     parked = held(api, task)
     service = api.app.state.github_app
     with api.app.state.store.transaction() as c:
@@ -217,9 +238,7 @@ def test_blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch):
     assert current['version'] > parked['version']
 
 
-@pytest.mark.parametrize('result', ['failure', None])
-def test_blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once_per_change(api, monkeypatch, result):
-    task = ticket(api, STALE)
+def _blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once_per_change(api, monkeypatch, task, result):
     held(api, task)
     service = api.app.state.github_app
     reads = github(api, monkeypatch, {**GREEN, 'check 3': result})
@@ -258,7 +277,7 @@ def test_stale_receipt_review_moves_without_passing_checks_are_still_refused(api
 def test_a_same_head_failure_landing_during_the_read_keeps_the_hold(api, monkeypatch):
     """A check webhook changes the PR link but not the task version: a green read it supersedes must not clear."""
     from backend import review_gate
-    from backend.tests.test_github import _suite
+    from backend.tests.helpers.github import _suite  # noqa: F401
 
     task = ticket(api, STALE)
     held(api, task)
@@ -325,7 +344,7 @@ def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatc
 def test_a_held_review_question_sent_anyway_reads_github_afresh_and_is_filed(api, monkeypatch):
     """Send anyway on a held Review 2 question is the same gate as a new one: all-green hosted checks at the current
     head count from a fresh read, with no receipt at that head."""
-    from backend.tests.test_org_rule_check import COLOR, Judge
+    from backend.tests.helpers.org_rule_check import COLOR, Judge  # noqa: F401
 
     task = ticket(api, STALE)
     token = bot_token(api)

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from backend import question_tasks as QT, still_needed, task_roundup
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_tasks_board import api, get  # noqa: F401
+from backend.tests.helpers.tasks_board import api, get  # noqa: F401
 
 ANA, OPS, CPO = "human:ana", "bot:ops", "bot:cpo"
 NOON_WED = "2026-10-21T19:00:00.000000Z"  # Wed 12:00 Pacific: a task roundup run
@@ -130,7 +130,9 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
     with store.transaction() as c:
         tasks = [H.task_create(c, ANA, f"Pick a {what}", "x", OPS) for what in ("venue", "caterer", "date")]
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
-        old = "2026-09-24T17:00:00.000000Z"  # weeks before, past the old 14-day expiry
+        # Wednesday before: past two business days by Friday, under the 7-day expiry (ask_deadlines.EXPIRE_DAYS) on
+        # Monday, so only the batch sends them back (test_ask_deadlines covers the expiry).
+        old = "2026-10-14T17:00:00.000000Z"
         for a in asks:
             age(c, a, old)
         c.execute("UPDATE history_events SET created_at=? WHERE subject_type='task'", (old,))
@@ -140,7 +142,7 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
         with store.read() as c:
             return [a["id"] for a in asks if not QT.is_open(H.task(c, a["id"]))]
 
-    assert tick("2026-10-17T17:00:00") == []  # Saturday: no batch, and no question expires on its own
+    assert tick("2026-10-17T17:00:00") == []  # Saturday: no batch, and none is 7 days old
     assert tick("2026-10-19T14:00:00") == []  # Monday 7:00 Pacific: before the batch
     assert set(tick("2026-10-19T15:30:00")) == {a["id"] for a in asks}  # Monday 8:30 Pacific: all three go back
     with store.transaction() as c:

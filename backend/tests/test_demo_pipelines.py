@@ -9,7 +9,7 @@ import pytest
 import time_machine
 
 from backend import demo
-from backend.tests.test_demo_finance import signed_in
+from backend.tests.helpers.demo_finance import signed_in
 
 EARLY_MONTH = datetime(2026, 11, 2, 18, 30, tzinfo=timezone.utc)
 
@@ -24,7 +24,7 @@ def pipeline(tmp_path_factory):
         yield signed_in(settings), type_id, by_title
 
 
-def test_the_pipeline_review_queue_and_manager_answer_in_the_demo(pipeline):
+def _the_pipeline_review_queue_and_manager_answer_in_the_demo(pipeline):
     client, type_id, _ = pipeline
     queue = client.get("/api/v2/pipelines/" + type_id + "/review/queue")
     assert queue.status_code == 200, queue.text
@@ -32,7 +32,7 @@ def test_the_pipeline_review_queue_and_manager_answer_in_the_demo(pipeline):
     assert manager.status_code == 200, manager.text
 
 
-def test_the_demo_tickets_show_the_states_the_demo_tells(pipeline):
+def _the_demo_tickets_show_the_states_the_demo_tells(pipeline):
     client, _, by_title = pipeline
 
     def states(title):
@@ -45,3 +45,13 @@ def test_the_demo_tickets_show_the_states_the_demo_tells(pipeline):
         states("Phone board shows one stage")["Screenshots"] == "out_of_date"
     )  # attached before the last change: stale
     assert states("Pipeline stages and the manager rail")["Spec page"] == "waiting"
+
+
+def test_the_demo_pipelines_tell_their_story(pipeline, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _the_pipeline_review_queue_and_manager_answer_in_the_demo,
+        _the_demo_tickets_show_the_states_the_demo_tells,
+    ):
+        with subtests.test(check.__name__):
+            check(pipeline)

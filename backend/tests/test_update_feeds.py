@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from backend import update_feeds as F
-from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
 
 SNAPSHOT = "a" * 40
@@ -184,7 +184,7 @@ def test_each_choice_gets_only_its_categories_batched_into_the_next_run_and_noth
     tico, template = (r["body"] for r in notes(api, "ops"))
     assert 'Summary (quoted): "1 changed. Changed: `hub task show`' in tico
     assert "https://github.com/ticoteam/tico/releases/tag/v0.4.2" in tico
-    assert "https://github.com/ticoteam/tico/blob/v0.4.2/CHANGELOG.md" in tico
+    assert 'Release notes: "https://github.com/ticoteam/tico/releases/tag/v0.4.2"' in tico
     assert "Action may be needed: yes. Reason: it changes MCP tools" in tico
     assert "This server runs 0.4.1, so these changes reach you once it updates." in tico
     assert f"https://github.com/ticoteam/tico/commit/{2:040x}" in template

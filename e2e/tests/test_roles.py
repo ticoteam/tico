@@ -11,7 +11,7 @@ rules, not read back from the code under test.
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture)
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture)
 from e2e import scenario
 
 pytestmark = pytest.mark.slow

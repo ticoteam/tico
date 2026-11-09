@@ -260,6 +260,23 @@ def _self_flagged(c: sqlite3.Connection) -> None:
     finance_directory.link_self(c)
 
 
+def touches_self(c: sqlite3.Connection, *, link_id: str = "", entity_ids: Sequence[str] = ()) -> bool:
+    """Whether a link (by id) or a pair of ends has our company at one end: changing where we operate is an admin's."""
+    if link_id:
+        row = _one(c, "SELECT from_entity_id, to_entity_id FROM entity_links WHERE id = ?", (link_id,))
+        entity_ids = [row["from_entity_id"], row["to_entity_id"]] if row else []
+    ids = [i for i in entity_ids if i]
+    if not ids:
+        return False
+    marks = ", ".join("?" * len(ids))
+    return _one(c, f"SELECT 1 AS found FROM entities WHERE self = 1 AND id IN ({marks})", ids) is not None
+
+
+def link_key_of(c: sqlite3.Connection, link_id: str) -> str | None:
+    row = _one(c, "SELECT link_key FROM entity_links WHERE id = ?", (link_id,))
+    return row["link_key"] if row else None
+
+
 def _set_kind(c: sqlite3.Connection, entity_id: str, kind: str, source_type: str) -> None:
     """An organization's kind, when it has none. A kind already set is left alone."""
     c.execute(
@@ -947,12 +964,41 @@ def walk(c: sqlite3.Connection, starts: Sequence[str], depth: int = WALK_DEPTH) 
     return reached, False
 
 
+NAME_CONTACT = "name:"  # a contact that is only a name (a letter's addressee), as `contact_entities` reads it
+PHONE_CONTACT = re.compile(r"\+[0-9]{7,15}")  # an E.164 number once its formatting is stripped
+PHONE_SQL = "replace(replace(replace(replace(replace(normalized_value, ' ', ''), '-', ''), '(', ''), ')', ''), '.', '')"
+
+
 def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[str]:
-    """The entities an address points at: a person or organization that has it as an email identifier, and the
-    organization whose primary domain is its domain. Names are never matched: two people can share one."""
+    """The entities a contact points at. An email address: a person or organization that has it as an email identifier,
+    and the organization whose primary domain is its domain. A phone number (+ and digits, formatting ignored): one
+    that has it as a phone identifier. `name:<name>` (a letter's addressee, which has no other identity): every entity
+    with that name, so a name two entities share reaches both and a rule on either holds the send. Otherwise names are
+    never matched."""
     ids: list[str] = []
     for address in addresses:
         text = address.strip().lower()
+        if text.startswith(NAME_CONTACT):
+            name = text[len(NAME_CONTACT) :].strip()
+            if name:
+                ids += [
+                    str(r["entity_id"])
+                    for r in _rows(
+                        c,
+                        "SELECT entity_id FROM entity_identifiers WHERE kind = 'name' AND normalized_value = ?",
+                        (name,),
+                    )
+                ]
+            continue
+        phone = _normal_identifier("phone", text)
+        if "@" not in text and PHONE_CONTACT.fullmatch(phone):
+            ids += [
+                str(r["entity_id"])
+                for r in _rows(
+                    c, f"SELECT entity_id FROM entity_identifiers WHERE kind = 'phone' AND {PHONE_SQL} = ?", (phone,)
+                )
+            ]
+            continue
         if not text:
             continue
         ids += [
@@ -1812,7 +1858,7 @@ def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
     cl, cparams = V.clause(reader, "o")
     places = _rows(
         c,
-        "SELECT o.id, o.name FROM entity_links l JOIN entities o "
+        "SELECT o.id, o.name, l.id AS link_id FROM entity_links l JOIN entities o "
         "ON o.id = CASE WHEN l.from_entity_id = ? THEN l.to_entity_id ELSE l.from_entity_id END "
         "WHERE (l.from_entity_id = ? OR l.to_entity_id = ?) AND l.link_key = 'operates_in' "
         f"AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) AND o.status <> 'merged' AND {cl} "

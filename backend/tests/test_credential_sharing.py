@@ -11,25 +11,11 @@ import os
 import pytest
 
 from backend.credentials import CredentialCipher
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act, everything
-from backend.tests.test_credentials import FakeKMS
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixture)
-
-JIRA = "jira-basic-auth-synthetic-fixture-0123456789"
-
-
-def local(api):
-    """The default: no KMS key is set, so the vault's data key is the file beside the database."""
-    settings = api.app.state.store.settings
-    assert not settings.credential_kms_key
-    settings.credential_admins = ("ana@acme.example", "ben@acme.example")
-    return settings.db_path.parent / "credential.key"
-
-
-def jira(api, **kwargs):
-    return post(api, "credentials", {"name": "Jira", "env": "JIRA_BASIC_AUTH", "secret": JIRA, **kwargs})
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act, everything
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.credential_sharing import JIRA, KMSWithEncrypt, jira, local
 
 
 def test_watchers_receive_only_live_grants_for_active_bots_on_their_computer(api):
@@ -60,7 +46,7 @@ def test_a_watcher_with_nothing_to_send_answers_from_a_read_while_the_write_lock
     # TK-INSRN53V: this poll waited up to 11 s behind a claim's write. It writes only to record a value it sends.
     import sqlite3
     from concurrent.futures import ThreadPoolExecutor
-    from backend.tests.test_api import headers
+    from backend.tests.helpers.api import headers
 
     local(api)
     computer = runner(api)
@@ -115,15 +101,6 @@ def test_the_vault_works_with_a_local_key_and_reads_it_back_after_a_restart(api)
     path.write_bytes(kept)
     api.app.state.vault.cipher = CredentialCipher("", key_file=path)
     assert post(api, f"credentials/{row['id']}/reveal", {})["value"] == JIRA
-
-
-class KMSWithEncrypt(FakeKMS):
-    def encrypt(self, **kwargs):
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-        assert kwargs["EncryptionContext"] == {"application": "tico-credentials"}
-        nonce = os.urandom(12)
-        return {"CiphertextBlob": nonce + AESGCM(self.key).encrypt(nonce, kwargs["Plaintext"], b"kms")}
 
 
 def test_setting_a_kms_key_later_keeps_what_was_stored_and_a_kms_install_is_untouched(api):

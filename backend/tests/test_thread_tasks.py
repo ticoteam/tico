@@ -3,8 +3,9 @@ privacy and carries its words and a link back. Fictional people only: ana (owner
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
-from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture and its helpers)
-from backend.tests.test_thread_api import new_thread
+from backend.tests.helpers.api import headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.helpers.thread_api import new_thread
+from backend.tests.helpers.thread_tasks import make_task
 
 
 def test_a_task_from_a_members_thread_message_is_private_with_a_link_back_and_a_stranger_gets_404(api):
@@ -38,12 +39,6 @@ def thread_me(api, thread_id, token="ana-test"):
     assert response.status_code == 200, response.text
     body = response.json()
     return (body.get("thread") or body)["me"]
-
-
-def make_task(api, body, token="ana-test"):
-    response = api.post("/api/v2/tasks", json=body, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json().get("task", response.json())
 
 
 def test_a_task_a_person_makes_for_a_bot_is_not_unread_for_them(api):

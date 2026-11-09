@@ -3,8 +3,8 @@ runs on the new one at once unless that login is held too."""
 
 from backend import login_holds
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, runner  # noqa: F401 (fixture)
-from backend.tests.test_login_holds import at, limit, providers_on, signed_in
+from backend.tests.helpers.api import assign, claim, post, runner  # noqa: F401 (fixture)
+from backend.tests.helpers.login_holds import at, limit, providers_on, signed_in
 
 
 def status(api, bot="ops"):

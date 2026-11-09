@@ -117,7 +117,7 @@ reachable from the bot's page.
 
 ## API
 
-All of it is in the stable v2 contract ([openapi/v2.json](openapi/v2.json), tag **Docs**); every write needs an
+All of it is in the stable v2 contract ([v2 spec](api.md#the-contract), tag **Docs**); every write needs an
 `Idempotency-Key`. Reads are open to every signed-in human and bot.
 
 | | |
@@ -140,7 +140,7 @@ Writes are recorded in the activity log with the actor (`docs.created_at`, `docs
 covers internal, indexed external and linked docs too.
 
 The code is `backend/docs.py` (with `backend/docs_import.py` for file conversion) and `ui/docs-page.ts`,
-`ui/docs-editor.ts`, `ui/docs-search.ts`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cjs`.
+`ui/docs-editor.ts`, `ui/docs-search.ts`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cts`.
 
 Archive removes a doc from the active list and search. **Undo** brings it back immediately.
 Choose **Archived** on Docs to browse archived docs, open one and choose **Restore**. Restore keeps its history;

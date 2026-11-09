@@ -19,13 +19,13 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import backend.company_page as package
-import backend.tests.test_api as test_api
+from backend.tests.helpers import api_app  # the api fixture reads api_settings here
 from backend import automations, oidc, screening, task_trigger_rules, team_icon, webhooks
 from backend import hubdb as H
 from backend.company_page import reader_app, readers as R, release, render
 from backend.store import digest
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.oidc import CLIENT, SECRET, provider  # noqa: F401  (the provider fixture)
 
 ORIGIN = "https://open.acme.example"
 UI = Path(__file__).resolve().parents[2] / "ui" / "assets"
@@ -40,7 +40,7 @@ def fake(provider):  # noqa: F811
 @pytest.fixture
 def configured(monkeypatch, fake):
     """Runs before `api`, which then builds its app with a reader origin and a sign-in provider."""
-    real = test_api.api_settings
+    real = api_app.api_settings
 
     def settings(tmp_path):
         made = real(tmp_path)
@@ -49,7 +49,7 @@ def configured(monkeypatch, fake):
         made.session_secret = "s" * 40
         return made
 
-    monkeypatch.setattr(test_api, "api_settings", settings)
+    monkeypatch.setattr(api_app, "api_settings", settings)
 
 
 def anchor_of(row):
@@ -724,7 +724,7 @@ def test_an_invite_cannot_take_over_a_row_another_account_holds(site):
 
 # ----------------------------------------------------------------------------------------------- the list
 def test_only_owners_and_admins_manage_readers_and_the_list_pages(site):
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(site.api, "ben@acme.example")
     assert site.api.get("/api/v2/readers", headers=headers("ben-test")).status_code == 403

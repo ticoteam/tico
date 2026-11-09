@@ -7,29 +7,16 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import events as E
 from backend import queue_refusals, thread_bot_status, threads
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixture, helpers)
-from backend.tests.test_thread_events import read_as, who
-from backend.tests.test_threads_delivery import bot_post, delivery, queued_job
-
-
-def new_thread(api, members=("human:ben", "bot:ops"), title="Budget", token="ana-test"):
-    return post(api, "threads", {"title": title, "audience": "members", "members": list(members)}, token=token)
-
-
-def say(api, thread_id, text, token="ana-test", expected=200, **more):
-    return post(api, f"threads/{thread_id}/messages", {"text": text, **more}, token=token, expected=expected)
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixture, helpers)
+from backend.tests.helpers.thread_events import read_as, who
+from backend.tests.helpers.threads_delivery import bot_post, delivery, queued_job
+from backend.tests.helpers.thread_halfway import bot_status, new_thread, say
 
 
 def timeline(api, thread_id, token="ana-test", **params):
     r = api.get(f"/api/v2/threads/{thread_id}/timeline", params=params, headers=headers(token))
     assert r.status_code == 200, r.text
     return r.json()
-
-
-def bot_status(api, thread_id, token="ana-test"):
-    r = api.get(f"/api/v2/threads/{thread_id}/bot-status", headers=headers(token))
-    assert r.status_code == 200, r.text
-    return r.json()["bots"]
 
 
 def sub_thread(api, parent_id, token="ana-test"):

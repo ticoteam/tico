@@ -1,5 +1,5 @@
 /* ui/app/pipeline-editor.ts — The pipeline editor: a pipeline's stages, their requirements and Warn after times, the
-   links that hand tickets on, and its goal, judge, factory, privacy, owner, manager and prefix. It opens from the pencil by the pipeline's name on the
+   links that hand tickets on, and its goal, factory, privacy, owner, manager and prefix. It opens from the pencil by the pipeline's name on the
    Tasks page, which shows only to a reader who may change the pipeline's rules (GET /api/v2/pipelines/{id}/rights).
    Every control calls a route that exists: stage names and order use the task-type route (movers only, so those
    controls show only to a mover), requirements and settings use backend/pipeline_requirements.py, links use
@@ -10,7 +10,7 @@
    pipelineEditSync(pipelineId)      shows or hides the pencil for the pipeline in view. */
 'use strict';
 
-interface PeStage { id: string; name: string; status: string; limit_minutes?: number | null; position?: number; }
+interface PeStage { id: string; name: string; status: string; limit_minutes?: number | null; card_cap?: number | null; position?: number; }
 interface PeType { id: string; name: string; prefix?: string | null; pipeline_owner_id?: string | null; manager?: string | null; goal?: string | null; steps: PeStage[]; }
 interface PeNeeds { formats?: string[]; newer_than_change?: boolean; is_work?: boolean; field?: string; source?: string; }
 interface PeReq {
@@ -20,8 +20,10 @@ interface PeReq {
 interface PeLink { id: string; from_pipeline_id: string; from_pipeline_stage_id: string; to_pipeline_id: string; mode: string; }
 interface PeState {
   type: PeType; reqs: Map<string, PeReq[]>; links: PeLink[] | null; requirements: boolean;
-  mover: boolean; warn: string; link: string;
-  /** The settings block's server view (goal, judge, factory, privacy, members), or null when the route did not answer. */
+  mover: boolean; warn: string; cap: string; link: string;
+  /** Whether the reader may change the pipeline's rules (its owner and admins): the manager is a choice only then. */
+  mayEdit: boolean;
+  /** The settings block's server view (goal, factory, privacy, members), or null when the route did not answer. */
   settings: PipelineSettings | null;
   /** The live factories for the Factory choice, or null when the list did not load (the choice is then left out). */
   factories: PipelineFactory[] | null;
@@ -49,7 +51,9 @@ const PE_RIGHTS = new Map<string, {may: boolean; at: number}>();
 const peOptions = (rows: [string, string][], on: string | null | undefined): string =>
   rows.map(([v, l]) => `<option value="${esc(v)}"${v === on ? ' selected' : ''}>${esc(l)}</option>`).join('');
 const pePeople = (): {id: string; name: string}[] => (S.people || []).filter(p => !p.hidden).map(p => ({id: 'human:' + p.id, name: p.name || p.id}));
-const peBots = (): {id: string; name: string}[] => (S.emps || []).filter(e => e.state !== 'archived').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
+// A pipeline's manager is an active bot: paused, planned and archived bots are not offered. The roster carries the bot's
+// state as `state` (`status` on the org roster, the same value).
+const peBots = (): {id: string; name: string}[] => (S.emps || []).filter(e => (e.state ?? e.status) === 'active').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
 /** A choice of one person or bot. A clearable choice offers `none` as an empty value. One that cannot be cleared (an owner
     or a manager: the server refuses an empty one) shows `none` only while nothing is set, as a disabled placeholder. */
 const peWho = (rows: {id: string; name: string}[], on: string | null | undefined, none: string, clearable = true): string => {
@@ -88,7 +92,8 @@ async function pipelineEditSync(pipelineId: string | null | undefined): Promise<
 
 async function peLoad(id: string): Promise<PeState> {
   const type: PeType = (await get(`/v2/task-types/${encodeURIComponent(id)}`, {fresh: true})).type;
-  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), warn: '', link: '', settings: null, factories: null};
+  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), mayEdit: false, warn: '', cap: '', link: '', settings: null, factories: null};
+  try { state.mayEdit = !!(await get(`/v2/pipelines/${encodeURIComponent(id)}/rights`, {fresh: true})).may_edit_rules; } catch { state.mayEdit = false; }
   try { state.settings = await pipelineSettings(id); } catch { state.settings = null; }
   try { state.factories = await pipelineFactories(); } catch { state.factories = null; }
   try { state.links = (await get(peRoute(`/v2/pipeline-links?pipeline=${encodeURIComponent(id)}`), {fresh: true})).links; } catch { state.links = null; }
@@ -123,6 +128,14 @@ function peWarnHTML(stage: PeStage, on: boolean): string {
       <button type="button" class="ghost" data-pe-warn-off="${esc(stage.id)}">Don't warn</button></span>` : ''}</span>`;
 }
 
+// "At most": how many cards the stage holds at once (D68). Blank is no cap; 0 is On ice (D69), a stage nobody works.
+function peCapHTML(stage: PeStage, on: boolean): string {
+  return `<span class="pe-cap"><button type="button" class="ghost pe-cap-b" data-pe-cap="${esc(stage.id)}" aria-expanded="${on}">At most: ${stage.card_cap == null ? 'No cap' : stage.card_cap}</button>${on ? `
+    <span class="pe-pop" role="group" aria-label="At most"><input type="number" min="0" max="500" step="1" value="${stage.card_cap ?? ''}" data-pe-cap-n aria-label="At most">
+      <button type="button" class="primary" data-pe-cap-save="${esc(stage.id)}">Save</button>
+      <button type="button" class="ghost" data-pe-cap-off="${esc(stage.id)}">No cap</button></span>` : ''}</span>`;
+}
+
 function peLinkHTML(state: PeState, stage: PeStage): string {
   if (state.links === null) return '';
   const link = state.links.find(l => l.from_pipeline_stage_id === stage.id && l.from_pipeline_id === state.type.id);
@@ -145,19 +158,16 @@ function peStageHTML(state: PeState, stage: PeStage, i: number, count: number): 
     : `<span class="pe-stage-name">${esc(stage.name)}</span>`;
   const reqs = state.reqs.get(stage.id) ?? [];
   return `<li class="pe-stage"><div class="pe-stage-head">${name}</div>
-    <div class="pe-stage-tools">${peWarnHTML(stage, state.warn === stage.id)}${peLinkHTML(state, stage)}</div>
+    <div class="pe-stage-tools">${peWarnHTML(stage, state.warn === stage.id)}${peCapHTML(stage, state.cap === stage.id)}${peLinkHTML(state, stage)}</div>
     ${state.requirements ? `<ul class="pe-reqs">${reqs.map(peReqHTML).join('')}</ul><button type="button" class="ghost pe-req-add" data-pe-new="${esc(stage.id)}">+ Require</button>` : ''}
     <div class="pe-form-slot" data-pe-slot="${esc(stage.id)}"></div></li>`;
 }
 
-const PE_JUDGE_LABELS: Record<string, string> = {'haiku-5.5': 'Haiku 5.5', jev: 'Jev', sonnet: 'Sonnet'};
-
-/** The Goal, Judge, Factory and Private rows of the settings block. They show only when the server sent the settings. */
+/** The Goal, Factory and Private rows of the settings block. They show only when the server sent the settings. */
 function peGoalHTML(state: PeState): string {
   const s = state.settings;
   if (!s) return '';
   const isPrivate = s.visibility === 'members';
-  const judges: [string, string][] = s.judge_models.map(v => [v, PE_JUDGE_LABELS[v] ?? v]);
   const factories = (state.factories ?? []).map(f => ({id: f.id, name: f.name}));
   // A member the roster does not show (a hidden person, an archived bot) still gets a checked box, so saving keeps it.
   const roster = [...pePeople(), ...peBots()];
@@ -167,10 +177,46 @@ function peGoalHTML(state: PeState): string {
         `<label class="pe-check"><input type="checkbox" data-pe-member value="${esc(p.id)}"${s.members.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('')}</fieldset>`
     : '';
   return `<label class="pe-f"><span>Goal</span><input name="goal" maxlength="200" value="${esc(s.goal ?? '')}" data-pe-setting="goal" autocomplete="off"></label>
-      <label class="pe-f"><span>Judge</span><select data-pe-setting="judge_model">${peOptions(judges, s.judge_model ?? s.default_judge_model)}</select></label>
       ${state.factories ? `<label class="pe-f"><span>Factory</span><select data-pe-setting="factory_id"${isPrivate ? ' disabled' : ''}>${peWho(factories, s.factory_id, 'None')}</select></label>` : ''}
+      ${peStuckHTML(s)}
       <label class="pe-check"><input type="checkbox" role="switch" data-pe-private${isPrivate ? ' checked' : ''}> Private</label>
       ${members}`;
+}
+
+/** The manager as a reader who may not change it sees it: the saved bot's name, with its state when it is not active. The
+    roster leaves archived bots out, so a saved bot it does not list is said to be no longer on the team. */
+function peManagerName(saved: string): string {
+  if (!saved) return 'Not set';
+  const bot = (S.emps || []).find(e => e.id === saved);
+  if (!bot) return 'A bot no longer on the team';
+  const botState = bot.state ?? bot.status;
+  return botState === 'active' ? botDisplayName(saved) : `${botDisplayName(saved)} (${botState})`;
+}
+
+/** The Pipeline Manager field. An owner or admin picks an active bot, or Not set; anyone else reads the name. A saved
+    manager that is not an active bot (archived, paused, planned or gone) shows as Not set, with a line saying so. */
+function peManagerHTML(state: PeState): string {
+  const bots = peBots();
+  const saved = (state.type.manager ?? '').replace(/^bot:/, '');
+  const current = bots.some(b => b.id === 'bot:' + saved) ? saved : '';
+  const stale = !!saved && !current;
+  if (!state.mayEdit) return `<span class="pe-readonly" data-pe-manager-readonly>${esc(peManagerName(saved))}</span>`;
+  const hint = `<span class="pe-hint">The bot that checks this pipeline's stuck tasks. Only active bots can be picked.</span>`;
+  const warn = stale ? `<span class="pe-hint pe-warn-line" data-pe-manager-stale>The saved manager is not an active bot. Pick one.</span>` : '';
+  if (!bots.length) return `<select data-pe-setting="manager_id" disabled><option value="">No active bots</option></select>${hint}${warn}`;
+  return `<select data-pe-setting="manager_id">${peWho(bots, current ? 'bot:' + current : '', 'Not set')}</select>${hint}${warn}`;
+}
+
+/** The stuck rule's three numbers: empty is the default, shown as the placeholder. */
+const PE_STUCK: [keyof PipelineSettings['stuck_rule_defaults'], string][] = [
+  ['stuck_after_hours', 'Stuck after (h)'],
+  ['ask_person_after_hours', 'Ask a person after (h)'],
+  ['question_expiry_days', 'Questions expire (days)'],
+];
+
+function peStuckHTML(s: PipelineSettings): string {
+  if (!s.stuck_rule_defaults) return '';
+  return PE_STUCK.map(([key, label]) => `<label class="pe-f"><span>${label}</span><input type="number" min="1" step="1" inputmode="numeric" value="${esc(String(s[key] ?? ''))}" placeholder="${esc(String(s.stuck_rule_defaults[key]))}" data-pe-number="${key}" autocomplete="off"></label>`).join('');
 }
 
 function peBodyHTML(state: PeState): string {
@@ -182,7 +228,7 @@ function peBodyHTML(state: PeState): string {
   return `<div class="pe-settings">
       <label class="pe-f"><span>Prefix</span><input name="prefix" maxlength="2" value="${esc(t.prefix ?? '')}" data-pe-setting="prefix" autocomplete="off"></label>
       <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'Not set', false)}</select></label>
-      <label class="pe-f"><span>Pipeline Manager</span><select data-pe-setting="manager_id">${peWho(peBots(), t.manager, 'Not set', false)}</select></label>
+      <label class="pe-f"><span>Pipeline Manager</span>${peManagerHTML(state)}</label>
       ${peGoalHTML(state)}
       ${from ? `<p class="pe-froms"><span>From</span> ${from}</p>` : ''}</div>
     <ol class="pe-stages">${t.steps.map((s, i) => peStageHTML(state, s, i, t.steps.length)).join('')}</ol>
@@ -340,6 +386,14 @@ async function peWarnSave(target: Element, stage: string, off: boolean): Promise
   await peReload();
 }
 
+async function peCapSave(target: Element, stage: string, off: boolean): Promise<void> {
+  const raw = target.closest('.pe-cap')?.querySelector<HTMLInputElement>('[data-pe-cap-n]')?.value.trim() ?? '';
+  const cap = off ? null : Number(raw);
+  if (!off && !(raw !== '' && Number.isInteger(cap) && (cap as number) >= 0)) { toast('Enter a whole number, 0 or more', true); return; }
+  try { await writeRequest('PATCH', peRoute(`/v2/pipeline-stages/${encodeURIComponent(stage)}`), {card_cap: cap}); if (PE) PE.cap = ''; } catch (e) { peFail(e); }
+  await peReload();
+}
+
 async function peClick(target: Element): Promise<void> {
   if (!PE) return;
   const hit = (attr: string): string | null => target.closest<HTMLElement>(`[${attr}]`)?.getAttribute(attr) ?? null;
@@ -347,6 +401,10 @@ async function peClick(target: Element): Promise<void> {
   if (warn) { PE.warn = PE.warn === warn ? '' : warn; peRender(); return; }
   const save = hit('data-pe-warn-save'), off = hit('data-pe-warn-off');
   if (save || off) { await peWarnSave(target, save ?? off ?? '', !save); return; }
+  const cap = hit('data-pe-cap');
+  if (cap) { PE.cap = PE.cap === cap ? '' : cap; peRender(); return; }
+  const capSave = hit('data-pe-cap-save'), capOff = hit('data-pe-cap-off');
+  if (capSave || capOff) { await peCapSave(target, capSave ?? capOff ?? '', !capSave); return; }
   const req = hit('data-pe-req');
   if (req) {
     const stage = [...PE.reqs.entries()].find(([, rs]) => rs.some(r => r.id === req))?.[0];
@@ -411,6 +469,8 @@ function peWire(dialog: HTMLDialogElement): void {
         void peSaveSettings({members: [...dialog.querySelectorAll<HTMLInputElement>('[data-pe-member]:checked')].map(box => box.value)});
         return;
       }
+      const number = t.dataset['peNumber'];
+      if (number) { const raw = t.value.trim(); void peSaveSettings({[number]: raw === '' ? null : Number(raw)}); return; }
       if (key) void peSetting(key, t.value);
       else if (renamed && PE) {
         const name = t.value.trim();

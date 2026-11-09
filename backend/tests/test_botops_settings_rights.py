@@ -4,10 +4,10 @@ release schedule, the Task Manager, stalled task check, the team's run budget, t
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
 
-from backend.tests.test_api import api, post  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import post  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
 
 def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(api, botops):

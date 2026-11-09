@@ -10,6 +10,12 @@ evals.factory.cases.freezes before anything imported scenarios): scenarios.SCENA
 from evals.factory.scenarios import SCENARIOS  # the built-ins: scenarios.py defines them before it imports this package
 
 # One line per case, in name order:  from .<name> import SCENARIOS as _<name>; SCENARIOS += _<name>
+from .ci_caps import SCENARIOS as _ci_caps
+
+SCENARIOS += _ci_caps
+from .close_stops_work import SCENARIOS as _close_stops_work
+
+SCENARIOS += _close_stops_work
 from .freezes import SCENARIOS as _freezes
 
 SCENARIOS += _freezes
@@ -49,3 +55,9 @@ SCENARIOS += _pipeline_review
 from .pipeline_manager import SCENARIOS as _pipeline_manager
 
 SCENARIOS += _pipeline_manager
+from .pipeline_marketing import SCENARIOS as _pipeline_marketing
+
+SCENARIOS += _pipeline_marketing
+from .pipeline_handoff import SCENARIOS as _pipeline_handoff
+
+SCENARIOS += _pipeline_handoff

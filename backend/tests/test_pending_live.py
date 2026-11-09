@@ -3,8 +3,8 @@
 from concurrent.futures import ThreadPoolExecutor
 
 from backend import events, meeting_items, meeting_audience
-from backend.tests.test_api import api, headers, get, restrict, unrelated_task_managers  # noqa: F401
-from backend.tests.test_meeting_items import record, add, change, push, items
+from backend.tests.helpers.api import headers, get, restrict, unrelated_task_managers  # noqa: F401
+from backend.tests.helpers.meeting_items import record, add, change, push, items
 
 
 def _reader_merges_edits_and_send_applies_final_fields_once(api):
@@ -139,7 +139,7 @@ def _stream_filters_and_one_gone_on_access_change(api):
 
 
 def _watch_notices_bot_access_revoked_without_task_change(api):
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(api, 'ben@acme.example')
     task = api.post(
@@ -165,7 +165,7 @@ def _watch_notices_bot_access_revoked_without_task_change(api):
 
 
 def _before_save_checks_private_live_audience_and_finalize_preserves_access(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     mid = post(api, 'live-meetings', {'title': 'Private live', 'visibility': 'private'})['id']
     post(api, f'live-meetings/{mid}/access', {'add': ['human:ben']})
@@ -195,7 +195,7 @@ def _before_save_checks_private_live_audience_and_finalize_preserves_access(api)
 
 
 def _doc_feature_and_bot_manager_are_inside_the_audience(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     mid = post(api, 'live-meetings', {'title': 'Private live', 'visibility': 'private'})['id']
     post(api, f'live-meetings/{mid}/bots', {'bots': ['ops']})
@@ -310,7 +310,7 @@ def _stale_save_and_send_return_current_without_overwriting_or_creating(api):
 
 
 def _participant_grants_end_with_removal_narrowing_and_discard(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     for action in ('remove', 'narrow', 'discard'):
         if action == 'narrow':
@@ -359,7 +359,7 @@ def _participant_grants_end_with_removal_narrowing_and_discard(api):
 
 
 def _sent_item_upload_survives_save_and_redacts_reference(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     tid = post(api, 'tasks', {'title': 'Already created', 'body': 'Words', 'owner': 'human:ana', 'private': True})['id']
     rid = record(api)
@@ -369,7 +369,7 @@ def _sent_item_upload_survives_save_and_redacts_reference(api):
 
 
 def _partial_save_reconciles_an_existing_task_without_creating_another(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     rid = record(api)
     item = add(api, rid, {'section': 'task', 'text': 'Created after partial Save'})['item']
@@ -424,7 +424,7 @@ def _presence_cleanup_is_bounded_and_meeting_delete_cleans_sessions(api):
 
 def _participant_queries_recheck_source_even_if_a_historical_grant_remains(api):
     from backend import meeting_audience
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     mid = post(api, 'live-meetings', {'title': 'Source', 'visibility': 'private'})['id']
     post(api, f'live-meetings/{mid}/access', {'add': ['human:ben']})
@@ -483,7 +483,7 @@ def _historical_grant_does_not_parse_string_participants_as_people(api):
 
 
 def _sent_link_and_legacy_item_provenance_both_follow_current_access(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     for keep in ('link', 'item'):
         rid = record(api, {'private': True, 'participants': ['ben@acme.example']})
@@ -511,7 +511,7 @@ def _sent_link_and_legacy_item_provenance_both_follow_current_access(api):
 
 def _historical_participants_flag_and_edit_route_share_the_effective_audience(api):
     from backend import learnings, updates
-    from backend.tests.test_api import post, setup_attempt
+    from backend.tests.helpers.api import post, setup_attempt
 
     _, _, attempt = setup_attempt(api)
     rid = record(api, {'private': True, 'audience': 'participants', 'notes': 'Confidential summary'})
@@ -580,7 +580,7 @@ def _recorder_adopts_a_task_sent_by_another_reader_after_partial_save(api):
 
 
 def _reader_cannot_use_sent_reconciliation_to_change_other_participant_access(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     source = record(api, {'private': True, 'participants': ['ben@acme.example', 'cara@acme.example']})
     item = add(api, source, {'section': 'task', 'text': 'Shared source', 'detail': {'owner': 'human:ana'}})['item']
@@ -602,7 +602,7 @@ def _reader_cannot_use_sent_reconciliation_to_change_other_participant_access(ap
 
 
 def _participant_revocation_keeps_every_remaining_saved_or_live_source(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     for origin in ('saved', 'live'):
         if origin == 'saved':

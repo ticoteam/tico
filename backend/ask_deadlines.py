@@ -18,6 +18,10 @@ the keeper's answer that closes the task done; its expiry closes it.
 2. Expire. A task a bot handed a person (owned by the person, requested by the bot: a Needs-you task, or the small
    subtask a question becomes) closes when the person has not touched it in EXPIRE_DAYS, unless it is due later or waits on
    someone else, and the bot hears why when it closes.
+3. The ceiling. A question task with no fallback date that is still open EXPIRE_DAYS after it was asked closes, whatever
+   its due date says: nothing asks a person for longer. The note says it expired and that the bot that asked should ask
+   again if it still matters. A question about a pipeline's work (the question task, its parent or the task it holds up
+   is on that pipeline) uses the pipeline's own days (task_types.question_expiry_days) when set (`expiry_days`).
 
 Nothing asks a person about a quiet task: a bot's quiet task is a line on its roundup (backend/task_roundup.py).
 """
@@ -27,7 +31,9 @@ from . import question_tasks as QT
 from . import team_rules
 from .batch_work import isolated
 
-EXPIRE_DAYS = 14
+# Days a question to a person stays open at most (docs/tasks.md, When nobody answers). A pipeline may set its own
+# (task_types.question_expiry_days); this is the default.
+EXPIRE_DAYS = 7
 # At most this many questions settled per sweep, oldest first: each one wakes a bot, so a backlog (the first sweep after
 # this shipped) reaches the bots over a few hours instead of all at once.
 BATCH = 25
@@ -39,6 +45,8 @@ ASKED_STATUSES = ("open", "waiting")
 
 
 def _name(conn, actor):
+    if actor == H.KEEPER:
+        return "Tico"  # a system check's question: the card names its asker Tico too
     row = (H.human(conn, H.actor_id(actor)) if H.is_human(actor) else H.bot(conn, H.actor_id(actor))) or {}
     return row.get("name") or H.actor_id(actor)
 
@@ -108,26 +116,74 @@ def _not_ahead(conn, person, default, spoke):
     return f"the team does not let bots go ahead on their own, so {default['do']} does not happen"
 
 
+def _pipeline_days(conn):
+    """{pipeline id: its own question expiry days}, for the pipelines that set one."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(task_types)")}
+    if "question_expiry_days" not in columns:
+        return {}
+    return {
+        str(r[0]): int(r[1])
+        for r in conn.execute("SELECT id, question_expiry_days FROM task_types WHERE question_expiry_days IS NOT NULL")
+        if int(r[1]) > 0
+    }
+
+
+def expiry_days(conn, row, days=None):
+    """How many days a question or ask on `row` stays open: the pipeline's own days when the row, its parent or the task
+    it holds up is on a pipeline that sets them (the row's own first), else EXPIRE_DAYS. `days` is _pipeline_days, read
+    once per sweep."""
+    from . import task_relations as TR
+
+    days = _pipeline_days(conn) if days is None else days
+    if not days:
+        return EXPIRE_DAYS
+    types = [row.get("type_id")]
+    for other in [TR.parent_of(conn, row["id"]), *TR.blocked_ids(conn, row["id"])]:
+        found = conn.execute("SELECT type_id FROM tasks WHERE id=?", (other,)).fetchone() if other else None
+        types.append(found[0] if found else None)
+    return next((days[str(t)] for t in types if t and str(t) in days), EXPIRE_DAYS)
+
+
+def _expired_question(conn, row, at, days):
+    """Whether an open question task with no fallback date has been open its expiry days (the ceiling)."""
+    asked = QT.asked_at(row)
+    return bool(asked and H.parse_ts(asked)) and H.shift(at, days=-expiry_days(conn, row, days)) >= str(asked)
+
+
 def sweep(conn, at=None):
-    """Go ahead on, or close, every dated question whose date passed, and close tasks handed to people. Returns
-    {"went_ahead": [...], "expired": [...], "closed": [...]}: task ids."""
+    """Go ahead on, or close, every dated question whose date passed, close every question open its expiry days, and
+    close tasks handed to people. Returns {"went_ahead": [...], "expired": [...], "closed": [...]}: task ids."""
     at = at or H.now()
     rules = team_rules.load(conn)
-    expiry = H.shift(at, days=-EXPIRE_DAYS)
+    days = _pipeline_days(conn)
+    expiry = H.shift(at, days=-min([EXPIRE_DAYS, *days.values()]))
     done = {"went_ahead": [], "expired": [], "closed": []}
     settled = lambda: sum(len(v) for v in done.values())
     # A question task closes on its date: the default goes ahead as the keeper's answer, or the question closes and
     # the bot hears why.
     from . import question_tasks
 
-    for row in question_tasks.open_rows(conn):
+    for row in question_tasks.open_rows(conn, keeper=True):
         if settled() >= BATCH:
             return done
         asked = question_tasks.as_ask(row)
         default = asked["refs"].get("if_no_answer") or {}
         closes = fallback_at(asked, rules)
-        if not closes or closes > at:
-            continue  # no date: still_needed sends it back in the weekday batch
+        if not closes:
+            # No date: still_needed sends it back in the weekday batch, and nothing stays open past its expiry days.
+            if _expired_question(conn, row, at, days):
+                with isolated(conn, "ask_deadlines", row["id"]):
+                    question_tasks.expire(
+                        conn,
+                        row,
+                        f"No answer from {_name(conn, row['owner_id'])} in {expiry_days(conn, row, days)} days, so "
+                        f"this question expired and closed. {_name(conn, row['requester_id'])}: ask again if it "
+                        "still matters.",
+                    )
+                    done["expired"].append(row["id"])
+            continue
+        if closes > at:
+            continue
         person, bot = row["owner_id"], row["requester_id"]
         spoke = last_word(conn, person, asked, row)
         with isolated(conn, "ask_deadlines", row["id"]):
@@ -150,12 +206,13 @@ def sweep(conn, at=None):
                 "it was for, or ask again if it still matters.",
             )
             done["expired"].append(row["id"])
-    for task in handed_to_people(conn, expiry, at):
+    for task in handed_to_people(conn, expiry, at, days):
         if settled() >= BATCH:
             break
         with isolated(conn, "ask_deadlines", task["id"]):
             note = (
-                f"No answer from {_name(conn, task['owner_id'])} in {EXPIRE_DAYS} days, so this ask expired and "
+                f"No answer from {_name(conn, task['owner_id'])} in {expiry_days(conn, task, days)} days, so this ask "
+                "expired and "
                 f"closed. {_name(conn, task['requester_id'])}: drop the work it was for, or ask again if it still matters."
             )
             H.task_close(conn, H.KEEPER, task["id"], note, strict=False)
@@ -164,16 +221,18 @@ def sweep(conn, at=None):
     return done
 
 
-def handed_to_people(conn, expiry, at=None):
+def handed_to_people(conn, expiry, at=None, days=None):
     """Tasks a bot handed a person that the person has not touched since `expiry`: owned by them, requested by a bot,
     still open or waiting (on nobody or that bot), not due later, not on a numbered board, not set aside until a date, and
-    not a due-date routine's occurrence (its day is its deadline, whoever owns it now), and not a question task."""
+    not a due-date routine's occurrence (its day is its deadline, whoever owns it now), not a question task, and not a card
+    On ice (D69): a parked card is never late, and only a person takes it out."""
     marks = ",".join("?" * len(ASKED_STATUSES))
     rows = H._rows(
         conn.execute(
             f"SELECT t.* FROM {H.TASKS} t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
             "AND t.owner_id LIKE 'human:%' AND t.requester_id LIKE 'bot:%' AND t.created_at<? AND coalesce(y.numbered,0)=0 "
             "AND t.occurrence IS NULL AND t.questions IS NULL "  # a question task closes on its own dates, above
+            f"AND NOT {H.ON_ICE % 't'} "
             "ORDER BY t.created_at",
             (*ASKED_STATUSES, expiry),
         )
@@ -194,6 +253,8 @@ def handed_to_people(conn, expiry, at=None):
             "UNION ALL SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id=?)",
             (row["id"], person, row["conversation_id"], person),
         ).fetchone()[0]
-        if not touched or touched < expiry:
+        # `expiry` is the earliest cut any pipeline asks for; each task keeps its own days.
+        own = H.shift(at or H.now(), days=-expiry_days(conn, row, days)) if days else expiry
+        if not touched or touched < own:
             out.append(row)
     return out

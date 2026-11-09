@@ -7,6 +7,7 @@ from fastapi import Request
 from pydantic import ValidationError
 from . import ask_ingest
 from . import pipeline_rights
+from . import task_relations as TR
 import json
 from . import org_rule_check
 from . import task_privacy as privacy
@@ -38,6 +39,7 @@ def register(
         names nothing, or more than BULK_CAP matches, is refused."""
         named = (
             f.owner,
+            f.exclude_owner,
             f.requester,
             f.status not in (None, "", "all") or None,
             f.label,
@@ -68,12 +70,26 @@ def register(
             exact=True,
             viewer=who.task_actor or who.actor,
         )
+        exclude_owner = None
+        if f.exclude_owner:
+            # An owner who is nobody would exclude nothing and widen the filter to every task, so it is refused.
+            exclude_owner = H.resolve_actor(c, f.exclude_owner)
+            if not exclude_owner:
+                raise Problem("exclude_owner", "exclude_owner is a person or a bot on the roster", 422)
         # The members-only rule too (pipeline_rights.list_sql): a non-member selects none of a hidden pipeline's tickets.
         visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
         if f.ids is not None:
             _, found = task_idents(c, who, ",".join(f.ids), visible_sql)
             filters["ids"] = [tid for tid in found.values() if tid]
-        rows = H.tasks(c, owner=owner, requester=requester, limit=BULK_CAP + 1, visible=visible_sql, **filters)
+        rows = H.tasks(
+            c,
+            owner=owner,
+            exclude_owner=exclude_owner,
+            requester=requester,
+            limit=BULK_CAP + 1,
+            visible=visible_sql,
+            **filters,
+        )
         if len(rows) > BULK_CAP:
             raise Problem(
                 "too_many",
@@ -106,11 +122,28 @@ def register(
         changed = [key for key in labels if key not in drop] + add
         return None if changed == labels else M.TaskUpdate(**base, labels=changed)
 
+    def bulk_finishes(c, row, body):
+        """Whether `body` (M.TaskBulk) finishes the task `row`: a close, a status of done, or a move into a done or closed
+        step. A finish retires the task's open subtasks with it (H.task_update's cascade)."""
+        if body.action == "close" or body.action == "status" and body.status == "done":
+            return True
+        if body.action != "step":
+            return False
+        steps = (H.type_get(c, row.get("type_id") or H.GENERAL_TYPE) or {}).get("steps") or []
+        target = next((s for s in steps if s["id"] == body.step), None) or next(
+            (s for s in steps if s["name"] == body.step), None
+        )
+        # Between two done (or two closed) steps is no finish: the single update moves it without the cascade.
+        return bool(target) and target["status"] in ("done", "closed") and target["status"] != row["status"]
+
     @app.post("/api/v2/task-bulk")
     def task_bulk(request: Request, body: M.TaskBulk):
         """One change to every task a filter selects (the filters of `GET /api/v2/tasks`), each made as its single
         update would be: a task the caller may not change is skipped with the reason, the rest still change. A dry
-        run makes every change and rolls all of them back, so its counts are the real ones."""
+        run makes every change and rolls all of them back, so its counts are the real ones, with one exception: it
+        does not run the org rule check (a judge call per task, whose spend a rollback cannot take back). A task a rule
+        would hold therefore counts as changed in a dry run and as held in the real run. The same holds for a parent
+        whose open subtask a rule would hold: the real run skips the parent, and a dry run counts it as changed."""
         caller = request.state.identity
         auth.domain(caller)
         with store.read() as c:
@@ -184,11 +217,22 @@ def register(
             # Chosen again under the write lock, so each task is judged as it is now.
             ids = bulk_select(c, caller, body.filter)
             changed, unchanged, skipped, judged = [], [], [], {}
+            # A close (or any finish: done, a done or closed step) takes a task's open subtasks with it. Each subtask the
+            # change does not close is still open when its parent is reached, and the parent's cascade would end it too,
+            # so the parent is skipped. Subtasks are judged first (deepest first), so that check reads what the loop
+            # actually did with each one: left out, held by its rule check, refused or invalid.
+            position = {tid: i for i, tid in enumerate(ids)}
+            order = sorted(ids, key=lambda tid: -len(TR.ancestors(c, tid)))
+            opened = (
+                {tid for tid in ids if (H.task(c, tid) or {}).get("status") != "closed"}
+                if body.action == "close"
+                else set()
+            )
             # Work queued to run after commit (a webhook's doorbell) goes with the rows a rollback takes back.
             queued = len(c.after_commit)
             if body.dry_run:
                 c.execute("SAVEPOINT bulk_dry_run")
-            for tid in ids:
+            for tid in order:
                 row = H.task(c, tid)
                 try:
                     change = bulk_change(c, row, body)
@@ -196,8 +240,22 @@ def register(
                     skipped.append((tid, "invalid", exc.errors()[0]["msg"]))
                     continue
                 if change is None:
-                    unchanged.append(tid)
+                    (changed if tid in opened else unchanged).append(tid)
                     continue
+                if bulk_finishes(c, row, body):
+                    # Open here means the change did not close it: not selected (filter or readability), held by its
+                    # rule check, refused or invalid. Finishing this task would end each of them through the cascade.
+                    left = [k["id"] for k in H.descendants(c, tid) if k["status"] in H.ACTIVE_STATUSES]
+                    if left:
+                        skipped.append(
+                            (
+                                tid,
+                                "subtasks_left_out",
+                                "Some of its open subtasks did not close in this change (left out, held or refused), "
+                                "so finishing it would end them too. Close them first, or take this task out of the change",
+                            )
+                        )
+                        continue
                 c.execute("SAVEPOINT bulk_task")
                 before = len(c.after_commit)
                 try:
@@ -239,6 +297,9 @@ def register(
                     changed.append(tid)
                     if done.get("ingest"):
                         judged[tid] = done["ingest"]  # what ask ingest did with this handoff, and why
+            # Named in the order the caller gave them, whatever order they were judged in.
+            changed.sort(key=position.__getitem__)
+            skipped.sort(key=lambda entry: position[entry[0]])
             # A handoff judged for a task this change did not land names its call: refused, or unchanged.
             held_tids, refused_tids = {t for t, code, *_ in skipped if code == "held"}, {t for t, *_ in skipped}
             for tid, verdict in ingests.items():

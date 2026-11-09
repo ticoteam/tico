@@ -2,51 +2,15 @@
 for an active bot; a defer rides along only on a turn in its own session; new tasks, chat messages and notes take the
 same words; the older names still work."""
 
-from datetime import datetime, timedelta, timezone
-
 import pytest
 
 from backend import delivery
-from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_mcp import call
-from backend.tests.test_tasks_board import bot_token
+from backend.tests.helpers.api import claim, get, headers, post
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.tasks_board import bot_token
 from clients import hubcli, hubtools
-
-
-def setup(api):
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    return machine
-
-
-def rows(api, **where):
-    sql = " AND ".join(f"{k}=?" for k in where) or "1"
-    with api.app.state.store.read() as c:
-        return [
-            dict(r)
-            for r in c.execute(f"SELECT * FROM deferrals WHERE {sql} ORDER BY created_at", tuple(where.values()))
-        ]
-
-
-def job_of(api, message_id):
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT id,state FROM jobs WHERE message_id=?", (message_id,)).fetchone()
-    return tuple(row) if row else None
-
-
-def tick(api, minutes):
-    """One scheduler pass `minutes` from now, by a new Scheduler, as after a restart."""
-    Scheduler(api.app.state.store, api.app.state.execution).tick(
-        datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    )
-
-
-def fired(api):
-    with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT target FROM events WHERE action=?", (delivery.EVENT,))]
+from backend.tests.helpers.delivery import fired, job_of, rows, setup, tick
 
 
 def test_a_deadline_starts_one_run_for_its_session_once(api):
@@ -264,7 +228,9 @@ def test_an_open_tasks_deferred_comment_still_fires(api):
 
 
 @pytest.mark.parametrize("state", ("queued", "running"))
-def test_closing_a_task_cancels_only_its_spent_deadline_runs(api, state):
+def test_closing_a_task_cancels_its_queued_runs_but_not_a_shared_deadline_run(api, state):
+    """Closing a task stops the bot work on it (docs/tasks.md): its queued runs are canceled, its own deferred run
+    included. A deadline run shared with another open task stays queued until that task closes too."""
     setup(api)
     first, second = [
         post(
@@ -289,7 +255,7 @@ def test_closing_a_task_cancels_only_its_spent_deadline_runs(api, state):
         H.task_close(c, "human:ana", first["id"], quiet=True)
     assert rows(api, item=held["id"])[0]["how"] == "moot"
     assert job_of(api, held["id"])[1] == ("canceled" if state == "queued" else state)
-    assert job_of(api, ordinary["id"])[1] == "queued"
+    assert job_of(api, ordinary["id"])[1] == "canceled"
     assert job_of(api, shared)[1] == "queued"
     assert rows(api, item=second["id"])[0]["settled_at"] is None
     with api.app.state.store.transaction() as c:

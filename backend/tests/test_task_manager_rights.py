@@ -5,8 +5,8 @@ import json
 import pytest
 
 from backend import hubdb as H, task_relations as TR
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401
-from backend.tests.test_api import hold
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import hold
 from backend import bot_settings as BS
 
 
@@ -58,7 +58,21 @@ def change(api, task, token, **fields):
     return post(api, 'tasks/' + task['id'], {'version': current['version'], **fields}, token=token)
 
 
-def test_manager_updates_every_field_and_is_named_in_history(api, manager):
+def test_a_manager_of_either_kind_changes_closes_and_labels_but_gains_no_more(api, manager, subtests):
+    """One install per manager kind: every field, close and reopen, the outsider's refusal, labels with the mover and
+    publish gates, and no named approval. Each check makes its own tasks."""
+    for check in (
+        _manager_updates_every_field_and_is_named_in_history,
+        _requester_manager_closes_reopens_owner_manager_cannot_close,
+        _nonmanager_unchanged_and_refusal_names_managers,
+        _manager_classifies_labels_but_keeps_mover_and_publish_gates,
+        _task_management_never_grants_a_named_approval,
+    ):
+        with subtests.test(check.__name__):
+            check(api, manager)
+
+
+def _manager_updates_every_field_and_is_named_in_history(api, manager):
     token, actor = manager
     for fields, field in [
         ({'status': 'doing'}, 'status'),
@@ -89,7 +103,50 @@ def test_manager_updates_every_field_and_is_named_in_history(api, manager):
             ), field
 
 
-def test_manager_changes_step_and_preserves_review_checks(api, bot_manager):
+def test_a_bot_manager_acts_for_its_reports_on_their_tasks(api, bot_manager, subtests):
+    """One install: the bot manager's step, comment, relation, link, snooze, defer, finish and run-now rights on its
+    reports' tasks, and the role and comment rights it does not get. Each check makes its own tasks, in file order."""
+    report = bot_token(api, 'ops')  # the report's own lease, for the role-holder and run-now checks
+    checks = [
+        (_manager_changes_step_and_preserves_review_checks, ()),
+        (_manager_comment_wakes_owner_without_mention, ()),
+        (_requester_manager_comment_wakes_owner_with_requester_permissions, ()),
+        (_manager_blockers_stale_link_and_reparent, ()),
+        (_manager_reparent_preserves_ancestor_blocker_guard, (False,)),
+        (_manager_reparent_preserves_ancestor_blocker_guard, (True,)),
+        (_manager_snoozes_and_defers_its_reports_task, ()),
+        (_manager_finishing_report_subtask_returns_result_to_parent_once, ()),
+        (_role_holder_keeps_snooze_right_without_lending_it_to_manager, (report,)),
+        (_manager_run_now_and_waiting_person, ()),
+        (_manager_cannot_edit_or_delete_another_authors_comment, ()),
+    ]
+    for check, extra in checks:
+        saved = _save_chart(api)
+        try:
+            with subtests.test(check.__name__, args=extra):
+                check(api, bot_manager, *extra)
+        finally:
+            _restore_chart(api, saved)  # each check meets the fixture's chart: ops -> cpo -> Ben, no middle layer
+
+
+def _save_chart(api):
+    """Every bot's reporting line and ops' declaration, as the check found them."""
+    with api.app.state.store.read() as c:
+        return dict(c.execute('SELECT bot, reports_to FROM bot_config').fetchall()), BS.read(c, 'ops')
+
+
+def _restore_chart(api, saved):
+    """Put back what `_save_chart` read. A bot a check added (the comment check's `middle`) reports to nobody after
+    it, so no fixture bot's chain runs through it."""
+    lines, ops = saved
+    with api.app.state.store.transaction() as c:
+        for bot, reports_to in c.execute('SELECT bot, reports_to FROM bot_config').fetchall():
+            if lines.get(bot) != reports_to:
+                c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (lines.get(bot), bot))
+        BS.write(c, 'ops', ops)
+
+
+def _manager_changes_step_and_preserves_review_checks(api, bot_manager):
     token, actor = bot_manager
     with api.app.state.store.transaction() as c:
         typ = H.type_create(
@@ -119,7 +176,7 @@ def test_manager_reads_both_private_parties_in_detail_list_sql_and_loses_access(
     assert owned['id'] not in {t['id'] for t in get(api, 'tasks', token=token)['tasks']}
 
 
-def test_manager_comment_wakes_owner_without_mention(api, bot_manager):
+def _manager_comment_wakes_owner_without_mention(api, bot_manager):
     token, actor = bot_manager
     task = make(api)
     # The manager is not the direct boss: add a second bot layer for bot and human cases.
@@ -140,7 +197,7 @@ def test_manager_comment_wakes_owner_without_mention(api, bot_manager):
         assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
-def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, bot_manager):
+def _requester_manager_comment_wakes_owner_with_requester_permissions(api, bot_manager):
     token, actor = bot_manager
     task = make(api, owner='bot:cmo', requester='bot:ops')
     result = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the packet.'}, token=token)
@@ -151,7 +208,7 @@ def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, b
         assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
-def test_manager_blockers_stale_link_and_reparent(api, bot_manager):
+def _manager_blockers_stale_link_and_reparent(api, bot_manager):
     token, actor = bot_manager
     task = make(api)
     blocker = make(api, private=False)
@@ -175,8 +232,7 @@ def test_manager_blockers_stale_link_and_reparent(api, bot_manager):
         )
 
 
-@pytest.mark.parametrize('descendant_blocked', [False, True])
-def test_manager_reparent_preserves_ancestor_blocker_guard(api, bot_manager, descendant_blocked):
+def _manager_reparent_preserves_ancestor_blocker_guard(api, bot_manager, descendant_blocked):
     token, _ = bot_manager
     parent = make(api)
     child = make(api)
@@ -196,7 +252,7 @@ def test_manager_reparent_preserves_ancestor_blocker_guard(api, bot_manager, des
         assert TR.parent_of(c, child['id']) == parent['id']
 
 
-def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manager):
+def _requester_manager_closes_reopens_owner_manager_cannot_close(api, manager):
     token, actor = manager
     owned = make(api)
     # The owner bot cannot close what a person asked for, so neither can its manager, bot or non-mover person.
@@ -219,7 +275,7 @@ def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manage
         )
 
 
-def test_manager_snoozes_and_defers_its_reports_task(api, bot_manager):
+def _manager_snoozes_and_defers_its_reports_task(api, bot_manager):
     token, actor = bot_manager
     task = make(api)
     snoozed = post(api, 'tasks/' + task['id'] + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token)
@@ -230,7 +286,7 @@ def test_manager_snoozes_and_defers_its_reports_task(api, bot_manager):
     post(api, 'tasks/' + task['id'] + '/defer', {'at': '2027-01-01T00:00:00Z'}, token=token)
 
 
-def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, bot_manager):
+def _manager_finishing_report_subtask_returns_result_to_parent_once(api, bot_manager):
     token, actor = bot_manager
     parent = make(api, owner='bot:cmo', requester='human:priya', private=False)
     child = make(api, requester='bot:cmo', private=False, parent_id=parent['id'])
@@ -261,9 +317,8 @@ def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, bot
         )
 
 
-def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, bot_manager):
+def _role_holder_keeps_snooze_right_without_lending_it_to_manager(api, bot_manager, report):
     token, _ = bot_manager
-    report = bot_token(api, 'ops')
     task = make(api, owner='bot:cmo', requester='human:priya', private=False)
     with api.app.state.store.transaction() as c:
         from backend.task_roles import set_roles
@@ -279,17 +334,16 @@ def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, bot_m
     assert post(api, path + '/unsnooze', {}, token=report)['holds'] == []
 
 
-def test_manager_run_now_and_waiting_person(api, bot_manager):
+def _manager_run_now_and_waiting_person(api, bot_manager):
     token, actor = bot_manager
-    bot_token(api, 'ops')  # report has a current assigned computer
-    task = make(api)
+    task = make(api)  # the report has a current assigned computer (its lease, taken by the caller)
     post(api, 'tasks/' + task['id'] + '/run-now', {}, token=token)
     with api.app.state.store.transaction() as c:
         H.task_update(c, actor, task['id'], status='waiting', waiting_on='ana', note='Choose the packet format.')
         assert any(e['actor'] == actor and e['field'] == 'status' for e in H.task_history(c, task['id']))
 
 
-def test_nonmanager_unchanged_and_refusal_names_managers(api, manager):
+def _nonmanager_unchanged_and_refusal_names_managers(api, manager):
     _, _ = manager
     outsider = bot_token(api, 'cmo')
     private = make(api)
@@ -302,7 +356,7 @@ def test_nonmanager_unchanged_and_refusal_names_managers(api, manager):
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider, expected=403)
 
 
-def test_manager_cannot_edit_or_delete_another_authors_comment(api, bot_manager):
+def _manager_cannot_edit_or_delete_another_authors_comment(api, bot_manager):
     token, _ = bot_manager
     task = make(api)
     with api.app.state.store.transaction() as c:
@@ -322,7 +376,7 @@ def test_cycles_and_current_org_changes_do_not_keep_inherited_authority(api, man
     get(api, 'tasks/' + task['id'], token=token, expected=404)
 
 
-def test_manager_classifies_labels_but_keeps_mover_and_publish_gates(api, manager):
+def _manager_classifies_labels_but_keeps_mover_and_publish_gates(api, manager):
     token, _ = manager
     task = make(api)
     with api.app.state.store.transaction() as c:
@@ -337,7 +391,7 @@ def test_manager_classifies_labels_but_keeps_mover_and_publish_gates(api, manage
         assert response.status_code in (403, 422), response.text
 
 
-def test_task_management_never_grants_a_named_approval(api, manager):
+def _task_management_never_grants_a_named_approval(api, manager):
     token, _ = manager
     task = make(api)
     with api.app.state.store.transaction() as c:

@@ -5,48 +5,14 @@ the older `team` and `department` fields follow group membership, and access lis
 nested in it.
 """
 
-import json
-
 from backend import groups as Groups
 from backend import people as P
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import get, post
 from backend import bot_settings as BS
+from backend.tests.helpers.groups import add_bots, group, roster_of, send, set_roster
 
 EVERYONE = {"everyone": True, "people": [], "teams": [], "bots": []}
-
-
-def send(api, method, path, body=None, token="ana-test", expected=200):
-    r = api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def group(api, gid, token="ana-test"):
-    return next(row for row in get(api, "groups", token=token) if row["id"] == gid)
-
-
-def roster_of(api):
-    with api.app.state.store.read() as c:
-        return json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-
-
-def set_roster(api, doc):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
-
-
-def add_bots(c, **bots):
-    """{slug: (config, reports_to)}: bots straight into the database."""
-    for slug, (config, reports_to) in bots.items():
-        if not H.bot(c, slug):
-            c.execute(
-                "INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,'active',?)",
-                (slug, slug, slug, "", H.now()),
-            )
-        c.execute("DELETE FROM bot_config WHERE bot=?", (slug,))
-        c.execute("INSERT INTO bot_config(bot,owner_id,reports_to) VALUES(?,?,?)", (slug, "ana", reports_to))
-        BS.write(c, slug, {"name": slug, "runtime": "fake", "model": "m", "host": "keeper", **config})
 
 
 def teams_now(api):
@@ -200,3 +166,35 @@ def test_teams_org_groups_and_person_teams_become_groups_and_no_bot_changes_grou
     with api.app.state.store.transaction() as c:
         assert Groups.migrate(c, api.app.state.store.settings) is True
     assert roster_of(api) == once and teams_now(api) == before
+
+
+# ----------------------------------------------------------------------------- the Built-in group
+def test_the_built_in_group_is_kept_by_tico_and_setup_puts_built_in_bots_in_it(api):
+    with api.app.state.store.transaction() as c:
+        add_bots(c, botops=({"template": "botops"}, None))
+        Groups.place(c, api.app.state.store.settings, ["botops"])
+    assert group(api, "built-in")["name"] == "Built-in"
+    assert teams_now(api)["botops"] == "built-in"
+    send(api, "PATCH", "groups/built-in", {"name": "Helpers"}, expected=422)
+    send(api, "DELETE", "groups/built-in", expected=422)
+    send(api, "POST", "groups", {"name": "Marketing", "add": {"bots": ["botops"]}}, expected=422)  # by hand: never
+    assert teams_now(api)["botops"] == "built-in"
+
+
+def test_move_bot_puts_a_bot_in_a_group_the_caller_made(api):
+    send(api, "POST", "groups", {"name": "Corporate"})
+    with api.app.state.store.transaction() as c:
+        add_bots(c, cpo=({}, "human:ana"))
+        Groups.move_bot(c, "cpo", "corporate")
+    assert teams_now(api)["cpo"] == "corporate"
+
+
+def test_migration_puts_the_built_in_bots_in_the_built_in_group_and_no_one_else(api):
+    doc = {"default_user": "ana", "people": [{"id": "ana", "email": "ana@acme.example"}], "org_groups": {}}
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM bot_config")
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
+        add_bots(c, botops=({"template": "botops"}, None), cmo=({}, None))
+        assert Groups.migrate(c, api.app.state.store.settings) is True
+    assert teams_now(api) == {"botops": "built-in", "cmo": None}
+    assert group(api, "built-in")["name"] == "Built-in"

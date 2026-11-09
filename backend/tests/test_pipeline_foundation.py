@@ -4,59 +4,20 @@ never write; the rights helper follows the owner and admins; and a stage with no
 
 import sqlite3
 from contextlib import closing
-from pathlib import Path
 
 import pytest
 
 from backend import access
 from backend import hubdb as H
 from backend import pipeline_engine, pipeline_rights
-from backend.config import Settings
-from backend.store import Store
+from backend.tests.helpers.pipeline_foundation import ANA, T, boot, hub, insert, rows, step_id
 
-ANA = "human:ana"
-T = "2026-11-07T09:00:00.000000Z"
-FIXTURES = Path(__file__).parent / "fixtures"
 F0 = (
     "20261107163621_pipeline_columns",
     "20261107163622_pipeline_tables",
     "20261107163623_pipeline_stage_visits",
     "20261107164247_pipeline_factories",
 )
-
-
-def boot(path):
-    Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
-
-
-def hub(path):
-    c = H.connect(path)
-    H.sync_registry(
-        c,
-        {},
-        {
-            "people": [
-                {"id": "ana", "email": "ana@acme.example"},
-                {"id": "ben", "email": "ben@acme.example"},
-                {"id": "chris", "email": "chris@acme.example"},
-            ]
-        },
-    )
-    return c
-
-
-def rows(c, sql, *args):
-    return [dict(r) for r in c.execute(sql, args).fetchall()]
-
-
-def step_id(c, type_id, name):
-    return c.execute("SELECT id FROM task_steps WHERE type_id=? AND name=?", (type_id, name)).fetchone()[0]
-
-
-def insert(c, table, **values):
-    columns = ", ".join(values)
-    marks = ", ".join("?" for _ in values)
-    c.execute(f"INSERT INTO {table} ({columns}) VALUES ({marks})", tuple(values.values()))
 
 
 def state(path):
@@ -262,7 +223,7 @@ def test_a_stage_with_no_requirements_moves_exactly_as_before(tmp_path):
     assert [(s["old"], s["new"]) for s in steps][-2:] == [(drafting, editing), (editing, drafting)]
     for table in ("stage_visits", "stage_decisions", "requirement_attachments", "review_claims", "pipeline_links"):
         assert c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
-    assert pipeline_engine.check_move(c, ANA, dict(task), editing) is None
+    assert pipeline_engine.check_move(c, ANA, dict(task), editing) is False  # no cap, so no move is over one
     assert pipeline_engine.dots_many(c, [dict(task)]) == {}
     c.close()
 
