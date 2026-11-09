@@ -86,7 +86,7 @@ const isRecurringTask = (t: TaskRow) => !!t.routine_id || /from schedule/.test(S
 const hasFiles = (i: TaskRow) => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
 type PartialTaskRow = Partial<TaskRow> & {owner?: string};   // a person's page passes only the owner to needsWho
-const taskFinished = (t: PartialTaskRow | null | undefined) => ['done', 'closed'].includes(String(t?.status || ''));
+const taskFinished = (t: Partial<Pick<TaskRow, 'status'>> | null | undefined) => ['done', 'closed'].includes(String(t?.status || ''));
 function taskAskToPerson(t: PartialTaskRow | null | undefined) {
   return !!(t?.ask?.body && actorPerson(t.ask.recipient_id));
 }
@@ -336,13 +336,13 @@ function parseServerTime(value: string | null | undefined) {
 function shortDay(at: Date) {
   return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
 }
-function occurrenceDay(t: TaskRow | null | undefined): Date | null {
+function occurrenceDay(t: {occurrence?: string | null; due_at?: string | null} | null | undefined): Date | null {
   const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due_at || '');
   if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
   const [y, mo, d] = m[1]!.split('-').map(Number);
   return new Date(y!, mo! - 1, d!);
 }
-function taskDueInfo(t: TaskRow | null | undefined) {
+function taskDueInfo(t: (Partial<Pick<TaskRow, 'due_at' | 'occurrence' | 'status'>> & {owner_id?: string | null}) | null | undefined) {
   if (!t?.due_at || taskFinished(t)) return null;
   const at = parseServerTime(t.due_at); if (!at) return null;
   const shown = occurrenceDay(t) || new Date(at);
@@ -385,7 +385,7 @@ function taskChipsHTML(t: TaskRow | null | undefined, opts: {tags?: boolean; max
   return (opts.tags === false ? '' : rowTagChips(t, opts.maxTags)) + prStateBadge(taskPRState(t)) + taskVerdictHTML(t) + subProgressChip(t) + dueChip(t) + snoozeChip(t);
 }
 // A face for an actor: a bot's avatar, a person's photo or initials.
-function actorFace(actor: string, size = 18) {
+function actorFace(actor: string | null | undefined, size = 18) {
   const slug = actorSlug(actor), pid = actorPerson(actor);
   if (slug) return avatar(slug, size, stateOf(slug));
   if (pid) {
