@@ -11,11 +11,12 @@ import pytest
 import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, demo_seed, hubdb, pipeline_engine
+from backend import demo, demo_seed, hubdb, judge, pipeline_engine
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
 from backend.app import create_app
+from clients import judge as J
 
 NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)  # a Friday evening: the week is complete
 ROSTER = {slug for slug, _template, _parent in D.BOTS}
@@ -69,12 +70,25 @@ def real_clock_at(patch, moment):
     patch.setattr(U, "datetime", clock)
 
 
+def no_answering_judge(patch):
+    """Both builds see the same decision model: one that never answers. The seed app is not a demo, so the server's
+    model would be asked for real while the company is seeded, and what the provider gives back (a refused made-up key,
+    or no answer in time) depends on the run. The rule check reads the model through the module, so that is what is
+    replaced; its `judge.call` row and `rules.unchecked` event are still written, the same in both builds."""
+
+    def engine(state, questions, label=None, level=None):
+        raise J.JudgeError("unavailable", "the test's decision model does not answer")
+
+    patch.setattr(judge, "server_engine", lambda *args, **kwargs: engine)
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     """Two builds of the same date, back to back, read before any app has opened either database. The machine's clock
     crosses 07:00 UTC (a usage-limit window edge) between them: the first build runs just after it, the second just
-    before."""
+    before. Both see the same decision model (`no_answering_judge`)."""
     with pytest.MonkeyPatch.context() as patch:
+        no_answering_judge(patch)
         real_clock_at(patch, datetime(2026, 11, 6, 7, 0, 1, tzinfo=timezone.utc))
         first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
         rows = stored(first.db_path)
