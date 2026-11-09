@@ -152,6 +152,8 @@ include them, such as "mine too" or "everything". Tasks owned by bots are includ
 more than 200 tasks is split into parts; each part is counted, and the total is given before you say yes. Each task it
 closes is listed under [Undo](#undo), where it can be reopened.
 
+A status you name closes only the tasks in that status: "close all the done ones" closes only done tasks. With no status, pipeline or owner named, it uses the open statuses: open, doing, waiting, review and ready. A split of more than 200 follows the status you named, one status at a time, and never widens to other statuses.
+
 **Never on your words.** These stay a Confirm card, or your own tap in Tico or Settings, whatever you ask
 (`NEVER` in backend/assistant.py lists the routes): a personal token, service key, stored credential or its grants,
 enrollment, runner or agent pairing, a password, a reader's invite, single sign-on and the directory's SCIM token; owner
