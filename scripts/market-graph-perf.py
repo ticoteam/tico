@@ -125,7 +125,16 @@ def main():
     data['api'] = api
     (out / 'fixtures.json').write_text(json.dumps(data))
     # The page's TypeScript at the baseline, compiled the way `npm run build:ui` compiles it (the same esbuild and flags).
-    source = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:ui/market-page.ts'], cwd=ROOT)
+    # The graph moved to ui/market-page-graph.ts; a baseline from before that has it in market-page.ts.
+    source = b'\n'.join(
+        subprocess.run(
+            ['git', 'show', f'{args.baseline_ref}:{path}'],
+            cwd=ROOT,
+            capture_output=True,
+            check=path == 'ui/market-page.ts',
+        ).stdout
+        for path in ('ui/market-page.ts', 'ui/market-page-graph.ts')
+    )
     before = subprocess.check_output(
         [str(ROOT / 'node_modules' / '.bin' / 'esbuild'), '--loader=ts', '--target=esnext', '--charset=utf8'],
         cwd=ROOT,
