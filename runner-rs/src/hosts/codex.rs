@@ -13,7 +13,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::oneshot;
 
-use super::{command_program, event, failed, hub_mcp_server, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
+use super::{
+    command_program, event, failed, hub_mcp_server, is_limit, shell_outside_actions,
+    shell_reads_only, tool_summary, Events, HostError, Settings,
+};
 use crate::env::Env;
 use crate::util::{iso, log, py_dumps, text_of};
 
@@ -22,28 +25,69 @@ const START_TIMEOUT: u64 = 60;
 /// How long a compaction may take (it summarises the whole transcript with the model).
 const COMPACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(540);
 const ENV_SKIP: &[&str] = &[
-    "PWD", "OLDPWD", "SHLVL", "_", "TMPDIR", "XPC_SERVICE_NAME", "XPC_FLAGS", "__CF_USER_TEXT_ENCODING", "TERM_SESSION_ID", "SSH_AUTH_SOCK",
+    "PWD",
+    "OLDPWD",
+    "SHLVL",
+    "_",
+    "TMPDIR",
+    "XPC_SERVICE_NAME",
+    "XPC_FLAGS",
+    "__CF_USER_TEXT_ENCODING",
+    "TERM_SESSION_ID",
+    "SSH_AUTH_SOCK",
 ];
 const ENV_MAX_VALUE: usize = 8000;
 const NOOP_COMMAND: &str = "/usr/bin/true";
 /// Thread items that are not tool calls. Any other item type, including one added later, is reported as a tool,
 /// because an unreported call would let a stopped run look safe to repeat.
 const NOT_TOOLS: &[&str] = &[
-    "userMessage", "hookPrompt", "agentMessage", "plan", "reasoning", "subAgentActivity",
-    "enteredReviewMode", "exitedReviewMode", "contextCompaction", "sleep",
+    "userMessage",
+    "hookPrompt",
+    "agentMessage",
+    "plan",
+    "reasoning",
+    "subAgentActivity",
+    "enteredReviewMode",
+    "exitedReviewMode",
+    "contextCompaction",
+    "sleep",
 ];
 
 /// A tool item's name and what it acts on: the files it changes or the program it runs, never its arguments.
 fn tool_of(item: &Value) -> (String, String) {
     let kind = item["type"].as_str().unwrap_or_default();
-    let named = |key: &str| item[key].as_str().filter(|t| !t.is_empty()).unwrap_or(kind).to_string();
+    let named = |key: &str| {
+        item[key]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .unwrap_or(kind)
+            .to_string()
+    };
     match kind {
-        "commandExecution" => ("shell".into(), command_program(item["command"].as_str().unwrap_or_default())),
+        "commandExecution" => (
+            "shell".into(),
+            command_program(item["command"].as_str().unwrap_or_default()),
+        ),
         "fileChange" => {
-            let paths: Vec<&str> = item["changes"].as_array().into_iter().flatten().filter_map(|c| c["path"].as_str()).collect();
-            ("apply_patch".into(), tool_summary(&json!({"path": paths.join(" ")})))
+            let paths: Vec<&str> = item["changes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["path"].as_str())
+                .collect();
+            (
+                "apply_patch".into(),
+                tool_summary(&json!({"path": paths.join(" ")})),
+            )
         }
-        "mcpToolCall" => (format!("mcp__{}__{}", text_of(&item["server"]), text_of(&item["tool"])), String::new()),
+        "mcpToolCall" => (
+            format!(
+                "mcp__{}__{}",
+                text_of(&item["server"]),
+                text_of(&item["tool"])
+            ),
+            String::new(),
+        ),
         "dynamicToolCall" | "collabAgentToolCall" => (named("tool"), String::new()),
         // An output with no call item of its own still means a call ran.
         "functionCallOutput" => match item["namespace"].as_str().filter(|n| !n.is_empty()) {
@@ -51,15 +95,35 @@ fn tool_of(item: &Value) -> (String, String) {
             None => (named("name"), String::new()),
         },
         "webSearch" => ("web_search".into(), String::new()),
-        "imageView" => ("view_image".into(), tool_summary(&json!({"path": item["path"]}))),
+        "imageView" => (
+            "view_image".into(),
+            tool_summary(&json!({"path": item["path"]})),
+        ),
         _ => (kind.to_string(), String::new()),
     }
+}
+
+/// The app server's extra skill roots for a turn: its staged company skills folder's `<name>/SKILL.md` folder
+/// (crate::company_skills::skills_root), a folder of the runner's own state. Never a folder under CODEX_HOME, which
+/// may be the operator's own.
+pub fn skill_roots(settings: &Settings) -> Vec<String> {
+    settings
+        .company_skills
+        .iter()
+        .map(|dir| {
+            crate::company_skills::skills_root(std::path::Path::new(dir))
+                .display()
+                .to_string()
+        })
+        .collect()
 }
 
 /// The `set` table for `shell_environment_policy`: the bot's environment, trimmed.
 pub fn env_for_config(env: &Env) -> Map<String, Value> {
     env.iter()
-        .filter(|(k, v)| !ENV_SKIP.contains(&k.as_str()) && v.len() <= ENV_MAX_VALUE && !v.contains('\0'))
+        .filter(|(k, v)| {
+            !ENV_SKIP.contains(&k.as_str()) && v.len() <= ENV_MAX_VALUE && !v.contains('\0')
+        })
         .map(|(k, v)| (k.clone(), json!(v)))
         .collect()
 }
@@ -70,8 +134,12 @@ pub fn mcp_disable_config(codex_home: Option<&str>) -> Map<String, Value> {
         .map(String::from)
         .or_else(|| std::env::var("CODEX_HOME").ok().filter(|h| !h.is_empty()))
         .unwrap_or_else(|| format!("{}/.codex", std::env::var("HOME").unwrap_or_default()));
-    let Ok(text) = std::fs::read_to_string(format!("{home}/config.toml")) else { return Map::new() };
-    let Ok(doc) = text.parse::<toml::Table>() else { return Map::new() };
+    let Ok(text) = std::fs::read_to_string(format!("{home}/config.toml")) else {
+        return Map::new();
+    };
+    let Ok(doc) = text.parse::<toml::Table>() else {
+        return Map::new();
+    };
     let mut out = Map::new();
     if let Some(toml::Value::Table(servers)) = doc.get("mcp_servers") {
         for (name, s) in servers {
@@ -83,7 +151,14 @@ pub fn mcp_disable_config(codex_home: Option<&str>) -> Map<String, Value> {
                 Some(_) => true,
                 None => false,
             };
-            out.insert(name.clone(), if has_command { json!({"command": NOOP_COMMAND, "args": []}) } else { json!({"startup_timeout_ms": 1}) });
+            out.insert(
+                name.clone(),
+                if has_command {
+                    json!({"command": NOOP_COMMAND, "args": []})
+                } else {
+                    json!({"startup_timeout_ms": 1})
+                },
+            );
         }
     }
     if out.is_empty() {
@@ -98,6 +173,7 @@ pub fn mcp_disable_config(codex_home: Option<&str>) -> Map<String, Value> {
 type Reply = Result<Value, Value>;
 
 struct Shared {
+    allocation: super::Allocation,
     tx: Events,
     env: Env,
     base_config: Map<String, Value>,
@@ -106,7 +182,8 @@ struct Shared {
     next_id: AtomicI64,
     alive: AtomicBool,
     child: Mutex<Option<(super::Stopper, Arc<AtomicBool>)>>,
-    exited: tokio::sync::Mutex<Option<oneshot::Receiver<std::io::Result<std::process::ExitStatus>>>>,
+    exited:
+        tokio::sync::Mutex<Option<oneshot::Receiver<std::io::Result<std::process::ExitStatus>>>>,
     /// True once the app-server process this host last started has been reaped. Never taken by `stop`, so it still
     /// tells after a stop that was cut off (`running`, `stop_and_reap`).
     reaped: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
@@ -124,6 +201,8 @@ struct Shared {
     /// Threads being compacted before a turn (`compact`): None until the app server says how it ended.
     compacting: Mutex<HashMap<String, Option<Result<(), String>>>>,
     compacted: tokio::sync::Notify,
+    /// The extra skill roots this app server was last given (`set_skill_roots`); empty is Codex's own default.
+    skill_roots: Mutex<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -133,6 +212,7 @@ impl CodexHost {
     /// A host for a subscription profile: the servers silenced are the ones in that profile's config.toml.
     pub fn on_home(env: Env, tx: Events, codex_home: Option<&str>) -> CodexHost {
         CodexHost(Arc::new(Shared {
+            allocation: super::Allocation::default(),
             tx,
             env,
             base_config: mcp_disable_config(codex_home),
@@ -152,6 +232,7 @@ impl CodexHost {
             capture: Mutex::new(None),
             compacting: Mutex::new(HashMap::new()),
             compacted: tokio::sync::Notify::new(),
+            skill_roots: Mutex::new(Vec::new()),
         }))
     }
 
@@ -177,12 +258,29 @@ impl CodexHost {
             self.stop_and_reap().await;
         }
         let mut command = crate::isolation::command("codex");
-        command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&self.0.env);
-        let mut child = command.spawn().map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
-        let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
-        let stdout = child.stdout.take().ok_or_else(|| failed("codex app-server has no stdout"))?;
+        command
+            .arg("app-server")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_clear()
+            .envs(&self.0.env);
+        super::new_group(&mut command);
+        let mut child = command
+            .spawn()
+            .map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
+        self.0.allocation.mark();
+        let _stderr =
+            crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| failed("codex app-server has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();
-        log(&format!("codex: app-server started pid {}", child.id().map_or("?".into(), |p| p.to_string())));
+        log(&format!(
+            "codex: app-server started pid {}",
+            child.id().map_or("?".into(), |p| p.to_string())
+        ));
         let (stopper, exited) = super::own(child);
         // `exited` resolves once; whether it has is kept here for `alive`.
         let gone = Arc::new(AtomicBool::new(false));
@@ -191,7 +289,9 @@ impl CodexHost {
         let flag = gone.clone();
         let diagnostics = self.0.tx.clone();
         tokio::spawn(async move {
-            let status = exited.await.unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
+            let status = exited
+                .await
+                .unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
             _stderr.drained().await;
             let code = super::return_code(&status);
             let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
@@ -224,7 +324,12 @@ impl CodexHost {
             }
         });
         let info = json!({"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"});
-        self.request("initialize", json!({"clientInfo": info, "capabilities": {"experimentalApi": true}}), START_TIMEOUT).await?;
+        self.request(
+            "initialize",
+            json!({"clientInfo": info, "capabilities": {"experimentalApi": true}}),
+            START_TIMEOUT,
+        )
+        .await?;
         self.notify("initialized", json!({})).await
     }
 
@@ -243,7 +348,12 @@ impl CodexHost {
     /// Whether the app-server process is still there, answering or not: from its start until it is reaped. `alive`
     /// is about the protocol and turns false sooner (stdout closed, a stop begun), while the process can live on.
     pub fn running(&self) -> bool {
-        self.0.reaped.lock().unwrap().as_ref().is_some_and(|r| !*r.borrow())
+        self.0
+            .reaped
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|r| !*r.borrow())
     }
 
     /// `stop`, then wait until the process has been reaped. Safe after a stop that was cut off: that stop's TERM and
@@ -254,6 +364,10 @@ impl CodexHost {
         if let Some(mut reaped) = reaped {
             let _ = reaped.wait_for(|gone| *gone).await;
         }
+    }
+
+    pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.0.allocation.track(turn);
     }
 
     pub fn alive(&self) -> bool {
@@ -275,7 +389,9 @@ impl CodexHost {
             c.sent(&line);
         }
         let mut stdin = self.0.stdin.lock().await;
-        let Some(s) = stdin.as_mut() else { return Err(failed("codex app-server stdin closed")) };
+        let Some(s) = stdin.as_mut() else {
+            return Err(failed("codex app-server stdin closed"));
+        };
         if let Err(e) = async {
             s.write_all(line.as_bytes()).await?;
             s.flush().await
@@ -288,7 +404,8 @@ impl CodexHost {
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), HostError> {
-        self.write(&json!({"jsonrpc": "2.0", "method": method, "params": params})).await
+        self.write(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
+            .await
     }
 
     #[cfg(test)]
@@ -296,11 +413,19 @@ impl CodexHost {
         self.0.next_id.load(Ordering::SeqCst)
     }
 
-    pub async fn request(&self, method: &str, params: Value, timeout: u64) -> Result<Value, HostError> {
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: u64,
+    ) -> Result<Value, HostError> {
         let id = self.0.next_id.fetch_add(1, Ordering::SeqCst) + 1;
         let (tx, rx) = oneshot::channel();
         self.0.pending.lock().unwrap().insert(id, tx);
-        if let Err(e) = self.write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})).await {
+        if let Err(e) = self
+            .write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+            .await
+        {
             self.0.pending.lock().unwrap().remove(&id);
             return Err(e);
         }
@@ -312,7 +437,11 @@ impl CodexHost {
             Ok(Err(_)) => Err(failed(format!("{method}: codex app-server exited"))),
             Ok(Ok(Ok(result))) => Ok(result),
             Ok(Ok(Err(err))) => {
-                let text = err["message"].as_str().filter(|m| !m.is_empty()).map(String::from).unwrap_or_else(|| err.to_string());
+                let text = err["message"]
+                    .as_str()
+                    .filter(|m| !m.is_empty())
+                    .map(String::from)
+                    .unwrap_or_else(|| err.to_string());
                 Err(failed(format!("{method}: {text}")))
             }
         }
@@ -324,7 +453,10 @@ impl CodexHost {
         match (id, method) {
             (Some(id), None) => {
                 // A response to one of our requests.
-                if let Some(slot) = id.as_i64().and_then(|i| self.0.pending.lock().unwrap().remove(&i)) {
+                if let Some(slot) = id
+                    .as_i64()
+                    .and_then(|i| self.0.pending.lock().unwrap().remove(&i))
+                {
                     let _ = slot.send(match msg.get("error") {
                         Some(e) => Err(e.clone()),
                         None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
@@ -336,7 +468,11 @@ impl CodexHost {
                 let _ = self.write(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "the runner answers no requests"}})).await;
             }
             (None, method) => {
-                let p = msg.get("params").filter(|p| p.is_object()).cloned().unwrap_or(json!({}));
+                let p = msg
+                    .get("params")
+                    .filter(|p| p.is_object())
+                    .cloned()
+                    .unwrap_or(json!({}));
                 self.on_notification(method.as_deref().unwrap_or_default(), &p);
             }
         }
@@ -352,32 +488,63 @@ impl CodexHost {
                 // from the first one.
                 let thread = &p["thread"];
                 let spawned = &thread["source"]["subAgent"]["thread_spawn"]["parent_thread_id"];
-                let parent = thread["parentThreadId"].as_str().or(spawned.as_str()).unwrap_or_default();
+                let parent = thread["parentThreadId"]
+                    .as_str()
+                    .or(spawned.as_str())
+                    .unwrap_or_default();
                 let child = text_of(&thread["id"]);
                 if !parent.is_empty() && !child.is_empty() && child != parent {
                     let mut children = self.0.children.lock().unwrap();
-                    let root = children.get(parent).cloned().unwrap_or_else(|| parent.to_string());
+                    let root = children
+                        .get(parent)
+                        .cloned()
+                        .unwrap_or_else(|| parent.to_string());
                     children.insert(child, root);
                 }
             }
             "turn/started" => {
                 let started = p["turn"]["id"].as_str().map(String::from);
-                if tid.as_ref().is_some_and(|tid| self.0.children.lock().unwrap().contains_key(tid)) {
+                if tid
+                    .as_ref()
+                    .is_some_and(|tid| self.0.children.lock().unwrap().contains_key(tid))
+                {
                     return; // a subagent's turn: the parent's turn is still the one running
                 }
                 if let (Some(tid), Some(s)) = (&tid, &started) {
-                    self.0.active_turn.lock().unwrap().insert(tid.clone(), s.clone());
+                    self.0
+                        .active_turn
+                        .lock()
+                        .unwrap()
+                        .insert(tid.clone(), s.clone());
                     self.0.tools_sent.lock().unwrap().clear();
                 }
                 // `tool_events`: this run reports every tool call, so a run with none provably called none.
-                self.emit(event("status", t, started.as_deref(), json!({"state": "active", "tool_events": true})));
-                if tid.as_ref().is_some_and(|tid| self.0.confirmed.lock().unwrap().insert(tid.clone())) {
+                self.emit(event(
+                    "status",
+                    t,
+                    started.as_deref(),
+                    json!({"state": "active", "tool_events": true}),
+                ));
+                if tid
+                    .as_ref()
+                    .is_some_and(|tid| self.0.confirmed.lock().unwrap().insert(tid.clone()))
+                {
                     // A new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
-                    self.emit(event("thread_confirmed", t, started.as_deref(), json!({"session_id": t})));
+                    self.emit(event(
+                        "thread_confirmed",
+                        t,
+                        started.as_deref(),
+                        json!({"session_id": t}),
+                    ));
                 }
             }
             "item/agentMessage/delta" => {
-                self.emit(event("delta", t, u, json!({"text": p["delta"].as_str().unwrap_or_default()})));
+                self.emit(event(
+                    "delta",
+                    t,
+                    u,
+                    json!({"text": p["delta"].as_str().unwrap_or_default()}),
+                ));
             }
             "item/started" => self.on_item(false, p),
             "item/completed" => {
@@ -436,7 +603,10 @@ impl CodexHost {
             }
             "turn/completed" => {
                 let done = &p["turn"];
-                let finished = done["id"].as_str().map(String::from).or_else(|| tid.as_ref().and_then(|t| self.0.active_turn.lock().unwrap().get(t).cloned()));
+                let finished = done["id"].as_str().map(String::from).or_else(|| {
+                    tid.as_ref()
+                        .and_then(|t| self.0.active_turn.lock().unwrap().get(t).cloned())
+                });
                 if let Some(tid) = &tid {
                     self.0.active_turn.lock().unwrap().remove(tid);
                 }
@@ -446,44 +616,109 @@ impl CodexHost {
                 }
                 // The turn a compaction runs as ends it: well, or with the reason it did not.
                 match done["status"].as_str().unwrap_or("completed") {
-                    "failed" => self.compaction_ended(t, Err(done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the compaction failed").to_string())),
-                    "interrupted" => self.compaction_ended(t, Err("the compaction was interrupted".into())),
+                    "failed" => self.compaction_ended(
+                        t,
+                        Err(done["error"]["message"]
+                            .as_str()
+                            .filter(|m| !m.is_empty())
+                            .unwrap_or("the compaction failed")
+                            .to_string()),
+                    ),
+                    "interrupted" => {
+                        self.compaction_ended(t, Err("the compaction was interrupted".into()))
+                    }
                     _ => self.compaction_ended(t, Ok(())),
                 }
                 if done["status"] == "failed" {
-                    let msg = with_kind(&done["error"], done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the turn failed").to_string());
-                    self.emit(event("turn_failed", t, finished.as_deref(), json!({"limit": is_limit(&msg), "error": msg})));
+                    let msg = with_kind(
+                        &done["error"],
+                        done["error"]["message"]
+                            .as_str()
+                            .filter(|m| !m.is_empty())
+                            .unwrap_or("the turn failed")
+                            .to_string(),
+                    );
+                    self.emit(event(
+                        "turn_failed",
+                        t,
+                        finished.as_deref(),
+                        json!({"limit": is_limit(&msg), "error": msg}),
+                    ));
                 } else {
-                    let status = done["status"].as_str().filter(|s| !s.is_empty()).unwrap_or("completed");
-                    self.emit(event("turn_completed", t, finished.as_deref(), json!({"status": status})));
+                    let status = done["status"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("completed");
+                    self.emit(event(
+                        "turn_completed",
+                        t,
+                        finished.as_deref(),
+                        json!({"status": status}),
+                    ));
                 }
             }
             "error" => {
                 let err = &p["error"];
-                let msg = with_kind(err, err["message"].as_str().filter(|m| !m.is_empty()).map(String::from).unwrap_or_else(|| py_dumps(err).chars().take(500).collect()));
+                let msg = with_kind(
+                    err,
+                    err["message"]
+                        .as_str()
+                        .filter(|m| !m.is_empty())
+                        .map(String::from)
+                        .unwrap_or_else(|| py_dumps(err).chars().take(500).collect()),
+                );
                 let will_retry = crate::util::truthy(p.get("willRetry"));
-                let fresh = turn.as_ref().is_some_and(|x| !self.0.done_turns.lock().unwrap().contains(x));
+                let fresh = turn
+                    .as_ref()
+                    .is_some_and(|x| !self.0.done_turns.lock().unwrap().contains(x));
                 if turn.is_some() && !will_retry && fresh {
-                    self.0.done_turns.lock().unwrap().insert(turn.clone().unwrap());
+                    self.0
+                        .done_turns
+                        .lock()
+                        .unwrap()
+                        .insert(turn.clone().unwrap());
                     if let Some(tid) = &tid {
                         self.0.active_turn.lock().unwrap().remove(tid);
                     }
-                    self.emit(event("turn_failed", t, u, json!({"error": msg, "limit": is_limit(&msg)})));
+                    self.emit(event(
+                        "turn_failed",
+                        t,
+                        u,
+                        json!({"error": msg, "limit": is_limit(&msg)}),
+                    ));
                 } else {
-                    self.emit(event("error", t, u, json!({"error": msg, "limit": is_limit(&msg)})));
+                    self.emit(event(
+                        "error",
+                        t,
+                        u,
+                        json!({"error": msg, "limit": is_limit(&msg)}),
+                    ));
                 }
             }
             "thread/goal/updated" => {
                 let goal = &p["goal"];
                 let status = crate::goals::codex_status(goal);
                 if ["active", "paused", "met", "stopped"].contains(&status.as_str()) {
-                    let note = goal["note"].as_str().filter(|n| !n.is_empty()).map(|n| json!(n)).unwrap_or_else(|| {
-                        if status == "stopped" { goal.get("status").cloned().unwrap_or(json!("")) } else { json!("") }
-                    });
+                    let note = goal["note"]
+                        .as_str()
+                        .filter(|n| !n.is_empty())
+                        .map(|n| json!(n))
+                        .unwrap_or_else(|| {
+                            if status == "stopped" {
+                                goal.get("status").cloned().unwrap_or(json!(""))
+                            } else {
+                                json!("")
+                            }
+                        });
                     self.emit(event("goal", t, None, json!({"status": status, "objective": goal.get("objective").cloned().unwrap_or(Value::Null), "note": note})));
                 }
             }
-            "thread/goal/cleared" => self.emit(event("goal", t, None, json!({"status": "cleared", "note": ""}))),
+            "thread/goal/cleared" => self.emit(event(
+                "goal",
+                t,
+                None,
+                json!({"status": "cleared", "note": ""}),
+            )),
             "thread/compacted" => self.compaction_ended(t, Ok(())),
             _ => {} // hook/*, mcpServer/*, turn/plan, warnings: nothing to do
         }
@@ -504,14 +739,26 @@ impl CodexHost {
             Some(_) => self.0.active_turn.lock().unwrap().get(&thread).cloned(),
             None => p["turnId"].as_str().map(String::from),
         };
-        let (t, u) = (Some(thread.as_str()).filter(|t| !t.is_empty()), turn.as_deref());
+        let (t, u) = (
+            Some(thread.as_str()).filter(|t| !t.is_empty()),
+            turn.as_deref(),
+        );
         let mut adopt = |child: &str| {
             if !child.is_empty() && child != thread {
-                self.0.children.lock().unwrap().insert(child.to_string(), thread.clone());
+                self.0
+                    .children
+                    .lock()
+                    .unwrap()
+                    .insert(child.to_string(), thread.clone());
             }
         };
         if kind == "collabAgentToolCall" {
-            item["receiverThreadIds"].as_array().into_iter().flatten().filter_map(Value::as_str).for_each(&mut adopt);
+            item["receiverThreadIds"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .for_each(&mut adopt);
         }
         if kind == "subAgentActivity" {
             let child = text_of(&item["agentThreadId"]);
@@ -522,13 +769,31 @@ impl CodexHost {
                 "interrupted" => "interrupted",
                 _ => return,
             };
-            if !self.0.tools_sent.lock().unwrap().insert(format!("agent:{child}:{status}")) {
+            if !self
+                .0
+                .tools_sent
+                .lock()
+                .unwrap()
+                .insert(format!("agent:{child}:{status}"))
+            {
                 return;
             }
             let subagent = json!({"id": child, "parent_id": sub, "type": item.get("agentPath").cloned().unwrap_or(Value::Null),
                                   "model": item.get("model").cloned().unwrap_or(Value::Null), "status": status});
-            self.emit(event("tool", t, u, json!({"tool": "subagent", "status": status, "item_id": format!("agent:{child}"),
-                                                 "parent_id": sub, "subagent": subagent})));
+            self.emit(event(
+                "tool",
+                t,
+                u,
+                json!({"tool": "subagent", "status": status, "item_id": format!("agent:{child}"),
+                                                 "parent_id": sub, "subagent": subagent}),
+            ));
+            return;
+        }
+        if kind == "userMessage" {
+            // The input this runner sent, never a subagent's.
+            if sub.is_none() {
+                self.selected_skills(item, t, u);
+            }
             return;
         }
         if kind.is_empty() || NOT_TOOLS.contains(&kind) {
@@ -545,7 +810,13 @@ impl CodexHost {
                 _ => "completed",
             }
         };
-        if !self.0.tools_sent.lock().unwrap().insert(format!("{id}:{status}")) {
+        if !self
+            .0
+            .tools_sent
+            .lock()
+            .unwrap()
+            .insert(format!("{id}:{status}"))
+        {
             return;
         }
         let (name, summary) = tool_of(item);
@@ -554,26 +825,83 @@ impl CodexHost {
             fields["summary"] = json!(summary);
         }
         if kind == "commandExecution" && item["command"].is_string() {
-            fields["outside_actions"] = json!(shell_outside_actions(item["command"].as_str().unwrap()));
+            let command = item["command"].as_str().unwrap();
+            fields["outside_actions"] = json!(shell_outside_actions(command));
+            fields["reads_only"] = json!(shell_reads_only(command));
         }
         self.emit(event("tool", t, u, fields));
+    }
+
+    /// A `Skill` call, shaped as Claude's (hosts/claude.rs), for each skill the turn's input selects by name: a `skill`
+    /// input item, which the app server echoes in the turn's userMessage item. It is Codex's only explicit selection
+    /// signal: a `$name` in the text is resolved inside Codex with no event, and a SKILL.md the model reads is not a
+    /// selection, so neither is counted. Only the skill's name leaves the computer, for the company's usage counts
+    /// (backend/skill_runtime.py); the call ends as it starts, since the skill is loaded with the input.
+    fn selected_skills(&self, item: &Value, t: Option<&str>, u: Option<&str>) {
+        let id = text_of(&item["id"]);
+        if id.is_empty() {
+            return;
+        }
+        for input in item["content"].as_array().into_iter().flatten() {
+            let Some(name) = input["name"]
+                .as_str()
+                .filter(|n| input["type"] == "skill" && crate::company_skills::name_ok(n))
+            else {
+                continue;
+            };
+            let call = format!("skill:{id}:{name}");
+            if !self
+                .0
+                .tools_sent
+                .lock()
+                .unwrap()
+                .insert(format!("{call}:started"))
+            {
+                continue;
+            }
+            self.emit(event("tool", t, u, json!({"tool": "Skill", "status": "started", "item_id": call, "summary": "", "parent_id": null, "skill": name})));
+            self.0
+                .tools_sent
+                .lock()
+                .unwrap()
+                .insert(format!("{call}:completed"));
+            self.emit(event(
+                "tool",
+                t,
+                u,
+                json!({"tool": "Skill", "status": "completed", "item_id": call, "parent_id": null}),
+            ));
+        }
     }
 
     /// The tokens one report adds: the first in this process counts `last`, later ones what the total grew by.
     fn token_increment(&self, thread: &str, usage: &Value) -> Value {
         let fields = |row: &Value| -> [i64; 3] {
             let c = |k: &str| match &row[k] {
-                Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0).max(0),
+                Value::Number(n) => n
+                    .as_i64()
+                    .or_else(|| n.as_f64().map(|f| f as i64))
+                    .unwrap_or(0)
+                    .max(0),
                 Value::String(s) => s.trim().parse::<i64>().unwrap_or(0).max(0),
                 _ => 0,
             };
             [c("inputTokens"), c("cachedInputTokens"), c("outputTokens")]
         };
         let (total, last) = (fields(&usage["total"]), fields(&usage["last"]));
-        let before = self.0.token_seen.lock().unwrap().insert(thread.into(), total);
+        let before = self
+            .0
+            .token_seen
+            .lock()
+            .unwrap()
+            .insert(thread.into(), total);
         let inc = match before {
             None => last,
-            Some(b) => [(total[0] - b[0]).max(0), (total[1] - b[1]).max(0), (total[2] - b[2]).max(0)],
+            Some(b) => [
+                (total[0] - b[0]).max(0),
+                (total[1] - b[1]).max(0),
+                (total[2] - b[2]).max(0),
+            ],
         };
         json!({"input": inc[0], "cached": inc[1], "output": inc[2]})
     }
@@ -582,22 +910,59 @@ impl CodexHost {
         let mut cfg = self.0.base_config.clone();
         let env = env_for_config(&settings.env);
         if !env.is_empty() {
-            cfg.insert("shell_environment_policy".into(), json!({"inherit": "core", "set": env}));
+            cfg.insert(
+                "shell_environment_policy".into(),
+                json!({"inherit": "core", "set": env}),
+            );
         }
         // The hub's own MCP server rides next to the stubbed operator ones.
-        let mut servers = cfg.get("mcp_servers").and_then(|s| s.as_object()).cloned().unwrap_or_default();
-        crate::mcp::codex_merge(&mut servers, crate::mcp::codex_config(&settings.mcp_servers, &settings.env, &self.0.env));
+        let mut servers = cfg
+            .get("mcp_servers")
+            .and_then(|s| s.as_object())
+            .cloned()
+            .unwrap_or_default();
+        crate::mcp::codex_merge(
+            &mut servers,
+            crate::mcp::codex_config(&settings.mcp_servers, &settings.env, &self.0.env),
+        );
         if let Some(hub) = hub_mcp_server(&settings.env) {
             servers.insert("hub".into(), hub);
         }
         if !servers.is_empty() {
             cfg.insert("mcp_servers".into(), Value::Object(servers));
         }
-        cfg.insert("model_auto_compact_token_limit".into(), json!(super::compact_at(&settings.compact_at)));
+        cfg.insert(
+            "model_auto_compact_token_limit".into(),
+            json!(super::compact_at(&settings.compact_at)),
+        );
         // No memory under this computer's CODEX_HOME, even where the operator's config.toml turns it on: a bot
         // remembers in its repository's memory/ (Dev 301).
         cfg.insert("features.memories".into(), json!(false));
-        let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never", "sandbox": "danger-full-access"});
+        if settings.packet_only {
+            // Retain the disabled operator-server entries from base_config.
+            for feature in [
+                "shell_tool",
+                "multi_agent",
+                "multi_agent_v2",
+                "image_generation",
+                "view_image",
+                "skill_search",
+                "tool_suggest",
+                "sleep_tool",
+                "hooks",
+                "plugins",
+                "apps",
+            ] {
+                cfg.insert(format!("features.{feature}"), json!(false));
+            }
+            cfg.insert("tools.view_image".into(), json!(false));
+            cfg.insert("apps._default.enabled".into(), json!(false));
+            cfg.insert("project_doc_max_bytes".into(), json!(0));
+            cfg.insert("features.apply_patch_freeform".into(), json!(false));
+            cfg.insert("web_search".into(), json!("disabled"));
+        }
+        let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never",
+            "sandbox": if settings.packet_only { "read-only" } else { "danger-full-access" }});
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
             params["model"] = json!(m);
         }
@@ -605,32 +970,88 @@ impl CodexHost {
         params
     }
 
-    pub async fn start_thread(&self, bot: &str, settings: &Settings) -> Result<String, HostError> {
-        let res = self.request("thread/start", self.thread_params(settings), START_TIMEOUT).await?;
-        res["thread"]["id"].as_str().filter(|t| !t.is_empty()).map(String::from).ok_or_else(|| failed(format!("thread/start for {bot} returned no thread id")))
+    /// Gives the app server the turn's staged company skills as its extra skill roots (`skills/extraRoots/set`, Codex
+    /// 0.136 and later), or takes them away. The call holds for the whole app-server process, which runs this one
+    /// turn, so it is sent only when the roots change. It never fails the turn: an app server without it runs the turn
+    /// without company skills.
+    async fn set_skill_roots(&self, settings: &Settings) {
+        let roots = skill_roots(settings);
+        if *self.0.skill_roots.lock().unwrap() == roots {
+            return;
+        }
+        match self
+            .request(
+                "skills/extraRoots/set",
+                json!({"extraRoots": roots}),
+                START_TIMEOUT,
+            )
+            .await
+        {
+            Ok(_) => *self.0.skill_roots.lock().unwrap() = roots,
+            Err(e) => log(&format!("codex: running without company skills: {e}")),
+        }
     }
 
-    pub async fn resume_thread(&self, thread_id: &str, settings: &Settings) -> Result<String, HostError> {
+    pub async fn start_thread(&self, bot: &str, settings: &Settings) -> Result<String, HostError> {
+        self.set_skill_roots(settings).await;
+        let res = self
+            .request("thread/start", self.thread_params(settings), START_TIMEOUT)
+            .await?;
+        res["thread"]["id"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .map(String::from)
+            .ok_or_else(|| failed(format!("thread/start for {bot} returned no thread id")))
+    }
+
+    pub async fn resume_thread(
+        &self,
+        thread_id: &str,
+        settings: &Settings,
+    ) -> Result<String, HostError> {
+        self.set_skill_roots(settings).await;
         let mut params = self.thread_params(settings);
         params["threadId"] = json!(thread_id);
         params["excludeTurns"] = json!(true);
         let res = self.request("thread/resume", params, START_TIMEOUT).await?;
-        Ok(res["thread"]["id"].as_str().filter(|t| !t.is_empty()).unwrap_or(thread_id).to_string())
+        Ok(res["thread"]["id"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .unwrap_or(thread_id)
+            .to_string())
     }
 
     /// A thread this host started a turn on (`turn/started`); None before.
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {
-        self.0.confirmed.lock().unwrap().contains(thread_id).then(|| thread_id.to_string())
+        self.0
+            .confirmed
+            .lock()
+            .unwrap()
+            .contains(thread_id)
+            .then(|| thread_id.to_string())
     }
 
-    pub async fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub async fn start_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         let mut params = json!({"threadId": thread_id, "input": [{"type": "text", "text": text}]});
         if let Some(e) = effort.filter(|e| !e.is_empty()) {
             params["effort"] = json!(e);
         }
         let res = self.request("turn/start", params, REQUEST_TIMEOUT).await?;
-        let turn = res["turn"]["id"].as_str().filter(|t| !t.is_empty()).map(String::from).ok_or_else(|| failed("turn/start returned no turn id"))?;
-        self.0.active_turn.lock().unwrap().insert(thread_id.into(), turn.clone());
+        let turn = res["turn"]["id"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .map(String::from)
+            .ok_or_else(|| failed("turn/start returned no turn id"))?;
+        self.0
+            .active_turn
+            .lock()
+            .unwrap()
+            .insert(thread_id.into(), turn.clone());
         Ok(turn)
     }
 
@@ -640,35 +1061,74 @@ impl CodexHost {
             .map(|_| ())
     }
 
-    pub async fn start_goal(&self, thread_id: &str, action: &str, objective: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub async fn start_goal(
+        &self,
+        thread_id: &str,
+        action: &str,
+        objective: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         let thread = json!({"threadId": thread_id});
         match action {
             "clear" => {
-                self.request("thread/goal/clear", thread, REQUEST_TIMEOUT).await?;
+                self.request("thread/goal/clear", thread, REQUEST_TIMEOUT)
+                    .await?;
                 Ok(self.control_completed(thread_id))
             }
             "pause" => {
-                if self.request("thread/goal/set", json!({"threadId": thread_id, "status": "paused"}), REQUEST_TIMEOUT).await.is_err() {
-                    self.request("thread/goal/clear", thread, REQUEST_TIMEOUT).await?;
+                if self
+                    .request(
+                        "thread/goal/set",
+                        json!({"threadId": thread_id, "status": "paused"}),
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .is_err()
+                {
+                    self.request("thread/goal/clear", thread, REQUEST_TIMEOUT)
+                        .await?;
                 }
                 Ok(self.control_completed(thread_id))
             }
             _ => {
-                self.request("thread/goal/set", json!({"threadId": thread_id, "objective": objective, "status": "active"}), REQUEST_TIMEOUT).await?;
+                self.request(
+                    "thread/goal/set",
+                    json!({"threadId": thread_id, "objective": objective, "status": "active"}),
+                    REQUEST_TIMEOUT,
+                )
+                .await?;
                 self.start_turn(thread_id, objective, effort).await
             }
         }
     }
 
-    pub async fn start_goal_turn(&self, thread_id: &str, objective: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
-        self.request("thread/goal/set", json!({"threadId": thread_id, "objective": objective, "status": "active"}), REQUEST_TIMEOUT).await?;
+    pub async fn start_goal_turn(
+        &self,
+        thread_id: &str,
+        objective: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
+        self.request(
+            "thread/goal/set",
+            json!({"threadId": thread_id, "objective": objective, "status": "active"}),
+            REQUEST_TIMEOUT,
+        )
+        .await?;
         self.start_turn(thread_id, text, effort).await
     }
 
     /// A compaction this host asked for has ended (the first word on a thread counts; a later one changes nothing).
     fn compaction_ended(&self, thread: Option<&str>, result: Result<(), String>) {
         let Some(thread) = thread else { return };
-        if let Some(slot) = self.0.compacting.lock().unwrap().get_mut(thread).filter(|slot| slot.is_none()) {
+        if let Some(slot) = self
+            .0
+            .compacting
+            .lock()
+            .unwrap()
+            .get_mut(thread)
+            .filter(|slot| slot.is_none())
+        {
             *slot = Some(result);
             self.0.compacted.notify_waiters();
         }
@@ -677,20 +1137,41 @@ impl CodexHost {
     /// Compacts a resumed thread (`thread/compact/start`) and returns once the app server says it is done, so the
     /// turn that follows runs on the shorter transcript. The thread's turn_completed ends the caller's wait.
     pub async fn compact(&self, thread_id: &str) -> Result<String, HostError> {
-        self.0.compacting.lock().unwrap().insert(thread_id.into(), None);
+        self.0
+            .compacting
+            .lock()
+            .unwrap()
+            .insert(thread_id.into(), None);
         let waiting = self.0.compacted.notified();
         tokio::pin!(waiting);
         waiting.as_mut().enable();
-        let started = self.request("thread/compact/start", json!({"threadId": thread_id}), REQUEST_TIMEOUT).await;
+        let started = self
+            .request(
+                "thread/compact/start",
+                json!({"threadId": thread_id}),
+                REQUEST_TIMEOUT,
+            )
+            .await;
         let ended = match started {
             Err(e) => Err(e.to_string()),
             Ok(_) => {
                 let end = tokio::time::Instant::now() + COMPACT_TIMEOUT;
                 loop {
-                    if let Some(result) = self.0.compacting.lock().unwrap().get(thread_id).cloned().flatten() {
+                    if let Some(result) = self
+                        .0
+                        .compacting
+                        .lock()
+                        .unwrap()
+                        .get(thread_id)
+                        .cloned()
+                        .flatten()
+                    {
                         break result;
                     }
-                    if tokio::time::timeout_at(end, waiting.as_mut()).await.is_err() {
+                    if tokio::time::timeout_at(end, waiting.as_mut())
+                        .await
+                        .is_err()
+                    {
                         break Err("the compaction did not finish in time".into());
                     }
                     waiting.set(self.0.compacted.notified());
@@ -706,24 +1187,57 @@ impl CodexHost {
     /// A control call that runs no model turn still ends one, so the runner's loop finishes as for any turn.
     fn control_completed(&self, thread_id: &str) -> String {
         let turn = uuid::Uuid::new_v4().to_string();
-        self.emit(event("turn_completed", Some(thread_id), Some(&turn), json!({"status": "completed"})));
+        self.emit(event(
+            "turn_completed",
+            Some(thread_id),
+            Some(&turn),
+            json!({"status": "completed"}),
+        ));
         turn
     }
 
     /// `/compact` and `/review [instructions]` as the app server's own calls; anything else is a prompt.
-    pub async fn start_command(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub async fn start_command(
+        &self,
+        thread_id: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         let trimmed = text.trim();
         let (name, args) = trimmed.split_once(' ').unwrap_or((trimmed, ""));
         match name {
             "/compact" => {
-                self.request("thread/compact/start", json!({"threadId": thread_id}), REQUEST_TIMEOUT).await?;
+                self.request(
+                    "thread/compact/start",
+                    json!({"threadId": thread_id}),
+                    REQUEST_TIMEOUT,
+                )
+                .await?;
                 Ok(self.control_completed(thread_id))
             }
             "/review" => {
-                let target = if args.is_empty() { json!({"type": "uncommittedChanges"}) } else { json!({"type": "custom", "instructions": args}) };
-                let res = self.request("review/start", json!({"threadId": thread_id, "target": target}), REQUEST_TIMEOUT).await?;
-                let turn = res["turn"]["id"].as_str().filter(|t| !t.is_empty()).map(String::from).ok_or_else(|| failed("review/start returned no turn id"))?;
-                self.0.active_turn.lock().unwrap().insert(thread_id.into(), turn.clone());
+                let target = if args.is_empty() {
+                    json!({"type": "uncommittedChanges"})
+                } else {
+                    json!({"type": "custom", "instructions": args})
+                };
+                let res = self
+                    .request(
+                        "review/start",
+                        json!({"threadId": thread_id, "target": target}),
+                        REQUEST_TIMEOUT,
+                    )
+                    .await?;
+                let turn = res["turn"]["id"]
+                    .as_str()
+                    .filter(|t| !t.is_empty())
+                    .map(String::from)
+                    .ok_or_else(|| failed("review/start returned no turn id"))?;
+                self.0
+                    .active_turn
+                    .lock()
+                    .unwrap()
+                    .insert(thread_id.into(), turn.clone());
                 Ok(turn)
             }
             _ => self.start_turn(thread_id, text, effort).await,
@@ -735,7 +1249,13 @@ impl CodexHost {
     }
 
     pub async fn interrupt(&self, thread_id: &str, turn_id: &str) -> Result<(), HostError> {
-        self.request("turn/interrupt", json!({"threadId": thread_id, "turnId": turn_id}), 30).await.map(|_| ())
+        self.request(
+            "turn/interrupt",
+            json!({"threadId": thread_id, "turnId": turn_id}),
+            30,
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -744,10 +1264,18 @@ impl CodexHost {
 // reads as a limit is kept as it is, so a genuine quota is never relabelled as capacity.
 fn with_kind(err: &Value, msg: String) -> String {
     let info = &err["codexErrorInfo"];
-    let kind = info.as_str().map(String::from).or_else(|| info.as_object().and_then(|o| o.keys().next().cloned()))
-        .or_else(|| err["type"].as_str().map(String::from)).or_else(|| err["error"]["type"].as_str().map(String::from))
-        .unwrap_or_default().to_lowercase();
-    let status = info.as_object().and_then(|o| o.values().next()).and_then(|v| v["httpStatusCode"].as_u64());
+    let kind = info
+        .as_str()
+        .map(String::from)
+        .or_else(|| info.as_object().and_then(|o| o.keys().next().cloned()))
+        .or_else(|| err["type"].as_str().map(String::from))
+        .or_else(|| err["error"]["type"].as_str().map(String::from))
+        .unwrap_or_default()
+        .to_lowercase();
+    let status = info
+        .as_object()
+        .and_then(|o| o.values().next())
+        .and_then(|v| v["httpStatusCode"].as_u64());
     let tag = if kind.contains("overloaded") {
         "overloaded"
     } else if kind.contains("usagelimit") || kind.contains("usage_limit") {
@@ -759,7 +1287,11 @@ fn with_kind(err: &Value, msg: String) -> String {
     } else {
         return msg;
     };
-    if is_limit(&msg) { msg } else { format!("{msg} ({tag})") }
+    if is_limit(&msg) {
+        msg
+    } else {
+        format!("{msg} ({tag})")
+    }
 }
 
 #[cfg(test)]
@@ -771,17 +1303,23 @@ mod tests {
         for (path, mut expected) in crate::hosts::fixtures::cases("codex") {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let host = CodexHost::on_home(Env::new(), tx, None);
-            for line in std::fs::read_to_string(&path).unwrap().lines().filter(|l| !l.trim().is_empty()) {
+            for line in std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+            {
                 host.on_message(serde_json::from_str(line).unwrap()).await;
             }
             let mut got = vec![];
             while let Ok(ev) = rx.try_recv() {
                 got.push(ev);
             }
-            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            // These shared Python snapshots hold no outside actions; Rust adds recovery labels and whether each
+            // line only reads (`cat`, `wc` and `ls` do, c3's `curl` does not).
             for event in &mut expected {
                 if event["tool"] == "shell" {
                     event["outside_actions"] = json!([]);
+                    event["reads_only"] = json!(event["item_id"] != "c3");
                 }
             }
             assert_eq!(got, expected, "{}", path.display());
@@ -790,12 +1328,18 @@ mod tests {
 
     #[test]
     fn recovery_shell_events_match_the_shared_api_fixture() {
-        let cases: Vec<Value> = serde_json::from_str(include_str!("../../tests/fixtures/recovery-shell-events.json")).unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/recovery-shell-events.json"
+        ))
+        .unwrap();
         for case in cases {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let host = CodexHost::on_home(Env::new(), tx, None);
-            host.on_item(false, &json!({"threadId": "th", "turnId": "tu", "item": {
-                "type": "commandExecution", "id": "tool-1", "command": case["command"]}}));
+            host.on_item(
+                false,
+                &json!({"threadId": "th", "turnId": "tu", "item": {
+                "type": "commandExecution", "id": "tool-1", "command": case["command"]}}),
+            );
             let got = rx.try_recv().unwrap();
             assert_eq!(got, case["codex"], "{}", case["command"]);
             assert!(!got.to_string().contains("synthetic-private-marker"));
@@ -804,28 +1348,74 @@ mod tests {
 
     #[test]
     fn the_operators_servers_are_stubbed_and_the_environment_trimmed() {
-        let dir = std::env::temp_dir().join(format!("codex-home-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("codex-home-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), "[mcp_servers.local]\ncommand = \"npx\"\n[mcp_servers.remote]\nurl = \"https://acme.example/mcp\"\n").unwrap();
         let cfg = mcp_disable_config(Some(dir.to_str().unwrap()));
-        assert_eq!(Value::Object(cfg), json!({"mcp_servers": {"local": {"command": "/usr/bin/true", "args": []}, "remote": {"startup_timeout_ms": 1}}}));
-        let env: Env = [("PWD", "/x"), ("ACME_KEY", "v"), ("BIG", &"x".repeat(9000)[..])].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        assert_eq!(Value::Object(env_for_config(&env)), json!({"ACME_KEY": "v"}));
+        assert_eq!(
+            Value::Object(cfg),
+            json!({"mcp_servers": {"local": {"command": "/usr/bin/true", "args": []}, "remote": {"startup_timeout_ms": 1}}})
+        );
+        let env: Env = [
+            ("PWD", "/x"),
+            ("ACME_KEY", "v"),
+            ("BIG", &"x".repeat(9000)[..]),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(
+            Value::Object(env_for_config(&env)),
+            json!({"ACME_KEY": "v"})
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn no_thread_keeps_a_codex_memory_outside_the_repository() {
         let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
-        assert_eq!(host.thread_params(&Settings::default())["config"]["features.memories"], json!(false));
+        assert_eq!(
+            host.thread_params(&Settings::default())["config"]["features.memories"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn packet_threads_disable_local_external_and_delegated_tools() {
+        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
+        let settings = Settings {
+            packet_only: true,
+            cwd: "/synthetic/empty".into(),
+            ..Settings::default()
+        };
+        let params = host.thread_params(&settings);
+        assert_eq!(params["sandbox"], "read-only");
+        for key in [
+            "features.shell_tool",
+            "features.multi_agent",
+            "features.image_generation",
+            "features.view_image",
+            "tools.view_image",
+            "apps._default.enabled",
+        ] {
+            assert_eq!(params["config"][key], false, "{key}");
+        }
+        assert_eq!(params["config"]["web_search"], "disabled");
+        assert!(params["config"]["mcp_servers"].get("hub").is_none());
     }
 
     #[tokio::test]
     async fn a_thread_is_confirmed_by_its_first_turn_not_by_thread_start() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let host = CodexHost::on_home(Env::new(), tx, None);
-        host.on_message(json!({"method": "thread/started", "params": {"thread": {"id": "thr_n"}}})).await;
-        assert_eq!(host.confirmed("thr_n"), None, "a thread/start alone is only in this app server");
+        host.on_message(json!({"method": "thread/started", "params": {"thread": {"id": "thr_n"}}}))
+            .await;
+        assert_eq!(
+            host.confirmed("thr_n"),
+            None,
+            "a thread/start alone is only in this app server"
+        );
         // A subagent's turn confirms nothing of the parent's.
         host.on_message(json!({"method": "thread/started", "params": {"thread": {"id": "thr_sub", "parentThreadId": "thr_n"}}})).await;
         host.on_message(json!({"method": "turn/started", "params": {"threadId": "thr_sub", "turn": {"id": "turn_s"}}})).await;
@@ -834,8 +1424,222 @@ mod tests {
             host.on_message(json!({"method": "turn/started", "params": {"threadId": "thr_n", "turn": {"id": turn}}})).await;
         }
         assert_eq!(host.confirmed("thr_n").as_deref(), Some("thr_n"));
-        let confirmed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| e["kind"] == "thread_confirmed").collect();
-        assert_eq!(confirmed, vec![json!({"kind": "thread_confirmed", "thread_id": "thr_n", "turn_id": "turn_1", "session_id": "thr_n"})]);
+        let confirmed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|e| e["kind"] == "thread_confirmed")
+            .collect();
+        assert_eq!(
+            confirmed,
+            vec![
+                json!({"kind": "thread_confirmed", "thread_id": "thr_n", "turn_id": "turn_1", "session_id": "thr_n"})
+            ]
+        );
+    }
+
+    #[test]
+    fn company_skills_are_a_root_of_the_runners_own_never_codex_home() {
+        let base =
+            std::env::temp_dir().join(format!("codex-skills-{}", uuid::Uuid::new_v4().simple()));
+        let (state, home) = (base.join("state"), base.join("codex-home"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
+        let files = vec![crate::company_skills::File {
+            path: "SKILL.md".into(),
+            content: "---\nname: acme-brief\ndescription: Write the Acme brief\n---\nWrite it.\n"
+                .into(),
+        }];
+        let sha = crate::company_skills::bundle_sha(&files);
+        let (staged, _) =
+            crate::company_skills::stage(&state, "a-1", &[("acme-brief".into(), sha, files)])
+                .unwrap();
+        let settings = Settings {
+            company_skills: Some(staged.display().to_string()),
+            ..Settings::default()
+        };
+        let roots = skill_roots(&settings);
+        assert_eq!(
+            roots,
+            vec![staged.join(".claude").join("skills").display().to_string()]
+        );
+        // Codex's layout (one folder per skill, with its SKILL.md), in the runner's state; nothing under CODEX_HOME.
+        assert!(std::path::Path::new(&roots[0])
+            .join("acme-brief")
+            .join("SKILL.md")
+            .is_file());
+        assert!(roots[0].starts_with(
+            &state
+                .join("skill-sessions")
+                .join("a-1")
+                .display()
+                .to_string()
+        ));
+        assert!(!home.join("skills").exists());
+        assert!(skill_roots(&Settings::default()).is_empty());
+        let host = CodexHost::on_home(
+            Env::new(),
+            tokio::sync::mpsc::unbounded_channel().0,
+            Some(home.to_str().unwrap()),
+        );
+        assert!(
+            !host
+                .thread_params(&settings)
+                .to_string()
+                .contains("skill-sessions"),
+            "the root goes only to skills/extraRoots/set"
+        );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A fake app server that records each request it answers; `FAKE_REFUSE_ROOTS` makes it an app server without
+    /// `skills/extraRoots/set`.
+    const FAKE_APP_SERVER: &str = r#"#!/usr/bin/env python3
+import json, os, sys
+def say(m): print(json.dumps(m), flush=True)
+threads = 0
+for line in sys.stdin:
+    msg = json.loads(line)
+    method, p = msg.get("method"), msg.get("params") or {}
+    if "id" not in msg:
+        continue
+    open(os.environ["FAKE_CALLS"], "a").write(json.dumps({"method": method, "params": p}) + "\n")
+    if method == "skills/extraRoots/set" and os.environ.get("FAKE_REFUSE_ROOTS"):
+        say({"id": msg["id"], "error": {"code": -32601, "message": "method not found"}})
+    elif method == "skills/extraRoots/set":
+        say({"id": msg["id"], "result": {}})
+        say({"method": "skills/changed", "params": {}})
+    elif method == "thread/start":
+        threads += 1
+        say({"id": msg["id"], "result": {"thread": {"id": "th-%d" % threads}}})
+    elif method == "thread/resume":
+        say({"id": msg["id"], "result": {"thread": {"id": p["threadId"]}}})
+    else:
+        say({"id": msg["id"], "result": {}})
+"#;
+
+    #[tokio::test]
+    async fn the_app_server_gets_the_turns_skill_root_once_and_a_refusal_still_runs_the_turn() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("codex-roots-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("codex");
+        std::fs::write(&program, FAKE_APP_SERVER).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let calls = |file: &std::path::Path| -> Vec<Value> {
+            std::fs::read_to_string(file)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        };
+        let staged = Settings {
+            company_skills: Some("/state/skill-sessions/a-1".into()),
+            ..Settings::default()
+        };
+        let root = json!(["/state/skill-sessions/a-1/.claude/skills"]);
+
+        let log = dir.join("calls.jsonl");
+        let env: Env = [
+            ("PATH".to_string(), path.clone()),
+            ("FAKE_CALLS".to_string(), log.display().to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+        host.start().await.unwrap();
+        assert_eq!(host.start_thread("ops", &staged).await.unwrap(), "th-1");
+        assert_eq!(host.resume_thread("th-1", &staged).await.unwrap(), "th-1");
+        host.start_thread("ops", &Settings::default())
+            .await
+            .unwrap();
+        host.stop().await;
+        let got = calls(&log);
+        let methods: Vec<&str> = got.iter().map(|c| c["method"].as_str().unwrap()).collect();
+        assert_eq!(
+            methods,
+            [
+                "initialize",
+                "skills/extraRoots/set",
+                "thread/start",
+                "thread/resume",
+                "skills/extraRoots/set",
+                "thread/start"
+            ],
+            "set before the thread starts, again only when the roots change"
+        );
+        assert_eq!(got[1]["params"], json!({"extraRoots": root}));
+        assert_eq!(
+            got[4]["params"],
+            json!({"extraRoots": []}),
+            "a turn without company skills takes them away"
+        );
+
+        // An app server too old for the call: the thread still starts, without company skills.
+        let log = dir.join("refused.jsonl");
+        let env: Env = [
+            ("PATH".to_string(), path),
+            ("FAKE_CALLS".to_string(), log.display().to_string()),
+            ("FAKE_REFUSE_ROOTS".to_string(), "1".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+        host.start().await.unwrap();
+        assert_eq!(host.start_thread("ops", &staged).await.unwrap(), "th-1");
+        host.stop().await;
+        let methods: Vec<String> = calls(&log).iter().map(|c| text_of(&c["method"])).collect();
+        assert_eq!(
+            methods,
+            ["initialize", "skills/extraRoots/set", "thread/start"]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_a_skill_input_item_counts_as_a_skill_use() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        let item = |method: &str, thread: &str, item: Value| json!({"method": method, "params": {"threadId": thread, "turnId": "turn_1", "item": item}});
+        let path = "/state/skill-sessions/a-1/.claude/skills/acme-brief/SKILL.md";
+        host.on_message(json!({"method": "turn/started", "params": {"threadId": "thr", "turn": {"id": "turn_1"}}})).await;
+        let selected = json!({"type": "userMessage", "id": "um_1", "content": [
+            {"type": "text", "text": "Use $acme-notes for the Acme brief", "text_elements": []},
+            {"type": "skill", "name": "acme-brief", "path": path},
+            {"type": "skill", "name": "../acme", "path": "/elsewhere/SKILL.md"},
+            {"type": "mention", "name": "acme-app", "path": "app://acme"}]});
+        // Started and completed both carry the input: one use.
+        host.on_message(item("item/started", "thr", selected.clone()))
+            .await;
+        host.on_message(item("item/completed", "thr", selected))
+            .await;
+        // No selection: a `$name` typed in the text, the model reading a SKILL.md, a subagent's input.
+        host.on_message(item("item/completed", "thr", json!({"type": "userMessage", "id": "um_2", "content": [{"type": "text", "text": "$acme-brief again", "text_elements": []}]}))).await;
+        host.on_message(item(
+            "item/started",
+            "thr",
+            json!({"type": "commandExecution", "id": "c1", "command": format!("cat {path}")}),
+        ))
+        .await;
+        host.on_message(json!({"method": "thread/started", "params": {"thread": {"id": "thr_sub", "parentThreadId": "thr"}}})).await;
+        host.on_message(item("item/completed", "thr_sub", json!({"type": "userMessage", "id": "um_3", "content": [{"type": "skill", "name": "acme-brief", "path": path}]}))).await;
+        let events: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let skills: Vec<&Value> = events.iter().filter(|e| e["tool"] == "Skill").collect();
+        assert_eq!(
+            skills,
+            vec![
+                &json!({"kind": "tool", "thread_id": "thr", "turn_id": "turn_1", "tool": "Skill", "status": "started", "item_id": "skill:um_1:acme-brief",
+                    "summary": "", "parent_id": null, "skill": "acme-brief"}),
+                &json!({"kind": "tool", "thread_id": "thr", "turn_id": "turn_1", "tool": "Skill", "status": "completed", "item_id": "skill:um_1:acme-brief", "parent_id": null}),
+            ]
+        );
+        assert!(
+            !serde_json::to_string(&events).unwrap().contains(path),
+            "the skill's name leaves, never its path"
+        );
     }
 
     #[tokio::test]
@@ -850,10 +1654,21 @@ mod tests {
         ] {
             host.on_message(serde_json::from_str(line).unwrap()).await;
         }
-        let failed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| e["kind"] == "turn_failed").collect();
+        let failed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|e| e["kind"] == "turn_failed")
+            .collect();
         assert_eq!(failed.len(), 2);
-        let (busy, quota) = (failed[0]["error"].as_str().unwrap(), failed[1]["error"].as_str().unwrap());
-        assert!(failed[0]["limit"] == true && crate::hosts::is_capacity(busy), "{busy}");
-        assert!(failed[1]["limit"] == true && !crate::hosts::is_capacity(quota), "{quota}");
+        let (busy, quota) = (
+            failed[0]["error"].as_str().unwrap(),
+            failed[1]["error"].as_str().unwrap(),
+        );
+        assert!(
+            failed[0]["limit"] == true && crate::hosts::is_capacity(busy),
+            "{busy}"
+        );
+        assert!(
+            failed[1]["limit"] == true && !crate::hosts::is_capacity(quota),
+            "{quota}"
+        );
     }
 }

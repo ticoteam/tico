@@ -3,6 +3,7 @@
 This module never initializes the application, allocates a census identity,
 creates a signing key, or accepts a caller-selected network destination.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -27,8 +28,11 @@ def read_file(path, limit, *, private=False, uid=None):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_size > limit
-                or (private and (info.st_mode & 0o077 or info.st_uid != (os.geteuid() if uid is None else uid)))):
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_size > limit
+            or (private and (info.st_mode & 0o077 or info.st_uid != (os.geteuid() if uid is None else uid)))
+        ):
             raise wire.Pending("private_material_invalid")
         raw = os.read(fd, limit + 1)
         if len(raw) > limit:
@@ -42,13 +46,17 @@ def capabilities(root=ROOT):
     # The image's existing release manifest covers all application code, while
     # the operator additionally checks the exact setup and supervisor sources.
     from .code_hash import digest
+
     manifest = wire.decode(read_file(root / "release-manifest.json", 4096))
     revision = manifest.get("commit")
     if not wire.matches(wire.REVISION, revision) or manifest.get("code") != digest(root):
         raise wire.Pending("runtime_source_unsupported")
-    return {"revision": revision,
-            "runtime_files": {name: hashlib.sha256(read_file(root / name, 2 * 1024 * 1024)).hexdigest()
-                              for name in wire.RUNTIME_FILES}}
+    return {
+        "revision": revision,
+        "runtime_files": {
+            name: hashlib.sha256(read_file(root / name, 2 * 1024 * 1024)).hexdigest() for name in wire.RUNTIME_FILES
+        },
+    }
 
 
 def server_environment(proc=Path("/proc")):
@@ -60,7 +68,7 @@ def server_environment(proc=Path("/proc")):
             command = (path / "cmdline").read_bytes().split(b"\0")
             # Only the actual ASGI server, not this observation process or the
             # backup supervisor, supplies the running settings.
-            if not any(command[index:index + 2] == [b"-m", b"backend.server"] for index in range(len(command))):
+            if not any(command[index : index + 2] == [b"-m", b"backend.server"] for index in range(len(command))):
                 continue
             values = dict(item.split(b"=", 1) for item in (path / "environ").read_bytes().split(b"\0") if b"=" in item)
             if values.get(b"TICO_DB") == b"/data/hub.sqlite":
@@ -77,7 +85,9 @@ def census(database=Path("/data/hub.sqlite")):
     # a database and census helpers may allocate an identity.
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)) as conn:
         conn.execute("PRAGMA query_only=ON")
-        row = conn.execute("SELECT substr(value_json,1,8193) FROM registry_metadata WHERE key='usage-count' LIMIT 1").fetchone()
+        row = conn.execute(
+            "SELECT substr(value,1,8193) FROM registry_metadata WHERE key='usage-count' LIMIT 1"
+        ).fetchone()
         value = wire.decode(row[0].encode(), 8192) if row and isinstance(row[0], str) else {}
     identity = value.get("install_id")
     if not wire.uuid4(identity):
@@ -87,28 +97,53 @@ def census(database=Path("/data/hub.sqlite")):
 
 def observe(*, root=ROOT, environ=None, database=Path("/data/hub.sqlite"), directory=Path("/caddy-generated")):
     from . import caddy_assets
+
     env = server_environment() if environ is None else environ
     app = env.get("TICO_DOMAIN", "")
     enabled = env.get("TICO_CADDY_VISUALS") == "1"
-    runner = caddy_assets._runner_host(env.get("TICO_RUNNER_URL", ""), app) if enabled else ""
-    config, generation, serving, reason = caddy_assets._configuration(
-        app, env.get("TICO_VISUAL_ORIGIN", ""), runner, enabled)
+    # The same inputs the writer uses for the reader origin, so a generated file with the Company page's reader site is
+    # observed as written. Without a reader origin this is the configuration observed before it existed.
+    reader_origin = env.get("TICO_READER_ORIGIN", "")
+    serve_reader = bool(reader_origin.strip())
+    runner = caddy_assets._runner_host(env.get("TICO_RUNNER_URL", ""), app) if enabled or serve_reader else ""
+    config, generation, serving, reason, reading, reader_reason = caddy_assets._configuration(
+        app,
+        env.get("TICO_VISUAL_ORIGIN", ""),
+        runner,
+        enabled,
+        reader_origin,
+        serve_reader,
+        signal=caddy_assets._signal_dial(env),
+    )
     actual = read_file(directory / "caddy.json", 262144)
-    if reason or serving != enabled or actual != caddy_assets._encoded(config) + b"\n":
+    if (
+        reason
+        or reader_reason
+        or serving != enabled
+        or reading != serve_reader
+        or actual != caddy_assets._encoded(config) + b"\n"
+    ):
         raise wire.Pending("generated_configuration_mismatch")
     if read_file(directory / "supervisor.sh", 65536) != read_file(root / "docker/caddy-supervisor.sh", 65536):
         raise wire.Pending("supervisor_source_mismatch")
-    return capabilities(root) | {"install_id": census(database), "public_hostname": app,
+    return capabilities(root) | {
+        "install_id": census(database),
+        "public_hostname": app,
         "configuration": {key: env.get(key, "") for key in wire.MANAGED},
         # Container hostname changes during recreation; all configured settings,
         # including auth and signing secrets, must retain their actual values.
         # Only the digest crosses this private local observation boundary.
-        "unrelated_digest": wire.digest({key: value for key, value in env.items() if key not in (*wire.MANAGED, "HOSTNAME")}),
-        "generation": generation, "file_sha256": hashlib.sha256(actual).hexdigest()}
+        "unrelated_digest": wire.digest(
+            {key: value for key, value in env.items() if key not in (*wire.MANAGED, "HOSTNAME")}
+        ),
+        "generation": generation,
+        "file_sha256": hashlib.sha256(actual).hexdigest(),
+    }
 
 
 class CaddyTLS(http.client.HTTPSConnection):
     """The existing private Caddy service, with the asset's real certificate/SNI."""
+
     def __init__(self, host, timeout):
         super().__init__(host, timeout=timeout, context=ssl.create_default_context())
 
@@ -129,7 +164,10 @@ def exchange(host, path, method="GET", headers=None, *, deadline, connection=Cad
     try:
         client.request(method, path, headers={"Accept-Encoding": "identity", "Connection": "close", **(headers or {})})
         response = client.getresponse()
-        if response.getheader("Set-Cookie") is not None or response.getheader("Content-Encoding") not in (None, "identity"):
+        if response.getheader("Set-Cookie") is not None or response.getheader("Content-Encoding") not in (
+            None,
+            "identity",
+        ):
             raise wire.Pending("probe_response_invalid")
         size, digest = 0, hashlib.sha256()
         while True:
@@ -149,9 +187,15 @@ def exchange(host, path, method="GET", headers=None, *, deadline, connection=Cad
 
 def probe(request, material, environ, *, database=Path("/data/hub.sqlite"), exchange=exchange):
     from . import visuals
-    if (not isinstance(material, dict) or set(material) != {"token", "sha256", "install_id"}
-            or material["install_id"] != request["install_id"] or not wire.matches(wire.HEX, material["sha256"])
-            or not wire.matches(wire.TOKEN, material["token"]) or len(material["token"]) > 2048):
+
+    if (
+        not isinstance(material, dict)
+        or set(material) != {"token", "sha256", "install_id"}
+        or material["install_id"] != request["install_id"]
+        or not wire.matches(wire.HEX, material["sha256"])
+        or not wire.matches(wire.TOKEN, material["token"])
+        or len(material["token"]) > 2048
+    ):
         raise wire.Pending("probe_material_invalid")
     key = environ.get("TICO_VISUAL_SECRET", "").strip().encode()
     if not key:
@@ -164,15 +208,21 @@ def probe(request, material, environ, *, database=Path("/data/hub.sqlite"), exch
     try:
         found = visuals.read(key, token)
         body = wire.decode(visuals._unb64(token.partition(".")[0]), 2048)
-        if not found or type(body[-1]) is not int or body[-1] < time.time() + 30:
+        if not found or type(body[4]) is not int or body[4] < time.time() + 30:
             raise ValueError()
     except (ValueError, TypeError, IndexError):
         raise wire.Pending("probe_material_expired") from None
     host, deadline = request["hostname"], time.monotonic() + 8
     path = "/visuals/" + token
-    markers = {"Cookie": "tico_visual_probe=inert", "Authorization": "Bearer inert-tico-visual-probe",
-               "Proxy-Authorization": "inert", "Cf-Access-Jwt-Assertion": "inert",
-               "X-Amzn-Oidc-Data": "inert", "X-Tico-Visual-Probe": "inert"}
+    markers = {
+        "Cookie": "tico_visual_probe=inert",
+        "Authorization": "Bearer inert-tico-visual-probe",
+        "Proxy-Authorization": "inert",
+        "Cf-Access-Jwt-Assertion": "inert",
+        "X-Amzn-Oidc-Data": "inert",
+        "X-Tico-Visual-Probe": "inert",
+    }
+
     def refused(path):
         try:
             return exchange(host, path, headers=markers, deadline=deadline)[0] == 404
@@ -182,10 +232,14 @@ def probe(request, material, environ, *, database=Path("/data/hub.sqlite"), exch
             # Caddy may retire the hostname at the TLS layer. Only a peer's
             # explicit handshake/name refusal counts; timeout, bad certificates
             # and a stopped/unreachable front door do not prove retirement.
-            if not request["enabled"] and error.reason in ("TLSV1_ALERT_INTERNAL_ERROR", "SSLV3_ALERT_HANDSHAKE_FAILURE",
-                                                           "TLSV1_UNRECOGNIZED_NAME"):
+            if not request["enabled"] and error.reason in (
+                "TLSV1_ALERT_INTERNAL_ERROR",
+                "SSLV3_ALERT_HANDSHAKE_FAILURE",
+                "TLSV1_UNRECOGNIZED_NAME",
+            ):
                 return True
             raise
+
     if request["enabled"]:
         if exchange(host, path, deadline=deadline) != (200, material["sha256"]):
             raise wire.Pending("signed_probe_pending")
@@ -220,8 +274,11 @@ def main(argv=None):
             request = wire.validate(value["request"])
             environment = server_environment()
             before = observe(environ=environment)
-            if (before["install_id"] != request["install_id"] or before["public_hostname"] != request["public_hostname"]
-                    or before["configuration"] != wire.configuration(request)):
+            if (
+                before["install_id"] != request["install_id"]
+                or before["public_hostname"] != request["public_hostname"]
+                or before["configuration"] != wire.configuration(request)
+            ):
                 raise wire.Pending("running_configuration_mismatch")
             probe(request, value["material"], environment)
             if observe() != before:

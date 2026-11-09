@@ -1,0 +1,16 @@
+{
+  "viewport": "1920x1080",
+  "steps": [
+    { "do": "goto", "url": "site/index.html" },
+    { "do": "pause", "ms": 800 },
+    { "do": "type", "selector": "#name", "text": "Dana Example", "delay_ms": 70 },
+    { "do": "pause", "ms": 400 },
+    { "do": "click", "selector": "#submit" },
+    { "do": "wait", "selector": "#result" },
+    { "do": "highlight", "selector": "#result", "ms": 1400 },
+    { "do": "zoom", "selector": "#result", "scale": 1.5, "ms": 600 },
+    { "do": "pause", "ms": 1200 },
+    { "do": "zoom", "reset": true, "ms": 600 },
+    { "do": "pause", "ms": 500 }
+  ]
+}

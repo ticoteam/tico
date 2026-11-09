@@ -1,0 +1,5 @@
+{
+  "scripts/pr_checks.py": {
+    "PLW1510": 4
+  }
+}

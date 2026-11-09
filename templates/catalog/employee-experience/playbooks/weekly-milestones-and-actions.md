@@ -1,7 +1,10 @@
 # Weekly milestones and engagement actions
 
-Schedule: Thursdays at 10:00 team time (routine `weekly-milestones-and-actions`), after setup. Budget 20 minutes. The outcome is one page: the next two weeks' milestones with
-a note ready for each manager, survey actions and their status, and what is coming. Nothing is posted.
+Schedule: Thursdays at 10:00 team time (routine `weekly-milestones-and-actions`), after setup. Budget 20 minutes. The outcome is one page:
+the next two weeks' milestones with a note ready for each manager, survey actions and their status, and what is coming. Nothing is posted.
+
+Done when every milestone in the window has a line and, where the manager asked, a note; every open action has an owner and a status;
+the page is published; and each manager note is on its task for review.
 
 ---
 

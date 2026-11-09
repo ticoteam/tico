@@ -1,11 +1,15 @@
-// The Liquid Dot stays cheap (ui/app/liquid-dot.js, styles/liquid-dot.css; budgets in docs/assistant.md). Chrome over
+// The Liquid Dot stays cheap (ui/app/liquid-dot.ts, styles/liquid-dot.css; budgets in docs/assistant.md). Chrome over
 // CDP, fixtures only:
 // - Idle 10 s with Ask closed: no layout, at most 4 style recalcs per idle swap (one or two land in 10 s), under 150 ms of main-thread work, no paints from
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.
 // - Each idle variant swapped in by hand: no layout and no paint.
-// - With the CPU slowed 4x, opening Ask (the dot flies in), a reply (it flies to the new turn) and closing (it flies
-//   back): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
+// - With the CPU slowed 4x, opening Ask (the dot flies up to the panel's header), a reply (the header's dot works, then
+//   rests) and closing (it flies back down): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
 //   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
+// - Opening and closing Ask, by the row, ⌘J and Escape, and from a page with no heading to
+//   one with a heading (the page it sees goes and comes back), flights included: no `hidden` attribute changes anywhere
+//   and no child of <body> comes or goes (each restyles the whole page on a real hub); the flying copy is made once
+//   and reused.
 // - A hidden tab: every dot paused and no idle timer left, and none set while hidden.
 // DOT_PERF_OUT=<file> writes the numbers (the PR body quotes them).
 const {chromium} = require('playwright');
@@ -16,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
 const {SLOWDOWN} = require('./support/load.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created: now, kind: 'say'});
+const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
 const IDLE_MS = 10000;
 const DOT_ANIMATED = new Set(['transform', 'opacity', 'offset', 'easing', 'composite', 'computedOffset']);
 
@@ -30,7 +34,7 @@ async function open(browser) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true});
@@ -44,7 +48,7 @@ async function open(browser) {
     if (p === '/api/v2/assistant/messages') {
       const n = ++state.sent, user = msg('u' + n, 'human:ben', JSON.parse(route.request().postData()).text), bot = msg('b' + n, 'bot:coo', 'On it.');
       state.messages.push(user, bot);
-      return json({message: user, reply: bot, fast: true});
+      return json({message: user});
     }
     if (p === '/api/v2/support/tickets' || p === '/api/v2/support/tickets/refresh') return json({enabled: true, tickets: [], unread: 0});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -52,7 +56,7 @@ async function open(browser) {
   });
   await page.goto('https://tico-ui.test/#/tasks');
   await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
-  await page.locator('#ask-fab').waitFor();
+  await page.locator('#ask-row').waitFor();
   return {page, errors};
 }
 const metrics = async cdp => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
@@ -91,7 +95,7 @@ const round = v => Math.round(v * 10) / 10;
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Performance.enable');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(4500);                       // the page settles: first draws, fonts, support's read, the peek's first look
+    await page.waitForTimeout(4500);                       // the page settles: first draws, fonts, support's read
 
     // ---- Idle, Ask closed.
     // Count the scheduler's swaps in the window: each may cost a few style recalcs (4 at most), nothing else may.
@@ -128,7 +132,7 @@ const round = v => Math.round(v * 10) / 10;
     const swapsBefore = await metrics(cdp);
     await browser.startTracing(page, {categories: ['devtools.timeline']});
     for (const v of await page.evaluate(() => LDOT_IDLES)) {
-      await page.evaluate(v => { document.querySelector('#ask-fab .ldot').dataset.idle = v; }, v);
+      await page.evaluate(v => { document.querySelector('#ask-row .ldot').dataset.idle = v; }, v);
       await page.waitForTimeout(400);
     }
     const swapsAfter = await metrics(cdp);
@@ -139,7 +143,7 @@ const round = v => Math.round(v * 10) / 10;
     assert.ok(swapPaints.length <= 1, `idle variants: paints ${JSON.stringify(swapPaints)}`);
 
     // ---- Open, a reply, close, with the CPU slowed 4x. A first open and close loads the chat; the second is timed.
-    await page.locator('#ask-fab').click();
+    await page.locator('#ask-row').click();
     await page.locator('#ask-panel .ask-form .p-text').waitFor();
     await page.waitForFunction(() => !document.querySelector('.ldot-fly'));
     await page.keyboard.press('Escape');
@@ -147,15 +151,15 @@ const round = v => Math.round(v * 10) / 10;
     await page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
     await page.waitForTimeout(400);
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
-    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away') && !document.querySelector('#ask-fab').getAnimations().length);
+    const settle = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away') && !document.querySelector('#ask-row').getAnimations().length);
     const budget = {p95: 20 * SLOWDOWN, max: 50 * SLOWDOWN, long: 50 * SLOWDOWN};
     const phases = {
-      open: async () => { await page.locator('#ask-fab').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
+      open: async () => { await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle(); },
       reply: async () => {
         const box = page.locator('#ask-panel .ask-form .p-text');
         await box.fill('Thanks'); await box.press('Enter');
-        await page.locator('#ask-panel .conv-run[data-message="b1"] .ask-turn-dot').waitFor(); await settle();
-        // open: one dot, flying or still; the newest turn holds the live one
+        await page.locator('#ask-panel .conv-run[data-message="b1"]').waitFor(); await settle();
+        // open: one dot, flying or still; the header's is the live one
         const live = await dotAnimations(page);
         assert.ok(live.dots <= 1, `open: ${live.dots} moving dots`);
         assert.ok(live.props.every(p => DOT_ANIMATED.has(p)), `open: the dot animates ${live.props}`);
@@ -174,6 +178,36 @@ const round = v => Math.round(v * 10) / 10;
       assert.ok(r.max <= budget.max, `${name}: frame max ${r.max} ms (budget ${budget.max})`);
       assert.ok(r.longTask <= budget.long, `${name}: a ${r.longTask} ms long task (budget ${budget.long})`);
     }
+
+    // ---- Opening and closing (the row, ⌘J, Escape), flights included, change no `hidden` attribute anywhere and add
+    // nothing to <body> or take nothing from it: on a real hub either restyles the whole page (ui/app/ask-panel.ts askSync).
+    await page.evaluate(() => {
+      const seen = window.__askMut = [], name = n => n.id || String(n.className || n.nodeName);
+      new MutationObserver(list => list.forEach(r => {
+        if (r.type === 'attributes') seen.push('hidden on ' + name(r.target));
+        else if (r.target === document.body) seen.push('<body> child ' + [...r.addedNodes].map(n => '+' + name(n)).concat([...r.removedNodes].map(n => '-' + name(n))).join(' '));
+      })).observe(document, {subtree: true, childList: true, attributes: true, attributeFilter: ['hidden']});
+    });
+    const shut = async () => { await page.locator('#ask-panel').waitFor({state: 'hidden'}); await settle(); };
+    for (let i = 0; i < 2; i++) {
+      await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+      await page.keyboard.press('Escape'); await shut();
+      await page.keyboard.press('Control+j'); await page.locator('#ask-panel .p-text:focus').waitFor(); await settle();
+      await page.keyboard.press('Control+j'); await shut();
+    }
+    // The page it sees: a page with no heading, then one with a heading, so its label goes and comes back.
+    const heading = text => page.evaluate(text => { const h = document.querySelector('#main h1, #main h2'); h.dataset.was ??= h.textContent; h.textContent = text ?? h.dataset.was; }, text);
+    await heading('');
+    await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+    assert.equal(await page.locator('#ask-panel [data-ask-sees]').isVisible(), false, 'no heading, no page named');
+    await page.keyboard.press('Escape'); await shut();
+    await heading(null);
+    await page.locator('#ask-row').click(); await page.waitForFunction(() => document.querySelector('.ldot-fly')); await settle();
+    assert.equal(await page.locator('#ask-panel [data-ask-sees]').isVisible(), true, 'the page it sees, named');
+    await page.keyboard.press('Escape'); await shut();
+    out.toggleMutations = await page.evaluate(() => window.__askMut);
+    assert.deepEqual(out.toggleMutations, [], 'Ask opening and closing changed `hidden` or <body>');
+    assert.equal(await page.evaluate(() => document.querySelectorAll('.ldot-layer .ldot').length), 1, 'one flying copy, reused');
 
     // ---- A hidden tab: everything pauses and no idle timer runs, or is set, until it shows again.
     const hidden = await page.evaluate(async () => {

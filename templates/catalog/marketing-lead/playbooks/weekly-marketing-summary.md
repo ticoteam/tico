@@ -4,6 +4,9 @@ Schedule: Fridays at 14:00 team time (routine `weekly-marketing-summary`), after
 the marketing owner: how the week went, what is blocked, the next six weeks on the calendar and
 proposed priorities. Nothing is shared and no task is created.
 
+Inputs: `knowledge/workstreams.md`, `knowledge/calendar.md`, `knowledge/priorities.md`, last week's page in `reports/`, and each workstream owner's tasks, updates and published reports since last Friday.
+Done when: `reports/YYYY-MM-DD-marketing-week.md` is written and published; every workstream has a line (or "no report"); the calendar covers six weeks; the task note gives the headline, the path and any source that could not be read.
+
 ---
 
 ## 1. Read where things stand
@@ -38,7 +41,7 @@ sends or two launches the same day), launches inside two weeks with no brief or 
 ## 6. Propose next week's priorities
 
 At most three, each with the workstream, the reason and the owner. Say what was dropped and why.
-Create or reassign tasks when the work requests routing and your Tools allow it.
+Routing and reassigning tasks are not part of this playbook; a request for them goes through `playbooks/route-a-request.md`.
 
 ## 7. Write the page and hand it over
 

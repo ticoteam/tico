@@ -9,12 +9,12 @@ created.
 **Headline: 3 of 5 workstreams on track; the October launch email is drafted while sending is off.**
 
 ## Needs you
-- **Launch email (email)**: draft v2 waiting since 2026-09-23. The draft is ready to load with the necessary Tools by 2026-09-30.
+- **Launch email (email)**: draft v2 waiting since 2026-09-23. It can be loaded by 2026-09-30 if the task asks for it and a granted Tool allows it.
   Source: task "October launch email", 2026-09-23.
 - **Home page copy (content)**: the change to the studio plan page needs a human; not started.
 
 ## Workstreams
-- **Content: green.** 2 posts drafted, 1 published by Sam on 2026-09-24. Next: plan for October. Owner: content.
+- **Content: green.** 2 posts drafted, 1 published on 2026-09-24 by its author. Next: plan for October. Owner: content.
 - **Search and AI visibility: amber.** Report shows Acme absent from 4 of 10 tracked AI answers. Fix
   brief is drafted, not started. Owner: seo-visibility. Source: report 2026-09-22.
 - **Email: red.** Blocked as above. Owner: email-marketing.
@@ -26,12 +26,12 @@ created.
 - Collision: the newsletter and launch email are both planned for 2026-10-08.
 
 ## Proposed priorities for next week (proposals, nothing assigned)
-1. Load the requested launch email; send only with outbound_send on. 2. Write the studio plan launch brief (product-marketing). 3. Move the newsletter to 2026-10-10 (email-marketing).
+1. Load the requested launch email; send only once a person has turned mail sending on in Tico. 2. Write the studio plan launch brief (product-marketing). 3. Move the newsletter to 2026-10-10 (email-marketing).
 
 ## Hiring proposal (nothing created)
 - **Paid Media Manager (`paid-media`).** Ad results were asked for three times in September (tasks
   "Ad spend check", 2026-09-04, 2026-09-15, 2026-09-22) and each went to you. First routine: the weekly
-  paid media review, Mondays 09:00. Reports to marketing-lead. When the work asks for this hire, I will ask BotOps to set it up.
+  paid media review, Mondays 09:00. Reports to marketing-lead. If the owner says yes, the set-up task goes to BotOps.
 
 ## Could not read
 The paid-ads sheet: no access was connected, so ad spend is not in this summary.

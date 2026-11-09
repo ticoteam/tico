@@ -17,10 +17,10 @@ const {unrouted} = require('./support/routes.cjs');
       {id: 'building', name: 'Building', status: 'doing', position: 0},
       {id: 'shipped', name: 'Shipped', status: 'done', position: 1}]};
     const now = '2030-10-26T12:00:00Z';
-    const task = (id, owner, extra = {}) => ({id, title: id, body: 'Build the requested change.', owner,
-      requester: 'human:ana', type_id: type.id, step_id: 'building', type: {id: type.id, name: type.name}, step: type.steps[0],
+    const task = (id, owner, extra = {}) => ({id, title: id, body: 'Build the requested change.', owner_id: owner,
+      requester_id: 'human:ana', type_id: type.id, step_id: 'building', type: {id: type.id, name: type.name}, step: type.steps[0],
       status: 'doing', version: 1, lane: 'company', labels: [], links: [], parts: {total: 0, done: 0},
-      rank: 1, created: now, updated: now, ...extra});
+      rank: 1, created_at: now, updated_at: now, ...extra});
     const tasks = [task('Automatic cooldown', 'bot:builder-a'), task('Another ticket', 'bot:builder-a'),
       task('Manual quarantine', 'human:ana', {roles: {builder: ['bot:builder-b']}}), task('Healthy builder', 'bot:healthy'),
       task('General work', 'bot:builder-a', {type_id: 'general', type: {id: 'general', name: 'General'}}),
@@ -40,7 +40,7 @@ const {unrouted} = require('./support/routes.cjs');
       const json = data => route.fulfill({contentType: 'application/json', body: JSON.stringify(data)});
       if (url.origin !== 'https://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile(p.slice(1)), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'human', mover: false, cloud: true});

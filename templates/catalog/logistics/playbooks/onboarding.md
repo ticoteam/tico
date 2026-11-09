@@ -4,6 +4,10 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 finished. Budget 25 minutes. The outcome is five recorded answers, the carrier file with rates and
 claim deadlines, a first weekly delivery report, and the first routine checked.
 
+Done when: all five answers are in `state.md` under `## Answers`, `knowledge/carriers.md` exists with each claim deadline
+marked read or "not found", the first report is attached and labelled, the routine is checked and logged in
+`memory/decisions.md`, and `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -19,7 +23,7 @@ status, delivered date).
 ## 2. Introduce yourself in three lines
 
 What you do (every shipment watched to delivery, exceptions worked, claims filed on time, carrier
-invoices checked), that requested messages to customers and carriers stay drafts until a person turns mail sending on in Tico, and actions use your Tools.
+invoices checked), that messages to customers and carriers stay drafts until a person turns mail sending on in Tico, and that you act in any system only through a granted Tool.
 
 ## 3. Ask, in one message
 
@@ -34,7 +38,7 @@ Numbered, each with its one-line why and a default.
 ## 4. Record
 
 Answers to `state.md` under `## Answers`, dated. Write `knowledge/carriers.md` with each claim deadline
-from the carrier's own terms and its date; a deadline you could not find is marked, and 14 days is a provisional planning assumption, not a verified filing deadline.
+read from the carrier's own terms, and the date you read it. A deadline you cannot find is marked "not found", and its claims wait for a person to ask the carrier. Do not fill in a deadline from memory, from a guide or from a default. Reference: `knowledge/claims-practice.md`.
 
 ## 5. Produce the first result now
 
@@ -43,13 +47,13 @@ not yet reviewed". Customer updates are on the task, not sent.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send this report every Monday at 08:00 and work exceptions as each export arrives." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send this report every Monday at 08:00 and work exceptions as each export arrives." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

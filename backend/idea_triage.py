@@ -18,6 +18,7 @@ import threading
 from clients import judge as J
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .store import H
+from . import bot_settings as BS
 
 LOG = logging.getLogger("tico.idea_triage")
 QUESTION_SET = "idea-triage"
@@ -30,18 +31,22 @@ ENGINEERING, PRODUCT = "engineering", "product"
 
 def engineering_bot(c):
     """The active Head of Engineering, or None."""
-    row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
-                    "WHERE json_extract(bc.config_json,'$.template')='engineering-lead' AND b.state='active' "
-                    "ORDER BY bc.bot LIMIT 1").fetchone()
+    row = c.execute(
+        f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+        f"WHERE s.template='engineering-lead' AND b.state='active' "
+        "ORDER BY bc.bot LIMIT 1"
+    ).fetchone()
     return row[0] if row else None
 
 
 def open_items(c, product_type):
     """{option name: (task id, title)} for the open roadmap items an idea can be covered by. Private tasks stay out:
     the new task's readers would see the link."""
-    rows = c.execute("SELECT id,title FROM tasks WHERE type_id=? AND private=0 "
-                     "AND status NOT IN ('done','closed','declined') ORDER BY updated DESC,id LIMIT ?",
-                     (product_type, MAX_ITEMS)).fetchall()
+    rows = c.execute(
+        "SELECT id,title FROM tasks WHERE type_id=? AND private=0 "
+        "AND status NOT IN ('done','closed','declined') ORDER BY updated_at DESC,id LIMIT ?",
+        (product_type, MAX_ITEMS),
+    ).fetchall()
     return {f"item-{n}": (row[0], row[1] or "") for n, row in enumerate(rows, 1)}
 
 
@@ -59,9 +64,10 @@ def _ask(engine, state, questions, label):
             box["result"] = engine(state, questions, label)
         except J.JudgeError as exc:
             box["error"] = exc.code
-        except Exception as exc:    # a fake, a provider bug: routing never breaks on it
+        except Exception as exc:  # a fake, a provider bug: routing never breaks on it
             LOG.warning("Idea triage call failed: %s", type(exc).__name__)
             box["error"] = "error"
+
     worker = threading.Thread(target=work, name="idea-triage", daemon=True)
     worker.start()
     worker.join(DEADLINE)
@@ -101,8 +107,9 @@ def triage(store, primary, product_type, title, summary):
         items = open_items(c, product_type) if product_type else {}
     questions = {"kind": qset["questions"]["kind"]}
     if items:
-        questions["covered"] = J.with_options(qset["questions"]["covered"],
-                                              {name: title for name, (_, title) in items.items()})
+        questions["covered"] = J.with_options(
+            qset["questions"]["covered"], {name: title for name, (_, title) in items.items()}
+        )
     state = {"idea": {"title": title, "summary": summary}}
     result, error = _ask(engine, state, questions, qset["label"])
     if result is not None and not isinstance(result, dict):
@@ -118,17 +125,26 @@ def triage(store, primary, product_type, title, summary):
         else:
             thresholds = qset["thresholds"]
             if kind[0] == ENGINEERING and kind[1] >= thresholds.get("engineering", 1.01):
-                out = ({"route": ENGINEERING, "reason": ENGINEERING, "covered": None, "engineering_bot": engineer}
-                       if engineer else _product("no_engineering_bot"))
+                out = (
+                    {"route": ENGINEERING, "reason": ENGINEERING, "covered": None, "engineering_bot": engineer}
+                    if engineer
+                    else _product("no_engineering_bot")
+                )
             else:
                 out = _product(PRODUCT if kind[0] == PRODUCT else "below_threshold")
             out["kind"] = kind
             if found[0] in items and found[1] >= thresholds.get("covered", 1.01):
                 task_id, item_title = items[found[0]]
                 out["covered"] = {"task": task_id, "title": item_title, "confidence": round(found[1], 3)}
-    detail = {"label": qset["label"], "questions": len(questions), "types": ["choice"],
-              "options": len(items), "route": out["route"], "reason": out["reason"],
-              "covered": (out["covered"] or {}).get("task")}
+    detail = {
+        "label": qset["label"],
+        "questions": len(questions),
+        "types": ["choice"],
+        "options": len(items),
+        "route": out["route"],
+        "reason": out["reason"],
+        "covered": (out["covered"] or {}).get("task"),
+    }
     if result is not None:
         detail.update(audit_detail(result), answers=_summary(result.get("answers"), questions))
     if error:
@@ -143,11 +159,18 @@ def preface(outcome):
     if not outcome or "kind" not in outcome:
         return ""
     choice, confidence = outcome["kind"]
-    lines = [f"Idea triage ({QUESTION_SET}, routing only): "
-             + (f"a bug or small change ({confidence:.0%}), sent to engineering." if outcome["route"] == ENGINEERING
-                else f"for product ({choice} {confidence:.0%}).")]
+    lines = [
+        f"Idea triage ({QUESTION_SET}, routing only): "
+        + (
+            f"a bug or small change ({confidence:.0%}), sent to engineering."
+            if outcome["route"] == ENGINEERING
+            else f"for product ({choice} {confidence:.0%})."
+        )
+    ]
     if outcome["covered"]:
         covered = outcome["covered"]
-        lines.append(f"Probably covered by the open roadmap item “{covered['title']}” "
-                     f"(task {covered['task']}, {covered['confidence']:.0%}); it is linked as related.")
+        lines.append(
+            f"Probably covered by the open roadmap item “{covered['title']}” "
+            f"(task {covered['task']}, {covered['confidence']:.0%}); it is linked as related."
+        )
     return "\n".join(lines) + "\n\n"

@@ -111,6 +111,9 @@ function start() {
     assert.equal(await keyDialog.locator('[name=secret]').inputValue(), '', 'the field is emptied once sent');
     await keyDialog.locator('[data-close]').last().click();
     await row(team).locator('[data-chip="own:claude"]').waitFor({timeout: 20000});
+    // These runners predate subscriptions: the Claude Code cell keeps the computer's login chip, with Needs update beside it.
+    assert.equal(await row(team).locator('[data-label="Claude Code"] [data-subs-needs-update]').count(), 1);
+    assert.equal(await row(team).locator('[data-subs-pick]').count(), 0, 'no picker on a computer that cannot take one');
     assert.deepEqual(received(), [OWN], 'the key reached Team box');
     await openDetail(team);
     await line.waitFor();

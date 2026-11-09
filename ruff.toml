@@ -1,14 +1,121 @@
-# Lint config for the Python code. Ruff is pinned: `uvx ruff@0.15.9` (scripts/lint.sh runs the checks).
+# Lint config for the Python code. Ruff is pinned: `uvx ruff@0.15.9`. A bare `uvx ruff@0.15.9 check` reads this file alone
+# and reports every finding, and formatting reads it too. The gate is scripts/lint.sh; CONTRIBUTING.md explains how the
+# findings that exist today are counted and kept from growing.
 #
-# Production code is checked for bugs with these rule families. Style rules (E501, I, UP, ...) are not enforced.
-# Existing findings are listed by (file, rule) in ruff-baseline.toml, which this file extends. That list only
-# shrinks: `python3 scripts/lint_baseline.py --check` fails on new findings and on entries that no longer fire.
-extend = "ruff-baseline.toml"
+# Production code is checked for bugs with the rule families below. Style rules (E501, I, UP, ...) are not enforced.
+# Tico Recorder's benchmarks are uv scripts that shell out to `security` and to paid speech APIs. They are run by hand
+# (recorder/bench/README.md), not part of the product, and their subprocess calls are left as written.
+extend-exclude = ["recorder/bench"]
+# Excluded files stay excluded when a tool names them (scripts/check.sh passes changed files): a shipped migration
+# was reformatted that way and installs refused to start on it.
+force-exclude = true
 target-version = "py312"
 line-length = 120
 
+# Formatting (`uvx ruff@0.15.9 format`, checked by scripts/lint.sh). Only layout changes: quotes stay as written.
+# These files are excluded from formatting only (not from linting, which still reads them).
+[format]
+quote-style = "preserve"
+# Applied migrations are frozen. A start refuses a database whose recorded checksum no longer matches its file
+# (backend/migrations/__init__.py), so every file below stays as it is. New migrations are formatted like the rest.
+# renames_data.py is written by scripts/cleanup/gen_map.py, whose --check compares its text.
+exclude = [
+    "backend/migrations/renames_data.py",
+    "backend/migrations/0002_status_values.py",
+    "backend/migrations/0003_google_connects_oauth_state.py",
+    "backend/migrations/0008_market_pages.py",
+    "backend/migrations/0009_drop_turns_legacy_usage.py",
+    "backend/migrations/0012_bot_ids.py",
+    "backend/migrations/0013_rails_renames_wave1.py",
+    "backend/migrations/0014_rails_renames_wave2.py",
+    "backend/migrations/0030_growth_segments.py",
+    "backend/migrations/0031_rails_renames_wave3.py",
+    "backend/migrations/0032_one_spelling_canceled.py",
+    "backend/migrations/0033_company_page.py",
+    "backend/migrations/0034_rails_renames_wave5.py",
+    "backend/migrations/0035_growth_rethink.py",
+    "backend/migrations/0037_finance_combined.py",
+    "backend/migrations/0043_drop_bot_legacy_columns.py",
+    "backend/migrations/0044_drop_kpi_goal_columns.py",
+    "backend/migrations/0046_task_check_backs.py",
+    "backend/migrations/0047_native_threads_schema.py",
+    "backend/migrations/0049_task_session_thread_once.py",
+    "backend/migrations/0050_idempotency_one_table.py",
+    "backend/migrations/0053_usage_facts.py",
+    "backend/migrations/0054_budget_nodes.py",
+    "backend/migrations/0059_subscription_owner.py",
+    "backend/migrations/0060_cloud_machine_pause.py",
+    "backend/migrations/0061_bot_team_from_manager.py",
+    "backend/migrations/0062_runner_states.py",
+    "backend/migrations/0063_thread_pins.py",
+    "backend/migrations/0064_history_events.py",
+    "backend/migrations/0065_mail_action_chain.py",
+    "backend/migrations/0066_ask_filter_no_rehearsal.py",
+    "backend/migrations/0068_message_routes_and_bot_status.py",
+    "backend/migrations/0069_subscription_credential_at.py",
+    "backend/migrations/0070_bot_settings.py",
+    "backend/migrations/0071_explicit_follow_ups.py",
+    "backend/migrations/0072_turns_into_attempts.py",
+    "backend/migrations/0073_person_draft_keys.py",
+    "backend/migrations/0074_google_workspace.py",
+    "backend/migrations/0075_task_holds.py",
+    "backend/migrations/0076_requeue_list_task_refs.py",
+    "backend/migrations/0077_mail_watch_since.py",
+    "backend/migrations/0078_rules_exceptions_roundup.py",
+    "backend/migrations/0079_exceptions_flows_roundup.py",
+    "backend/migrations/0080_automation_run_trigger_index.py",
+    "backend/migrations/0081_google_workspace_scopes.py",
+    "backend/migrations/0090_maintenance.py",
+    "backend/migrations/0092_mailboxes.py",
+    "backend/migrations/0093_withdraw_still_wanted.py",
+    "backend/migrations/0096_retire_health_monitor.py",
+    "backend/migrations/20261105004449_runner_device_id.py",
+    "backend/migrations/20261105004523_cloud_machine_start_asked.py",
+    "backend/migrations/20261105004526_create_quarantine_holds.py",
+    "backend/migrations/20261105010000_update_format_and_delivery.py",
+    "backend/migrations/20261105010001_meeting_presence.py",
+    "backend/migrations/20261105010100_learn_beta.py",
+    "backend/migrations/20261105010200_suggestions.py",
+    "backend/migrations/20261105010233_page_audience.py",
+    "backend/migrations/20261105011434_meeting_item_task_proposals.py",
+    "backend/migrations/20261105025124_meeting_item_versions.py",
+    "backend/migrations/20261105034511_resend_system_asks.py",
+    "backend/migrations/20261105040656_email_sending_queue.py",
+    "backend/migrations/20261105050420_index_check_waits_retry.py",
+    "backend/migrations/20261105050905_page_tombstones.py",
+    "backend/migrations/20261105054838_harden_email_send_proofs.py",
+    "backend/migrations/20261105070431_initialize_mail_reply_history.py",
+    "backend/migrations/20261105071056_page_history_sources.py",
+    "backend/migrations/20261105101525_letter_sources.py",
+    "backend/migrations/20261105103841_check_wait_pr_identity.py",
+    "backend/migrations/20261105120026_cloud_machine_deletions.py",
+    "backend/migrations/20261105122651_cloud_machine_replacement_codes.py",
+    "backend/migrations/20261105131220_cloud_machine_enrollment_failures.py",
+    "backend/migrations/20261105134042_cloud_machine_deletion_age.py",
+    "backend/migrations/20261105213649_task_readers.py",
+    "backend/migrations/20261105214334_retire_replaced_job_mirrors.py",
+    "backend/migrations/20261105215933_attempt_acting_person.py",
+    "backend/migrations/20261105220549_tools_and_keys.py",
+    "backend/migrations/20261105220550_tools_from_credentials.py",
+    "backend/migrations/20261105222012_one_send_policy.py",
+    "backend/migrations/20261105235413_task_followers.py",
+    "backend/migrations/20261106010106_marketing_step_names.py",
+    "backend/migrations/20261106030000_comments_route.py",
+    "backend/migrations/20261106063137_skill_device_codes_client_hash.py",
+    "backend/migrations/20261106070134_tool_audience.py",
+    "backend/migrations/20261106070714_ad_tool_services.py",
+    "backend/migrations/20261106082557_cloud_machine_grow_storage.py",
+    "backend/migrations/20261106084204_retire_memory_tidy.py",
+    "backend/migrations/20261106085449_ad_budgets_warn_only.py",
+    "backend/migrations/20261106092712_question_task_fields.py",
+    "backend/migrations/20261106112609_derived_waiting.py",
+]
+
 [lint]
-select = ["F", "E9", "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004"]
+select = [
+    "F", "E9", "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004",
+    "RUF006", "RUF100", "S113", "S602", "E722", "T10", "PLW0711",
+]
 
 # Test code gets only undefined names (F821), unused locals (F841) and syntax errors (E9). Pytest fixtures
 # make the rest noisy (F811 redefinitions, unused fixture imports, ...).
@@ -17,17 +124,20 @@ select = ["F", "E9", "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "P
     "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004", "F401", "F402", "F403", "F404", "F405",
     "F406", "F407", "F501", "F502", "F503", "F504", "F505", "F506", "F507", "F508", "F509", "F521", "F522", "F523",
     "F524", "F525", "F541", "F601", "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
-    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901"
+    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901",
+    "RUF006", "RUF100", "S113", "S602", "E722", "T10", "PLW0711"
 ]
 "**/test_*.py" = [
     "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004", "F401", "F402", "F403", "F404", "F405",
     "F406", "F407", "F501", "F502", "F503", "F504", "F505", "F506", "F507", "F508", "F509", "F521", "F522", "F523",
     "F524", "F525", "F541", "F601", "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
-    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901"
+    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901",
+    "RUF006", "RUF100", "S113", "S602", "E722", "T10", "PLW0711"
 ]
 "**/conftest.py" = [
     "B", "PLE", "PLW1510", "ASYNC", "DTZ", "S110", "BLE001", "PGH004", "F401", "F402", "F403", "F404", "F405",
     "F406", "F407", "F501", "F502", "F503", "F504", "F505", "F506", "F507", "F508", "F509", "F521", "F522", "F523",
     "F524", "F525", "F541", "F601", "F602", "F621", "F622", "F631", "F632", "F633", "F634", "F701", "F702", "F704",
-    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901"
+    "F706", "F707", "F722", "F811", "F822", "F823", "F842", "F901",
+    "RUF006", "RUF100", "S113", "S602", "E722", "T10", "PLW0711"
 ]

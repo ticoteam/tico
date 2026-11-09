@@ -1,4 +1,4 @@
-// Motion on a real hub (ui/styles/motion.css, ui/app/motion.js), as Dana on a phone, then a desktop. With motion on:
+// Motion on a real hub (ui/styles/motion.css, ui/app/motion.ts), as Dana on a phone, then a desktop. With motion on:
 // the sidebar's current-row bar slides to the new row when the page changes (desktop: a phone's sidebar is a drawer),
 // Ask's panel fades in as it opens, and a count that changes ticks without its badge's box moving by a pixel. With
 // reduced motion: nothing runs after a page change or after Ask opens (base.css shortens what is left to 1ms, so a
@@ -14,7 +14,7 @@ const moving = page => page.evaluate(() => document.getAnimations().filter(a => 
   const el = a.effect?.target;
   return `${a.animationName || a.transitionProperty || a.constructor.name} on ${el ? el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + [...el.classList].slice(0, 2).map(c => '.' + c).join('') : '?'}`;
 }));
-const askButton = phone => phone ? '#mobile-ask' : '#ask-fab';
+const askButton = phone => phone ? '#mobile-ask' : '#ask-row';
 
 run('motion', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/overview'});

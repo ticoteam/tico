@@ -1,0 +1,992 @@
+Free Standard Data Processing Agreement
+
+ Skip to content
+
+A plain language, highly structured DPA for cloud or hosted services. Use with the Common Paper CSA or your own MSA for GDPR compliance.
+
+Create your free DPA
+
+ All downloads and formats
+
+Streamline your full contract workflow
+
+Everything you need to get your agreement sent and signed today:
+
+Templates -> Proposals -> Negotiations -> Approvals -> Esignature -> Recordkeeping
+
+ Try it free
+
+A higher standard
+
+Common Paper agreements help you get on the same page, faster.
+
+Industry-standard terms
+
+Written by a committee of experienced attorneys so you can start negotiations on the same, reasonable terms every time.
+
+Easy to negotiate
+
+No more endless pages of redlines. Key agreement terms and SCC details live on a single, easy to adjust Cover Page.
+
+Free and open source
+
+Most companies don’t need a bespoke DPA. Our agreements are available for anyone to use and modify.
+
+ Using this agreement
+
+Common Paper agreements consist of a signed Cover Page and Standard Terms that are hosted online and incorporated by reference. Creating and executing an agreement is easy:
+
+Customize your DPA terms in the Cover Page
+
+Use this document to describe the legal details of the DPA, plus complete necessary details for the Standard Contractual Clauses (SCCs).
+
+Send for signature
+
+Once both parties have agreed on the terms, send the Cover Page for signature using your preferred method.
+
+ View the Standard Terms
+
+About this Common Paper agreement
+
+How was this agreement created?
+
+The Common Paper DPA was created by a committee of dozens of attorneys representing technology vendors, procurement teams, boutique firms, and Big Law.
+
+I see this agreement is hosted online. Does that mean it will change?
+
+Version 1.1 of this agreement will remain unchanged and hosted at commonpaper.com/standards/data-processing-agreement/1.1. Over time, we will create new versions to accommodate changes to the law and additional use cases. We expect future changes to occur infrequently, and they will be posted as a new version. However, any new versions will not change agreements that incorporate prior versions.
+
+How do I use this agreement?
+
+To execute an agreement using the Common Paper DPA, first download a copy of the Cover Page in your preferred format. Then fill out the details of your agreement like approved subprocessors, and the details required in the SCC annexes like the categories of personal data being processed. Finally, sign your Cover Page with your counterparty via the signing process of your choice. The Cover Page incorporates the Standard Terms by reference, completing the executed agreement.
+
+Do I have to incorporate the Standard Terms by reference?
+
+You can also download the full version of the agreement here and include the Standard Terms in the agreement itself.
+
+Can I customize the Cover Page?
+
+Yes, you can feel free to change the Cover Page any way you like. Many companies decide to add their company branding or logo and edit some of the text. The only thing you are required to keep is the license information and link to the Standard Terms.
+
+Can I customize the Standard Terms?
+
+All modifications to the Standard Terms should be made by addendum on the Cover Page. Incorporating the Standard Terms by reference from the Common Paper website gives both sides assurance that all key details and modifications are explicitly called out in the Cover Page.
+
+What license is this agreement released under?
+
+Common Paper agreements are free to use and modify under CC BY 4.0.
+
+What is GDPR?
+
+GDPR or General Data Protection Regulation is a regulation that protects an individual’s personal data in Europe (EU) and the European Economic Area (EEA). It was adopted into UK law following the UK’s departure from the EU. The GDPR restricts what companies can and cannot do with the personal data of EU/EEA individuals. It also restricts companies from transferring personal data of an EU/EEA individual to a country outside of the EU/EEA without appropriate safeguards in place.
+
+What are the SCCs?
+
+The SCCs (short for standard contractual clauses and sometimes called the model clauses) are published and released by the European Commission as one way to allow for data transfers from the EU/EEA to outside of the EU/EEA. The SCCs contain contractual clauses to ensure appropriate data protection safeguards are established and followed under GDPR.
+
+What version of the SCCs does this use?
+
+The Common Paper DPA incorporates the new SCCs published in June 2021 following Schrems II. If this makes no sense to you, it means that the Common Paper DPA takes into account the most recent information as of the date of release.
+
+Can I use this DPA for all processing activities?
+
+No. The Common Paper Committee decided to create a simple DPA that everyone could understand. To remove complexity, the DPA was designed to support the most common scenario for cloud and hosted services: Controller-to-Processor and Processor-to-Processor relationships that include a cross-border transfer from within the EU/EEA to outside the EU/EEA. So this Common Paper DPA is not meant for Controller-to-Controller, Processor-to-Controller, or Joint Controller relationships, or for data transfers within the EU/EEA. If you need a DPA for these other situations, let us know.
+
+Can I use this for compliance with CCPA or other data privacy regulations?
+
+No, the Common Paper DPA is only designed for GDPR compliance. However, the Cover Page includes optional language to establish a service provider relationship under the California Consumer Privacy Act (CCPA). In addition, the Common Paper Committee is working on standard agreements for other data privacy regulations.
+
+Configuration Guide
+
+Available formats
+
+This agreement is free to use or modify under CC BY 4.0. The agreement is available in the following formats.
+
+Configuration guide
+
+Set up this agreement by answering a few questions.
+
+Standard Terms
+
+ Full text: 
+
+ Standard DPA posted at 
+ commonpaper.com/standards/data-processing-agreement/1.1
+
+ Markdown:
+
+GitHub
+
+Cover Page
+
+Word (DOCX)
+
+Cover Page & 
+Standard Terms
+
+Word (DOCX)
+
+Optional info sheet
+
+ PDF
+
+ Word (DOCX)
+
+Current version: 1.1
+ See full version history -> 
+
+Streamline your full contract workflow
+
+Everything you need to get your agreement sent and signed today:
+
+Templates -> Proposals -> Negotiations -> Approvals -> Esignature -> Recordkeeping
+
+ Try it free
+
+ COVER PAGE
+
+Data Processing Agreement
+
+USING THIS DPA
+
+This DPA has 2 parts: (1) the Key Terms on this Cover Page and (2) the Common Paper DPA Standard Terms Version 1.1 posted at commonpaper.com/standards/data-processing-agreement/1.1/ (“DPA Standard Terms”), which is incorporated by reference. If there is any inconsistency between the parts of the DPA, the Cover Page will control over the DPA Standard Terms. Capitalized and highlighted words have the meanings given on the Cover Page. However, if the Cover Page omits or does not define a highlighted word, the default meaning will be “none” or “not applicable” and the correlating clause, sentence, or section does not apply to this Agreement. All other capitalized words have the meanings given in the DPA Standard Terms or the Agreement. A copy of the DPA Standard Terms is attached for convenience only.
+
+Key Terms
+
+The key legal terms of the DPA are as follows:
+
+Agreement
+
+This DPA supplements the [ name & date of underlying agreement ].
+
+ Approved Subprocessors
+
+[ x ] List of Subprocessors available at [ insert URL ]
+
+ [ ] [ Subprocessor name ]
+
+Country of location: [ list of all countries ]
+
+Processing task: [ fill in ]
+
+Provider Security Contact
+
+[ enter email and/or physical address ]
+
+Security Policy
+
+[ x ] As defined in the Agreement.
+
+ [ ] Provider will use commercially reasonable efforts to secure the Service from unauthorized access, alteration, or use and other unlawful tampering.
+
+ [ ] Security Policy available at [ insert URL of where to find ]
+
+ [ ] Provider will maintain annually updated reports or annual certifications of compliance with the following:
+
+ [ ] ISO 27001
+ [ ] Penetration testing
+
+ [ ] SOC 2 Type I
+ [ ] PCI Level 1
+
+ [ ] SOC 2 Type II
+ [ ] PCI Level 2
+
+ [ ] HITRUST
+ [ ] FedRAMP Authorized
+
+ [ ] Other: [ fill in ]
+
+ Changes to the Agreement
+
+DPA Covered Claim
+
+[ ] The Agreement includes an additional Provider Covered Claim for any action, proceeding, or claim arising out of or relating to [ (1) Provider’s breach or alleged breach of the DPA, or (2) Provider’s gross negligence or willful misconduct, in each case, that results in a Security Incident. ]
+
+[ ] Without limiting the indemnity obligations in the Agreement, if any, Provider will indemnify, defend, and hold harmless Customer from and against any action, proceeding, or claim made by someone other than Customer, Customer’s Affiliates, or Users, and all out-of-pocket damages, awards, settlements, costs, and expenses, including reasonable attorneys’ fees and other legal expenses, that arise from [ (1) Provider’s breach or alleged breach of the DPA, or (2) Provider’s gross negligence or willful misconduct, in each case, that results in a Security Incident. ]
+
+DPA Liability Cap
+
+[ ] The Agreement includes an additional Increased Claim for DPA Covered Claims, with a separate Increased Cap Amount of the greater of $[_________] or [ fill in a number greater than 1 ] times the fees paid or payable by Customer to Provider in the 12 month period immediately before the claim.
+
+[ ] The following is added to the end of Section 8.1 of the DPA Standard Terms:
+
+However, Provider’s total cumulative liability arising out of or related to DPA Covered Claims will not be more than the greater of $[_________] or [ fill in a number greater than 1 ] times the fees paid or payable by Customer to Provider in the 12 month period immediately before the claim.
+
+Governing Law and Chosen Courts
+
+[ ] Notwithstanding the governing law or similar clauses of the Agreement, all interpretations and disputes about this DPA will be governed by the laws of the Governing State without regard to its conflict of laws provisions. In addition, and notwithstanding the forum selection, jurisdiction, or similar clauses of the Agreement, the parties agree to bring any legal suit, action, or proceeding about this DPA in, and each party irrevocably submits to the exclusive jurisdiction of, the courts of the Governing State.
+
+Governing State means: [ Select a state, province, or country ]
+
+Service Provider Relationship
+
+[ ] To the extent California Consumer Privacy Act, Cal. Civ. Code § 1798.100 et seq (“CCPA”) applies, the parties acknowledge and agree that Provider is a service provider and is receiving Personal Data from Customer to provide the Service as agreed in the Agreement and detailed below (see Nature and Purpose of Processing), which constitutes a limited and specified business purpose. Provider will not sell or share any Personal Data provided by Customer under the Agreement. In addition, Provider will not retain, use, or disclose any Personal Data provided by Customer under the Agreement except as necessary for providing the Service for Customer, as stated in the Agreement, or as permitted by Applicable Data Protection Laws. Provider certifies that it understands the restrictions of this paragraph and will comply with all Applicable Data Protection Laws. Provider will notify Customer if it can no longer meet its obligation under the CCPA.
+
+ Restricted Transfers
+
+Governing Member State
+
+[ ] EEA Transfers: [ Select an EEA country ]
+
+[ ] UK Transfers: [ Select England and Wales; Scotland; or Northern Ireland ]
+
+ Annex I(A) List of Parties
+
+Data Exporter
+
+Name: Customer
+
+Address: [ Customer’s Physical Address ]
+
+Contact Person:
+
+ Name: [ Customer contact name ] 
+
+ Position: [ Customer contact title ] 
+
+ Address: [ Physical address ]
+
+Activities relevant to transfer: See Annex 1(B)
+
+Role: [ Pick one: Controller | Processor ]
+
+Data Importer
+
+Name: Provider
+
+Address: [ Provider’s Physical Address ]
+
+Contact Person:
+
+ Name: [ Provider contact name ] 
+
+ Position: [ Provider contact title ] 
+
+ Address: [ Physical address ]
+
+Activities relevant to transfer: See Annex 1(B)
+
+Role: Processor
+
+ Annex I(B) Description of Transfer and Processing Activities
+
+Service
+
+[ Name of product or service ]
+
+Categories of Data Subjects
+
+[ ] Customer’s end users or customers
+
+[ ] Customer’s employees
+
+[ ] [ custom option ]
+
+Categories of Personal Data
+
+[ ] Name
+
+[ ] Contact information such as email, phone number, or address
+
+[ ] Employment information such as employee ID or compensation
+
+[ ] Financial information such as bank account numbers
+
+[ ] Professional or biographic information such as resume or CV
+
+[ ] Transactional information such as account information or purchases
+
+[ ] User activity and analysis such as device information or IP address
+
+[ ] Location information
+
+[ ] [ custom option ]
+
+Special Category Data
+
+ Is special category data Processed?
+
+ ( ) Yes ( ) No
+
+Special Category Data Restrictions or Safeguards
+
+[ ] See Security Policy
+
+[ ] [ custom option ]
+
+Frequency of Transfer
+
+[ ] Continuous
+
+[ ] [ custom options ]
+
+Nature and Purpose of Processing
+
+Provider will Process Customer Personal Data as instructed in Section 2.3 of the DPA Standard Terms. The nature of processing includes:
+
+[ ] Receiving data, including collection, accessing, retrieval, recording, and data entry
+
+[ ] Holding data, including storage, organization, and structuring
+
+[ ] Using data, including analysis, consultation, testing, automated decision making, and profiling
+
+[ ] Updating data, including correcting, adaptation, alteration, alignment, and combination
+
+[ ] Protecting data, including restricting, encrypting, and security testing
+
+[ ] Sharing data, including disclosure, dissemination, allowing access, or otherwise making available
+
+[ ] Returning data to the data exporter or data subject
+
+[ ] Erasing data, including destruction and deletion
+
+[ ] [ custom options ]
+
+Duration of Processing
+
+Provider will process Customer Personal Data as long as required (i) to conduct the Processing activities instructed in Section 2.2(a)-(d) of the Standard Terms; or (ii) by Applicable Laws.
+
+ Annex I(C)
+
+Competent Supervisory Authority
+
+The supervisory authority will be the supervisory authority of the data exporter, as determined in accordance with Clause 13 of the EEA SCCs or the relevant provision of the UK Addendum.
+
+ Annex II
+
+Technical and Organizational Security Measures
+
+[ x ] See Security Policy
+
+[ ] Pseudonymization and encryption of personal data: 
+
+[ describe the measures ]
+
+[ ] Ensuring ongoing confidentiality, integrity, availability, and resilience of processing systems and services: 
+
+[ describe the measures ]
+
+[ ] Ability to restore the availability of and access to Customer Personal Data in a timely manner following a physical or technical incident: 
+
+[ describe the measures ]
+
+[ ] Regular testing, assessment, and evaluation of the effectiveness of technical and organizational measures used to secure Processing: 
+
+[ describe the measures ]
+
+[ ] User identification and authorization process and protection: 
+
+[ describe the measures ]
+
+[ ] Protecting Customer Personal Data during transmission (in transit): 
+
+[ describe the measures ]
+
+[ ] Protecting Customer Personal Data during storage (at rest): 
+
+[ describe the measures ]
+
+[ ] Physical security where Customer Personal Data is processed: 
+
+[ describe the measures ]
+
+[ ] Events logging: 
+
+[ describe the measures ]
+
+[ ] Systems configuration, including default configuration: 
+
+[ describe the measures ]
+
+[ ] Internal IT and IT security governance and management: 
+
+[ describe the measures ]
+
+[ ] Certification or assurance of processes and products: 
+
+[ describe the measures ]
+
+[ ] Ensuring data minimization: 
+
+[ describe the measures ]
+
+[ ] Ensuring data quality: 
+
+[ describe the measures ]
+
+[ ] Ensuring limited data retention: 
+
+[ describe the measures ]
+
+[ ] Ensuring accountability: 
+
+[ describe the measures ]
+
+[ ] Allowing data portability and ensuring erasure: 
+
+[ describe the measures ]
+
+Provider and Customer have not changed the DPA Standard Terms except for the details on the Cover Page above. By signing this Cover Page, each party agrees to enter into this DPA as of the last date of signature below.
+
+PROVIDER: [official company name]
+
+CUSTOMER: [official company name]
+
+ Signature
+
+ Print Name
+
+ Title
+
+ Date
+
+ STANDARD TERMS
+
+Processor and Subprocessor Relationships
+
+Provider as Processor. In situations where Customer is a Controller of the Customer Personal Data, Provider will be deemed a Processor that is Processing Personal Data on behalf of Customer.
+
+Provider as Subprocessor. In situations where Customer is a Processor of the Customer Personal Data, Provider will be deemed a Subprocessor of the Customer Personal Data.
+
+Processing
+
+Processing Details. Annex I(B) on the Cover Page describes the subject matter, nature, purpose, and duration of this Processing, as well as the Categories of Personal Data collected and Categories of Data Subjects.
+
+Processing Instructions. Customer instructs Provider to Process Customer Personal Data: (a) to provide and maintain the Service; (b) as may be further specified through Customer’s use of the Service; (c) as documented in the Agreement; and (d) as documented in any other written instructions given by Customer and acknowledged by Provider about Processing Customer Personal Data under this DPA. Provider will abide by these instructions unless prohibited from doing so by Applicable Laws. Provider will immediately inform Customer if it is unable to follow the Processing instructions. Customer has given and will only give instructions that comply with Applicable Laws.
+
+Processing by Provider. Provider will only Process Customer Personal Data in accordance with this DPA, including the details in the Cover Page. If Provider updates the Service to update existing or include new products, features, or functionality, Provider may change the Categories of Data Subjects, Categories of Personal Data, Special Category Data, Special Category Data Restrictions or Safeguards, Frequency of Transfer, Nature and Purpose of Processing, and Duration of Processing as needed to reflect the updates by notifying Customer of the updates and changes.
+
+Customer Processing. Where Customer is a Processor and Provider is a Subprocessor, Customer will comply with all Applicable Laws that apply to Customer’s Processing of Customer Personal Data. Customer’s agreement with its Controller will similarly require Customer to comply with all Applicable Laws that apply to Customer as a Processor. In addition, Customer will comply with the Subprocessor requirements in Customer’s agreement with its Controller.
+
+Consent to Processing. Customer has complied with and will continue to comply with all Applicable Data Protection Laws concerning its provision of Customer Personal Data to Provider and/or the Service, including making all disclosures, obtaining all consents, providing adequate choice, and implementing relevant safeguards required under Applicable Data Protection Laws.
+
+ Subprocessors.
+
+Provider will not provide, transfer, or hand over any Customer Personal Data to a Subprocessor unless Customer has approved the Subprocessor. The current list of Approved Subprocessors includes the identities of the Subprocessors, their country of location, and their anticipated Processing tasks. Provider will inform Customer at least 10 business days in advance and in writing of any intended changes to the Approved Subprocessors whether by addition or replacement of a Subprocessor, which allows Customer to have enough time to object to the changes before the Provider begins using the new Subprocessor(s). Provider will give Customer the information necessary to allow Customer to exercise its right to object to the change to Approved Subprocessors. Customer has 30 days after notice of a change to the Approved Subprocessors to object, otherwise Customer will be deemed to accept the changes. If Customer objects to the change within 30 days of notice, Customer and Provider will cooperate in good faith to resolve Customer’s objection or concern.
+
+When engaging a Subprocessor, Provider will have a written agreement with the Subprocessor that ensures the Subprocessor only accesses and uses Customer Personal Data (i) to the extent required to perform the obligations subcontracted to it, and (ii) consistent with the terms of Agreement.
+
+If the GDPR applies to the Processing of Customer Personal Data, (i) the data protection obligations described in this DPA (as referred to in Article 28(3) of the GDPR, if applicable) are also imposed on the Subprocessor, and (ii) Provider’s agreement with the Subprocessor will incorporate these obligations, including details about how Provider and its Subprocessor will coordinate to respond to inquiries or requests about the Processing of Customer Personal Data. In addition, Provider will share, at Customer’s request, a copy of its agreements (including any amendments) with its Subprocessors. To the extent necessary to protect business secrets or other confidential information, including personal data, Provider may redact the text of its agreement with its Subprocessor prior to sharing a copy.
+
+Provider remains fully liable for all obligations subcontracted to its Subprocessors, including the acts and omissions of its Subprocessors in Processing Customer Personal Data. Provider will notify Customer of any failure by its Subprocessors to fulfill a material obligation about Customer Personal Data under the agreement between Provider and the Subprocessor.
+
+Restricted Transfers
+
+Authorization. Customer agrees that Provider may transfer Customer Personal Data outside the EEA, the United Kingdom, or other relevant geographic territory as necessary to provide the Service. If Provider transfers Customer Personal Data to a territory for which the European Commission or other relevant supervisory authority has not issued an adequacy decision, Provider will implement appropriate safeguards for the transfer of Customer Personal Data to that territory consistent with Applicable Data Protection Laws.
+
+Ex-EEA Transfers. Customer and Provider agree that if the GDPR protects the transfer of Customer Personal Data, the transfer is from Customer from within the EEA to Provider outside of the EEA, and the transfer is not governed by an adequacy decision made by the European Commission, then by entering into this DPA, Customer and Provider are deemed to have signed the EEA SCCs and their Annexes, which are incorporated by reference. Any such transfer is made pursuant to the EEA SCCs, which are completed as follows:
+
+Module Two (Controller to Processor) of the EEA SCCs apply when Customer is a Controller and Provider is Processing Customer Personal Data for Customer as a Processor.
+
+Module Three (Processor to Sub-Processor) of the EEA SCCs apply when Customer is a Processor and Provider is Processing Customer Personal Data on behalf of Customer as a Subprocessor.
+
+For each module, the following applies (when applicable):
+
+The optional docking clause in Clause 7 does not apply;
+
+In Clause 9, Option 2 (general written authorization) applies, and the minimum time period for prior notice of Subprocessor changes is 10 business days;
+
+In Clause 11, the optional language does not apply;
+
+All square brackets in Clause 13 are removed;
+
+In Clause 17 (Option 1), the EEA SCCs will be governed by the laws of Governing Member State;
+
+In Clause 18(b), disputes will be resolved in the courts of the Governing Member State; and
+
+The Cover Page to this DPA contains the information required in Annex I, Annex II, and Annex III of the EEA SCCs.
+
+Ex-UK Transfers. Customer and Provider agree that if the UK GDPR protects the transfer of Customer Personal Data, the transfer is from Customer from within the United Kingdom to Provider outside of the United Kingdom, and the transfer is not governed by an adequacy decision made by the United Kingdom Secretary of State, then by entering into this DPA, Customer and Provider are deemed to have signed the UK Addendum and their Annexes, which are incorporated by reference. Any such transfer is made pursuant to the UK Addendum, which is completed as follows:
+
+Section 3.2 of this DPA contains the information required in Table 2 of the UK Addendum.
+
+Table 4 of the UK Addendum is modified as follows: Neither party may end the UK Addendum as set out in Section 19 of the UK Addendum; to the extent ICO issues a revised Approved Addendum under Section 18 of the UK Addendum, the parties will work in good faith to revise this DPA accordingly.
+
+The Cover Page contains the information required by Annex 1A, Annex 1B, Annex II, and Annex III of the UK Addendum.
+
+Other International Transfers. For Personal Data transfers where Swiss law (and not the law in any EEA member state or the United Kingdom) applies to the international nature of the transfer, references to the GDPR in Clause 4 of the EEA SCCs are, to the extent legally required, amended to refer to the Swiss Federal Data Protection Act or its successor instead, and the concept of supervisory authority will include the Swiss Federal Data Protection and Information Commissioner.
+
+ Security Incident Response
+
+Upon becoming aware of any Security Incident, Provider will: (a) notify Customer without undue delay when feasible, but no later than 72 hours after becoming aware of the Security Incident; (b) provide timely information about the Security Incident as it becomes known or as is reasonably requested by Customer; and (c) promptly take reasonable steps to contain and investigate the Security Incident. Provider’s notification of or response to a Security Incident as required by this DPA will not be construed as an acknowledgment by Provider of any fault or liability for the Security Incident.
+
+ Audit & Reports
+
+Audit Rights. Provider will give Customer all information reasonably necessary to demonstrate its compliance with this DPA and Provider will allow for and contribute to audits, including inspections by Customer, to assess Provider’s compliance with this DPA. However, Provider may restrict access to data or information if Customer’s access to the information would negatively impact Provider’s intellectual property rights, confidentiality obligations, or other obligations under Applicable Laws. Customer acknowledges and agrees that it will only exercise its audit rights under this DPA and any audit rights granted by Applicable Data Protection Laws by instructing Provider to comply with the reporting and due diligence requirements below. Provider will maintain records of its compliance with this DPA for 3 years after the DPA ends.
+
+Security Reports. Customer acknowledges that Provider is regularly audited against the standards defined in the Security Policy by independent third-party auditors. Upon written request, Provider will give Customer, on a confidential basis, a summary copy of its then-current Report so that Customer can verify Provider’s compliance with the standards defined in the Security Policy.
+
+Security Due Diligence. In addition to the Report, Provider will respond to reasonable requests for information made by Customer to confirm Provider’s compliance with this DPA, including responses to information security, due diligence, and audit questionnaires, or by giving additional information about its information security program. All such requests must be in writing and made to the Provider Security Contact and may only be made once a year.
+
+ Coordination & Cooperation
+
+Response to Inquiries. If Provider receives any inquiry or request from anyone else about the Processing of Customer Personal Data, Provider will notify Customer about the request and Provider will not respond to the request without Customer’s prior consent. Examples of these kinds of inquiries and requests include a judicial or administrative or regulatory agency order about Customer Personal Data where notifying Customer is not prohibited by Applicable Law, or a request from a data subject. If allowed by Applicable Law, Provider will follow Customer’s reasonable instructions about these requests, including providing status updates and other information reasonably requested by Customer. If a data subject makes a valid request under Applicable Data Protection Laws to delete or opt out of Customer’s giving of Customer Personal Data to Provider, Provider will assist Customer in fulfilling the request according to the Applicable Data Protection Law. Provider will cooperate with and provide reasonable assistance to Customer, at Customer’s expense, in any legal response or other procedural action taken by Customer in response to a third-party request about Provider’s Processing of Customer Personal Data under this DPA.
+
+DPIAs and DTIAs. If required by Applicable Data Protection Laws, Provider will reasonably assist Customer in conducting any mandated data protection impact assessments or data transfer impact assessments and consultations with relevant data protection authorities, taking into consideration the nature of the Processing and Customer Personal Data.
+
+ Deletion of Customer Personal Data
+
+Deletion by Customer. Provider will enable Customer to delete Customer Personal Data in a manner consistent with the functionality of the Services. Provider will comply with this instruction as soon as reasonably practicable except where further storage of Customer Personal Data is required by Applicable Law.
+
+Deletion at DPA Expiration.
+
+After the DPA expires, Provider will return or delete Customer Personal Data at Customer’s instruction unless further storage of Customer Personal Data is required or authorized by Applicable Law. If return or destruction is impracticable or prohibited by Applicable Laws, Provider will make reasonable efforts to prevent additional Processing of Customer Personal Data and will continue to protect the Customer Personal Data remaining in its possession, custody, or control. For example, Applicable Laws may require Provider to continue hosting or Processing Customer Personal Data.
+
+If Customer and Provider have entered the EEA SCCs or the UK Addendum as part of this DPA, Provider will only give Customer the certification of deletion of Personal Data described in Clause 8.1(d) and Clause 8.5 of the EEA SCCs if Customer asks for one.
+
+ Limitation of Liability
+
+Liability Caps and Damages Waiver. To the maximum extent permitted under Applicable Data Protection Laws, each party’s total cumulative liability to the other party arising out of or related to this DPA will be subject to the waivers, exclusions, and limitations of liability stated in the Agreement.
+
+Related-Party Claims. Any claims made against Provider or its Affiliates arising out of or related to this DPA may only be brought by the Customer entity that is a party to the Agreement.
+
+Exceptions. This DPA does not limit any liability to an individual about the individual’s data protection rights under Applicable Data Protection Laws. In addition, this DPA does not limit any liability between the parties for violations of the EEA SCCs or UK Addendum.
+
+ Conflicts Between Documents
+
+This DPA forms part of and supplements the Agreement. If there is any inconsistency between this DPA, the Agreement, or any of their parts, the part listed earlier will control over the part listed later for that inconsistency: (1) the EEA SCCs or the UK Addendum, (2) this DPA, and then (3) the Agreement.
+
+ Term of Agreement
+
+This DPA will start when Provider and Customer agree to a Cover Page for the DPA and sign or electronically accept the Agreement and will continue until the Agreement expires or is terminated. However, Provider and Customer will each remain subject to the obligations in this DPA and Applicable Data Protection Laws until Customer stops transferring Customer Personal Data to Provider and Provider stops Processing Customer Personal Data.
+
+ Definitions
+
+“Applicable Laws” means the laws, rules, regulations, court orders, and other binding requirements of a relevant government authority that apply to or govern a party.
+
+“Applicable Data Protection Laws” means the Applicable Laws that govern how the Service may process or use an individual’s personal information, personal data, personally identifiable information, or other similar term.
+
+“Controller” will have the meaning(s) given in the Applicable Data Protection Laws for the company that determines the purpose and extent of Processing Personal Data.
+
+“Cover Page” means a document that is signed or electronically accepted by the parties that incorporates these DPA Standard Terms and identifies Provider, Customer, and the subject matter and details of the data processing.
+
+“Customer Personal Data” means Personal Data that Customer uploads or provides to Provider as part of the Service and that is governed by this DPA.
+
+“DPA” means these DPA Standard Terms, the Cover Page between Provider and Customer, and the policies and documents referenced in or attached to the Cover Page.
+
+“EEA SCCs” means the standard contractual clauses annexed to the European Commission’s Implementing Decision 2021/914 of 4 June 2021 on standard contractual clauses for the transfer of personal data to third countries pursuant to Regulation (EU) 2016/679 of the European Parliament and of the European Council.
+
+“European Economic Area” or “EEA” means the member states of the European Union, Norway, Iceland, and Liechtenstein.
+
+“GDPR” means European Union Regulation 2016/679 as implemented by local law in the relevant EEA member nation.
+
+“Personal Data” will have the meaning(s) given in the Applicable Data Protection Laws for personal information, personal data, or other similar term.
+
+“Processing” or “Process” will have the meaning(s) given in the Applicable Data Protection Laws for any use of, or performance of a computer operation on, Personal Data, including by automatic methods.
+
+“Processor” will have the meaning(s) given in the Applicable Data Protection Laws for the company that Processes Personal Data on behalf of the Controller.
+
+“Report” means audit reports prepared by another company according to the standards defined in the Security Policy on behalf of Provider.
+
+“Restricted Transfer” means (a) where the GDPR applies, a transfer of personal data from the EEA to a country outside of the EEA which is not subject to an adequacy determination by the European Commission; and (b) where the UK GDPR applies, a transfer of personal data from the United Kingdom to any other country which is not subject to adequacy regulations adopted pursuant to Section 17A of the United Kingdom Data Protection Act 2018.
+
+“Security Incident” means a Personal Data Breach as defined in Article 4 of the GDPR.
+
+“Service” means the product and/or services described in the Agreement.
+
+“Special Category Data” will have the meaning given in Article 9 of the GDPR.
+
+“Subprocessor” will have the meaning(s) given in the Applicable Data Protection Laws for a company that, with the approval and acceptance of Controller, assists the Processor in Processing Personal Data on behalf of the Controller.
+
+“UK GDPR” means European Union Regulation 2016/679 as implemented by section 3 of the United Kingdom’s European Union (Withdrawal) Act of 2018 in the United Kingdom.
+
+“UK Addendum” means the international data transfer addendum to the EEA SCCs issued by the Information Commissioner for Parties making Restricted Transfers under S119A(1) Data Protection Act 2018.
+
+Common Paper Data Processing Agreement (Version 1.1) free to use under CC BY 4.0.
+
+The DPA, annotated
+
+USING THIS DPA
+
+The Common Paper DPA supports two kinds of data processing relationships: Controller to Processor and Processor to Subprocessor. In each case, the former is assumed to be the “Customer”, and the latter is assumed to be the “Provider” of services, as those terms are used in the DPA Standard Terms.
+
+The customer can identify their role as either a “Controller” or “Processor” in the Data Exporter field below. The DPA refers to the provider’s processing obligations, whether as a “Processor” or “Subprocessor”, by using the defined term “Provider” in the DPA Standard Terms.
+
+Throughout this annotated guide, “you” assumes that the reader is the Provider, and that the Provider is a vendor selling or providing a product or services.
+
+The Common Paper DPA Standard Terms Version 1
+
+The DPA incorporates the DPA Standard Terms by reference, with a link to commonpaper.com/standards/data-processing-agreement/1.1. Each version of the DPA Standard Terms will remain unchanged and posted our website, and updates will get posted as new versions.
+
+Incorporated by reference
+
+Incorporating the DPA Standard Terms by reference ensures there are no hidden changes in the DPA Standard Terms.
+
+A copy of the DPA Standard Terms…
+
+This allows including a copy of the text of the Standard Terms for convenience. You can find a version without the standard terms attached on the data processing agreement page
+
+Key Terms
+
+The Key Terms contains the key legal details of each specific contract.
+
+The Key Terms are contained in a Cover Page. Learn about how standard agreements work in our anatomy of a contract blog post.
+
+Agreement
+
+Typically, Data Processing Agreements are not standalone agreements. This DPA works in conjunction with an underlying agreement to establish rules for processing, and provides GDPR and other privacy protections, to personal data affected by that agreement. This field allows you to identify that underlying agreement. If you make a SaaS product, then the underlying agreement is typically a CSA or clickthrough TOS.
+
+[ name & date of underlying agreement ]
+
+Square brackets with text indicate a field you can fill in or customize before sending the DPA.
+
+For this one, include details about the underlying agreement such as the title, the effective date, and the full legal name of each company that signed the agreement. For example, “Cloud Services Agreement between Company A, Inc. and Company B., Inc., dated [ effective date of agreement ].”
+
+Approved Subprocessors
+
+When a data processor uses its own vendor to processes the personal data of the end customer, that secondary processor will be considered a subprocessor.
+
+Section 2.6(a) of the DPA Standard Terms includes an authorization for the subprocessors identified in this field. However, customers must receive at least 10 business days prior notice of any additions to or replacements on the list, even if the list is hosted online.
+
+[ x ]
+
+Choices pre-marked with an “x” show the default selection. You can use the “x” to mark off your choice, or keep the text for your choice and delete the text for the other options.
+
+Insert URL
+
+Many companies post a list to their website, including the subprocessors name, location, and processing tasks.
+
+[ ]
+
+Use this option if you do not have an online list of subprocessors or if you prefer to identify the subprocessors here on the Cover Page.
+
+[ subprocessor name ]
+
+Many data processors have subprocessors, and most modern SaaS companies use subprocessors. Common subprocessors include hosting and infrastructure services such as AWS, Cloudflare, and Snowflake; communication and customer services such as Twilio, Intercom, and Zendesk; and financial and billing services such as Netsuite, Stripe, and Square.
+
+[ enter email and/or physical address ]
+
+Include contact information such as email and/or physical address for a security contact at your company. This person should be someone who is authorized to respond to customer requests related to your company’s information security program.
+
+Security Policy
+
+There are certain obligations within the DPA Standard Terms that rely on having this field defined. You should select at least one option, and can select more than one.
+
+[ x ]
+
+This option allows you to incorporate security requirements from the underlying agreement. If the underlying agreement does not contain those details, use the options below to specify the types of security measures in place.
+
+DPA Covered Claim
+
+Including a DPA Covered Claim is optional. If you delete this entire row, the default is to defer to any indemnity, or lack of indemnity, in the underlying agreement.
+
+Use this field to include an indemnity obligation under the DPA that is in addition to any obligations in the underlying agreement.
+
+[ ]
+
+Select this option if including additional indemnity obligations for the DPA and the underlying agreement is a Common Paper standard agreement.
+
+[ (1) Provider’s breach or alleged breach of the DPA, or (2) Provider’s gross negligence or willful misconduct, in each case, that results in a Security Incident. ]
+
+The included text reflects a default for Provider Covered Claims (i.e., what indemnification obligations the provider has) set by the Committee. You can modify it in any way to address your particular situation.
+
+Note: “Security Incident” refers to most kinds of data breaches.
+
+[ ]
+
+Select this option if including additional indemnity obligations for the DPA and the underlying agreement is not a Common Paper standard agreement.
+
+[ (1) Provider’s breach or alleged breach of the DPA, or (2) Provider’s gross negligence or willful misconduct, in each case, that results in a Security Incident. ]
+
+The included text reflects a default for Provider’s indemnification obligations the provider set by the Committee. You can modify it in any way to address your particular situation.
+
+Note: “Security Incident” refers to most kinds of data breaches.
+
+DPA Liability Cap
+
+Including a DPA Liability Cap is optional. This liability cap refers to the maximum monetary amount the provider could be responsible for in the event of a DPA Covered Claim above.
+
+If you delete this entire row, the default is to defer to any liability caps from the underlying agreement. If you use this field, it will override those values and set a separate dollar amount for DPA Covered Claim(s).
+
+[ ]
+
+Select this option if including a separate liability cap for DPA Covered Claims and the underlying agreement is a Common Paper standard agreement.
+
+[ ]
+
+Select this option if including a separate liability cap for DPA Covered Claims and the underlying agreement is not a Common Paper standard agreement.
+
+Governing Law and Chosen Courts
+
+Including governing law and chosen courts for the DPA is optional.
+
+Governing law identifies the set of laws under which the DPA will be interpreted. Chosen courts, or jurisdiction, identifies where a lawsuit related to the DPA can be filed in the event of a dispute.
+
+The governing law and chosen courts of the underlying agreement will apply to the DPA unless you use this field to override the underlying agreement.
+
+About this DPA
+
+There is a similar sounding but different field, Governing Member State, below in the Restricted Transfers section. That field below is about disputes over the Standard Contractual Clauses (or EEA SCCs), which are a special set of terms in addition to the DPA.
+
+This field (Governing Law and Chosen Courts) is just about disputes over the DPA, separate from the EEA SCCs.
+
+Service Provider Relationship
+
+Using this field is optional. It is written for the California Consumer Privacy Act, as amended by the California Privacy Rights Act, also known as CCPA. CCPA may apply if you are working with customers who do business in California and collect personal data of California residents.
+
+If CCPA does not apply, or if you do not qualify as a service provider, delete the entire row.
+
+[ ]
+
+If your customers want your DPA to establish that you are a “service provider” under the CCPA, review the statements in this field to see if they are all true. If you qualify as a service provider, check the box or include the language.
+
+Restricted Transfers
+
+The SCCs are a special set of terms that allow processing personal data outside of the European Economic Area (EEA) or UK. The EEA includes the 27 EU member states plus Iceland, Liechtenstein, and Norway.
+
+Note that as of January 31, 2020, the UK is no longer part of the EU. However, transfer of personal data out of the UK is allowed under separate terms know as the UK Addendum.
+
+The EEA SCCs and UK Addendum are published and released by the relevant data regulatory authorities as a way to allow for data transfers from the EEA or UK to outside of the EEA or UK, respectively. Both the EEA SCCs and UK Addendum contain contractual commitments to ensure appropriate data protection safeguards are established and followed under GDPR.
+
+Everything below this section relates to the EEA SCCs and UK Addendum, which are incorporated into the DPA in Section 3 of the DPA Standard Terms.
+
+Governing Member State
+
+This field is similar to the Governing Law and Chosen Courts field above, but applies slightly differently. The EEA SCCs and UK Addendum are considered special and distinct sets of terms that specifically apply to transferring personal data outside of the EEA or UK, respectively.
+
+In the event of a dispute over your compliance with the EEA SCCs or UK Addendum, the governing body selected in this field would oversee the dispute. This selection only applies to the EEA SCCs or UK Addendum. It can be different from Governing Law and Chosen Courts field, or the same if that field is set to a correlated geographic area.
+
+[ ]
+
+Select this option if you are based outside of the EEA and the customer will be transferring data to you from within the EEA. Then, select an EEA country to serve as the governing body for disputes over data transfers outside of the EEA.
+
+[ ]
+
+Select this option if you are based outside of the UK and the customer will be transferring data to you from within the UK. Then, select a region from within the UK to serve as the governing body over personal data transfers outside of the UK.
+
+Data Exporter
+
+The DPA needs to include contact details for the Data Exporter, which in this case is the customer.
+
+[ Pick one: Controller | Processor ]
+
+The customer will be either the data “Controller” or a data “Processor”.
+
+If you need to establish a Controller to Processor DPA, select Controller. If you need to establish a Processor to (Sub)Processor DPA, select Processor.
+
+Data Importer
+
+The DPA needs to include contact details for the Data Importer, which in this case is the provider.
+
+Processor
+
+The DPA Standard Terms refer to the obligations of a data importer, whether as a subprocessor or processor, using the term “Provider”.
+
+In this field, the Provider is always identified as a Processor. However, Section 1.2 of the DPA Standard Terms deems that designation to be that of “Subprocessor” if the Customer’s role above is that of a Processor.
+
+[ Name of product or service ]
+
+What is the name of the product or service that you are providing to the customer? Generally, this would be similar to your Cloud Service description in a CSA or Services description in a PSA.
+
+Categories of Data Subjects
+
+Use this field to identify whose personal data you are processing on behalf of the customer.
+
+You must select at least one option.
+
+[ Custom Option ]
+
+If this DPA is Processor to Subprocessor (i.e., Data Exporter’s role is “Processor”), you will want to include the individuals for whom the Customer is a processor. For example, “End users of a Controller on whose behalf Customer processes data.”
+
+Categories of Personal Data
+
+Use this field to identify what types personal data you are processing on behalf of the customer.
+
+You must select at least one option.
+
+Special Category Data
+
+Special Category Data is extra-sensitive personal information that may not be processed under the GDPR or UK GDPR except in limited circumstances.
+
+Special Category Data can include:
+
+ – personal data revealing racial or ethnic origin
+
+ – political opinions
+
+ – religious or philosophical beliefs
+
+ – trade union membership
+
+ – criminal offenses
+
+ – genetic data
+
+ – certain kinds of biometric data
+
+ – data concerning health, sex life, or sexual orientation
+
+ – other types of sensitive personal information
+
+Special Category Data Restrictions or Safeguards
+
+If you indicated that you do process Special Category Data above, you should include additional safeguards and protections for that data.
+
+Use this field to outline additional safeguards and protections such as strict purpose limitation, access records and restrictions, restrictions for onward transfers, or additional security measures. Select “See Security Policy” if these measures are already included in your Security Policy.
+
+Frequency of Transfer
+
+This field is about the frequency with which you receive personal data from your customer.
+
+You must select at least one option.
+
+[ ]
+
+“Continuous” is the typical choice for online service providers. The custom option applies in rare situations, for example if the processing involves a one-off data transfer.
+
+Nature and Purpose of Processing
+
+Use this field to identify the kinds of processing activities you will engage in with regard to personal data received from your customers.
+
+You must select at least one option.
+
+Provider will process Customer Personal Data as long as required…
+
+This language is not intended to be modified.
+
+The supervisory authority will be the supervisory authority of the data exporter, as determined in accordance with Clause 13…
+
+This language is not intended to be modified.
+
+Technical and Organizational Security Measures
+
+Check off the security measures that are applicable to your company’s practices. For those that you select, provide a brief description of you company’s actual practices.
+
+You must select at least one option. However, you are not required to include a response for each section.
+
+Note: There may be overlap across the types of listed security measures, and some of your descriptions may repeat or cross-reference others. In addition, your company may publish policies on its website that directly address some of these items, and it’s fine to reference those policy provisions in your descriptions. We have included suggestions for each section, but your description should reflect what is most applicable for your company’s practices.
+
+Pseudonymization and encryption of personal data
+
+The GPDR defines “pseudonymization” as “the processing of personal data in such a manner that the personal data can no longer be attributed to a specific data subject without the use of additional information, provided that such additional information is kept separately and is subject to technical and organizational measures to ensure that the personal data are not attributed to an identified or identifiable natural person.”
+
+Ensuring ongoing confidentiality, integrity, availability, and resilience of processing systems and services
+
+This section can be an overview of your company’s security procedures and frameworks. That might include implementation of data security tools like encryption, firewalls, DDos protection, and the like, as well as processes for testing, risk assessment and mitigation, audit trails, access controls, incident response, and so on. It might also include things like data protection training for personnel. In your response, you can cross-reference applicable measures that you’ve indicated elsewhere in this section, or provide a link to your company’s security policy, if applicable.
+
+Alternatively, you can provide a comprehensive summary here and cite to this section for other responses.
+
+Ability to restore the availability of and access to Customer Personal Data in a timely manner following a physical or technical incident
+
+This section can be used to provide a list of the measures your company takes to protect data so that it can be restored in case of corruption or accidental loss, such as remote storage.
+
+Regular testing, assessment, and evaluation of the effectiveness of technical and organizational measures used to secure Processing
+
+This section can be used to describe any process for regular audits, company certifications, bug bounty programs, etc.
+
+User identification and authorization process and protection
+
+This section can be used to explain how users are authenticated on companies’ systems (e.g., password requirements, multi-factor authentication) and how credentials are secured.
+
+Protecting Customer Personal Data during transmission (in transit)
+
+A typical measure here is the use of cryptographic protocols to protect data in transit.
+
+Protecting Customer Personal Data during storage (at rest)
+
+Common measures include industry-standard encryption, access controls such as passwords and data segregation, logical access controls to manage different levels of personnel access, physical access controls (see below), policies for remote work, etc.
+
+Physical security where Customer Personal Data is processed
+
+This section can be used to describe any physical security measures that the company has in place, such as locked facilities, building security, etc.
+
+Events logging
+
+This section can be used to describe the processes the company has in place for events logging, e.g., for auditing and incident response purposes.
+
+Systems configuration, including default configuration
+
+This section can be used to describe the management of configuration, maintenance and monitoring of company systems.
+
+Internal IT and IT security governance and management
+
+This section can be used to describe the structure and procedure for the company’s IT group, including, for example, roles and responsibilities for incident response.
+
+Certification or assurance of processes and products
+
+This section can be used to list any security certifications the company may have.
+
+Ensuring data minimization
+
+This section can be used to explain how the company keeps the amount of data processed at reasonable levels, such as limiting data collection only to what is needed, and deleting data once it’s no longer in use.
+
+Ensuring data quality
+
+The GDPR sets out certain expectations regarding data quality: “Personal data shall be … accurate and, where necessary, kept up to date; every reasonable step must be taken to ensure that personal data that are inaccurate, having regard to the purposes for which they are processed, are erased or rectified without delay (‘accuracy’).”
+
+Ensuring limited data retention
+
+This section can be used to explain the company’s policies and standards for data retention and deletion. For example, you could list company procedures to ensure deletion of personal or confidential data after an agreement ends. However, you do not need to provide details that the company would consider confidential.
+
+Ensuring accountability
+
+This section can be used to describe any company policies for regular systems testing and security audits.
+
+Allowing data portability and ensuring erasure
+
+This section can be used to explain how the company supports customers with data access and erasure requests from their users, as well as procedures the company has adopted to ensure secure data deletion and hardware disposal.
+
+Controller
+
+Generally speaking, a data controller decides and is responsible for how and why personal data is processed.
+
+Customer Personal Data
+
+Capitalized but not highlighted words and phrases such as “Customer Personal Data” are defined in Section 11 below. Remember that capitalized words and phrases that are highlighted such as “Provider” have the meanings given on the Cover Page.
+
+Processor
+
+Generally speaking, a data processor handles the data on the controller’s behalf, based on directions from the controller.
+
+Provider as Subprocessor
+
+When a data processor uses its own vendor to help process the personal data, that secondary processor is considered a subprocessor.
+
+Provider will be deemed a Subprocessor of the Customer Personal Data
+
+If Customer is identified as performing a Processor role in the Data Exporter field on the Cover Page, this language creates the logical designation that Provider is therefore a Subprocessor.
+
+Processing
+
+“Processing” of data refers to the handling of personal data in some way. For example, collecting, organizing, or transferring personal data.
+
+Subprocessors
+
+This section applies to the Provider’s subprocessors, i.e. those who are listed on the Cover Page as “Approved Subprocessors”, even in situations where the Customer is a Processor and the Provider acts as the Customer’s subprocessor. In such situations where Provider is a subprocessor, Provider will still have its own subprocessors (vendors that Provider contracts with to help with Provider’s subprocessing) that must be approved by the Customer as part of the DPA.
+
+Adequacy decision
+
+An adequacy decision is a decision by the European Commission that a country outside the EEA offers an adequate level of data protection to allow personal data to flow from the EEA to that country without requiring additional safeguards.
+
+Annex III
+
+Annex III is covered by the list of Approved Subprocessors on the Cover Page, rather than being identified as “Annex III”.
+
+ICO
+
+The Information Commissioner’s Office (ICO) is the UK’s independent authority for information rights.
+
+Data protection impact assessments
+
+A data protection impact assessment (DPIA) is required under the GDPR and UK GDPR when processing could result in a high risk to the rights and freedoms of natural persons. The DPIA process is intended to identify privacy risks and protections to help mitigate those risks.
+
+Data transfer impact assessments
+
+Data transfer impact assessments (DTIAs) are performed when transferring EEA or UK personal data to a third country for which an adequacy decision has not been issued. The purpose of the DTIA is to assess whether the EEA or UK personal data will be adequately protected under that third country’s legal system.
+
+Applicable Laws may require Provider to continue hosting or Processing Customer Personal Data
+
+Applicable Laws vary by region and locality, and there are many situations where you might be required to continue hosting or processing data. One example in the United States is related to employee records.
+
+Related-Party Claims
+
+This section makes it so that Customer’s affiliates, if any, are barred from bringing claims under the DPA against the Provider or its Affiliates.
+
+Free to use under CC BY 4.0
+
+All Common Paper agreements are released under the Creative Commons CC BY 4.0 license, which enables you to use the agreements in any way, as long as you leave in the attribution.
+
+ Newsletter signup
+
+Subscribe for updates

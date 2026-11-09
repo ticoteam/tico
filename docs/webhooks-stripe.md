@@ -12,7 +12,7 @@ again in live mode with a second Tico webhook.
 
 ## 1. Make the incoming webhook in Tico
 
-In Settings → Webhooks → Incoming, add a webhook named *Stripe* with the id `stripe`. Or:
+In Automations → Incoming webhooks, add a webhook named *Stripe* with the id `stripe`. Or:
 
 ```
 hub trigger create Stripe --id stripe

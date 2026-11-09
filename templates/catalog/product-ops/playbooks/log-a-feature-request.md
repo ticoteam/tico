@@ -15,7 +15,8 @@ Find the need behind it: who, trying to do what, blocked how. The account and wh
 
 ## 2. Search the ledger
 
-Search `knowledge/requests.md` by the need, the product area and synonyms. Three outcomes:
+Search `knowledge/requests.md` by the need, the product area and the words the customer used. Then follow
+`skills/match-a-request-to-the-ledger/SKILL.md` to pick one of three outcomes:
 - **Same need**: add the account and source to that row. If the account is already there, add the date only.
 - **Close but different**: new row, and a "see also" link both ways, with one line on the difference.
 - **New**: new row with the need, area, account, segment (from the CRM, read), source and date.
@@ -27,5 +28,5 @@ Is it on the roadmap, specced, shipped or declined? Link the spec or the decisio
 ## 4. Answer the sender
 
 On the task: the row it went to, how many accounts now ask, and its status, in words the sender can
-repeat without a promise: "Logged with 12 other studios; not on the current roadmap." Then
+repeat without a promise: "Logged with 12 other accounts; not on the current roadmap." Then
 `hub task update <id> --status done --note`.

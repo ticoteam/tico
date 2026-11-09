@@ -13,17 +13,27 @@ cd "$(dirname "$0")/.."
 BRAND=ui/assets/tico
 WEB=ui/assets
 APP=app/icons
-MARK=$BRAND/tico-mark.svg      # 64x64 rounded tile, #172221, off-white "ti", green dot
+MARK=$BRAND/tico-mark.svg      # 64x64 rounded tile, #172221, the flat Liquid Dot
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 png() { rsvg-convert --width "$2" --height "$2" --output "$3" "$1"; echo "$3"; }
-inner() { sed -e '1d;$d' "$MARK"; }
-# The mark on a square: $1 = viewBox, $2 = filled background rect (yes/no).
+inner() { sed -e '1d;$d' "$1"; }
+# The mark on a square: $1 = viewBox, $2 = filled background rect (yes/no), $3 = source SVG (default: the desktop mark).
 tile() {
-  local bg=""
+  local bg="" src=${3:-$MARK}
   [ "$2" = yes ] && bg='<rect x="-100" y="-100" width="300" height="300" fill="#172221"/>'
-  printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="%s">%s%s</svg>\n' "$1" "$bg" "$(inner)"
+  printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="%s">%s%s</svg>\n' "$1" "$bg" "$(inner "$src")"
+}
+# An .icns from a square SVG on Apple's grid: $1 = svg, $2 = output, $3 = a name for its iconset in $TMP.
+icns() {
+  local set=$TMP/$3.iconset
+  mkdir "$set"
+  for s in 16 32 128 256 512; do
+    png "$1" $s "$set/icon_${s}x${s}.png" >/dev/null
+    png "$1" $((s * 2)) "$set/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil --convert icns --output "$2" "$set"; echo "$2"
 }
 
 tile "0 0 64 64" yes    > "$TMP/fullbleed.svg"      # iOS and Slack round the corners themselves
@@ -50,14 +60,24 @@ png "$MARK" 256 $APP/128x128@2x.png
 png "$MARK" 512 $APP/icon.png
 
 if command -v iconutil >/dev/null; then
-  SET=$TMP/icon.iconset; mkdir "$SET"
-  for s in 16 32 128 256 512; do
-    png "$TMP/mac.svg" $s "$SET/icon_${s}x${s}.png" >/dev/null
-    png "$TMP/mac.svg" $((s * 2)) "$SET/icon_${s}x${s}@2x.png" >/dev/null
-  done
-  iconutil --convert icns --output $APP/icon.icns "$SET"; echo $APP/icon.icns
+  icns "$TMP/mac.svg" $APP/icon.icns desktop
 else
   echo "iconutil not found: $APP/icon.icns left as is"
+fi
+
+# Recorder app bundle (recorder/tauri.conf.json lists these): the Liquid Dot with a mic cut into it.
+# The PNGs are flat like the desktop's; icon.icns sits on Apple's grid.
+REC=$BRAND/tico-recorder-mark.svg
+RICONS=recorder/icons
+tile "-8 -8 80 80" no "$REC" > "$TMP/recorder-mac.svg"
+png "$REC" 32 $RICONS/32x32.png
+png "$REC" 128 $RICONS/128x128.png
+png "$REC" 256 $RICONS/128x128@2x.png
+png "$REC" 512 $RICONS/icon.png
+if command -v iconutil >/dev/null; then
+  icns "$TMP/recorder-mac.svg" $RICONS/icon.icns recorder
+else
+  echo "iconutil not found: $RICONS/icon.icns left as is"
 fi
 
 # Windows icon: PNG-compressed entries at the usual sizes.

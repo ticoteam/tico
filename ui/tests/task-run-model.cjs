@@ -11,11 +11,11 @@ const SHOTS = process.env.TICO_UI_SHOTS || '';
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
 const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
-const task = {id: 't-audit', title: 'Audit the billing page', owner: 'bot:ops', requester: 'human:ana', status: 'open',
-  lane: 'company', version: 1, created: at(30), updated: at(5), conversation_id: 'r-audit'};
+const task = {id: 't-audit', title: 'Audit the billing page', owner_id: 'bot:ops', requester_id: 'human:ana', status: 'open',
+  lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-audit'};
 const MODELS = [
   {id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', harnesses: ['claude'], efforts: ['low', 'medium', 'high'], default_effort: 'high'},
-  {id: 'gpt-test', label: 'GPT Test', harnesses: ['codex', 'cursor'], efforts: ['low', 'high'], default_effort: 'low'},
+  {id: 'gpt-test', label: 'GPT Test', context_tokens: 1_050_000, harnesses: ['codex', 'cursor'], efforts: ['low', 'high'], default_effort: 'low'},
   {id: 'old-model', label: 'Old Model', harnesses: ['claude'], efforts: [], deprecated: true},
   {id: 'tico-fast', label: 'Gateway fast', harnesses: ['claude'], efforts: []}];
 
@@ -30,10 +30,10 @@ async function run(viewport, shot, me, canSet) {
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json(me);
       if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
@@ -73,6 +73,9 @@ async function run(viewport, shot, me, canSet) {
     await model.waitFor();
     const offered = await model.locator('option').evaluateAll(os => os.map(o => o.value));
     assert.deepEqual(offered, ['', 'claude-sonnet-5-5', 'gpt-test'], 'no retired or Gateway tier model');
+    // The rendered options: the window follows the name when the catalog gives one, and a model without one shows none.
+    assert.deepEqual(await model.locator('option').allInnerTexts(), ["The bot's task model", 'Sonnet 5.5', 'GPT Test · 1.05M'],
+      'the window is in the option label');
     assert.equal(await sec.locator('[data-run-model-apply]').isDisabled(), true, 'nothing to apply yet');
 
     // A model with two harnesses offers both, starting on its first harness and its default effort.

@@ -8,6 +8,7 @@ the ticket's secret in the fragment so it never reaches a server log.
 
 `TICO_SUPPORT=off` (as on the server) or `--no-support` turns the offer off.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -27,13 +28,19 @@ from .ui import IO
 DEFAULT_HQ = "https://updates.tico.team"
 QUESTION = "Send this to Tico support?"
 OFF = ("off", "0", "false", "no", "disabled")
-VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?")    # the version HQ accepts
+VERSION = re.compile(
+    r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?"
+)  # the version HQ accepts
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
 TICKET = re.compile(r"TK-[A-Z2-7]{8}")
 SECRET = re.compile(r"[A-Za-z0-9_-]{20,64}")
-MAX_MESSAGE = 3900                # HQ takes 4000 characters
-STEPS = {3: "this computer does not qualify", 4: "download or checksum failed", 5: "Docker or Python setup failed",
-         6: "the wizard or the health check failed"}
+MAX_MESSAGE = 3900  # HQ takes 4000 characters
+STEPS = {
+    3: "this computer does not qualify",
+    4: "download or checksum failed",
+    5: "Docker or Python setup failed",
+    6: "the wizard or the health check failed",
+}
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -88,7 +95,9 @@ def domains_of(*values: str) -> list[str]:
 # A home folder names the account (/home/ana/tico), and so does an ssh login (ana@203.0.113.7); the address itself goes
 # with the diagnostics rules.
 HOME = re.compile(r"((?:/home|/Users|[A-Za-z]:\\Users)[/\\])(?!\[user\])[^/\\\s\"'<>]+")
-SSH_USER = re.compile(r"(?<![A-Za-z0-9._%+'-])[A-Za-z_][A-Za-z0-9_.-]{0,31}@(?=\d{1,3}(?:\.\d{1,3}){3}(?![\w.-]*[A-Za-z])|\[|[0-9a-fA-F]*:)")
+SSH_USER = re.compile(
+    r"(?<![A-Za-z0-9._%+'-])[A-Za-z_][A-Za-z0-9_.-]{0,31}@(?=\d{1,3}(?:\.\d{1,3}){3}(?![\w.-]*[A-Za-z])|\[|[0-9a-fA-F]*:)"
+)
 
 
 def scrub(text: str, *, domains=(), secrets=(), names=()) -> str:
@@ -120,24 +129,36 @@ def summary(what: str, checks=(), error: str = "", version: str = "") -> str:
 
 def _post(url: str, body: dict, timeout: float = 20):
     """(status, decoded JSON or {}). Redirects are not followed: the request goes to HQ or nowhere."""
+
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *a, **k):
             return None
-    request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
-        "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "tico-setup"})
+
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "tico-setup"},
+    )
     try:
         with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as r:
             return r.status, json.loads(r.read(65536).decode() or "{}")
     except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.loads(e.read(65536).decode() or "{}")
-        except ValueError:
-            return e.code, {}
+        with e:
+            try:
+                return e.code, json.loads(e.read(65536).decode() or "{}")
+            except ValueError:
+                return e.code, {}
 
 
 def send(message: str, email: str, version: str, hq: str, post=None) -> tuple[str, str]:
     """File the ticket. Returns (ticket_id, secret); raises OSError or ValueError with a plain reason."""
-    body = {"message": message, "kind": "setup", **({"email": email} if email else {}), **({"version": version} if version else {})}
+    body = {
+        "message": message,
+        "kind": "setup",
+        **({"email": email} if email else {}),
+        **({"version": version} if version else {}),
+    }
     post = post or _post
     status, answer = post(hq + "/v1/support", body)
     if status == 422 and isinstance(answer, dict) and answer.get("field") == "fields":
@@ -154,8 +175,19 @@ def send(message: str, email: str, version: str, hq: str, post=None) -> tuple[st
     return ticket, secret
 
 
-def offer(io: IO, what: str, checks=(), error: str = "", *, domains=(), secrets=(), names=(), version: str = "",
-          args=None, post=None) -> bool:
+def offer(
+    io: IO,
+    what: str,
+    checks=(),
+    error: str = "",
+    *,
+    domains=(),
+    secrets=(),
+    names=(),
+    version: str = "",
+    args=None,
+    post=None,
+) -> bool:
     """Ask, and send on "y". Never raises and never changes how the run ends; returns whether a ticket was filed."""
     if off(args) or not io.interactive or not _tty():
         return False
@@ -170,9 +202,13 @@ def offer(io: IO, what: str, checks=(), error: str = "", *, domains=(), secrets=
         hq = hq_url()
         if not hq.startswith(("https://", "http://127.0.0.1", "http://localhost")):
             return False
-        message = scrub(summary(what, checks, error, version), domains=domains, secrets=secrets, names=names)[:MAX_MESSAGE]
-        io.say("\nTico support can look at this for you. This is exactly what would be sent (keys, emails, addresses, "
-               "account names and your domain removed):\n")
+        message = scrub(summary(what, checks, error, version), domains=domains, secrets=secrets, names=names)[
+            :MAX_MESSAGE
+        ]
+        io.say(
+            "\nTico support can look at this for you. This is exactly what would be sent (keys, emails, addresses, "
+            "account names and your domain removed):\n"
+        )
         io.say("\n".join("    " + line for line in message.splitlines()))
         if not io.confirm(QUESTION, False):
             return False
@@ -206,6 +242,13 @@ def from_installer(args, io: IO) -> int:
         saved, _ = state.load(domain)
         hosts += [domain, saved.get("owner_email", ""), saved.get("allowed_domain", ""), saved.get("runner_host", "")]
         names.append(saved.get("company", ""))
-    offer(io, what, error=args.error or "", domains=domains_of(*hosts), names=names,
-          version=bundle_version(args.tico_version or ""), args=args)
+    offer(
+        io,
+        what,
+        error=args.error or "",
+        domains=domains_of(*hosts),
+        names=names,
+        version=bundle_version(args.tico_version or ""),
+        args=args,
+    )
     return 0

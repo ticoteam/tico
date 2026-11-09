@@ -1,5 +1,7 @@
-"""One person's own Google account (connectors/mail/oauth.py): read-only at Google, bound to the account that
-signed in, never a door to anyone else's mailbox, and never a quiet fallback to the service account."""
+"""One person's own Google account (connectors/mail/oauth.py): read-only at Google unless the grant holds the write
+scopes Google gave it, bound to the account that signed in, never a door to anyone else's mailbox, and never a quiet
+fallback to the service account."""
+
 import contextlib
 import io
 import json
@@ -12,17 +14,27 @@ import unittest
 import urllib.parse
 from argparse import Namespace
 from pathlib import Path
-from unittest.mock import patch
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 from connectors.mail import Failure, Refused, auth, oauth
 from connectors.mail import __main__ as cli
 from connectors.mail import calendar as cal, gmail as gm
 
 G = oauth.G
-CLIENT = {"client_id": "123.apps.googleusercontent.com", "client_secret": "client-secret-value",
-          "token_uri": oauth.TOKEN_URI}
-READ_ONLY = ["openid", "https://www.googleapis.com/auth/userinfo.email", G + "gmail.readonly",
-             G + "calendar.events.readonly", G + "calendar.freebusy", G + "calendar.calendarlist.readonly"]
+CLIENT = {
+    "client_id": "123.apps.googleusercontent.com",
+    "client_secret": "client-secret-value",
+    "token_uri": oauth.TOKEN_URI,
+}
+READ_ONLY = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    G + "gmail.readonly",
+    G + "calendar.events.readonly",
+    G + "calendar.freebusy",
+    G + "calendar.calendarlist.readonly",
+]
 
 
 class Response(io.BytesIO):
@@ -52,8 +64,9 @@ class FakeGoogle:
                 body["refresh_token"] = self.refresh
             return Response(json.dumps(body).encode())
         if url.startswith(oauth.TOKENINFO_URI):
-            return Response(json.dumps({"email": self.email, "email_verified": "true",
-                                        "scope": " ".join(self.scopes)}).encode())
+            return Response(
+                json.dumps({"email": self.email, "email_verified": "true", "scope": " ".join(self.scopes)}).encode()
+            )
         if url.startswith(oauth.REVOKE_URI):
             if self.revoke_fails:
                 raise OSError("network down")
@@ -72,11 +85,20 @@ class TransportError(Exception):
 
 class FakeCredentials:
     """google.oauth2.credentials.Credentials: refresh() answers as the test says."""
+
     made = []
     refresh_error = None
 
-    def __init__(self, token=None, refresh_token=None, token_uri=None, client_id=None, client_secret=None,
-                 scopes=None, expiry=None):
+    def __init__(
+        self,
+        token=None,
+        refresh_token=None,
+        token_uri=None,
+        client_id=None,
+        client_secret=None,
+        scopes=None,
+        expiry=None,
+    ):
         self.token, self.refresh_token, self.scopes, self.expiry = token, refresh_token, scopes, expiry
         self.client_id = client_id
         FakeCredentials.made.append(self)
@@ -88,10 +110,19 @@ class FakeCredentials:
 
 
 def google_modules():
-    modules = {name: types.ModuleType(name) for name in (
-        "google", "google.auth", "google.auth.exceptions", "google.auth.transport",
-        "google.auth.transport.requests", "google.oauth2", "google.oauth2.credentials",
-        "google.oauth2.service_account")}
+    modules = {
+        name: types.ModuleType(name)
+        for name in (
+            "google",
+            "google.auth",
+            "google.auth.exceptions",
+            "google.auth.transport",
+            "google.auth.transport.requests",
+            "google.oauth2",
+            "google.oauth2.credentials",
+            "google.oauth2.service_account",
+        )
+    }
     modules["google.auth.exceptions"].RefreshError = RefreshError
     modules["google.auth.exceptions"].TransportError = TransportError
     modules["google.auth.transport.requests"].Request = lambda: None
@@ -101,6 +132,7 @@ def google_modules():
         @staticmethod
         def from_service_account_file(*_a, **_k):
             raise AssertionError("the service account must not be used for a connected mailbox")
+
     modules["google.oauth2.service_account"].Credentials = NoServiceAccount
     modules["google.oauth2"].service_account = modules["google.oauth2.service_account"]
     modules["google.oauth2"].credentials = modules["google.oauth2.credentials"]
@@ -131,8 +163,9 @@ class Base(unittest.TestCase):
         google = google or FakeGoogle()
         flow = oauth.authorization(CLIENT, mailbox, capabilities)
         answer = f"http://127.0.0.1:8765/?state={flow['state']}&code=4/0-code&scope=x"
-        return oauth.connect(mailbox, CLIENT, oauth.code_from(answer, flow["state"]), flow["verifier"],
-                             capabilities, opener=google), google
+        return oauth.connect(
+            mailbox, CLIENT, oauth.code_from(answer, flow["state"]), flow["verifier"], capabilities, opener=google
+        ), google
 
 
 class Connect(Base):
@@ -141,14 +174,20 @@ class Connect(Base):
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(flow["url"]).query)
         scopes = query["scope"][0].split()
         self.assertEqual(scopes, oauth.IDENTITY_SCOPES + oauth.READ_SCOPES)
-        for broad in (G + "gmail.modify", G + "gmail.compose", G + "calendar", G + "calendar.events",
-                      "https://mail.google.com/"):
+        for broad in (
+            G + "gmail.modify",
+            G + "gmail.compose",
+            G + "calendar",
+            G + "calendar.events",
+            "https://mail.google.com/",
+        ):
             self.assertNotIn(broad, scopes)
         self.assertEqual(query["login_hint"], ["ana@acme.example"])
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertEqual(query["access_type"], ["offline"])
-        with_labels = urllib.parse.parse_qs(urllib.parse.urlsplit(
-            oauth.authorization(CLIENT, "ana@acme.example", ["labels"])["url"]).query)["scope"][0].split()
+        with_labels = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(oauth.authorization(CLIENT, "ana@acme.example", ["labels"])["url"]).query
+        )["scope"][0].split()
         self.assertEqual(set(with_labels) - set(scopes), {G + "gmail.modify"}, "a capability adds only its own scope")
 
     def test_a_grant_is_stored_private_and_shown_without_any_token(self):
@@ -190,7 +229,7 @@ class Connect(Base):
         self.assertFalse(oauth.revoke("ana@acme.example", opener=google))
         self.assertIsNone(oauth.grant("ana@acme.example"))
         with self.assertRaises(Failure):
-            auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE])     # and no service-account key behind it
+            auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE])  # and no service-account key behind it
 
     def test_a_grants_file_others_can_read_is_refused(self):
         self.connect()
@@ -206,8 +245,10 @@ class Tokens(Base):
         self.assertEqual(granted, [G + "gmail.readonly"])
         self.assertEqual(token, "ya29.minted-for-gmail.readonly")
         _token, _expiry, granted = auth.mint_token("ana@acme.example", "calendar")
-        self.assertEqual(set(granted), {G + "calendar.events.readonly", G + "calendar.freebusy",
-                                        G + "calendar.calendarlist.readonly"})
+        self.assertEqual(
+            set(granted),
+            {G + "calendar.events.readonly", G + "calendar.freebusy", G + "calendar.calendarlist.readonly"},
+        )
         self.assertEqual(FakeCredentials.made[-1].client_id, CLIENT["client_id"])
 
     def test_mint_token_prints_the_scopes_and_never_the_refresh_token(self):
@@ -221,10 +262,11 @@ class Tokens(Base):
 
     def test_an_expired_or_revoked_grant_says_reconnect_and_never_falls_back(self):
         self.connect()
-        self.key.write_text("{}")                        # a service-account key on the same computer
+        self.key.write_text("{}")  # a service-account key on the same computer
         os.chmod(self.key, 0o600)
-        FakeCredentials.refresh_error = RefreshError("invalid_grant: Token has been expired or revoked.",
-                                                     {"error": "invalid_grant"})
+        FakeCredentials.refresh_error = RefreshError(
+            "invalid_grant: Token has been expired or revoked.", {"error": "invalid_grant"}
+        )
         with self.assertRaises(Failure) as caught:
             auth.mint_token("ana@acme.example", "gmail")
         self.assertIn("(invalid_grant)", caught.exception.msg)
@@ -237,7 +279,7 @@ class Tokens(Base):
         self.connect()
         self.assertIsNone(oauth.grant("ben@acme.example"))
         self.assertEqual(auth.source("ben@acme.example"), "service_account")
-        with self.assertRaises(Failure) as caught:     # no key on this computer: nobody else is reachable
+        with self.assertRaises(Failure) as caught:  # no key on this computer: nobody else is reachable
             auth.mint_token("ben@acme.example", "gmail")
         self.assertIn("service-account key is not at", caught.exception.msg)
         self.assertEqual([c.refresh_token for c in FakeCredentials.made], [], "ana's grant was never used")
@@ -251,6 +293,7 @@ class Tokens(Base):
 
 class NotGranted:
     """A Gmail/Calendar service that must never be called."""
+
     def __getattr__(self, name):
         raise AssertionError(f"Google was asked ({name}) for something the grant does not allow")
 
@@ -263,50 +306,82 @@ class ReadOnlyRefusals(Base):
 
     def test_writes_on_a_read_only_account_are_refused_before_google(self):
         g = gm.Gmail(self.service([G + "gmail.readonly"]), "ana@acme.example")
-        for attempt in (lambda: g.modify("m1", add=["L1"]), lambda: g.modify("m1", remove=["INBOX"]),
-                        lambda: g.create_label("hub/x"), lambda: g.create_draft("cmF3"),
-                        lambda: g.update_draft("d1", "cmF3"), lambda: g.delete_draft("d1"),
-                        lambda: g.send_draft("d1")):
+        for attempt in (
+            lambda: g.modify("m1", add=["L1"]),
+            lambda: g.modify("m1", remove=["INBOX"]),
+            lambda: g.create_label("hub/x"),
+            lambda: g.create_draft("cmF3"),
+            lambda: g.update_draft("d1", "cmF3"),
+            lambda: g.delete_draft("d1"),
+            lambda: g.send_raw("cmF3"),
+        ):
             with self.assertRaises(Refused) as caught:
                 attempt()
             self.assertIn("read-only at Google", caught.exception.msg)
             self.assertIn("nothing was sent to Google", caught.exception.msg)
-        c = cal.Calendar(self.service([G + "calendar.events.readonly", G + "calendar.freebusy"]),
-                         "ana@acme.example")
+        c = cal.Calendar(self.service([G + "calendar.events.readonly", G + "calendar.freebusy"]), "ana@acme.example")
         from datetime import datetime, timezone
+
         now = datetime(2026, 10, 15, tzinfo=timezone.utc)
-        for attempt in (lambda: c.create_event(now, now, "x"), lambda: c.delete_event("e1"),
-                        lambda: c.create_hub_event(now, now, "x", [], "e1"),
-                        lambda: c.create_scheduling_event(now, now, "a@b.example", "e1", "")):
+        for attempt in (
+            lambda: c.create_event(now, now, "x"),
+            lambda: c.delete_event("e1"),
+            lambda: c.create_hub_event(now, now, "x", [], "e1"),
+            lambda: c.create_scheduling_event(now, now, "a@b.example", "e1", ""),
+        ):
             with self.assertRaises(Refused) as caught:
                 attempt()
             self.assertIn("--allow calendar-write", caught.exception.hint)
 
     def test_a_refusal_exits_2_and_the_service_account_keeps_its_delegation(self):
-        with patch.object(cli.oauth, "status", side_effect=Refused("read-only", "hint")), \
-                contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+        with (
+            patch.object(cli.oauth, "status", side_effect=Refused("read-only", "hint")),
+            contextlib.redirect_stderr(io.StringIO()),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             self.assertEqual(cli.main(["google", "status"]), 2)
         self.assertIsNone(oauth.require(None, "labels", "ana@acme.example", "label mail"))
-        oauth.require([G + "gmail.modify"], "drafts", "ana@acme.example", "write drafts")   # modify covers drafts
+        oauth.require([G + "gmail.modify"], "drafts", "ana@acme.example", "write drafts")  # modify covers drafts
+
+    def test_the_full_calendar_scope_covers_event_writes_and_read_only_calendar_does_not(self):
+        oauth.require(
+            [G + "calendar"], "calendar-write", "ana@acme.example", "add calendar events"
+        )  # a Workspace token
+        oauth.require([G + "gmail.modify"], "labels", "ana@acme.example", "label mail")
+        with self.assertRaises(Refused) as caught:
+            oauth.require(
+                [G + "calendar.events.readonly", G + "calendar.freebusy"],
+                "calendar-write",
+                "ana@acme.example",
+                "add calendar events",
+            )
+        self.assertIn("read-only at Google", caught.exception.msg)
 
     def test_a_turn_with_a_supervisor_token_refuses_the_same_writes(self):
         os.environ[auth.SOCKET_ENV], os.environ["HUB_TOKEN"] = "/tmp/none.sock", "attempt"
-        with patch("runner.credential_socket.request_mail",
-                   return_value={"token": "ya29.t", "expiry": "", "scopes": [G + "gmail.readonly"]}):
+        with patch(
+            "runner_support.credential_socket.request_mail",
+            return_value={"token": "ya29.t", "expiry": "", "scopes": [G + "gmail.readonly"]},
+        ):
             creds = auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE])
         self.assertEqual(creds._tico_granted, [G + "gmail.readonly"])
-        with patch("runner.credential_socket.request_mail", return_value={"token": "ya29.t", "expiry": ""}):
+        with patch("runner_support.credential_socket.request_mail", return_value={"token": "ya29.t", "expiry": ""}):
             self.assertIsNone(getattr(auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE]), "_tico_granted", None))
-        from runner.credential_socket import MailRefused
-        with patch("runner.credential_socket.request_mail", side_effect=MailRefused("signin")):
+        from runner_support.credential_socket import MailRefused
+
+        with patch("runner_support.credential_socket.request_mail", side_effect=MailRefused("signin")):
             with self.assertRaises(oauth.SignInFailed) as caught:
                 auth.credentials("ana@acme.example", [auth.GMAIL_SCOPE])
-        self.assertIn("Reconnect", caught.exception.hint)       # a revoked grant reads as reconnect in a turn
+        self.assertIn("Reconnect", caught.exception.hint)  # a revoked grant reads as reconnect in a turn
 
 
 SERVER_CONNECT = {"id": "ana", "mailbox": "Ana@Acme.example", "client_id": CLIENT["client_id"], "broker": "server"}
-GRANTED = {"access_token": "ya29.access-secret", "refresh_token": "1//refresh-secret", "expires_in": 3599,
-           "scope": " ".join(READ_ONLY)}
+GRANTED = {
+    "access_token": "ya29.access-secret",
+    "refresh_token": "1//refresh-secret",
+    "expires_in": 3599,
+    "scope": " ".join(READ_ONLY),
+}
 
 
 class Server:
@@ -321,12 +396,16 @@ class Server:
             raise self.error
         if path.endswith("/exchange"):
             return dict(GRANTED)
-        return {"access_token": "ya29.from-server", "expires_in": 3599, "expiry": "2026-10-16T01:00:00Z",
-                "scopes": body["scopes"]}
+        return {
+            "access_token": "ya29.from-server",
+            "expires_in": 3599,
+            "expiry": "2026-10-16T01:00:00Z",
+            "scopes": body["scopes"],
+        }
 
 
 class ServerRefreshed(Base):
-    """A grant from Settings > Inbox > Connect Google: Tico's server holds the client secret and refreshes it."""
+    """A grant from Tools > Settings > Email > Connect Google: Tico's server holds the client secret and refreshes it."""
 
     def finish(self, server=None, google=None):
         server = server or Server()
@@ -346,8 +425,11 @@ class ServerRefreshed(Base):
         self.assertNotIn("refresh-secret", json.dumps(result))
 
     def test_finish_without_the_server_s_connect_is_refused(self):
-        for request in ({**SERVER_CONNECT, "broker": None}, {**SERVER_CONNECT, "id": ""},
-                        {"mailbox": "ana@acme.example", "code": "4/0", "verifier": "v", **CLIENT}):
+        for request in (
+            {**SERVER_CONNECT, "broker": None},
+            {**SERVER_CONNECT, "id": ""},
+            {"mailbox": "ana@acme.example", "code": "4/0", "verifier": "v", **CLIENT},
+        ):
             server = Server()
             with patch.object(oauth, "broker", return_value=server):
                 result = oauth.finish(request, opener=FakeGoogle())
@@ -370,26 +452,44 @@ class ServerRefreshed(Base):
             self.assertEqual((token, granted), ("ya29.from-server", [G + "gmail.readonly"]))
             self.assertEqual(expiry, "2026-10-16T01:00:00")
             _token, _expiry, granted = auth.mint_token("ana@acme.example", "calendar")
-        self.assertEqual(server.calls[0], ("connectors/mail/google/token", {
-            "mailbox": "ana@acme.example", "service": "gmail", "refresh_token": "1//refresh-secret", "scopes": [G + "gmail.readonly"]}))
-        self.assertEqual(server.calls[1][1]["scopes"], [G + "calendar.events.readonly", G + "calendar.freebusy",
-                                                        G + "calendar.calendarlist.readonly"])
+        self.assertEqual(
+            server.calls[0],
+            (
+                "connectors/mail/google/token",
+                {
+                    "mailbox": "ana@acme.example",
+                    "service": "gmail",
+                    "refresh_token": "1//refresh-secret",
+                    "scopes": [G + "gmail.readonly"],
+                },
+            ),
+        )
+        self.assertEqual(
+            server.calls[1][1]["scopes"],
+            [G + "calendar.events.readonly", G + "calendar.freebusy", G + "calendar.calendarlist.readonly"],
+        )
         self.assertEqual(FakeCredentials.made[-1].refresh_token, None, "google-auth never refreshes it here")
         self.assertEqual([c for c in FakeCredentials.made if c.refresh_token], [])
 
     def test_a_server_refusal_says_reconnect_or_admin_and_never_falls_back(self):
         from clients.tico import APIError
+
         self.finish()
-        self.key.write_text("{}")                        # a service-account key on the same computer
+        self.key.write_text("{}")  # a service-account key on the same computer
         os.chmod(self.key, 0o600)
-        for kind, expected in (("signin", "signin"), ("admin_policy", "admin_policy"), ("app_config", "app_config"),
-                               ("network", "network"), ("error", "error")):
+        for kind, expected in (
+            ("signin", "signin"),
+            ("admin_policy", "admin_policy"),
+            ("app_config", "app_config"),
+            ("network", "network"),
+            ("error", "error"),
+        ):
             refusal = APIError("google_refused", "Google refused it (x)", 409, extra={"kind": kind})
             with patch.object(oauth, "broker", return_value=Server(refusal)):
                 with self.assertRaises(oauth.SignInFailed) as caught:
                     auth.mint_token("ana@acme.example", "gmail")
             self.assertEqual(caught.exception.kind, expected)
-        unknown = APIError("not_this_grant", "no", 403)        # e.g. its connected result never reached the server
+        unknown = APIError("not_this_grant", "no", 403)  # e.g. its connected result never reached the server
         with patch.object(oauth, "broker", return_value=Server(unknown)):
             with self.assertRaises(oauth.SignInFailed) as caught:
                 auth.mint_token("ana@acme.example", "gmail")
@@ -420,21 +520,102 @@ class ServerRefreshed(Base):
         self.assertEqual(FakeCredentials.made[-1].refresh_token, "1//refresh-secret")
 
 
+ACT_SCOPES = [G + "gmail.modify", G + "calendar.events"]
+OWN_APP_GRANTED = READ_ONLY + ACT_SCOPES  # what Google reports for a grant the company's own app made with them
+
+
+class ActGrant(Base):
+    """A grant from the company's own Google app: the act scopes Google reports are kept, described, refreshed and gated
+    like any other scope. Tico's shared app never asks for them, so its grants stay read only (backend/tests)."""
+
+    def finish(self, scopes=OWN_APP_GRANTED):
+        server = Server()
+        with patch.object(oauth, "broker", return_value=server):
+            return oauth.finish(dict(SERVER_CONNECT), opener=FakeGoogle(scopes=scopes)), server
+
+    def test_the_grant_keeps_the_act_scopes_google_reports_and_describes_what_they_allow(self):
+        result, _ = self.finish()
+        self.assertEqual(result["status"], "connected")
+        self.assertEqual(
+            set(result["can"]),
+            {"read mail", "label and archive mail", "write drafts", "read calendar", "add calendar events"},
+        )
+        stored = json.loads(self.grants.read_text())["grants"]["ana@acme.example"]
+        self.assertTrue(set(ACT_SCOPES) <= set(stored["scopes"]))
+        self.assertNotIn("refresh-secret", json.dumps(result))
+
+    def test_a_refresh_asks_the_server_for_the_act_scopes_the_grant_holds(self):
+        self.finish()
+        server = Server()
+        with patch.object(oauth, "broker", return_value=server):
+            _token, _expiry, granted = auth.mint_token("ana@acme.example", "gmail")
+            _token, _expiry, calendar_granted = auth.mint_token("ana@acme.example", "calendar")
+        self.assertEqual(server.calls[0][1]["scopes"], [G + "gmail.modify", G + "gmail.readonly"])
+        self.assertEqual(granted, [G + "gmail.modify", G + "gmail.readonly"])
+        self.assertIn(G + "calendar.events", calendar_granted)
+        self.assertEqual(server.calls[1][1]["scopes"][0], G + "calendar.events")
+
+    def test_labels_drafts_and_calendar_writes_pass_the_act_grant_and_are_refused_without_it(self):
+        self.finish()
+        granted = oauth.grant("ana@acme.example")["scopes"]
+        for capability in ("labels", "drafts", "calendar-write"):
+            oauth.require(granted, capability, "ana@acme.example", "do it")  # no Refused
+            with self.assertRaises(Refused):
+                oauth.require(READ_ONLY, capability, "ana@acme.example", "do it")
+
+    def test_gmail_and_calendar_writes_reach_google_for_the_act_grant(self):
+        self.finish()
+        act = MagicMock()
+        act._tico_granted = oauth.grant("ana@acme.example")["scopes"]
+        now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+        gm.Gmail(act, "ana@acme.example").modify("m1", add=["L1"])
+        gm.Gmail(act, "ana@acme.example").create_draft("cmF3")
+        cal.Calendar(act, "ana@acme.example").create_event(now, now, "x")
+        self.assertEqual(act.users.return_value.messages.return_value.modify.call_count, 1)
+        self.assertEqual(act.users.return_value.drafts.return_value.create.call_count, 1)
+        self.assertEqual(act.events.return_value.insert.call_count, 1)
+
+    def test_a_read_only_grant_refuses_the_writes_before_the_service_is_touched(self):
+        read_only = MagicMock()
+        read_only._tico_granted = READ_ONLY
+        now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+        with self.assertRaises(Refused):
+            gm.Gmail(read_only, "ana@acme.example").modify("m1", add=["L1"])
+        with self.assertRaises(Refused):
+            cal.Calendar(read_only, "ana@acme.example").create_event(now, now, "x")
+        self.assertEqual(read_only.mock_calls, [])
+
+    def test_a_refresh_for_scopes_the_grant_lacks_says_connect_again(self):
+        from clients.tico import APIError
+
+        self.finish(scopes=READ_ONLY)  # the shared app's read-only grant asks for an act scope
+        refusal = APIError("scope", "This Connect Google grant does not hold all the gmail scopes asked for.", 422)
+        with patch.object(oauth, "broker", return_value=Server(refusal)):
+            with self.assertRaises(oauth.SignInFailed) as caught:
+                oauth.server_token(oauth.grant("ana@acme.example"), "gmail", [G + "gmail.modify"], "ana@acme.example")
+        self.assertEqual(caught.exception.kind, "scope")
+        self.assertEqual(caught.exception.msg, "ana@acme.example's Connect Google grant does not hold that access")
+        self.assertEqual(
+            caught.exception.hint, "Connect Google again in Tools > Settings > Email to give Tico this access."
+        )
+
+
 class AdminPolicy(Base):
     def test_a_workspace_policy_block_is_named_as_the_admins_and_nothing_is_widened(self):
         def blocked(_person, mailbox):
             raise oauth.refused("admin_policy", mailbox, "admin_policy_enforced")
+
         result = oauth.finish(dict(SERVER_CONNECT), opener=FakeGoogle(), exchange_with=blocked)
         self.assertEqual((result["status"], result["kind"]), ("failed", "admin_policy"))
         self.assertIn("Workspace admin for acme.example", result["hint"])
         self.assertFalse(self.grants.exists())
         flow = oauth.authorization(CLIENT, "ana@acme.example", [])
-        with self.assertRaises(oauth.SignInFailed) as caught:     # the redirect's own error code
+        with self.assertRaises(oauth.SignInFailed) as caught:  # the redirect's own error code
             oauth.code_from(f"https://x/?error=admin_policy_enforced&state={flow['state']}", flow["state"])
         self.assertEqual(caught.exception.kind, "admin_policy")
         self.connect()
         FakeCredentials.refresh_error = RefreshError("admin_policy_enforced: blocked", {})
-        with self.assertRaises(oauth.SignInFailed) as caught:     # a block added after connecting
+        with self.assertRaises(oauth.SignInFailed) as caught:  # a block added after connecting
             auth.mint_token("ana@acme.example", "gmail")
         self.assertEqual(caught.exception.kind, "admin_policy")
         self.assertEqual([c.scopes for c in FakeCredentials.made], [[G + "gmail.readonly"]], "never widened")
@@ -465,11 +646,14 @@ class Doctor(Base):
 
             def execute(self):
                 return {}
-        with patch.object(cli.access, "mailbox_holders", return_value={"ana@acme.example": ["inbox"]}), \
-                patch.object(cli.lb, "wanted", return_value=[]), \
-                patch.object(cli, "open_gmail", return_value=Gmail()), \
-                patch.object(cli, "open_calendar", return_value=Calendars()), \
-                patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient")}):
+
+        with (
+            patch.object(cli.access, "mailbox_holders", return_value={"ana@acme.example": ["inbox"]}),
+            patch.object(cli.lb, "wanted", return_value=[]),
+            patch.object(cli, "open_gmail", return_value=Gmail()),
+            patch.object(cli, "open_calendar", return_value=Calendars()),
+            patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient")}),
+        ):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 rc = cli.cmd_doctor(Namespace(e2e=False, mailbox=None, all_mailboxes=False, json=True))

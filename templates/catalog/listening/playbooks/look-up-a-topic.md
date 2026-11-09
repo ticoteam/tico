@@ -4,6 +4,9 @@ Triggered by a task asking what people are saying about something ("what do peop
 pricing?", "did anyone react to the competitor's launch?"). Budget 20 minutes. The outcome is one
 short note on the task: what was read, what it says and what could not be read.
 
+Inputs: the task, `knowledge/watchlist.md`, `knowledge/sources.md`, and `hub market show` for any organization the task names.
+Done when: the note is on the task with the answer first, the coverage line (returned and blocked sources), and the quotes with their links; any finding that needs a person is proposed as a child task.
+
 ---
 
 ## 1. Read the request
@@ -11,7 +14,7 @@ short note on the task: what was read, what it says and what could not be read.
     hub task show <id>
 
 Name the topic, the window (default: the last 14 days) and who will read the answer. Ask once with
-`hub task ask <id>` if the topic is ambiguous, and stop.
+`hub task question "<question>" --on <person> --parent <id>` if the topic is ambiguous, and stop.
 
 ## 2. Query the sources
 

@@ -56,12 +56,29 @@ def store(c, vault, who, runner, runtime, value, login_id, env=""):
     cid, now = H.new_id(), H.now()
     ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
     preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
-    c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,"
-              "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-              (cid, f"{env} for {runner['label']}", "api_key", env, preview, ciphertext, nonce,
-               "computer:" + runner["id"], now, now, who.actor, who.actor))
-    c.execute("INSERT INTO computer_keys(credential_id,runner_id,runtime,state,login_id,created,created_by) "
-              "VALUES(?,?,?,?,?,?,?)", (cid, runner["id"], runtime, STAGED, login_id, now, who.actor))
+    c.execute(
+        "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
+        "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            cid,
+            f"{env} for {runner['label']}",
+            "api_key",
+            env,
+            preview,
+            ciphertext,
+            nonce,
+            "computer:" + runner["id"],
+            now,
+            now,
+            who.actor,
+            who.actor,
+        ),
+    )
+    c.execute(
+        "INSERT INTO computer_keys(credential_id,runner_id,runtime,state,login_id,created_at,created_by) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (cid, runner["id"], runtime, STAGED, login_id, now, who.actor),
+    )
     H.event(c, who.actor, "computer_key.stored", runner["id"], {"runtime": runtime, "env": env, "credential": cid})
     return {"id": cid, "env": env, "preview": preview}
 
@@ -69,34 +86,44 @@ def store(c, vault, who, runner, runtime, value, login_id, env=""):
 def confirm(c, runner_id, login_id):
     """The computer checked the key staged for `login_id`: it is now this computer's key, and the one it replaces is
     deleted from the vault."""
-    row = c.execute("SELECT * FROM computer_keys WHERE login_id=? AND runner_id=? AND state=?",
-                    (login_id, runner_id, STAGED)).fetchone()
+    row = c.execute(
+        "SELECT * FROM computer_keys WHERE login_id=? AND runner_id=? AND state=?", (login_id, runner_id, STAGED)
+    ).fetchone()
     if not row:
         return None
-    for old in c.execute("SELECT credential_id FROM computer_keys WHERE runner_id=? AND runtime=? AND state=?",
-                         (runner_id, row["runtime"], ACTIVE)).fetchall():
+    for old in c.execute(
+        "SELECT credential_id FROM computer_keys WHERE runner_id=? AND runtime=? AND state=?",
+        (runner_id, row["runtime"], ACTIVE),
+    ).fetchall():
         _remove(c, old["credential_id"])
     c.execute("UPDATE computer_keys SET state=?, login_id=NULL WHERE credential_id=?", (ACTIVE, row["credential_id"]))
     # In use again: a key added after a clear, or after a switch to a subscription (Switch to API key included), signs
     # it in (the shared key stays behind it).
     for table in ("model_login_cleared", "model_login_key_off"):
         c.execute(f"DELETE FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, row["runtime"]))
-    H.event(c, "runner:" + runner_id, "computer_key.active", runner_id,
-            {"runtime": row["runtime"], "credential": row["credential_id"]})
+    H.event(
+        c,
+        "runner:" + runner_id,
+        "computer_key.active",
+        runner_id,
+        {"runtime": row["runtime"], "credential": row["credential_id"]},
+    )
     return row["credential_id"]
 
 
 def discard(c, login_id):
-    """A staged key the computer could not use, or whose check was cancelled or ran out: deleted, the old key kept."""
-    for row in c.execute("SELECT credential_id FROM computer_keys WHERE login_id=? AND state=?",
-                         (login_id, STAGED)).fetchall():
+    """A staged key the computer could not use, or whose check was canceled or ran out: deleted, the old key kept."""
+    for row in c.execute(
+        "SELECT credential_id FROM computer_keys WHERE login_id=? AND state=?", (login_id, STAGED)
+    ).fetchall():
         _remove(c, row["credential_id"])
 
 
 def delete(c, runner_id, runtime):
     """Clear key: this computer's own key for `runtime` is deleted from the vault (staged ones too)."""
-    rows = c.execute("SELECT credential_id FROM computer_keys WHERE runner_id=? AND runtime=?",
-                     (runner_id, runtime)).fetchall()
+    rows = c.execute(
+        "SELECT credential_id FROM computer_keys WHERE runner_id=? AND runtime=?", (runner_id, runtime)
+    ).fetchall()
     for row in rows:
         _remove(c, row["credential_id"])
     return len(rows)
@@ -105,38 +132,56 @@ def delete(c, runner_id, runtime):
 def before_delete(c, who, credential_id):
     """Credentials > Delete on a computer's own key. One in use goes like any credential: the computer falls back to
     the shared key at its next key fetch, or, with none, the key is cleared there as Clear key does. One a computer is
-    still checking is refused, so a check never confirms a key that is gone; it is cancelled or ends first."""
+    still checking is refused, so a check never confirms a key that is gone; it is canceled or ends first."""
     from .model_login import ACTIVE_SQL
-    row = c.execute("SELECT k.*, r.label FROM computer_keys k JOIN runners r ON r.id=k.runner_id "
-                    "WHERE k.credential_id=?", (credential_id,)).fetchone()
+
+    row = c.execute(
+        "SELECT k.*, r.label FROM computer_keys k JOIN runners r ON r.id=k.runner_id WHERE k.credential_id=?",
+        (credential_id,),
+    ).fetchone()
     if not row:
         return
-    if row["state"] == STAGED and c.execute(f"SELECT 1 FROM model_logins WHERE id=? AND {ACTIVE_SQL}",
-                                            (row["login_id"],)).fetchone():
-        raise Problem("state", f"{row['label']} is still checking this key; cancel Replace key there, or wait for it "
-                      "to finish", 409)
+    if (
+        row["state"] == STAGED
+        and c.execute(f"SELECT 1 FROM model_logins WHERE id=? AND {ACTIVE_SQL}", (row["login_id"],)).fetchone()
+    ):
+        raise Problem(
+            "state",
+            f"{row['label']} is still checking this key; cancel Replace key there, or wait for it to finish",
+            409,
+        )
     c.execute("DELETE FROM computer_keys WHERE credential_id=?", (credential_id,))
     # With no shared key to sign in with next, deleting the key in use is Clear key: the computer is told to delete its
     # copies and log out the login the key made, or that login would keep working on a key that is gone.
     cleared = row["state"] == ACTIVE and not shared(c, row["runtime"], row["runner_id"])
     if cleared:
         from .model_login import mark_key_cleared
+
         mark_key_cleared(c, who, row["runner_id"], row["runtime"])
-    H.event(c, who.actor, "computer_key.deleted", row["runner_id"],
-            {"runtime": row["runtime"], "credential": credential_id, "cleared": cleared})
+    H.event(
+        c,
+        who.actor,
+        "computer_key.deleted",
+        row["runner_id"],
+        {"runtime": row["runtime"], "credential": credential_id, "cleared": cleared},
+    )
 
 
 def active(c, runner_id, runtime):
     """This computer's own key in use for `runtime`: its credential row, or None."""
-    return c.execute("SELECT cr.* FROM computer_keys k JOIN credentials cr ON cr.id=k.credential_id "
-                     "WHERE k.runner_id=? AND k.runtime=? AND k.state=? AND cr.ciphertext IS NOT NULL "
-                     "ORDER BY k.created DESC", (runner_id, runtime, ACTIVE)).fetchone()
+    return c.execute(
+        "SELECT cr.* FROM computer_keys k JOIN credentials cr ON cr.id=k.credential_id "
+        "WHERE k.runner_id=? AND k.runtime=? AND k.state=? AND cr.ciphertext IS NOT NULL "
+        "ORDER BY k.created_at DESC",
+        (runner_id, runtime, ACTIVE),
+    ).fetchone()
 
 
 def _sealed_credentials(c):
     """Sealed credential rows once per read snapshot. `shared` used to re-scan the table for every runtime × computer
     (Operations `serving` / `shared_listing`)."""
     from . import read_cache
+
     return read_cache.rows(c, "SELECT * FROM credentials WHERE ciphertext IS NOT NULL ORDER BY id")
 
 
@@ -169,61 +214,88 @@ def keys_for(c, vault, runner_id, runtime, login_id=""):
     or its login signed out. `clear_key` tells a computer that missed its Clear key job (it was offline) to clear
     its copy now. Returns (reply, credential ids sent)."""
     from .model_login import ACTIVE_SQL, KEY_JOBS_SQL
+
     if login_id:
-        row = c.execute("SELECT cr.* FROM computer_keys k JOIN credentials cr ON cr.id=k.credential_id "
-                        "JOIN model_logins l ON l.id=k.login_id WHERE k.login_id=? AND k.runner_id=? AND k.runtime=? "
-                        f"AND k.state=? AND l.{KEY_JOBS_SQL} AND l.{ACTIVE_SQL}",
-                        (login_id, runner_id, runtime, STAGED)).fetchone()
+        row = c.execute(
+            "SELECT cr.* FROM computer_keys k JOIN credentials cr ON cr.id=k.credential_id "
+            "JOIN model_logins l ON l.id=k.login_id WHERE k.login_id=? AND k.runner_id=? AND k.runtime=? "
+            f"AND k.state=? AND l.{KEY_JOBS_SQL} AND l.{ACTIVE_SQL}",
+            (login_id, runner_id, runtime, STAGED),
+        ).fetchone()
         if not row:
             return {"credentials": []}, []
-        return {"credentials": [{"env": row["env"], "value": vault.cipher.decrypt(c, row), "source": "computer"}]}, [row["id"]]
+        return {"credentials": [{"env": row["env"], "value": vault.cipher.decrypt(c, row), "source": "computer"}]}, [
+            row["id"]
+        ]
     # A Switch to API key is running: the computer puts the new key in place itself, and until it says it is done what
     # Tico holds is still the subscription's. A regular fetch meanwhile changes nothing there (runner-rs/src/signin.rs).
-    if c.execute(f"SELECT 1 FROM model_logins WHERE runner_id=? AND runtime=? AND profile='' AND kind='to_key' "
-                 f"AND {ACTIVE_SQL}", (runner_id, runtime)).fetchone():
+    if c.execute(
+        f"SELECT 1 FROM model_logins WHERE runner_id=? AND runtime=? AND profile='' AND kind='to_key' AND {ACTIVE_SQL}",
+        (runner_id, runtime),
+    ).fetchone():
         return {"credentials": [], "switching": True}, []
-    mark = c.execute("SELECT clear_key FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''",
-                     (runner_id, runtime)).fetchone()
+    mark = c.execute(
+        "SELECT clear_key FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, runtime)
+    ).fetchone()
     if mark:
         return {"credentials": [], "signed_out": True, **({"clear_key": True} if mark["clear_key"] else {})}, []
     # Switched to a subscription: no key reaches that login until a person adds one or picks Use the shared key.
-    if c.execute("SELECT 1 FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=''",
-                 (runner_id, runtime)).fetchone():
+    if c.execute(
+        "SELECT 1 FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=''", (runner_id, runtime)
+    ).fetchone():
         return {"credentials": [], "key_off": True}, []
     own = active(c, runner_id, runtime)
     if own:
-        return {"credentials": [{"env": own["env"], "value": vault.cipher.decrypt(c, own), "source": "computer"}]}, [own["id"]]
+        return {"credentials": [{"env": own["env"], "value": vault.cipher.decrypt(c, own), "source": "computer"}]}, [
+            own["id"]
+        ]
     found = shared(c, runtime, runner_id)
-    return ({"credentials": [{"env": env, "value": vault.cipher.decrypt(c, row), "source": "shared"}
-                             for env, row in found.items()]}, [row["id"] for row in found.values()])
+    return (
+        {
+            "credentials": [
+                {"env": env, "value": vault.cipher.decrypt(c, row), "source": "shared"} for env, row in found.items()
+            ]
+        },
+        [row["id"] for row in found.values()],
+    )
 
 
 def listing(c, runner_id):
     """{runtime: {env, preview, since}} of this computer's own keys in use: what its rows show, never a value."""
     out = {}
-    for row in c.execute("SELECT k.runtime, k.created, cr.env, cr.preview FROM computer_keys k "
-                         "JOIN credentials cr ON cr.id=k.credential_id WHERE k.runner_id=? AND k.state=? "
-                         "ORDER BY k.created", (runner_id, ACTIVE)):
-        out[row["runtime"]] = {"env": row["env"], "preview": row["preview"], "since": row["created"]}
+    for row in c.execute(
+        "SELECT k.runtime, k.created_at, cr.env, cr.preview FROM computer_keys k "
+        "JOIN credentials cr ON cr.id=k.credential_id WHERE k.runner_id=? AND k.state=? "
+        "ORDER BY k.created_at",
+        (runner_id, ACTIVE),
+    ):
+        out[row["runtime"]] = {"env": row["env"], "preview": row["preview"], "since": row["created_at"]}
     return out
 
 
 def listing_by_runner(c):
     """{runner_id: listing(...)} for every computer in one pass (Operations listing)."""
     out = {}
-    for row in c.execute("SELECT k.runner_id, k.runtime, k.created, cr.env, cr.preview FROM computer_keys k "
-                         "JOIN credentials cr ON cr.id=k.credential_id WHERE k.state=? "
-                         "ORDER BY k.created", (ACTIVE,)):
+    for row in c.execute(
+        "SELECT k.runner_id, k.runtime, k.created_at, cr.env, cr.preview FROM computer_keys k "
+        "JOIN credentials cr ON cr.id=k.credential_id WHERE k.state=? "
+        "ORDER BY k.created_at",
+        (ACTIVE,),
+    ):
         out.setdefault(row["runner_id"], {})[row["runtime"]] = {
-            "env": row["env"], "preview": row["preview"], "since": row["created"]}
+            "env": row["env"],
+            "preview": row["preview"],
+            "since": row["created_at"],
+        }
     return out
 
 
 def _readiness(runner, runtime):
     """What `runner` last reported for `runtime`: its readiness row, or {}."""
     import json
+
     try:
-        row = (json.loads(runner["readiness_json"] or "{}").get("runtimes") or {}).get(runtime)
+        row = (json.loads(runner["readiness"] or "{}").get("runtimes") or {}).get(runtime)
     except (ValueError, AttributeError):
         return {}
     return row if isinstance(row, dict) else {}
@@ -244,7 +316,9 @@ def uses_shared(c, runner, runtime):
     if not found or active(c, rid, runtime):
         return None
     for table in ("model_login_cleared", "model_login_key_off"):
-        if c.execute(f"SELECT 1 FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime)).fetchone():
+        if c.execute(
+            f"SELECT 1 FROM {table} WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime)
+        ).fetchone():
             return None
     reported = _reported(runner, runtime)
     if reported.get("source") not in (None, "", "shared"):
@@ -257,7 +331,9 @@ def uses_shared(c, runner, runtime):
 def serving(c):
     """{runner id: {runtime: {id, name, env, preview, every, computers: [{id, label}]}}} for every live computer: the
     shared key each runs each runtime on, and every computer that same key serves. Values never leave the vault."""
-    runners = c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY lower(label), id").fetchall()
+    runners = c.execute(
+        "SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY lower(label), id"
+    ).fetchall()
     every = granted(c, COMPUTERS)
     used, served = {}, {}
     for runner in runners:
@@ -266,9 +342,20 @@ def serving(c):
             if row:
                 used.setdefault(runner["id"], {})[runtime] = row
                 served.setdefault(row["id"], []).append({"id": runner["id"], "label": runner["label"]})
-    return {rid: {runtime: {"id": row["id"], "name": row["name"], "env": row["env"], "preview": row["preview"],
-                            "every": row["id"] in every, "computers": served[row["id"]]}
-                  for runtime, row in found.items()} for rid, found in used.items()}
+    return {
+        rid: {
+            runtime: {
+                "id": row["id"],
+                "name": row["name"],
+                "env": row["env"],
+                "preview": row["preview"],
+                "every": row["id"] in every,
+                "computers": served[row["id"]],
+            }
+            for runtime, row in found.items()
+        }
+        for rid, found in used.items()
+    }
 
 
 def shared_listing(c, runner):
@@ -288,5 +375,8 @@ def users(c, runner, runtime):
     row = uses_shared(c, runner, runtime)
     if not row:
         return []
-    return [r for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY lower(label), id")
-            if (found := uses_shared(c, r, runtime)) is not None and found["id"] == row["id"]]
+    return [
+        r
+        for r in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY lower(label), id")
+        if (found := uses_shared(c, r, runtime)) is not None and found["id"] == row["id"]
+    ]

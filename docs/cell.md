@@ -41,8 +41,8 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    `init` checks it is first (`iptables -S DOCKER-USER`), and `add` refuses to start a company when it is missing or
    not first.
 4. Starts the router and the tunnel in Compose project `tico-cell` (`/srv/tico-cell/edge.yaml`). The router is Caddy,
-   serving plain HTTP on `127.0.0.1:8080`. It sends each company's host name to that company's loopback port, and
-   answers anything else with a 404. The tunnel sends `*.<domain>` to the router, and before that wildcard, every
+   serving plain HTTP on `127.0.0.1:8080`. It sends each company's host name to that company's loopback port (or, for
+   a sleeping company, to the wake service), and answers anything else with a 404. The tunnel sends `*.<domain>` to the router, and before that wildcard, every
    company host it does not match (see [Moving an install in](#moving-an-install-in)). Both containers use the host's
    network and listen on loopback only. Both drop all Linux capabilities, set `no-new-privileges` and a read-only
    root filesystem. The router adds back only `NET_BIND_SERVICE` (Caddy's binary needs it to exec). The tunnel
@@ -52,6 +52,13 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
 5. Installs and starts `tico-cell-updater.service`, the companies' updater ([Updates](#updates)), running
    `python3 -m setup.cell_updater` from this checkout. It is restarted only when its unit changes, which is when
    `init` runs from another checkout, and started if it is not running.
+6. Installs and starts `tico-cell-wake.service`, which starts a sleeping company on its first request
+   ([Sleep, wake and the hold](#sleep-wake-and-the-hold)), running `python3 -m setup.cell_wake` from this checkout on
+   `127.0.0.1:8082`. It is restarted and started the same way as the updater.
+
+`--page-domain DOMAIN` (for example `tico.page`, not the cell's domain) sets the domain the companies' page hosts sit under.
+`init` then adds one tunnel route, `*.<page-domain>`, beside the cell's own. `--page-domain ""` removes it. In Cloudflare,
+the page domain needs the same wildcard record as the cell's, a CNAME to the tunnel, in its own zone.
 
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
 of its own on the tunnel: cloudflared prefers routes held in the dashboard over the file `init` writes. Names that
@@ -65,10 +72,14 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
   [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
-  [--own-domain] [--alias HOST]... [--env-file F] [--import-data FILE] --json
+  [--own-domain] [--alias HOST]... [--page-host HOST] [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
+python3 -m setup cell sleep --company boatyard [--wake-at 2026-10-30T18:00:00Z] --json
+python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
+python3 -m setup cell set-page-host --company boatyard --host boatyard.tico.page|"" --json
+python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
 ```
@@ -92,6 +103,7 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `import_failed` | Unpacking the archive failed (for example, the disk is full). Nothing is left of it |
 | `not_initialized` | `init` has not run, or the metadata firewall rule is missing or not first |
 | `not_found` | No such company, or it was removed |
+| `not_sleeping` | `wake` on a company that staff stopped (`stop`); `start` starts it |
 | `busy` | Another command holds the lock too long |
 | `full` | All 4,000 slots are in use |
 | `use_update` | `add --version` names another release than the company runs; use `update` |
@@ -101,14 +113,14 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `docker_failed` | A Docker or Compose call failed |
 | `router_failed` | The router refused its new config (the old config stays) |
 | `firewall_failed` | The metadata firewall rule could not be set |
-| `unhealthy` | `/healthz` did not answer through the router in time (the detail has the last log lines) |
+| `unhealthy` | `/healthz` did not answer through the router in time (`wake`: on the server's own port), and the detail has the last log lines |
 | `update_failed` | The new release did not come up and the company is back on the old one and its database (`version` says which) |
-| `updater_failed` | `init` could not install or start the cell updater |
+| `updater_failed` | `init` could not install or start the cell updater or the wake service |
 | `rollback_failed` | The new release did not come up, and putting the old one back failed too; the detail says how far it got (`version` is the release in `.env` now) |
 | `unsupported_host` | `init` was run somewhere other than the Linux host |
 | `internal` | A bug. The detail has the cause, with secrets masked |
 
-`add`, `start` and `update` answer like this:
+`add`, `start`, `wake` and `update` answer like this:
 
 ```json
 {"ok": true, "company": "boatyard", "url": "https://boatyard.tico.team", "port": 20000, "ready_ms": 8400,
@@ -119,16 +131,20 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 `compose.yaml` does not pass to the server, so they do nothing) when given `--env-file`, and `"imported": true` with
 `"imported_bytes"` (the size of the files unpacked) when given `--import-data`.
 
-They return only once `/healthz` answers through the router. `ready_ms` is the time from the start of the command
+They return only once `/healthz` answers through the router (`wake`: on the server's own port, since the route
+changes only after that). `ready_ms` is the time from the start of the command
 until then. `changed` is false when nothing needed doing. The other commands answer like this:
 
 - `list`: `{"ok": true, "companies": [{"company", "url", "aliases", "port", "version", "memory", "state"}]}`.
-- `status`: the same fields as a `list` entry, plus `healthy` (whether `/healthz` answers through the router now) and
-  `container` (`{"state", "health"}`).
+- `status`: the same fields as a `list` entry, plus `healthy` (whether `/healthz` answers through the router now;
+  always false for a sleeping company, which is not probed, since a probe would wake it) and `container`
+  (`{"state", "health"}`).
 - `stop`: `{"ok": true, "company", "state": "stopped", "changed"}`.
+- `sleep`: `{"ok": true, "company", "state": "sleeping", "changed"}`.
 - `remove`: `{"ok": true, "company", "removed", "kept_data"}`. `removed` is false when there was nothing to remove.
 
-A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `missing` (no container) or `removed`.
+A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sleeping`, `missing` (no container) or
+`removed`.
 
 ### Rules
 
@@ -154,7 +170,8 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
   waits until Docker says it is stopped, copies its database to `snapshots/` (the last two are kept), and only then
   points `.env` at the new release, with the update marked pending in `company.json`. If the stop or the copy fails,
   nothing changes and the old release is started again. A running company starts the new release at once. A stopped
-  company stays stopped, and its next `start` (or `add`) starts the new release. Either way, while the update is
+  company stays stopped, and its next `start` (or `add`) starts the new release; a sleeping one stays asleep, and its
+  next request (`wake`) starts it. Either way, while the update is
   pending, a release that does not answer `/healthz` is rolled back: the server is stopped (Docker must say so before
   the database files are touched), the database copy and the old release are put back, and the old release must
   answer `/healthz`. `update` back to the old release while an update is still pending is that same rollback.
@@ -165,6 +182,68 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `mi
   company stays marked `removed` with its slot, and running `remove` again finishes.
 - **Locks.** Commands on different companies run in parallel. Only allocating or freeing a slot and rewriting the
   router config share a lock. A command reads a company's record only once it holds that company's lock.
+
+## Sleep, wake and the hold
+
+People and senders (webhooks, mail, runners) never get a 502 from the router while a company's server is down for a
+moment or asleep.
+
+- **The hold.** Each company's route retries a dial that fails (nothing listens on its port: the server is starting,
+  restarting or updating) every 250 ms for up to 30 s (`lb_try_duration`, `lb_try_interval`), so the request waits
+  and gets the server's real answer. Only a failed dial is retried for every method, since nothing reached the server;
+  an error after the connection opened is retried for `GET` only, so a write is never sent twice. What still fails is
+  answered with a plain `503` and `Retry-After: 5` ("Tico is starting. Try again in a few seconds."), never a 502
+  page. Once a request reaches the server there is no time limit: long answers, SSE (`/api/v2/events`) and
+  WebSockets work as before. A router reload (every `add`, `remove`, `stop`, `start`, `sleep` and `wake`) leaves open
+  WebSockets 5 minutes before it closes them.
+- **Sleep.** `sleep` points the company's hosts at the wake service, then stops its server (Docker must say it is
+  stopped). The record's state is `sleeping`. If the stop fails, the company is left as it was. When to sleep a
+  company (idle rules) is up to the caller.
+- **Sleep requests and timed wakes.** A company's server can ask its updater to sleep it: `POST /sleep` on its updater
+  address with its updater token ([Updates](#updates)), body `{"wake_at": "2026-10-30T18:00:00Z" | null, "reason":
+  "idle"}`. The answer is `202 {"state": "sleeping", "wake_at"}` at once, and the sleep itself runs a second later, so
+  the answer gets back before the server stops. `409 {"error": "busy"}` means an update or another cell command holds
+  the company, and nothing changes. An update accepted in that second cancels the sleep (the server asks again later);
+  one that comes once the server is stopping gets a 409. A later sleep request in that second replaces the earlier
+  one. A `wake_at` that is not an ISO-8601 UTC time, or is more than 31 days out, is
+  `422 {"error": "bad_wake_at"}`. `sleep --wake-at` does the same from the command line. The record keeps the time, and
+  the wake service starts the company once that time is within a minute, checking every 20 s; a start that fails is
+  logged and tried again at a later check, not at once. Each timed start checks the time again under the company's
+  lock, so a time staff moved or cleared meanwhile starts nothing; a request always wakes the company. Starting,
+  waking or stopping the company clears the time, and a sleep without one clears a time an earlier sleep set.
+- **Sleep policy.** A company's record can carry `sleep_minutes`: idle minutes before it sleeps, 0 to 1440, where 0 means
+  never sleeps and no value means no policy. Staff set it with `set-sleep --minutes N` (`--minutes default` removes
+  it) or `add --sleep-minutes N`; a re-run of `add` without the flag keeps the saved value. The company's updater
+  answers `GET /sleep` with `200 {"minutes": N | null}` from the record, behind the same token and network gate as
+  `GET /status`, so a change is seen on its next read. Nothing here sleeps a company by itself: the caller decides.
+- **Wake.** The wake service (`tico-cell-wake.service`, `setup/cell_wake.py`) listens on `127.0.0.1:8082`. The
+  router reaches it for a sleeping company's hosts only, and the route itself names the company in a header
+  (`X-Tico-Cell-Wake`; a copy the visitor sent is replaced). The service also checks that the request's `Host` is one
+  of that company's own hosts, so a request never chooses which company starts. It holds the request, runs `wake`
+  for that company (one start, however many requests arrive), then sends the request on to the server as it came
+  (method, headers and body, streamed both ways) and returns the server's real answer. `wake` takes the company's
+  lock, starts the server the same way `start` does (a pending update is finished or rolled back there too), waits
+  for `/healthz` on the server's own port, then marks the company `running` and reloads the router, so later
+  requests go straight to the server. Staff can run `wake` by hand too.
+- **What the wake service answers itself.** All of these are short plain-text answers, never a 502 page:
+  - A wake that fails, or does not finish within 30 s: `503` with `Retry-After: 5`. A start that does not come up is
+    stopped again, so the company stays asleep. For 10 s after a failed wake, requests get the 503 at once, so a flood
+    is not a start loop. A start that is still running when its request gives up carries on, and later requests use
+    it.
+  - `GET` or `HEAD /healthz`: `503`, and the company is not woken. Cell stats and monitors probe every company, and a
+    probe must not undo a sleep.
+  - A WebSocket upgrade wakes the company, then gets `503` with `Retry-After: 1`. The client's reconnect goes straight
+    to the server.
+  - Caps: at most 512 connections at once, 256 requests waiting for a wake in all and 64 for one company. Past a cap,
+    `503` at once. A body is streamed, never stored, and refused with `413` when it is larger than the server accepts
+    (`TICO_UPLOAD_MAX_BYTES`, 2 GiB by default, plus 11 MB).
+- **Stopped is not asleep.** A company staff stopped (`stop`) is answered `503` at once ("This Tico company is
+  stopped."), and nothing wakes it. `start` routes it back to its server.
+- **Stopping a server is quick.** On `docker stop` (a restart, an update, `sleep`), the server's entry point gives the
+  server 1 s to finish what it is answering (`TICO_STOP_GRACE` in the image), then kills it. Only then does it stop
+  Litestream, so Litestream's last sync covers every write (at most 5 s, `shutdown-sync-timeout`) and its local state
+  is current for the next start. Before, the server's own shutdown outlasted Docker's 10 s stop timeout, and the
+  SIGKILL that followed also cut off Litestream's last sync.
 
 ## Moving an install in
 
@@ -200,6 +279,17 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   in its own zone if it has one (`hub.ticofiles.com`). A host under the wildcard that has a DNS record of its own
   (`hub.tico.team` and `runner.tico.team` point at the old instance today) must be changed to that CNAME or deleted.
   Cloudflare's universal certificate covers one label below the zone, so a deeper name needs a certificate of its own.
+- **`--page-host HOST`** (for example `acme.tico.page`): the company's [Company page](company-page.md) host. The cell
+  serves its files from `pages/<slug>/current` in the company's folder, without waking the company: the home page,
+  `data.json`, `feed.xml` and `/assets/*`, for GET and HEAD only, and never with a reader's cookie or a query string.
+  Every other request on that host goes to the company's server, as for its domain. The host is refused with
+  `bad_domain` when it is the company's own domain or an alias, and with `domain_taken` when another company has it.
+  Leaving the flag
+  out keeps the host; `--page-host ""` clears it and keeps the folder. `remove` deletes the folder unless
+  `--keep-data` is given. `list` and `status` show `page_host` and `page_url` when one is set.
+  A host under the page domain needs no route of its own; any other host gets one, as an alias does.
+  For a company that already runs, `set-page-host --host HOST` sets the same host without add's sign-in settings:
+  the server restarts with it. `--host ""` clears it; the same host again changes nothing.
 - **`--env-file F`** (0600, `KEY=VALUE` lines, keys `[A-Z][A-Z0-9_]*`, values on one line): settings the cell does not
   write, such as `TICO_RUNNER_URL`, `TICO_VISUAL_ORIGIN`, `TICO_BLOB_BUCKET`, `TICO_BLOB_REGION`, `TICO_INBOUND_KEY`,
   `TYPESAFE_API_KEY`, `TICO_STALE_REVIEW`, `TICO_SUPPORT_ACCESS`, `TICO_OIDC_ALLOWED_DOMAINS`. They are kept in
@@ -208,7 +298,8 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, and `TICO_CADDY*` and `TICO_TUNNEL*`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, and the page's `TICO_READER_ORIGIN` and
+  `TICO_COMPANY_PAGE_DIR`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.
 - **`--import-data FILE`** (a `.tar` or `.tar.gz` of the contents of the install's `/data`: `hub.sqlite` and its
@@ -219,6 +310,31 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   than its contents). It is unpacked into `.data-import/` beside `data/`, with Python's `tarfile` data filter as a
   second check, owned by user 10001, and renamed to `data/` in one step before the server first starts, so a failed
   import leaves nothing. Once imported, run `add` again without `--import-data`.
+
+## Routes
+
+A route is something on the host that is not a company, such as Tico's public demo (docs/demo.md): its hosts go to
+its own loopback ports.
+
+```sh
+python3 -m setup cell route set --name demo --host demo.tico.team --host demo.tico.dev \
+  --port 19081 --port 19082 --noindex [--router-only] --json
+python3 -m setup cell route remove --name demo [--router-only] --json
+python3 -m setup cell route list --json
+```
+
+- The record is `routes/<name>.json` (hosts, ports, noindex). Every later router or tunnel write (`add`, `remove`,
+  `sleep`, `wake`, ...) keeps it. A route's hosts and a company's never overlap (`domain_taken` either way).
+- Up to 5 hosts and 2 ports, from 1024 to 19999 and not the cell's own (2019, 8080, 8081, 8082, 8090). With two ports
+  the router sends each request to the first one whose `/healthz` answers (checked every 2 s), so a second copy can
+  start beside the first and take over when the first stops, with no reload. The hold and the 503 are a company's.
+- `--noindex` adds `X-Robots-Tag: noindex, nofollow` to every answer and serves a `robots.txt` that disallows
+  everything.
+- A host the tunnel's wildcard misses (`demo.tico.dev`) goes into the tunnel's routes as an alias does, and restarts
+  the tunnel when the list changes. `--router-only` leaves the tunnel alone; the answer's `tunnel_pending` says a
+  restart is still due.
+- A core older than routes drops them when it rewrites the router. The demo's own timer puts its route back
+  (`deploy/demo/tico-demo route`).
 
 ## Updates
 
@@ -277,14 +393,16 @@ takes no snapshot, and it restarts the server only when a file changed, so a sec
 | Path | What it is |
 |---|---|
 | `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
+| `/srv/tico-cell/routes/<name>.json` | A route ([Routes](#routes)): its hosts, ports and noindex |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
+| `/etc/systemd/system/tico-cell-wake.service` | The wake service, run from the same checkout, on `127.0.0.1:8082` |
 | `/srv/tico-cell/tunnel/cloudflared.yml`, `tunnel.env` | The tunnel's routes (owned by 65532, the cloudflared user), and its token (0600) |
 | `/srv/tico-cell/companies/<slug>/.env` | The server's settings (0600), written by the same code as a hosted install's |
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
 | `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data` and `control/` as `/control`, `TICO_CELL`, the default network and the `tico.cell.company` label |
 | `.../extra.env` | Settings carried from a moved install (`--env-file`, 0600) |
-| `.../company.json` | The slot, port, release, memory, state, aliases, and a pending update (the release before it and its snapshot). No secrets |
+| `.../company.json` | The slot, port, release, memory, state, aliases, the sleep policy (`sleep_minutes`), and a pending update (the release before it and its snapshot). No secrets |
 | `.../data/`, `company-file/` | The server's `/data`, and the starter plan (both owned by user 10001) |
 | `.../control/updater-token` | The company's updater token (0600, owned by 10001); its server reads it as `/control/updater-token` |
 | `.../updater-status.json` | The cell updater's last status for the company (0600) |

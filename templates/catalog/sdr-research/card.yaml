@@ -24,8 +24,8 @@ owns:
   - "Meetings booked: a proposed time from the seller's free slots and a handoff note to the Account Executive"
   - "The ideal customer profile and the do-not-contact list as this team states them (knowledge/icp.md, knowledge/do-not-contact.md)"
 never:
-  - "Send, schedule or reply to any email or message, or add anyone to a sequence or list, outside the requested work or Tools"
-  - "Change a lead, contact, stage or owner in the CRM outside the requested work or Tools"
+  - "Send, schedule or reply to any email or message, or add anyone to a sequence or list, unless the task asks for it and a granted Tool allows it"
+  - "Change a lead, contact, stage or owner in the CRM, unless the task asks for it and a granted Tool allows it"
   - "Work a deal after the first meeting: that belongs to the Account Executive"
   - "Write a fact about a lead it did not read in a dated public source, or use a private person's details"
 prerequisites:

@@ -13,7 +13,7 @@
 .roadmap-requesters>h3{display:flex;align-items:center;gap:8px}
 .roadmap-requesters>h3>.prop-add{margin-left:auto}
 .requester-chip{border:1px solid var(--line);border-radius:var(--r-ctl);padding:3px 7px;background:transparent;color:var(--muted);font-size:var(--t-xs);font-weight:400;text-transform:none;letter-spacing:normal}
-.requester-chip[aria-pressed=true]{background:var(--ok-bg);color:var(--accent)}
+.requester-chip[aria-pressed=true]{background:var(--surface2);color:var(--ink)}
 .requester-group h4{margin:12px 0 4px}
 .requester-row{display:flex;flex-direction:column;gap:3px;width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;color:var(--ink);text-align:left;padding:8px 0;overflow-wrap:anywhere}
 button.requester-row:hover,button.requester-row:focus-visible{background:var(--hover)}
@@ -30,7 +30,6 @@ button.requester-row:hover,button.requester-row:focus-visible{background:var(--h
 .roadmap-moderation button{border:0;padding:0;background:transparent;color:var(--muted);font-size:var(--t-xs)}
 .tcomment:hover .roadmap-moderation,.tcomment:focus-within .roadmap-moderation,.roadmap-moderation:focus-within{opacity:1}
 .tcomment-head:has([data-public-moderate]){flex-wrap:wrap}
-.tl-tabs .tl-ranked{color:var(--muted);text-decoration:none;align-self:center;padding:6px 10px;font-size:var(--t-sm)}
 .roadmap-page{max-width:1200px;margin:auto}
 .roadmap-sort{display:flex;align-items:center;gap:8px;margin:18px 0}
 .roadmap-table{width:100%;border-collapse:collapse;table-layout:fixed}

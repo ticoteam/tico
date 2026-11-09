@@ -1,10 +1,16 @@
 # Round scenario
 
-Triggered by a task asking what a raise would do to ownership. Budget 15 minutes. The outcome is a scenario table the human can discuss, never a recommendation on terms.
+Triggered by a task asking what a raise would do to ownership. Budget 15 minutes. The outcome is a scenario table the human can discuss. It is never a recommendation on terms.
+
+**Inputs:** the raise, the pre-money value or range, the pool top-up and whether it sits pre- or post-money, and `knowledge/cap-table.md`. If the placement is not given, show both placements for the first variant.
+
+**Output:** the assumptions, one table per variant (three at most), and the checks from the skill.
+
+**Done when:** every table sums to 100.0%, each is labelled a draft, and the task is marked done with the tables attached.
 
 ---
 
-1. Read the inputs: raise, pre-money (or a range), pool top-up and whether it is pre- or post-money.
-2. Compute ownership before and after for each holder and class, the new pool and the dilution. Show every assumption in a line above the table.
-3. Give two or three variants at most (for example, three pre-money values). Mark the table a draft, not advice.
-4. Hand it to the human; terms and decisions are theirs and their lawyer's.
+1. Read the inputs and write down anything missing.
+2. Build each variant with `skills/build-a-round-scenario/SKILL.md`.
+3. Hand over. Terms and decisions belong to the human and their lawyer.
+4. Publish the report with `hub file publish`, then `hub task update <id> --status done --note`.

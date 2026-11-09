@@ -1,0 +1,5129 @@
+use super::*;
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    sync::{Arc, Mutex},
+};
+
+// Requests a fake Tico server recorded: request line, JSON body, and Idempotency-Key header.
+type Seen = Arc<Mutex<Vec<(String, Value, String)>>>;
+
+fn server(steps: Vec<Option<Value>>) -> (Tico, Seen, std::thread::JoinHandle<()>) {
+    server_gated(steps, None)
+}
+/// As `server`, but the request at `gate.0` is answered only after `gate.1` receives a value, so a
+/// test can run something else while Tico holds that request open.
+fn server_gated(
+    steps: Vec<Option<Value>>,
+    gate: Option<(usize, std::sync::mpsc::Receiver<()>)>,
+) -> (Tico, Seen, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(vec![]));
+    let requests = seen.clone();
+    listener.set_nonblocking(true).unwrap();
+    let handle = std::thread::spawn(move || {
+        for (index, reply) in steps.into_iter().enumerate() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(std::time::Instant::now() < deadline, "Missing HTTP request");
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut bytes = vec![];
+            let end = loop {
+                let mut one = [0; 1];
+                stream.read_exact(&mut one).unwrap();
+                bytes.push(one[0]);
+                if bytes.ends_with(b"\r\n\r\n") {
+                    break bytes.len();
+                }
+            };
+            let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
+            let mut length = 0;
+            let mut key = String::new();
+            for line in headers.lines() {
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        length = value.trim().parse().unwrap();
+                    }
+                    if name.eq_ignore_ascii_case("idempotency-key") {
+                        key = value.trim().to_owned();
+                    }
+                }
+            }
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            requests.lock().unwrap().push((
+                headers.lines().next().unwrap().to_string(),
+                if body.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_slice(&body).unwrap()
+                },
+                key,
+            ));
+            if let Some((at, release)) = &gate
+                && *at == index
+            {
+                release.recv().unwrap();
+            }
+            if let Some(reply) = reply {
+                // `{"status": 404}` alone stands for a route this Tico does not have; with an
+                // `error` it is Tico refusing the request.
+                // `{"sse": "<text>"}` is an event stream as Tico sends it.
+                if let Some(text) = reply["sse"].as_str() {
+                    write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",text.len()).unwrap();
+                    continue;
+                }
+                let failed = reply.as_object().is_some_and(|row| {
+                    row.len() == 1 || (row.len() == 2 && row.contains_key("error"))
+                }) && reply["status"].as_u64().is_some_and(|code| code >= 400);
+                let status = if failed {
+                    format!("{} Refused", reply["status"])
+                } else {
+                    "200 OK".into()
+                };
+                let body = match (failed, reply.get("error")) {
+                    (true, Some(error)) => serde_json::to_vec(&json!({"error":error})).unwrap(),
+                    (true, None) => b"{}".to_vec(),
+                    _ => serde_json::to_vec(&reply).unwrap(),
+                };
+                write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        }
+    });
+    let tico = Tico::new(
+        Destination {
+            id: "synthetic".into(),
+            name: "Fixture".into(),
+            base_url: url,
+            actor: "human:test".into(),
+        },
+        "synthetic-token".into(),
+    )
+    .unwrap();
+    (tico, seen, handle)
+}
+fn transcript(store: &Store, title: &str) -> Recording {
+    let record = store.create(title).unwrap();
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            0,
+            1000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_result(
+            &claimed,
+            "I will send the proposal",
+            "",
+            json!({"fixture":true}),
+        )
+        .unwrap();
+    store.get(&record.id).unwrap()
+}
+#[test]
+fn lost_import_response_retries_the_same_payload_and_key_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Lost import acknowledgement");
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        None,
+        Some(who),
+        Some(json!({"id":"meeting-fixture"})),
+    ]);
+    assert!(tico.send(&store, &record.id, false).is_err());
+    assert!(
+        crate::engine::RecordingHandle::with_sources(
+            store.clone(),
+            record.id.clone(),
+            || anyhow::bail!("A frozen recording must not open inputs")
+        )
+        .is_err()
+    );
+    let reopened = Store::open(dir.path()).unwrap();
+    assert!(
+        reopened
+            .edit_transcript(&record.id, &record.chunks[0].id, "Me", "Changed words")
+            .is_err()
+    );
+    assert_eq!(
+        tico.send(&reopened, &record.id, false).unwrap(),
+        "meeting-fixture"
+    );
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[1].1, calls[3].1);
+    assert_eq!(calls[1].2, calls[3].2);
+    assert!(calls[1].0.contains("meetings/import"));
+}
+#[test]
+fn actions_are_only_pushed_when_explicitly_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Reviewed proposal");
+    let mut context = store.context(&record.id).unwrap();
+    context.items.push(crate::workspace::Item {
+        id: "item-fixture".into(),
+        title: "Send the proposal".into(),
+        quote: "I will send the proposal".into(),
+        kind: "task".into(),
+        selected: true,
+        ..Default::default()
+    });
+    store.save_context(&record.id, &context).unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"meeting-fixture"})),
+        Some(json!({"sections":{"task":[]}})),
+        Some(json!({"item":{"id":"proposal-fixture"}})),
+    ]);
+    tico.send(&store, &record.id, false).unwrap();
+    worker.join().unwrap();
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|entry| !entry.0.contains("/push"))
+    );
+}
+/// A meeting with one proposed action item, sent without pushing it: import, list, file.
+fn send_one_item(steps: Vec<Option<Value>>) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Routes");
+    let mut context = store.context(&record.id).unwrap();
+    context.items.push(crate::workspace::Item {
+        id: "item-fixture".into(),
+        title: "Send the proposal".into(),
+        quote: "I will send the proposal".into(),
+        kind: "task".into(),
+        ..Default::default()
+    });
+    store.save_context(&record.id, &context).unwrap();
+    let (tico, seen, worker) = server(steps);
+    tico.send(&store, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let lines = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|row| row.0.split(' ').take(2).collect::<Vec<_>>().join(" "))
+        .collect();
+    let saved =
+        store.get(&record.id).unwrap().deliveries[0].receipt["items"]["item-fixture"]["id"].clone();
+    assert_eq!(saved, "proposal-fixture");
+    lines
+}
+#[test]
+fn meeting_routes_go_to_api_v2_which_runner_hostnames_route() {
+    let lines = send_one_item(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"meeting-fixture"})),
+        Some(json!({"sections":{"task":[]}})),
+        Some(json!({"item":{"id":"proposal-fixture"}})),
+    ]);
+    assert_eq!(
+        &lines[2..],
+        [
+            "GET /api/v2/meetings/meeting-fixture/items",
+            "POST /api/v2/meetings/meeting-fixture/items",
+        ]
+    );
+}
+#[test]
+fn an_older_tico_without_v2_meeting_routes_gets_the_old_path() {
+    let missing = || Some(json!({"status":404}));
+    let lines = send_one_item(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"meeting-fixture"})),
+        missing(),
+        Some(json!({"sections":{"task":[]}})),
+        missing(),
+        Some(json!({"item":{"id":"proposal-fixture"}})),
+    ]);
+    assert_eq!(
+        &lines[2..],
+        [
+            "GET /api/v2/meetings/meeting-fixture/items",
+            "GET /api/meetings/meeting-fixture/items",
+            "POST /api/v2/meetings/meeting-fixture/items",
+            "POST /api/meetings/meeting-fixture/items",
+        ]
+    );
+}
+#[test]
+fn a_pending_earlier_turn_holds_back_later_source_turns_and_silence_does_not_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Ordered live fixture").unwrap();
+    store
+        .mutate(&record.id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    let earlier = store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            0,
+            1000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Meeting,
+            1000,
+            2000,
+            &vec![0.; 16000],
+            16000,
+        )
+        .unwrap();
+    let mut context = store.context(&record.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "live".into();
+    store.save_context(&record.id, &context).unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"id":"live-fixture"})),
+        Some(json!({"accepted":[1]})),
+        Some(json!({"id":"live-fixture"})),
+    ]);
+    tico.sync_live(&store, &record.id).unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    assert_eq!(claimed.id, earlier.id);
+    store
+        .transcription_result(&claimed, "First turn", "", json!({}))
+        .unwrap();
+    tico.sync_live(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[0].0.starts_with("GET"));
+    assert_eq!(calls[1].1["chunks"][0]["seq"], 1);
+    assert_eq!(calls[1].1["chunks"][0]["text"], "First turn");
+}
+
+#[test]
+fn lost_finalization_response_preserves_notes_and_reuses_the_canonical_meeting() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = transcript(&store, "Lost finalization acknowledgement");
+    let mut context = store.context(&record.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "ended".into();
+    context.notes = "Reviewed original notes".into();
+    store.save_context(&record.id, &context).unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"id":"live-fixture","state":"ended"})),
+        None,
+        Some(json!({"id":"live-fixture","state":"ended"})),
+        Some(json!({"meeting_id":"canonical-fixture"})),
+    ]);
+    assert!(tico.finish_live(&store, &record.id).is_err());
+    store
+        .update_context(&record.id, |current| {
+            current.notes = "Local later notes".into();
+            Ok(())
+        })
+        .unwrap();
+    tico.finish_live(&store, &record.id).unwrap();
+    tico.finish_live(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests[1].1, requests[3].1);
+    assert_eq!(requests[1].2, requests[3].2);
+    assert_eq!(requests[3].1, json!({}));
+    // The notes reviewed at the first attempt are what `send` files, not later edits.
+    let frozen = store.context(&record.id).unwrap().finalize_payload.unwrap();
+    assert_eq!(frozen["notes"], "Reviewed original notes");
+    assert_eq!(
+        store.get(&record.id).unwrap().deliveries[0].meeting_id,
+        "canonical-fixture"
+    );
+}
+
+#[test]
+fn empty_or_silent_live_recordings_can_end_without_creating_a_fake_import() {
+    for silent in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let record = store.create("Empty connected recording").unwrap();
+        if silent {
+            store
+                .save_audio(
+                    &record.id,
+                    crate::audio::Channel::Microphone,
+                    0,
+                    1000,
+                    &vec![0.; 16000],
+                    16000,
+                )
+                .unwrap();
+        }
+        store
+            .update_context(&record.id, |context| {
+                context.live_id = "empty-fixture".into();
+                context.live_destination = "synthetic".into();
+                context.live_state = "live".into();
+                Ok(())
+            })
+            .unwrap();
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"id":"empty-fixture","state":"live"})),
+            Some(json!({"state":"ended"})),
+        ]);
+        tico.finish_live(&store, &record.id).unwrap();
+        tico.finish_live(&store, &record.id).unwrap();
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].0.contains("/control"));
+        assert_eq!(requests[1].1["action"], "end");
+        assert_eq!(store.context(&record.id).unwrap().live_state, "ended");
+        assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+        assert!(
+            crate::engine::RecordingHandle::with_sources(
+                store.clone(),
+                record.id.clone(),
+                || anyhow::bail!("A closed meeting must not reopen inputs")
+            )
+            .is_err()
+        );
+    }
+}
+#[test]
+fn drafts_and_private_answers_come_from_the_model_and_nothing_reaches_tico() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Solo session");
+    let chat = |content: &str| Some(json!({"choices":[{"message":{"content":content}}]}));
+    let (model, seen, worker) = server(vec![
+        chat(
+            r#"{"items":[{"title":"Send the proposal","quote":"I will send the proposal"},
+            {"title":"Ship on Friday","quote":"We ship on Friday"}]}"#,
+        ),
+        chat("You said you will send the proposal (00:00)."),
+    ]);
+    let config = Settings {
+        transcription_url: model.destination.base_url.clone(),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::assist::draft(&store, &config, "key", &record.id).unwrap(),
+        1
+    );
+    // Nothing new to review: no request is made.
+    assert_eq!(
+        crate::assist::draft(&store, &config, "key", &record.id).unwrap(),
+        0
+    );
+    let answer =
+        crate::assist::ask(&store, &config, "key", &record.id, "What did I commit to?").unwrap();
+    assert!(answer.contains("send the proposal"));
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|row| row.0.starts_with("POST /chat/completions "))
+    );
+    assert_eq!(requests[0].1["model"], crate::settings::ASSIST_MODEL);
+    assert!(
+        requests[0].1["messages"][1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("I will send the proposal")
+    );
+    let context = store.context(&record.id).unwrap();
+    assert!(context.live_id.is_empty() && context.live_destination.is_empty());
+    assert_eq!(context.chat.len(), 2);
+    // The invented quote was dropped; the real one is kept with its time.
+    assert_eq!(context.items.len(), 1);
+    assert_eq!(context.items[0].quote, "I will send the proposal");
+    assert!(context.items[0].task_id.is_empty());
+    assert_eq!(context.drafted_through_ms, 1000);
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+}
+#[test]
+fn an_action_item_becomes_one_private_task_carrying_the_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Pricing call");
+    let mut context = store.context(&record.id).unwrap();
+    context.items.push(crate::workspace::Item {
+        id: "item-fixture".into(),
+        kind: "task".into(),
+        title: "Send the proposal".into(),
+        quote: "I will send the proposal".into(),
+        ..Default::default()
+    });
+    store.save_context(&record.id, &context).unwrap();
+    let who = json!({"actor":"human:test","name":"Chris"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"url":"https://acme.example"})),
+        Some(json!({"task":{"id":"task-fixture"}})),
+        Some(who),
+    ]);
+    for _ in 0..2 {
+        tico.send_task(
+            &store,
+            &record.id,
+            "item-fixture",
+            "bot:sales",
+            "Sales Bot",
+            true,
+        )
+        .unwrap();
+    }
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    let tasks: Vec<_> = requests
+        .iter()
+        .filter(|row| row.0.starts_with("POST /api/v2/tasks "))
+        .collect();
+    assert_eq!(tasks.len(), 1);
+    let body = &tasks[0].1;
+    assert_eq!(
+        (body["owner"].as_str(), body["private"].as_bool()),
+        (Some("bot:sales"), Some(true))
+    );
+    let text = body["body"].as_str().unwrap();
+    assert!(
+        text.contains("“I will send the proposal” — Me, 00:00"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Transcript around it:\n[00:00] Me: I will send the proposal"),
+        "{text}"
+    );
+    assert!(text.contains("sent by Chris from Tico Recorder"), "{text}");
+    let context = store.context(&record.id).unwrap();
+    let item = &context.items[0];
+    assert_eq!(
+        (item.task_id.as_str(), item.sent_to.as_str()),
+        ("task-fixture", "Sales Bot")
+    );
+    assert_eq!(item.task_url, "https://acme.example/#/task/task-fixture");
+    assert!(
+        requests
+            .iter()
+            .any(|row| row.0.starts_with("GET /api/v2/recorder/browser "))
+    );
+    // The meeting now belongs to this Tico: Send offers only it.
+    assert_eq!(context.live_destination, tico.destination.id);
+}
+fn streamed(store: &Store, id: &str, channel: &str, start_ms: u64, text: &str, speaker: &str) {
+    let words: Vec<Word> = text
+        .split(' ')
+        .enumerate()
+        .map(|(index, word)| Word {
+            start_ms: start_ms + index as u64 * 300,
+            end_ms: start_ms + index as u64 * 300 + 250,
+            text: word.into(),
+            speaker: speaker.into(),
+            turn: String::new(),
+        })
+        .collect();
+    let end = words.last().map_or(start_ms, |word| word.end_ms);
+    store
+        .replace_live_words(id, channel, start_ms, end, &words)
+        .unwrap();
+}
+#[test]
+fn items_drafted_from_streamed_text_survive_the_chunked_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Streamed drafting").unwrap();
+    store.state(&record.id, "recording").unwrap();
+    // Streamed text a few seconds old; no chunk is transcribed yet.
+    streamed(
+        &store,
+        &record.id,
+        "me",
+        1_000,
+        "Okay I will send Dana the pricing deck tomorrow",
+        "",
+    );
+    assert!(
+        !crate::assist::draft_due(&store, &record.id).unwrap(),
+        "under 400 new characters"
+    );
+    let long =
+        "so the plan is that everyone reviews the numbers before the board meeting next week "
+            .repeat(8);
+    streamed(&store, &record.id, "them", 5_000, long.trim(), "S1");
+    assert!(crate::assist::draft_due(&store, &record.id).unwrap());
+    let chat = |content: &str| Some(json!({"choices":[{"message":{"content":content}}]}));
+    let (model, seen, worker) = server(vec![chat(
+        r#"{"items":[{"title":"Send Dana the pricing deck","quote":"I will send Dana the pricing deck"},
+            {"title":"Ship on Friday","quote":"We ship on Friday"}]}"#,
+    )]);
+    let config = Settings {
+        transcription_url: model.destination.base_url.clone(),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::assist::draft(&store, &config, "key", &record.id).unwrap(),
+        1
+    );
+    worker.join().unwrap();
+    let sent = seen.lock().unwrap()[0].1["messages"][1]["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(sent.contains("I will send Dana the pricing deck"));
+    // The newest five seconds wait for the next review while recording.
+    let through = store.context(&record.id).unwrap().drafted_through_ms;
+    // 120 words from 5 s, the last ending at 40.95 s.
+    assert!(through > 4_000 && through <= 40_950 - 5_000, "{through}");
+    // The chunk for that time lands and words it differently.
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            0,
+            4_500,
+            &vec![0.2; 72_000],
+            16000,
+        )
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    let words = [
+        "Okay,",
+        "I'll",
+        "send",
+        "Dana",
+        "the",
+        "pricing",
+        "deck",
+        "tomorrow.",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, text)| Word {
+        start_ms: 1_000 + index as u64 * 300,
+        end_ms: 1_250 + index as u64 * 300,
+        text: (*text).into(),
+        ..Default::default()
+    })
+    .collect();
+    store
+        .transcription_words(
+            &claimed,
+            "Okay, I'll send Dana the pricing deck tomorrow.",
+            words,
+            "",
+            json!({}),
+        )
+        .unwrap();
+    let record = store.get(&record.id).unwrap();
+    let shown = crate::transcript::live_lines(&record, &store.live_words(&record.id).unwrap());
+    assert_eq!(
+        shown[0].text,
+        "Okay, I'll send Dana the pricing deck tomorrow."
+    );
+    assert!(!shown.iter().any(|line| line.text.contains("I will send")));
+    // The item stays, backed by the text it was drafted from; an invented quote is not.
+    let context = store.context(&record.id).unwrap();
+    assert_eq!(context.items.len(), 1);
+    let item = &context.items[0];
+    assert_eq!(item.quote, "I will send Dana the pricing deck");
+    assert!(item.source.contains(&item.quote));
+    assert!(crate::assist::quote_supported(item, &record));
+    let invented = crate::workspace::Item {
+        quote: "We ship on Friday".into(),
+        ..item.clone()
+    };
+    assert!(!crate::assist::quote_supported(&invented, &record));
+    let typed = crate::workspace::Item {
+        quote: "We ship on Friday".into(),
+        source: String::new(),
+        ..item.clone()
+    };
+    assert!(!crate::assist::quote_supported(&typed, &record));
+}
+#[test]
+fn once_a_recording_is_transcribed_its_streamed_text_never_reaches_tico() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let shared = transcript(&store, "Shared live");
+    let mut context = store.context(&shared.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "live".into();
+    store.save_context(&shared.id, &context).unwrap();
+    let sent = transcript(&store, "Sent after the meeting");
+    for id in [&shared.id, &sent.id] {
+        // Streamed words inside the finished chunk and after it, where no chunk is done yet.
+        streamed(&store, id, "me", 200, "streamedcovered words", "");
+        streamed(&store, id, "me", 5_000, "streamedonly words", "");
+        streamed(&store, id, "them", 6_000, "streamedfarend words", "S1");
+    }
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"accepted":[1]})),
+        Some(json!({"id":"live-fixture"})),
+        Some(who),
+        Some(json!({"id":"meeting-fixture"})),
+    ]);
+    tico.sync_live(&store, &shared.id).unwrap();
+    tico.send(&store, &sent.id, false).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests[0].1["chunks"][0]["text"],
+        "I will send the proposal"
+    );
+    assert!(
+        requests[3].1["transcript"]
+            .to_string()
+            .contains("I will send the proposal")
+    );
+    for (_, body, _) in requests.iter() {
+        let body = body.to_string();
+        assert!(
+            !body.contains("streamed"),
+            "streamed text reached Tico: {body}"
+        );
+    }
+}
+
+fn tico_settings(id: &str, base_url: &str) -> Settings {
+    Settings {
+        destinations: vec![Destination {
+            id: id.into(),
+            name: "Acme".into(),
+            base_url: base_url.into(),
+            actor: "human:test".into(),
+        }],
+        ..Default::default()
+    }
+}
+
+fn wait_settings_reload(what: &str, mut done: impl FnMut() -> bool) {
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < until,
+            "Timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn settings_reload_services_retry_cached_auth_failures_after_a_credential_save() {
+    if settings::tests::isolated(
+        "network::tests::settings_reload_services_retry_cached_auth_failures_after_a_credential_save",
+    ) {
+        return;
+    }
+    let (tico, seen, server) = server(vec![
+        Some(json!({"status":401,"error":"Sign in again"})),
+        Some(json!({"transcribe":true,"stream":true,"assist":true})),
+    ]);
+    settings::save_secret("tico:synthetic", "old-token").unwrap();
+    settings::save_secret("tico-grant:synthetic", "").unwrap();
+    assert!(crate::speech::refresh(&tico.destination).is_err());
+    assert!(crate::speech::current(&tico.destination).is_err());
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    settings::save_secret("tico:synthetic", "new-token").unwrap();
+    assert!(
+        crate::speech::current(&tico.destination)
+            .unwrap()
+            .transcribe
+    );
+    server.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    let mut changed = tico.destination.clone();
+    changed.base_url = "https://other.acme.example".into();
+    assert!(crate::speech::known(&changed).is_none());
+}
+
+#[test]
+fn settings_reload_live_worker_uses_a_connection_saved_after_startup_and_clears_status() {
+    if settings::tests::isolated(
+        "network::tests::settings_reload_live_worker_uses_a_connection_saved_after_startup_and_clears_status",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Sign in after startup");
+    let (tico, seen, server) = server(vec![Some(json!({"accepted":[1]}))]);
+    settings::save_secret("tico:synthetic", "synthetic-token").unwrap();
+    settings::save_secret("tico-grant:synthetic", "").unwrap();
+    store
+        .update_context(&record.id, |context| {
+            context.live_destination = "synthetic".into();
+            context.live_id = "live-fixture".into();
+            context.live_state = "live".into();
+            Ok(())
+        })
+        .unwrap();
+    let live = crate::live::LiveSync::start(store.clone());
+    wait_settings_reload("the initial missing connection", || {
+        live.error(&record.id).contains("Choose a Tico connection")
+    });
+    assert!(seen.lock().unwrap().is_empty());
+    settings::write(
+        dir.path(),
+        &Settings {
+            destinations: vec![tico.destination],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    wait_settings_reload("the saved connection and cleared status", || {
+        !seen.lock().unwrap().is_empty() && live.errors().is_empty()
+    });
+    server.join().unwrap();
+    assert_eq!(
+        seen.lock().unwrap()[0].0,
+        "POST /api/v2/live-meetings/live-fixture/chunks HTTP/1.1"
+    );
+    assert_eq!(
+        seen.lock().unwrap()[0].1["chunks"][0]["text"],
+        "I will send the proposal"
+    );
+    drop(live);
+}
+
+#[test]
+fn settings_reload_transcription_drainer_uses_a_connection_saved_after_startup() {
+    if settings::tests::isolated(
+        "network::tests::settings_reload_transcription_drainer_uses_a_connection_saved_after_startup",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Sign in with queued audio").unwrap();
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            0,
+            1000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    settings::write(
+        dir.path(),
+        &Settings {
+            speech_source: crate::speech::TICO.into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (tico, seen, server) = server(vec![
+        Some(json!({"transcribe":true,"stream":false,"assist":false})),
+        Some(json!({"text":"Transcribed after sign-in"})),
+    ]);
+    settings::save_secret("tico:synthetic", "synthetic-token").unwrap();
+    settings::save_secret("tico-grant:synthetic", "").unwrap();
+    // The actual services endpoint is read once before the two drainers share its cached answer.
+    crate::speech::refresh(&tico.destination).unwrap();
+    let drainer = Transcriber::start(store.clone());
+    wait_settings_reload("the initial missing connection", || {
+        drainer.status().contains("Sign in to Tico")
+    });
+    settings::write(
+        dir.path(),
+        &Settings {
+            destinations: vec![tico.destination],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    wait_settings_reload("transcription and cleared status", || {
+        store.get(&record.id).unwrap().chunks[0].text == "Transcribed after sign-in"
+            && drainer.status().is_empty()
+    });
+    server.join().unwrap();
+    assert!(
+        seen.lock().unwrap()[1]
+            .0
+            .starts_with("POST /api/v2/recorder/audio/transcriptions ")
+    );
+    drop(drainer);
+}
+#[test]
+fn speech_goes_through_the_tico_once_connected_unless_own_keys_were_already_set_up() {
+    use crate::speech::{self, OWN, TICO};
+    let mut config = Settings::default();
+    assert_eq!(speech::source(&config), OWN, "no Tico yet");
+    config = tico_settings("speech-source", "https://runner.acme.example");
+    assert_eq!(speech::source(&config), TICO);
+    config.speech_source = OWN.into();
+    assert_eq!(speech::source(&config), OWN);
+    config.speech_source = TICO.into();
+    assert_eq!(
+        speech::source(&tico_settings("x", "https://a.example")),
+        TICO
+    );
+    // An install with keys of its own keeps them; one without follows the connection.
+    let unset = tico_settings("speech-source", "https://runner.acme.example");
+    assert_eq!(speech::settled(&unset, true), Some(OWN));
+    assert_eq!(speech::settled(&unset, false), None);
+    assert_eq!(speech::settled(&config, true), None, "a choice is kept");
+    let dir = tempfile::tempdir().unwrap();
+    // No settings file: a new install, nothing to keep and the keychain is not asked.
+    assert!(!speech::settle(dir.path(), || panic!("keychain read")).unwrap());
+    settings::write(dir.path(), &unset).unwrap();
+    assert!(speech::settle(dir.path(), || true).unwrap());
+    assert_eq!(settings::read(dir.path()).unwrap().speech_source, OWN);
+    // Settled once: later launches never ask again.
+    assert!(!speech::settle(dir.path(), || panic!("keychain read")).unwrap());
+    // Older settings files have no field; anything else is refused.
+    std::fs::write(
+        dir.path().join("settings.json"),
+        br#"{"transcription_model":"x"}"#,
+    )
+    .unwrap();
+    assert_eq!(settings::read(dir.path()).unwrap().speech_source, "");
+    let mut bad = unset.clone();
+    bad.speech_source = "xai".into();
+    assert!(settings::write(dir.path(), &bad).is_err());
+}
+#[test]
+fn your_tico_transcribes_through_its_relay_with_the_person_token() {
+    use crate::speech::{self, Services};
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"transcribe":true,"assist":true,"stream":false})),
+        Some(
+            json!({"text":"Hello there","words":[{"word":"Hello","start":0.1,"end":0.4,"speaker":"speaker_0"}]}),
+        ),
+    ]);
+    let config = Settings {
+        transcription_url: "https://openrouter.ai/api/v1".into(),
+        transcription_model: "my/custom-model".into(),
+        destinations: vec![tico.destination.clone()],
+        ..Default::default()
+    };
+    let services = speech::fetch(&tico.destination, "person-token").unwrap();
+    assert_eq!(
+        services,
+        Services {
+            transcribe: true,
+            assist: true,
+            stream: false
+        }
+    );
+    speech::remember(&tico.destination, Ok(services));
+    let (relay, token) = speech::transcription_with(&config, |id| {
+        assert_eq!(id, "synthetic");
+        Ok("person-token".into())
+    })
+    .unwrap();
+    assert_eq!(token, "person-token");
+    assert_eq!(
+        relay.transcription_url,
+        format!("{}/api/v2/recorder", tico.destination.base_url)
+    );
+    let (text, words) = transcribe_words(&relay, &token, b"RIFF", true).unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        (text.as_str(), words[0].turn.as_str()),
+        ("Hello there", "speaker_0")
+    );
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests[0].0.starts_with("GET /api/v2/recorder/services "),
+        "{}",
+        requests[0].0
+    );
+    assert!(
+        requests[1]
+            .0
+            .starts_with("POST /api/v2/recorder/audio/transcriptions ")
+    );
+    // Scribe v2 by name, so the Tico asks for word timings and speaker labels.
+    assert_eq!(requests[1].1["model"], "elevenlabs/scribe-v2");
+    assert_eq!(
+        requests[1].1["provider"]["options"]["elevenlabs"]["diarize"],
+        true
+    );
+    // A Tico that can't transcribe now says so; nothing is sent.
+    speech::remember(&tico.destination, Ok(Services::default()));
+    let refused = speech::transcription_with(&config, |_| panic!("no token needed")).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "Your Tico can't transcribe right now. Audio is saved locally."
+    );
+    speech::remember(&tico.destination, Err("Tico request failed: Server returned HTTP 503 (unavailable). Check the connection or retry.".into()));
+    let down = speech::transcription_with(&config, |_| panic!("no token needed")).unwrap_err();
+    assert_eq!(
+        down.to_string(),
+        "Your Tico can't transcribe right now — HTTP 503"
+    );
+    let old = speech::plain(anyhow::anyhow!(OLD_TICO), "transcribe");
+    assert_eq!(
+        old.to_string(),
+        "Your Tico can't transcribe yet. Update Tico, or use your own keys."
+    );
+}
+#[test]
+fn your_tico_streams_over_its_own_address() {
+    let mut config = tico_settings("speech-stream", "https://runner.acme.example");
+    let plan = crate::stream::Plan::from_settings(&config).unwrap();
+    assert_eq!(plan.url, "wss://runner.acme.example/api/v2/recorder/stream");
+    assert!(plan.tico.is_some() && plan.key.is_none() && !plan.required);
+    assert!(
+        crate::stream::enabled(&config),
+        "on unless switched off; the Tico says if it can"
+    );
+    config.destinations[0].base_url = "http://127.0.0.1:8000".into();
+    assert_eq!(
+        crate::stream::Plan::from_settings(&config).unwrap().url,
+        "ws://127.0.0.1:8000/api/v2/recorder/stream"
+    );
+    config.streaming = Some(false);
+    assert!(crate::stream::Plan::from_settings(&config).is_none());
+    // Own keys keep the xAI address.
+    config.streaming = None;
+    config.speech_source = crate::speech::OWN.into();
+    let own = crate::stream::Plan::from_settings(&config).unwrap();
+    assert_eq!(own.url, crate::stream::DEFAULT_URL);
+    assert!(own.tico.is_none());
+}
+
+fn word(start_ms: u64, end_ms: u64, text: &str, speaker: &str) -> Word {
+    Word {
+        start_ms,
+        end_ms,
+        text: text.into(),
+        speaker: speaker.into(),
+        turn: String::new(),
+    }
+}
+#[test]
+fn finished_words_go_to_the_streamed_turn_they_fall_in_or_the_nearest() {
+    use crate::live::{Span, assign, corrected, streamed_turns};
+    let span = |seq, start_ms, end_ms| Span {
+        seq,
+        channel: "me".into(),
+        start_ms,
+        end_ms,
+    };
+    let spans = [span(1, 1000, 2000), span(3, 4000, 5000)];
+    let words = [
+        word(500, 700, "early", ""),
+        word(1800, 2400, "edge", ""),
+        word(3000, 3600, "between", ""),
+        word(2900, 3100, "tie", ""),
+        word(4200, 4400, "inside", ""),
+        word(9000, 9100, "late", ""),
+    ];
+    let assigned = assign(&spans, &words);
+    let texts: Vec<Vec<&str>> = assigned
+        .iter()
+        .map(|words| words.iter().map(|word| word.text.as_str()).collect())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            vec!["early", "edge", "tie"],
+            vec!["between", "inside", "late"]
+        ]
+    );
+    assert!(assign(&[], &words).is_empty());
+    // Words in time order; the voice diarization named most, else the speaker it had.
+    let named = vec![
+        word(3000, 3200, "world", "Dana"),
+        word(1000, 1200, "Hello", "Dana"),
+        word(2000, 2200, "there", "Lee"),
+    ];
+    assert_eq!(
+        corrected(named, "S1"),
+        ("Dana".into(), "Hello there world".into())
+    );
+    assert_eq!(
+        corrected(vec![word(0, 1, "Hi", "")], "S1"),
+        ("S1".into(), "Hi".into())
+    );
+    // One shared greeting is insufficient evidence to delete a genuine local reply.
+    let greeting = word(1000, 1200, "Hello", "");
+    assert_eq!(
+        crate::transcript::without_echo(
+            std::slice::from_ref(&greeting),
+            &[word(1100, 1300, "hello,", "S1")]
+        ),
+        [greeting]
+    );
+    // A turn the finished transcript has no words for is emptied.
+    assert_eq!(corrected(vec![], "S1"), ("S1".into(), String::new()));
+    // Streamed turns end where the speaker changes or speech pauses.
+    let me = streamed_turns(
+        "me",
+        &[
+            word(0, 250, "so", "S1"),
+            word(300, 550, "yes", ""),
+            word(2600, 2800, "right", ""),
+        ],
+    );
+    assert_eq!(
+        me.iter()
+            .map(|turn| (
+                turn.speaker.as_str(),
+                turn.text.as_str(),
+                turn.start_ms,
+                turn.end_ms
+            ))
+            .collect::<Vec<_>>(),
+        [("Me", "so yes", 0, 550), ("Me", "right", 2600, 2800)]
+    );
+    let them = streamed_turns(
+        "them",
+        &[
+            word(0, 250, "hi", "S1"),
+            word(300, 550, "all", "S1"),
+            word(600, 800, "hey", "S2"),
+            word(900, 950, "ok", ""),
+        ],
+    );
+    assert_eq!(
+        them.iter()
+            .map(|turn| (turn.speaker.as_str(), turn.text.as_str()))
+            .collect::<Vec<_>>(),
+        [("S1", "hi all"), ("S2", "hey"), ("Meeting audio", "ok")]
+    );
+}
+
+/// A recording in progress, shared live with the synthetic Tico.
+fn live_recording(store: &Store, title: &str) -> Recording {
+    let record = store.create(title).unwrap();
+    store.state(&record.id, "recording").unwrap();
+    let mut context = store.context(&record.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "live".into();
+    store.save_context(&record.id, &context).unwrap();
+    record
+}
+/// Finishes a microphone chunk with these words, as Scribe returns them.
+fn finished_chunk(store: &Store, id: &str, start: u64, end: u64, words: Vec<Word>) {
+    store
+        .save_audio(
+            id,
+            crate::audio::Channel::Microphone,
+            start,
+            end,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    let text = words
+        .iter()
+        .map(|word| word.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    store
+        .transcription_words(&claimed, &text, words, "", json!({"fixture":true}))
+        .unwrap();
+}
+#[test]
+fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_corrects_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Streamed live");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    // Both channels' finals go at once, in time order, with the service's speaker label.
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    let (result, requests) = pass(vec![Some(json!({"accepted":[1,2]}))]);
+    result.unwrap();
+    assert!(
+        requests[0]
+            .0
+            .starts_with("POST /api/v2/live-meetings/live-fixture/chunks ")
+    );
+    assert_eq!(
+        requests[0].1["chunks"],
+        json!([
+            {"seq":1,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"helo there"},
+            {"seq":2,"speaker":"Speaker 1","start_ms":1200,"end_ms":1750,"text":"hi all"},
+        ])
+    );
+    // Only new finals go next time; seq stays contiguous.
+    streamed(&store, id, "me", 3_000, "and fiends", "");
+    streamed(&store, id, "them", 2_500, "yes", "S2");
+    let (result, requests) = pass(vec![Some(json!({"accepted":[3,4]}))]);
+    result.unwrap();
+    let chunks = &requests[0].1["chunks"];
+    assert_eq!(
+        (chunks[0]["seq"].clone(), chunks[0]["text"].clone()),
+        (json!(3), json!("yes"))
+    );
+    assert_eq!(
+        (chunks[1]["seq"].clone(), chunks[1]["text"].clone()),
+        (json!(4), json!("and fiends"))
+    );
+    assert_eq!(chunks.as_array().unwrap().len(), 2);
+    // A late final retains its capture time locally and uses the shared delivery time frontier.
+    streamed(&store, id, "them", 2_800, "late", "S2");
+    streamed(&store, id, "me", 6_000, "uh", "");
+    let (result, requests) = pass(vec![Some(json!({"accepted":[5,6]}))]);
+    result.unwrap();
+    assert_eq!(
+        requests[0].1["chunks"],
+        json!([
+            {"seq":5,"speaker":"Speaker 2","start_ms":3000,"end_ms":3050,"text":"late"},
+            {"seq":6,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":"uh"},
+        ])
+    );
+    // The finished chunk corrects the microphone's streamed turns instead of repeating them;
+    // its words past the last streamed turn are the only new text.
+    finished_chunk(
+        &store,
+        id,
+        0,
+        8_000,
+        vec![
+            word(1000, 1250, "Hello", ""),
+            word(1300, 1550, "there", ""),
+            word(3000, 3250, "and", ""),
+            word(3300, 3550, "friends", ""),
+            word(7000, 7300, "bye", ""),
+        ],
+    );
+    // The first correction's reply is lost: the retry repeats its key and body.
+    let (result, first) = pass(vec![Some(json!({"accepted":[7]})), None]);
+    assert!(result.is_err());
+    assert_eq!(
+        first[0].1["chunks"],
+        json!([{"seq":7,"speaker":"Me","start_ms":7000,"end_ms":7300,"text":"bye"}])
+    );
+    let (result, requests) = pass(vec![
+        Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":true,"event_id":9})),
+        Some(json!({"id":"live-fixture","seq":4,"revision":2,"replayed":false,"event_id":10})),
+        Some(
+            json!({"status":422,"error":{"code":"validation","message":"Transcript text is required"}}),
+        ),
+    ]);
+    result.unwrap();
+    assert_eq!(first[1], requests[0], "the retry is the same request");
+    let corrections: Vec<(String, Value)> = requests
+        .iter()
+        .map(|(line, body, _)| (line.split(' ').nth(1).unwrap().to_owned(), body.clone()))
+        .collect();
+    assert_eq!(
+        corrections,
+        [
+            (
+                "/api/v2/live-meetings/live-fixture/chunks/1/corrections".into(),
+                json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"})
+            ),
+            (
+                "/api/v2/live-meetings/live-fixture/chunks/4/corrections".into(),
+                json!({"revision":2,"speaker":"Me","start_ms":3000,"end_ms":3550,"text":"and friends"})
+            ),
+            // No finished words: emptied (Tico refuses empty text for now, and keeps "uh").
+            (
+                "/api/v2/live-meetings/live-fixture/chunks/6/corrections".into(),
+                json!({"revision":2,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":""})
+            ),
+        ]
+    );
+    assert!(requests[0].2.contains(":live:1:r2:"), "{}", requests[0].2);
+    // Every finished word reached the microphone's turns once: corrected, or new past them.
+    let mut shared: Vec<String> = corrections
+        .iter()
+        .map(|(_, body)| body["text"].as_str().unwrap().to_owned())
+        .collect();
+    shared.insert(
+        2,
+        first[0].1["chunks"][0]["text"].as_str().unwrap().to_owned(),
+    );
+    assert_eq!(
+        shared
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        "Hello there and friends bye"
+    );
+    // Nothing changed: nothing is sent (this Tico is gone, so any request would fail).
+    let (tico, _, worker) = server(vec![]);
+    worker.join().unwrap();
+    tico.push_live(&store, id).unwrap();
+    // The recording's own transcript is the finished chunk, untouched.
+    let kept = store.get(id).unwrap();
+    assert_eq!(kept.chunks[0].text, "Hello there and friends bye");
+    assert_eq!(store.live_words(id).unwrap()["me"].len(), 5);
+}
+
+#[test]
+fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_nothing_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Chunks only");
+    let id = record.id.as_str();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5_000,
+        vec![word(400, 700, "Morning", ""), word(800, 1000, "all", "")],
+    );
+    let (tico, seen, worker) = server(vec![
+        // Paused in Tico: the turn waits, and the meeting is read to see so.
+        Some(
+            json!({"status":409,"error":{"code":"meeting_state","message":"A paused meeting cannot accept new transcript text"}}),
+        ),
+        Some(json!({"id":"live-fixture","state":"paused"})),
+    ]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(store.context(id).unwrap().live_state, "paused");
+    assert_eq!(
+        seen.lock().unwrap()[0].1["chunks"],
+        json!([{"seq":1,"speaker":"Me","start_ms":400,"end_ms":1000,"text":"Morning all"}])
+    );
+    // While paused nothing new goes, even with streamed words.
+    streamed(&store, id, "me", 5_500, "still talking", "");
+    let (tico, _, worker) = server(vec![]);
+    worker.join().unwrap();
+    tico.push_live(&store, id).unwrap();
+    // The synthetic capture clock has advanced beyond the words spoken while paused.
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(7)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    // Resumed in Tico: the uncertain pending turn is only a removal marker.
+    let (tico, seen, worker) = server(vec![Some(json!({"id":"live-fixture","state":"live"}))]);
+    // A paused meeting is only read back.
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(
+        seen.lock().unwrap()[0]
+            .0
+            .starts_with("GET /api/v2/live-meetings/live-fixture ")
+    );
+    assert_eq!(store.context(id).unwrap().live_state, "live");
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(
+        requests[0].1["chunks"],
+        json!([
+            {"seq":1,"speaker":"Me","start_ms":400,"end_ms":1000,"text":"[removed]"}
+        ])
+    );
+}
+
+#[test]
+fn meeting_notices_are_read_from_new_events_only() {
+    let (tico, seen, worker) = server(vec![Some(json!({"sse": concat!(
+        "id: 41\nevent: meeting.chunk\ndata: {\"seq\":3,\"text\":\"hi\"}\n\n",
+        "id: 42\nevent: meeting.bot_turn_deferred\ndata: {\"turn_id\":\"t7\",\"bot\":\"falcon\",\"reason\":\"replying_in_meeting\"}\n\n",
+        ": keep-alive\n\n",
+        "id: 43\nevent: meeting.bot_turn_failed\ndata: {\"turn_id\":\"t8\",\"bot\":\"falcon\"}\n\n",
+    )}))]);
+    // First read of a meeting: only its recent events.
+    tico.read_notices("live-events", 240).unwrap();
+    worker.join().unwrap();
+    assert!(
+        seen.lock().unwrap()[0]
+            .0
+            .starts_with("GET /api/v2/live-meetings/live-events/events?after=40 "),
+        "{}",
+        seen.lock().unwrap()[0].0
+    );
+    let shown = crate::notices::notices("live-events");
+    // What came after the keep-alive is the next read's.
+    assert_eq!(shown.len(), 1);
+    assert_eq!(
+        shown[0].text("Falcon"),
+        "Falcon will answer after its current reply"
+    );
+    // Nothing new: nothing asked (this Tico is gone, so a request would fail).
+    let (tico, _, worker) = server(vec![]);
+    worker.join().unwrap();
+    tico.read_notices("live-events", 42).unwrap();
+}
+
+#[test]
+fn shared_items_refetch_on_the_first_invalidation() {
+    let (tico, _, worker) = server(vec![Some(json!({"sse": concat!(
+        "event: ready\ndata: {\"seq\":41}\n\n",
+        "id: 42\nevent: meeting_items\ndata: {\"meeting_id\":\"m1\",\"kind\":\"items\"}\n\n",
+        "id: 43\nevent: presence\ndata: {\"place\":\"meeting:m1\"}\n\n",
+        ": keepalive\n\n",
+    )}))]);
+    let found = tico
+        .events_until_change(
+            "/api/v2/events?topics=meeting_items,presence&meeting=m1&place=meeting:m1",
+        )
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[1].0, 42);
+    assert_eq!(found[1].1, "meeting_items");
+}
+
+/// Edits and removals of lines already shared live (synthetic replay, no bots): an edit during the
+/// meeting, an edit after Stop, a removal, a lost reply retried, a finished chunk that arrives after
+/// the edit, then Send. Each change is one revision, the person's text wins, and Send files it.
+#[test]
+fn edits_and_removals_of_shared_lines_go_up_as_revisions_and_win_over_automatic_corrections() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Edited live");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    let correction = |seq: u64, revision: u64| json!({"id":"live-fixture","seq":seq,"revision":revision,"replayed":false,"event_id":1});
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    let (result, _) = pass(vec![Some(json!({"accepted":[1,2]}))]);
+    result.unwrap();
+    // Before Tico has a line, there is nothing to edit.
+    assert!(
+        crate::live::edit_shared(&store, id, 9, Some("nope"))
+            .unwrap_err()
+            .to_string()
+            .contains("not shared live")
+    );
+    // During the meeting: the first line is corrected, the second removed.
+    crate::live::edit_shared(&store, id, 1, Some("Hello there")).unwrap();
+    crate::live::edit_shared(&store, id, 2, None).unwrap();
+    // Saving the same text again is no new revision.
+    crate::live::edit_shared(&store, id, 1, Some("Hello there")).unwrap();
+    let (result, requests) = pass(vec![Some(correction(1, 2)), Some(correction(2, 2))]);
+    result.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|(line, body, _)| (line.clone(), body.clone()))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "POST /api/v2/live-meetings/live-fixture/chunks/1/corrections HTTP/1.1".to_owned(),
+                json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"})
+            ),
+            (
+                "POST /api/v2/live-meetings/live-fixture/chunks/2/corrections HTTP/1.1".to_owned(),
+                json!({"revision":2,"speaker":"Speaker 1","start_ms":1200,"end_ms":1750,"text":"[removed]"})
+            ),
+        ]
+    );
+    // After Stop, a line's edit is a revision 3, and its reply is lost: the retry repeats the request.
+    store.state(id, "stopped").unwrap();
+    crate::live::edit_shared(&store, id, 1, Some("Hello there, everyone")).unwrap();
+    let (result, first) = pass(vec![None]);
+    assert!(result.is_err());
+    let (result, retry) = pass(vec![Some(correction(1, 3))]);
+    result.unwrap();
+    assert_eq!(first[0], retry[0], "the retry is the same request");
+    assert!(retry[0].2.contains(":live:1:r3:"), "{}", retry[0].2);
+    // A finished chunk that transcribes after the edit must not put its words back.
+    finished_chunk(
+        &store,
+        id,
+        0,
+        2_000,
+        vec![
+            word(1_000, 1_250, "Hello", ""),
+            word(1_300, 1_550, "there", ""),
+        ],
+    );
+    let (result, requests) = pass(vec![]);
+    result.unwrap();
+    assert!(requests.is_empty(), "{requests:?}");
+    // Tico's view: each line at its latest revision, with the person's edits marked.
+    let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+    let texts: Vec<(i64, &str, bool, bool)> = lines
+        .iter()
+        .map(|line| (line.seq, line.text.as_str(), line.acknowledged, line.edited))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            (1, "Hello there, everyone", true, true),
+            (2, "[removed]", true, true),
+        ]
+    );
+    // Send with an edit that Tico never received (the meeting ended there first) files nothing.
+    crate::live::edit_shared(&store, id, 1, Some("Late words")).unwrap();
+    let mut context = store.context(id).unwrap();
+    context.live_state = "ended".into();
+    store.save_context(id, &context).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"id":"live-fixture","state":"ended"}))]);
+    let error = tico.finish_live(&store, id).unwrap_err().to_string();
+    worker.join().unwrap();
+    assert!(
+        error.contains("1 edited line(s) did not reach Tico"),
+        "{error}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1, "nothing is filed");
+}
+
+/// Send after edits (synthetic, no bots): the edits go up before the meeting ends, the meeting is
+/// finalized, and the fence lifts. Tico files the stored text, so the edited lines are what is sent.
+#[test]
+fn send_after_edits_pushes_them_before_the_meeting_ends_and_leaves_the_fence() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Edited then sent");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    pass(vec![Some(json!({"accepted":[1,2]}))]).0.unwrap();
+    store.state(id, "stopped").unwrap();
+    crate::live::edit_shared(&store, id, 1, Some("Hello there, friend")).unwrap();
+    crate::live::edit_shared(&store, id, 2, None).unwrap();
+    // Finished audio for the edited line: its automatic correction must not undo the edit, and the
+    // chunk's text is what makes Send finalize the meeting.
+    finished_chunk(
+        &store,
+        id,
+        0,
+        2_000,
+        vec![
+            word(1_000, 1_250, "Hello", ""),
+            word(1_300, 1_550, "there", ""),
+        ],
+    );
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":false,"event_id":1})),
+        Some(json!({"id":"live-fixture","seq":2,"revision":2,"replayed":false,"event_id":2})),
+        Some(json!({"id":"live-fixture","state":"live"})),
+        Some(json!({"id":"live-fixture","state":"ended"})),
+        Some(json!({"meeting_id":"canonical-fixture"})),
+    ]);
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    let lines: Vec<&str> = requests.iter().map(|(line, _, _)| line.as_str()).collect();
+    assert_eq!(
+        lines,
+        [
+            "POST /api/v2/live-meetings/live-fixture/chunks/1/corrections HTTP/1.1",
+            "POST /api/v2/live-meetings/live-fixture/chunks/2/corrections HTTP/1.1",
+            "GET /api/v2/live-meetings/live-fixture HTTP/1.1",
+            "POST /api/v2/live-meetings/live-fixture/control HTTP/1.1",
+            "POST /api/v2/live-meetings/live-fixture/finalize HTTP/1.1",
+        ]
+    );
+    assert_eq!(requests[0].1["text"], "Hello there, friend");
+    assert_eq!(requests[1].1["text"], "[removed]");
+    assert!(!crate::live::is_sending(id), "Send released the meeting");
+    let stored = store.get(id).unwrap();
+    assert_eq!(store.context(id).unwrap().live_state, "ended");
+    assert_eq!(stored.deliveries[0].meeting_id, "canonical-fixture");
+}
+
+/// Edits are fenced from the last pass before a Send until it ends: a Send held at its end request
+/// refuses an edit and saves nothing, and once Send finishes the meeting is ended and refuses too.
+#[test]
+fn an_edit_while_send_is_held_at_the_end_is_refused_and_not_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Held send");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    pass(vec![Some(json!({"accepted":[1]}))]).0.unwrap();
+    store.state(id, "stopped").unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        2_000,
+        vec![
+            word(1_000, 1_250, "helo", ""),
+            word(1_300, 1_550, "there", ""),
+        ],
+    );
+    let before = crate::live::shared_transcript(&store, &store.get(id).unwrap(), false).unwrap();
+    assert_eq!(before["blocks"][0]["editable"], true);
+    let (release, gate) = std::sync::mpsc::channel();
+    let (tico, seen, worker) = server_gated(
+        vec![
+            Some(json!({"id":"live-fixture","state":"live"})),
+            Some(json!({"id":"live-fixture","state":"ended"})),
+            Some(json!({"meeting_id":"canonical-fixture"})),
+        ],
+        Some((1, gate)),
+    );
+    std::thread::scope(|scope| {
+        let send = scope.spawn(|| tico.finish_live(&store, id));
+        // Wait until Tico holds the end request open.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while seen.lock().unwrap().len() < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Send never reached its end request"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let error = crate::live::edit_shared(&store, id, 1, Some("Late words"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("being sent"), "{error}");
+        let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+        assert_eq!(
+            (lines[0].text.as_str(), lines[0].edited),
+            ("helo there", false)
+        );
+        let held = crate::live::shared_transcript(&store, &store.get(id).unwrap(), false).unwrap();
+        assert_eq!(
+            held["blocks"][0]["editable"], false,
+            "no controls while Send runs"
+        );
+        release.send(()).unwrap();
+        send.join().unwrap().unwrap();
+    });
+    worker.join().unwrap();
+    assert!(!crate::live::is_sending(id));
+    let error = crate::live::edit_shared(&store, id, 1, Some("Late words"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ended"), "{error}");
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        3,
+        "Send made its three requests and no edit went up"
+    );
+}
+
+/// A Send that fails releases the meeting: its edits are still pending and can be made again.
+#[test]
+fn a_failed_send_lifts_the_fence_so_edits_can_be_saved_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Failed send");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    pass(vec![Some(json!({"accepted":[1]}))]).0.unwrap();
+    store.state(id, "stopped").unwrap();
+    let (tico, _seen, worker) = server(vec![
+        Some(json!({"id":"live-fixture","state":"live"})),
+        None,
+    ]);
+    assert!(tico.finish_live(&store, id).is_err());
+    worker.join().unwrap();
+    assert!(!crate::live::is_sending(id));
+    crate::live::edit_shared(&store, id, 1, Some("Hello again")).unwrap();
+    let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+    assert_eq!(lines[0].text, "Hello again");
+}
+
+/// The guards on an edit and on the view (synthetic, no bots): a line Tico has not acknowledged, a
+/// blank or too long edit, saving the text a line already shows (still an edit), an ended meeting,
+/// and which speech the transcript shows beside the sent lines.
+#[test]
+fn edit_guards_and_the_shared_view_follow_what_tico_has() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Guards");
+    let id = record.id.as_str();
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    let (tico, _seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    // Queued but not yet acknowledged by Tico.
+    store
+        .db()
+        .unwrap()
+        .execute(
+            "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,?,?,?,0)",
+            rusqlite::params![
+                id,
+                "synthetic",
+                3,
+                "stream:3",
+                json!({"seq":3,"speaker":"S1","start_ms":2000,"end_ms":2500,"text":"pending words"}).to_string()
+            ],
+        )
+        .unwrap();
+    let error = |result: anyhow::Result<()>| result.unwrap_err().to_string();
+    assert!(error(crate::live::edit_shared(&store, id, 3, Some("x"))).contains("still on its way"));
+    assert!(
+        error(crate::live::edit_shared(&store, id, 1, Some("   "))).contains("cannot be empty")
+    );
+    let long = "a".repeat(10_001);
+    assert!(error(crate::live::edit_shared(&store, id, 1, Some(&long))).contains("too long"));
+    // Saving the text a line already shows keeps it: it is marked edited, with no revision.
+    crate::live::edit_shared(&store, id, 1, Some("helo there")).unwrap();
+    let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+    assert_eq!(
+        (lines[0].text.as_str(), lines[0].edited),
+        ("helo there", true)
+    );
+    // Speech starting before the last queued line waits; speech after it is shown.
+    streamed(&store, id, "me", 2_200, "still speaking", "");
+    streamed(&store, id, "me", 9_000, "later words", "");
+    let view = crate::live::shared_transcript(&store, &store.get(id).unwrap(), true).unwrap();
+    let blocks = view["blocks"].as_array().unwrap();
+    let editable: Vec<Value> = blocks
+        .iter()
+        .map(|block| block["editable"].clone())
+        .collect();
+    assert_eq!(editable[..3], [json!(true), json!(true), json!(false)]);
+    let texts: Vec<&str> = blocks
+        .iter()
+        .filter_map(|block| block["paragraphs"][0].as_str())
+        .collect();
+    assert!(
+        texts.contains(&"later words") && !texts.contains(&"still speaking"),
+        "{texts:?}"
+    );
+    // An ended meeting offers no controls.
+    let mut context = store.context(id).unwrap();
+    context.live_state = "ended".into();
+    store.save_context(id, &context).unwrap();
+    let ended = crate::live::shared_transcript(&store, &store.get(id).unwrap(), false).unwrap();
+    assert_eq!(ended["blocks"][0]["editable"], false);
+    assert!(error(crate::live::edit_shared(&store, id, 1, Some("late"))).contains("ended in Tico"));
+}
+
+#[test]
+fn paused_capture_stays_local_through_resume_retry_recovery_and_final_corrections() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Off the record");
+    let id = &record.id;
+    streamed(&store, id, "me", 1000, "public opening", "");
+    let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"paused"}))]);
+    tico.control_live(&store, id, "pause", 5000).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 6000, "secret launch", "");
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"live"}))]);
+    tico.control_live(&store, id, "resume", 10000).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 11000, "public closing", "");
+    // A transport failure leaves only public text in the durable outbox.
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.push_live(&store, id).is_err());
+    worker.join().unwrap();
+    let queued: String = store
+        .db()
+        .unwrap()
+        .query_row(
+            "SELECT group_concat(payload_json) FROM live_outbox WHERE recording_id=?",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!queued.contains("secret"));
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(!seen.lock().unwrap()[0].1.to_string().contains("secret"));
+    finished_chunk(
+        &store,
+        id,
+        0,
+        8000,
+        vec![
+            word(1000, 1300, "Public opening.", ""),
+            word(6000, 6300, "Secret launch.", ""),
+        ],
+    );
+    finished_chunk(
+        &store,
+        id,
+        8000,
+        15000,
+        vec![
+            word(9000, 9300, "Secret plan.", ""),
+            word(11000, 11300, "Public closing.", ""),
+        ],
+    );
+    store.state(id, "stopped").unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({})),
+        Some(json!({})), // final corrections
+        Some(json!({"state":"live"})),
+        Some(json!({"state":"ended"})),
+        Some(json!({"meeting_id":"filed-fixture"})),
+    ]);
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|(_, payload, _)| !payload.to_string().to_lowercase().contains("secret"))
+    );
+    assert_eq!(
+        store.get(id).unwrap().chunks[0].text,
+        "Public opening. Secret launch."
+    );
+    let mut context = store.context(id).unwrap();
+    context.items.push(crate::workspace::Item {
+        quote: "Secret launch.".into(),
+        at_ms: 6000,
+        ..Default::default()
+    });
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+    context.items[0].quote = "Public opening.".into();
+    context.items[0].at_ms = 1000;
+    assert!(!crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+
+    // Quote starts outside the pause, so content matching must detect the paused suffix.
+    context.items[0].quote = "Public opening. Secret launch.".into();
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+    let mut untimed = store.get(id).unwrap();
+    untimed.chunks[0].words.clear();
+    assert!(crate::live::paused_quotes(&untimed, &context));
+    // A quote can cross two chunks as well as a pause boundary.
+    context.items[0].quote = "Secret launch. Secret plan. Public closing.".into();
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+}
+
+#[test]
+fn paused_finish_requires_resume_then_files_pending_public_speech() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Pause before final public upload");
+    let id = &record.id;
+    finished_chunk(
+        &store,
+        id,
+        0,
+        8000,
+        vec![
+            word(1000, 1400, "Public opening", ""),
+            word(6000, 6300, "Secret words", ""),
+        ],
+    );
+    store.state(id, "stopped").unwrap();
+    store
+        .update_context(id, |c| {
+            c.live_state = "paused".into();
+            c.locally_paused = true;
+            c.paused_windows = vec![(5000, None)];
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"state":"live"})),
+        Some(json!({"accepted":[1]})),
+        Some(json!({"state":"live"})),
+        Some(json!({"state":"ended"})),
+        Some(json!({"meeting_id":"filed-public"})),
+    ]);
+    assert!(
+        tico.finish_live(&store, id)
+            .unwrap_err()
+            .to_string()
+            .contains("Resume sharing")
+    );
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(store.get(id).unwrap().deliveries.is_empty());
+    tico.control_live(&store, id, "resume", 10000).unwrap();
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests[1].1["chunks"][0]["text"], "Public opening");
+    assert!(requests[4].0.contains("/finalize"));
+    assert!(
+        !serde_json::to_string(&*requests)
+            .unwrap()
+            .contains("Secret")
+    );
+    let kept = store.get(id).unwrap();
+    assert_eq!(kept.deliveries[0].meeting_id, "filed-public");
+    assert!(kept.chunks[0].text.contains("Secret"));
+}
+
+#[test]
+fn finish_stops_if_final_readback_discovers_a_remote_pause() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Remote pause before finish");
+    store.state(&record.id, "stopped").unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"state":"paused"}))]);
+    assert!(
+        tico.finish_live(&store, &record.id)
+            .unwrap_err()
+            .to_string()
+            .contains("Resume sharing")
+    );
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+}
+
+#[test]
+fn uncertain_pause_stays_local_and_discard_never_finalizes_or_sends() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Discard locally kept recording");
+    let id = &record.id;
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.control_live(&store, id, "pause", 5000).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"live"}))]);
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(store.context(id).unwrap().live_state, "paused");
+    assert_eq!(
+        store.context(id).unwrap().paused_windows,
+        vec![(5000, None)]
+    );
+    finished_chunk(
+        &store,
+        id,
+        0,
+        10000,
+        vec![word(6000, 6300, "Private words", "")],
+    );
+    store.state(id, "stopped").unwrap();
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.control_live(&store, id, "discard", 10000).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    assert!(store.context(id).unwrap().live_discarded);
+    assert!(tico.finish_live(&store, id).is_err());
+    let (tico, seen, worker) = server(vec![Some(json!({"state":"ended"}))]);
+    tico.control_live(&store, id, "discard", 10000).unwrap();
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(seen.lock().unwrap()[0].1, json!({"action":"end"}));
+    assert!(tico.finish_live(&store, id).is_err());
+    let kept = store.get(id).unwrap();
+    assert!(kept.deliveries.is_empty());
+    assert_eq!(kept.chunks[0].text, "Private words");
+    assert!(
+        std::path::Path::new(&kept.chunks[0].file).exists()
+            || dir.path().join(&kept.chunks[0].file).exists()
+    );
+}
+
+#[test]
+fn remote_pause_scrubs_pending_turns_chunks_and_corrections_before_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Remote pause");
+    let id = &record.id;
+    streamed(&store, id, "me", 1000, "public opening", "");
+    let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 4000, "secret streamed", "");
+    finished_chunk(
+        &store,
+        id,
+        5000,
+        8000,
+        vec![word(6000, 6300, "secret finished", "")],
+    );
+    // A correction queued before discovering the remote pause must also stay private.
+    store.db().unwrap().execute("INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?, 'synthetic',1,2,?)",rusqlite::params![id, json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"secret correction"}).to_string()]).unwrap();
+    let (tico, _, worker) = server(vec![
+        Some(json!({"status":409,"error":{"code":"meeting_state","message":"paused"}})),
+        Some(json!({"state":"paused"})),
+    ]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        store.context(id).unwrap().paused_windows,
+        vec![(1000, None)]
+    );
+    let db = store.db().unwrap();
+    let pending: String = db.query_row("SELECT group_concat(payload_json) FROM live_outbox WHERE recording_id=? AND acknowledged=0", [id], |r|r.get(0)).unwrap();
+    assert!(!pending.contains("secret"));
+    let corrections: String = db.query_row("SELECT group_concat(payload_json) FROM live_corrections WHERE recording_id=? AND state=0", [id], |r|r.get(0)).unwrap();
+    assert!(!corrections.contains("secret"));
+    drop(db);
+    let store = Store::open(dir.path()).unwrap();
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({})), Some(json!({"state":"live"}))]);
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, p, _)| p.to_string().contains("secret"))
+    );
+    streamed(&store, id, "me", 12000, "public resumed", "");
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.push_live(&store, id).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2,3,4]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(!requests[0].1.to_string().contains("secret"));
+    assert!(requests[0].1.to_string().contains("public resumed"));
+    assert_eq!(store.get(id).unwrap().chunks[0].text, "secret finished");
+}
+
+#[test]
+fn item_send_refuses_paused_and_discarded_even_with_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic item guards");
+    let (tico, seen, worker) = server(vec![]);
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |c| {
+                c.live_state = if discarded { "ended" } else { "paused" }.into();
+                c.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        for confirmed in [false, true] {
+            let error = tico
+                .send_task_confirmed(
+                    &store,
+                    &record.id,
+                    "item",
+                    "bot:fixture",
+                    "Fixture",
+                    true,
+                    confirmed,
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(if discarded { "discarded" } else { "Resume" }),
+                "{error}"
+            );
+        }
+    }
+    worker.join().unwrap();
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "state fences precede all HTTP"
+    );
+    assert!(!store.get(&record.id).unwrap().chunks.is_empty());
+}
+
+#[test]
+fn item_send_requires_quote_review_and_filters_the_surrounding_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic item excerpt");
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            5000,
+            6000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_result(&claimed, "SECRET_PAUSED", "", json!({}))
+        .unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(6000))];
+            c.items = vec![crate::workspace::Item {
+                id: "item".into(),
+                title: "Follow up".into(),
+                quote: "SECRET_PAUSED".into(),
+                at_ms: 5500,
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:test","name":"Fixture"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(who),
+        Some(json!({"url":"https://acme.example"})),
+        Some(json!({"task":{"id":"synthetic-task"}})),
+    ]);
+    let error = tico
+        .send_task(&store, &record.id, "item", "bot:fixture", "Fixture", true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("may quote paused speech"), "{error}");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.0.starts_with("POST"))
+    );
+    store
+        .update_context(&record.id, |c| {
+            c.items[0].quote = "I will send the proposal".into();
+            c.items[0].at_ms = 0;
+            Ok(())
+        })
+        .unwrap();
+    tico.send_task_confirmed(
+        &store,
+        &record.id,
+        "item",
+        "bot:fixture",
+        "Fixture",
+        true,
+        true,
+    )
+    .unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    assert!(requests[1].0.starts_with("GET /api/v2/me "));
+    let tasks: Vec<_> = requests
+        .iter()
+        .filter(|r| r.0.starts_with("POST /api/v2/tasks "))
+        .collect();
+    assert_eq!(tasks.len(), 1);
+    let body = tasks[0].1["body"].as_str().unwrap();
+    assert!(body.contains("I will send the proposal"), "{body}");
+    assert!(!body.contains("SECRET_PAUSED"), "{body}");
+    assert!(
+        store
+            .get(&record.id)
+            .unwrap()
+            .chunks
+            .iter()
+            .any(|c| c.text.contains("SECRET_PAUSED"))
+    );
+}
+
+#[test]
+fn item_send_discovers_a_remote_pause_before_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Remote item pause");
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"state":"paused"})),
+    ]);
+    store
+        .update_context(&record.id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = tico.destination.id.clone();
+            c.live_state = "live".into();
+            Ok(())
+        })
+        .unwrap();
+    let error = tico
+        .send_task_confirmed(
+            &store,
+            &record.id,
+            "item",
+            "bot:fixture",
+            "Fixture",
+            true,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Resume"), "{error}");
+    worker.join().unwrap();
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.0.starts_with("POST"))
+    );
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    assert!(
+        requests[1]
+            .0
+            .starts_with("GET /api/v2/live-meetings/live-fixture ")
+    );
+    assert!(!store.context(&record.id).unwrap().paused_windows.is_empty());
+}
+
+#[test]
+fn old_tico_refuses_private_connect_without_dropping_visibility() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Private synthetic replay").unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"status":422})),
+        Some(json!({"status":422})),
+    ]);
+    let error = tico
+        .connect(&store, &record.id, Some("private"))
+        .unwrap_err();
+    worker.join().unwrap();
+    assert!(error.to_string().contains("nothing was shared"));
+    assert!(store.context(&record.id).unwrap().live_id.is_empty());
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    for (request, body, _) in requests.iter().skip(1) {
+        assert!(request.starts_with("POST /api/v2/live-meetings "));
+        assert_eq!(body["visibility"], "private");
+    }
+    assert_eq!(requests[1].1["client"], "tico-recorder");
+    assert!(requests[2].1.get("client").is_none());
+}
+
+#[test]
+fn title_only_item_needs_confirmation_after_each_edit_before_any_task_post() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic title review");
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(6000))];
+            c.items = vec![crate::workspace::Item {
+                id: "title-only".into(),
+                title: "Secret launch date".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:test","name":"Fixture"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(who.clone()),
+        Some(who),
+        Some(json!({"url":"https://acme.example"})),
+        Some(json!({"task":{"id":"synthetic-title-task"}})),
+    ]);
+    for title in ["Secret launch date", "Changed secret launch date"] {
+        store
+            .update_context(&record.id, |c| {
+                c.items[0].title = title.into();
+                Ok(())
+            })
+            .unwrap();
+        let error = tico
+            .send_task(
+                &store,
+                &record.id,
+                "title-only",
+                "bot:fixture",
+                "Fixture",
+                true,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Review its title and quote"), "{error}");
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|r| !r.0.starts_with("POST"))
+        );
+    }
+    tico.send_task_confirmed(
+        &store,
+        &record.id,
+        "title-only",
+        "bot:fixture",
+        "Fixture",
+        true,
+        true,
+    )
+    .unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 5);
+    assert!(
+        requests[..3]
+            .iter()
+            .all(|r| r.0.starts_with("GET /api/v2/me "))
+    );
+    assert!(requests[3].0.starts_with("GET /api/v2/recorder/browser "));
+    assert!(requests[4].0.starts_with("POST /api/v2/tasks "));
+    assert_eq!(requests[4].1["title"], "Changed secret launch date");
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].task_id,
+        "synthetic-title-task"
+    );
+}
+
+#[test]
+fn browser_links_require_server_support_and_a_safe_browser_address() {
+    let (tico, _, worker) = server(vec![Some(json!({"status":404}))]);
+    assert!(tico.browser_url().is_err());
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"url":"https://acme.example"}))]);
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(
+        json!({"url":"https://user:secret@acme.example"}),
+    )]);
+    assert!(tico.browser_url().is_err());
+    worker.join().unwrap();
+}
+
+#[test]
+fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
+    for (old, oauth) in [(false, false), (true, false), (true, true), (false, true)] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let record = transcript(&store, "Synthetic task links");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "link-item".into(),
+                    title: "Follow up".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let mut replies = vec![
+            Some(json!({"actor":"human:test","name":"Fixture"})),
+            Some(json!({"status": if old {404} else {503}})),
+        ];
+        if old {
+            replies.push(Some(json!({"task":{"id":"synthetic-task"}})));
+        }
+        let (mut tico, seen, worker) = server(replies);
+        tico.oauth = oauth;
+        let result = tico.send_task(
+            &store,
+            &record.id,
+            "link-item",
+            "bot:fixture",
+            "Fixture",
+            true,
+        );
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap();
+        if old {
+            result.unwrap();
+            assert!(
+                requests
+                    .iter()
+                    .any(|row| row.0.starts_with("POST /api/v2/tasks "))
+            );
+            let task_url = &store.context(&record.id).unwrap().items[0].task_url;
+            if oauth {
+                assert!(
+                    task_url.is_empty(),
+                    "An older OAuth server must not link to its runner hostname"
+                );
+            } else {
+                assert!(task_url.ends_with("/#/task/synthetic-task"));
+            }
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("task was not sent")
+            );
+            assert!(requests.iter().all(|row| !row.0.starts_with("POST")));
+            assert!(
+                store.context(&record.id).unwrap().items[0]
+                    .task_id
+                    .is_empty()
+            );
+        }
+    }
+    let (tico, _, worker) = server(vec![Some(json!({"url":"https://acme.example"}))]);
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    worker.join().unwrap();
+}
+
+#[test]
+fn saved_pending_item_uses_atomic_push_and_live_send_names_its_source() {
+    for saved in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Shared items");
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"actor":"human:test","name":"Test"})),
+            Some(json!({"state":"ended"})),
+            Some(json!({"url":"https://acme.example"})),
+            Some(if saved {
+                json!({"item":{"result_ref":"task-fixture"}})
+            } else {
+                json!({"task":{"id":"task-fixture"}})
+            }),
+        ]);
+        store
+            .update_context(&record.id, |context| {
+                context.live_id = "live-fixture".into();
+                context.live_destination = tico.destination.id.clone();
+                context.live_state = "ended".into();
+                context.items.push(crate::workspace::Item {
+                    id: "item-fixture".into(),
+                    kind: "task".into(),
+                    title: "Final words".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        if saved {
+            store
+                .delivery(
+                    &record.id,
+                    &crate::store::Delivery {
+                        destination_id: tico.destination.id.clone(),
+                        meeting_id: "saved-fixture".into(),
+                        status: "sent".into(),
+                        receipt: json!({"items":{"item-fixture":{"id":"server-item"}}}),
+                        error: String::new(),
+                    },
+                )
+                .unwrap();
+        }
+        tico.send_task(&store, &record.id, "item-fixture", "human:ben", "Ben", true)
+            .unwrap();
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap();
+        let sent = requests.iter().find(|r| r.0.starts_with("POST ")).unwrap();
+        if saved {
+            assert!(
+                sent.0
+                    .starts_with("POST /api/v2/meetings/saved-fixture/items/server-item/push ")
+            );
+            assert_eq!(sent.1["text"], "Final words");
+            assert_eq!(sent.1["detail"]["owner"], "human:ben");
+        } else {
+            assert!(sent.0.starts_with("POST /api/v2/tasks "));
+            assert_eq!(sent.1["live_meeting_id"], "live-fixture");
+        }
+        assert_eq!(
+            requests.iter().filter(|r| r.0.starts_with("POST ")).count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let team = transcript(&store, "Standup");
+    let narrow = transcript(&store, "Comp review");
+    let live = transcript(&store, "Live sync");
+    store
+        .update_context(&live.id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = "synthetic".into();
+            c.live_state = "ended".into();
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &live.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "filed-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"team-fixture"})),
+        Some(who.clone()),
+        Some(json!({"status":422,"error":"Extra inputs are not permitted"})),
+        Some(who),
+        Some(json!({"id":"filed-fixture","review_state":"live"})),
+    ]);
+    assert_eq!(
+        tico.send_to(&store, &team.id, false, "team").unwrap(),
+        "team-fixture"
+    );
+    let refused = tico
+        .send_to(&store, &narrow.id, false, "participants")
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("participants only"), "{refused}");
+    tico.send_to(&store, &live.id, false, "participants")
+        .unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[1].0.contains("meetings/import"));
+    assert_eq!(calls[1].1["private"], false);
+    assert!(calls[1].1.get("audience").is_none());
+    assert_eq!(calls[3].1["private"], true);
+    assert_eq!(calls[3].1["audience"], "participants");
+    assert!(calls[5].0.contains("/meetings/filed-fixture/review"));
+    assert_eq!(
+        calls[5].1,
+        json!({"action":"approve","private":true,"audience":"participants"})
+    );
+    assert_eq!(
+        store.get(&narrow.id).unwrap().deliveries[0].status,
+        "failed"
+    );
+    assert!(
+        store.get(&narrow.id).unwrap().deliveries[0]
+            .meeting_id
+            .is_empty()
+    );
+}
+
+#[test]
+fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let kept = transcript(&store, "Kept here");
+    let older = transcript(&store, "Older Tico");
+    for (id, state) in [(&kept.id, "ended"), (&older.id, "live")] {
+        store
+            .update_context(id, |c| {
+                c.live_id = format!("live-{state}");
+                c.live_destination = "synthetic".into();
+                c.live_state = state.into();
+                Ok(())
+            })
+            .unwrap();
+    }
+    // Finish had already filed the shared transcript for review.
+    store
+        .delivery(
+            &kept.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "pending-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"ok":true})),
+        Some(json!({"id":"live-ended","state":"ended","discarded":true})),
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"local-fixture"})),
+        Some(json!({"status":404})),
+        Some(json!({"id":"live-live","state":"ended"})),
+    ]);
+    tico.keep_local(&store, &kept.id).unwrap();
+    let context = store.context(&kept.id).unwrap();
+    assert!(context.live_discarded && context.live_removed);
+    assert!(store.get(&kept.id).unwrap().deliveries.is_empty());
+    // Saved to Tico later, it is a meeting recorded on this computer.
+    assert_eq!(
+        tico.send_to(&store, &kept.id, false, "team").unwrap(),
+        "local-fixture"
+    );
+    let error = tico.keep_local(&store, &older.id).unwrap_err().to_string();
+    assert!(error.contains("keeps the live transcript"), "{error}");
+    let context = store.context(&older.id).unwrap();
+    assert!(context.live_discarded && !context.live_removed);
+    assert_eq!(context.live_state, "ended");
+    assert!(tico.send_to(&store, &older.id, false, "team").is_err());
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(
+        calls[0]
+            .0
+            .contains("/api/v2/meetings/pending-fixture/delete")
+    );
+    assert!(
+        calls[1]
+            .0
+            .contains("/api/v2/live-meetings/live-ended/discard")
+    );
+    assert!(calls[3].0.contains("meetings/import"));
+    assert_eq!(calls[3].1["external_id"], json!(kept.id));
+    assert!(calls[5].0.contains("/live-meetings/live-live/control"));
+    assert_eq!(calls[5].1, json!({"action":"end"}));
+}
+
+fn live_delivery(store: &Store, id: &str, status: &str, receipt: Value) {
+    store
+        .update_context(id, |c| {
+            c.live_id = format!("live-{id}");
+            c.live_destination = "synthetic".into();
+            c.live_state = "ended".into();
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: format!("filed-{id}"),
+                status: status.into(),
+                error: String::new(),
+                receipt,
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_retried_save_applies_the_audience_chosen_now_and_sends_a_title_changed_here() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    // Approved for the Team, then a later step failed; the retry is Participants only.
+    let narrowed = transcript(&store, "Narrowed");
+    live_delivery(
+        &store,
+        &narrowed.id,
+        "failed",
+        json!({"source":"live","approved":true,"audience":"team","tico_title":"Narrowed"}),
+    );
+    // Tico filed it with the live room's title; Finish renamed it here.
+    let renamed = transcript(&store, "Renamed here");
+    live_delivery(&store, &renamed.id, "partial", json!({"source":"live"}));
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"filed","review_state":"live"})),
+        Some(who),
+        Some(json!({"id":"filed","review_state":"live","title":"Live room"})),
+        Some(json!({"id":"filed","version":3,"title":"Live room"})),
+        Some(json!({"ok":true})),
+    ]);
+    tico.send_to(&store, &narrowed.id, false, "participants")
+        .unwrap();
+    tico.send_to(&store, &renamed.id, false, "team").unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(
+        calls[1]
+            .0
+            .contains(&format!("/meetings/filed-{}/review", narrowed.id))
+    );
+    assert_eq!(
+        calls[1].1,
+        json!({"action":"approve","private":true,"audience":"participants"})
+    );
+    assert!(
+        calls[5]
+            .0
+            .contains(&format!("/meetings/filed-{}/edit", renamed.id))
+    );
+    assert_eq!(calls[5].1, json!({"version":3,"title":"Renamed here"}));
+    let receipt = &store.get(&renamed.id).unwrap().deliveries[0].receipt;
+    assert_eq!(receipt["tico_title"], "Renamed here");
+}
+
+#[test]
+fn this_mac_after_a_save_failed_before_approval_still_removes_it_from_tico() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let failed = transcript(&store, "Failed save");
+    live_delivery(&store, &failed.id, "failed", json!({"source":"live"}));
+    let approved = transcript(&store, "Approved save");
+    live_delivery(
+        &store,
+        &approved.id,
+        "failed",
+        json!({"source":"live","approved":true}),
+    );
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"ok":true})),
+        Some(json!({"id":"live","state":"ended","discarded":true})),
+    ]);
+    tico.keep_local(&store, &failed.id).unwrap();
+    let error = tico
+        .keep_local(&store, &approved.id)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("already saved"), "{error}");
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(
+        calls[0]
+            .0
+            .contains(&format!("/meetings/filed-{}/delete", failed.id))
+    );
+    assert!(calls[1].0.contains("/discard"));
+    assert!(store.get(&failed.id).unwrap().deliveries.is_empty());
+    assert!(store.context(&failed.id).unwrap().live_removed);
+}
+
+#[test]
+fn a_retry_names_the_audience_and_a_narrowing_tico_refuses_is_shown_as_said() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    // Approved for participants, retried for the Team.
+    let widened = transcript(&store, "Widened");
+    live_delivery(
+        &store,
+        &widened.id,
+        "failed",
+        json!({"source":"live","approved":true,"audience":"participants","tico_title":"Widened"}),
+    );
+    // Approved for the Team and already sent to a task; retried for participants.
+    let sent = transcript(&store, "Sent already");
+    live_delivery(
+        &store,
+        &sent.id,
+        "failed",
+        json!({"source":"live","approved":true,"audience":"team","tico_title":"Sent already"}),
+    );
+    let who = json!({"actor":"human:test"});
+    let refusal = "Already sent to #2417 for the team. Change who can see it there.";
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"filed","review_state":"live"})),
+        Some(who),
+        Some(json!({"status":409,"error":{"code":"already_sent","detail":refusal}})),
+    ]);
+    tico.send_to(&store, &widened.id, false, "team").unwrap();
+    let error = tico
+        .send_to(&store, &sent.id, false, "participants")
+        .unwrap_err()
+        .to_string();
+    worker.join().unwrap();
+    assert_eq!(error, refusal);
+    assert_eq!(store.get(&sent.id).unwrap().deliveries[0].error, refusal);
+    let calls = seen.lock().unwrap();
+    assert_eq!(
+        calls[1].1,
+        json!({"action":"approve","private":false,"audience":"team"})
+    );
+    assert!(calls[1].2.contains("refile"));
+}
+
+#[test]
+fn a_task_created_before_save_is_uploaded_as_a_sent_meeting_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Sent before Save");
+    store
+        .update_context(&record.id, |context| {
+            context.items.push(crate::workspace::Item {
+                id: "sent-item".into(),
+                title: "Send the proposal".into(),
+                task_id: "created-task".into(),
+                kind: "task".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"saved-meeting"})),
+        Some(json!({"sections":{"task":[]}})),
+        Some(json!({"item":{"id":"sent-row","status":"pushed","result_ref":"created-task"}})),
+        Some(json!({})),
+    ]);
+    tico.send(&store, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[3].1["status"], "pushed");
+    assert_eq!(calls[3].1["result_ref"], "created-task");
+    assert!(!calls.iter().any(|r| r.0.contains("/push")));
+}
+
+#[test]
+fn partial_save_create_adopts_another_readers_task_and_save_recovers() {
+    for lost_reply in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Partial Save");
+        store
+            .update_context(&record.id, |context| {
+                for id in ["a", "b"] {
+                    context.items.push(crate::workspace::Item {
+                        id: id.into(),
+                        title: format!("Task {id}"),
+                        kind: "task".into(),
+                        owner: "human:test".into(),
+                        ..Default::default()
+                    });
+                }
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test","name":"Test"});
+        let a = json!({"id":"server-a","version":1,"status":"proposed"});
+        // Another reader Sends A after the partial Save, before Recorder's Create.
+        let sent_a = json!({"id":"server-a","version":2,"status":"pushed","result_ref":"task-a"});
+        let b = json!({"id":"server-b","version":1,"status":"proposed"});
+        let adopted = json!({"item":sent_a,"pushed":false});
+        let mut steps = vec![
+            Some(who.clone()),
+            Some(json!({"id":"saved-meeting"})),
+            Some(json!({"sections":{"task":[]}})),
+            Some(json!({"item":a})),
+            Some(json!({"status":503,"error":{"code":"unavailable"}})),
+            Some(who.clone()),
+            Some(json!({"url":"https://acme.example"})),
+            if lost_reply {
+                None
+            } else {
+                Some(adopted.clone())
+            },
+        ];
+        if lost_reply {
+            steps.extend([Some(who.clone()), Some(adopted)]);
+        }
+        steps.extend([
+            Some(who.clone()), Some(json!({"sections":{"task":[sent_a]}})), Some(json!({"item":b})), Some(json!({})),
+            Some(who), Some(json!({"people":[{"id":"test","name":"Test"}]})),
+            Some(json!({"sections":{"task":[sent_a,b]}})),
+            Some(json!({"item":{"id":"server-b","version":2,"status":"pushed","result_ref":"task-b"}})),
+        ]);
+        let (tico, seen, worker) = server(steps);
+        assert!(tico.send(&store, &record.id, false).is_err());
+        assert_eq!(
+            store.get(&record.id).unwrap().deliveries[0].status,
+            "failed"
+        );
+        let created = tico.send_task(&store, &record.id, "a", "human:test", "Test", true);
+        if lost_reply {
+            assert!(created.is_err());
+            tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+                .unwrap();
+        } else {
+            created.unwrap();
+        }
+        assert_eq!(
+            store.context(&record.id).unwrap().items[0].task_id,
+            "task-a"
+        );
+        tico.send(&store, &record.id, false).unwrap();
+        let delivery = &store.get(&record.id).unwrap().deliveries[0];
+        assert_eq!(delivery.status, "sent");
+        assert_eq!(delivery.receipt["items"]["a"]["status"], "pushed");
+        assert_eq!(delivery.receipt["items"]["a"]["result_ref"], "task-a");
+        assert_eq!(delivery.receipt["items"]["a"]["version"], 2);
+        tico.send(&store, &record.id, true).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let pushes: Vec<_> = calls
+            .iter()
+            .filter(|r| {
+                r.0.starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+            })
+            .collect();
+        assert_eq!(pushes.len(), if lost_reply { 2 } else { 1 });
+        assert_eq!(
+            pushes[0].1,
+            json!({"version":1,"text":"Task a","detail":{"owner":"human:test","due":"","body":""},"private":true})
+        );
+        if lost_reply {
+            assert_eq!(pushes[0].2, pushes[1].2);
+        }
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|r| r
+                    .0
+                    .starts_with("POST /api/v2/meetings/saved-meeting/items ")
+                    && r.1["text"] == "Task a")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn create_uses_a_known_server_item_in_every_delivery_state() {
+    for status in ["pending", "failed", "sent"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Known server item");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    title: "Task a".into(),
+                    kind: "task".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        store
+            .delivery(
+                &record.id,
+                &crate::store::Delivery {
+                    destination_id: "synthetic".into(),
+                    meeting_id: "saved-meeting".into(),
+                    status: status.into(),
+                    error: String::new(),
+                    receipt: json!({"items":{"a":{"id":"server-a","version":1}}}),
+                },
+            )
+            .unwrap();
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"actor":"human:test"})),
+            Some(json!({"url":"https://acme.example"})),
+            Some(
+                json!({"item":{"id":"server-a","version":2,"result_ref":"existing-task"},"pushed":false}),
+            ),
+        ]);
+        tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+            .unwrap();
+        worker.join().unwrap();
+        assert_eq!(
+            store.context(&record.id).unwrap().items[0].task_id,
+            "existing-task"
+        );
+        let calls = seen.lock().unwrap();
+        assert!(
+            calls[2]
+                .0
+                .starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+        );
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+    }
+}
+
+#[test]
+fn create_replays_uncertain_item_upload_before_adopting_another_readers_task() {
+    for in_flight in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Uncertain upload");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    title: "Server title".into(),
+                    kind: "task".into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test","name":"Test"});
+        // Save commits A, loses its response, then another reader Sends the original A.
+        let sent = json!({"id":"server-a","section":"task","version":2,"status":"pushed",
+            "text":"Server title","detail":{"owner":"human:test"},
+            "result_ref":"one-task","updated_by":"human:ben"});
+        let (release, held) = std::sync::mpsc::channel();
+        let (tico, seen, worker) = server_gated(
+            vec![
+                Some(who.clone()),
+                Some(json!({"id":"saved-meeting"})),
+                Some(json!({"sections":{"task":[]}})),
+                None,
+                Some(who.clone()),
+                Some(json!({"item":sent})),
+                Some(json!({"url":"https://acme.example"})),
+                Some(json!({"item":sent,"pushed":false})),
+                Some(who),
+                Some(json!({"sections":{"task":[sent]}})),
+                Some(json!({})),
+            ],
+            in_flight.then_some((3, held)),
+        );
+        std::thread::scope(|scope| {
+            let saving = scope.spawn(|| tico.send(&store, &record.id, false));
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while seen.lock().unwrap().len() < 4 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Save did not upload A"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            store
+                .update_context(&record.id, |context| {
+                    context.items[0].title = "My unsaved title".into();
+                    Ok(())
+                })
+                .unwrap();
+            if !in_flight {
+                assert!(saving.join().unwrap().is_err());
+            }
+            let creating =
+                scope.spawn(|| tico.send_task(&store, &record.id, "a", "human:test", "Test", true));
+            if in_flight {
+                release.send(()).unwrap();
+            }
+            creating.join().unwrap().unwrap();
+        });
+        let context = store.context(&record.id).unwrap();
+        assert_eq!(context.items[0].task_id, "one-task");
+        let closed = context.items[0].closed_draft.as_ref().unwrap();
+        assert_eq!(closed["text"], "My unsaved title");
+        assert_eq!(closed["item"]["updated_by"], "human:ben");
+        tico.send(&store, &record.id, false).unwrap();
+        worker.join().unwrap();
+        assert_eq!(store.get(&record.id).unwrap().deliveries[0].status, "sent");
+        let calls = seen.lock().unwrap();
+        let uploads: Vec<_> = calls
+            .iter()
+            .filter(|r| {
+                r.0.starts_with("POST /api/v2/meetings/saved-meeting/items ")
+            })
+            .collect();
+        assert_eq!(uploads.len(), 2);
+        assert_eq!(uploads[0].1, uploads[1].1);
+        assert_eq!(uploads[0].2, uploads[1].2);
+        assert_eq!(uploads[1].1["text"], "Server title");
+        assert!(
+            calls[7]
+                .0
+                .starts_with("POST /api/v2/meetings/saved-meeting/items/server-a/push ")
+        );
+        assert_eq!(calls[7].1["text"], "My unsaved title");
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+    }
+}
+
+#[test]
+fn create_stops_if_replaying_the_uncertain_upload_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Still uncertain");
+    store
+        .update_context(&record.id, |context| {
+            context.items.push(crate::workspace::Item {
+                id: "a".into(),
+                title: "Local title".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let payload = json!({"section":"task","text":"Original title"});
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved-meeting".into(),
+                status: "failed".into(),
+                error: String::new(),
+                receipt: json!({"uploads":{"a":{"body":payload,"key":"original-upload-key"}}}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"status":503,"error":{"code":"unavailable"}})),
+    ]);
+    assert!(
+        tico.send_task(&store, &record.id, "a", "human:test", "Test", true)
+            .is_err()
+    );
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].1, payload);
+    assert_eq!(calls[1].2, "original-upload-key");
+    assert!(
+        store.context(&record.id).unwrap().items[0]
+            .task_id
+            .is_empty()
+    );
+    assert_eq!(
+        store.get(&record.id).unwrap().deliveries[0].receipt["uploads"]["a"]["key"],
+        "original-upload-key"
+    );
+}
+
+#[test]
+fn recorder_links_resume_forty_five_tasks_after_an_interrupted_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Resumable links");
+    store
+        .update_context(&record.id, |c| {
+            for n in 0..45 {
+                c.items.push(crate::workspace::Item {
+                    id: format!("local-{n}"),
+                    kind: "link".into(),
+                    task_id: format!("task-{n:03}"),
+                    ..Default::default()
+                });
+            }
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"meeting-fixture"})),
+        Some(json!({})),
+        None,
+        Some(who),
+        Some(json!({})),
+        Some(json!({})),
+    ]);
+    assert!(tico.send(&store, &record.id, false).is_err());
+    let receipt = store.get(&record.id).unwrap().deliveries[0].receipt.clone();
+    assert_eq!(receipt["links"].as_object().unwrap().len(), 20);
+    let reopened = Store::open(dir.path()).unwrap();
+    tico.send(&reopened, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let batches: Vec<_> = calls
+        .iter()
+        .filter(|(path, _, _)| path.contains("/tasks "))
+        .collect();
+    assert_eq!(
+        batches
+            .iter()
+            .map(|(_, body, _)| body["task_ids"].as_array().unwrap().len())
+            .collect::<Vec<_>>(),
+        [20, 20, 20, 5]
+    );
+    assert_eq!(batches[1].1, batches[2].1);
+    assert_eq!(batches[1].2, batches[2].2);
+    assert!(
+        calls
+            .iter()
+            .all(|(path, _, _)| !path.contains("/items") && !path.contains("POST /api/v2/tasks "))
+    );
+    assert_eq!(
+        reopened.get(&record.id).unwrap().deliveries[0].receipt["links"]
+            .as_object()
+            .unwrap()
+            .len(),
+        45
+    );
+}
+
+#[test]
+fn recorder_saves_approval_notes_and_proposal_before_sent_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Ordered Save");
+    store
+        .update_context(&record.id, |c| {
+            c.notes = "Notes".into();
+            c.items.push(crate::workspace::Item {
+                id: "proposal".into(),
+                title: "Follow up".into(),
+                proposed_task_id: "matched".into(),
+                kind: "task".into(),
+                due: "2026-12-01".into(),
+                body: "Details".into(),
+                ..Default::default()
+            });
+            c.items.push(crate::workspace::Item {
+                id: "sent".into(),
+                title: "Already sent".into(),
+                task_id: "already-sent".into(),
+                kind: "task".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "meeting-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"title":"Ordered Save"})),
+        Some(json!({"version":1})),
+        Some(json!({})),
+        Some(json!({"sections":{"task":[]}})),
+        Some(json!({"item":{"id":"server-proposal"}})),
+        Some(json!({"item":{"id":"server-sent","status":"pushed","result_ref":"already-sent"}})),
+        Some(json!({})),
+    ]);
+    tico.send_to(&store, &record.id, false, "team").unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[1].0.contains("/review"));
+    assert!(calls[3].0.contains("/edit"));
+    assert_eq!(calls[5].1["proposed_task_id"], "matched");
+    assert_eq!(calls[5].1["detail"]["body"], "Details");
+    assert_eq!(
+        calls[7].1,
+        json!({"task_ids":["already-sent"],"kind":"sent"})
+    );
+    let receipt = store.get(&record.id).unwrap().deliveries[0].receipt.clone();
+    assert_eq!(receipt["approved"], true);
+    assert_eq!(receipt["notes_saved"], true);
+    assert_eq!(receipt["items"]["proposal"]["id"], "server-proposal");
+}
+
+#[test]
+fn recorder_this_mac_deletes_a_finalized_pending_meeting_and_drops_only_queued_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "This Mac");
+    store
+        .update_context(&record.id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = "synthetic".into();
+            c.live_state = "ended".into();
+            for (id, kind) in [("queued", "link"), ("sent", "task")] {
+                c.items.push(crate::workspace::Item {
+                    id: id.into(),
+                    kind: kind.into(),
+                    task_id: format!("task-{id}"),
+                    ..Default::default()
+                });
+            }
+            c.task_link_operations
+                .push(crate::workspace::TaskLinkOperation {
+                    id: "queued-link".into(),
+                    kind: "linked".into(),
+                    task_ids: vec!["task-queued".into()],
+                });
+            c.items.push(crate::workspace::Item {
+                id: "proposal".into(),
+                title: "Follow up".into(),
+                proposed_task_id: "matched".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "pending".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let sent = serde_json::to_value(&store.context(&record.id).unwrap().items[1]).unwrap();
+    let stale = store.context(&record.id).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({})), Some(json!({}))]);
+    tico.keep_local(&store, &record.id).unwrap();
+    // Both direct drain and Save's stale snapshot must leave the dropped links alone.
+    tico.flush_saved_links(&store, &record.id).unwrap();
+    let mut stale_delivery = Delivery {
+        destination_id: "synthetic".into(),
+        meeting_id: "pending".into(),
+        status: "sent".into(),
+        error: String::new(),
+        receipt: json!({"approved":true}),
+    };
+    tico.save_links(&store, &record.id, &stale, &mut stale_delivery)
+        .unwrap();
+    assert!(
+        tico.queue_links(&store, &record.id, &["task-queued".into()])
+            .is_err()
+    );
+    assert!(
+        tico.accept_task_link(&store, &record.id, "proposal")
+            .is_err()
+    );
+    assert!(tico.finish_live(&store, &record.id).is_err());
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].0.contains("/pending/delete"));
+    assert!(calls[1].0.contains("/live-fixture/discard"));
+    let context = store.context(&record.id).unwrap();
+    assert!(context.kept_on_mac && context.live_removed && context.live_discarded);
+    assert!(context.task_link_operations.is_empty());
+    assert_eq!(context.items.len(), 2);
+    assert_eq!(serde_json::to_value(&context.items[0]).unwrap(), sent);
+    assert!(context.items[1].proposed_task_id.is_empty());
+    let after = store.get(&record.id).unwrap();
+    assert_eq!(after.chunks[0].text, record.chunks[0].text);
+    assert!(after.deliveries.is_empty());
+}
+
+#[test]
+fn this_mac_with_a_lost_discard_reply_blocks_save_and_links_until_cleanup_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Kept here");
+    live_delivery(&store, &record.id, "partial", json!({"source":"live"}));
+    store
+        .update_context(&record.id, |c| {
+            c.task_link_operations
+                .push(crate::workspace::TaskLinkOperation {
+                    id: "pending".into(),
+                    kind: "linked".into(),
+                    task_ids: vec!["task".into()],
+                });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({})),
+        None,
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"discarded":true})),
+    ]);
+    assert!(tico.keep_local(&store, &record.id).is_err());
+    let context = store.context(&record.id).unwrap();
+    assert!(context.live_discarded && !context.live_removed);
+    assert!(context.task_link_operations.is_empty());
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+    assert!(
+        tico.send_to(&store, &record.id, false, "team")
+            .unwrap_err()
+            .to_string()
+            .contains("discarded")
+    );
+    tico.flush_saved_links(&store, &record.id).unwrap();
+    assert!(
+        tico.queue_links(&store, &record.id, &["task".into()])
+            .is_err()
+    );
+    tico.keep_local(&store, &record.id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    assert!(calls[0].0.contains("/delete"));
+    assert!(calls[1].0.contains("/discard"));
+    assert!(calls[2].0.starts_with("GET "));
+    assert!(calls[3].0.contains("/discard"));
+    assert_eq!(calls[1].2, calls[3].2);
+    assert!(store.context(&record.id).unwrap().live_removed);
+}
+
+#[test]
+fn recorder_drafts_only_offer_active_tasks_and_reauthorize_cached_candidates() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Candidate cache");
+    let (tico, seen, worker) = server(vec![
+        Some(
+            json!({"tasks":[{"id":"visible","number":42,"title":"Review pricing","status":"open","owner_id":"human:test"}]}),
+        ),
+        Some(json!({"tasks":[]})),
+    ]);
+    assert_eq!(
+        tico.draft_tasks(&store, &record.id).unwrap()[0].number,
+        Some(42)
+    );
+    assert!(tico.draft_tasks(&store, &record.id).unwrap().is_empty());
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(
+        calls[0].0.contains("owner=human%3Atest")
+            && calls[0]
+                .0
+                .contains("status=open%2Cdoing%2Cwaiting%2Creview%2Cready")
+    );
+    assert!(calls[1].0.contains("ids=visible"));
+}
+
+#[test]
+fn recorder_note_taker_rejects_unoffered_task_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Matched proposal");
+    let reply = json!({"items":[{"link":999,"quote":"I will send the proposal"},{"link":42,"quote":"I will send the proposal"}]});
+    let (tico, seen, worker) = server(vec![Some(
+        json!({"choices":[{"message":{"content":reply.to_string()}}]}),
+    )]);
+    let config = Settings {
+        transcription_url: tico.destination.base_url.clone(),
+        ..Default::default()
+    };
+    let candidates = vec![crate::task_links::Task {
+        id: "visible".into(),
+        number: Some(42),
+        title: "Review pricing".into(),
+        status: "open".into(),
+        owner_id: "human:test".into(),
+    }];
+    assert_eq!(
+        crate::assist::draft_with_tasks(&store, &config, "test-key", &record.id, &candidates)
+            .unwrap(),
+        1
+    );
+    worker.join().unwrap();
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].proposed_task_id,
+        "visible"
+    );
+    let calls = seen.lock().unwrap();
+    let input: Value =
+        serde_json::from_str(calls[0].1["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        input["TASKS"],
+        json!([{"number":42,"title":"Review pricing"}])
+    );
+}
+
+#[test]
+fn recorder_picker_queues_forty_five_tasks_across_result_pages_without_creating_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Picker pages");
+    let ids: Vec<String> = (0..45).map(|n| format!("task-{n:03}")).collect();
+    let replies = ids.chunks(30).map(|batch| Some(json!({"tasks":batch.iter().enumerate().map(|(n,id)|
+        json!({"id":id,"number":n+1,"title":"Review pricing","status":"open"})).collect::<Vec<_>>()}))).collect();
+    let (tico, seen, worker) = server(replies);
+    tico.queue_links(&store, &record.id, &ids).unwrap();
+    worker.join().unwrap();
+    let context = store.context(&record.id).unwrap();
+    assert_eq!(context.items.len(), 45);
+    assert!(
+        context
+            .items
+            .iter()
+            .all(|item| item.kind == "link" && !item.task_id.is_empty())
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|(path, _, _)| path.starts_with("GET /api/v2/tasks?ids="))
+    );
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+}
+
+#[test]
+fn recorder_reassignment_between_note_taker_calls_removes_the_task_from_the_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Reassigned candidate");
+    let candidate = json!({"id":"visible","number":42,"title":"Review pricing","status":"open","owner_id":"human:test"});
+    let mut reassigned = candidate.clone();
+    reassigned["owner_id"] = json!("human:other");
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"tasks":[candidate.clone()]})),
+        Some(json!({"choices":[{"message":{"content":"{\"items\":[]}"}}]})),
+        Some(json!({"tasks":[reassigned]})),
+        Some(json!({"choices":[{"message":{"content":"{\"items\":[]}"}}]})),
+    ]);
+    let config = Settings {
+        transcription_url: tico.destination.base_url.clone(),
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        let candidates = tico.draft_tasks(&store, &record.id).unwrap();
+        crate::assist::draft_with_tasks(&store, &config, "test-key", &record.id, &candidates)
+            .unwrap();
+        // Re-review speech after an ownership change, within the five-minute selection cache.
+        store
+            .update_context(&record.id, |c| {
+                c.drafted_through_ms = 0;
+                Ok(())
+            })
+            .unwrap();
+    }
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let first: Value =
+        serde_json::from_str(calls[1].1["messages"][1]["content"].as_str().unwrap()).unwrap();
+    let second: Value =
+        serde_json::from_str(calls[3].1["messages"][1]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(first["TASKS"].as_array().unwrap().len(), 1);
+    assert_eq!(second["TASKS"], json!([]));
+    assert!(calls[2].0.contains("ids=visible"));
+}
+
+#[test]
+fn recorder_post_save_create_sends_current_owner_title_details_and_due_with_the_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Saved then edited");
+    store
+        .update_context(&record.id, |c| {
+            c.items.push(crate::workspace::Item {
+                id: "local".into(),
+                kind: "task".into(),
+                title: "Send the revised plan".into(),
+                body: "Current details".into(),
+                due: "2026-12-01T01:00:00Z".into(),
+                owner: "human:other".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({"items":{"local":{"id":"server-item","version":3}}}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"url":"https://acme.example"})),
+        None,
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"item":{"result_ref":"created"}})),
+    ]);
+    assert!(
+        tico.send_task(&store, &record.id, "local", "human:other", "Other", true)
+            .is_err()
+    );
+    tico.send_task(&store, &record.id, "local", "human:other", "Other", true)
+        .unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(
+        calls[2].1,
+        json!({"version":3,"text":"Send the revised plan","private":true,
+        "detail":{"owner":"human:other","body":"Current details","due":"2026-12-01T01:00:00Z"}})
+    );
+    assert!(calls[2].0.contains("/items/server-item/push"));
+    assert_eq!(calls[2].1, calls[4].1);
+    assert_eq!(calls[2].2, calls[4].2);
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].task_id,
+        "created"
+    );
+}
+
+#[test]
+fn recorder_save_drops_unavailable_links_and_keeps_only_a_plain_skip_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Disappearing link");
+    store
+        .update_context(&record.id, |c| {
+            c.items.push(crate::workspace::Item {
+                id: "queued".into(),
+                kind: "link".into(),
+                task_id: "gone".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, _, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"meeting"})),
+        Some(json!({"results":[{"status":404}]})),
+    ]);
+    tico.send(&store, &record.id, false).unwrap();
+    worker.join().unwrap();
+    let context = store.context(&record.id).unwrap();
+    assert!(context.items.is_empty() && context.task_link_operations.is_empty());
+    assert_eq!(context.skipped_task_links, 1);
+    assert_eq!(store.get(&record.id).unwrap().deliveries[0].status, "sent");
+}
+
+#[test]
+fn recorder_link_unlink_link_uses_fresh_actions_and_retries_the_durable_unlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Link round trip");
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({}),
+            },
+        )
+        .unwrap();
+    let found =
+        json!({"tasks":[{"id":"task","number":42,"title":"Review pricing","status":"open"}]});
+    let (tico, seen, worker) = server(vec![
+        Some(found.clone()),
+        Some(json!({"results":[{"status":200}]})),
+        None,
+        Some(json!({"ok":true})),
+        Some(found),
+        Some(json!({"results":[{"status":200}]})),
+    ]);
+    let ids = vec!["task".to_owned()];
+    tico.queue_links(&store, &record.id, &ids).unwrap();
+    assert!(tico.queue_unlink(&store, &record.id, "task").is_err());
+    let reopened = Store::open(dir.path()).unwrap();
+    let destination = tico.destination.clone();
+    let sync = crate::task_links::TaskLinkSync::start_with(reopened.clone(), move |_, _| {
+        Tico::new(destination.clone(), "synthetic-token".into())
+    });
+    wait_recorder_links(&reopened, &record.id);
+    drop(sync);
+    assert!(reopened.context(&record.id).unwrap().items.is_empty());
+    tico.queue_links(&reopened, &record.id, &ids).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_ne!(calls[1].2, calls[5].2);
+    assert_eq!(calls[2].2, calls[3].2);
+    assert_eq!(
+        reopened.context(&record.id).unwrap().items[0].task_id,
+        "task"
+    );
+    assert!(
+        reopened
+            .context(&record.id)
+            .unwrap()
+            .task_link_operations
+            .is_empty()
+    );
+}
+
+#[test]
+fn recorder_unlinks_a_remote_only_row_even_if_the_task_disappears() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Remote-only link");
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(
+        json!({"status":404,"error":{"code":"not_found"}}),
+    )]);
+    tico.queue_unlink(&store, &record.id, "gone").unwrap();
+    worker.join().unwrap();
+    let context = store.context(&record.id).unwrap();
+    assert!(context.task_link_operations.is_empty());
+    assert_eq!(context.live_destination, "synthetic");
+    assert_eq!(context.skipped_task_links, 1);
+    assert!(
+        seen.lock().unwrap()[0]
+            .0
+            .starts_with("DELETE /api/v2/meetings/saved/tasks/gone")
+    );
+}
+
+fn pending_recorder_link(store: &Store) -> String {
+    let record = store.create("Interrupted link").unwrap();
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "saved".into(),
+                status: "sent".into(),
+                error: String::new(),
+                receipt: json!({}),
+            },
+        )
+        .unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.live_destination = "synthetic".into();
+            c.items.push(crate::workspace::Item {
+                id: "local".into(),
+                kind: "link".into(),
+                task_id: "task".into(),
+                ..Default::default()
+            });
+            c.task_link_operations
+                .push(crate::workspace::TaskLinkOperation {
+                    id: "durable-action".into(),
+                    kind: "linked".into(),
+                    task_ids: vec!["task".into()],
+                });
+            Ok(())
+        })
+        .unwrap();
+    record.id
+}
+
+fn wait_recorder_links(store: &Store, id: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let mark = store.changes();
+        if store.context(id).unwrap().task_link_operations.is_empty() {
+            return;
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(!left.is_zero(), "Link outbox did not drain");
+        store.wait_changes(mark, left);
+    }
+}
+
+#[test]
+fn recorder_link_worker_restarts_before_commit_and_links_once_without_another_action() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let id = pending_recorder_link(&store);
+    let (tico, seen, server) = server(vec![None, Some(json!({"results":[{"status":200}]}))]);
+    // The process goes away after persisting the action, before the server commits it.
+    assert!(tico.flush_saved_links(&store, &id).is_err());
+    let activity = store.task_link_activity(&id);
+    assert!(!activity.sending);
+    assert_eq!(activity.task_ids, ["task"]);
+    assert!(!activity.error.is_empty());
+    drop(store);
+    let reopened = Store::open(dir.path()).unwrap();
+    let destination = tico.destination.clone();
+    let sync = crate::task_links::TaskLinkSync::start_with(reopened.clone(), move |_, _| {
+        Tico::new(destination.clone(), "synthetic-token".into())
+    });
+    wait_recorder_links(&reopened, &id);
+    drop(sync);
+    assert_eq!(reopened.task_link_activity(&id), Default::default());
+    server.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2); // Only the second request commits a relationship.
+    assert_eq!(requests[0].1, requests[1].1);
+    assert_eq!(requests[0].2, requests[1].2);
+    assert!(!requests[1].2.is_empty());
+    assert_eq!(
+        reopened.get(&id).unwrap().deliveries[0].receipt["links"],
+        json!({"task":"linked"})
+    );
+}
+
+#[test]
+fn recorder_link_worker_reconnects_with_backoff_and_preserves_per_task_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let id = pending_recorder_link(&store);
+    store
+        .update_context(&id, |c| {
+            c.task_link_operations[0].task_ids.push("gone".into());
+            c.items.push(crate::workspace::Item {
+                id: "unavailable".into(),
+                kind: "link".into(),
+                task_id: "gone".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, server) = server(vec![
+        None,
+        None,
+        Some(json!({"results":[{"status":200},{"status":404}]})),
+    ]);
+    let attempts = Arc::new(Mutex::new(vec![]));
+    let tried = attempts.clone();
+    let destination = tico.destination.clone();
+    let sync = crate::task_links::TaskLinkSync::start_with(store.clone(), move |_, _| {
+        tried.lock().unwrap().push(std::time::Instant::now());
+        Tico::new(destination.clone(), "synthetic-token".into())
+    });
+    wait_recorder_links(&store, &id);
+    drop(sync);
+    server.join().unwrap();
+    let attempts = attempts.lock().unwrap();
+    assert_eq!(attempts.len(), 3);
+    assert!(attempts[1].duration_since(attempts[0]) >= Duration::from_secs(1));
+    assert!(attempts[2].duration_since(attempts[1]) >= Duration::from_secs(2));
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.1 == requests[0].1 && r.2 == requests[0].2)
+    );
+    let context = store.context(&id).unwrap();
+    assert_eq!(context.skipped_task_links, 1);
+    assert_eq!(context.items.len(), 1);
+    assert_eq!(context.items[0].task_id, "task");
+    assert_eq!(
+        store.get(&id).unwrap().deliveries[0].receipt["links"],
+        json!({"task":"linked"})
+    );
+}
+
+#[test]
+fn recorder_link_drainers_serialize_and_reread_the_outbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let id = pending_recorder_link(&store);
+    let (release, held) = std::sync::mpsc::channel();
+    let (tico, seen, server) = server_gated(
+        vec![Some(json!({"results":[{"status":200}]}))],
+        Some((0, held)),
+    );
+    let tico = Arc::new(tico);
+    let first_store = store.clone();
+    let first_tico = tico.clone();
+    let first_id = id.clone();
+    let first = std::thread::spawn(move || {
+        first_tico
+            .flush_saved_links(&first_store, &first_id)
+            .unwrap()
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while seen.lock().unwrap().is_empty() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let second_store = store.clone();
+    let activity = store.task_link_activity(&id);
+    assert!(activity.sending);
+    assert_eq!(activity.task_ids, ["task"]);
+    assert!(activity.error.is_empty());
+    let (connecting, connected) = std::sync::mpsc::channel();
+    let disconnected = crate::task_links::TaskLinkSync::start_with(store.clone(), move |_, _| {
+        connecting.send(()).unwrap();
+        anyhow::bail!("Connection unavailable")
+    });
+    connected.recv_timeout(Duration::from_secs(3)).unwrap();
+    let second_id = id.clone();
+    let (finished, completion) = std::sync::mpsc::channel();
+    let second = std::thread::spawn(move || {
+        tico.flush_saved_links(&second_store, &second_id).unwrap();
+        finished.send(()).unwrap();
+    });
+    // A second drainer waits for the held request, then sees the acknowledged operation is gone.
+    assert!(matches!(
+        completion.recv_timeout(Duration::from_millis(100)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert!(store.task_link_activity(&id).sending);
+    release.send(()).unwrap();
+    first.join().unwrap();
+    second.join().unwrap();
+    drop(disconnected);
+    server.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert!(store.context(&id).unwrap().task_link_operations.is_empty());
+    assert_eq!(store.task_link_activity(&id), Default::default());
+}
+
+#[test]
+fn recorder_save_retry_reconciles_current_fields_or_keeps_a_closed_draft() {
+    for moved in ["", "pushed", "edited", "dismissed", "raced"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Lost item upload");
+        store
+            .update_context(&record.id, |c| {
+                c.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    kind: "task".into(),
+                    title: "Original title".into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test"});
+        let original = json!({"id":"server-a","version":1,"section":"task","status":"proposed","text":"Original title","detail":{"owner":"human:test"}});
+        let mut current = original.clone();
+        if !moved.is_empty() {
+            current["version"] = json!(2);
+            current["updated_by"] = json!("human:other");
+            current["status"] = json!(match moved {
+                "pushed" => "pushed",
+                "dismissed" => "dismissed",
+                _ => "proposed",
+            });
+            current["text"] = json!("Someone else's title");
+        }
+        let edited = json!({"id":"server-a","version":2,"section":"task","status":"proposed","text":"Current title","detail":{"owner":"human:other","body":"Current details","due":"2026-12-01T12:00:00Z"}});
+        let replayed = if moved == "raced" {
+            original.clone()
+        } else {
+            current.clone()
+        };
+        let mut steps = vec![
+            Some(who.clone()),
+            Some(json!({"id":"filed"})),
+            Some(json!({"sections":{"task":[]}})),
+            None,
+            Some(who),
+            Some(json!({"sections":{"task":[replayed.clone()]}})),
+            Some(json!({"item":replayed})),
+        ];
+        steps.push(Some(if moved.is_empty() {
+            json!({"item":edited})
+        } else if moved == "raced" {
+            json!({"status":409,"error":{"code":"version_conflict"}})
+        } else {
+            json!({"sections":{"task":[current.clone()]}})
+        }));
+        if moved == "raced" {
+            steps.push(Some(json!({"sections":{"task":[current]}})));
+        }
+        let (tico, seen, worker) = server(steps);
+        assert!(tico.send(&store, &record.id, false).is_err());
+        assert_eq!(
+            store.get(&record.id).unwrap().deliveries[0].receipt["local_fields"]["a"]["text"],
+            "Original title"
+        );
+        store
+            .update_context(&record.id, |c| {
+                let item = &mut c.items[0];
+                item.title = "Current title".into();
+                item.owner = "human:other".into();
+                item.body = "Current details".into();
+                item.due = "2026-12-01T12:00:00Z".into();
+                Ok(())
+            })
+            .unwrap();
+        let reopened = Store::open(dir.path()).unwrap();
+        tico.send(&reopened, &record.id, false).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[3].1, calls[6].1);
+        assert_eq!(calls[3].2, calls[6].2);
+        assert_eq!(calls[6].1["text"], "Original title");
+        let context = reopened.context(&record.id).unwrap();
+        if moved.is_empty() {
+            assert!(
+                calls[7]
+                    .0
+                    .starts_with("POST /api/v2/meetings/filed/items/server-a ")
+            );
+            assert_eq!(
+                calls[7].1,
+                json!({"version":1,"text":"Current title","detail":{"owner":"human:other","body":"Current details","due":"2026-12-01T12:00:00Z"}})
+            );
+            assert!(context.items[0].closed_draft.is_none());
+        } else {
+            let closed = context.items[0].closed_draft.as_ref().unwrap();
+            assert_eq!(closed["text"], "Current title");
+            assert_eq!(closed["detail"]["owner"], "human:other");
+            assert_eq!(closed["item"]["updated_by"], "human:other");
+        }
+        assert_eq!(
+            reopened.get(&record.id).unwrap().deliveries[0].status,
+            "sent"
+        );
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+    }
+}
+
+#[test]
+fn recorder_add_after_save_uploads_once_and_create_always_uses_push() {
+    for (status, explicit_add) in [("sent", false), ("sent", true), ("failed", false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Add after Save");
+        store
+            .update_context(&record.id, |c| {
+                c.items.push(crate::workspace::Item {
+                    id: "new".into(),
+                    kind: "task".into(),
+                    title: "New task".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        store
+            .delivery(
+                &record.id,
+                &Delivery {
+                    destination_id: "synthetic".into(),
+                    meeting_id: "filed".into(),
+                    status: status.into(),
+                    error: String::new(),
+                    receipt: json!({"approved":true}),
+                },
+            )
+            .unwrap();
+        let upload = Some(
+            json!({"item":{"id":"new-server","version":1,"status":"proposed","text":"New task","detail":{}}}),
+        );
+        let mut steps = if explicit_add {
+            vec![upload, Some(json!({"actor":"human:test"}))]
+        } else {
+            vec![Some(json!({"actor":"human:test"})), upload]
+        };
+        steps.extend([
+            Some(json!({"url":"https://acme.example"})),
+            Some(json!({"item":{"id":"new-server","result_ref":"one-task"},"pushed":true})),
+        ]);
+        let (tico, seen, worker) = server(steps);
+        if explicit_add {
+            tico.upload_pending_item(&store, &record.id, "new").unwrap();
+            tico.upload_pending_item(&store, &record.id, "new").unwrap();
+        }
+        tico.send_task(&store, &record.id, "new", "human:test", "Test", true)
+            .unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let upload = calls
+            .iter()
+            .find(|r| r.0.starts_with("POST /api/v2/meetings/filed/items "))
+            .unwrap();
+        assert!(upload.2.contains(":new:item:"));
+        assert!(calls.last().unwrap().0.contains("/items/new-server/push "));
+        assert!(!calls.iter().any(|r| r.0.starts_with("POST /api/v2/tasks ")));
+        assert_eq!(
+            store.context(&record.id).unwrap().items[0].task_id,
+            "one-task"
+        );
+    }
+}
+
+#[test]
+fn recorder_save_reads_fields_typed_while_the_item_upload_is_waiting() {
+    for retry in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Typing during Save");
+        store
+            .update_context(&record.id, |c| {
+                c.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    kind: "task".into(),
+                    title: "Original title".into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let who = json!({"actor":"human:test"});
+        let original = json!({"id":"server-a","version":1,"status":"proposed","text":"Original title","detail":{"owner":"human:test"}});
+        let mut steps = vec![
+            Some(who.clone()),
+            Some(json!({"id":"filed"})),
+            Some(json!({"sections":{"task":[]}})),
+        ];
+        if retry {
+            steps.extend([
+                None,
+                Some(who),
+                Some(json!({"sections":{"task":[original.clone()]}})),
+            ]);
+        }
+        steps.extend([Some(json!({"item":original})),Some(json!({"item":{"id":"server-a","version":2,"status":"proposed","text":"Typed during upload","detail":{"owner":"human:test"}}}))]);
+        let (release, held) = std::sync::mpsc::channel();
+        let gate = if retry { 6 } else { 3 };
+        let (tico, seen, worker) = server_gated(steps, Some((gate, held)));
+        if retry {
+            assert!(tico.send(&store, &record.id, false).is_err());
+        }
+        std::thread::scope(|scope| {
+            let saving = scope.spawn(|| tico.send(&store, &record.id, false));
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while seen.lock().unwrap().len() <= gate {
+                assert!(std::time::Instant::now() < deadline, "Upload did not start");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            store
+                .update_context(&record.id, |c| {
+                    c.items[0].title = "Typed during upload".into();
+                    Ok(())
+                })
+                .unwrap();
+            release.send(()).unwrap();
+            saving.join().unwrap().unwrap();
+        });
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        assert!(
+            calls
+                .last()
+                .unwrap()
+                .0
+                .starts_with("POST /api/v2/meetings/filed/items/server-a ")
+        );
+        assert_eq!(calls.last().unwrap().1["text"], "Typed during upload");
+        assert_eq!(calls.last().unwrap().1["version"], 1);
+        assert_eq!(
+            store.get(&record.id).unwrap().deliveries[0].receipt["items"]["a"]["text"],
+            "Typed during upload"
+        );
+        assert!(
+            store.context(&record.id).unwrap().items[0]
+                .closed_draft
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn recorder_picker_and_link_queue_accept_tasks_without_a_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Unnumbered task");
+    let task = json!({"id":"no-number","number":null,"title":"Review pricing","status":"open","owner_id":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"tasks":[task.clone()]})),
+        Some(json!({"tasks":[task]})),
+    ]);
+    let page = tico.search_tasks("pricing", "", 0).unwrap();
+    assert!(page["tasks"][0]["number"].is_null());
+    tico.queue_links(&store, &record.id, &["no-number".into()])
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].task_id,
+        "no-number"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn recorder_picker_reads_task_types_and_searches_a_bare_number() {
+    let (tico, seen, worker) = server(vec![
+        Some(
+            json!({"types":[{"id":"general","name":"General","steps":[]},{"id":"bug","name":"Bug","numbered":true}]}),
+        ),
+        Some(json!({"tasks":[],"next_offset":null})),
+        Some(json!({"tasks":[],"next_offset":null})),
+    ]);
+    assert_eq!(
+        tico.task_types().unwrap(),
+        json!([{"id":"general","name":"General"},{"id":"bug","name":"Bug"}])
+    );
+    tico.search_tasks(" 19118 ", "bug", 0).unwrap();
+    tico.search_tasks("property manager", "", 0).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert!(calls[0].0.starts_with("GET /api/v2/task-types "));
+    assert!(
+        calls[1]
+            .0
+            .starts_with("GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0&type=bug ")
+    );
+    assert!(
+        calls[2]
+            .0
+            .starts_with("GET /api/v2/tasks?q=property+manager&limit=30&brief=true&offset=0 ")
+    );
+}
+
+#[test]
+fn recorder_save_ignores_display_names_when_detecting_local_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Display fields on retry");
+    store
+        .update_context(&record.id, |c| {
+            c.items.push(crate::workspace::Item {
+                id: "a".into(),
+                kind: "task".into(),
+                title: "Original title".into(),
+                owner: "human:test".into(),
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .unwrap();
+    let original = json!({"id":"server-a","version":1,"section":"task","status":"proposed","text":"Original title","detail":{"owner":"human:test","owner_name":"Test"}});
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "filed".into(),
+                status: "failed".into(),
+                error: String::new(),
+                receipt: json!({"audience":"team","approved":true,"items":{"a":original}}),
+            },
+        )
+        .unwrap();
+    let current = json!({"id":"server-a","version":2,"section":"task","status":"proposed","text":"Another reader's title","detail":{"owner":"human:test","owner_name":"Test"}});
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"sections":{"task":[current]}})),
+    ]);
+    tico.send_to(&store, &record.id, false, "team").unwrap();
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    assert!(
+        store.context(&record.id).unwrap().items[0]
+            .closed_draft
+            .is_none()
+    );
+    assert_eq!(
+        store.get(&record.id).unwrap().deliveries[0].receipt["items"]["a"]["version"],
+        2
+    );
+}
+
+#[test]
+fn recorder_later_edits_survive_other_items_links_add_and_edit_replies() {
+    for phase in ["b", "links", "add", "edit", "moved"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = transcript(&store, "Later typing");
+        let original = json!({"id":"server-a","section":"task","version":1,"status":"proposed","text":"Original","detail":{"owner":"human:test"}});
+        store
+            .update_context(&record.id, |c| {
+                c.items.push(crate::workspace::Item {
+                    id: "a".into(),
+                    kind: "task".into(),
+                    title: if phase == "edit" {
+                        "First edit"
+                    } else {
+                        "Original"
+                    }
+                    .into(),
+                    owner: "human:test".into(),
+                    ..Default::default()
+                });
+                if phase == "b" || phase == "moved" {
+                    c.items.push(crate::workspace::Item {
+                        id: "b".into(),
+                        kind: "task".into(),
+                        title: "B".into(),
+                        ..Default::default()
+                    });
+                }
+                if phase == "links" {
+                    c.items.push(crate::workspace::Item {
+                        id: "link".into(),
+                        kind: "link".into(),
+                        task_id: "linked".into(),
+                        ..Default::default()
+                    });
+                }
+                Ok(())
+            })
+            .unwrap();
+        if phase == "edit" {
+            store.delivery(&record.id, &Delivery {
+                destination_id:"synthetic".into(),meeting_id:"filed".into(),status:"failed".into(),error:String::new(),
+                receipt:json!({"audience":"","uploads":{"a":{"key":"original-upload","body":{"section":"task","text":"Original","detail":{"owner":"human:test"},"quote":"","at_ms":null}}}}),
+            }).unwrap();
+        }
+        let mut steps = if phase == "add" {
+            store
+                .delivery(
+                    &record.id,
+                    &Delivery {
+                        destination_id: "synthetic".into(),
+                        meeting_id: "filed".into(),
+                        status: "sent".into(),
+                        error: String::new(),
+                        receipt: json!({"approved":true}),
+                    },
+                )
+                .unwrap();
+            vec![]
+        } else if phase == "edit" {
+            vec![
+                Some(json!({"actor":"human:test"})),
+                Some(json!({"sections":{"task":[]}})),
+            ]
+        } else {
+            vec![
+                Some(json!({"actor":"human:test"})),
+                Some(json!({"id":"filed"})),
+                Some(json!({"sections":{"task":[]}})),
+            ]
+        };
+        steps.push(Some(json!({"item":original})));
+        let gate = match phase {
+            "b" | "moved" => {
+                steps.push(Some(json!({"item":{"id":"server-b","version":1,"status":"proposed","text":"B","detail":{}}})));
+                4
+            }
+            "links" => {
+                steps.push(Some(
+                    json!({"results":[{"task_id":"linked","status":"linked","link_id":"link"}]}),
+                ));
+                4
+            }
+            "edit" => {
+                steps.push(Some(json!({"item":{"id":"server-a","section":"task","version":2,"status":"proposed","text":"First edit","detail":{"owner":"human:test"}}})));
+                3
+            }
+            _ => 0,
+        };
+        if phase == "moved" {
+            steps.push(Some(
+                json!({"status":409,"error":{"code":"version_conflict"}}),
+            ));
+            steps.push(Some(json!({"sections":{"task":[{"id":"server-a","section":"task","version":2,"status":"pushed","text":"Someone else's task","detail":{"owner":"human:other"},"updated_by":"human:other","result_ref":"existing"}]}})));
+        } else {
+            steps.push(Some(json!({"item":{"id":"server-a","section":"task","version":if phase == "edit" {3} else {2},"status":"proposed","text":"Latest title","detail":{"owner":"human:other","due":"2026-12-02T12:00:00Z","body":"Latest details"}}})));
+        }
+        let (release, held) = std::sync::mpsc::channel();
+        let (tico, seen, worker) = server_gated(steps, Some((gate, held)));
+        std::thread::scope(|scope| {
+            let saving = scope.spawn(|| {
+                if phase == "add" {
+                    tico.upload_pending_item(&store, &record.id, "a")
+                        .map(|_| String::new())
+                } else {
+                    tico.send(&store, &record.id, false)
+                }
+            });
+            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            while seen.lock().unwrap().len() <= gate {
+                if saving.is_finished() {
+                    panic!(
+                        "Save finished before the held request in {phase}: {:?}",
+                        saving.join().unwrap()
+                    );
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Request never started: {phase}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            store
+                .update_context(&record.id, |c| {
+                    let item = &mut c.items[0];
+                    item.title = "Latest title".into();
+                    item.owner = "human:other".into();
+                    item.due = "2026-12-02T12:00:00Z".into();
+                    item.body = "Latest details".into();
+                    Ok(())
+                })
+                .unwrap();
+            release.send(()).unwrap();
+            saving.join().unwrap().unwrap();
+        });
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let edit = calls
+            .iter()
+            .find(|call| call.1["text"] == "Latest title")
+            .unwrap();
+        assert!(edit.0.contains("/items/server-a "));
+        assert_eq!(edit.1["version"], if phase == "edit" { 2 } else { 1 });
+        assert_eq!(edit.1["detail"]["body"], "Latest details");
+        let context = store.context(&record.id).unwrap();
+        if phase == "moved" {
+            let closed = context.items[0].closed_draft.as_ref().unwrap();
+            assert_eq!(closed["text"], "Latest title");
+            assert_eq!(closed["detail"]["due"], "2026-12-02T12:00:00Z");
+            assert_eq!(closed["item"]["result_ref"], "existing");
+        } else {
+            let receipt = store.get(&record.id).unwrap().deliveries[0].receipt.clone();
+            assert_eq!(receipt["items"]["a"]["text"], "Latest title");
+            assert!(context.items[0].closed_draft.is_none());
+        }
+    }
+}
+
+#[test]
+fn speaker_bleed_never_enters_the_live_outbox_when_microphone_finishes_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Speaker bleed ordering");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5000,
+        vec![
+            word(1020, 1200, "Ship", ""),
+            word(1320, 1500, "this", ""),
+            word(1620, 1800, "tomorrow", ""),
+        ],
+    );
+    store
+        .save_audio(
+            id,
+            crate::audio::Channel::Meeting,
+            0,
+            5000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(seen.lock().unwrap().is_empty());
+    let count: i64 = store
+        .db()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM live_sources WHERE recording_id=?",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "held microphone must not be marked as delivered");
+    let remote = store.claim_transcription().unwrap().unwrap();
+    let mut words = vec![
+        word(1000, 1200, "Ship", ""),
+        word(1300, 1500, "this", ""),
+        word(1600, 1800, "tomorrow", ""),
+    ];
+    for word in &mut words {
+        word.turn = "remote-4".into();
+    }
+    store
+        .transcription_words(&remote, "Ship this tomorrow", words, "", json!({}))
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let seen = seen.lock().unwrap();
+    let sent = seen[0].1["chunks"].as_array().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["text"], "Ship this tomorrow");
+    assert_ne!(sent[0]["speaker"], "Me");
+}
+
+#[test]
+fn held_microphone_and_remote_turn_share_one_frontier_and_keep_capture_timestamps() {
+    for release in ["reference", "failure", "stop", "timeout"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Ordered held turns");
+        let id = record.id.as_str();
+        store
+            .mutate(id, |r| {
+                r.meeting_audio = true;
+                Ok(())
+            })
+            .unwrap();
+        streamed(&store, id, "me", 1000, "I disagree", "");
+        streamed(&store, id, "them", 1500, "remote reply", "S1");
+        let (tico, seen, worker) = server(vec![]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "remote must wait behind Me: {release}"
+        );
+        match release {
+            "reference" => {
+                streamed(&store, id, "them", 5000, "later", "S1");
+            }
+            "failure" => {
+                store
+                    .save_audio(
+                        id,
+                        crate::audio::Channel::Meeting,
+                        0,
+                        5000,
+                        &[0.2; 1600],
+                        16000,
+                    )
+                    .unwrap();
+                store.db().unwrap().execute("UPDATE chunks SET document=json_set(document,'$.status','failed') WHERE recording_id=?", [id]).unwrap();
+            }
+            "stop" => {
+                store.state(id, "stopped").unwrap();
+            }
+            _ => {
+                store
+                    .mutate(id, |r| {
+                        r.started_at =
+                            (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        }
+        let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2,3]}))]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        let sent = calls[0].1["chunks"].as_array().unwrap();
+        assert_eq!(sent[0]["text"], "I disagree", "{release}");
+        assert_eq!(sent[0]["start_ms"], 1000, "{release}");
+        assert_eq!(sent[1]["text"], "remote reply", "{release}");
+        assert_eq!(sent[1]["start_ms"], 1500, "{release}");
+    }
+}
+
+#[test]
+fn finished_inputs_share_word_turns_in_one_order_with_their_real_times() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Finished turn ordering");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(&store, id, 0, 5000, vec![word(1000, 1200, "My reply", "")]);
+    store
+        .save_audio(
+            id,
+            crate::audio::Channel::Meeting,
+            0,
+            5000,
+            &[0.2; 1600],
+            16000,
+        )
+        .unwrap();
+    let remote = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &remote,
+            "Remote reply",
+            vec![word(1500, 1900, "Remote reply", "Speaker 1")],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let sent = calls[0].1["chunks"].as_array().unwrap();
+    assert_eq!(sent[0]["start_ms"], 1000);
+    assert_eq!(sent[0]["end_ms"], 1200);
+    assert_eq!(sent[1]["start_ms"], 1500);
+    assert_eq!(sent[1]["end_ms"], 1900);
+    assert_eq!(sent[1]["speaker"], "Speaker 1");
+}
+
+#[test]
+fn finished_microphone_reference_timeout_shares_without_any_meeting_chunks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Missing reference capture");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(14)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        5000,
+        vec![word(1000, 1200, "My genuine reply", "")],
+    );
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls[0].1["chunks"][0]["text"], "My genuine reply");
+    assert_eq!(calls[0].1["chunks"][0]["start_ms"], 1000);
+}
+
+/// Seconds of recording clock: chunks are 30-55 s long in the engine.
+const CHUNK_S: i64 = 45;
+/// Sets the recording clock to `seconds` since it started.
+fn recording_clock(store: &Store, id: &str, seconds: i64) {
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(seconds)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+}
+/// The pending chunk's hold has passed its bound, measured from the chunk's end.
+const PAST_PENDING_WAIT_S: i64 =
+    CHUNK_S + crate::transcript::PENDING_CHUNK_WAIT_MS as i64 / 1000 + 1;
+fn stopped_pending_chunk(
+    store: &Store,
+    pending_channel: crate::audio::Channel,
+) -> (String, crate::store::Chunk) {
+    use crate::audio::Channel;
+    let record = live_recording(store, "Stop with unfinished audio");
+    let id = &record.id;
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    let end = CHUNK_S as u64 * 1000;
+    store
+        .save_audio(id, pending_channel, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let pending = store.claim_transcription().unwrap().unwrap();
+    let other = if pending_channel == Channel::Microphone {
+        Channel::Meeting
+    } else {
+        Channel::Microphone
+    };
+    store
+        .save_audio(id, other, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let ready = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &ready,
+            "Later",
+            vec![word(1500, 1900, "Later", "")],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    store.state(id, "stopped").unwrap();
+    // Stop lands as the chunks end; the pending one is a few seconds into transcription.
+    recording_clock(store, id, CHUNK_S + 3);
+    (record.id, pending)
+}
+
+#[test]
+fn stop_holds_both_channels_behind_unfinished_chunks_until_completion_failure_or_timeout() {
+    use crate::audio::Channel;
+    for channel in [Channel::Microphone, Channel::Meeting] {
+        for release in ["completion", "failure", "timeout"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            let (id, pending) = stopped_pending_chunk(&store, channel);
+            let (tico, seen, worker) = server(vec![]);
+            tico.push_live(&store, &id).unwrap();
+            worker.join().unwrap();
+            assert!(seen.lock().unwrap().is_empty(), "{channel:?}: {release}");
+            match release {
+                "completion" => store
+                    .transcription_words(
+                        &pending,
+                        "Earlier",
+                        vec![word(1000, 1200, "Earlier", "")],
+                        "",
+                        json!({}),
+                    )
+                    .unwrap(),
+                "failure" => {
+                    store.db().unwrap().execute("UPDATE chunks SET document=json_set(document,'$.status','failed') WHERE id=?", [&pending.id]).unwrap();
+                }
+                _ => {
+                    // Still held just inside the bound, released just past it.
+                    recording_clock(&store, &id, PAST_PENDING_WAIT_S - 5);
+                    let (tico, seen, worker) = server(vec![]);
+                    tico.push_live(&store, &id).unwrap();
+                    worker.join().unwrap();
+                    assert!(seen.lock().unwrap().is_empty(), "{channel:?}: bound");
+                    recording_clock(&store, &id, PAST_PENDING_WAIT_S);
+                }
+            }
+            let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2]}))]);
+            tico.push_live(&store, &id).unwrap();
+            worker.join().unwrap();
+            let calls = seen.lock().unwrap();
+            let sent = calls[0].1["chunks"].as_array().unwrap();
+            assert_eq!(
+                sent[0]["start_ms"],
+                if release == "completion" { 1000 } else { 1500 }
+            );
+            if release == "completion" {
+                assert_eq!(sent[1]["start_ms"], 1500);
+            }
+            if release == "timeout" {
+                drop(calls);
+                store
+                    .transcription_words(
+                        &pending,
+                        "Earlier",
+                        vec![word(1000, 1200, "Earlier", "")],
+                        "",
+                        json!({}),
+                    )
+                    .unwrap();
+                let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+                tico.push_live(&store, &id).unwrap();
+                worker.join().unwrap();
+                assert_eq!(seen.lock().unwrap()[0].1["chunks"][0]["start_ms"], 1500);
+                assert!(
+                    store
+                        .get(&id)
+                        .unwrap()
+                        .chunks
+                        .iter()
+                        .flat_map(|c| &c.words)
+                        .any(|w| w.start_ms == 1000)
+                );
+            }
+        }
+    }
+}
+
+/// Real 45 s chunks on both inputs. After Stop the remote chunk is transcribed and the mic
+/// chunk is not; the mic reply must land between the remote question and the remote follow-up,
+/// not be re-timed after the follow-up once the remote turns went first.
+#[test]
+fn late_microphone_reply_after_stop_lands_after_the_remote_turn_it_answered() {
+    use crate::audio::Channel;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Late reply after Stop");
+    let id = record.id.as_str();
+    store
+        .mutate(id, |r| {
+            r.meeting_audio = true;
+            Ok(())
+        })
+        .unwrap();
+    let end = CHUNK_S as u64 * 1000;
+    store
+        .save_audio(id, Channel::Microphone, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let mic = store.claim_transcription().unwrap().unwrap();
+    store
+        .save_audio(id, Channel::Meeting, 0, end, &[0.2; 1600], 16000)
+        .unwrap();
+    let remote = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_words(
+            &remote,
+            "Can we ship Friday? Great, thanks",
+            vec![
+                word(30_000, 30_300, "Can", "Speaker 1"),
+                word(30_400, 30_700, "we", "Speaker 1"),
+                word(30_800, 31_100, "ship", "Speaker 1"),
+                word(31_200, 31_800, "Friday?", "Speaker 1"),
+                word(40_000, 40_500, "Great,", "Speaker 1"),
+                word(40_600, 41_000, "thanks", "Speaker 1"),
+            ],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    store.state(id, "stopped").unwrap();
+    for seconds in [CHUNK_S + 2, CHUNK_S + 30] {
+        recording_clock(&store, id, seconds);
+        let (tico, seen, worker) = server(vec![]);
+        tico.push_live(&store, id).unwrap();
+        worker.join().unwrap();
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "remote turns must wait for the mic chunk at {seconds} s"
+        );
+    }
+    store
+        .transcription_words(
+            &mic,
+            "Yes that works",
+            vec![
+                word(34_000, 34_300, "Yes", ""),
+                word(34_400, 34_700, "that", ""),
+                word(34_800, 35_200, "works", ""),
+            ],
+            "",
+            json!({}),
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[1,2,3]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let calls = seen.lock().unwrap();
+    let sent = calls[0].1["chunks"].as_array().unwrap();
+    let order: Vec<_> = sent
+        .iter()
+        .map(|c| (c["text"].as_str().unwrap(), c["start_ms"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("Can we ship Friday?", 30_000),
+            ("Yes that works", 34_000),
+            ("Great, thanks", 40_000),
+        ]
+    );
+    assert_eq!(sent[1]["speaker"], "Me");
+}
+
+#[test]
+fn any_chunk_422_reconciles_the_outbox_and_later_speech_still_delivers() {
+    for code in ["sequence_order", "validation", "request_failed"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Refused outbox");
+        streamed(&store, &record.id, "me", 1000, "Late words", "");
+        let (tico, seen, worker) = server(vec![
+            Some(json!({"status":422,"error":{"code":code}})),
+            Some(json!({"state":"live","seq":0,"chunks":[]})),
+            Some(json!({"accepted":[1]})),
+            Some(json!({"accepted":[2]})),
+        ]);
+        tico.push_live(&store, &record.id).unwrap();
+        streamed(&store, &record.id, "me", 3000, "Later words", "");
+        tico.push_live(&store, &record.id).unwrap();
+        worker.join().unwrap();
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[2].1["chunks"][0]["start_ms"], 1000);
+        assert_eq!(calls[3].1["chunks"][0]["text"], "Later words");
+        let pending: i64 = store
+            .db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM live_outbox WHERE acknowledged=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0, "{code}");
+    }
+}
+
+/// Only Tico's timing refusal (`sequence_order`) is final for a correction; any other 422 on a
+/// non-empty correction retries with the sync's backoff. Neither blocks later live turns.
+#[test]
+fn only_a_timing_refusal_is_final_for_a_correction_and_neither_blocks_later_turns() {
+    for code in ["sequence_order", "validation"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = live_recording(&store, "Refused correction");
+        streamed(&store, &record.id, "me", 1000, "Helo", "");
+        let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+        tico.push_live(&store, &record.id).unwrap();
+        worker.join().unwrap();
+        finished_chunk(
+            &store,
+            &record.id,
+            0,
+            2000,
+            vec![word(1000, 1250, "Hello", "")],
+        );
+        let (tico, _, worker) = server(vec![Some(json!({"status":422,"error":{"code":code}}))]);
+        let result = tico.push_live(&store, &record.id);
+        worker.join().unwrap();
+        let state = |store: &Store| -> i64 {
+            store
+                .db()
+                .unwrap()
+                .query_row("SELECT state FROM live_corrections", [], |r| r.get(0))
+                .unwrap()
+        };
+        let correction = "/api/v2/live-meetings/live-fixture/chunks/1/corrections";
+        finished_chunk(
+            &store,
+            &record.id,
+            3000,
+            4000,
+            vec![word(3500, 3750, "Next", "")],
+        );
+        if code == "sequence_order" {
+            result.unwrap();
+            assert_eq!(state(&store), 2, "Tico keeps its revision");
+            let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+            tico.push_live(&store, &record.id).unwrap();
+            worker.join().unwrap();
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 1, "a final refusal is not sent again");
+            assert_eq!(seen[0].1["chunks"][0]["text"], "Next");
+        } else {
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(error.contains("HTTP 422 (validation)"), "{error}");
+            assert_eq!(state(&store), 0, "retried with the sync's backoff");
+            let (tico, seen, worker) = server(vec![
+                Some(json!({"accepted":[2]})),
+                Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":false})),
+            ]);
+            tico.push_live(&store, &record.id).unwrap();
+            worker.join().unwrap();
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen[0].1["chunks"][0]["text"], "Next");
+            assert_eq!(seen[1].0.split(' ').nth(1).unwrap(), correction);
+            assert_eq!(seen[1].1["text"], "Hello");
+            assert_eq!(state(&store), 1);
+        }
+    }
+}
+
+/// A chunk refusal the repair cannot fix reads Tico back and rewrites the outbox once per
+/// outbox state, not on every pass; new speech is a new state and gets one more repair.
+#[test]
+fn an_unfixable_chunk_422_repairs_once_per_outbox_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Refused twice");
+    let id = record.id.as_str();
+    let refused = || Some(json!({"status":422,"error":{"code":"validation"}}));
+    let view = || Some(json!({"state":"live","seq":0,"chunks":[]}));
+    let methods = |seen: &Seen| -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .map(|(line, _, _)| line.split(' ').next().unwrap().to_owned())
+            .collect()
+    };
+    streamed(&store, id, "me", 1000, "Late words", "");
+    let (tico, seen, worker) = server(vec![refused(), view(), refused()]);
+    let error = format!("{:#}", tico.push_live(&store, id).unwrap_err());
+    worker.join().unwrap();
+    assert!(error.contains("HTTP 422 (validation)"), "{error}");
+    assert_eq!(methods(&seen), ["POST", "GET", "POST"]);
+    // Same outbox: refused without another read-back or rewrite.
+    let (tico, seen, worker) = server(vec![refused()]);
+    let error = format!("{:#}", tico.push_live(&store, id).unwrap_err());
+    worker.join().unwrap();
+    assert!(error.contains("HTTP 422 (validation)"), "{error}");
+    assert_eq!(methods(&seen), ["POST"]);
+    // New speech changes the outbox: one repair, then both turns go.
+    streamed(&store, id, "me", 3000, "Later words", "");
+    let (tico, seen, worker) = server(vec![refused(), view(), Some(json!({"accepted":[1,2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(methods(&seen), ["POST", "GET", "POST"]);
+    let seen = seen.lock().unwrap();
+    let texts: Vec<_> = seen[2].1["chunks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["Late words", "Later words"]);
+}
+
+/// Owns only the Python process this test starts, including when an assertion fails.
+struct BackendBridge(std::process::Child);
+impl Drop for BackendBridge {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn backend_bridge() -> (Tico, BackendBridge) {
+    use std::io::BufRead;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let child = std::process::Command::new("python3")
+        .args(["-u", "recorder/tests/live_backend.py"])
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut bridge = BackendBridge(child);
+    let mut url = String::new();
+    std::io::BufReader::new(bridge.0.stdout.take().unwrap())
+        .read_line(&mut url)
+        .unwrap();
+    let tico = Tico::new(
+        Destination {
+            id: "synthetic".into(),
+            name: "Fixture".into(),
+            base_url: url.trim().into(),
+            actor: "human:test".into(),
+        },
+        "synthetic-token".into(),
+    )
+    .unwrap();
+    (tico, bridge)
+}
+
+#[test]
+#[ignore = "requires Python backend dependencies; run on RunsOn with --ignored"]
+fn stopped_late_chunks_and_legacy_422_recover_against_real_backend() {
+    for release in ["completion", "timeout", "legacy", "validation"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (id, pending) = stopped_pending_chunk(&store, crate::audio::Channel::Microphone);
+        let (tico, _bridge) = backend_bridge();
+        let path = "/api/v2/live-meetings/live-fixture";
+        tico.push_live(&store, &id).unwrap();
+        assert_eq!(tico.call(path, None, "").unwrap()["seq"], 0);
+        if release != "completion" {
+            recording_clock(&store, &id, PAST_PENDING_WAIT_S);
+            tico.push_live(&store, &id).unwrap();
+        }
+        store
+            .transcription_words(
+                &pending,
+                "Earlier",
+                vec![word(1000, 1200, "Earlier", "")],
+                "",
+                json!({}),
+            )
+            .unwrap();
+        if ["legacy", "validation"].contains(&release) {
+            // An old persisted outbox can still contain the reviewer's invalid sequence.
+            store.db().unwrap().execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json) VALUES(?,?,?,?,?)",
+                rusqlite::params![id,"synthetic",2,pending.id,json!({"seq":2,"speaker":"Me","start_ms":1000,"end_ms":if release == "validation" {0} else {1200},"text":"Earlier"}).to_string()],
+            ).unwrap();
+        }
+        tico.push_live(&store, &id).unwrap();
+        finished_chunk(
+            &store,
+            &id,
+            46_000,
+            47_000,
+            vec![word(46_200, 46_500, "Afterwards", "")],
+        );
+        tico.push_live(&store, &id).unwrap();
+        let view = tico.call(path, None, "").unwrap();
+        let chunks = view["chunks"].as_array().unwrap();
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|c| c["text"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            if release == "completion" {
+                vec!["Earlier", "Later", "Afterwards"]
+            } else {
+                vec!["Later", "Earlier", "Afterwards"]
+            }
+        );
+        assert!(
+            chunks
+                .windows(2)
+                .all(|p| p[0]["start_ms"].as_u64() <= p[1]["start_ms"].as_u64())
+        );
+        let pending: i64 = store
+            .db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM live_outbox WHERE acknowledged=0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending, 0, "{release}");
+    }
+}
+
+/// Tico sees which Recorder build each copy runs: every kind of call (read, write, delete, event stream) carries
+/// this build's version and the same install id, and no call leaves either out.
+#[test]
+fn every_tico_call_names_this_recorder_version_and_install() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let replies = [
+        "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+        "Content-Type: text/event-stream\r\nContent-Length: 3\r\n\r\n:\n\n",
+    ];
+    let handle = std::thread::spawn(move || {
+        let mut heads = vec![];
+        for reply in replies {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = vec![];
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut one = [0; 1];
+                stream.read_exact(&mut one).unwrap();
+                bytes.push(one[0]);
+            }
+            let head = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map_or(0, |value| value.trim().parse().unwrap());
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nConnection: close\r\n{reply}").unwrap();
+            heads.push(head);
+        }
+        heads
+    });
+    let tico = Tico::new(
+        Destination {
+            id: "versioned".into(),
+            name: "Fixture".into(),
+            base_url: url,
+            actor: "human:test".into(),
+        },
+        "synthetic-token".into(),
+    )
+    .unwrap();
+    tico.call("/api/v2/me", None, "read").unwrap();
+    tico.call("/api/v2/meetings/import", Some(&json!({})), "write")
+        .unwrap();
+    tico.unlink_meeting_task("meeting", "task", "unlink")
+        .unwrap();
+    tico.events("/api/v2/events").unwrap();
+    let heads = handle.join().unwrap();
+    let install = settings::install_id();
+    assert_eq!(install.len(), 32);
+    assert_eq!(install, settings::install_id(), "one id for this copy");
+    assert!(!VERSION.is_empty());
+    for head in heads {
+        assert!(
+            head.contains(&format!(
+                "x-tico-recorder-version: {}\r\n",
+                VERSION.to_ascii_lowercase()
+            )),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!("x-tico-recorder-install: {install}\r\n")),
+            "{head}"
+        );
+        assert!(head.contains("authorization: bearer synthetic-token"));
+    }
+}
