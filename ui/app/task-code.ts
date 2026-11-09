@@ -58,7 +58,7 @@ interface SubSummary { done?: number; total?: number; prs_total?: number; prs_me
 // The task as this rail reads it: its links, its waits, and the roll-up of its subtasks.
 interface CodeTask extends Omit<TaskRow, 'parent'> {
   children_summary?: SubSummary | null;
-  parent?: {id: string; label?: string | null; title?: string | null} | null;
+  parent?: {id: string; label?: string | null; title: string} | null;
   worktree_waits?: WorktreeWait[] | null;
   check_waits?: CheckWait[] | null;
 }

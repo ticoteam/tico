@@ -48,7 +48,7 @@ interface RoadmapComment {
   kind?: string;
   public?: boolean;
   hidden_at?: string | null;
-  refs?: { comment?: unknown } | null;
+  refs?: { comment?: unknown; [key: string]: unknown } | null;
 }
 interface RoadmapReceiver {
   source?: string;
@@ -166,7 +166,7 @@ function roadmapRequesterEditor(parent: TaskDialog, task: PropTask, requester: R
     catch (error) { $('[data-error]', dialog).textContent = errorMessage(error, ''); $('[data-requester-remove]', dialog).disabled = false; }
   });
 }
-function roadmapCommentMark(m: RoadmapComment, taskId: string): string {
+function roadmapCommentMark(m: RoadmapComment, taskId: string | number): string {
   if (!m.public || !m.refs?.comment || m.kind !== 'say') return '';
   const mark = `<span class="pill">${m.hidden_at ? 'Hidden' : 'Public'}</span>`;
   const task = TASK_CHAT?.id === taskId ? TASK_CHAT.dialog.liveTask : null;

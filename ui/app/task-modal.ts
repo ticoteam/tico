@@ -17,7 +17,6 @@ interface ModalRunPick { model: string; harness: string; effort: string; }
 interface ModalTask extends TaskRow {
   links?: ModalLink[];
   children?: unknown[];
-  parent?: unknown;
   run_model?: ModalRunModel | null;
   can_set_run_model?: boolean;
   milestone_waits?: ModalMilestone[] | null;
@@ -38,7 +37,6 @@ interface ModalDialog extends TfDialog {
   taskRail?: TaskRailState;
   tpOff?: (() => void) | null;
   tpEl?: TaskPagesSlot | null;
-  taskLive?: unknown;
 }
 // GET /v2/tasks/{id} as the dialog and its conversation read it.
 interface ModalDetail {
