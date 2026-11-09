@@ -12,14 +12,7 @@ from backend import check_models, diagnostics, execution, health, maintenance_he
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
-from backend.tests.helpers.claim_refusals import health_admin, held
-
-
-@pytest.fixture(autouse=True)
-def forget_claims():
-    execution.CLAIMED_BUSY.clear()
-    yield
-    execution.CLAIMED_BUSY.clear()
+from backend.tests.helpers.claim_refusals import forget_claims, health_admin, held  # noqa: F401
 
 
 def says(api, machine, reason, **busy):

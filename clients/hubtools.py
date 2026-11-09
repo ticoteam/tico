@@ -12313,6 +12313,7 @@ FINANCE_SEARCH = [
     "project",
     "vendor",
     "campaign",
+    "receipt",
     "subscription",
 ]
 FINANCE_INBOX = [
@@ -12538,8 +12539,9 @@ def _fin_paged(api, path, query, key, budget):
     "Search what you may see: entries, bank and card rows, bills, invoices, contacts, rules, cards (each with the "
     "vendors it is saved on). account: chart lines by code or name, with ids, for categorize, bill_create and "
     "rule_create. campaign: an ad campaign by name, with owner, spend, clicks and conversions. subscription: a "
-    "recurring charge by vendor name, with status, monthly cost and next charge. Name a kind to page with cursor; "
-    "otherwise the first few of each kind, except accounts, vendors, campaigns and subscriptions (name one of those).",
+    "recurring charge by vendor name, with status, monthly cost and next charge. receipt: by file name or vendor "
+    "(status: unread, suggested, unmatched, attached, rejected). Name a kind to page with cursor; otherwise the first "
+    "few of each kind, except accounts, vendors, campaigns, subscriptions and receipts (name one).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),

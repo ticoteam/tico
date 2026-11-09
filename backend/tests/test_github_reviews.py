@@ -4,6 +4,7 @@ import json
 
 import httpx
 import jwt
+import pytest
 
 from backend import bot_settings as BS
 from backend import github_app as G
@@ -213,8 +214,7 @@ def test_reviewer_turn_can_write_only_its_own_repo_and_reads_a_product_write_gra
     assert submit(api, key="primary-read-only").status_code == 403
 
 
-def test_review_mismatch_stays_fenced_and_definite_refusal_can_retry(api, gh, tmp_path, monkeypatch):
-    settings, seen = configured(api, gh, tmp_path, monkeypatch)
+def _review_mismatch_stays_fenced_and_definite_refusal_can_retry(api, gh, monkeypatch, settings, seen):
     for field, value in (("receipt_head", "b" * 40), ("receipt_state", "COMMENTED")):
         seen[field] = value
         assert submit(api, key=field).status_code == 502
@@ -226,8 +226,7 @@ def test_review_mismatch_stays_fenced_and_definite_refusal_can_retry(api, gh, tm
     assert submit(api, key="refused").status_code == 200
 
 
-def test_reviewer_failure_does_not_mutate_primary_health_or_reachability(api, gh, tmp_path, monkeypatch):
-    configured(api, gh, tmp_path, monkeypatch)
+def _reviewer_failure_does_not_mutate_primary_health_or_reachability(api, gh, monkeypatch, settings, seen):
     from backend import repositories as R
 
     def unexpected(*args, **kw):
@@ -240,15 +239,13 @@ def test_reviewer_failure_does_not_mutate_primary_health_or_reachability(api, gh
     assert turn_token(api, "cmo").status_code == 409
 
 
-def test_reviewer_ignores_known_missing_repo_without_changing_primary_cache(api, gh, tmp_path, monkeypatch):
-    configured(api, gh, tmp_path, monkeypatch)
+def _reviewer_ignores_known_missing_repo_without_changing_primary_cache(api, gh, monkeypatch, settings, seen):
     reviewer = api.app_state.github_reviewer_app
     token, _, repos = reviewer.mint_reachable([REPO, "Acme/gone"], G.READ_PERMISSIONS, missing={"acme/gone"})
     assert token.startswith("reviewer-") and repos == [REPO]
 
 
-def test_review_missing_from_reviewer_installation_refuses_before_claim_or_post(api, gh, tmp_path, monkeypatch):
-    _, seen = configured(api, gh, tmp_path, monkeypatch)
+def _review_missing_from_reviewer_installation_refuses_before_claim_or_post(api, gh, monkeypatch, settings, seen):
 
     def unexpected(*args, **kw):
         raise AssertionError("reviewer refusal must not diagnose through primary Administration")
@@ -261,6 +258,28 @@ def test_review_missing_from_reviewer_installation_refuses_before_claim_or_post(
     assert seen["reviews"] == []
     with api.app_state.store.read_transaction() as c:
         assert c.execute("SELECT count(*) FROM idempotency WHERE binding='github_review'").fetchone()[0] == 0
+
+
+def test_reviewer_failures_stay_on_the_reviewer_identity(api, gh, tmp_path, monkeypatch, subtests):
+    """The reviewer identity's own failures, on one configured hub: a known missing repository, a repository missing
+    from the reviewer installation (before any review is posted or claimed), a receipt mismatch or definite refusal,
+    and an installation refusal that leaves the primary App alone. Each check undoes what it changed to GitHub; the
+    missing-repository check runs before any review is posted (it counts every review and idempotency row), and the
+    installation refusal, which refuses every token from then on, runs last."""
+    settings, seen = configured(api, gh, tmp_path, monkeypatch)
+    reviewer = api.app_state.github_reviewer_app
+    for check in (
+        _reviewer_ignores_known_missing_repo_without_changing_primary_cache,
+        _review_missing_from_reviewer_installation_refuses_before_claim_or_post,
+        _review_mismatch_stays_fenced_and_definite_refusal_can_retry,
+        _reviewer_failure_does_not_mutate_primary_health_or_reachability,
+    ):
+        with subtests.test(check.__name__):
+            with pytest.MonkeyPatch.context() as mp:
+                check(api, gh, mp, settings, seen)
+            gh.missing.discard("product")
+            reviewer.live.clear()
+            reviewer.cache.clear()
 
 
 def test_github_refusing_a_review_403_files_one_devops_task_not_the_type_manager(api, gh, tmp_path, monkeypatch):

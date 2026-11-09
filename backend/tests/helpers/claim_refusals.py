@@ -1,6 +1,8 @@
 """Helpers that other tests share, moved out of test_claim_refusals.py so they import no test file."""
 
-from backend import health, maintenance_health
+import pytest
+
+from backend import execution, health, maintenance_health
 from backend.store import H
 from backend.tests.helpers.api import post
 
@@ -25,3 +27,10 @@ def health_admin(api):
     from backend.auth import Identity
 
     return Identity("human:ana", "owner")
+
+
+@pytest.fixture(autouse=True)
+def forget_claims():
+    execution.CLAIMED_BUSY.clear()
+    yield
+    execution.CLAIMED_BUSY.clear()

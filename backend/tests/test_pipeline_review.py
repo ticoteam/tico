@@ -1652,3 +1652,13 @@ def test_named_not_validated_still_refuses_when_no_link_files_into_the_named_pip
         requirement_version=1,
     )
     assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+
+
+def test_a_bot_cannot_create_a_ticket_at_review_past_the_making_requirements(world):
+    """Codex GB2 round 3: a bot creating a ticket straight at a later stage is held to the earlier stages' exit
+    requirements, as a bot entering one by move is. Making's Mockup is not attached, so the create is refused."""
+    w = world
+    w.requirement("Brief", "attachment", "person", stage=w.making)
+    with pytest.raises(H.Refused) as refused_create:
+        H.task_create(w.c, "bot:cmo", "Made by a bot", "", "bot:cmo", type=w.pipeline, step="Review", lint=False)
+    assert refused_create.value.rule == "requirement"

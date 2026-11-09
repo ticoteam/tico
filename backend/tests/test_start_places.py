@@ -870,7 +870,11 @@ def build_task(api, computer, title):
     return task
 
 
-def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn_starts(api):
+def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn_starts_and_starts_once_a_build_ends(
+    api,
+):
+    """The fourth build waits on a three-build computer while a turn with no repo work takes a place beside the builds;
+    once a running build ends, the waiting build's next ask gets the slot and it runs."""
     from backend import start_places
 
     computer = build_computer(api)
@@ -898,19 +902,7 @@ def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn
     chat = claim(api, computer)
     assert chat is not None and not chat.get('task')
     assert post(api, f"attempts/{chat['id']}/start-place", {}, computer['token'])['reserved'] is True
-
-
-def test_a_build_waiting_for_a_slot_starts_once_a_running_build_ends(api):
-    computer = build_computer(api)
-    for i in range(4):
-        build_task(api, computer, f'Build {i}')
-    builds = [claim(api, computer) for _ in range(4)]
-    assert all(builds)
-    fourth = builds[3]['id']
-    assert post(api, f'attempts/{fourth}/start-place', {}, computer['token']) == {
-        'reserved': False,
-        'waiting': 'builds at once',
-    }
+    # A build waiting for a slot starts once a running build ends.
     first = builds[0]['id']
     post(api, f'attempts/{first}/started', {'thread_id': 'build-1'}, computer['token'])
     post(api, f'attempts/{first}/complete', {'outcome': 'completed', 'text': '', 'last_seq': 0}, computer['token'])

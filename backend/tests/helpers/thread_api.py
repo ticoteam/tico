@@ -38,3 +38,13 @@ def sidebar(api, token="ben-test", **params):
 
 def row_of(listed, thread_id):
     return next((t for t in listed["threads"] + listed["dms"] if t["id"] == thread_id), None)
+
+
+def get_thread(api, thread_id, token="ben-test"):
+    return api.get(f"/api/v2/threads/{thread_id}", headers=headers(token))
+
+
+def search(api, query, token):
+    response = api.get("/api/v2/threads/search", params={"q": query}, headers=headers(token))
+    assert response.status_code == 200, response.text
+    return response.json()

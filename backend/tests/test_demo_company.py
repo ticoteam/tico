@@ -11,13 +11,14 @@ import pytest
 import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, demo_seed, hubdb
+from backend import demo, demo_seed, hubdb, judge, pipeline_engine
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
 from backend.app import create_app
 
-NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)  # a Friday evening: the week is complete
+from backend.tests.helpers.demo_company import NOW  # noqa: F401
+
 ROSTER = {slug for slug, _template, _parent in D.BOTS}
 DAY = {"from": "2026-10-31", "to": "2026-11-06"}
 PER_INSTALL = {
@@ -75,6 +76,9 @@ def built(tmp_path_factory):
     crosses 07:00 UTC (a usage-limit window edge) between them: the first build runs just after it, the second just
     before."""
     with pytest.MonkeyPatch.context() as patch:
+        # The build asks no model. Without this, a person's message check dials the Gateway the demo saved a key for,
+        # and the answer ("auth" or "unavailable") depends on timing, so the two builds' judge rows differ.
+        patch.setattr(judge, "server_engine", lambda *args, **kwargs: None)
         real_clock_at(patch, datetime(2026, 11, 6, 7, 0, 1, tzinfo=timezone.utc))
         first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
         rows = stored(first.db_path)
@@ -300,9 +304,35 @@ def test_the_demo_clock_also_reads_the_spend_windows(built):
 
 
 def test_the_same_date_builds_the_same_company(built):
-    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too."""
+    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too.
+    The one column left out is created_at on pipeline_engine.seeded events: boot stamps each from the machine's clock to
+    the microsecond, so it differs between two builds. Every other column of those rows is compared."""
     first, rows, again = built
-    assert again == rows
+    with closing(sqlite3.connect(first.db_path)) as db:
+        event_columns = [column[1] for column in db.execute("PRAGMA table_info(events)")]
+    created, action = event_columns.index("created_at"), event_columns.index("action")
+
+    def unclocked(events):
+        return [
+            tuple(None if i == created else value for i, value in enumerate(row))
+            if row[action] == pipeline_engine.SEEDED
+            else row
+            for row in events
+        ]
+
+    left = {**again, "events": unclocked(again["events"])}
+    right = {**rows, "events": unclocked(rows["events"])}
+    if left != right:
+        # Say which tables and which event row differ: a CI log cuts a pytest diff short.
+        first = next(
+            ((n, a, b) for n, (a, b) in enumerate(zip(left["events"], right["events"])) if a != b),
+            None,
+        )
+        differing = sorted(name for name in set(left) | set(right) if left.get(name) != right.get(name))
+        raise AssertionError(
+            f"builds differ in {differing}; events {len(left['events'])} vs {len(right['events'])}; "
+            f"first differing event row {str(first)[:600]}"
+        )
     with closing(sqlite3.connect(first.db_path)) as db:
         columns = [column[1] for column in db.execute("PRAGMA table_info(idempotency)")]
     operation, response = columns.index("operation"), columns.index("response")
@@ -312,6 +342,17 @@ def test_the_same_date_builds_the_same_company(built):
         if row[operation].startswith("/api/v2/usage/")
     ]
     assert any(hours), "the windows hold spend, so the hour is really compared"
+
+
+def test_the_build_asks_no_model_for_a_person(built):
+    """A person's rule check is held to the people's daily cap, which the build zeroes: no judge call is recorded for a
+    person's check, so no model is dialled with the demo's made-up keys (the answer would depend on timing)."""
+    first, _rows, _again = built
+    with closing(sqlite3.connect(first.db_path)) as db:
+        asked = db.execute(
+            "SELECT count(*) FROM events WHERE action='judge.call' AND json_extract(detail,'$.people')=1"
+        ).fetchone()[0]
+    assert asked == 0, f"{asked} person rule checks asked a model in the build"
 
 
 def test_every_department_has_its_lead_and_answers_to_a_person(ana):

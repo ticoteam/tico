@@ -49,7 +49,12 @@ def move(api, task, step='Review 1'):
     )
 
 
-def another_ticket(api, n):
+def nth_ticket(api, n, receipt=None, **fields):
+    """A fold's n-th ticket: the first makes the board as ticket() does, later ones join it as the only PR holder."""
+    return ticket(api, receipt, **fields) if n == 0 else another_ticket(api, n, receipt, **fields)
+
+
+def another_ticket(api, n, receipt=None, **fields):
     """One more ticket of the same type for a table of rows in one test, the only task holding the PR link."""
     with api.app.state.store.read() as c:
         typ = H.type_get(c, 'Dev tickets')
@@ -63,9 +68,12 @@ def another_ticket(api, n):
             'type': typ['id'],
             'step': 'In Progress',
             'links': [PR],
+            **fields,
         },
     )
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_links WHERE task_id<>?", (task['id'],))
+        if receipt:
+            c.execute('UPDATE tasks SET note=? WHERE id=?', (receipt, task['id']))
     return get(api, 'tasks/' + task['id'])['task']

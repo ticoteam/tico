@@ -26,6 +26,7 @@ from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.finance.store import ads as SA
 from backend.finance.store import ap as SAP
 from backend.finance.store import budgets as SB
+from backend.finance.store import contacts as SC
 from backend.store import Store
 from backend.tests.helpers.finance_fixtures import (
     AT,
@@ -169,11 +170,9 @@ def _mirrored(store: Store, w: dict[str, str]) -> None:
     """The books become a provider's: Google's and Meta's contacts are the provider's own ("Google", and a Meta one
     known by its alias "facebook"), not the ones the import makes."""
     with store.transaction() as c:
-        c.execute(
-            "DELETE FROM fin_vendor_aliases WHERE contact_id IN (?,?)", (w["google_ads_vendor"], w["meta_ads_vendor"])
-        )
-        c.execute("UPDATE fin_contacts SET name='Google' WHERE id=?", (w["google_ads_vendor"],))
-        c.execute("UPDATE fin_contacts SET name='Facebook Inc' WHERE id=?", (w["meta_ads_vendor"],))
+        SC.alias_drop_contact(c, [w["google_ads_vendor"], w["meta_ads_vendor"]])
+        SAP.update(c, "fin_contacts", w["google_ads_vendor"], {"name": "Google"})
+        SAP.update(c, "fin_contacts", w["meta_ads_vendor"], {"name": "Facebook Inc"})
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
         SAP.alias_add(c, book, "facebook", w["meta_ads_vendor"], AT)
         c.execute("UPDATE fin_books SET mode='mirror'")
@@ -206,7 +205,7 @@ def test_a_mirrored_book_with_no_platform_vendor_reports_only(books: Store):
         spend(c, "6300", 30_000, day="2026-10-12", teammate="bot:paid-rental-ads", vendor="GOOGLE *ADS")
     _mirrored(books, w)
     with books.transaction() as c:
-        c.execute("UPDATE fin_contacts SET name='Alphabet Workspace' WHERE id=?", (w["google_ads_vendor"],))
+        SAP.update(c, "fin_contacts", w["google_ads_vendor"], {"name": "Alphabet Workspace"})
         before = contacts(c)
         assert AI.ensure_vendor(c, "google_ads", AT) == ""
         assert contacts(c) == before  # never made: Tico writes no contact to QuickBooks or Xero
@@ -318,12 +317,18 @@ def test_every_hold_at_the_platform_comes_out_card_ach_bill_and_order(books: Sto
     gv = w["google_ads_vendor"]
     with books.transaction() as c:
         book = _money_account(c)
-        other = str(
-            c.execute(
-                "INSERT INTO fin_contacts(id,book_id,name,kind,created_at,created_by,updated_at) "
-                "VALUES('k-bill',?,'Billboard Co','vendor',?,?,?) RETURNING id",
-                (book, AT, OWNER, AT),
-            ).fetchone()[0]
+        other = SAP.insert(
+            c,
+            "fin_contacts",
+            {
+                "id": "k-bill",
+                "book_id": book,
+                "name": "Billboard Co",
+                "kind": "vendor",
+                "created_at": AT,
+                "created_by": OWNER,
+                "updated_at": AT,
+            },
         )
         c.execute(
             "INSERT INTO fin_feed_txns(id,money_account_id,provider_id,txn_date,amount,currency,counterparty,"
@@ -670,7 +675,11 @@ def test_a_google_card_charge_over_an_ad_budget_is_not_declined_and_freezes_no_c
 
 
 def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
+    """The shipped data fix (20261106085449) runs before 20261108203140_finance_fold_in turns the contact tables into
+    views, so it runs here on the contact tables as they were then."""
     import importlib
+
+    from backend.tests.helpers.finance_fold_in_migration import old_contact_tables  # noqa: F401
 
     fix = importlib.import_module("backend.migrations.20261106085449_ad_budgets_warn_only")
     w = world(books)
@@ -698,6 +707,7 @@ def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
         )
         assert named.status == "committed", named
         c.execute("UPDATE fin_budgets SET at_limit='decline' WHERE vendor<>''")
+        old_contact_tables(c)
         fix.up(c)
         fix.up(c)
         limits = dict(c.execute("SELECT name, at_limit FROM fin_budgets WHERE account_id=?", (w["adv"],)).fetchall())

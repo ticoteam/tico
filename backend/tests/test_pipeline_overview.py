@@ -499,7 +499,15 @@ def test_a_real_spawn_then_ship_then_resume_makes_one_spawn_lap(api):
     prod, eng = out["pipelines"]["Product"], out["pipelines"]["Engineering"]
     with api.app.state.store.read() as c:
         steps = {(str(t), str(n)): str(i) for t, n, i in c.execute("SELECT type_id, name, id FROM task_steps")}
-    parent = card(api, prod, steps[(prod, "Review")])
+    parent = card(api, prod, steps[(prod, "Ideas")])
+    move(api, parent["id"], step=steps[(prod, "Specifying")])
+    with api.app.state.store.transaction() as c:  # the owner marks the Spec page met, so the card may leave Specifying
+        spec_id = c.execute(
+            "SELECT id FROM stage_requirements WHERE pipeline_stage_id=? AND name='Spec page'",
+            (steps[(prod, "Specifying")],),
+        ).fetchone()[0]
+        pipeline_review.mark_met(c, "human:ana", parent["id"], spec_id, "Spec page written in the test")
+    move(api, parent["id"], step=steps[(prod, "Review")])
     with (
         api.app.state.store.transaction() as c
     ):  # the person approves the spec: the card leaves Review, the subtask is filed

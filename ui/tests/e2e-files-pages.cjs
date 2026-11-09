@@ -1,7 +1,8 @@
 // Journey: bot files and pages, and Make page, as Dana and Priya. The Engineering Lead's pages and files (the pages seed) show in
 // Library > Files with their titles; a page opens and draws its title, its version and its status line; a reader links a page to a
 // task (filesPages). Then Make page's task box and progress card, which were make-page.cjs (makePage; the request and pin use a real hub,
-// the authenticated publish and durable status contracts are in backend/tests/test_make_page.py). Runs on a phone and a desktop.
+// the authenticated publish and durable status contracts are in backend/tests/test_make_page.py). Runs on a phone: the
+// desktop row (kind, bot) is redesign-e2e-pages.cjs's, and Make page's fit is checked where it is tightest.
 const assert = require('node:assert/strict');
 const {journey, open, go, call, must, expectFailure, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
 
@@ -17,7 +18,11 @@ async function filesPages({hub, browser, phone}) {
     // The bot's data file: its row draws its title, its kind and the bot that made it, and the hub serves its content
     // (a data file has no page view; its row links to the file itself).
     const csv = page.locator('.lf-row', {hasText: 'Signup funnel'}).first();
-    assert.match((await csv.innerText()).replace(/\s+/g, ' '), /Data · Engineering Lead/, `${where}: the data file names its kind and bot`);
+    if (phone) assert.match((await csv.locator('.lf-meta').innerText()).replace(/\s+/g, ' '), /^Data · Engineering Lead · /, `${where}: the data file names its kind and bot`);
+    else {
+      assert.equal((await csv.locator('.lf-kind').innerText()).trim(), 'Data', `${where}: the data file's kind`);
+      assert.equal((await csv.locator('.lf-by-n').innerText()).trim(), 'Engineering Lead', `${where}: the bot that made the data file`);
+    }
     const file = await call(hub, 'dana', 'GET', `files/${await csv.getAttribute('data-id')}`);
     assert.equal(file.status, 200, `${where}: the hub serves the data file`);
     assert.match(String(file.body), /landing,1200/, `${where}: the data file's rows are served`);
@@ -211,4 +216,4 @@ journey('e2e-files-pages', async ctx => {
     catch (error) { error.message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${error.message}`; throw error; }
     finally { for (const context of ctx.browser.contexts()) await context.close().catch(() => {}); }
   }
-}, [...SEEDS, 'pages']);
+}, [...SEEDS, 'pages'], {only: 'phone'});

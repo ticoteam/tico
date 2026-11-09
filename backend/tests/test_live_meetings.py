@@ -1165,12 +1165,6 @@ def test_a_failed_decision_keeps_its_code_and_never_its_detail(live):
     assert "synthetic-private-words" not in json.dumps({k: v for k, v in trace.items() if k != "decision_input"})
 
 
-def test_the_meeting_view_says_its_meeting_model(live):
-    assert connect(live)["meeting_model"] is None
-    own = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
-    assert get(live, f"live-meetings/{own['id']}")["meeting_model"] == ""
-
-
 def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_openrouter(live, monkeypatch):
     settings = live.app.state.store.settings
     gateway_on(live, monkeypatch)
@@ -1592,6 +1586,7 @@ def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkey
     assert get(live, f"live-meetings/{plain['id']}")["meeting_model_effective"] == MEETING
     own = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
     assert (own["meeting_model"], own["meeting_model_effective"]) == ("", "")
+    assert get(live, f"live-meetings/{own['id']}")["meeting_model"] == ""  # the read says it too
 
 
 def test_recorder_discard_ends_without_filing_or_bot_runs(live):

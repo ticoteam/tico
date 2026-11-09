@@ -338,16 +338,6 @@ def test_a_slack_thread_reply_is_a_sub_thread_of_the_message_it_answers(world):
     assert reply["parent_message_id"] == root["id"]
 
 
-def test_an_edit_and_a_delete_become_a_revision_and_a_tombstone(world):
-    activate_marketing(world)
-    world.bridge.receive(chan_event(ts(1), "Kickoff"))
-    assert world.bridge.receive(chan_edit(ts(1), "Kickoff at 11")) == "edited"
-    assert origin_message(world, ts(1))["body"] == "Kickoff at 11"
-    assert origin_message(world, ts(1))["revision"] == 1
-    assert world.bridge.receive(chan_delete(ts(1))) == "deleted"
-    assert origin_message(world, ts(1))["deleted_at"] is not None
-
-
 # ----------------------------------------------------------------------------- Block
 def test_a_blocked_message_is_held_and_its_author_is_told_privately(world):
     activate_marketing(world)
@@ -459,83 +449,7 @@ def test_an_uncertain_post_that_never_landed_is_sent_once_more(world):
 
 
 # ----------------------------------------------------------------------------- history
-def test_history_is_opt_in_and_carries_only_mapped_members_from_the_last_thirty_days(world):
-    now = time.time()
-    world.slack.members[MARKETING] = ["U1", "U2", BOT_USER]
-    world.slack.pages[MARKETING] = [
-        {"ts": f"{now - 3600:.6f}", "user": "U1", "text": "Kickoff today"},
-        {"ts": f"{now - 3000:.6f}", "user": "U4", "text": "from someone not on the roster"},
-        {"ts": f"{now - 2500:.6f}", "user": "U2", "text": "BLOCKME: held"},
-        {"ts": f"{now - 2000:.6f}", "user": "U2", "bot_id": "B1", "text": "a bot"},
-        {"ts": f"{now - 1000:.6f}", "user": "U2", "text": "Sounds good"},
-        {"ts": f"{now - 40 * 86400:.6f}", "user": "U1", "text": "too old"},
-    ]
-    link_id = request(world, "#marketing", history=True)
-    assert gate(world, link_id) == "active"
-    world.clock.advance(61)
-    world.bridge.tick()
-    link = link_row(world, link_id)
-    assert link["history_state"] == "done" and link["history_count"] == 2
-    carried = all_rows(world, "SELECT sender_id, body, refs FROM messages ORDER BY created_at")
-    assert [m["body"] for m in carried] == ["Kickoff today", "Sounds good"]
-    assert [m["sender_id"] for m in carried] == ["human:ana", "human:ben"]
-    assert all(json.loads(m["refs"])["import"] is True for m in carried)
-
-
-def test_history_is_off_unless_asked_for(world):
-    link_id = activate_marketing(world)
-    world.slack.pages[MARKETING] = [{"ts": f"{time.time() - 100:.6f}", "user": "U1", "text": "old news"}]
-    world.clock.advance(61)
-    world.bridge.tick()
-    assert link_row(world, link_id)["history_state"] == "off"
-    assert all_rows(world, "SELECT id FROM messages") == []
-
-
-def test_history_stops_at_the_cap(world, monkeypatch):
-    monkeypatch.setattr(ST, "HISTORY_CAP", 1)
-    now = time.time()
-    world.slack.members[MARKETING] = ["U1", BOT_USER]
-    world.slack.pages[MARKETING] = [
-        {"ts": f"{now - 500:.6f}", "user": "U1", "text": "first"},
-        {"ts": f"{now - 400:.6f}", "user": "U1", "text": "second"},
-    ]
-    link_id = request(world, "#marketing", history=True)
-    gate(world, link_id)
-    world.clock.advance(61)
-    world.bridge.tick()
-    assert link_row(world, link_id)["history_count"] == 1
-    assert [m["body"] for m in all_rows(world, "SELECT body FROM messages")] == ["first"]
-
-
 # ----------------------------------------------------------------------------- inbound: duplicates, queue, cache, rules
-def test_a_duplicate_edit_event_is_one_revision(world):
-    activate_marketing(world)
-    world.bridge.receive(chan_event(ts(1), "Kickoff"))
-    first = chan_edit(ts(1), "Kickoff at 11")
-    first["edited_ts"] = ts(5)
-    assert world.bridge.receive(first) == "edited"
-    assert world.bridge.receive(dict(first, event_id="Ed-retry")) == "duplicate"
-    assert origin_message(world, ts(1))["revision"] == 1
-    assert (
-        len(
-            all_rows(
-                world,
-                "SELECT revision FROM message_revisions WHERE origin_id=?",
-                origin_message(world, ts(1))["origin_id"],
-            )
-        )
-        == 2
-    )
-
-
-def test_an_edit_to_the_same_text_is_not_a_revision(world):
-    activate_marketing(world)
-    world.bridge.receive(chan_event(ts(1), "Kickoff"))
-    unfurl = dict(chan_edit(ts(1), "Kickoff"), edited_ts=ts(3))
-    assert world.bridge.receive(unfurl) == "unchanged"
-    assert origin_message(world, ts(1))["revision"] == 0
-
-
 def test_messages_that_arrive_while_suspended_are_posted_on_resume_in_order(world):
     link_id = activate_marketing(world, members=("U1",))
     world.slack.members[MARKETING].append("U3")  # an unmapped member: the link suspends
@@ -848,25 +762,6 @@ def test_a_busy_channel_does_not_hold_back_another_channel_in_one_pass(world, mo
 OUTSIDER = Identity("human:contractor", "human", email="contractor@example.com")
 
 
-def test_a_thread_the_admin_cannot_read_gives_the_same_404_as_a_missing_one(world):
-    with pytest.raises(Problem) as hidden:
-        ST.request_link(world.hub, OUTSIDER, MEMBERS, "#secret", auth=Auth(world.hub))
-    with pytest.raises(Problem) as missing:
-        ST.request_link(world.hub, OUTSIDER, "T-missing", "#marketing", auth=Auth(world.hub))
-    assert hidden.value.status == missing.value.status == 404
-    assert hidden.value.code == missing.value.code and hidden.value.detail == missing.value.detail
-
-
-def test_a_listing_leaves_out_the_links_to_threads_the_admin_cannot_read(world):
-    link_id = request(world, "#secret", thread=MEMBERS)  # a members thread: Ana is a member, the outsider is not
-    assert gate(world, link_id) == "active"
-    assert [r["id"] for r in ST.list_links(world.hub, WHO, auth=Auth(world.hub))["links"]] == [link_id]
-    assert ST.list_links(world.hub, OUTSIDER, auth=Auth(world.hub))["links"] == []
-    with pytest.raises(Problem) as exc:
-        ST.list_links(world.hub, OUTSIDER, MEMBERS, auth=Auth(world.hub))
-    assert exc.value.status == 404
-
-
 # ----------------------------------------------------------------------------- P2-9: edits without a Slack user; notes
 def test_a_held_edit_without_a_slack_user_is_noted_to_its_author_and_does_not_crash(world):
     activate_marketing(world)
@@ -975,17 +870,6 @@ def test_an_uncertain_post_is_absent_only_after_every_page_of_the_window_is_read
 
 
 # ----------------------------------------------------------------------------- P2-12: edit order
-def test_an_older_edit_arriving_after_a_newer_one_is_stale_and_changes_nothing(world):
-    activate_marketing(world)
-    world.bridge.receive(chan_event(ts(1), "Kickoff"))
-    newer = dict(chan_edit(ts(1), "Kickoff at 12"), edited_ts=ts(5))
-    older = dict(chan_edit(ts(1), "Kickoff at 11"), edited_ts=ts(3), event_id="Ed-late")
-    assert world.bridge.receive(newer) == "edited"
-    assert world.bridge.receive(older) == "stale"
-    assert origin_message(world, ts(1))["body"] == "Kickoff at 12"
-    assert origin_message(world, ts(1))["revision"] == 1
-
-
 # ----------------------------------------------------------------------------- audit 38: restricted messages use fresh members
 def test_a_member_who_joins_later_is_in_the_restricted_message_check_from_the_next_send(world, monkeypatch):
     real = TH.message_readable
@@ -1060,3 +944,173 @@ def test_a_terminal_slack_refusal_files_one_needs_you_item_until_it_is_resolved(
     send_as_ana(world, "third")
     world.bridge.outbound()
     assert len(all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'A message to Slack%'")) == 2
+
+
+def _a_thread_the_admin_cannot_read_gives_the_same_404_as_a_missing_one(world):
+    with pytest.raises(Problem) as hidden:
+        ST.request_link(world.hub, OUTSIDER, MEMBERS, "#secret", auth=Auth(world.hub))
+    with pytest.raises(Problem) as missing:
+        ST.request_link(world.hub, OUTSIDER, "T-missing", "#marketing", auth=Auth(world.hub))
+    assert hidden.value.status == missing.value.status == 404
+    assert hidden.value.code == missing.value.code and hidden.value.detail == missing.value.detail
+
+
+def _a_listing_leaves_out_the_links_to_threads_the_admin_cannot_read(world):
+    link_id = request(world, "#secret", thread=MEMBERS)  # a members thread: Ana is a member, the outsider is not
+    assert gate(world, link_id) == "active"
+    assert [r["id"] for r in ST.list_links(world.hub, WHO, auth=Auth(world.hub))["links"]] == [link_id]
+    assert ST.list_links(world.hub, OUTSIDER, auth=Auth(world.hub))["links"] == []
+    with pytest.raises(Problem) as exc:
+        ST.list_links(world.hub, OUTSIDER, MEMBERS, auth=Auth(world.hub))
+    assert exc.value.status == 404
+
+
+def _an_edit_and_a_delete_become_a_revision_and_a_tombstone(world, base):
+    activate_marketing(world)
+    world.bridge.receive(chan_event(ts(base + 1), "Kickoff"))
+    assert world.bridge.receive(chan_edit(ts(base + 1), "Kickoff at 11")) == "edited"
+    assert origin_message(world, ts(base + 1))["body"] == "Kickoff at 11"
+    assert origin_message(world, ts(base + 1))["revision"] == 1
+    assert world.bridge.receive(chan_delete(ts(base + 1))) == "deleted"
+    assert origin_message(world, ts(base + 1))["deleted_at"] is not None
+
+
+def _an_edit_to_the_same_text_is_not_a_revision(world, base):
+    activate_marketing(world)
+    world.bridge.receive(chan_event(ts(base + 1), "Kickoff"))
+    unfurl = dict(chan_edit(ts(base + 1), "Kickoff"), edited_ts=ts(base + 3))
+    assert world.bridge.receive(unfurl) == "unchanged"
+    assert origin_message(world, ts(base + 1))["revision"] == 0
+
+
+def _a_duplicate_edit_event_is_one_revision(world, base):
+    activate_marketing(world)
+    world.bridge.receive(chan_event(ts(base + 1), "Kickoff"))
+    first = chan_edit(ts(base + 1), "Kickoff at 11")
+    first["edited_ts"] = ts(base + 5)
+    assert world.bridge.receive(first) == "edited"
+    assert world.bridge.receive(dict(first, event_id="Ed-retry")) == "duplicate"
+    assert origin_message(world, ts(base + 1))["revision"] == 1
+    assert (
+        len(
+            all_rows(
+                world,
+                "SELECT revision FROM message_revisions WHERE origin_id=?",
+                origin_message(world, ts(base + 1))["origin_id"],
+            )
+        )
+        == 2
+    )
+
+
+def _an_older_edit_arriving_after_a_newer_one_is_stale_and_changes_nothing(world, base):
+    activate_marketing(world)
+    world.bridge.receive(chan_event(ts(base + 1), "Kickoff"))
+    newer = dict(chan_edit(ts(base + 1), "Kickoff at 12"), edited_ts=ts(base + 5))
+    older = dict(chan_edit(ts(base + 1), "Kickoff at 11"), edited_ts=ts(base + 3), event_id="Ed-late")
+    assert world.bridge.receive(newer) == "edited"
+    assert world.bridge.receive(older) == "stale"
+    assert origin_message(world, ts(base + 1))["body"] == "Kickoff at 12"
+    assert origin_message(world, ts(base + 1))["revision"] == 1
+
+
+def _history_is_off_unless_asked_for(world):
+    link_id = activate_marketing(world)
+    world.slack.pages[MARKETING] = [{"ts": f"{time.time() - 100:.6f}", "user": "U1", "text": "old news"}]
+    world.clock.advance(61)
+    world.bridge.tick()
+    assert link_row(world, link_id)["history_state"] == "off"
+    assert all_rows(world, "SELECT id FROM messages") == []
+
+
+def _history_is_opt_in_and_carries_only_mapped_members_from_the_last_thirty_days(world):
+    now = time.time()
+    world.slack.members[MARKETING] = ["U1", "U2", BOT_USER]
+    world.slack.pages[MARKETING] = [
+        {"ts": f"{now - 3600:.6f}", "user": "U1", "text": "Kickoff today"},
+        {"ts": f"{now - 3000:.6f}", "user": "U4", "text": "from someone not on the roster"},
+        {"ts": f"{now - 2500:.6f}", "user": "U2", "text": "BLOCKME: held"},
+        {"ts": f"{now - 2000:.6f}", "user": "U2", "bot_id": "B1", "text": "a bot"},
+        {"ts": f"{now - 1000:.6f}", "user": "U2", "text": "Sounds good"},
+        {"ts": f"{now - 40 * 86400:.6f}", "user": "U1", "text": "too old"},
+    ]
+    link_id = request(world, "#marketing", history=True)
+    assert gate(world, link_id) == "active"
+    world.clock.advance(61)
+    world.bridge.tick()
+    link = link_row(world, link_id)
+    assert link["history_state"] == "done" and link["history_count"] == 2
+    carried = all_rows(world, "SELECT sender_id, body, refs FROM messages ORDER BY created_at")
+    assert [m["body"] for m in carried] == ["Kickoff today", "Sounds good"]
+    assert [m["sender_id"] for m in carried] == ["human:ana", "human:ben"]
+    assert all(json.loads(m["refs"])["import"] is True for m in carried)
+
+
+def _history_stops_at_the_cap(world, monkeypatch):
+    monkeypatch.setattr(ST, "HISTORY_CAP", 1)
+    now = time.time()
+    world.slack.members[MARKETING] = ["U1", BOT_USER]
+    world.slack.pages[MARKETING] = [
+        {"ts": f"{now - 500:.6f}", "user": "U1", "text": "first"},
+        {"ts": f"{now - 400:.6f}", "user": "U1", "text": "second"},
+    ]
+    link_id = request(world, "#marketing", history=True)
+    gate(world, link_id)
+    world.clock.advance(61)
+    world.bridge.tick()
+    assert link_row(world, link_id)["history_count"] == 1
+    assert [m["body"] for m in all_rows(world, "SELECT body FROM messages WHERE body IN ('first', 'second')")] == [
+        "first"
+    ]
+
+
+# ----------------------------------------------------------------------------- stories: one app for several checks
+def _unlink_every_link(world):
+    """Stop what the last check linked, so the next check links its own channel from a clean start."""
+    for row in all_rows(world, "SELECT id FROM slack_thread_links WHERE state != 'unlinked'"):
+        ST.unlink_link(world.hub, WHO, row["id"])
+
+
+def test_the_admin_cannot_read_a_thread_story(world, subtests):
+    """A thread the admin cannot read is refused and listed like a missing one; the listing shows what the admin can."""
+    for check in (
+        _a_thread_the_admin_cannot_read_gives_the_same_404_as_a_missing_one,
+        _a_listing_leaves_out_the_links_to_threads_the_admin_cannot_read,
+    ):
+        with subtests.test(check.__name__):
+            check(world)
+
+
+def test_an_edit_story_one_revision_a_tombstone_and_stale_edits(world, subtests):
+    """Edits to one channel message in one app: a delete is a tombstone, an edit to the same text is no revision, a
+    duplicate edit event is one revision, and an older edit after a newer one changes nothing. Each check has its own
+    stamps and link."""
+    checks = (
+        (_an_edit_and_a_delete_become_a_revision_and_a_tombstone, 0),
+        (_an_edit_to_the_same_text_is_not_a_revision, 100),
+        (_a_duplicate_edit_event_is_one_revision, 200),
+        (_an_older_edit_arriving_after_a_newer_one_is_stale_and_changes_nothing, 300),
+    )
+    for number, (check, base) in enumerate(checks):
+        if number:
+            _unlink_every_link(world)
+        with subtests.test(check.__name__):
+            check(world, base)
+
+
+def test_a_history_story_is_off_opt_in_and_capped(world, monkeypatch, subtests):
+    """History import in one app: off unless asked for, opt-in carries only mapped members of the last thirty days, and
+    it stops at the cap. Each check links the channel from a clean start."""
+    checks = (
+        _history_is_off_unless_asked_for,
+        _history_is_opt_in_and_carries_only_mapped_members_from_the_last_thirty_days,
+        _history_stops_at_the_cap,
+    )
+    for number, check in enumerate(checks):
+        if number:
+            _unlink_every_link(world)
+        with subtests.test(check.__name__):
+            if check is _history_stops_at_the_cap:
+                check(world, monkeypatch)
+            else:
+                check(world)

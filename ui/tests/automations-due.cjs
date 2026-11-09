@@ -3,7 +3,8 @@
 // and the zone, saved as the hub's trigger; the list reads "Due Mar 1 · yearly · 21d before", files it under Due date
 // and shows the next due day over when its task opens. A Create task step made in the editor opens a task for a bot,
 // and that occurrence task's due is a deadline (Overdue, Due), not a wake date, while a bot's other task still Wakes.
-// Phone, then desktop. The page's clock starts at the hub's frozen one. TICO_UI_SHOTS=<dir> saves the list and the
+// Desktop only: the Next column at 1440 (fix 822d4ba1f) is this script's; the phone's collapsed filter sections are
+// automations-list-runs.cjs's. The page's clock starts at the hub's frozen one. TICO_UI_SHOTS=<dir> saves the list and the
 // open editor, dark and light.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, automationNamed, sideways, t} = require('./support/redesign-e2e.cjs');
@@ -180,4 +181,4 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   await utc.context().close();
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-});
+}, {only: 'desktop'});

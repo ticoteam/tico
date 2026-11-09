@@ -6,17 +6,121 @@ readers, a run's reply lands in its sub-thread, and session keys keep private an
 The migration's reader sets are pinned by test_threads_migration_e2e.py (goldens of the pre-threads predicates).
 """
 
+import contextlib
+import inspect
+
 import pytest
+import time_machine
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import org_rule_check, threads
 from backend.store import H, Problem
-from backend.tests.helpers.threads_migration_e2e import identities
+from backend.tests.demo_template import copy_demo
+from backend.tests.helpers.threads_migration_e2e import NOW, build, close, identities, open_store  # noqa: F401
 from clients import sessions
 
 
+@pytest.fixture(scope="module")
+def demo_template(tmp_path_factory):
+    """Each worker seeds once; tests only open private copies of this directory. A module that imports `world` imports
+    this too."""
+    # The function-scoped bot_ids_are_their_slugs fixture has not run during module setup.
+    with pytest.MonkeyPatch.context() as monkeypatch, time_machine.travel(NOW, tick=False):
+        monkeypatch.setattr(H, "new_bot_id", lambda slug: slug)
+        return build("demo", tmp_path_factory.mktemp("threads-demo-template"))
+
+
+@contextlib.contextmanager
+def demo_world(directory, demo_template):
+    """A private copy of the template, read on the day it was built (including clocks outside hubdb.now)."""
+    with time_machine.travel(NOW, tick=False):
+        settings = copy_demo(demo_template, directory / "demo")
+        store, auth = open_store(settings)
+        try:
+            with store.transaction() as c:
+                auth.sync_access(c)
+                who = identities(c, auth)
+            yield store, auth, who
+        finally:
+            close(store)
+
+
+@pytest.fixture
+def world(tmp_path, demo_template):
+    with demo_world(tmp_path, demo_template) as made:
+        yield made
+
+
+def owner_of(c, auth):
+    return auth.owner_identity(c)
+
+
+def people(who):
+    return sorted(a for a in who if a.startswith("human:"))
+
+
+def made_threads(c, auth, who):
+    """One stored-audience thread of each kind a person makes, as the owner, plus a bot's Home."""
+    owner = threads.viewer(auth, owner_of(c, auth))
+    other = next(a for a in people(who) if a != owner.actor)
+    from backend import views
+
+    groups = sorted((views.roster(c, shared=True).get("org_groups") or {}).keys())
+    made = {
+        "company": threads.create(c, owner, title="All hands", audience="company")["id"],
+        "members": threads.create(c, owner, title="Launch", audience="members", members=[other])["id"],
+        "personal": threads.create(c, owner, title="Notes", audience="personal")["id"],
+    }
+    if groups:
+        made["team"] = threads.create(c, owner, title="Team", audience="team", audience_group_id=groups[0])["id"]
+    bot = sorted(a for a in who if a.startswith("bot:"))[0]
+    made["home"] = threads.home(c, bot, create=True)["id"]
+    return made
+
+
+# ----------------------------------------------------------------------------- every check on the demo world
+def test_the_threads_contracts_on_the_demo_world(tmp_path, demo_template, subtests):
+    """Every check below that reads the demo world, in one test. The template is built once per worker that gets a test
+    of this module (most of a minute on CI), so one test builds it once. Each check still opens its own copy of the
+    template and gets its own monkeypatch, as when it was a test of its own."""
+    checks = (
+        _python_sql_and_sse_renderings_agree_for_every_teammate,
+        _an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_with_write,
+        _internal_bots_read_company_and_their_groups_threads_and_external_agents_do_not,
+        _a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing,
+        _a_held_post_writes_no_message_and_no_delivery,
+        _a_held_first_message_makes_no_thread_sub_thread_or_dm,
+        _a_warned_post_writes_the_warned_text,
+        _a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery,
+        _two_sub_thread_starts_make_one_sub_thread,
+        _revisions_apply_highest_first_and_a_delete_is_final,
+        _only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone,
+        _a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone,
+        _the_loop_guard_defers_bot_wakes_and_lets_them_go,
+        _a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message_is_readable,
+        _a_legacy_writer_fans_out_and_is_guarded_like_a_post,
+        _the_inbox_reads_deliveries_not_to_actor,
+        _reactions_need_read_access_and_are_one_per_emoji,
+        _a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees,
+        _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new,
+        _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot,
+        _a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read,
+        _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read,
+    )
+    for n, check in enumerate(checks):
+        with (
+            subtests.test(check.__name__),
+            pytest.MonkeyPatch.context() as monkeypatch,
+            demo_world(tmp_path / str(n), demo_template) as world,
+        ):
+            if "monkeypatch" in inspect.signature(check).parameters:
+                check(world, monkeypatch)
+            else:
+                check(world)
+
+
 # ----------------------------------------------------------------------------- C1: three renderings
-def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
+def _python_sql_and_sse_renderings_agree_for_every_teammate(world):
     store, auth, who = world
     with store.transaction() as c:
         made = made_threads(c, auth, who)
@@ -79,7 +183,7 @@ def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
         assert len(checked) > 1, "the demo's bots fall into several classes, each checked"
 
 
-def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_with_write(world, monkeypatch):
+def _an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_with_write(world, monkeypatch):
     """Spec C1's bot rule: outside a turn (an external agent) a bot reads by membership, participation or a Home, never
     because a thread is company- or team-wide, though it may still be woken there. Posting in a Home takes Write on
     its owner for bots too; only the Home's own bot and a run replying into its granted thread skip it."""
@@ -123,7 +227,7 @@ def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_o
         assert threads.can_post(c, turn, home), "a run replies into the thread it was granted"
 
 
-def test_internal_bots_read_company_and_their_groups_threads_and_external_agents_do_not(world):
+def _internal_bots_read_company_and_their_groups_threads_and_external_agents_do_not(world):
     """Bots are AI employees: an internal bot reads what a person in its seat reads, every company thread and its
     group's team threads (groups above its own included), in any turn; members and personal threads only as a member.
     An external agent never gets company or team standing read. Python, SQL and SSE agree on every row."""
@@ -189,7 +293,7 @@ def test_internal_bots_read_company_and_their_groups_threads_and_external_agents
             assert threads.audience_has(c, made["company"], bot)
 
 
-def test_a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(world):
+def _a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -207,7 +311,7 @@ def test_a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(
 
 
 # ----------------------------------------------------------------------------- the write door
-def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
+def _a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -237,7 +341,7 @@ def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
     assert seen["replay"]["thread_id"] == tid and seen["replay"]["body"] == "The price is $10"
 
 
-def test_a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatch):
+def _a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatch):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -291,7 +395,7 @@ def test_a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatc
         assert again["conversation_id"] == dm["conversation_id"], "a DM start reuses the open DM"
 
 
-def test_a_warned_post_writes_the_warned_text(world, monkeypatch):
+def _a_warned_post_writes_the_warned_text(world, monkeypatch):
     store, auth, who = world
     monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: {"warn": "Warning: careful."})
     with store.transaction() as c:
@@ -301,7 +405,7 @@ def test_a_warned_post_writes_the_warned_text(world, monkeypatch):
     assert message["body"].startswith("Warning: careful.") and message["body"].endswith("Hello")
 
 
-def test_a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery(world):
+def _a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -326,7 +430,7 @@ def test_a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery(world):
         assert counts(c) == before
 
 
-def test_two_sub_thread_starts_make_one_sub_thread(world, monkeypatch):
+def _two_sub_thread_starts_make_one_sub_thread(world, monkeypatch):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -359,7 +463,7 @@ def test_two_sub_thread_starts_make_one_sub_thread(world, monkeypatch):
 
 
 # ----------------------------------------------------------------------------- C5: revisions
-def test_revisions_apply_highest_first_and_a_delete_is_final(world):
+def _revisions_apply_highest_first_and_a_delete_is_final(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -401,7 +505,7 @@ def test_revisions_apply_highest_first_and_a_delete_is_final(world):
         assert "words" not in audits and '"length"' in audits, "audit rows keep lengths, never a message's words"
 
 
-def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
+def _only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
     """A replicated repeat, an existing sub-thread and a deleted message's tombstone are each answered only after the
     caller is authorized: an outsider gets 404, a repeat aimed at another thread 409, and a reader who could not read
     a message before it was deleted gets the quiet hidden row, not its author and refs."""
@@ -435,7 +539,7 @@ def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
         assert mine["deleted"] and mine["refs"] == {} and mine["body"] is None
 
 
-def test_a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone(world):
+def _a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -461,7 +565,7 @@ def test_a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone(worl
 
 
 # ----------------------------------------------------------------------------- C3: loop guard
-def test_the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
+def _the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
     store, auth, who = world
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
     # Bot-to-bot messages wake (no `bot_to_bot` wait), so each would start a run.
@@ -499,7 +603,7 @@ def test_the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
         assert not [t for t in threads.sidebar(c, owner)["attention"] if t.get("capped")]
 
 
-def test_a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message_is_readable(world, monkeypatch):
+def _a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message_is_readable(world, monkeypatch):
     """A carrier copies the words of the message it wakes a bot for, so it is read as that message; no carrier is
     written for a message the bot may not read, and a claim refuses one whose message has gone."""
     from backend import rules, task_privacy
@@ -537,7 +641,7 @@ def test_a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message
         assert not task_privacy.message_readable(c, member, carrier)
 
 
-def test_a_legacy_writer_fans_out_and_is_guarded_like_a_post(world, monkeypatch):
+def _a_legacy_writer_fans_out_and_is_guarded_like_a_post(world, monkeypatch):
     """hubdb.say without the write door (a runner reply, an old route): a mentioned person and an outside destination
     get their deliveries, and bot-to-bot wakes stop at the loop guard."""
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
@@ -567,7 +671,7 @@ def test_a_legacy_writer_fans_out_and_is_guarded_like_a_post(world, monkeypatch)
 
 
 # ----------------------------------------------------------------------------- C3: inbox readers read deliveries
-def test_the_inbox_reads_deliveries_not_to_actor(world):
+def _the_inbox_reads_deliveries_not_to_actor(world):
     store, auth, who = world
     bot = sorted(a for a in who if a.startswith("bot:"))[0]
     with store.transaction() as c:
@@ -594,7 +698,7 @@ def test_the_inbox_reads_deliveries_not_to_actor(world):
 
 
 # ----------------------------------------------------------------------------- reactions
-def test_reactions_need_read_access_and_are_one_per_emoji(world):
+def _reactions_need_read_access_and_are_one_per_emoji(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -612,7 +716,7 @@ def test_reactions_need_read_access_and_are_one_per_emoji(world):
 
 
 # ----------------------------------------------------------------------------- runs reply in their sub-thread
-def test_a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees(world):
+def _a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -645,9 +749,8 @@ def test_session_keys_never_share_a_thread_across_audience_classes():
 
 
 # ----------------------------------------------------------------------------- migration: crafted per-message cases
-from backend.tests.helpers.api import post as api_post  # noqa: E402
-from backend.tests.helpers.live_meetings import live  # noqa: E402,F401  (fixtures)
-from backend.tests.helpers.threads_core import made_threads, owner_of, people, world, demo_template
+from backend.tests.helpers.api import post as api_post  # noqa: F401
+from backend.tests.helpers.live_meetings import live  # noqa: F401
 
 UNSTAMPED = (
     "UPDATE messages SET seq=NULL, origin_id=NULL, revision=0, restricted=1, legacy_audience=NULL",
@@ -737,7 +840,7 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
     assert all("human:cara" not in removed[m] for m in ids)
 
 
-def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new(world, monkeypatch):
+def _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new(world, monkeypatch):
     """Spec section 4: the shared room is its bot's Home. Its history keeps exactly its old readers until a manager
     opens it; everything new follows Home Read. Pinned in Python, in SQL and in the legacy per-message check."""
     from backend import task_privacy
@@ -827,7 +930,7 @@ def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_onl
         assert sees(c, old_reader)[3] is False, "once opened, the Home is read by its Read audience alone"
 
 
-def test_outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot(world):
+def _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -856,7 +959,7 @@ def test_outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_m
         )
 
 
-def test_a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read(world):
+def _a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -875,7 +978,7 @@ def test_a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read
     assert threads.sub_thread_title("word " * 30).endswith("…") and len(threads.sub_thread_title("word " * 30)) <= 61
 
 
-def test_a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(world):
+def _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))

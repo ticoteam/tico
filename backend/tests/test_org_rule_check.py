@@ -638,9 +638,9 @@ def test_failing_open_delivers_and_writes_unchecked(ruled, monkeypatch, how):
         monkeypatch.setitem(K.DEADLINES, "low", 0.2)
         judge.hold = threading.Event()
     elif how == "budget":
-        api.app.state.store.settings.rules_monthly_usd = 1.0
+        api.app.state.store.settings.decisions_monthly_usd = 1.0
         with api.app.state.store.transaction() as c:
-            H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
+            H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     else:
         judge.fail = RuntimeError("provider down")
     got = say(api, "Our favorite color is gold")
@@ -721,17 +721,46 @@ def test_an_open_breaker_goes_through_unchecked_at_once_and_a_probe_closes_it(ru
     assert calls.failures == 0 and say(api, "Our favorite color is blue")["held"]
 
 
-def test_the_rules_budget_is_apart_from_decides(ruled):
+def test_a_rule_checks_spend_lands_in_the_decisions_budget(ruled):
     api, judge = ruled
     color_rule(api)
-    settings = api.app.state.store.settings
-    settings.decisions_monthly_usd, settings.rules_monthly_usd = 1.0, 50.0
-    with api.app.state.store.transaction() as c:
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 50.0
+    assert say(api, "Our favorite color is gold")["held"]
+    assert events(api, "rules.spend") == []  # one budget: no spend rows of its own
+    [spend] = events(api, "judge.spend")
+    assert spend["target"].startswith("rule-check@") and json.loads(spend["detail"])["cost_usd"] > 0
+    with store.read() as c:
+        assert K.B.spent_this_month(c) == json.loads(spend["detail"])["cost_usd"]
+    [call] = events(api, "judge.call")
+    assert json.loads(call["detail"])["rules"]  # per-rule counts still read the rule ids off the call
+    assert not hasattr(K, "BUDGET")
+
+
+def test_a_spent_decisions_cap_stops_rule_checks(ruled):
+    api, judge = ruled
+    color_rule(api)
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    with store.transaction() as c:
         H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
-    assert say(api, "Our favorite color is gold")["held"]  # Decide's cap is spent; the rules' is not
-    with api.app.state.store.read() as c:
-        assert K.B.spent_this_month(c, None, K.BUDGET) > 0
-        assert K.B.over_spend_cap(c, settings) and not K.B.over_spend_cap(c, settings, None, K.BUDGET)
+    got = say(api, "Our favorite color is gold")
+    assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
+    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
+    assert get(api, "rules/stats")["usd_left"] == 0
+
+
+def test_a_decisions_cap_spent_while_a_check_waits_its_turn_is_the_budget_too(ruled):
+    api, judge = ruled
+    color_rule(api)
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    with store.transaction() as c:  # under the cap, but with no room for one more call's most
+        H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
+    got = say(api, "Our favorite color is gold")
+    assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
+    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
+    assert events(api, "judge.call") == []  # nothing was asked
 
 
 def test_stats_and_the_team_setting_turn_checks_off(ruled):

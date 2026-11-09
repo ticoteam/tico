@@ -120,7 +120,7 @@ def test_a_quote_not_in_the_file_is_dropped_and_counted_not_stored(api):
     assert all(item["text"] != "Pay within ten days." for item in listing["rules"])
 
 
-def test_a_quote_matches_across_case_quote_marks_and_spacing(api):
+def test_a_quote_matches_across_case_quote_marks_and_spacing():
     text = "Keep a record of the “consent”   for five years."
     assert counsel.quote_in(text, 'keep a record of the "consent" for five years.')
     assert not counsel.quote_in(text, "Keep a record of the consent for six years.")

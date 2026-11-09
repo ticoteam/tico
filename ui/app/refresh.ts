@@ -75,19 +75,20 @@ interface LiveTaskEvent {
   task_id?: unknown;
   gone?: unknown;
   bulk?: unknown;
-  task?: {lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown; type_id?: unknown} | null;
+  task?: {id?: unknown; lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown; type_id?: unknown} | null;
 }
-/** A task row in a list: its id, and the rest of the row as the server sends it. */
-interface LiveTaskRow { id?: unknown; [key: string]: unknown; }
+/** A task row in a list: its id and links, and the rest of the row as the server sends it (a TaskRow fits it). */
+interface LiveTaskRow { id?: unknown; links?: unknown; }
 /** The list a live change applies to, the open one or the kept one (S.lastRead.tasks), with its rows and cursor. */
 interface KeptTaskList { tasks: LiveTaskRow[]; since?: unknown; }
 // The kept list S.lastRead.tasks: LastRead types its tasks key as unknown, so this is the one place it is cast.
 const keptTasks = (): KeptTaskList | undefined => S.lastRead.tasks as KeptTaskList | undefined;
 function liveTasksApply(events: LiveTaskEvent[]): void {
   events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
-  if (TASK_CHAT && events.some(d => d.gone && String(d.id) === String(TASK_CHAT.id))) {
-    if (TASK_CHAT.dialog.taskLive) taskLiveGone(TASK_CHAT.dialog, TASK_CHAT.dialog.taskLive);
-    else TASK_CHAT.dialog.querySelector('[data-modal-close]')?.click();
+  const chat = TASK_CHAT;   // the open conversation as it is now (taskChatStop below clears the global)
+  if (chat && events.some(d => d.gone && String(d.id) === String(chat.id))) {
+    if (chat.dialog.taskLive) taskLiveGone(chat.dialog, chat.dialog.taskLive);
+    else chat.dialog.querySelector<HTMLElement>('[data-modal-close]')?.click();
     taskChatStop();
   }
   const state = TASKS_ST;
@@ -137,7 +138,8 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
     const me = 'human:' + PERSON_TASKS;
     if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
   }
-  if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
+  const open = TASK_CHAT;   // read again: a stop above may have cleared it
+  if (open && events.some(d => d.bulk || String(d.id) === String(open.id) && !unchanged.has(String(d.id)))) taskChatLive(open);
   pipelineLateLive(events);   // the pipeline on the board: its cards' late times (pipeline-rail.ts)
 }
 /** A bot's live status line: the bot, and its status (absent when the bot has none). */

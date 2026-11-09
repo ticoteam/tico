@@ -45,8 +45,7 @@ def test_sync_bot_repos_setup_overrides_and_unreachable(api, gh):
 
 
 # '', None and whitespace take the same strip/None branch: one whitespace case stands for them.
-@pytest.mark.parametrize('cleared', ['   '])
-def test_cleared_setup_command_returns_to_the_repository_file(api, gh, cleared):
+def _cleared_setup_command_returns_to_the_repository_file(api, gh, cleared):
     gh.setup_files['/repos/Acme/product/contents/tico.json'] = {'setup': 'npm ci'}
     catalog(api, gh)
     put(api, 'repositories/Acme/product', {'enabled': True})
@@ -58,7 +57,7 @@ def test_cleared_setup_command_returns_to_the_repository_file(api, gh, cleared):
     assert (rows['Acme/product']['setup_command'], rows['Acme/product']['setup_source']) == ('npm ci', 'tico.json')
 
 
-def test_a_command_cleared_before_the_fix_returns_to_the_file_after_the_next_start(api, gh):
+def _a_command_cleared_before_the_fix_returns_to_the_file_after_the_next_start(api, gh):
     gh.setup_files['/repos/Acme/product/contents/tico.json'] = {'setup': 'npm ci'}
     gh.setup_files['/repos/Acme/docs/contents/tico.json'] = {'setup': 'npm ci'}
     catalog(api, gh)
@@ -429,7 +428,7 @@ def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_acc
     assert off['workflows_stopped'] == ['Acme/product']
 
 
-def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token_and_keeps_a_webhook_reset(api, gh):
+def _a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token_and_keeps_a_webhook_reset(api, gh):
     catalog(api, gh)
     runner_token(api, 'cpo')
     put(api, 'repositories/Acme/product', {'enabled': True})
@@ -498,6 +497,18 @@ def test_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token_an
     gh.on_token = webhook
     assert turn_token(api).json()['workflows_withheld']['repositories'] == ['Acme/product']
     assert 'turn-reads' not in service.live
+
+
+def _forget_github_state(api, gh):
+    """Back to a new test's start within the same app: GitHub forgotten (so it can be connected again), and what an
+    earlier check left on the fake GitHub and the token cache cleared."""
+    assert api.post('/api/v2/github/app/disconnect', headers=auth()).status_code == 200
+    service = api.app_state.github_app
+    gh.refuse_actions_write = gh.refuse_workflows_write = False
+    gh.refuse = None
+    gh.on_token = None
+    service.live.clear()
+    service.cache.clear()
 
 
 def flagged_grants(api, gh):
@@ -696,7 +707,7 @@ def test_all_ticked_repos_lets_one_repository_run_workflows(api, gh):
         assert R.metadata(c, R.ALL_STORED['run_workflows']) == {} and R.metadata(c, R.WORKFLOWS) == {}
 
 
-def test_a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions(api, gh):
+def _a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions(api, gh):
     flagged_grants(api, gh)
     # The installation reports Workflows: write, but GitHub refuses every token asking for it.
     gh.permissions = {'actions': 'write', 'workflows': 'write', 'checks': 'read', 'statuses': 'read'}
@@ -750,6 +761,23 @@ def test_a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions
     assert one['workflows_withheld']['repositories'] == ['Acme/product'] and 'workflow_edits_withheld' not in one
     assert write_tokens(one) == {'Acme/product': ('workflows',)}
     assert not api.app_state.github_app.raise_refused(github_app.RAISES[1])
+
+
+def test_cleared_setup_commands_and_refused_workflow_tokens_tell_the_story(api, gh, subtests):
+    """One app for two stories: a cleared setup command returns to the repository file (before and after the fix), and
+    refused workflow tokens fall back to the ordinary write token. Each check keeps its own assertions."""
+    for number, (check, args) in enumerate(
+        (
+            (_cleared_setup_command_returns_to_the_repository_file, ('   ',)),
+            (_a_command_cleared_before_the_fix_returns_to_the_file_after_the_next_start, ()),
+            (_a_workflow_mint_refused_twice_falls_back_to_the_ordinary_write_token_and_keeps_a_webhook_reset, ()),
+            (_a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions, ()),
+        )
+    ):
+        if number:
+            _forget_github_state(api, gh)
+        with subtests.test(check.__name__):
+            check(api, gh, *args)
 
 
 def test_teammates_read_whether_github_is_connected_and_installed(api, gh):
