@@ -31,7 +31,7 @@ interface ToastOptions {
   /** Show an error even while signed out (the signed-out banner is the usual place). */
   keepWhenSignedOut?: boolean;
   /** An open modal dialog the toast sits in, so its button can be pressed. */
-  host?: Element | null;
+  host?: Element | null | undefined;
 }
 
 // ---------------------------------------------------------------- the signed-in person (S.me, GET /api/me)
