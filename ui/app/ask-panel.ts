@@ -14,12 +14,6 @@
 // answered here or by telling the Assistant.
 
 // The state of the panel's conversation (ASK), its thread and composer, as the functions below read and write them.
-interface AskComposer {
-  el: HTMLElement | null;
-  files: File[];
-  sending?: boolean;
-  [key: string]: unknown;
-}
 interface AskChat {
   open?: boolean;
   mounted?: boolean;
@@ -29,7 +23,7 @@ interface AskChat {
   send?: (text: string) => Promise<void>;
   stop?: () => void;
   draft?: string;
-  composer?: AskComposer;
+  composer?: Pill;
   live?: boolean;
   drawn?: boolean;
 }

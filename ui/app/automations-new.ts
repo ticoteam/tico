@@ -11,7 +11,7 @@ type AuNewTemplate = import('../types/api').AutomationTemplates['templates'][num
 /** An automation as the page reads it: the API's type, plus the owner string the list rows carry. */
 type AuNewAuto = import('../types/api').Automation & { owner?: string; readonly?: boolean };
 /** A template filled for an owner and an inbox (GET /v2/automations/templates/<id>). */
-type AuNewFilled = AuFlow & { group?: string };
+type AuNewFilled = AuFlow & { name?: string; owner?: string; group?: string };
 /** The owner kind's list and the value picked in it (Whose inbox). */
 type AuNewPick = [string[][], string];
 /** The New inbox dialog's state. */
@@ -42,7 +42,8 @@ function auApplyFlow(a: AuNewAuto, filled: AuNewFilled) {
   if (!b) return null;
   const old: AuStep = JSON.parse(JSON.stringify(a.steps?.[0])), as = auOwnerAs(a), L = b.llm;
   if (!L) return null;
-  const prompt = String(old.prompt || '').trim() ? old.prompt : L.prompt;
+  // Not blank, so old.prompt is a string.
+  const prompt = String(old.prompt || '').trim() ? old.prompt! : L.prompt;
   if (as) {
     // Only the rules and the questions stay beside the old step; a Sort it replaces goes.
     const kept = [b.rules.length && b.src.rules, b.questions.length && b.src.qd, b.questions.length && b.src.qf].filter((s): s is AuStep => !!s);

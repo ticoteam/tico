@@ -326,7 +326,7 @@ function renderSettingsHistory(el = $('#set-history'), history: SettingsHistoryD
   const drawn = el._settingsDrawn = {};
   el.onclick = async (event: Event) => {
     const review = eventElement(event)?.closest<HTMLElement>('[data-transition-review]');
-    if (review) { settingsWatchTransition(review.dataset.transitionReview); return; }
+    if (review) { settingsWatchTransition(review.dataset.transitionReview!); return; }
     const showOlder = eventElement(event)?.closest<HTMLButtonElement>('[data-settings-older]');
     if (showOlder) {
       showOlder.disabled = true;

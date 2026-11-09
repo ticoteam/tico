@@ -24,17 +24,12 @@ interface GoalRecord {
 // A goal action about to be sent: the verb, and the text for set and edit.
 interface GoalIntent { slug: string; text: string; action: 'set' | 'edit' }
 // The composer's goal fields: the old chat's BOT_PILL (pill.ts) and a bot thread's composer (thread-view.ts).
-interface GoalComposer {
-  slug: string | null;
-  el?: Element | null | undefined;
+interface GoalComposer extends Pill {
   ways?: boolean | undefined;
-  goalMode?: boolean | undefined;
   goalsOf?: (() => ChatGoalState | null | undefined) | undefined;
   goalPending?: GoalIntent | null | undefined;
-  sending?: boolean | undefined;
   sent?: Promise<unknown> | null | undefined;
   label?: (() => void) | undefined;
-  buttons?: (() => void) | undefined;
 }
 // What a bot's thread supplies for its goal: its bar, its composer, its redraw, and the room its first goal makes.
 interface ChatGoalUi {

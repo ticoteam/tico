@@ -95,7 +95,7 @@ function tasksScopeMenu(state: TaskState, anchor: HTMLElement) {
       const b = eventElement(ev)?.closest<HTMLElement>('[data-scope], [data-task-type]'); if (!b) return;
       pop.hidePopover();
       if (b.dataset.scope) { if (state.view !== 'foryou') tasksSetView(state, 'foryou'); }
-      else tasksScopeType(state, b.dataset.taskType);
+      else tasksScopeType(state, b.dataset.taskType!);
       $('#task-scope')?.focus();
     };
   });

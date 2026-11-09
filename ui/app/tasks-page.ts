@@ -305,7 +305,7 @@ function taskFormFiles(form: HTMLFormElement) {
   fileDropTarget(form, add);
   pasteImages(form, add);
 }
-function openTaskCreate(owner = '', opts: {parent?: TaskRow | null | undefined; labels?: unknown[] | undefined; type?: string | null | undefined} = {}) {
+function openTaskCreate(owner = '', opts: {parent?: (Pick<TaskRow, 'id' | 'title'> & Partial<Pick<TaskRow, 'private'>>) | null | undefined; labels?: unknown[] | undefined; type?: string | null | undefined} = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
   d.innerHTML = `<div class="tmodal-head"><h2 class="tmodal-title" style="margin:0">${parent ? 'New subtask' : 'New task'}</h2>
@@ -577,7 +577,7 @@ async function tasksLoadAllDone(state: TasksPageState) {
     }
   } finally { state.doneDrain = false; }
 }
-function companyNeedActor(task: PartialTaskRow & {ask?: NeedAsk}, need: (NeedsItem & {ask?: NeedAsk}) | undefined) {
+function companyNeedActor(task: PartialTaskRow & {ask?: NeedAsk}, need: (Pick<PartialTaskRow, 'status' | 'waiting_on' | 'reconnect'> & {ask?: NeedAsk}) | null | undefined) {
   const me = myActor();
   // A task waiting on me waits with the bot that owns it, whoever asked for it.
   const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner_id]

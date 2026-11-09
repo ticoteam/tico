@@ -100,7 +100,6 @@ function taskWorktreeRepo(l: CodeLink, siblings: CodeLink[] = []): string | unde
   const detail = taskLinkDetail(l);
   const last = String(l.path || detail.path || '').split(/[\\/]/).filter(Boolean).pop() || '';
   if (last.includes('__')) return last.split('__').pop();
-  // @ts-expect-error REPOS is declared by settings-repositories.ts as `let REPOS = null`, which has no type until that file is typed.
   const known = [...new Set([...siblings.map(taskLinkRepo), ...((typeof REPOS !== 'undefined' && REPOS?.repositories) || []).map((r: import('../types/api').Repository) => r.full_name)]
     .filter(Boolean).map(repoShort))];
   return known.includes(last) ? last : '';     // a branch name is never taken for a repo: it would be a guess

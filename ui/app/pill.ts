@@ -20,7 +20,7 @@ interface Pill {
   action?: string | undefined;
   el?: Element | null | undefined;
   files: File[];
-  send?: ((P: Pill, text: string) => unknown) | null | undefined;
+  send?: PillSend | null | undefined;
   sending?: boolean | undefined;
   sendRetrying?: boolean | undefined;
   sendNotice?: string | undefined;
@@ -33,6 +33,9 @@ interface Pill {
   pressTimer?: ReturnType<typeof setTimeout> | undefined;
   buttons?: (() => void) | undefined;
 }
+// What Send calls. Declared as a method so a page's own pill type (with its extra fields) can take it.
+interface PillSender { send(P: Pill, text: string): unknown }
+type PillSend = PillSender['send'];
 interface PillConfig {
   mode: string;
   slug?: string | null | undefined;
@@ -72,7 +75,7 @@ function chatDraftSave(P: Pill) {
   try { localStorage.setItem(CHAT_DRAFTS, JSON.stringify(all)); } catch {}
 }
 // The draft (and files) last left in this bot's box come back.
-function pillRestore(P: Pill): Pill {
+function pillRestore<T extends Pill>(P: T): T {
   // A pill with no slug never has a draft, files or pending send under a key, so '' reads the same as null.
   const slug = P.slug || '', draft = chatDrafts()[slug], files = CHAT_FILES.get(slug);
   if (draft) pq(P, '.p-text').value = draft;

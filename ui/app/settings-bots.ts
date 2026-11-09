@@ -365,10 +365,10 @@ function renderSettingsBots() {
     const credential = target.closest<HTMLElement>('[data-agent-credential]');
     const revoke = target.closest<HTMLElement>('[data-agent-revoke]');
     const pairing = target.closest<HTMLElement>('[data-agent-pair]');
-    if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
+    if (pairing) void settingsAgentPair(pairing.dataset.agentPair!);
     if (bot) settingsEditBot(bot.dataset.editBot);
-    if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
-    if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke);
+    if (credential) void settingsAgentCredential(credential.dataset.agentCredential!);
+    if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke!);
   };
   el.oninput = (event: Event) => {
     const target = eventElement(event);
@@ -398,7 +398,7 @@ function renderSettingsBots() {
       el.querySelectorAll('[data-bot-pick]').forEach((box: HTMLInputElement) => { box.checked = on; });
       settingsBotsSyncSelection(el, rows); return;
     }
-    const machine = target.closest<HTMLElement>('[data-bot-machine]');
+    const machine = target.closest<HTMLSelectElement>('[data-bot-machine]');
     if (machine) void settingsMoveBot(machine);
     const part = target.closest<HTMLSelectElement>('[data-task-row] [data-task-effort],[data-task-row] [data-task-context]');
     if (part) void settingsSaveTaskPart(part);

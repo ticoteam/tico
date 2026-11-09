@@ -26,6 +26,8 @@ interface NeedItem {
   rows?: StaleRow[] | null;
   need?: string;
   recommend?: NeedRecommend | null;
+  /** The ask a task item waits on (decide.ts DecItem; tasks-page.ts companyNeedActor reads its sender). */
+  ask?: DecAsk | null;
 }
 /** A bot's recommendation on its request: what it asks, and what it would do ("Do what you recommend"). */
 type NeedRecommend = {ask?: unknown; do: string};

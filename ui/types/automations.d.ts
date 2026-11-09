@@ -99,7 +99,7 @@ interface AuDest { id: string; name?: string; color?: string; then?: AuThen[] }
 /** What starts an automation: its kind and that kind's fields. */
 interface AuTrigger { type?: string; filters?: AuCond[]; name?: string; inbox?: string; [field: string]: unknown }
 /** A flow: its steps, its destinations (a board's), and its trigger. */
-interface AuFlow { steps?: AuStep[]; destinations?: AuDest[] | null; trigger?: AuTrigger }
+interface AuFlow { steps?: AuStep[]; destinations?: AuDest[] | null; trigger?: AuTrigger | undefined }
 /** An automation as the page holds it (AU.cur): the API's fields, with steps and trigger always present (automations.js
     auNormal), and the fields a built-in or a system job carries. */
 type AuAutomation = Omit<import('./api').Automation, 'steps' | 'trigger' | 'destinations'> & {

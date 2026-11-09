@@ -29,8 +29,9 @@ function assistantPill(): AssistantPill {
   const slug = myChatBot();
   if (ASSISTANT_PILL && ASSISTANT_PILL.slug === slug) return ASSISTANT_PILL;
   if (ASSISTANT_PILL) PILLS.delete(ASSISTANT_PILL);
-  const pill: AssistantPill = pillRestore(makePill({mode: 'chat', slug, send: assistantSend,
-    label: 'Message the Assistant', placeholder: 'Ask anything…'}));
+  // makePill always gives the pill its element.
+  const pill = pillRestore(makePill({mode: 'chat', slug, send: assistantSend,
+    label: 'Message the Assistant', placeholder: 'Ask anything…'})) as AssistantPill;
   ASSISTANT_PILL = pill;
   return pill;
 }

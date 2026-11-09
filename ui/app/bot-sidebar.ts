@@ -29,9 +29,10 @@ interface BotSidebarDraft { slug: string; tabs: BotSidebarTab[]; widgets: BotSid
 // A page as GET /v2/cards/choices and the place's pins give it.
 interface BotSidebarPinPage { file_id: string; title?: string; bot: string; updated_at: string }
 // A pin on the bot's place (GET /v2/places/bot:<slug>), or one made by Add and not saved yet.
-interface BotSidebarPin { item: string | null; size: string; card?: import('../types/api').Card; page?: BotSidebarPinPage | undefined }
+type BotSidebarPin = { item: string | null; size: string }
+  & ({ card: import('../types/api').Card; page?: undefined } | { card?: undefined; page: BotSidebarPinPage });
 // GET /v2/cards/choices (api.d.ts has it as unknown): the pages and built-in cards Add offers, and the teams a card may follow.
-interface BotSidebarChoices { pages: BotSidebarPinPage[]; templates: { id: string; name: string }[]; teams: unknown }
+interface BotSidebarChoices { pages: BotSidebarPinPage[]; templates: { id: string; name: string }[]; teams: DashChoices['teams'] }
 // A key's step, by key name: the arrow keys a handler moves by.
 type BotSidebarSteps = Partial<Record<string, number>>;
 
@@ -51,7 +52,8 @@ const BOT_SVG = {
   eye: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
   shut: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><path stroke="currentColor" stroke-width="1.6" d="M4 4l16 16"/></svg>',
 };
-const botWidgetName = (id: string) => (BOT_WIDGETS.find(([w]) => w === id) || [, id])[1];
+// [, id] types as [never?, string?]; its [1] is id, a string.
+const botWidgetName = (id: string) => (BOT_WIDGETS.find(([w]) => w === id) || [, id])[1] as string;
 // Pages and built-in cards pinned to the sidebar (`page:<file id>`, `card:<id>`): slug -> item -> the pin as
 // GET /api/v2/places/bot:<slug> gives it, so a widget's name and body come from what this reader may see.
 const BOT_PINS = new Map<string, Map<string | null, BotSidebarPin>>();
@@ -128,7 +130,8 @@ function botPinFill(slug: string, el: HTMLElement) {
   else { body.innerHTML = ''; body.append(dashPageEl(pin.page, 'small')); }
 }
 async function botPinsLoad(slug: string) {
-  const view: import('../types/api').Place | null = await v2Get('/v2/places/' + encodeURIComponent('bot:' + slug));
+  // Each pin holds a card or a page (as the Dashboard's DashPin says).
+  const view: (Omit<import('../types/api').Place, 'pins'> & { pins: BotSidebarPin[] }) | null = await v2Get('/v2/places/' + encodeURIComponent('bot:' + slug));
   if (BOT?.slug !== slug || !view?.pins) return;
   const kept = BOT_PINS.get(slug) || new Map<string | null, BotSidebarPin>(), pins = new Map<string | null, BotSidebarPin>(view.pins.map(p => [p.item, p]));
   // A page added in this edit and not saved yet keeps the brief the add form had.
