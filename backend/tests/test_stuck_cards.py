@@ -6,7 +6,7 @@ from backend import ask_deadlines
 from backend import hubdb as H
 from backend import question_tasks as QT
 from backend import stuck_cards
-from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import get, headers
 
 ANA = "human:ana"
 STAGES = [
