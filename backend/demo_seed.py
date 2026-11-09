@@ -174,13 +174,21 @@ class Builder:
     def build(self):
         from .app import create_app
 
-        # The seed talks to its own app as the owner; the demo that people open has no such token.
+        # The seed talks to its own app as the owner; the demo that people open has no such token. It asks no decision
+        # model either (`demo_build`): the keys it saves are made up, and an answer would depend on the network.
         seeding = dataclasses.replace(
             self.settings,
             demo=False,
+            demo_build=True,
             demo_public=False,
-            demo_seeding=True,
             local_owner_token_file=None,
+            # The seed is not the demo, so the demo's no-model guard (judge.server_engine) does not apply to it. A
+            # person's check would dial the Gateway the demo's made-up key was saved for, and the answer ("auth" or
+            # "unavailable") would depend on timing. So people's daily model cap is zero for the whole build, as the
+            # bots' is zeroed around the schedule runs (demo_sections/schedules.py): each check is unchecked before
+            # any call.
+            decisions_daily_calls_owner=0,
+            decisions_daily_calls_human=0,
             test_identities={
                 OWNER: Identity("human:ana", "owner", D.PEOPLE[0]["email"]),
                 "demo-cara": Identity("human:cara", "human", D.PEOPLE[2]["email"]),

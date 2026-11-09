@@ -65,10 +65,10 @@ interface GkGoal {
 }
 /** What a panel is showing (opened by goalPanelOpen); ui/app/goals.ts keeps the state it sits in. */
 interface GkPanel {
-  owner: string; goal: string; kpiAdd: string; kpi: string; standing: boolean; tapped: string; history: boolean;
-  historyKpis: GkKpi[] | null; historyLoading: boolean; historyError: boolean; why: string; whyFrom: string;
-  whyDraft: string | null; update: string; updateDraft: {body: string; signal: string} | null; updateError: string;
-  updateFocus: boolean; updatePending: {goal: string} | null; whySaving?: boolean;
+  owner: string; goal: string; kpiAdd: string; kpi?: string | undefined; standing?: boolean | undefined; tapped?: string | undefined; history?: boolean | undefined;
+  historyKpis?: GkKpi[] | null | undefined; historyLoading?: boolean | undefined; historyError?: boolean | undefined; why?: string | undefined; whyFrom?: string | undefined;
+  whyDraft?: string | null | undefined; update?: string | undefined; updateDraft?: {body: string; signal: string} | null | undefined; updateError?: string | undefined;
+  updateFocus?: boolean | undefined; updatePending?: {goal: string} | null | undefined; whySaving?: boolean | undefined;
 }
 interface GkKpiDetail {
   kpi: GkKpi; links: GkKpiLink[]; readings: GkReading[]; checkins: GkCheckin[]; proposals: GkProposal[]; may_log: boolean; may_edit: boolean;
@@ -362,7 +362,7 @@ function stratPropBetName(id: string | undefined) {
 function stratPropWrongText(w: unknown) {
   if (!w) return '';
   const el = document.createElement('span');
-  el.innerHTML = strategyWrongIfHtml(w);
+  el.innerHTML = strategyWrongIfHtml(w as StratWrongIf);
   return el.textContent.trim();
 }
 // One changed thing on a strategy card: its name, then Now / Proposed (or only what is proposed without a draft to read).
@@ -787,8 +787,8 @@ function goalTreeShape(): {byParent: Record<string, GkTreeNode[]>} {
   // out (orgTreeWithHelpers), so the Heads and groups the server hangs under it show under the owner, as on the sidebar.
   const placed = bots.filter(e => !isHelperBot(e) || e.id === 'goal-manager');
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.id)]);
-  const byParent: Record<string, GkTreeNode[]> = {}, groupOf = orgGroupOf(people, placed);
-  const put = (parent: string, node: GkTreeNode) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
+  const byParent: OrgByParent = {}, groupOf = orgGroupOf(people, placed);
+  const put = (parent: string, node: OrgNode) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
   for (const g of (S.orgGroups || [])) put(orgGroupParent(g, keys), {kind: 'group', id: g.id, name: g.name, order: g.order || 0});
   for (const p of people) put(orgHang('p:' + p.id, orgBossKey({kind: 'person', person: p}), groupOf), {kind: 'person', id: p.id, person: p});
   for (const e of placed) {

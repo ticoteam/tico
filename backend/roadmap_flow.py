@@ -25,6 +25,23 @@ def _dev(row):
     return bool(re.fullmatch(DEV_NAME, row[1] or '', re.I) or re.fullmatch(DEV_NAME, row[0] or '', re.I))
 
 
+def dev_board(c, ident, name):
+    """Whether a type gets the Dev board's flow, rules and pools: a type named Dev tickets (Tico Team's), or a type with
+    the engineering role laid out as the Dev board, with a Review 1 step (company_default's Engineering, once setup has
+    given it the board's stages). The booted Engineering type, or tico_default's, has no Review 1 and is no Dev board."""
+    if _dev((ident, name)):
+        return True
+    if 'role' not in {r[1] for r in c.execute('PRAGMA table_info(task_types)')}:
+        return False
+    return bool(
+        c.execute(
+            'SELECT 1 FROM task_types t JOIN task_steps s ON s.type_id=t.id '
+            "WHERE t.id=? AND t.role=? AND s.name='Review 1' COLLATE NOCASE LIMIT 1",
+            (ident, ENGINEERING),
+        ).fetchone()
+    )
+
+
 def migrate(c):
     """Give the Product roadmap and Dev tickets types their role, once. The roadmap is the type its legacy bot
     manages, else the type with the role's own id; engineering goes to every type its legacy bot manages (each
@@ -89,11 +106,23 @@ def claim(c):
     seed_pools(c)
 
 
+def _onboarded(c):
+    """Whether the company has finished onboarding. A hub that has not (a new one) gets no legacy manager: its company
+    setup binds the pipeline managers instead (pipeline_setup, seat and bot bindings)."""
+    from . import onboarding
+
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_metadata'").fetchone():
+        return False
+    return bool(onboarding.load(c)["completed"])
+
+
 def ensure(c):
-    """Create the two role types when they are missing. An existing type keeps the manager it has; one with
-    none gets the default."""
+    """Create the two role types when they are missing. An existing type keeps the manager it has, or none: a type
+    with no manager stays without one. A type this creates takes the legacy manager name only once onboarding is
+    complete (_onboarded); a company still onboarding gets none."""
     from . import hubdb as H
 
+    onboarded = _onboarded(c)
     for ident, name, manager, steps in (
         (
             PRODUCT,
@@ -134,11 +163,11 @@ def ensure(c):
             ).fetchone()
             existing = row[0] if row else None
         if existing:
-            c.execute('UPDATE task_types SET role=?,manager=coalesce(manager,?) WHERE id=?', (ident, manager, existing))
+            c.execute('UPDATE task_types SET role=? WHERE id=?', (ident, existing))
             continue
         c.execute(
             'INSERT INTO task_types(id,name,bots,manager,role,steps_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-            (ident, name, 'work', manager, ident, int(ident == PRODUCT), H.now(), H.now()),
+            (ident, name, 'work', manager if onboarded else None, ident, int(ident == PRODUCT), H.now(), H.now()),
         )
         for position, (step, status) in enumerate(steps):
             c.execute(

@@ -1050,7 +1050,7 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
         )
         F.ensure(c)
         assert not c.execute("SELECT 1 FROM task_types WHERE id='engineering'").fetchone()
-        assert H.type_get(c, dev['id'])['manager'] == 'engineering-lead'
+        assert H.type_get(c, dev['id'])['manager'] is None  # a type with no manager stays with none
     task = post(
         api,
         'tasks',
@@ -1742,3 +1742,15 @@ def test_a_refused_roadmap_move_keeps_the_child_start_and_is_logged_on_the_card(
             (card['id'],),
         ).fetchall()
     assert len(refusals) == 1 and 'Due' in refusals[0][0]
+
+
+def test_suggestions_receiver_is_a_new_org_product_bot_after_the_old_roles(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo')")
+        BS.update(c, 'cpo', {'template': 'product-team-manager'})
+        assert R.suggestions_receiver(c) == ('cpo', 'automatic')
+        BS.update(c, 'cpo', {'template': 'segment-product-owner'})
+        BS.update(c, 'cmo', {'template': 'product-lead'})
+        assert R.suggestions_receiver(c) == ('cmo', 'automatic')
+        BS.update(c, 'cmo', {'template': None})
+        assert R.suggestions_receiver(c) == ('cpo', 'automatic')

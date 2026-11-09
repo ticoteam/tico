@@ -7,7 +7,7 @@ Inputs: the ticket and its conversation (`hub task show <id>`), its acceptance t
 `knowledge/standards.md` and `knowledge/patterns.md`.
 
 Outcome: one pull request linked to the ticket, one head commit whose checks you ran and recorded, and the ticket moved to
-Review 1. Every change gets Review 1; a change nobody will see skips In QA after its review, not the review.
+Review 1. Every change gets Review 1; a change nobody will see skips In QA after its review (on a board with In QA), not the review.
 
 Done when the change does what the ticket says, a test fails on the old code and passes on yours, the pull request
 description says what changed, why and how it was tested, the ticket links the pull request, and the note on the ticket
@@ -26,6 +26,15 @@ and keep going on what is clear. Do not build a behaviour the spec does not stat
 
     git -C software/<repo> fetch origin
     git -C software/<repo> switch -c <ticket-number>-<short-name> origin/<base branch>
+
+If `<repo>` is `ticoteam/tico`, turn its pre-push hook on once for that clone (every worktree of the clone shares it):
+
+    git -C software/<repo> config core.hooksPath .githooks
+
+From then on each push runs `scripts/check.sh` and the branch conflict check first. A push it stops is a finding: fix it
+and push again. If `check.sh` cannot run on this computer (a tool it needs is missing), say so in the note in step 7 and
+push with `git push --no-verify`; the pull request's static checks run the same checks in CI. Do not change the hook
+setting of any other repository.
 
 Work only on that branch. Never commit to the base branch and never force-push.
 

@@ -19,7 +19,9 @@ class Loads:
     """The company's values read once (`record`, `plain`, `access`, `given`), and each bot's rows keyed by the bot.
     `runners` is {id: runners row}; `holds` is every login hold ({key: stored value}), so a missing key is no hold."""
 
-    def __init__(self, record, plain, access, given, runners, status, waits, limits, backoff, exits, held, holds):
+    def __init__(
+        self, record, plain, access, given, runners, status, waits, limits, backoff, exits, held, holds, company=None
+    ):
         self.record = record  # providers.load(c, settings): the company's choice, the environment's seed included
         self.plain = plain  # providers.load(c): the same without the seed (for_claim reads it so); None if unread
         self.access = access  # cloud_access.access(c)
@@ -32,6 +34,7 @@ class Loads:
         self.exits = exits  # {bot: browser exit's computer or None}; None when not read
         self.held = held  # {bot: turns it holds on every computer}
         self.holds = holds  # {login-hold key: stored value}
+        self.company = company  # company_pause.record(c): the company's pause on record, None while it runs
 
     def runner_of(self, c, runner_id, live=False):
         """The runners row, or None; `live` leaves out a revoked computer (as the capability reads do)."""
@@ -103,7 +106,7 @@ def read(c, settings, runners, bots, *, exits=True):
     once, then each bot's rows in chunks of 500 bots (one statement while there are fewer). `exits`: whether the
     browser exits are read (a computer that does not advertise browser_exit_v1 needs them)."""
     from . import providers, cloud_access, usage_limits, run_backoff, browser_exit, start_places
-    from . import model_subscriptions
+    from . import model_subscriptions, company_pause
     from .hubdb import chunks
     from .execution import GATEWAY_WAIT
 
@@ -143,6 +146,7 @@ def read(c, settings, runners, bots, *, exits=True):
         browser_exit.exits_of(c, bots) if exits else None,
         start_places.held_counts(c, bots),
         holds,
+        company_pause.record(c),
     )
 
 

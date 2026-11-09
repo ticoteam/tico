@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 Row = dict[str, Any]
 MODES = ("move", "spawn")
+# When a spawn files: as its card leaves the stage (the default, every spawn so far) or as a card enters it (Lead's Qualified).
+FIRES = ("leave", "enter")
 COLUMNS = "id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, return_stage_id, created_by, created_at"
 LINK_LIMIT = 200  # links per page; a page also stays under LINK_BYTES, as the audit list does
 LINK_BYTES = 262_144
@@ -35,10 +37,10 @@ def _rows(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> l
 
 
 def link_for_stage(conn: sqlite3.Connection, pipeline_stage_id: str) -> Row | None:
-    """The live link that leaves this stage, or None."""
+    """The live link that leaves this stage, or None. Its `fires` is included for the engine; it is not in COLUMNS."""
     found = _rows(
         conn,
-        f"SELECT {COLUMNS} FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
+        f"SELECT {COLUMNS}, fires FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
         (pipeline_stage_id,),
     )
     return found[0] if found else None
@@ -99,12 +101,17 @@ def create_link(
     to_pipeline_id: str,
     mode: str = "move",
     return_stage_id: str | None = None,
+    fires: str = "leave",
 ) -> Row:
     """Link a stage to another pipeline. Refused (rule "link"): a mode that is not move or spawn, a stage or pipeline that
     is not there, a link to its own pipeline, a stage that already has a live link out (that would branch), a target with no
     stage to enter, and anyone who may not edit the from-pipeline's rules."""
     if mode not in MODES:
         H.refuse(conn, actor, "link", "A link moves a ticket or spawns one")
+    if fires not in FIRES:
+        H.refuse(conn, actor, "link", "A link fires when a card leaves its stage or enters it")
+    if fires == "enter" and mode != "spawn":
+        H.refuse(conn, actor, "link", "Only a spawn link can fire when a card enters its stage")
     stage = pipeline_engine.stage(conn, from_stage_id)
     if stage is None:
         H.refuse(conn, actor, "link", "No such stage")
@@ -128,8 +135,8 @@ def create_link(
     link_id = cast(str, H.new_id())
     conn.execute(
         "INSERT INTO pipeline_links (id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, "
-        "return_stage_id, created_by, created_at, retired_at) VALUES (?,?,?,?,?,?,?,?,NULL)",
-        (link_id, stage["type_id"], from_stage_id, to_pipeline_id, mode, return_stage_id, actor, H.now()),
+        "return_stage_id, created_by, created_at, retired_at, fires) VALUES (?,?,?,?,?,?,?,?,NULL,?)",
+        (link_id, stage["type_id"], from_stage_id, to_pipeline_id, mode, return_stage_id, actor, H.now(), fires),
     )
     H.event(conn, actor, "pipeline_link.create", link_id, {"from": from_stage_id, "to": to_pipeline_id, "mode": mode})
     return _rows(conn, f"SELECT {COLUMNS} FROM pipeline_links WHERE id = ?", (link_id,))[0]
@@ -180,29 +187,54 @@ def _label(conn: sqlite3.Connection, task_id: str) -> str:
 
 def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     """Who owns a spawned ticket, as a new ticket filed at the target's first stage would be owned: the least busy bot of
-    that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the target pipeline's manager when it is
-    on the roster; else the filer, since a ticket always has an owner."""
+    that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the least busy available pool bot
+    over its slots. The pool is the stage's assign pool (spec A5). When the stage has no pool bot available, or no
+    assign rule at all, the Engineering role holder is looked up (_role_holder) before the filer. The filer owns the ticket
+    only when that lookup resolves to no one. The lookup applies only to a stage of a type that carries the engineering
+    role (see _role_holder). The pipeline's manager is never chosen (spec A5: a manager change does not move a Dev
+    ticket), on a stage with a pool or without one."""
     from . import pipeline_engine, step_flow
 
     first = pipeline_engine.first_stage(conn, pipeline_id)
+    step: Row | None = None
     if first is not None:
         step = _one(conn, "SELECT id, type_id, position, flow FROM task_steps WHERE id = ?", (first["id"],))
         flow: dict[str, Any] = step_flow.of(step)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         rule: Any = flow.get("assign") if step else None
-        picked = _pool_bot(conn, step, rule) if step and rule else None
-        if picked:
-            return f"bot:{picked}"
-    found = _rows(conn, "SELECT manager FROM task_types WHERE id = ?", (pipeline_id,))
-    slug = str(found[0]["manager"] or "") if found else ""
-    if not slug:
-        return filer
-    candidate = slug if slug.startswith(("bot:", "human:")) else f"bot:{slug}"
-    return candidate if H.resolve_actor(conn, candidate) else filer
+        if step and rule:
+            picked = _pool_bot(conn, step, rule) or _pool_bot(conn, step, rule, within_slots=False)
+            if picked:
+                return f"bot:{picked}"
+    holder = _role_holder(conn, step["type_id"]) if step else None
+    return f"bot:{holder}" if holder else filer
 
 
-def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row) -> str | None:
+def _role_holder(conn: sqlite3.Connection, type_id: str) -> str | None:
+    """The bot that holds the Engineering role (spec A5) for a stage of type `type_id`, or None when no bot does. Only a
+    type whose task_types.role is the engineering role is looked up, so a spawn into any other pipeline never reaches
+    Engineering's holder."""
+    from . import roadmap_flow
+
+    flows: Any = roadmap_flow  # roadmap_flow is untyped; the Any alias keeps strict mode quiet, as H and allocator do
+    row = _one(conn, "SELECT role FROM task_types WHERE id = ?", (type_id,))
+    if row is None or row["role"] != flows.ENGINEERING:
+        return None
+    return _stored_role_holder(conn)
+
+
+def _stored_role_holder(conn: sqlite3.Connection) -> str | None:
+    """The bot a stored record names as holding the Engineering role, or None. No stored record links a bot to that type
+    or role, so this resolves to no one today: task_types.role holds the role key only; task_roles is per task;
+    TYPE_BOTS is a permission (read or work); seats.team names a team; automation_templates ROLES names manager bots,
+    which are never a role holder. The pipeline's manager is never returned."""
+    del conn  # no stored record to read until a role link exists
+    return None
+
+
+def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row, *, within_slots: bool = True) -> str | None:
     """The bot the allocator would give a new ticket at this step: the pool bot with the fewest tickets in hand (ties: the
-    fewest open tickets, then the slug) among those that are active, onboarded and have a free slot. None when none does."""
+    fewest open tickets, then the slug) among those that are active, onboarded and, unless `within_slots` is False, have a
+    free slot. None when none does."""
     from . import task_allocator
 
     allocator: Any = task_allocator
@@ -211,7 +243,7 @@ def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row) -> str | None:
         if not allocator._available(conn, slug):  # pyright: ignore[reportPrivateUsage]
             continue
         in_hand = int(allocator.in_hand(conn, slug, step["type_id"], step))
-        if in_hand >= int(rule["slots"]):
+        if within_slots and in_hand >= int(rule["slots"]):
             continue
         free.append((in_hand, int(allocator._open(conn, slug)), slug))  # pyright: ignore[reportPrivateUsage]
     return min(free)[2] if free else None
@@ -545,8 +577,9 @@ def spawn(
     and is recorded as its own handoff; `note` leads its body as "Follow-up: <note>".
 
     A ticket the rules refuse to file raises Problem 409 `spawn_refused` with the reason, so the move that made the spawn
-    rolls back with it: a card never advances past a stage whose linked work was not filed. Returns the new ticket's id,
-    or None when nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
+    rolls back with it: a card never advances past a stage whose linked work was not filed. A first stage with no room
+    (D68) raises the stage_full refusal instead, so the card waits at its stage. Returns the new ticket's id, or None when
+    nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
     from .store import Problem
 
     if link["mode"] != "spawn":
@@ -563,8 +596,24 @@ def spawn(
     target = str(link["to_pipeline_id"])
     first = pipeline_engine.first_stage(conn, target)
     source = H.task(conn, source_id)
-    if first is None or source is None:
+    if source is None:
         return None
+    # Every working stage of the target is On ice (D69): it takes no linked ticket, so the card waits at its stage, as for
+    # a full first stage, until a person opens a stage there. Nothing is dropped, nor filed straight into Done.
+    frozen = pipeline_engine.frozen_refusal(conn, target, source_id, "the linked ticket")
+    if frozen is not None:
+        raise frozen
+    if first is None:
+        return None
+    full = pipeline_engine.full_stage(conn, str(first["id"]), source_id)
+    if full is not None:
+        # The linked ticket waits for room (D68): the move that would have filed it is refused, so the card stays where it is.
+        raise pipeline_engine.room_refusal(
+            "stage_full",
+            f"{pipeline_engine.full_detail(full)}, so the linked ticket waits",
+            source_id,
+            str(first["id"]),
+        )
     filer = str(source["owner_id"])
     owner = _owner_for(conn, target, filer)
     lead = f"Follow-up: {note}. " if note else ""

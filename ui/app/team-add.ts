@@ -7,7 +7,7 @@ const teamAddCanHuman = () => orgCanGroups() || !!S.me?.can_add_people;
 // One menu for the Team header's plus and each group's plus (ui/app/sidebar.ts). In a group it hires into that group
 // and adds a group inside it; people are added from the header only. Build a team and Cloud agents show only where
 // their pages are loaded (window.teamBuildOpen, window.cloudAgentsOpen).
-let TEAM_ADD_GROUP = null;
+let TEAM_ADD_GROUP: string | null = null;
 const TEAM_ADD_MENU = document.createElement('div');
 TEAM_ADD_MENU.id = 'team-add-menu';
 TEAM_ADD_MENU.setAttribute('role', 'menu');
@@ -22,21 +22,26 @@ TEAM_ADD_MENU.innerHTML = `<button type="button" role="menuitem" data-team-add="
   <button type="button" role="menuitem" data-team-add="human">Add human</button>`;
 document.body.append(TEAM_ADD_MENU);
 
-function teamAddAllowed(group = null) {
+// Which menu items the viewer may use here, by their data-team-add value.
+type TeamAddAllowed = Record<string, boolean>;
+type TeamAddForm = HTMLFormElement & {elements: HTMLFormControlsCollection & {email: HTMLInputElement; name: HTMLInputElement}};
+function teamAddAllowed(group: string | null = null): TeamAddAllowed {
   const bot = teamAddCanBot();
   return {bot, build: bot && typeof window.teamBuildOpen === 'function', cloud: bot && typeof window.cloudAgentsOpen === 'function',
     scratch: bot, existing: teamAddCanExisting(), section: orgCanGroups(), human: group === null && teamAddCanHuman()};
 }
-function teamAddAny(group = null) { return Object.values(teamAddAllowed(group)).some(Boolean); }
-function teamAddOpenFor(group) { return !TEAM_ADD_MENU.hidden && TEAM_ADD_GROUP === group; }
-const teamAddAnchor = () => TEAM_ADD_GROUP === null ? $('#org-add-group')
-  : document.querySelector(`#tree [data-group-plus="${CSS.escape(TEAM_ADD_GROUP)}"]`);
+function teamAddAny(group: string | null = null) { return Object.values(teamAddAllowed(group)).some(Boolean); }
+function teamAddOpenFor(group: string | null): boolean { return !TEAM_ADD_MENU.hidden && TEAM_ADD_GROUP === group; }
+const teamAddAnchor = (): HTMLElement | null => TEAM_ADD_GROUP === null ? $('#org-add-group')
+  : document.querySelector<HTMLElement>(`#tree [data-group-plus="${CSS.escape(TEAM_ADD_GROUP)}"]`);
 function teamAddRefresh() {
   const allowed = teamAddAllowed(TEAM_ADD_GROUP);
-  TEAM_ADD_MENU.querySelectorAll('button').forEach(button => { button.hidden = !allowed[button.dataset.teamAdd]; });
-  TEAM_ADD_MENU.querySelector('[data-team-add=section]').textContent = TEAM_ADD_GROUP === null ? 'Add section' : 'Add group';
+  TEAM_ADD_MENU.querySelectorAll('button').forEach(button => { button.hidden = !allowed[button.dataset.teamAdd ?? '']; });   // C: every item has its data-team-add
+  const sectionItem = TEAM_ADD_MENU.querySelector<HTMLElement>('[data-team-add=section]');
+  if (sectionItem) sectionItem.textContent = TEAM_ADD_GROUP === null ? 'Add section' : 'Add group';   // G
   $('#org-add-group').hidden = !teamAddAny();
-  if (!teamAddAny(TEAM_ADD_GROUP) || TEAM_ADD_MENU.contains(document.activeElement) && document.activeElement.hidden) teamAddClose(true);
+  const active = document.activeElement;   // L
+  if (!teamAddAny(TEAM_ADD_GROUP) || TEAM_ADD_MENU.contains(active) && active instanceof HTMLElement && active.hidden) teamAddClose(true);   // N
 }
 function teamAddClose(returnFocus = false) {
   const open = !TEAM_ADD_MENU.hidden;
@@ -60,7 +65,7 @@ function teamAddPosition() {
   TEAM_ADD_MENU.style.left = Math.max(8, Math.min(anchor.left, innerWidth - menu.width - 8)) + 'px';
   TEAM_ADD_MENU.style.top = Math.max(8, anchor.bottom + menu.height + 8 <= innerHeight ? anchor.bottom + 4 : anchor.top - menu.height - 4) + 'px';
 }
-function teamAddOpen(last = false, group = null) {
+function teamAddOpen(last = false, group: string | null = null) {
   if (!TEAM_ADD_MENU.hidden) teamAddClose();
   TEAM_ADD_GROUP = group;
   teamAddRefresh();
@@ -69,15 +74,16 @@ function teamAddOpen(last = false, group = null) {
   TEAM_ADD_MENU.hidden = false;
   anchor.setAttribute('aria-expanded', 'true');
   teamAddPosition();
-  const items = [...TEAM_ADD_MENU.querySelectorAll('button:not([hidden])')];
+  const items = [...TEAM_ADD_MENU.querySelectorAll<HTMLButtonElement>('button:not([hidden])')];
   items[last ? items.length - 1 : 0]?.focus();
 }
 // A group's plus: opens the menu there, or closes it when it is already open there.
-function teamAddToggle(group) {
-  if (teamAddOpenFor(group)) teamAddClose(true); else teamAddOpen(false, group);
+function teamAddToggle(group: string | undefined): void {
+  const at = group ?? null;   // C: sidebar.ts passes a plus's data-group-plus, which is always there
+  if (teamAddOpenFor(at)) teamAddClose(true); else teamAddOpen(false, at);
 }
 $('#org-add-group').onclick = () => TEAM_ADD_MENU.hidden ? teamAddOpen() : teamAddClose(true);
-$('#org-add-group').onkeydown = event => {
+$('#org-add-group').onkeydown = (event: KeyboardEvent) => {
   if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
   event.preventDefault(); teamAddOpen(event.key === 'ArrowUp');
 };
@@ -86,20 +92,21 @@ TEAM_ADD_MENU.onkeydown = event => {
   else if (event.key === 'Tab') teamAddClose(true);
   else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
     event.preventDefault();
-    const items = [...TEAM_ADD_MENU.querySelectorAll('button:not([hidden])')], index = items.indexOf(document.activeElement);
+    const items = [...TEAM_ADD_MENU.querySelectorAll<HTMLButtonElement>('button:not([hidden])')];
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);   // the focused item, or -1 when focus is elsewhere
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
       : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
     items[next]?.focus();
   }
 };
 const TEAM_ADD_KEEP = '#org-add-group, #team-add-menu, [data-group-plus]';
-document.addEventListener('click', event => { if (!event.target.closest(TEAM_ADD_KEEP)) teamAddClose(); });
-document.addEventListener('focusin', event => { if (!event.target.closest(TEAM_ADD_KEEP)) teamAddClose(); });
+document.addEventListener('click', event => { if (!eventElement(event)?.closest(TEAM_ADD_KEEP)) teamAddClose(); });
+document.addEventListener('focusin', event => { if (!eventElement(event)?.closest(TEAM_ADD_KEEP)) teamAddClose(); });
 window.addEventListener('hashchange', () => teamAddClose());
 window.addEventListener('resize', teamAddPosition);
 $('.side-scroll').addEventListener('scroll', teamAddPosition, {passive: true});
 TEAM_ADD_MENU.onclick = event => {
-  const action = event.target.closest('[data-team-add]')?.dataset.teamAdd;
+  const action = eventElement(event)?.closest<HTMLElement>('[data-team-add]')?.dataset.teamAdd;
   if (!action) return;
   const group = TEAM_ADD_GROUP;
   teamAddClose();
@@ -117,7 +124,7 @@ TEAM_ADD_MENU.onclick = event => {
   else if (action === 'human' && teamAddCanHuman()) teamAddHuman();
 };
 
-function teamAddDialog(title, body) {
+function teamAddDialog(title: string, body: string): HTMLDialogElement {
   setDrawer(false);
   const dialog = document.createElement('dialog');
   dialog.id = 'team-add-dialog'; dialog.className = 'tmodal team-add-dialog';
@@ -131,13 +138,13 @@ function teamAddDialog(title, body) {
     window.removeEventListener('hashchange', leave); dialog.remove();
     if (dialog.returnValue !== 'next') teamAddReturnFocus();
   };
-  dialog.querySelectorAll('[data-team-close]').forEach(button => { button.onclick = () => dialog.close(); });
+  dialog.querySelectorAll<HTMLButtonElement>('[data-team-close]').forEach(button => { button.onclick = () => dialog.close(); });
   dialog.showModal();
   return dialog;
 }
 // Post a job makes a Recruiting seat and opens its Applicants page (ui/app/recruit.ts). From a group's plus the job is
 // in that group and reports to its head: the bot in it whose manager is outside it.
-function teamAddBot(group = null) {
+function teamAddBot(group: string | null = null) {
   setDrawer(false);
   if (group === null) { void recruitPostJob(); return; }
   const bots = (S.emps || []).filter(e => e.team === group && e.status !== 'archived' && !isHelperBot(e));
@@ -155,7 +162,9 @@ function teamAddHuman() {
     <p class="err" role="alert" data-team-error hidden></p>
     <div class="row"><button class="primary" type="submit">Add human</button><button class="ghost" type="button" data-team-close>Cancel</button></div>
   </form>`);
-  const form = dialog.querySelector('form'), submit = form.querySelector('[type=submit]'), error = form.querySelector('[data-team-error]');
+  const form = dialog.querySelector('form') as TeamAddForm | null;   // the dialog's own form, written above
+  const submit = form?.querySelector<HTMLButtonElement>('[type=submit]'), error = form?.querySelector<HTMLElement>('[data-team-error]');
+  if (!form || !submit || !error) return;   // G: the dialog always has them; the old code threw on a null here
   form.elements.email.focus();
   form.onsubmit = async event => {
     event.preventDefault();
@@ -168,6 +177,6 @@ function teamAddHuman() {
       dialog.close(); await refresh(true);
       if (S.route === SETTINGS && $('#settings-people')) void renderSettingsPeople();
       toast(`Added ${name || email}. No email sent.`);
-    } catch (e) { error.textContent = e.message; error.hidden = false; submit.disabled = false; }
+    } catch (e) { error.textContent = errorMessage(e, ''); error.hidden = false; submit.disabled = false; }   // H
   };
 }

@@ -5,20 +5,33 @@
 // What this file reads from the server and keeps in SETTINGS_DATA. The other settings files read these through the
 // globals declared here, so each type names the fields its readers use; a field nobody reads is left out.
 type SettingsPerson = import('../types/api').Person & {hidden?: boolean; owner?: boolean; role?: string};
-type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: boolean};
+type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: CloudMachineRow | null; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness & DetailReadiness & DeviceReadiness};
 // A catalog row (backend/providers.py MODEL_CATALOG): every row has an id, a provider and a label.
-type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean};
+type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
+  efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
-type SettingsHistory = {changes: Record<string, unknown>[]; transitions: Record<string, unknown>[]; transitions_truncated?: boolean; next_before?: string | null};
+type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
-type HarnessCaps = {api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string};
-type HarnessRow = {id: string; name?: string; external?: boolean; capabilities?: HarnessCaps};
+type HarnessCaps = {account?: string; api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string; weekly_usage?: string};
+// GET /v2/operations `agents`: an external agent (a Hermes or OpenClaw profile) and what it last reported (settings-devices.ts).
+type SettingsAgentRow = {bot: string; display_name?: string; harness?: string; profile?: string; version?: string; platform?: string; model?: string; provider?: string; online?: boolean; revoked_at?: string | null; last_seen_at?: string | null};
+type HarnessRow = {id: string; name?: string; label?: string; runtime?: string; external?: boolean; capabilities?: HarnessCaps};
+// What a bot's computer cannot run, per bot and harness (backend/readiness.py `can_run`, /v2/operations `runnable`).
+type SettingsRunAnswer = {can_run?: boolean; problem?: string; short?: string; computer?: {id?: string} | null;
+  sign_in?: {runner_id?: string; computer?: string} | null; move?: {id: string; label: string} | null};
+type SettingsRunnable = Record<string, Record<string, SettingsRunAnswer> | undefined>;
+// GET /v2/models `gateway` (backend/gateway_tiers.py): the Tico AI Gateway's levels and its tiers by id (tico-{level}[-fast]).
+type SettingsTierVersion = {version: string; model: string; context?: number | null; price: {input: number; output: number}};
+type SettingsTier = {name: string; level: string; fast: boolean; current: string; versions: SettingsTierVersion[]};
+type SettingsGatewayTiers = {tiers: Record<string, SettingsTier>; levels: {id: string; name: string}[]};
+// GET /v2/usage/limits: each bot's use limit and the company's default (ui/app/usage.ts draws them).
+type SettingsLimits = {bots?: Record<string, UseLimit>; default?: UseDefault};
 // GET /v2/operations: the computers, services and issues that the Computers and Health views draw.
-type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: unknown; agents?: unknown; scheduler_enabled?: boolean};
+type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; scheduler_enabled?: boolean};
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
-type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: unknown; enabled_providers?: string[]; default?: {model?: string}};
-type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: unknown; agents?: unknown; harnesses?: HarnessRow[]; gateway?: unknown; enabledProviders?: string[]; defaultModel?: string; limits?: unknown};
+type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
+type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
 type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
 type SettingsAssistantDecision = {id: string; decision: string; what: string; decided_at: string; decided_for?: {words?: string} | null; consumed_at?: string | null; can_undo?: boolean};
@@ -110,7 +123,7 @@ let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 // Health has no tab: General's Health line opens it (Details), and its address still works.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'security', 'history',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'directory', 'security', 'history',
   'health', 'billing'];
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
@@ -267,6 +280,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
+      <button type="button" data-settings-tab="directory" role="tab">Directory</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="security" role="tab">Security</button>' : ''}
       <button type="button" data-settings-tab="history" role="tab">History</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
@@ -323,6 +337,7 @@ function pageSettings() {
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-security" role="tabpanel" hidden>
       <section class="card" id="set-screening-card"><header><h2>Screening</h2></header><div id="set-screening">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>` : ''}
+    <div class="settings-pane" id="settings-directory" role="tabpanel" hidden><div id="set-directory"></div></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
       <div id="settings-types"></div>
@@ -477,6 +492,8 @@ function settingsShow(tab: string) {
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
+  const directoryPane = document.getElementById('settings-directory'), directoryBody = document.getElementById('set-directory');
+  if (directoryPane && directoryBody) { directoryPane.hidden = SETTINGS_TAB !== 'directory'; if (SETTINGS_TAB === 'directory') void directorySettingsShow(directoryBody); }
   const securityPane = $('#settings-security');
   if (securityPane) { securityPane.hidden = SETTINGS_TAB !== 'security'; if (SETTINGS_TAB === 'security') void renderScreeningCard(); }
   // Once route() has put a newly opened page at its top, which would undo a scroll to a card already drawn.

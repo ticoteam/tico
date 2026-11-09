@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Runs the browser scripts in ui/tests/*.cjs a few at a time (npm run test:ui).
+// Runs the browser scripts in ui/tests/*.cjs and *.cts (TypeScript, run by Node's type stripping) a few at a time (npm run test:ui).
 // Each script's output is held and printed together, so a failure reads as one block.
 // Usage: node scripts/ui-tests.cjs [-j N] [--all] [--group NAME] [--list] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
 // --list prints the scripts the same arguments would run, one name per line, and runs nothing (CI splits them
@@ -38,6 +38,14 @@ function resources(env, cores, idleFraction) {
   if (!Number.isFinite(slowdown) || slowdown <= 0) throw new Error('TICO_UI_SLOWDOWN must be a positive finite number');
   if (!Number.isFinite(timeout) || timeout <= 0) throw new Error('TICO_UI_SCRIPT_TIMEOUT must be a positive number of seconds');
   return {jobs, slowdown, timeout};
+}
+
+// Node runs a .cts script (TypeScript, stripped of its types) from 22.18 on. Returns the one message to print when a
+// selected .cts script cannot run on this Node, else null.
+function typeScriptGuard(files, version = process.versions.node) {
+  const [major, minor] = version.split('.').map(Number);
+  const stripsTypes = major > 22 || (major === 22 && minor >= 18);
+  return files.some(file => file.endsWith('.cts')) && !stripsTypes ? 'ui/tests .cts needs node >= 22.18' : null;
 }
 
 // Lists every process as {pid, ppid, start, command}; a stopped script's tree is found from it by parent, never by
@@ -221,14 +229,18 @@ function stoppedReport({pending, calls, stopped}) {
 // Named groups of scripts: a group is every ui/tests script whose name starts with its prefix.
 const GROUPS = {e2e: 'e2e-'};
 
+// A script is ui/tests/<name>.cjs or <name>.cts; its name is the stem. A .d.cts is a declaration file, not a script.
+const SCRIPT_FILE = /\.(cjs|cts)$/;
+const stemOf = file => file.replace(/\.(cjs|cts)$/, '');
+
 // Frame and time budgets need spare CPU throughout the measurement, after the other browsers have finished.
-const ALONE = ['dot-perf.cjs', 'strategy-budget.cjs'];
+const ALONE = ['dot-perf', 'strategy-budget'];
 async function runScripts(files, jobs, run) {
-  const queue = files.filter(file => !ALONE.includes(file));
+  const queue = files.filter(file => !ALONE.includes(stemOf(file)));
   await Promise.all(Array.from({length: Math.min(jobs, queue.length)}, async () => {
     while (queue.length) await run(queue.shift());
   }));
-  for (const file of files.filter(file => ALONE.includes(file))) await run(file);
+  for (const file of files.filter(file => ALONE.includes(stemOf(file)))) await run(file);
 }
 
 async function main() {
@@ -253,17 +265,21 @@ async function main() {
       if (!Object.hasOwn(GROUPS, group)) throw new Error(`--group must be one of: ${Object.keys(GROUPS).join(', ')}`);
       groups.push(group);
     }
-    else wanted.push(path.basename(args[i]).replace(/\.cjs$/, ''));
+    else wanted.push(stemOf(path.basename(args[i])));
   }
-  const allFiles = fs.readdirSync(dir).filter(f => f.endsWith('.cjs')).sort();
-  const grouped = groups.flatMap(group => allFiles.filter(f => f.startsWith(GROUPS[group])).map(f => f.replace(/\.cjs$/, '')));
+  const allFiles = fs.readdirSync(dir).filter(f => SCRIPT_FILE.test(f) && !f.endsWith('.d.cts')).sort();
+  const twins = allFiles.map(stemOf).filter((s, i, all) => all.indexOf(s) !== i);
+  if (twins.length) throw new Error(`a script is both .cjs and .cts: ${twins.join(', ')}`);
+  const grouped = groups.flatMap(group => allFiles.filter(f => f.startsWith(GROUPS[group])).map(stemOf));
   const named = [...wanted, ...grouped];
   // A tour that takes its own screenshots runs by name, on its own time: --all would stop it at the script timeout.
   const WALKTHROUGHS = ['threads-walkthrough'];
   const chosen = named.length ? named : all ? null : CORE;
-  const files = allFiles.filter(f => chosen ? chosen.includes(f.replace(/\.cjs$/, '')) : !WALKTHROUGHS.includes(f.replace(/\.cjs$/, '')));
+  const files = allFiles.filter(f => chosen ? chosen.includes(stemOf(f)) : !WALKTHROUGHS.includes(stemOf(f)));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
-  if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
+  if (list) { console.log(files.map(stemOf).join('\n')); return; }
+  const needs = typeScriptGuard(files);
+  if (needs) { console.error(needs); process.exit(1); }
   // The page runs the UI's TypeScript files as their compiled JavaScript: compile them once, before any script reads it.
   execFileSync(process.execPath, [path.join(__dirname, 'build-ui.cjs')], {stdio: 'inherit'});
   const {cores, idleFraction} = await sampleCpu();
@@ -277,11 +293,11 @@ async function main() {
   const env = {TICO_BROWSER: 'chromium', ...process.env, TICO_UI_SLOWDOWN: String(selected.slowdown)};
   const run = async file => {
     // A walkthrough is a long tour of screens, and takes its screenshots as it goes: it gets five times the script budget.
-    const timeout = WALKTHROUGHS.includes(file.replace(/\.cjs$/, '')) ? selected.timeout * 5 : selected.timeout;
+    const timeout = WALKTHROUGHS.includes(stemOf(file)) ? selected.timeout * 5 : selected.timeout;
     const result = await runScript(path.join(dir, file), {env, timeout});
     const {code, out, timedOut, secs} = result;
     if (code === 0 && !timedOut) {
-      timings[file.replace(/\.cjs$/, '')] = secs;
+      timings[stemOf(file)] = secs;
       console.log(`ok    ${file} (${secs.toFixed(1)}s)`);
     }
     else {
@@ -300,7 +316,7 @@ async function main() {
   process.exit(failed.length ? 1 : 0);
 }
 
-module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact};
+module.exports = {resources, runScript, runScripts, sampleCpu, inSlot, stopTree, stoppedReport, redact, typeScriptGuard};
 // A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh), before it samples
 // the CPU; hosted CI, a run already in a slot, or a computer without bash goes straight on.
 function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HELD) || process.platform === 'win32'; }

@@ -48,14 +48,16 @@ Loop until nothing is left that you can move:
    then the order in its project's plan, then oldest. Label it `in-progress`.
 2. **Build** in its own worktree and branch `<who>/<topic>` (one ticket per PR) from the target repo's
    `origin/main` (`git worktree add`), so two tickets never share a checkout. For a bot repo,
-   work in a fresh clone or worktree, never in the live bot checkout the runner uses.
+   work in a fresh clone or worktree, never in the live bot checkout the runner uses. In `ticoteam/tico`, run
+   `git config core.hooksPath .githooks` once in the clone (every worktree shares it): each push then runs
+   `scripts/check.sh` and the branch conflict check first. Other repos keep their own hook settings.
 3. **Test** locally, and only what you changed. Write unit tests while you build and run them as you
    go, as many as the change needs. Keep each test that guards a real failure (a privacy or permission
    boundary, data safety, a core task/run flow, a regression); drop tests of wording, docs or trivial
    plumbing. Before merging, run
    the test files for what you touched, plus the checks the change obviously affects (catalog, docs
    counts, tool parity). Do not run the full suite for a merge: each release gets one full run on its frozen candidate
-   (docs/releasing.md). GitHub Actions builds and publishes: the release windows dispatch Release validation, one exact-SHA full release gate, for main's head (docs/releasing.md#release-windows). Separately, the PR checks workflow lints every pull request to main that is not a draft, and the merge queue runs the tests a change reaches (the default Python suite and core browser scripts when it cannot tell) before the change lands. Compare a local
+   (docs/releasing.md). GitHub Actions builds and publishes: the release train dispatches Release validation, one exact-SHA full release gate, for main's head (docs/releasing.md#the-release-train). Separately, the PR checks workflow lints every pull request to main that is not a draft, and the merge queue runs the tests a change reaches (the default Python suite and core browser scripts when it cannot tell) before the change lands. Compare a local
    failure against main before calling it yours.
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.
@@ -66,7 +68,7 @@ Loop until nothing is left that you can move:
    read why before you push again. Never `--admin` or the REST merge endpoint: both skip the queue.
    Green here means the `checks` of the run after the PR was marked ready show passing, not skipped: a draft's run
    skips every job and proves nothing. Outside contributors open the pull request and stop there. Merged changes ship in
-   the next release window; a red candidate caused by your merge is your top priority.
+   the next release (the train runs at any hour); a red candidate caused by your merge is your top priority.
 6. **Record**: one comment on the ticket (PR, what changed, what you decided); close it if the PR
    did not. Tick it in its project; add any decision to the project's **Decisions** with the date.
    Close the project when its plan is all ticked.

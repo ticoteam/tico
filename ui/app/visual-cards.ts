@@ -11,12 +11,29 @@ const VISUAL_INLINE_MAX = 4;
 // (card) opens it full screen; a kind without one gets no Expand item. VISUAL_SPACE[kind](file) -> CSS for the body
 // before it loads, when width/height do not say. VISUAL_MOVED[kind](card) runs on a kept card just before a redraw
 // puts it back without moveBefore (visualSwap): taken out of the page, it loads again once back.
-const VISUAL_BODY = {}, VISUAL_WIRE = {}, VISUAL_EXPAND = {}, VISUAL_SPACE = {}, VISUAL_MOVED = {};
+// The attachment fields the cards read (refs.attachments, backend/visuals.py); a caller's own file type may hold more.
+interface VisualFile {
+  file_id?: string | number | null | undefined; version?: number | string | null | undefined;
+  current_version?: number | string | null | undefined; kind?: string | null | undefined;
+  name?: string | null | undefined; title?: string | null | undefined; label?: string | null | undefined;
+  src?: string | null | undefined; preview_url?: string | null | undefined; poster_url?: string | null | undefined;
+  open?: boolean | null | undefined; removed?: boolean | null | undefined; content_type?: string | null | undefined;
+  width?: number | string | null | undefined; height?: number | string | null | undefined;
+}
+// The address fields visualSrc reads, each a signed /visuals/<token> address when the server sent one.
+type VisualSrcField = 'src' | 'preview_url' | 'poster_url';
+type VisualAddress = {[K in VisualSrcField]?: string | null | undefined};
+type VisualCardState = 'ready' | 'open' | 'removed';
+// Keyed by kind ('image', 'svg', 'page', 'video', 'audio'): a kind with no renderer is a chip.
+type VisualByKind<F> = Record<string, F>;
+const VISUAL_BODY: VisualByKind<(f: VisualFile) => string> = {}, VISUAL_WIRE: VisualByKind<(card: HTMLElement) => void> = {},
+  VISUAL_EXPAND: VisualByKind<(card: HTMLElement) => void> = {}, VISUAL_SPACE: VisualByKind<(f: VisualFile) => string> = {},
+  VISUAL_MOVED: VisualByKind<(card: HTMLElement) => void> = {};
 
 // The address a card shows from: 1/4's signed, sign-in-free `src` on /visuals/<token> (backend/visuals.py). Never
 // the signed-in /api/v2/files address and never a blob: URL. No `src` (a file this reader can no longer open, or a
 // page or SVG without a visual address, an Open card): no picture.
-function visualSrc(f, field = 'src') {
+function visualSrc(f: VisualAddress | null | undefined, field: VisualSrcField = 'src'): string | null {
   const raw = f && typeof f[field] === 'string' ? f[field] : '';
   if (!raw) return null;
   let url; try { url = new URL(raw, location.href); } catch { return null; }
@@ -34,22 +51,24 @@ function visualSrc(f, field = 'src') {
 // from the signed-in config (NATIVE_VISUAL_FILES, app/src/visual_origin.rs); until then, and in a shell too old to
 // know it, the page is an Open card rather than a frame whose redirect would open the browser. Pictures and SVG are
 // <img>, never a navigation, so they need nothing.
-function visualFrameOk(kind, src) {
+function visualFrameOk(kind: string | null | undefined, src: string): boolean {
   if (kind !== 'page' || !(window.ticoNative || /TicoHub/.test(navigator.userAgent))) return true;
   let url; try { url = new URL(src, location.href); } catch { return false; }
   return url.origin !== location.origin || !!NATIVE_VISUAL_FILES;
 }
 // The approved address a page's frame shows from, or null for an Open card (pages, ui/app/pages.ts).
-const visualPageSrc = src => { const ok = visualSrc({src}); return ok && visualFrameOk('page', ok) ? ok : null; };
+const visualPageSrc = (src: string) => { const ok = visualSrc({src}); return ok && visualFrameOk('page', ok) ? ok : null; };
 // An ACK can arrive after a live snapshot painted chips. Every place that draws visuals draws again from the data it
 // already holds: no new read, draft reset or whole-page refresh.
+// A page's Open card keeps the page it was drawn from (pageCard, ui/app/pages.ts).
+interface VisualPageCard extends HTMLElement { pageData?: import('../types/api').Page; pageSize?: string }
 function nativeVisualRepaint() {
   if (typeof V2C !== 'undefined' && V2C) v2ChatRender(V2C);
   if (typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.data && taskChatCurrent(TASK_CHAT))
     taskCommentsRender(TASK_CHAT, TASK_CHAT.data);
   if (typeof THV_VIEWS !== 'undefined') for (const v of THV_VIEWS) if (!v.gone && v.state === 'ready') thvDraw(v);
   // Pinned pages and the full page view: an Open card drawn before the ACK becomes its frame (pageCard keeps its page).
-  for (const el of document.querySelectorAll('.pg-card:not(.pg-framed)'))
+  for (const el of document.querySelectorAll<VisualPageCard>('.pg-card:not(.pg-framed)'))
     if (el.pageData && typeof pageCard === 'function' && pageSrc(el.pageData)) el.replaceWith(pageCard(el.pageData, {size: el.pageSize}));
   if (typeof PG !== 'undefined' && PG?.page && PG.shown === PG.page.version && pageSrc(PG.page) && !document.querySelector('#pg-view .pg-body iframe'))
     void pageFullBody(PG);
@@ -57,43 +76,44 @@ function nativeVisualRepaint() {
   // neither while an answer from it is on its way, so its controls stay off.
   if (typeof DEC !== 'undefined' && DEC && !DEC.busy) decidePaintBody(DEC);
   if (typeof qcardRedraw === 'function')
-    for (const box of document.querySelectorAll('[data-qcard]:not([aria-busy="true"])'))
+    for (const box of document.querySelectorAll<HTMLElement>('[data-qcard]:not([aria-busy="true"])'))
       if (qcardShown(box)) { qcardDraft(box); qcardRedraw(box); }
 }
-const visualRef = f => `${f.file_id}@${Number(f.version)}`;
+const visualRef = (f: VisualFile) => `${f.file_id}@${Number(f.version)}`;
 // Without a separate visual address (Visuals always on, backend/visuals.py mode) a page or SVG is never served from
 // the app's own address: the server sends `open` and no `src`, and it is a card with its title, its still preview
 // when it has one, and Open, which shows it in the file viewer. One held in Tico file hosting gets a `src` on the app's
 // own route instead, which sends the browser on to the company's ticofiles.com address (backend/tico_storage.py).
-const VISUAL_OPEN_KINDS = new Set(['page', 'svg']);
+const VISUAL_OPEN_KINDS = new Set<string | null | undefined>(['page', 'svg']);
 // A card, or null for a chip.
-function visualState(f) {
-  if (!f || typeof f !== 'object' || !f.file_id || !Number.isInteger(Number(f.version)) || !VISUAL_BODY[f.kind]) return null;
+function visualState(f: VisualFile | null | undefined): VisualCardState | null {
+  if (!f || typeof f !== 'object' || !f.file_id || !Number.isInteger(Number(f.version)) || !VISUAL_BODY[String(f.kind)]) return null;
   if (f.removed) return 'removed';
-  if (visualSrc(f)) return visualFrameOk(f.kind, visualSrc(f)) ? 'ready' : 'open';
+  const src = visualSrc(f);
+  if (src) return visualFrameOk(f.kind, src) ? 'ready' : 'open';
   return f.open === true && VISUAL_OPEN_KINDS.has(f.kind) ? 'open' : null;
 }
-function visualOpenBody(f) {
+function visualOpenBody(f: VisualFile): string {
   const preview = visualSrc(f, 'preview_url');
   return `<div class="vcard-open">${preview ? `<img class="vcard-preview" src="${esc(preview)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false">` : ''}
     <button type="button" class="ghost vcard-open-btn" data-vcard-act="open">Open</button></div>`;
 }
-function visualSpace(f) {
+function visualSpace(f: VisualFile): string {
   const w = Number(f.width), h = Number(f.height);
   if (w > 0 && h > 0) return `aspect-ratio:${w}/${h};--vcard-w:${Math.round(w)}px`;
-  return VISUAL_SPACE[f.kind]?.(f) || '';
+  return VISUAL_SPACE[String(f.kind)]?.(f) || '';
 }
-const visualTitle = f => String(f.title || f.name || 'Visual').trim() || 'Visual';
-function visualCardHTML(f, key, state) {
+const visualTitle = (f: VisualFile) => String(f.title || f.name || 'Visual').trim() || 'Visual';
+function visualCardHTML(f: VisualFile, key: string, state: VisualCardState): string {
   const title = visualTitle(f), n = Number(f.version), fid = String(f.file_id);
   const current = Number(f.current_version);
   const newer = state !== 'removed' && current > n
     ? `<button type="button" class="link vcard-newer" data-vcard-act="newer">Newer version</button>` : '';
-  const expand = state === 'ready' && VISUAL_EXPAND[f.kind] ? `<button type="button" role="menuitem" data-vcard-act="expand">Expand</button>` : '';
+  const expand = state === 'ready' && VISUAL_EXPAND[String(f.kind)] ? `<button type="button" role="menuitem" data-vcard-act="expand">Expand</button>` : '';
   const menu = state === 'removed' ? '' : `<details class="vcard-menu"><summary aria-label="More for ${esc(title)}" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></summary>
       <div class="vcard-menu-list" role="menu">${expand}<button type="button" role="menuitem" data-vcard-act="open">Open in file viewer</button><a role="menuitem" href="${API}/v2/files/${encodeURIComponent(fid)}?v=${n}" download="${esc(f.name || title)}">Download</a></div></details>`;
   const body = state === 'removed' ? '<div class="vcard-note">This visual was removed</div>'
-    : state === 'open' ? visualOpenBody(f) : VISUAL_BODY[f.kind](f);
+    : state === 'open' ? visualOpenBody(f) : VISUAL_BODY[String(f.kind)]!(f);   // visualState: a card's kind has a body
   return `<figure class="vcard" data-visual-key="${esc(key)}" data-kind="${esc(f.kind)}" data-state="${state}" data-file="${esc(fid)}" data-version="${n}"${
     current > n ? ` data-current="${current}"` : ''} data-name="${esc(f.name || title)}"${state === 'ready' ? ` data-fresh-src="${esc(visualSrc(f))}"` : ''}${
     state === 'open' && visualSrc(f, 'preview_url') ? ` data-fresh-preview="${esc(visualSrc(f, 'preview_url'))}"` : ''}>
@@ -103,8 +123,8 @@ function visualCardHTML(f, key, state) {
 // The cards for `files` (a message's refs.attachments) and, after them, `chips(rest, shown)` for everything else:
 // `rest` the attachments that are not cards, `shown` the set of "<file id>@<version>" that are. `key` is the
 // message's id: a card is keyed "<message>:<file>@<version>", so a new version is a new card.
-function visualCardsHTML(files, {key = '', chips = () => ''}: {key?: string; chips?: (rest: unknown[], shown?: unknown) => string} = {}) {
-  const cards = [], rest = [], shown = new Set(), keys = new Set();
+function visualCardsHTML<T extends VisualFile>(files: T[] | null | undefined, {key = '', chips = () => ''}: {key?: string; chips?: (rest: T[], shown: Set<string>) => string} = {}): string {
+  const cards: string[] = [], rest: T[] = [], shown = new Set<string>(), keys = new Set<string>();
   for (const f of Array.isArray(files) ? files : []) {
     if (f?.removed && f.label && !f.file_id) {
       cards.push(`<span class="vcard-note">${esc(f.label)}</span>`);
@@ -124,17 +144,17 @@ function visualCardsHTML(files, {key = '', chips = () => ''}: {key?: string; chi
 // so a loaded page or a playing clip is not torn down; it takes the new tree's fresh address (data-fresh-src) for
 // a renderer whose address ran out. visualKept pairs them (old node, its place in the new tree); visualKeep puts
 // each old node in its place.
-function visualKept(oldRoot, newRoot) {
-  const old = new Map(), pairs = [];
-  for (const card of oldRoot.querySelectorAll('figure.vcard[data-visual-key]')) old.set(card.dataset.visualKey, card);
+function visualKept(oldRoot: ParentNode, newRoot: ParentNode): [HTMLElement, HTMLElement][] {
+  const old = new Map<string | undefined, HTMLElement>(), pairs: [HTMLElement, HTMLElement][] = [];
+  for (const card of oldRoot.querySelectorAll<HTMLElement>('figure.vcard[data-visual-key]')) old.set(card.dataset.visualKey, card);
   if (!old.size) return pairs;
-  for (const card of newRoot.querySelectorAll('figure.vcard[data-visual-key]')) {
+  for (const card of newRoot.querySelectorAll<HTMLElement>('figure.vcard[data-visual-key]')) {
     const was = old.get(card.dataset.visualKey);
     if (!was || was.dataset.state !== card.dataset.state || was.dataset.current !== card.dataset.current) continue;
     old.delete(card.dataset.visualKey);
     if (card.dataset.freshSrc) was.dataset.freshSrc = card.dataset.freshSrc;
     // An Open card's still preview is a plain picture: a renewed address replaces the one that may have run out.
-    const still = was.querySelector('img.vcard-preview');
+    const still = was.querySelector<HTMLImageElement>('img.vcard-preview');
     if (still && card.dataset.freshPreview && still.getAttribute('src') !== card.dataset.freshPreview) {
       still.hidden = false; still.src = card.dataset.freshPreview;
     }
@@ -142,7 +162,7 @@ function visualKept(oldRoot, newRoot) {
   }
   return pairs;
 }
-function visualKeep(oldRoot, newRoot) {
+function visualKeep(oldRoot: ParentNode, newRoot: ParentNode) {
   for (const [was, card] of visualKept(oldRoot, newRoot)) card.replaceWith(was);
 }
 // root.innerHTML = html, keeping the cards both trees share. The new tree is brought into this document first: a
@@ -150,66 +170,68 @@ function visualKeep(oldRoot, newRoot) {
 // a node without taking it out (moveBefore), the new tree goes in and each kept card moves into it, so a page's
 // frame is not loaded again either. Elsewhere the kept card is taken out and put back in the same task: a clip
 // plays on, a page's frame loads again (VISUAL_MOVED).
-function visualSwap(root, html) {
+function visualSwap(root: Element, html: string) {
   if (!root.querySelector('figure.vcard')) { root.innerHTML = html; return; }
   const t = document.createElement('template');
   t.innerHTML = html;
   const fresh = document.importNode(t.content, true);
   if (!root.moveBefore) {
-    for (const [was, card] of visualKept(root, fresh)) { card.replaceWith(was); VISUAL_MOVED[was.dataset.kind]?.(was); }
+    for (const [was, card] of visualKept(root, fresh)) { card.replaceWith(was); VISUAL_MOVED[String(was.dataset.kind)]?.(was); }
     root.replaceChildren(fresh);
     return;
   }
   const pairs = visualKept(root, fresh), old = [...root.childNodes];
   root.append(fresh);
-  for (const [was, card] of pairs) { card.parentNode.moveBefore(was, card); card.remove(); }
-  const kept = new Set(pairs.map(([was]) => was));
+  for (const [was, card] of pairs) { card.parentNode!.moveBefore(was, card); card.remove(); }   // a card in the new tree has a parent
+  const kept = new Set<Node>(pairs.map(([was]) => was));
   for (const node of old) if (!kept.has(node)) node.remove();
 }
-function visualWire(root = document) {
-  for (const card of root.querySelectorAll('figure.vcard:not([data-wired])')) {
+function visualWire(root: ParentNode = document) {
+  for (const card of root.querySelectorAll<HTMLElement>('figure.vcard:not([data-wired])')) {
     card.dataset.wired = '1';
-    if (card.dataset.state === 'ready') VISUAL_WIRE[card.dataset.kind]?.(card);
+    if (card.dataset.state === 'ready') VISUAL_WIRE[String(card.dataset.kind)]?.(card);
   }
 }
 new MutationObserver(() => { if (document.querySelector('figure.vcard:not([data-wired])')) visualWire(); })
   .observe(document.documentElement, {childList: true, subtree: true});
 // A renderer that could not show its visual: the card says so and offers the file viewer (and Download, which the
 // menu has too). `message` replaces the default words, e.g. "This device can't play MOV video".
-function visualFail(card, message = "Couldn't show this visual") {
+function visualFail(card: HTMLElement | null | undefined, message = "Couldn't show this visual") {
   if (!card) return;
   card.dataset.state = 'failed';
   const body = card.querySelector('.vcard-body');
+  if (!body) return;
   body.removeAttribute('style');
   body.innerHTML = `<div class="vcard-note">${esc(message)} <button type="button" class="link" data-vcard-act="open">Open in file viewer</button></div>`;
   card.querySelector('[data-vcard-act="expand"]')?.remove();
 }
 // Open in file viewer: inside a task, its own file panel at that version; anywhere else the file viewer.
-function visualOpen(card, version = Number(card.dataset.version)) {
-  const d = card.closest('dialog');
+function visualOpen(card: HTMLElement, version = Number(card.dataset.version)) {
+  const d = card.closest<TfDialog>('dialog');
   if (d?.tfEl && tfOpen(d, card.dataset.file, version, {scroll: true})) return;
-  VIEW = {items: [{fileId: card.dataset.file, version, name: card.dataset.name, kind: viewKindOf(card.dataset.name)}], index: 0};
+  VIEW = {items: [{fileId: card.dataset.file, version, name: card.dataset.name ?? '', kind: viewKindOf(card.dataset.name)}], index: 0};
   void viewerShow();
 }
 document.addEventListener('click', ev => {
-  const act = ev.target.closest('[data-vcard-act]');
-  const card = act?.closest('figure.vcard');
-  if (!card) return;
+  const act = eventElement(ev)?.closest<HTMLElement>('[data-vcard-act]');
+  const card = act?.closest<HTMLElement>('figure.vcard');
+  if (!act || !card) return;
   ev.preventDefault();
   act.closest('details')?.removeAttribute('open');
   const what = act.dataset.vcardAct;
-  if (what === 'expand') VISUAL_EXPAND[card.dataset.kind]?.(card);
+  if (what === 'expand') VISUAL_EXPAND[String(card.dataset.kind)]?.(card);
   else if (what === 'newer') visualOpen(card, Number(card.dataset.current));
   else if (what === 'open') visualOpen(card);
 });
 // A thumbnail's menu is wider than the thumbnail (Dev 338): one that would open past the screen's left edge opens to
 // the right. The menu is opened here, then sided, before the next frame, so it never shows on the wrong side.
 document.addEventListener('click', ev => {
-  const menu = ev.target.closest?.('details.vcard-menu > summary')?.parentElement;
-  if (!menu || menu.open) return;
+  const menu = eventElement(ev)?.closest('details.vcard-menu > summary')?.parentElement;
+  if (!(menu instanceof HTMLDetailsElement) || menu.open) return;
   ev.preventDefault();
   menu.open = true;
   const list = menu.querySelector('.vcard-menu-list');
+  if (!list) return;
   list.classList.remove('toward-right');
   if (list.getBoundingClientRect().left < 4) list.classList.add('toward-right');
 });
@@ -220,5 +242,6 @@ document.addEventListener('error', ev => {
 }, true);
 // One menu open at a time; a click elsewhere closes it.
 document.addEventListener('click', ev => {
-  for (const m of document.querySelectorAll('details.vcard-menu[open]')) if (!m.contains(ev.target)) m.removeAttribute('open');
+  const target = ev.target instanceof Node ? ev.target : null;
+  for (const m of document.querySelectorAll('details.vcard-menu[open]')) if (!m.contains(target)) m.removeAttribute('open');
 });

@@ -52,9 +52,16 @@ KEY = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
 LIMIT = 50  # the most rows a list returns (spec §9.1 item 9)
 COUNT_CAP = 1000  # counts stop here and say they are approximate (spec §9.1 item 7)
 CARD_LINKS = 30  # the links a card shows (spec §6 keeps `get` under about 2k tokens)
+SHARED_PLACES_ACTOR = "places-pack"  # who wrote a place from the shared places tree (places/adapter.py ACTOR)
+WORKS_AT = ("works_at", "member_of")  # the links a person's organization is read from, for a list's Organization column
 # The tables a merge moves an entity's rows from. entity_sources skips a source the kept entity already has.
 MOVES = {
-    "entity_identifiers": "SELECT id FROM entity_identifiers WHERE entity_id = :drop",
+    # What a Finance book row put on the entity stays where its book row points: the book's vendor names (scope_type
+    # finance_book) and the billing emails it keeps current (source_type finance_book, finance/store/contacts.py).
+    "entity_identifiers": (
+        "SELECT id FROM entity_identifiers WHERE entity_id = :drop AND scope_type IS NOT 'finance_book' "
+        "AND source_type IS NOT 'finance_book'"
+    ),
     "entity_notes": "SELECT id FROM entity_notes WHERE entity_id = :drop",
     "entity_mentions": "SELECT id FROM entity_mentions WHERE entity_id = :drop",
     "entity_activities": "SELECT id FROM entity_activities WHERE entity_id = :drop",
@@ -241,8 +248,33 @@ def self_id(c: sqlite3.Connection) -> str | None:
         return row[0]
     if c.execute("SELECT 1 FROM entities WHERE id = ?", (SELF_ID,)).fetchone():
         c.execute("UPDATE entities SET self = 1 WHERE id = ?", (SELF_ID,))
+        _self_flagged(c)
         return SELF_ID
     return None
+
+
+def _self_flagged(c: sqlite3.Connection) -> None:
+    """Self was just made or flagged: Finance's contacts that came before it link to it now (vendor_to / customer_of)."""
+    from backend.finance import directory as finance_directory
+
+    finance_directory.link_self(c)
+
+
+def touches_self(c: sqlite3.Connection, *, link_id: str = "", entity_ids: Sequence[str] = ()) -> bool:
+    """Whether a link (by id) or a pair of ends has our company at one end: changing where we operate is an admin's."""
+    if link_id:
+        row = _one(c, "SELECT from_entity_id, to_entity_id FROM entity_links WHERE id = ?", (link_id,))
+        entity_ids = [row["from_entity_id"], row["to_entity_id"]] if row else []
+    ids = [i for i in entity_ids if i]
+    if not ids:
+        return False
+    marks = ", ".join("?" * len(ids))
+    return _one(c, f"SELECT 1 AS found FROM entities WHERE self = 1 AND id IN ({marks})", ids) is not None
+
+
+def link_key_of(c: sqlite3.Connection, link_id: str) -> str | None:
+    row = _one(c, "SELECT link_key FROM entity_links WHERE id = ?", (link_id,))
+    return row["link_key"] if row else None
 
 
 def _set_kind(c: sqlite3.Connection, entity_id: str, kind: str, source_type: str) -> None:
@@ -275,6 +307,7 @@ def ensure_self(c: sqlite3.Connection, *, company_name: str | None, domain: str 
                 (SELF_ID, name, name.lower(), domain or None, now, now),
             )
         current = SELF_ID
+        _self_flagged(c)
     if domain:
         c.execute(
             "UPDATE entities SET primary_domain = ? WHERE id = ? AND COALESCE(primary_domain, '') = ''",
@@ -931,12 +964,41 @@ def walk(c: sqlite3.Connection, starts: Sequence[str], depth: int = WALK_DEPTH) 
     return reached, False
 
 
+NAME_CONTACT = "name:"  # a contact that is only a name (a letter's addressee), as `contact_entities` reads it
+PHONE_CONTACT = re.compile(r"\+[0-9]{7,15}")  # an E.164 number once its formatting is stripped
+PHONE_SQL = "replace(replace(replace(replace(replace(normalized_value, ' ', ''), '-', ''), '(', ''), ')', ''), '.', '')"
+
+
 def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[str]:
-    """The entities an address points at: a person or organization that has it as an email identifier, and the
-    organization whose primary domain is its domain. Names are never matched: two people can share one."""
+    """The entities a contact points at. An email address: a person or organization that has it as an email identifier,
+    and the organization whose primary domain is its domain. A phone number (+ and digits, formatting ignored): one
+    that has it as a phone identifier. `name:<name>` (a letter's addressee, which has no other identity): every entity
+    with that name, so a name two entities share reaches both and a rule on either holds the send. Otherwise names are
+    never matched."""
     ids: list[str] = []
     for address in addresses:
         text = address.strip().lower()
+        if text.startswith(NAME_CONTACT):
+            name = text[len(NAME_CONTACT) :].strip()
+            if name:
+                ids += [
+                    str(r["entity_id"])
+                    for r in _rows(
+                        c,
+                        "SELECT entity_id FROM entity_identifiers WHERE kind = 'name' AND normalized_value = ?",
+                        (name,),
+                    )
+                ]
+            continue
+        phone = _normal_identifier("phone", text)
+        if "@" not in text and PHONE_CONTACT.fullmatch(phone):
+            ids += [
+                str(r["entity_id"])
+                for r in _rows(
+                    c, f"SELECT entity_id FROM entity_identifiers WHERE kind = 'phone' AND {PHONE_SQL} = ?", (phone,)
+                )
+            ]
+            continue
         if not text:
             continue
         ids += [
@@ -1008,6 +1070,25 @@ def visible_ids(c: sqlite3.Connection, who: str | V.Reader, ids: Iterable[str]) 
     """The ids of the entities a reader may see (the read rule, visible.clause)."""
     r = V.reader(c, who) if isinstance(who, str) else who
     return {str(row["id"]) for row in _visible_rows(c, r, list(ids))}
+
+
+def remove_source(c: sqlite3.Connection, actor: str, entity_id: str, source_type: str, source_id: str) -> bool:
+    """Forgets one source an entity is known from. True when a row was removed. The last source is refused: an entity
+    with no sources shows to everyone, so removing it would publish what the source hid. Ending the last one is the
+    deletion path's job, not this."""
+    _writer(c, actor)
+    _live(c, actor, entity_id)
+    row = _one(
+        c,
+        "SELECT id FROM entity_sources WHERE entity_id = ? AND source_type = ? AND source_id = ?",
+        (entity_id, source_type, source_id),
+    )
+    if row is None:
+        return False
+    if _count(c, "SELECT count(*) FROM entity_sources WHERE entity_id = ?", (entity_id,)) <= 1:
+        _refuse(c, actor, "last_source", "that is the only source this entity is known from; it would show to everyone")
+    c.execute("DELETE FROM entity_sources WHERE id = ?", (row["id"],))
+    return True
 
 
 def merge(c: sqlite3.Connection, actor: str, keep_id: str, drop_id: str) -> str:
@@ -1143,6 +1224,7 @@ ERASE_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("entity_identifiers", "DELETE FROM entity_identifiers WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_notes", "DELETE FROM entity_notes WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_mentions", "DELETE FROM entity_mentions WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
+    ("entity_lookups", "DELETE FROM entity_lookups WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_activities", "DELETE FROM entity_activities WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_connections", "DELETE FROM entity_connections WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
     ("entity_external_refs", "DELETE FROM entity_external_refs WHERE entity_id IN (SELECT value FROM json_each(:ids))"),
@@ -1338,6 +1420,20 @@ def erase_rows(c: sqlite3.Connection, actor: str, entity_id: str, reason: str) -
     if root["self"]:
         _refuse(c, actor, "kind", "self cannot be erased")
     ids = _erased_ids(c, entity_id)
+    from backend.finance import directory as finance_directory
+
+    kept = finance_directory.kept_for_books(c, ids, (table for table, _ in ERASE_STATEMENTS))
+    if kept:
+        # A ledger's counterparty (a contact, a bill's vendor, a project's customer) is kept for the accounting:
+        # erasing it would break the books.
+        from backend.store import Problem
+
+        name = str(root["name"] or "").strip() or "This entity"
+        raise Problem(
+            "kept_for_books",
+            f"Kept for the books: {name} has Finance records ({', '.join(kept)}). Erase them in Finance first.",
+            409,
+        )
     ids_json = json.dumps(ids)
     link_ids = [
         row[0]
@@ -1544,9 +1640,12 @@ def find(
     link: str | None = None,
     after: str | None = None,
     limit: int = LIMIT,
+    detail: bool = False,
 ) -> dict[str, Any]:
-    """A page of one type's visible entities, by name (a prefix), status, or a self link key (customer_of). Keyset
-    paged on (name_key, id): `after` is the `next` the last page gave. The count stops at COUNT_CAP and says so."""
+    """A page of one type's visible entities, by name (a prefix), status, or a self link key (customer_of; a person also
+    matches by the organization they work at). Keyset
+    paged on (name_key, id): `after` is the `next` the last page gave. The count stops at COUNT_CAP and says so.
+    `detail` adds what the Directory page's list shows: each row's organization, owner and the sources it is known from."""
     r = V.reader(c, who)
     limit = _limit(limit)
     cl, cparams = V.clause(r)
@@ -1560,8 +1659,15 @@ def find(
         where.append("e.status = ?")
         args.append(status)
     if link:
-        where.append("(' ' || e.self_link_keys || ' ') LIKE ?")
-        args.append(f"% {link} %")
+        # A person matches through the organization they work at, too: Jane at a customer is one of our customers' people.
+        ocl, oparams = V.clause(r, "o")
+        where.append(
+            "((' ' || e.self_link_keys || ' ') LIKE ? OR (e.type = 'person' AND EXISTS (SELECT 1 FROM entity_links l "
+            "JOIN entities o ON o.id = l.to_entity_id WHERE l.from_entity_id = e.id "
+            "AND l.link_key IN (SELECT value FROM json_each(?)) AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) "
+            f"AND o.status <> 'merged' AND (' ' || o.self_link_keys || ' ') LIKE ? AND {ocl})))"
+        )
+        args += [f"% {link} %", json.dumps(list(WORKS_AT)), _today(), f"% {link} %", *oparams]
     if after:
         name_key, row_id = _decode(after)
         where.append("(e.name_key, e.id) > (?, ?)")
@@ -1575,8 +1681,11 @@ def find(
     total = _count(
         c, f"SELECT count(*) FROM (SELECT 1 FROM entities e WHERE {condition} LIMIT ?)", [*args, COUNT_CAP + 1]
     )
+    shown = [brief(row) for row in rows]
+    if detail:
+        _list_detail(c, r, rows, shown)
     return {
-        "rows": [brief(row) for row in rows],
+        "rows": shown,
         "next": _encode([rows[-1]["name_key"], rows[-1]["id"]]) if more and rows else None,
         "count": min(total, COUNT_CAP),
         "approximate": total > COUNT_CAP,
@@ -1597,6 +1706,76 @@ def brief(row: Row) -> Row:
         "last_activity_at": row["last_activity_at"],
         "mentions_count": row["mentions_count"],
     }
+
+
+def _owner(row: Row) -> str | None:
+    return f"{row['owner_type']}:{row['owner_id']}" if row.get("owner_id") else None
+
+
+def _sources_seen(c: sqlite3.Connection, r: V.Reader, ids: Sequence[str]) -> dict[str, list[str]]:
+    """Each entity's source types the reader can see (company-wide ones, and the restricted ones the reader is granted),
+    so a list never says an entity is known from a book or an inbox the reader cannot read."""
+    out: dict[str, list[str]] = {}
+    if not ids:
+        return out
+    for row in _rows(
+        c,
+        "SELECT entity_id, source_type, source_id, visibility FROM entity_sources "
+        "WHERE entity_id IN (SELECT value FROM json_each(?)) ORDER BY entity_id, created_at, id",
+        (json.dumps(list(ids)),),
+    ):
+        source_type = str(row["source_type"])
+        if row["visibility"] != "company" and not r.system:
+            granted = r.grants.get(source_type, ())
+            if granted is not None and str(row["source_id"]) not in granted:
+                continue
+        kinds = out.setdefault(str(row["entity_id"]), [])
+        if source_type not in kinds:
+            kinds.append(source_type)
+    return out
+
+
+def _list_detail(c: sqlite3.Connection, r: V.Reader, rows: Sequence[Row], shown: list[Row]) -> None:
+    """The list columns beyond brief(): a person's organization (a current works_at or member_of to an organization the
+    reader sees), the owner, and the source types the reader may see. One query each for the page."""
+    ids = [str(row["id"]) for row in rows]
+    cl, cparams = V.clause(r, "o")
+    orgs: dict[str, Row] = {}
+    if ids:
+        for link in _rows(
+            c,
+            "SELECT l.from_entity_id AS entity_id, o.id, o.name, o.self_link_keys FROM entity_links l "
+            "JOIN entities o ON o.id = l.to_entity_id "
+            "WHERE l.from_entity_id IN (SELECT value FROM json_each(?)) AND l.link_key IN (SELECT value FROM json_each(?)) "
+            f"AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) AND o.status <> 'merged' AND {cl} "
+            "ORDER BY l.valid_from_on DESC, o.name_key, o.id",
+            [json.dumps(ids), json.dumps(list(WORKS_AT)), _today(), *cparams],
+        ):
+            orgs.setdefault(
+                str(link["entity_id"]),
+                {"id": link["id"], "name": link["name"], "links_to_us": (link["self_link_keys"] or "").split()},
+            )
+    sources = _sources_seen(c, r, ids)
+    for row, item in zip(rows, shown, strict=True):
+        item["organization"] = orgs.get(str(row["id"]))
+        item["owner"] = _owner(row)
+        item["sources"] = sources.get(str(row["id"]), [])
+
+
+def type_counts(c: sqlite3.Connection, who: str) -> list[Row]:
+    """How many entities of each type the reader sees, each stopping at COUNT_CAP and saying so: the Directory's tabs and
+    Settings › Directory's types read it."""
+    r = V.reader(c, who)
+    cl, cparams = V.clause(r)
+    out: list[Row] = []
+    for kind in types(c):
+        total = _count(
+            c,
+            f"SELECT count(*) FROM (SELECT 1 FROM entities e WHERE e.type = ? AND e.status <> 'merged' AND {cl} LIMIT ?)",
+            [kind["key"], *cparams, COUNT_CAP + 1],
+        )
+        out.append({"type": kind["key"], "count": min(total, COUNT_CAP), "approximate": total > COUNT_CAP})
+    return out
 
 
 def target(c: sqlite3.Connection, actor: str, ref: object) -> str:
@@ -1679,7 +1858,7 @@ def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
     cl, cparams = V.clause(reader, "o")
     places = _rows(
         c,
-        "SELECT o.id, o.name FROM entity_links l JOIN entities o "
+        "SELECT o.id, o.name, l.id AS link_id FROM entity_links l JOIN entities o "
         "ON o.id = CASE WHEN l.from_entity_id = ? THEN l.to_entity_id ELSE l.from_entity_id END "
         "WHERE (l.from_entity_id = ? OR l.to_entity_id = ?) AND l.link_key = 'operates_in' "
         f"AND (l.valid_until_on IS NULL OR l.valid_until_on > ?) AND o.status <> 'merged' AND {cl} "
@@ -1763,7 +1942,10 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         )
         if V.note_visible(r, row)
     ][:20]
-    return {
+    # The list's columns (organization, owner, sources), read the same way, so the page and its row agree.
+    detail: dict[str, Any] = {}
+    _list_detail(c, r, [ent], [detail])
+    body: dict[str, Any] = {
         "id": ent["id"],
         "type": ent["type"],
         "name": ent["name"],
@@ -1771,11 +1953,27 @@ def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | No
         "self": bool(ent["self"]),
         "primary_email": ent["primary_email"],
         "primary_domain": ent["primary_domain"],
+        "summary": ent["summary"],
+        "links_to_us": (ent["self_link_keys"] or "").split(),
+        **detail,
         "values": values,
         "links": links,
         "refs": refs,
         "notes": notes,
     }
+    if ent["type"] == "place":
+        # A place from the shared places tree says so (the page marks it Shared), with its kind and governing body.
+        try:
+            props = json.loads(ent["properties"] or "{}")
+        except ValueError:
+            props = {}
+        props = cast(dict[str, Any], props) if isinstance(props, dict) else {}
+        body["place"] = {
+            "kind": props.get("place_kind") or "",
+            "governing_body": props.get("governing_body") or "",
+            "shared": ent["created_by_id"] == SHARED_PLACES_ACTOR,
+        }
+    return body
 
 
 def history(
@@ -1819,3 +2017,161 @@ def history(
     for row in rows:
         row["value"] = json.loads(row["value"])
     return {"rows": rows, "next": _encode([rows[-1]["active_until"], rows[-1]["id"]]) if more and rows else None}
+
+
+def matching(c: sqlite3.Connection, type_key: str, match: Mapping[str, object]) -> list[str]:
+    """The live entities of one type a match names (an email, a domain, a name or an id), all of them: ingest asks this
+    before it creates, so an existing entity is found without its name or values being written again. It reads every
+    entity, not what a reader may see, so only the system's ingest calls it."""
+    return _match(c, type_key, match)
+
+
+def has_sources(c: sqlite3.Connection, entity_id: str) -> bool:
+    """Whether an entity records any source. One with none shows to everyone, so a restricted source added to it would
+    narrow it. Ingest checks this before it adds one to an entity it did not just create."""
+    return _count(c, "SELECT count(*) FROM entity_sources WHERE entity_id = ?", (entity_id,)) > 0
+
+
+# ----------------------------------------------------------------------------------------- the linker (track 6b, §7.1)
+# What the linker (backend/entities/linker.py) reads and writes. Matches come from entity_identifiers' index, a batch at a
+# time, never from a scan of the entities. A linker write is a system write, as seed_link is: no roster actor, and only
+# the mention rows the linker itself found (method run_trace or exact) are replaced.
+LINKER_METHODS = ("run_trace", "exact")
+IN_CHUNK = 400  # values per json_each lookup, so one statement never carries an unbounded list
+# The linker links only to what a company member may see. Text is read by company members and by narrower audiences, so
+# a company-visible entity is one every reader of the text may be shown. A restricted entity is never linked from text.
+COMPANY_READER = V.Reader(actor="", key="", system=False, sensitive=False, grants={})
+
+
+def record_lookup(c: sqlite3.Connection, attempt_id: str, entity_id: str) -> None:
+    """The entity an attempt read (`hub directory get` or `rules`): the run trace the linker links that attempt's text to.
+    Once per attempt and entity."""
+    c.execute(
+        "INSERT OR IGNORE INTO entity_lookups (id, attempt_id, entity_id, created_at) VALUES (?, ?, ?, ?)",
+        (_id("lkp"), attempt_id, entity_id, H.now()),
+    )
+
+
+def run_lookups(c: sqlite3.Connection, attempt_id: str) -> list[str]:
+    """The entities an attempt read, merges followed, oldest first. Who may see them is the caller's question."""
+    ids = [
+        row["entity_id"]
+        for row in _rows(
+            c,
+            "SELECT entity_id FROM entity_lookups WHERE attempt_id = ? ORDER BY created_at, id",
+            (attempt_id,),
+        )
+    ]
+    return _follow(c, ids)
+
+
+def identifier_entities(c: sqlite3.Connection, pairs: Iterable[tuple[str, str]]) -> dict[tuple[str, str], list[str]]:
+    """The kept entities each (kind, normalized value) names, merges followed. Every entity counts, whoever may see it: a
+    name two entities share is ambiguous to the linker, and it stays ambiguous when one of them is hidden. A scoped
+    identifier (a Finance book's alias, scope_type set) is not company-wide, so it is not matched at all."""
+    by_kind: dict[str, list[str]] = {}
+    for kind, value in dict.fromkeys(pairs):
+        by_kind.setdefault(kind, []).append(value)
+    found: dict[tuple[str, str], list[str]] = {}
+    for kind, values in by_kind.items():
+        for start in range(0, len(values), IN_CHUNK):
+            chunk = values[start : start + IN_CHUNK]
+            for row in _rows(
+                c,
+                "SELECT i.normalized_value, i.entity_id FROM entity_identifiers i "
+                "JOIN entities e ON e.id = i.entity_id "
+                "WHERE i.kind = ? AND i.normalized_value IN (SELECT value FROM json_each(?)) "
+                "AND i.scope_type IS NULL AND e.deleted_at IS NULL",
+                (kind, json.dumps(chunk)),
+            ):
+                found.setdefault((kind, row["normalized_value"]), []).append(row["entity_id"])
+    return {key: _follow(c, ids) for key, ids in found.items()}
+
+
+def company_visible(c: sqlite3.Connection, ids: Iterable[str]) -> set[str]:
+    """The entities among `ids` that a company member sees whatever else they hold (the read rule for a reader with no
+    grants). A merged or deleted entity is not one."""
+    unique = list(dict.fromkeys(ids))
+    if not unique:
+        return set()
+    cl, params = V.clause(COMPANY_READER)
+    rows = _rows(
+        c,
+        "SELECT e.id FROM entities e WHERE e.id IN (SELECT value FROM json_each(?)) "
+        f"AND e.deleted_at IS NULL AND e.status <> 'merged' AND {cl}",
+        [json.dumps(unique), *params],
+    )
+    return {row["id"] for row in rows}
+
+
+def replace_link_mentions(
+    c: sqlite3.Connection,
+    mentionable_type: str,
+    mentionable_id: str,
+    revision: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Replaces the linker's mention rows for one text with `rows` (entity_id, role, quote, occurrence, confidence, method,
+    status). Mentions another method wrote (an inline link, a person's) stay. The mention counts of every entity the old
+    or new rows name are recounted, and a linked mention moves the entity's last activity forward."""
+    before = [
+        row["entity_id"]
+        for row in _rows(
+            c,
+            "SELECT DISTINCT entity_id FROM entity_mentions WHERE mentionable_type = ? AND mentionable_id = ? "
+            "AND method IN ('run_trace', 'exact')",
+            (mentionable_type, mentionable_id),
+        )
+    ]
+    c.execute(
+        "DELETE FROM entity_mentions WHERE mentionable_type = ? AND mentionable_id = ? AND method IN ('run_trace', 'exact')",
+        (mentionable_type, mentionable_id),
+    )
+    now = H.now()
+    for row in rows:
+        c.execute(
+            "INSERT INTO entity_mentions (id, mentionable_type, mentionable_id, mentionable_revision, entity_id, role, "
+            "quote, occurrence, confidence, method, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _id("men"),
+                mentionable_type,
+                mentionable_id,
+                revision,
+                row["entity_id"],
+                row["role"],
+                row["quote"],
+                row["occurrence"],
+                row["confidence"],
+                row["method"],
+                row["status"],
+                now,
+            ),
+        )
+    touched = list(dict.fromkeys([*before, *(row["entity_id"] for row in rows)]))
+    if not touched:
+        return
+    c.execute(
+        "UPDATE entities SET mentions_count = (SELECT COUNT(*) FROM entity_mentions m "
+        "WHERE m.entity_id = entities.id AND m.status = 'linked') WHERE id IN (SELECT value FROM json_each(?))",
+        (json.dumps(touched),),
+    )
+    linked = list(dict.fromkeys(row["entity_id"] for row in rows if row["status"] == "linked"))
+    if linked:
+        c.execute(
+            "UPDATE entities SET last_activity_at = ? WHERE id IN (SELECT value FROM json_each(?)) "
+            "AND (last_activity_at IS NULL OR last_activity_at < ?)",
+            (now, json.dumps(linked), now),
+        )
+
+
+def mentions(c: sqlite3.Connection, who: str, mentionable_type: str, mentionable_id: str) -> list[Row]:
+    """The mentions of one text whose entity shows to the reader (the read rule). A suggested mention is returned too; the
+    caller says it renders as plain text."""
+    r = V.reader(c, who)
+    cl, params = V.clause(r)
+    return _rows(
+        c,
+        "SELECT m.*, e.name AS entity_name FROM entity_mentions m JOIN entities e ON e.id = m.entity_id "
+        f"WHERE m.mentionable_type = ? AND m.mentionable_id = ? AND {cl} ORDER BY m.created_at, m.id",
+        [mentionable_type, mentionable_id, *params],
+    )

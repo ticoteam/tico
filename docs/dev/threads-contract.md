@@ -360,6 +360,11 @@ threads.apply_revision(c, origin, *, body=None, deleted=False) -> message view|N
 - Every copy of the words follows: carriers, notes, Slack posts not sent, stored retry answers, and (on a delete) a
   sub-thread's title and reactions.
 - Highest revision wins; an older or repeated `(origin_id, revision)` is ignored. A delete is final.
+- A thread delete (`threads.delete`, `DELETE /api/v2/threads/{id}`, managers only, every message in the thread already
+  deleted, no one else a member or follower, not a Home) keeps no words: in the same transaction every message in
+  its tree (the root and its sub-threads) loses its older revision bodies (its own and its origin's copies), its
+  attachment references (only its origin stays) and its files (`file_library.release_message_files`). The
+  tombstones, sequence numbers and the `thread.deleted` event stay. A single message's delete does not do this.
 - A Tico-held edit is never mirrored out: outside deliveries carry only revisions that were delivered locally.
 
 ## 4. C3: delivery
@@ -601,8 +606,9 @@ with no stored audience is decided by the pre-threads rules, exactly** (`threads
 of `threads.readable_sql`): a task room by the task; a person by `scope` (personal: its owner, the Strategy room
 owner-only; shared: `rooms.shared_member_ids` plus Read on the bot, live; otherwise the owner or a participant), a
 bound meeting room by the meeting; an agent bot by participation or `rooms.room_bot`; a run by its attempt's grant.
-The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e reader-set goldens
-(`backend/tests/fixtures/threads/reader-sets-*.json`) pin it. The audience *label* is still derived live from
+The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e test
+(`backend/tests/test_threads_migration_e2e.py`) reads the pre-threads reader sets live in the same run and checks
+`threads.readable` against them after `threads.migrate`. The audience *label* is still derived live from
 `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
 because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
 Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
@@ -719,6 +725,7 @@ Thread view (`threads.view(c, viewer, row)`):
  "me": {"member": true, "following": true, "follows": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
         "activity": true, "can_post": true, "can_manage": true, "pinned": false},
  "pinned_for_everyone": false,                   // §10.1
+ "name": "Bea, Cy",                              // what it is called: the title, else its people (Naming, §10)
  "dm_with": [{"actor": "human:bea", "name": "Bea"}], "dm_with_count": 1,   // DM roots: the others, at most 4 named
  "new_at": {"thread_id": "t_sub", "message_id": "m_1"}}                    // list rows only; see below
 ```
@@ -734,7 +741,7 @@ person who only joined a chat or read it has a following row but is not reached,
 
 | Route | Service function |
 |---|---|
-| `GET /api/v2/threads?cursor=&limit=&sort=` | `threads.sidebar(c, viewer, cursor=None, limit=50, sort=None)` → `{"attention": [...], "threads": [...], "dms": [...], "bot_dms": {...}, "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, an unread DM with another person in it, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `sort=recent` puts everything after Needs attention newest first; `sort=important` (the app's default) orders it by each root's `importance` (1-10, backend/thread_rank.py: a Decide pass ranks roots with new messages, at most once an hour each; never ranked = 5), highest first, then newest, and leaves out noise: level 1, and a task's thread whose task is finished or that no person owns or asked for. Every row carries `importance` (0 = noise by rule). A task's thread (audience `task`) is a candidate only while it has unread for the viewer (a person's message past their mark, or a delivery to them): parties and posters are no reason, and the filter is part of the same indexed query, so the page and its `next_cursor` agree with the rows. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`; the app shows it as Inbox. `bot_dms` (first page only): `{bot actor: unread}` for the viewer's DMs with one bot and no one else (`threads.bot_dm_unread`), which are not Needs attention: the Team list shows each count on its bot, whose page holds the DM. `person_dms` (first page only): the same for DMs with one person (`threads.person_dm_unread`). Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
+| `GET /api/v2/threads?cursor=&limit=&sort=` | `threads.sidebar(c, viewer, cursor=None, limit=50, sort=None)` → `{"attention": [...], "threads": [...], "dms": [...], "bot_dms": {...}, "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, an unread DM with another person in it, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `sort=recent` puts everything after Needs attention newest first; `sort=important` orders it by each root's `importance` (1-10, backend/thread_rank.py: a Decide pass ranks roots with new messages, at most once an hour each; never ranked = 5), highest first, then newest, and leaves out noise: level 1, and a task's thread whose task is finished or that no person owns or asked for. No screen sends `sort=important`: the app's thread lists send no `sort`, so they get the default: Needs attention first, then unread, then recent. Every row carries `importance` (0 = noise by rule). A task's thread (audience `task`) is a candidate only while it has unread for the viewer (a person's message past their mark, or a delivery to them): parties and posters are no reason, and the filter is part of the same indexed query, so the page and its `next_cursor` agree with the rows. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`; the app shows it as Inbox. `bot_dms` (first page only): `{bot actor: unread}` for the viewer's DMs with one bot and no one else (`threads.bot_dm_unread`), which are not Needs attention: the Team list shows each count on its bot, whose page holds the DM. `person_dms` (first page only): the same for DMs with one person (`threads.person_dm_unread`). Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
 | `GET /api/v2/threads/{id}/bot-status` | `thread_bot_status.status(c, viewer, root)` → `{"bots": [...]}` (§4.10) |
 | `GET /api/v2/threads/{id}/timeline?cursor=&limit=&flat=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=..., flat=False)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor", "bot_status", "read_marks"}` (`bot_status` on the first page; `flat` and its `read_marks`: §4.9; every message has `reply_to` and `routed`); `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
@@ -800,13 +807,13 @@ members and followers once each. Joining is `PUT .../follow`, which puts the thr
 
 Catch up. An item is an open root the viewer reads with at least one new message over its subtree that they may read
 (the thread check for each sub-thread and the per-message check for each message; bot activity alone is never unread,
-nor are one's own messages), or with an open mention or ask the viewer may read (`thread_attention._addressed`'s rule, read as ids
-in SQL, the newest 500) or a write held for their review (`org_rule_check.held_for`: only the viewer's own candidates,
+nor are one's own messages), or with an open mention or ask the viewer may read (`_flags` in `thread_rail`, read as ids
+in SQL, the newest 500; its rule is under muted roots below) or a write held for their review (`org_rule_check.held_for`: only the viewer's own candidates,
 their own holds, their bots' and the ones they review, through `org_rule_holds_author` and `org_rule_holds_reviewer`,
 the oldest 500 native posts and edits). Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
 is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
 another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out in SQL unless it
-mentions them; a migrated Home they read only for its history counts only by its attention items. Order: items that
+holds an open attention item for them (`_flags` in `thread_rail`, which runs its own query: a delivery with reason mention, ask, assign, addressed or reply whose message is a person's, a bot's ask, or a bot's mention or reply (a DM with one teammate gives the reader reason `dm` at its top level, so only a mention counts there; in a sub-thread, a reply whose `in_reply_to` is the reader's message gives the reader reason `reply` and counts); no reply from the reader after it in the same conversation; an ask not yet answered; `_flags` reads at most ATTENTION_SCAN (500) of these, newest first, so a match past that cap does not bring a muted root back; unlike `thread_attention._addressed`, it admits a bot's ask whatever its reason, where `_addressed` admits one only with reason mention or reply, and it skips an ask already answered) or a mention, ask or assignment past the reader's read point (`_mentioned`: anyone but the reader, with no check whether it was answered, so it counts until the read point passes it; at most ATTENTION_SCAN rows, with no order, so a match past that cap may stay out); a migrated Home they read only for its history counts only by its attention items. Order: items that
 mention the viewer (an open mention, or a new message delivered to them as a mention or assignment; an old `ask` row counts too) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
 subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
@@ -824,11 +831,20 @@ less the ones shown). `count` is every item across
 pages, at most 99 (the sidebar badge). Reading an item is `POST .../read-all`; muting it is `PUT .../follow {"notify": "muted"}`. The older
 `POST /api/v2/threads/{id}/catch-up` (`hub thread catchup`) is a different thing: a written summary of one thread.
 
-Naming. Only a DM with one teammate may be unnamed. `threads.create`, `threads.dm` and a post that starts a thread
+Naming. Only a DM with one teammate and a task's thread may be unnamed (`require_name`). `threads.create`, `threads.dm` and a post that starts a thread
 (`_create_plan`) refuse a group DM (two or more others) or a members, team or company thread with an empty title:
 422 `name_required`, "Group chats need a name.", and for a bot the same text plus how to pass a title (`title` in
 `hub_thread_create` and `hub_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
 no title, and existing unnamed group DMs stay readable: clients name them from `dm_with`.
+
+A thread with no title that is not a Home is named by `name` (`threads._thread_name`, the same for every reader): the
+people and bots in it and its groups, the viewer left out, sorted by name, the first three and `+N` for the rest;
+`You` when nobody else is in it; `Thread` when the viewer may not see anyone in it. A reader who is not a member is
+told only of the people they may see. Nothing is stored: a rename wins, an empty title brings the names back, and a
+change of members changes the name. A DM keeps its other person's name. Where a name is shown, it is `name` (the thread
+view, list and rail rows, the breadcrumb's `title` and a search hit's `title` for a thread with none, and the
+Catch up, Needs you, digest and attention items; `threads.shown_name` and `threads.shown_names` for the rest). A
+thread's stored `title` is still what the Name field and the title sort use.
 
 Events. `threads` topic, kind `pinned`, `{"thread_id", "root_id", "kind": "pinned", "actor", "pinned",
 "pinned_for_everyone"}` (`pinned` is the receiver's own state). A reader's own pin (`thread_pins`, `ref` = actor) goes

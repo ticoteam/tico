@@ -54,7 +54,8 @@ def _line(text, limit=160):
 
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
-    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject."""
+    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject. A child or
+    blocker named by its title, or the task a blocked check waits on, also carries its id as `task`."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
 
     out = []
@@ -74,7 +75,16 @@ def holds(conn, row):
 
                 check = check_detail(conn, row) or False
                 if check:
-                    out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why"))})
+                    # The task the check waits on, as `task`: its live blocker (check_blocked.blocked), or for a
+                    # waiting check the task its own first hold names, as its reason does (words).
+                    held = H.task(conn, check["check"]) or {}
+                    if not held:
+                        named = None
+                    elif held.get("status") == "waiting":
+                        named = next(iter(holds(conn, held)), {}).get("task")
+                    else:
+                        named = TR.live_blocker(conn, held["id"], H.ACTIVE_STATUSES)
+                    out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why")), "task": named})
             continue
         out.append(_task_hold(conn, row, "child", child))
     own = {r[0] for r in conn.execute(TR.CHILD_IDS, (row["id"],))}
@@ -109,7 +119,7 @@ def _task_hold(conn, row, kind, other):
 
     if H.task_private(conn, other) and not H.subtask_flows_up(conn, other, row):
         return {"kind": "private", "on": None, "what": "a private task"}
-    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"])}
+    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"]), "task": other["id"]}
 
 
 def words(conn, found):
@@ -343,6 +353,8 @@ def unstrand(conn, at=None):
         for r in conn.execute(
             "SELECT t.id FROM task_holds h JOIN tasks t ON t.id=h.task_id WHERE h.kind='blocked' AND h.released_at IS NULL "
             "AND h.cause='stranded' AND t.status='waiting' AND t.owner_id LIKE 'bot:%' "
+            # A card On ice (D69) waits for the person who parked it: the pass leaves it, as every sweep does.
+            f"AND NOT {H.ON_ICE % 't'} "
             "AND coalesce(h.cleared_at,h.created_at)<=? ORDER BY h.created_at,t.id",
             (H.shift(at, hours=-GRACE_HOURS),),
         )

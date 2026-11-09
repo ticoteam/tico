@@ -28,14 +28,16 @@ from . import (
     handlers,
     jobs,
     mirror,
+    receipts,
     payments,
+    subscriptions,
 )
 from . import prepaids, purchasing, topups
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import books_link, books_sync, delivery, rights, sync, tax, usage
-from . import vendors
+from . import statement_upload, vendors
 from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
@@ -125,6 +127,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "connection_sync": banking.connection_sync,
     "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map,
+    "money_account_add": banking.money_account_add,
     "connection_settings": banking.connection_settings,
     "bills_address_set": bills_address_set,
     "books_disconnect": books_disconnect,
@@ -142,7 +145,10 @@ PLANNERS: dict[str, handlers.Planner] = {
     **topups.PLANNERS,
     **attribution.PLANNERS,
     **campaigns.PLANNERS,
+    **receipts.PLANNERS,
+    **subscriptions.PLANNERS,
     **vendors.PLANNERS,
+    **statement_upload.PLANNERS,
 }
 assert set(PLANNERS) == set(K.LIVE)
 
@@ -958,6 +964,7 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 amortize_prepaids = jobs.amortize
 watch_documents = jobs.watch
+detect_subscriptions = subscriptions.detect  # the daily look (scheduler finance_tick)
 grant_defaults = rights.grant_defaults
 RIGHT_RULES = R.RULES  # the one right an install from before RIGHTS_VERSION 2 is granted (bookkeeper)
 
@@ -1083,7 +1090,7 @@ DEV_COPY_KEPT = (
     "fin_books",
     "fin_budget_versions",
     "fin_budgets",
-    "fin_contacts",
+    "fin_book_entities",
     "fin_dimensions",
     "fin_entries",
     "fin_events",
@@ -1109,13 +1116,13 @@ DEV_COPY_KEPT = (
     "fin_settlements",
     "fin_cash_rollups",
     "fin_credit_refunds",
-    "fin_vendor_aliases",
     "fin_vendor_labels",
     "fin_vendor_legacy",
     "fin_view_defaults",
     "fin_view_grants",
     "fin_view_versions",
     "fin_raw_imports",
+    "fin_statement_uploads",
     "fin_close_snapshots",
     "fin_tax_jurisdictions",
     "fin_tax_seeds",
@@ -1127,10 +1134,12 @@ DEV_COPY_KEPT = (
     "fin_invoice_reminders",
     "fin_ad_accounts",
     "fin_ad_campaigns",
+    "fin_receipts",
     "fin_ad_spends",
     "fin_ad_warnings",
     "fin_attributions",
     "fin_attribution_rules",
+    "fin_subscriptions",
 )
 # Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
 # inbox, cards and their authorizations, payees and payments, the ad spend imports) and spend holds. In the order they
@@ -1138,6 +1147,7 @@ DEV_COPY_KEPT = (
 DEV_COPY_EMPTIED = (
     "fin_card_auths",
     "fin_card_saves",
+    "fin_statement_previews",
     "fin_payments",
     "fin_transfers",
     "fin_recipients",

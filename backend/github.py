@@ -575,6 +575,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
     if not read_refresh and action in ("opened", "reopened", "edited", "ready_for_review"):
         registered |= register_named_pr(c, pr)
     links = _links_for(c, url)
+    merged = []  # the links this event merged for the first time (_merge_wakes)
     for link in links:
         task = H.task(c, link["task_id"])
         if not task:
@@ -637,6 +638,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             if detail.get("head_sha") != head_sha:
                 detail.pop("checks", None)
                 detail.pop("checks_dropped", None)
+                detail.pop(DROPPED_PENDING, None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
                 detail["health_reviewed_head"] = ""
@@ -680,17 +682,28 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             detail,
             check_flow=step_flow.has_flow(c, task.get("type_id")),
         )
+        # The merge's one wake (_merge_wakes), recorded with the link: a stale event that reopens the link, and a later
+        # reading of the same merge, cannot send it again.
+        merge_wake = state == "merged" and link["state"] not in ("merged", "shipped") and not detail.get("merged_wake")
+        if merge_wake:
+            detail["merged_wake"] = True
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if new_head:
             from . import pipeline_github_checks
 
             # The new head is saved: its checks show the out-of-date standing from this same write.
             pipeline_github_checks.publish_affected(c, link["task_id"])
-        if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
-            # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
-            from . import verdict_moves
+        if state == "merged" and link["state"] not in ("merged", "shipped"):
+            from . import review_pages, verdict_moves
 
-            verdict_moves.merged(c, task)
+            if not read_refresh:
+                # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
+                verdict_moves.merged(c, task)
+            # A merge read on refresh has no webhook behind it, so its page is queued here too. queue() is idempotent:
+            # a second merge event finds the page already queued and changes nothing.
+            review_pages.queue(c, task, link["id"])
+            if merge_wake:
+                merged.append(link)
         elif new_head and action == "synchronize" and state == "open":
             # A push at a check step whose check already finished needs a check of the new head.
             from . import check_pools, verdict_moves
@@ -745,7 +758,56 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
 
         target = milestone_waits.pr_target(url)
         woken = milestone_waits.happened(c, "pr_merged", target[0], url) if target else []
+    _merge_wakes(c, merged, url)
     return {"pr": url, "action": action, "tasks": len(links), **({"milestone_woken": woken} if woken else {})}
+
+
+def _merge_wakes(c, links, url):
+    """A linked pull request merged: each bot card waiting or blocked on it gets one wake, the card itself, the cards
+    it blocks and its parent. A card blocked on the merged card is blocked on it whatever its status, so it counts
+    without a hold. A person's card is not woken (the person sees it), and a card a milestone wait already woke for this
+    pull request (milestone_waits, any time before) is not woken again, and neither is a card a merge of this pull request
+    already woke through another of its links (`github-merge-wake:<task>` records the pull requests each card has been
+    woken for). A card other than the merged one hears the merge without the pull request's details when that card is
+    private: its readers may not see it. The caller passes only a merge's first reading."""
+    from . import milestone_waits, task_relations as TR
+    from .repositories import metadata, save_metadata
+
+    target = milestone_waits.pr_target(url)
+    pr_key = target[0] if target else url.lower()
+    seen = set()
+    if target and H._has_table(c, "task_milestone_waits"):
+        seen = {
+            r[0]
+            for r in c.execute(
+                "SELECT task_id FROM task_milestone_waits WHERE kind='pr_merged' AND target=? AND woke_at IS NOT NULL",
+                (target[0],),
+            )
+        }
+    carry = "Carry this card on: move it to its next stage, or close it if it is done."
+    for link in links:
+        own = f"{link['title']} merged: {url}. {carry}"
+        private = H.task_private(c, H.task(c, link["task_id"]))
+        other = f"A pull request on a card this card waits on merged. {carry}" if private else own
+        parent = TR.parent_of(c, link["task_id"])
+        candidates = [
+            (link["task_id"], False),
+            *((b, True) for b in TR.blocked_ids(c, link["task_id"])),
+            *([(parent, False)] if parent else []),
+        ]
+        for tid, blocked in candidates:
+            row = H.task(c, tid) if tid not in seen else None
+            if not row or not H.is_bot(row["owner_id"]) or row["status"] not in H.ACTIVE_STATUSES:
+                continue
+            if not (blocked or row["status"] == "waiting" or row.get("blocked_since")):
+                continue
+            key = "github-merge-wake:" + tid
+            woke = metadata(c, key).get("prs", [])
+            if pr_key in woke:
+                continue
+            seen.add(tid)
+            save_metadata(c, key, {"prs": [*woke, pr_key]})
+            queue_wake(c, row, own if tid == link["task_id"] else other)
 
 
 def release(c, payload, release_repo=""):
@@ -872,11 +934,33 @@ def _worst(a, b):
     return "failing" if "failing" in (a, b) else "pending" if "pending" in (a, b) else None
 
 
-def _set_dropped(detail, dropped):
+# Whether a check the stored copy leaves out was still going: `checks_dropped` keeps only the worst state, so a running
+# check left out beside a dropped failure would read "failing" and could never be seen to finish.
+DROPPED_PENDING = "checks_dropped_pending"
+
+
+def _dropped_pending(checks, kept):
+    return any(state == "pending" for key, state in checks.items() if key not in kept)
+
+
+def _set_dropped(detail, dropped, pending=False):
     if dropped:
         detail["checks_dropped"] = dropped
     else:
         detail.pop("checks_dropped", None)
+    if dropped and pending:
+        detail[DROPPED_PENDING] = True
+    else:
+        detail.pop(DROPPED_PENDING, None)
+
+
+def _still_going(detail):
+    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out."""
+    return (
+        "pending" in (detail.get("checks") or {}).values()
+        or detail.get("checks_dropped") == "pending"
+        or bool(detail.get(DROPPED_PENDING))
+    )
 
 
 def _finish(c, task, link, detail, full, checks):
@@ -969,8 +1053,10 @@ _pending_lock = threading.Lock()
 def refresh_pending_checks(service):
     """The background pass's read of checks that have sat pending with no word from GitHub for `STUCK_SUITE_MINUTES`,
     on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
-    so a suite that never started stops holding a green head (Dev 646). A link whose stored copy dropped a non-passing
-    check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
+    so a suite that never started stops holding a green head (Dev 646). A failed head whose stored copy still has a
+    pending check is read too: a failure outranks pending, so such a link reads "failing", but the pending suite keeps
+    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A link whose stored
+    copy dropped a non-passing check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
     a read only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first.
     Returns the ids of pending links that left pending."""
     with service.store.read() as c:
@@ -984,7 +1070,9 @@ def refresh_pending_checks(service):
                 "FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
                 "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
-                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL) AND l.number IS NOT NULL AND r.reachable=1 "
+                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
+                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending')) "
+                "AND l.number IS NOT NULL AND r.reachable=1 "
                 f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
                 "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
                 (
@@ -1021,30 +1109,42 @@ def apply_checks(c, link_id, head, checks, since=None):
     """Rebuild a PR link's checks from a fresh read (`read_checks`) at the head the link is at now. Checks that leave
     pending this way finish the head as a webhook's last check would (`_finish`, then verdict_moves.checks_done).
     `since` is the link's updated stamp when the read began: a link written after it (a webhook during the read) keeps
-    its checks, which are newer than the read. Returns the link's checks state, or None when the read no longer
-    applies (another head, a closed PR, a write since)."""
+    its checks, which are newer than the read. A failed head whose stored copy had a pending check and whose read has
+    none finishes too, though it read "failing" before and after: the pending check is what kept it from finishing.
+    Returns the link's checks state, or None when the read no longer applies (another head, a closed PR, a write since)."""
     row = c.execute("SELECT * FROM task_links WHERE id=?", (link_id,)).fetchone()
     link = dict(row) if row else None
     detail = H._json(link.get("detail"), {}) or {} if link else {}
     task = link and H.task(c, link["task_id"])
-    if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
+    if not checks or link is None or not task or link.get("state") != "open" or detail.get("head_sha") != head:
         return None
     if since is not None and link.get("updated_at") != since:
         return None
     # The state and the failures named come from the whole read; only the stored copy is cut.
     state, kept = _overall(checks), _kept(checks)
-    dropped = _dropped(checks, kept)
-    if detail.get("checks") == kept and link.get("checks") == state and detail.get("checks_dropped") == dropped:
+    dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
+    # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
+    # even when its state stays the same.
+    held = _still_going(detail) and "pending" not in checks.values()
+    if (
+        detail.get("checks") == kept
+        and link.get("checks") == state
+        and detail.get("checks_dropped") == dropped
+        and bool(detail.get(DROPPED_PENDING)) == dropped_pending
+        and not held
+    ):
         return state
     detail["checks"] = kept
-    _set_dropped(detail, dropped)
-    finished = state != "pending" and state != link.get("checks")
+    _set_dropped(detail, dropped, dropped_pending)
+    changed = state != link.get("checks")
+    # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
+    finished = state != "pending" and "pending" not in checks.values() and (changed or held)
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
     c.execute(
         "UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?", (state, json.dumps(detail), H.now(), link_id)
     )
-    if state != link.get("checks"):
+    if changed:
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
     if finished_head:
@@ -1125,8 +1225,9 @@ def pr_signal(c, event, payload):
                 checks[_suite_key(own, signal)] = "pending"
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
+            pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
             detail["checks"] = kept
-            _set_dropped(detail, dropped)
+            _set_dropped(detail, dropped, pending)
             fields["checks"] = _with_dropped(_overall(checks), dropped)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
@@ -1147,6 +1248,8 @@ def pr_signal(c, event, payload):
                 and not set(checks.values()) <= {"skipped"}
                 # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
                 and (not dropped or "failing" in checks.values())
+                # A check the copy left out may still be going: the next fresh read (apply_checks) finishes the head.
+                and not _still_going(detail)
             ):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
@@ -1364,10 +1467,17 @@ def refresh_task_prs(service, task_id):
                             except Exception:
                                 logging.getLogger("tico.github").debug("Head identity unavailable for %s #%s", *key)
                         # Pending checks, and a copy that dropped a check, are read afresh: a suite that never starts sends
-                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green.
+                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green. So is
+                        # a failing link that still holds a running check: this refresh moves the link's updated_at, so
+                        # task reads every few minutes would keep refresh_pending_checks from ever reading it (PR 3055).
                         checks = None
-                        dropped = (H._json(link.get("detail"), {}) or {}).get("checks_dropped")
-                        if head and (link.get("checks") == "pending" or dropped) and pr.get("state") == "open":
+                        stored = H._json(link.get("detail"), {}) or {}
+                        dropped = stored.get("checks_dropped")
+                        if (
+                            head
+                            and (link.get("checks") == "pending" or dropped or _still_going(stored))
+                            and pr.get("state") == "open"
+                        ):
                             try:
                                 checks = _fresh_checks(service, link["repo"], head)
                             except Exception:
@@ -1819,9 +1929,8 @@ def refresh_deployed_tasks(service):
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
-# What a release kept of a pull request is read hunk by hunk: release notes move between sections at every cut and
-# tests are cut routinely, so the product files decide when the pull request has any.
-NOTES_FILES = {"CHANGELOG.md"}
+# What a release kept of a pull request is read hunk by hunk: tests are cut routinely, so the product files decide
+# when the pull request has any.
 TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
 
 
@@ -1878,7 +1987,6 @@ def change_kept(get, repo, merge, release):
     files = commit.get("files") or []
     if len(parents) > 1:  # a merge commit: the pull request is what it changed on top of main
         files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
-    files = [f for f in files if f.get("filename") not in NOTES_FILES]
     product = [f for f in files if not TEST_PATH.search(f["filename"])]
     if not (product or files):
         return None

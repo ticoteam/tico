@@ -1,4 +1,4 @@
-"""A real Tico server for the Computers page browser test (ui/tests/computers-shared.cjs).
+"""A real Tico server for the Computers page browser test (ui/tests/computers-shared.cts).
 
     python3 ui/tests/support/computers_server.py
 

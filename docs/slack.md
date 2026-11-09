@@ -16,7 +16,7 @@ How messages are routed and stored is in [slack-gateway.md](slack-gateway.md).
 5. In Tico, Tools > Slack, paste both tokens. They are stored encrypted in Tico's database
    and never shown again. Do not put them in `.env`.
 
-Within a minute the Slack card on Tools and Settings > Health say **Connected**. The first connection pins the workspace
+Within a minute the Slack card on Tools and on the Health page (Settings > General > Health > Details) say **Connected**. The first connection pins the workspace
 the tokens belong to; to pin it in advance, set `SLACK_TEAM_ID` in `.env`. To change workspace, disconnect and
 paste the new tokens. Invite Tico to a channel with `/invite @Tico`.
 
@@ -92,7 +92,7 @@ at a time (`limit`, `cursor`; follow `next_cursor`).
 
 ## Troubleshooting
 
-| Tools card or Settings > Health says | Do this |
+| Tools card or the Health page (Settings > General > Health > Details) says | Do this |
 |---|---|
 | Tokens saved, waiting | The service is not running: `slack` is missing from `COMPOSE_PROFILES`, or run `docker compose logs slack`. |
 | `invalid_auth` | The bot token is wrong or was revoked; reinstall the app and paste the new token. |

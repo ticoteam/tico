@@ -60,9 +60,11 @@ const assistantName = (): string => {
 const assistantBot = (): string => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
 // The built-in Counsel's slug (backend/hubdb.py COUNSEL): Tico's own name, so a team's own bot named counsel stays theirs.
 const COUNSEL_BOT = 'tico-counsel';
+// The group the server keeps the built-in bots in (backend/groups.py BUILT_IN): Tico's own, collapsed on the team chart.
+const BUILT_IN_GROUP = 'built-in';
 // The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, Counsel and the Brand Owner are built
-// in to every team: pause and rename them, never archive or delete. None is on the org chart: their settings are
-// Settings > Bots and their bot page's Settings.
+// in to every team: pause and rename them, never archive or delete. They sit in the Built-in group of the team chart, which
+// nobody drags them out of; their settings are Settings > Bots and their bot page's Settings.
 const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT || slug === 'brand';
 // The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
 // work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.
@@ -211,11 +213,11 @@ function betaMark(root: ParentNode = document): void {
 // ----------------------------------------------------------------- derived state
 // Returns one of planned, paused, running, needs, idle. Typed as string because bot-page.js compares it with 'failed', which
 // this never returns: the comparison is a dead branch in that file, and a literal union would make it a new tsc finding.
-function stateOf(slug: string): string {
+function stateOf(slug: string | undefined): string {
   const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
-  const live = S.v2?.status?.[slug];
+  const live = S.v2?.status?.[slug ?? ''];
   if (live) return live.state === 'running' ? 'running' : ['waiting_human', 'blocked', 'crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
   if (S.status?.active?.some(a => a.employee === slug)) return 'running';
   return 'idle';

@@ -314,7 +314,7 @@ def loading_references(data):
 # The one script a visual page runs (lead, Oct 19): it tells the frame around it how tall the page is. Its hash is
 # the only script the page's content policy allows, so the page's own scripts and inline handlers stay dead. A frame
 # laid out at zero width reports an inflated height the app cannot shrink back from, so it sends nothing until the
-# page has a width and reports again on every resize (ui/tests/visual-reporter.cjs runs the same file). It reports
+# page has a width and reports again on every resize (ui/tests/visual-reporter.cts runs the same file). It reports
 # the content's own height when the content fits the frame, not scrollHeight, which never goes below the frame: a
 # page measured once too tall (wrapped at a passing narrow width) could otherwise never come back down.
 # It also marks the page's view. A card frame names its view in the fragment, which never reaches the server:

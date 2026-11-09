@@ -190,7 +190,7 @@ function recruitFor({department, briefing, share}) {
     let refuseSetup = false;   // the next PUT /api/v2/setup is refused once (set on the team chart)
     const recruits = [], opened = {};
     // Each bot's DM reads what Set up wrote to it (the chat the first message opened).
-    const dms = ['support', 'meeting-notes'].map(bot => threadsFake({bot, messages: () => opened[bot]?.messages || []}));
+    const dms = ['support', 'meeting-notes'].map(bot => threadsFake({bot, messages: () => opened[bot]?.messages || [], home: () => opened[bot]?.home || []}));
     let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
     let record = {
       names: {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace'},
@@ -274,6 +274,15 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires_at: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
+      // Start onboarding writes in the bot's Home (the team sees it), and the bot page's chat shows it from then on.
+      if (/^\/api\/v2\/threads\/t-home-[^/]+\/messages$/.test(p) && request.method() === 'POST') {
+        const bot = p.split('/')[4].slice('t-home-'.length), text = request.postDataJSON().text;
+        chats.push([bot, request.postDataJSON()]);
+        const message = {id: 'msg-' + bot, seq: 1, depth: 0, thread_id: 't-home-' + bot, sender_id: 'human:ana', body: text,
+                         created_at: '2026-09-16T10:05:00Z'};
+        opened[bot] = {...opened[bot], home: [message]};
+        return json({message});
+      }
       // A person's chat with a bot: the first message opens it, and the bot page's DM tab shows it from then on.
       if (/^\/api\/v2\/chat\/[^/]+$/.test(p)) {
         const bot = p.split('/')[4], text = request.postDataJSON().text;
@@ -395,10 +404,20 @@ function recruitFor({department, briefing, share}) {
     const tilesOn = () => page.locator('[data-ob-tile][aria-pressed=true]').evaluateAll(els => els.map(el => el.dataset.obTile));
     assert.deepEqual(await tilesOn(), ['sales', 'marketing', 'support', 'finance', 'operations', 'product', 'engineering']);
     assert.equal(await page.locator('[data-ob-tile]').count(), 9);
-    // The chart is there from the start: the owner on top and each chosen department waiting. Built-in and message bots are not on it.
+    // The chart is there from the start: the owner on top, each chosen department waiting, and the built-ins as one folded
+    // Built-in group. Message bots are not on it.
     assert.match(await page.locator('#ob-chart [data-oc-owner]').textContent(), /Ana M\. Rivera\s*CEO/);
     assert.doesNotMatch(await page.locator('#ob-chart').textContent(), /Ace|BotOps|Inbox Manager/);
     assert.equal(await page.locator('#ob-chart .oc-dept.oc-pending').count(), 7);
+    const builtIn = () => page.locator('#ob-chart [data-oc-builtin-toggle]');
+    assert.match(await builtIn().textContent(), /Built-in\s*2/);
+    assert.equal(await builtIn().getAttribute('aria-expanded'), 'false');
+    await builtIn().click();
+    assert.equal(await builtIn().getAttribute('aria-expanded'), 'true');
+    assert.match(await page.locator('#ob-chart').textContent(), /Ace[\s\S]*BotOps/);
+    assert.equal(await builtIn().evaluate(el => document.activeElement === el), true, 'the toggle keeps focus after the redraw');
+    await builtIn().click();
+    assert.equal(await builtIn().getAttribute('aria-expanded'), 'false');
     await shot(page, 'desktop-3-departments');
     await page.locator('[data-ob-tile=hr]').click();
     await page.locator('[data-ob-tile=product]').click();
@@ -843,9 +862,10 @@ function recruitFor({department, briefing, share}) {
     assert.doesNotMatch(review, /Never without a human|Send anything|Spend money|Publish anything/);
     assert.match(review, /Computers\s*Ana's Mac, Cloud box online/);
     assert.equal(await page.locator('[data-review-departments]').textContent(), 'Sales, Marketing, Customer Support, Operations, Engineering');
-    assert.equal(await page.locator('[data-review-helpers]').textContent(), 'Ace, BotOps');
+    assert.equal(await page.locator('[data-review-helpers]').textContent(), '2 bots Ace, BotOps');
+    assert.equal(await page.locator('[data-review-builtin]').getAttribute('open'), null, 'the built-ins start folded');
     assert.equal(await page.locator('[data-review-message-bots]').textContent(), 'Inbox Manager');
-    assert.match(review, /Built-in\s*Ace, BotOps/);
+    assert.match(review, /Built-in\s*2 bots\s*Ace, BotOps/);
     assert.match(review, /Message bots\s*Inbox Manager/);
     assert.doesNotMatch(review, /Helpers/);
     assert.match(await page.locator('[data-review-team]').textContent(), /Sales Manager\s*→ Ana Rivera/);
@@ -959,17 +979,18 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#bot-onboard').waitFor();
     await shot(page, 'desktop-7-bot-page');
     assert.match(await page.locator('#bot-onboard').textContent(), /Onboarding/);
-    assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
+    assert.equal(await page.locator('#bot-onboard p.bot-onboard-tip').count(), 1);                     // the tip is the only paragraph
+    assert.equal(await page.locator('#bot-onboard p:not(.bot-onboard-tip)').count(), 0);              // the pill and the button, no other paragraph
     assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
     assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
-    // The DM tab shows the setup conversation: the person's line, in the chat Set up wrote to.
-    await page.goto('https://tico-ui.test/#/bot/support/dm');
+    // Home shows the setup conversation: the person's line, in the chat Set up wrote to (not the private DM).
+    await page.goto('https://tico-ui.test/#/bot/support/home');
     await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor();
     // A planned starter is activated first (an owner's call), then told the same line.
     await page.goto('https://tico-ui.test/#/bot/meeting-notes');
     await page.locator('#bot-start-setup').click();
     await page.locator('#bot-start-setup', {hasText: 'Onboarding started'}).waitFor();
-    // Start onboarding opens its DM tab, which shows the line at once, not after a reload.
+    // Start onboarding opens Home (Incognito stays off), which shows the line at once, not after a reload.
     await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
     assert.equal(await page.locator('#bot-thread .th-empty').count(), 0);
     assert.deepEqual(definitions, [{path: '/api/v2/bots/meeting-notes/definition', body: {status: 'active', expected_revision: 4}}]);

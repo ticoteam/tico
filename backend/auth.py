@@ -357,6 +357,13 @@ class Auth:
                 owner_link.place_first(self.settings, self.store)
             except Exception:
                 logging.getLogger("tico.auth").exception("the owner sign-in link could not be put in place")
+        if self.settings.setup_handoff_hash:
+            from . import setup_handoff
+
+            try:
+                setup_handoff.place_first(self.settings, self.store)
+            except Exception:
+                logging.getLogger("tico.auth").exception("the setup handoff could not be put in place")
         try:
             if self.proxy:
                 self.proxy.warm()
@@ -771,7 +778,7 @@ class Auth:
 
     def system_bot(self, slug):
         """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot, the Health Monitor, the Task
-        Manager, the Bookkeeper, Counsel, the Brand Owner): they act for the whole company, so only the company owner changes them. Admins
+        Manager, the Bookkeeper, Counsel, the Brand Owner, the Updates Owner, the Automations Owner): they act for the whole company, so only the company owner changes them. Admins
         manage every other bot."""
         return slug in (
             self.settings.assistant_bot,
@@ -784,6 +791,8 @@ class Auth:
             "bookkeeper",
             H.COUNSEL,
             H.BRAND_OWNER,
+            "updates-owner",
+            "automations-owner",
         )
 
     def bot_manager(self, c, who, slug, operator=None):

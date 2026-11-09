@@ -119,8 +119,7 @@ def bot_token(api, slug="ops"):
 # ----------------------------------------------------------------------------- rank
 
 
-def test_completing_a_bot_requested_human_task_needs_no_result_note(api):
-    token = bot_token(api, "ops")
+def _completing_a_bot_requested_human_task_needs_no_result_note(api, token):
     tapped = post(
         api,
         "tasks",
@@ -149,7 +148,7 @@ def test_completing_a_bot_requested_human_task_needs_no_result_note(api):
     } <= told, told
 
 
-def test_self_requested_completion_stays_done_until_explicit_close(api):
+def _self_requested_completion_stays_done_until_explicit_close(api):
     owner, completion, token = 'ana', {'status': 'done'}, 'ana-test'
     task = post(
         api, 'tasks', {'owner': owner, 'title': 'Check the receipt', 'body': 'Check the receipt totals.'}, token=token
@@ -181,8 +180,7 @@ def test_self_requested_completion_stays_done_until_explicit_close(api):
     assert closed['done_at'] == done['done_at']
 
 
-def test_a_late_bot_completion_does_not_reopen_a_task_its_requester_closed(api):
-    token = bot_token(api, "ops")
+def _a_late_bot_completion_does_not_reopen_a_task_its_requester_closed(api, token):
     task = post(api, "tasks", {"owner": "ops", "title": "Clean up the inbox", "body": "Archive the old threads."})
     done = post(
         api, "tasks/" + task["id"], {"version": task["version"], "status": "done", "note": "Archived 40."}, token=token
@@ -207,7 +205,7 @@ def test_a_late_bot_completion_does_not_reopen_a_task_its_requester_closed(api):
     assert reopened["status"] == "open" and reopened["closed_at"] is None
 
 
-def test_a_bot_requester_may_reopen_a_task_it_closed(api):
+def _a_bot_requester_may_reopen_a_task_it_closed(api):
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, "bot:cpo", "Draft the launch post", "Write the first draft.", "bot:ops")["id"]
         H.task_update(c, "bot:ops", tid, status="done", note="Drafted.")
@@ -224,6 +222,19 @@ def test_a_bot_requester_may_reopen_a_task_it_closed(api):
             with pytest.raises(H.Refused, match="stays closed"):
                 H.task_update(c, who, tid, status="open")
         assert H.task(c, tid)["note"] == "Published."
+
+
+def test_done_and_closed_tasks_stay_as_their_requester_left_them(api, subtests):
+    """Completion and close rules, one hub: each check files its own tasks; the bot checks share one leased ops token."""
+    token = bot_token(api, "ops")
+    for check, args in (
+        (_completing_a_bot_requested_human_task_needs_no_result_note, (api, token)),
+        (_self_requested_completion_stays_done_until_explicit_close, (api,)),
+        (_a_late_bot_completion_does_not_reopen_a_task_its_requester_closed, (api, token)),
+        (_a_bot_requester_may_reopen_a_task_it_closed, (api,)),
+    ):
+        with subtests.test(check.__name__):
+            check(*args)
 
 
 # ----------------------------------------------------------------------------- lanes
@@ -268,8 +279,7 @@ def jobs_for(api, bot):
         return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
-def test_a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api):
-    token = bot_token(api, "ops")
+def _a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api, token):
     task = post(api, "tasks", {"owner": "ben", "title": "Fix the sign-in check", "body": "x"}, token=token)
     path = f"tasks/{task['id']}/comments"
     queued = jobs_for(api, "ops")
@@ -288,8 +298,7 @@ def test_a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api)
     assert jobs_for(api, "ops") == queued, "an edit or delete wakes nobody"
 
 
-def test_a_person_mentioned_in_a_comment_is_reached_and_follows_the_task(api):
-    token = bot_token(api, "ops")
+def _a_person_mentioned_in_a_comment_is_reached_and_follows_the_task(api, token):
     task = post(api, "tasks", {"owner": "ana", "title": "Fix the sign-in check", "body": "x"}, token=token)
     queued = jobs_for(api, "ops")
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you test it on staging?"}, token="priya-test")
@@ -315,7 +324,7 @@ def mention_reason(api, message_id, actor):
     return row[0] if row else None
 
 
-def test_a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
+def _a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
     task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you book it by Friday?"})
     # A mention is a comment that reaches whom it names, not a question (question tasks are their own thing).
@@ -323,7 +332,7 @@ def test_a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
     assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["@ben can you book it by Friday?"]
 
 
-def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
+def _mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Send the weekly numbers", "body": "x"})
     queued = jobs_for(api, "ops")
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you send ops the numbers?"})
@@ -332,13 +341,13 @@ def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
     assert mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
 
 
-def test_a_comment_on_a_task_with_no_bot_on_it_is_not_quiet(api):
-    task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
+def _a_comment_on_a_task_with_no_bot_on_it_is_not_quiet(api):
+    task = post(api, "tasks", {"owner": "ben", "title": "Book the caterer", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Any update?"})
     assert said["woke"] is False and said["delivered"] is True and not said["comment"].get("refs", {}).get("quiet")
 
 
-def test_the_author_edits_a_comment_and_nobody_wakes(api):
+def _the_author_edits_a_comment_and_nobody_wakes(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Use the Agust numbers."})
     assert said["woke"] and said["comment"]["edited_at"] is None
@@ -359,8 +368,8 @@ def test_the_author_edits_a_comment_and_nobody_wakes(api):
     assert "Agust" not in audit, "the audit keeps metadata without withdrawn words"
 
 
-def test_only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api):
-    task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
+def _only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api):
+    task = post(api, "tasks", {"owner": "ops", "title": "Draft the press note", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Use the September numbers."}, token="ben-test")
     path = f"tasks/{task['id']}/comments/{said['comment']['id']}"
     for token in ("ana-test", "priya-test", "ben-via-botops"):  # Tico's owner, a teammate, BotOps acting for Ben
@@ -370,8 +379,8 @@ def test_only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api)
     assert post(api, path, {"text": "Use the October numbers."}, token="ben-test")["comment"]["edited_at"]
 
 
-def test_a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
-    task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
+def _a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
+    task = post(api, "tasks", {"owner": "ops", "title": "Draft the launch email", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "September, and call me first."})["comment"]
     before = get(api, "tasks/" + task["id"])
     gone = post(api, f"tasks/{task['id']}/comments/{said['id']}/delete", {})
@@ -387,6 +396,28 @@ def test_a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
             c.execute("SELECT expires_at FROM task_delegations WHERE message_id=?", (said["id"],)).fetchone()[0]
             <= H.now()
         )
+
+
+def test_comments_reach_whom_they_name_and_edits_or_deletes_wake_nobody(api, subtests):
+    """Comment routing, edits and deletes, one hub: each check files its own task. The checks that need no runner run
+    first, as they did on a fresh hub; then ops is leased once and the two checks on a task ops filed share that token."""
+    for check in (
+        _a_mention_on_a_task_with_no_bot_on_it_is_one_comment,
+        _mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot,
+        _a_comment_on_a_task_with_no_bot_on_it_is_not_quiet,
+        _the_author_edits_a_comment_and_nobody_wakes,
+        _only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves,
+        _a_deleted_comment_leaves_the_task_and_never_reaches_the_bot,
+    ):
+        with subtests.test(check.__name__):
+            check(api)
+    token = bot_token(api, "ops")
+    for check in (
+        _a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it,
+        _a_person_mentioned_in_a_comment_is_reached_and_follows_the_task,
+    ):
+        with subtests.test(check.__name__):
+            check(api, token)
 
 
 # ----------------------------------------------------------------------------- movers
@@ -1054,11 +1085,11 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
     assert post(api, path, {'version': version(), 'close': True})['status'] == 'closed'
 
 
-def marketing_idea(c, owner="bot:cmo", requester="human:ana"):
-    return H.task_create(c, requester, "Try referral ads", "Spend $200 for two weeks.", owner, type="idea")["id"]
+def marketing_idea(c, owner="bot:cmo", requester="human:ana", title="Try referral ads"):
+    return H.task_create(c, requester, title, "Spend $200 for two weeks.", owner, type="idea")["id"]
 
 
-def test_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_requester_is_told(api, monkeypatch):
+def _the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_requester_is_told(api, monkeypatch):
     told = []
     wake = H._wake
 
@@ -1087,9 +1118,9 @@ def test_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_re
     assert "human:ana" in told
 
 
-def test_an_owner_bot_cannot_close_a_marketing_idea_on_its_closed_step_or_on_another_types(api):
+def _an_owner_bot_cannot_close_a_marketing_idea_on_its_closed_step_or_on_another_types(api):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
+        tid = marketing_idea(c, title="Try podcast sponsorships")
         sales = H.type_create(
             c, H.KEEPER, "Sales", [{"name": "Draft", "status": "open"}, {"name": "Lost", "status": "closed"}]
         )
@@ -1101,16 +1132,16 @@ def test_an_owner_bot_cannot_close_a_marketing_idea_on_its_closed_step_or_on_ano
         assert (H.task(c, tid)["status"], H.task(c, call)["status"]) == ("open", "open")
 
 
-def test_a_marketing_idea_moved_to_done_or_ready_is_not_closed(api):
+def _a_marketing_idea_moved_to_done_or_ready_is_not_closed(api):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
+        tid = marketing_idea(c, title="Try newsletter swaps")
         assert H.task_update(c, "bot:cmo", tid, step="Done", note="Checked.")["status"] == "done"
         assert H.task(c, tid)["closed_at"] is None
 
 
-def test_a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it(api):
+def _a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it(api):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
+        tid = marketing_idea(c, title="Try billboard tests")
         with pytest.raises(H.Refused):
             H.task_update(c, "bot:cpo", tid, step="Won", note="Won.")
         with pytest.raises(H.Refused, match="only they or their managers close it"):
@@ -1118,10 +1149,11 @@ def test_a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it(api):
         assert H.task(c, tid)["status"] == "open"
 
 
-def test_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_the_same_step_name(api):
+def _an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_the_same_step_name(api):
     with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
-        sales = H.type_create(
+        tid = marketing_idea(c, title="Try conference booths")
+        # The Sales board an earlier check in the fold made, or a new one.
+        sales = H.type_get(c, "Sales") or H.type_create(
             c, H.KEEPER, "Sales", [{"name": "Draft", "status": "open"}, {"name": "Lost", "status": "closed"}]
         )
         with pytest.raises(H.Refused, match="only they or their managers close it"):
@@ -1129,6 +1161,19 @@ def test_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_
         with pytest.raises(H.Refused, match="only they or their managers close it"):
             H.task_close(c, "bot:cmo", tid, note="Lost on cost.", type=sales["id"], step="Lost")
         assert H.task(c, tid)["status"] == "open"
+
+
+def test_only_the_owner_bot_finishes_a_marketing_idea_and_only_on_its_outcome_steps(api, monkeypatch, subtests):
+    """Marketing idea finishing rules, one hub: each check files its own idea under its own title."""
+    for check, args in (
+        (_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_requester_is_told, (api, monkeypatch)),
+        (_an_owner_bot_cannot_close_a_marketing_idea_on_its_closed_step_or_on_another_types, (api,)),
+        (_a_marketing_idea_moved_to_done_or_ready_is_not_closed, (api,)),
+        (_a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it, (api,)),
+        (_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_the_same_step_name, (api,)),
+    ):
+        with subtests.test(check.__name__):
+            check(*args)
 
 
 def _idea(c, title):

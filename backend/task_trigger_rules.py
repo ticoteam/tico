@@ -218,13 +218,15 @@ def judge(conn, item):
 
 
 def _run(conn, item, rule, params):
-    from . import rules as R, templating
+    from . import pipeline_engine, rules as R, templating
 
     by, row, action = rule["action_by"], item["row"], params.get("action")
     queue = _PENDING.get()
     start = len(queue["items"]) if queue else 0
     notified = unblocked(conn).copy()
     token = _CHAIN.set((rule["id"],))
+    # The Action is an automation's, whoever it writes as: held to the stage caps and On ice as one (D68, D69).
+    held = pipeline_engine.AUTOMATION.set(True)
     conn.execute("SAVEPOINT task_trigger_action")
     try:
         current = H.task(conn, row["id"])
@@ -290,6 +292,9 @@ def _run(conn, item, rule, params):
         # arbitrary text there. The source task retains the rule's history.
         detail = f"Action failed ({type(exc).__name__})"
         error(conn, rule["id"], detail)
+        if isinstance(exc, H.Refused) and exc.rule == "stage_full":
+            pipeline_engine.record_waiting(conn, by, row["id"], exc)  # the manager lists the card waiting for room
     finally:
+        pipeline_engine.AUTOMATION.reset(held)
         _CHAIN.reset(token)
     _history(conn, item, rule, action, detail)

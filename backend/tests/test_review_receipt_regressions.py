@@ -7,7 +7,7 @@ import pytest
 
 from backend import hubdb as H, test_receipts, review_gate
 from backend.tests.test_github import api, get, headers, hook, post, pr_event, PR
-from backend.tests.test_review_gate import HEAD, OLD, ticket, move, another_ticket
+from backend.tests.test_review_gate import HEAD, OLD, ticket, move
 from backend import bot_settings as BS
 
 
@@ -32,17 +32,45 @@ def github(api, monkeypatch, checks=(), statuses=()):
     return calls
 
 
-@pytest.mark.parametrize(
-    'step,receipt',
-    [
-        ('Review 1', None),
-        ('Review 1', f'Tests: head {HEAD}: 2 failed'),
-        ('Review 1', f'Tests: head {OLD}: 9 passed'),
-        ('Review 2', None),
-    ],
-)
-def test_fresh_all_green_opens_review_without_text_and_overrides_text_failure(api, monkeypatch, step, receipt):
-    task = ticket(api, receipt)
+def _row_ticket(api, receipt=None, **fields):
+    """`ticket` for one row of a folded table: the first row makes the board and its ticket; each later row files one
+    more ticket of the same board under its own title and leaves it the only task holding the PR link."""
+    with api.app.state.store.read() as c:
+        typ = H.type_get(c, 'Dev tickets')
+        n = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
+    if not typ:
+        return ticket(api, receipt, **fields)
+    task = post(
+        api,
+        'tasks',
+        {
+            'owner': 'cpo',
+            'title': f'Improve messages, fold row {n}',
+            'body': 'Build messages.',
+            'type': typ['id'],
+            'step': 'In Progress',
+            'links': [PR],
+            **fields,
+        },
+    )
+    hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
+    with api.app.state.store.transaction() as c:
+        c.execute('DELETE FROM task_links WHERE task_id<>?', (task['id'],))
+        if receipt:
+            c.execute('UPDATE tasks SET note=? WHERE id=?', (receipt, task['id']))
+    return get(api, 'tasks/' + task['id'])['task']
+
+
+FRESH_ALL_GREEN_ROWS = [
+    ('Review 1', None),
+    ('Review 1', f'Tests: head {HEAD}: 2 failed'),
+    ('Review 1', f'Tests: head {OLD}: 9 passed'),
+    ('Review 2', None),
+]
+
+
+def _fresh_all_green_opens_review_without_text_and_overrides_text_failure(api, monkeypatch, step, receipt):
+    task = _row_ticket(api, receipt)
     github(
         api,
         monkeypatch,
@@ -63,16 +91,15 @@ def test_fresh_all_green_opens_review_without_text_and_overrides_text_failure(ap
     assert child.status_code == 200, child.text
 
 
-@pytest.mark.parametrize(
-    'checks,statuses',
-    [
-        ([], []),
-        ([{'id': 1, 'name': 'python', 'conclusion': None}], []),
-        ([{'id': 1, 'name': 'python', 'conclusion': 'skipped'}], []),
-    ],
-)
-def test_absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, monkeypatch, checks, statuses):
-    task = ticket(api)
+ABSENT_PENDING_OR_SKIPPED_ROWS = [
+    ([], []),
+    ([{'id': 1, 'name': 'python', 'conclusion': None}], []),
+    ([{'id': 1, 'name': 'python', 'conclusion': 'skipped'}], []),
+]
+
+
+def _absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, monkeypatch, checks, statuses):
+    task = _row_ticket(api)
     github(api, monkeypatch, checks, statuses)
     response = move(api, task)
     assert response.status_code == 422 and 'passing test receipt' in response.text, response.text
@@ -82,9 +109,9 @@ def test_absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, m
     assert move(api, task).status_code == 200
 
 
-def test_cached_webhook_green_does_not_supply_the_receipt(api):
+def _cached_webhook_green_does_not_supply_the_receipt(api):
     # Without a fresh GitHub read the gate has only the webhook-built cache, where a neutral check reads as passing and a re-run replaces a failure.
-    task = ticket(api)
+    task = _row_ticket(api)
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
@@ -94,9 +121,8 @@ def test_cached_webhook_green_does_not_supply_the_receipt(api):
     assert response.status_code == 422 and 'passing test receipt' in response.text, response.text
 
 
-@pytest.mark.parametrize('source', ['checks', 'statuses'])
-def test_github_failed_attempt_still_blocks_after_green_rerun(api, monkeypatch, source):
-    task = ticket(api, f'Tests: head {HEAD}: 9 passed')
+def _github_failed_attempt_still_blocks_after_green_rerun(api, monkeypatch, source):
+    task = _row_ticket(api, f'Tests: head {HEAD}: 9 passed')
     calls = github(
         api,
         monkeypatch,
@@ -116,9 +142,8 @@ def test_github_failed_attempt_still_blocks_after_green_rerun(api, monkeypatch, 
     assert all(params.get('filter') == 'all' for path, params in calls if path.endswith('check-runs'))
 
 
-@pytest.mark.parametrize('pending', [False, True])
-def test_success_with_skipped_companion_counts_but_pending_does_not(api, monkeypatch, pending):
-    task = ticket(api)
+def _success_with_skipped_companion_counts_but_pending_does_not(api, monkeypatch, pending):
+    task = _row_ticket(api)
     github(
         api,
         monkeypatch,
@@ -131,14 +156,14 @@ def test_success_with_skipped_companion_counts_but_pending_does_not(api, monkeyp
     assert response.status_code == (422 if pending else 200), response.text
 
 
-def test_successful_commit_status_can_supply_the_receipt(api, monkeypatch):
-    task = ticket(api)
+def _successful_commit_status_can_supply_the_receipt(api, monkeypatch):
+    task = _row_ticket(api)
     github(api, monkeypatch, statuses=[{'context': 'tests', 'state': 'success'}])
     assert move(api, task).status_code == 200
 
 
-def test_one_green_pr_does_not_supply_another_prs_receipt(api, monkeypatch):
-    task = ticket(api)
+def _one_green_pr_does_not_supply_another_prs_receipt(api, monkeypatch):
+    task = _row_ticket(api)
     post(api, 'tasks/' + task['id'] + '/links', {'url': PR.replace('/412', '/413')})
     github(api, monkeypatch, [{'id': 1, 'name': 'python', 'conclusion': 'success'}])
     service = api.app.state.github_app
@@ -156,6 +181,29 @@ def test_one_green_pr_does_not_supply_another_prs_receipt(api, monkeypatch):
     )
     response = move(api, task)
     assert response.status_code == 422 and OLD in response.text, response.text
+
+
+def test_a_fresh_github_read_decides_when_ci_stands_in_for_the_receipt(api, subtests):
+    """Every fresh-read row in one hub: each row files its own ticket (the only one holding the PR link) and patches
+    GitHub inside its own MonkeyPatch context, so the unconfigured-cache row reads the webhook cache as on a fresh hub."""
+    for step, receipt in FRESH_ALL_GREEN_ROWS:
+        with subtests.test('fresh_all_green', step=step, receipt=receipt), pytest.MonkeyPatch.context() as mp:
+            _fresh_all_green_opens_review_without_text_and_overrides_text_failure(api, mp, step, receipt)
+    for checks, statuses in ABSENT_PENDING_OR_SKIPPED_ROWS:
+        with subtests.test('absent_pending_or_skipped', checks=checks), pytest.MonkeyPatch.context() as mp:
+            _absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, mp, checks, statuses)
+    with subtests.test('cached_webhook_green'):
+        _cached_webhook_green_does_not_supply_the_receipt(api)
+    for source in ('checks', 'statuses'):
+        with subtests.test('failed_attempt_after_green_rerun', source=source), pytest.MonkeyPatch.context() as mp:
+            _github_failed_attempt_still_blocks_after_green_rerun(api, mp, source)
+    for pending in (False, True):
+        with subtests.test('skipped_or_pending_companion', pending=pending), pytest.MonkeyPatch.context() as mp:
+            _success_with_skipped_companion_counts_but_pending_does_not(api, mp, pending)
+    with subtests.test('commit_status_receipt'), pytest.MonkeyPatch.context() as mp:
+        _successful_commit_status_can_supply_the_receipt(api, mp)
+    with subtests.test('one_green_pr_per_pr'), pytest.MonkeyPatch.context() as mp:
+        _one_green_pr_does_not_supply_another_prs_receipt(api, mp)
 
 
 @pytest.mark.parametrize(
@@ -324,10 +372,10 @@ def test_dev505_original_note_does_not_claim_a_current_failure():
     assert test_receipts.at_head({'id': 't', 'note': note}, head)[0] != 'failed'
 
 
-def test_manager_chain_and_editing_person_can_supply_no_ci_receipt(api):
-    task = ticket(api)
+def _manager_chain_and_editing_person_can_supply_no_ci_receipt(api):
+    task = _row_ticket(api)
     for n, author in enumerate(['manager', 'grandmanager', 'person', 'outsider']):
-        _author_supplies_receipt(api, task if n == 0 else another_ticket(api, n), author)
+        _author_supplies_receipt(api, task if n == 0 else _row_ticket(api), author)
 
 
 def _author_supplies_receipt(api, task, author):
@@ -346,8 +394,8 @@ def _author_supplies_receipt(api, task, author):
     assert response.status_code == (422 if author == 'outsider' else 200), (author, response.text)
 
 
-def test_written_failure_is_not_cleared_by_a_managers_same_head_rerun(api):
-    task = ticket(api, f'Tests: head {HEAD}: 2 failed')
+def _written_failure_is_not_cleared_by_a_managers_same_head_rerun(api):
+    task = _row_ticket(api, f'Tests: head {HEAD}: 2 failed')
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         H.task_comment(c, 'bot:cmo', task['id'], f'Tests: head {HEAD}: 9 passed, 0 failed', wake=False)
@@ -355,8 +403,8 @@ def test_written_failure_is_not_cleared_by_a_managers_same_head_rerun(api):
     assert response.status_code == 422 and 'failed test receipt' in response.text
 
 
-def test_human_without_task_edit_rights_is_not_a_receipt_author(api):
-    task = ticket(api)
+def _human_without_task_edit_rights_is_not_a_receipt_author(api):
+    task = _row_ticket(api)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email,teams) VALUES('guest','Guest','guest@example.test','[]')")
         conv = H.conversation(c, task['conversation_id'])
@@ -374,11 +422,11 @@ def test_human_without_task_edit_rights_is_not_a_receipt_author(api):
     assert move(api, task).status_code == 422
 
 
-def test_nonparty_person_with_task_edit_rights_counts(api):
-    task = ticket(api)
+def _nonparty_person_with_task_edit_rights_counts(api):
+    task = _row_ticket(api)
     # The owner row is replaced last, so the first two persons count by their team and their delegation alone.
     for n, permission in enumerate(['mover', 'delegate', 'owner']):
-        _nonparty_counts(api, task if n == 0 else another_ticket(api, n), permission)
+        _nonparty_counts(api, task if n == 0 else _row_ticket(api), permission)
 
 
 def _nonparty_counts(api, task, permission):
@@ -427,8 +475,8 @@ def test_head_bound_failure_inherits_test_context_without_poisoning_other_head()
     assert test_receipts.at_head({'id': 't', 'note': text}, OLD)[0] == 'failed'
 
 
-def test_null_email_receipt_author_fails_closed_without_crashing(api):
-    task = ticket(api)
+def _null_email_receipt_author_fails_closed_without_crashing(api):
+    task = _row_ticket(api)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email,teams) VALUES('guest','Guest',NULL,'[]')")
         c.execute(
@@ -450,9 +498,8 @@ def test_null_email_receipt_author_fails_closed_without_crashing(api):
     assert response.status_code == 422 and 'missing test receipt' in response.text, response.text
 
 
-@pytest.mark.parametrize('handoff', ['move', 'child'])
-def test_environment_owner_receipt_counts_without_stored_owner(api, handoff):
-    task = ticket(api)
+def _environment_owner_receipt_counts_without_stored_owner(api, handoff):
+    task = _row_ticket(api)
     api.app.state.store.settings.owner_email = 'editor@acme.example'
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='owner'")
@@ -475,10 +522,10 @@ def test_environment_owner_receipt_counts_without_stored_owner(api, handoff):
     assert response.status_code == 200, response.text
 
 
-def test_removed_manager_receipt_does_not_count(api):
-    task = ticket(api)
+def _removed_manager_receipt_does_not_count(api):
+    task = _row_ticket(api)
     for n, removal in enumerate(['deleted_at', 'hidden_at', 'superseded_at']):
-        _removed_receipt(api, task if n == 0 else another_ticket(api, n), removal)
+        _removed_receipt(api, task if n == 0 else _row_ticket(api), removal)
 
 
 def _removed_receipt(api, task, removal):
@@ -504,8 +551,8 @@ def _removed_receipt(api, task, removal):
         assert test_receipts.at_head(facts, HEAD)[0] == 'passed'
 
 
-def test_manager_receipt_in_private_child_still_requires_mover_visibility(api):
-    task = ticket(api, private=False)
+def _manager_receipt_in_private_child_still_requires_mover_visibility(api):
+    task = _row_ticket(api, private=False)
     with api.app.state.store.transaction() as c:
         # Ana heads every bot that reports to no one, so cmo reports to another root person she does not manage.
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
@@ -539,8 +586,8 @@ def test_manager_receipt_in_private_child_still_requires_mover_visibility(api):
     assert move(api, task).status_code == 200
 
 
-def test_stored_owner_revokes_environment_owners_receipt_authority(api):
-    task = ticket(api)
+def _stored_owner_revokes_environment_owners_receipt_authority(api):
+    task = _row_ticket(api)
     api.app.state.store.settings.owner_email = 'former@acme.example'
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email,teams) VALUES('former','Former','former@acme.example','[]')")
@@ -562,3 +609,60 @@ def test_stored_owner_revokes_environment_owners_receipt_authority(api):
         )
     response = move(api, task)
     assert response.status_code == 422 and 'missing test receipt' in response.text, response.text
+
+
+def _authority_baseline(api):
+    """What the receipt-author checks change: the owner address in settings and the registry, the people roster, who
+    each bot reports to, and the humans and bots on file."""
+    with api.app.state.store.read() as c:
+        return {
+            'owner_email': api.app.state.store.settings.owner_email,
+            'meta': {
+                k: v for k, v in c.execute("SELECT key, value FROM registry_metadata WHERE key IN ('owner','people')")
+            },
+            'reports_to': list(c.execute('SELECT bot, reports_to FROM bot_config')),
+            'humans': {r[0] for r in c.execute('SELECT id FROM humans')},
+            'bots': {r[0] for r in c.execute('SELECT id FROM bots')},
+        }
+
+
+def _restore_authority(api, baseline):
+    """Put back what a fresh hub had, so each check judges its receipt author as it did alone."""
+    api.app.state.store.settings.owner_email = baseline['owner_email']
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key IN ('owner','people')")
+        for key, value in baseline['meta'].items():
+            c.execute('INSERT INTO registry_metadata VALUES(?,?)', (key, value))
+        c.execute('UPDATE bot_config SET reports_to=NULL')
+        for bot, reports_to in baseline['reports_to']:
+            c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (reports_to, bot))
+        for (who,) in list(c.execute('SELECT id FROM humans')):
+            if who not in baseline['humans']:
+                c.execute('DELETE FROM humans WHERE id=?', (who,))
+        for (bot,) in list(c.execute('SELECT id FROM bots')):
+            if bot not in baseline['bots']:  # the chain check's `boss`: a root bot Ana would otherwise head
+                for table, column in (('bot_settings', 'bot_id'), ('bot_config', 'bot'), ('bots', 'id')):
+                    c.execute(f'DELETE FROM {table} WHERE {column}=?', (bot,))
+
+
+def test_who_may_write_a_receipt_without_ci(api, subtests):
+    """Every receipt-author row in one hub: each check files its own ticket, and the owner, roster, reporting lines and
+    extra humans a check set are put back before the next one."""
+    baseline = _authority_baseline(api)
+    for check, args in (
+        (_manager_chain_and_editing_person_can_supply_no_ci_receipt, ()),
+        (_written_failure_is_not_cleared_by_a_managers_same_head_rerun, ()),
+        (_human_without_task_edit_rights_is_not_a_receipt_author, ()),
+        (_nonparty_person_with_task_edit_rights_counts, ()),
+        (_null_email_receipt_author_fails_closed_without_crashing, ()),
+        (_environment_owner_receipt_counts_without_stored_owner, ('move',)),
+        (_environment_owner_receipt_counts_without_stored_owner, ('child',)),
+        (_removed_manager_receipt_does_not_count, ()),
+        (_manager_receipt_in_private_child_still_requires_mover_visibility, ()),
+        (_stored_owner_revokes_environment_owners_receipt_authority, ()),
+    ):
+        with subtests.test(check.__name__, args=args):
+            try:
+                check(api, *args)
+            finally:
+                _restore_authority(api, baseline)

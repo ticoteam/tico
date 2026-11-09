@@ -20,7 +20,8 @@ from backend import threads
 from backend.tests.test_question_tasks import keep_asking
 from backend import updates
 from backend.auth import Identity
-from backend.store import H
+from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
+from backend.store import H, Problem
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
@@ -258,6 +259,62 @@ def test_a_mixed_bulk_change_holds_only_the_breaking_task(ruled):
     assert [s.get("code") for s in r.json()["tasks"]["skipped"]] == ["held"]
 
 
+def test_a_bulk_close_holds_a_subtask_and_its_parent_is_skipped_not_closed(ruled):
+    """The rule holds only the subtask. The subtask stays open, so the parent is skipped with subtasks_left_out: closing
+    the parent would close the held subtask through its cascade, which runs no rule check."""
+    api, _ = ruled
+    parent = post(
+        api, "tasks", {"owner": "ops", "title": "Launch the spring campaign", "body": "Plan it."}, token="ops-test"
+    )
+    kid = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Our favorite color is red",
+            "body": "Pick a palette.",
+            "relations": [{"task": parent["id"], "kind": "parent"}],
+        },
+        token="ops-test",
+    )
+    color_rule(api)  # after the two tasks exist: their own creation would be held by the same rule
+    r = api.post(
+        "/api/v2/task-bulk",
+        json={"filter": {"ids": [parent["id"], kid["id"]]}, "action": "close", "note": "Closing the batch"},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert (out["matched"], out["changed"]) == (2, 0)
+    assert {(t["id"], t["code"]) for t in out["tasks"]["skipped"]} == {
+        (kid["id"], "held"),
+        (parent["id"], "subtasks_left_out"),
+    }
+    rows = sql(api, "SELECT id, status FROM tasks WHERE id IN (?,?)", (parent["id"], kid["id"]))
+    assert {row["id"]: row["status"] for row in rows} == {parent["id"]: "open", kid["id"]: "open"}
+
+
+def test_a_dry_run_does_not_run_the_rule_check(ruled):
+    """A dry run skips the org rule check (a judge call per task, whose spend a rollback cannot take back): the task a rule
+    would hold counts as changed in the dry run, and the real run holds it."""
+    api, judge = ruled
+    kid = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Our favorite color is red", "body": "Pick a palette."},
+        token="ops-test",
+    )
+    color_rule(api)  # after the task exists: its own creation would be held by the same rule
+    body = {"filter": {"ids": [kid["id"]]}, "action": "close", "note": "Closing it"}
+    dry = api.post("/api/v2/task-bulk", json={**body, "dry_run": True}, headers=headers("ops-test"))
+    assert dry.status_code == 200, dry.text
+    assert (dry.json()["changed"], dry.json()["skipped"]) == (1, 0) and judge.calls == []
+    real = api.post("/api/v2/task-bulk", json=body, headers=headers("ops-test"))
+    assert real.status_code == 200, real.text
+    assert [(t["id"], t["code"]) for t in real.json()["tasks"]["skipped"]] == [(kid["id"], "held")]
+    assert len(judge.calls) == 1
+
+
 def test_a_note_to_a_bot_and_a_wake_bot_step_are_checked(ruled):
     api, judge = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}})
@@ -490,6 +547,177 @@ def test_a_hold_with_no_reviewer_is_a_block_the_owner_or_an_admin_releases(ruled
     assert len(bodies(api, "favorite color is teal")) == 1
 
 
+def _hire(api, pid):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id, name, email) VALUES(?, ?, ?)", (pid, pid.title(), f"{pid}@acme.example"))
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw["people"].append({"id": pid, "email": f"{pid}@acme.example"})
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
+
+
+def _leave(api, pid):
+    """The person's sign-in is turned off: they no longer count as a reviewer who is present."""
+    with api.app.state.store.transaction() as c:
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in raw["people"] if p["id"] == pid)["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
+
+
+def _app_support():
+    """Tico support in an app-only session: a human with no roster row, reading as an Admin does everywhere else."""
+    return Identity(SUPPORT_ACTOR, "human", via_token=True, token_label=SUPPORT_NAME, token_id="sa_test", support="app")
+
+
+def test_with_the_reviewer_gone_app_only_tico_support_reads_no_bot_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    _hire(api, "dan")
+    color_rule(api, if_broken="escalate", reviewer="dan")
+    held = say(api, "Our favorite color is gold")["held"]
+    assert hold_row(api, held["id"])["reviewer"] == "human:dan"
+    _leave(api, "dan")
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, held["id"])
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.held_for(c, app, ("message",)) == []
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, held["id"], auth)
+        assert kept.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as sent:
+            K.send(c, app, held["id"], hold_row(api, held["id"])["nonce"], auth=auth)
+        assert sent.value.status == 404
+    assert hold_row(api, held["id"])["state"] == "held" and bodies(api, "favorite color is gold") == []
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)
+    listed = get(api, "rule-holds", token="ben-test")["holds"]  # an Admin reads it, the reviewer being gone
+    assert [h["id"] for h in listed] == [held["id"]]
+    view = get(api, f"rule-holds/{held['id']}", token="ana-test")  # the owner too
+    assert view["can_send"]
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_the_reviewer_gone_app_only_tico_support_reads_no_person_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    _hire(api, "dan")
+    made = color_rule(api, reviewer="dan")
+    with api.app.state.store.transaction() as c:  # a person's held post, held by a rule whose editors can release it
+        c.execute(
+            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "h-cara-app",
+                "message",
+                json.dumps({"text": "Our favorite color is gold", "replay": {}}),
+                "human:cara",
+                "[]",
+                json.dumps([made["id"]]),
+                "{}",
+                "n-cara-app",
+                "held",
+                "human:dan",
+                None,
+                H.now(),
+            ),
+        )
+    _leave(api, "dan")
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, "h-cara-app")
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, "h-cara-app", auth)
+        assert kept.value.status == 404
+    assert hold_row(api, "h-cara-app")["state"] == "held"
+    assert "nonce" in get(api, "rule-holds/h-cara-app", token="ben-test")  # an Admin reads and releases it
+    assert "nonce" in get(api, "rule-holds/h-cara-app", token="ana-test")  # the owner too
+    kept = post(api, "rule-holds/h-cara-app/keep", {}, token="ben-test")
+    assert kept["state"] == "kept" and kept["decided_by"] == "human:ben"
+
+
+def _app_reads_nothing(api, hold_id):
+    """App-only Tico support sees no hold, lists none, keeps none and sends none: the hold stays held."""
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, hold_id)
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, hold_id, auth)
+        assert kept.value.status == 404
+        with pytest.raises(Problem) as sent:
+            K.send(c, app, hold_id, hold_row(api, hold_id)["nonce"], auth=auth)
+        assert sent.value.status == 404
+    assert hold_row(api, hold_id)["state"] == "held"
+
+
+def test_with_no_reviewer_app_only_tico_support_reads_no_bot_hold_and_the_owner_and_admin_do(ruled, monkeypatch):
+    api, _ = ruled
+    _nobody_near_ops(api)
+    monkeypatch.setattr(K, "owner_or_admin", lambda c: None)  # no person on the team to name as reviewer
+    color_rule(api, if_broken="escalate")
+    held = say(api, "Our favorite color is gold")["held"]
+    assert held["outcome"] == "blocked" and hold_row(api, held["id"])["reviewer"] is None
+    _app_reads_nothing(api, held["id"])
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ben-test")  # an Admin reads it
+    assert [h["id"] for h in get(api, "rule-holds", token="ben-test")["holds"]] == [held["id"]]
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ana-test")  # the owner too
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_no_reviewer_app_only_tico_support_reads_no_person_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    made = color_rule(api)
+    with api.app.state.store.transaction() as c:  # a person's held post whose rule names no reviewer
+        c.execute(
+            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "h-cara-none",
+                "message",
+                json.dumps({"text": "Our favorite color is gold", "replay": {}}),
+                "human:cara",
+                "[]",
+                json.dumps([made["id"]]),
+                "{}",
+                "n-cara-none",
+                "held",
+                None,
+                None,
+                H.now(),
+            ),
+        )
+    _app_reads_nothing(api, "h-cara-none")
+    assert "nonce" in get(api, "rule-holds/h-cara-none", token="ben-test")  # an Admin reads and releases it
+    assert "nonce" in get(api, "rule-holds/h-cara-none", token="ana-test")  # the owner too
+    assert post(api, "rule-holds/h-cara-none/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_the_reviewer_present_a_bot_hold_is_not_read_by_app_only_tico_support(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    held = say(api, "Our favorite color is gold")["held"]
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        assert not K._is_reviewer(app, K._hold(c, held["id"]), c, auth)
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ben-test")  # the reviewer reads it as before
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
 def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     api, _ = ruled
     color_rule(api, reviewer="ben")
@@ -685,12 +913,12 @@ def test_failing_open_delivers_and_writes_unchecked(ruled, monkeypatch, how):
     api, judge = ruled
     color_rule(api)
     if how == "timeout":
-        monkeypatch.setitem(K.DEADLINES, "medium", 0.2)
+        monkeypatch.setitem(K.DEADLINES, "low", 0.2)
         judge.hold = threading.Event()
     elif how == "budget":
-        api.app.state.store.settings.rules_monthly_usd = 1.0
+        api.app.state.store.settings.decisions_monthly_usd = 1.0
         with api.app.state.store.transaction() as c:
-            H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
+            H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     else:
         judge.fail = RuntimeError("provider down")
     got = say(api, "Our favorite color is gold")
@@ -726,7 +954,7 @@ def test_the_check_runs_under_its_levels_deadline(ruled):
 
     api.app.state.judge = engine
     assert say(api, "Our favorite color is gold")["held"]
-    assert 0 < left[0] <= K.deadline("medium")
+    assert 0 < left[0] <= K.deadline("low")
 
 
 def test_a_full_pool_goes_through_unchecked_at_once(ruled):
@@ -771,17 +999,46 @@ def test_an_open_breaker_goes_through_unchecked_at_once_and_a_probe_closes_it(ru
     assert calls.failures == 0 and say(api, "Our favorite color is blue")["held"]
 
 
-def test_the_rules_budget_is_apart_from_decides(ruled):
+def test_a_rule_checks_spend_lands_in_the_decisions_budget(ruled):
     api, judge = ruled
     color_rule(api)
-    settings = api.app.state.store.settings
-    settings.decisions_monthly_usd, settings.rules_monthly_usd = 1.0, 50.0
-    with api.app.state.store.transaction() as c:
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 50.0
+    assert say(api, "Our favorite color is gold")["held"]
+    assert events(api, "rules.spend") == []  # one budget: no spend rows of its own
+    [spend] = events(api, "judge.spend")
+    assert spend["target"].startswith("rule-check@") and json.loads(spend["detail"])["cost_usd"] > 0
+    with store.read() as c:
+        assert K.B.spent_this_month(c) == json.loads(spend["detail"])["cost_usd"]
+    [call] = events(api, "judge.call")
+    assert json.loads(call["detail"])["rules"]  # per-rule counts still read the rule ids off the call
+    assert not hasattr(K, "BUDGET")
+
+
+def test_a_spent_decisions_cap_stops_rule_checks(ruled):
+    api, judge = ruled
+    color_rule(api)
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    with store.transaction() as c:
         H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
-    assert say(api, "Our favorite color is gold")["held"]  # Decide's cap is spent; the rules' is not
-    with api.app.state.store.read() as c:
-        assert K.B.spent_this_month(c, None, K.BUDGET) > 0
-        assert K.B.over_spend_cap(c, settings) and not K.B.over_spend_cap(c, settings, None, K.BUDGET)
+    got = say(api, "Our favorite color is gold")
+    assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
+    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
+    assert get(api, "rules/stats")["usd_left"] == 0
+
+
+def test_a_decisions_cap_spent_while_a_check_waits_its_turn_is_the_budget_too(ruled):
+    api, judge = ruled
+    color_rule(api)
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    with store.transaction() as c:  # under the cap, but with no room for one more call's most
+        H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
+    got = say(api, "Our favorite color is gold")
+    assert "held" not in got and judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
+    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["budget"]
+    assert events(api, "judge.call") == []  # nothing was asked
 
 
 def test_stats_and_the_team_setting_turn_checks_off(ruled):
@@ -2383,3 +2640,50 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
     # A person's own email is not checked.
     post(api, "email/sends", {"mailbox": BOX, "raw": mime(body="Our favorite color is gold, says Ana.")})
     assert len(judge.calls) == 1
+
+
+def test_a_rule_check_asks_jev_at_low_and_never_steps_up_to_medium(ruled):
+    # Rule checks spend on Jev only: the Decide level is always Low, whatever the rule or the operation.
+    api, judge = ruled
+    color_rule(api)
+    levels = []
+
+    def engine(state, questions, label=None, level=None):
+        levels.append(level)
+        return judge(state, questions, label)
+
+    api.app.state.judge = engine
+    assert say(api, "Our favorite color is gold")["held"]
+    assert levels == ["low"]
+
+
+def test_a_rule_check_whose_jev_fails_is_unchecked_and_never_asks_the_company_model(ruled, monkeypatch):
+    from clients import judge as J
+
+    from backend import judge as B
+
+    api, judge = ruled
+    color_rule(api)
+    judge.fail = J.JudgeError("unavailable", "Jev did not answer", retryable=True)
+    company = []
+
+    def backup(state, questions, label=None, level=None):
+        company.append(label)
+        return judge(state, questions, label)
+
+    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    assert "held" not in say(api, "Our favorite color is gold")
+    assert company == [], "the company's own model is not a rule check's fallback"
+    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["unavailable"]
+
+
+def test_a_rule_checks_judge_call_names_the_rules_it_asked(ruled):
+    api, judge = ruled
+    made = color_rule(api)
+    say(api, "Our favorite color is gold")
+    with api.app.state.store.read() as c:
+        details = [
+            json.loads(r[0])
+            for r in c.execute("SELECT detail FROM events WHERE action='judge.call' AND target LIKE 'rule-check%'")
+        ]
+    assert details and details[-1]["rules"] == [made["id"]] and details[-1]["level"] == "low"

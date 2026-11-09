@@ -572,9 +572,10 @@ def listing(c, settings, bot, reads=None):
             tools.append(repo)
     from .repositories import access
 
-    app_row = read_cache.one(c, "SELECT org FROM github_app WHERE id='app'")
-    if repo and not app_row and repo in tools:
-        repo["detail"] += "; uses the computer's own GitHub sign-in (the GitHub App is not connected)"
+    app_row = read_cache.one(c, "SELECT org, installation_id FROM github_app WHERE id='app'")
+    # Connected and installed, as the GitHub card counts it: an App that was never installed reaches no repository.
+    if repo and not (app_row and app_row["installation_id"]) and repo in tools:
+        repo["detail"] += "; not backed up: GitHub is not connected"
     from .github_app import repo_of
 
     own = repo_of(state['row']['repo'] if state['row'] else '', settings.github_owner)

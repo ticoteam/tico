@@ -28,6 +28,8 @@ interface TaskDialog extends HTMLDialogElement {
   focusProp?: string;
   propsErrs?: PropsErrors | null;
   liveTask?: PropTask | null;
+  taskLive?: TaskLive | null;
+  saveQueue?: Promise<unknown>;
 }
 // The rights a signed-in person has on one task (taskPropRights).
 interface PropRights { mover: boolean; party: boolean; live: boolean; edit: boolean; links: boolean; reopen: boolean; snooze: boolean; }
@@ -125,7 +127,7 @@ function taskPropsHTML(t: PropTask, opts = {}): string {
   const dueDay = dueAt ? new Date(dueDayAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
   const dueWords = !dueAt ? '' : info?.kind === 'wake' ? `${info.words.split(' ')[0]} ${dueDay}` : dueDay;
   const dueLate = !!info?.late;
-  const dueISO = dueAt ? new Date(dueDayAt - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
+  const dueISO = dueAt ? new Date(Number(dueDayAt) - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
   rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date data-task-field="due" tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
@@ -257,7 +259,7 @@ function taskPropsMsgPaint(d: TaskDialog): void {
 
 // ---- one small menu for every row (and the "…" menu): arrow keys, Home/End, Enter, Esc; an optional find box
 function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry}: PropMenuOptions<T>): PropPop | undefined {
-  let pop = $('.prop-pop', d) as PropPop | null;
+  let pop: PropPop | null = $('.prop-pop', d);
   if (pop?.matches(':popover-open')) { const same = pop.anchor === anchor; pop.hidePopover(); if (same) return; }
   if (pop?.anchor && pop.anchor !== anchor) pop.anchor.setAttribute('aria-expanded', 'false');   // only one menu, only one expanded
   if (!pop) {
@@ -322,7 +324,7 @@ function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {l
 }
 // A redraw replaces the dialog's content; one that lands while a menu is open waits for it to close.
 function taskMenuSettled(d: TaskDialog) {
-  const pop = $('.prop-pop', d) as PropPop | null;
+  const pop: PropPop | null = $('.prop-pop', d);
   if (!pop?.matches(':popover-open')) return Promise.resolve();
   return new Promise<Event>(resolve => pop.addEventListener('menuclosed', resolve, {once: true}));
 }
@@ -464,7 +466,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       propMenu(d, b, {label: 'Expected result', entry: 'What should be ready to inspect?',
         onEntry: note => void save('check_back_note', {check_back_note: note})});
     } else if (key === 'due') {
-      const input = $('[data-prop-date]', d) as HTMLInputElement | null;
+      const input: HTMLInputElement | null = $('[data-prop-date]', d);
       d.focusProp = 'due';
       if (!input) throw new Error('The due date field is missing from the task dialog');
       try { input.showPicker(); } catch { input.removeAttribute('tabindex'); input.classList.add('shown'); input.focus(); }
@@ -490,7 +492,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
   if (publication) publication.onchange = () => save('publication', {visibility: publication.checked ? 'public' : 'private'});
   // A date saves only when it is whole and sensible. With the native picker that is its change; typed by hand (the
   // fallback field), only on Enter or leaving the field, so a half-typed year like 0002 never saves.
-  const date = $('[data-prop-date]', d) as HTMLInputElement | null;
+  const date: HTMLInputElement | null = $('[data-prop-date]', d);
   if (date) date.onkeydown = ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); date.dispatchEvent(new Event('change')); }
   };

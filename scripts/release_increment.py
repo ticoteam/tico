@@ -4,14 +4,14 @@ At most ONE full Release validation (ci.yml's whole gate) is dispatched automati
 outcome (full_within_day). The anchor is the newest full validation of those 24 hours that ran the suite to an answer
 whose commit main still contains: a green one, or a red one naming its failures. It is the anchor whichever release it
 validated, and the day's other candidates run only what their diff from it selects. A cancelled full run, or a red one
-with unnamed failures (a build, a VM, a startup failure), is no anchor, and it allows no second full run: the window
+with unnamed failures (a build, a VM, a startup failure), is no anchor, and it allows no second full run: the train
 waits, and a person runs Release train by hand to validate again (a manual run dispatches as it does today). Once the
-full run is a day old, the window may dispatch one again. A candidate after the anchor runs only what its diff from the
+full run is a day old, the train may dispatch one again. A candidate after the anchor runs only what its diff from the
 anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set,
 the factory checks when their inputs changed, the product part (the upgrade journey and the Docker smoke checks) when its
 previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
 the failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until
-a commit since it selects one of its failures; until then the window waits. A green validation after it (full or
+a commit since it selects one of its failures; until then the train waits. A green validation after it (full or
 incremental, of a commit main still contains) supersedes it.
 
 The decisions here are pure. The GitHub reads (runs, job logs) come from scripts/release_train.py, and the checkout's
@@ -19,6 +19,7 @@ diff and selection from Checkout below, so the unit tests and the replay run the
 """
 
 import argparse
+import ast
 from collections import Counter
 from datetime import timedelta
 import json
@@ -32,14 +33,13 @@ import pr_checks  # beside this module; stdlib only
 
 ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_AGE = timedelta(hours=24)
-MAX_PLAN_CHARS = 60000  # a workflow_dispatch input is limited in size; a bigger plan runs the full validation instead
 FACTORY, PRODUCT, DESKTOP = "factory", "product", "desktop"
 DESKTOP_INPUTS = ("app/",)  # the Tauri desktop app: its part of the gate tests it
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"
 MATRIX_KEYS = ("name", "part", "shard", "workers", "runner", "binaries")
-JOB_NAME = re.compile(r"(python|browser)-\d+|conformance|contracts|product|desktop")
+JOB_NAME = re.compile(r"(python|browser)-\d+|conformance|contracts(-\d+)?|product|desktop")
 TOKEN_PYTEST = re.compile(r"\bFAILED (\S+?)::")
 TOKEN_BROWSER = re.compile(r"\bFAIL +(?:\S*/)?([\w.-]+)\.cjs\b")
 
@@ -74,9 +74,10 @@ def failed_tokens(jobs):
 
 
 def anchor_of(records, now, contained, named):
-    """The anchor: the newest full validation that finished within the last 24 hours (by finish time), whose commit main
-    still contains, and that ran the suite to an answer: green, or red naming its failures. `named(record)` gives a red
-    record's failed tokens (a set; None when a failure cannot be named). A cancelled run, and a red one with unnamed
+    """The anchor: the newest validation, full or incremental, that finished within the last 24 hours (by finish time),
+    whose commit main still contains, and that ran the suite to an answer: green, or red naming its failures. A green
+    incremental validation covers its own diff from its anchor, so the chain of incrementals anchors the next one.
+    `named(record)` gives a red record's failed tokens (a set; None when a failure cannot be named). A cancelled run, and a red one with unnamed
     failures (a build, a VM, a startup failure), is no anchor; full_within_day still counts it, so no second full run is
     dispatched on its account. Returns the record with its "failed" tokens (empty when green), or None. `records` are
     every release's validations (validation_record in release_train): the anchor may have validated an earlier
@@ -84,8 +85,7 @@ def anchor_of(records, now, contained, named):
     candidates = [
         record
         for record in records
-        if not record["incremental"]
-        and record["status"] == "completed"
+        if record["status"] == "completed"
         and record["conclusion"] != "cancelled"
         and record["finished"] is not None
         and now - record["finished"] <= ANCHOR_AGE
@@ -104,7 +104,7 @@ def anchor_of(records, now, contained, named):
 
 def full_within_day(records, now):
     """The newest full validation that finished within the last 24 hours, whatever its outcome (a cancelled one, or a red
-    one with unnamed failures, too), or None. While it exists the window dispatches no full validation automatically:
+    one with unnamed failures, too), or None. While it exists the train dispatches no full validation automatically:
     a person runs Release train by hand to validate again. `records` are every release's validations, as anchor_of
     reads them."""
     finished = [
@@ -135,7 +135,7 @@ def red_since(records, anchor, contained):
     """The newest red validation that no later green one supersedes, or None. Reds count back to the anchor when there is
     one, else back to the newest green validation of any release. A green validation (full or incremental, of a commit
     main still contains) supersedes the reds older than it. Reds carry across releases: a red nothing later passed is
-    still main's failure, and dropping it at the next window would leave its failure unrun. `records` are newest first,
+    still main's failure, and dropping it at the next release would leave its failure unrun. `records` are newest first,
     as anchor_of reads them."""
     for record in records:
         if anchor is not None and record["id"] == anchor["id"]:
@@ -153,7 +153,7 @@ def names(items):
 
 
 def red_rule(red, head, since_red):
-    """Whether the window runs head again after a red validation, and the line it logs.
+    """Whether the train runs head again after a red validation, and the line it logs.
 
     `red` is the red validation (sha, url, conclusion, failed: a set of tokens, or None when unnamed); `since_red` is the
     tokens the commits since red select (None when their diff could not be read). A red whose head is still main's head
@@ -186,13 +186,13 @@ def red_rule(red, head, since_red):
             names(hits),
             head[:12],
         )
-    return False, "no commit since %s selects what failed there (%s): the window waits for such a commit" % (
+    return False, "no commit since %s selects what failed there (%s): the train waits for such a commit" % (
         short,
         names(failed),
     )
 
 
-def selection_tokens(selected, changed):
+def selection_tokens(selected, changed, factory_root=pr_checks.ROOT):
     """What a selection runs, as the same tokens failure_tokens reads from a log. Smoke scripts are not included: they
     run on every incremental validation, so they cannot be the commit that fixes a failure."""
     tokens = set(selected["python"]) | {f"ui/tests/{name}.cjs" for name in selected["browser"]}
@@ -204,25 +204,64 @@ def selection_tokens(selected, changed):
         tokens.add(PRODUCT)
     if any(name.startswith(DESKTOP_INPUTS) for name in changed):
         tokens.add(DESKTOP)
-    if pr_checks.factory_reason(list(changed)) is not None:
+    if pr_checks.factory_reason(list(changed), root=factory_root) is not None:
         tokens.add(FACTORY)
     return tokens
 
 
-def load_tables(path):
+def load_tables(path, root):
     """The measured seconds the groups balance with (scripts/test-timings.json): `seconds` for python files (the default
-    run's and the release gate's), `browser` for scripts, and `slow` the python files only the release gate collects."""
+    run's and the release gate's), `browser` for scripts, and `slow_only` the python files the release gate collects
+    only because every one of their tests is slow. A file the default table lacks is not slow-only by that alone: the
+    default table is recorded from older runs."""
     table = json.loads(Path(path).read_text())
     default, release, browser = (dict(table.get(key, {})) for key in ("default", "release", "browser"))
-    return {"seconds": {**release, **default}, "browser": browser, "slow": set(release) - set(default)}
+    only_release = set(release) - set(default)
+    slow_only = {name for name in only_release if slow_marks(Path(root) / name)[1]}
+    return {"seconds": {**release, **default}, "browser": browser, "slow_only": slow_only}
+
+
+def _is_slow_mark(node):
+    return isinstance(node, ast.Attribute) and node.attr == "slow" and _attr_name(node.value) == "mark"
+
+
+def _attr_name(node):
+    return node.attr if isinstance(node, ast.Attribute) else None
+
+
+def slow_marks(path):
+    """(has_slow, all_slow) for a python test file, read from its AST (a string that mentions a mark does not count):
+    has_slow if any `pytest.mark.slow` appears; all_slow if the module's pytestmark is slow or every test function's own
+    decorators are. A parametrised test with some slow cases is not all_slow, so it stays in the python lane too."""
+    try:
+        tree = ast.parse(Path(path).read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return False, False
+    has = any(_is_slow_mark(node) for node in ast.walk(tree))
+    module = [
+        statement.value
+        for statement in tree.body
+        if isinstance(statement, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in statement.targets)
+    ]
+    if any(_is_slow_mark(node) for value in module for node in ast.walk(value)):
+        return True, True
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name.startswith("test")]
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            functions += [
+                item for item in node.body if isinstance(item, ast.FunctionDef) and item.name.startswith("test")
+            ]
+    all_slow = bool(functions) and all(
+        any(_is_slow_mark(d) or (isinstance(d, ast.Call) and _is_slow_mark(d.func)) for d in fn.decorator_list)
+        for fn in functions
+    )
+    return has, all_slow
 
 
 def has_slow_tests(path):
-    """Whether a python test file marks a test slow: its slow tests run only with `-m slow`, the contracts lane."""
-    try:
-        return "mark.slow" in Path(path).read_text(errors="replace")
-    except OSError:
-        return False
+    """Whether a python test file marks a test slow: its slow tests run in the contracts lane (-m slow)."""
+    return slow_marks(path)[0]
 
 
 def job(name, part, files=(), workers="4", **extra):
@@ -238,7 +277,15 @@ def job(name, part, files=(), workers="4", **extra):
 
 
 def plan_for(
-    selected, changed, carried, exists, smoke_browser, tables, has_slow=lambda path: False, previous_changed=False
+    selected,
+    changed,
+    carried,
+    exists,
+    smoke_browser,
+    tables,
+    has_slow=lambda path: False,
+    previous_changed=False,
+    factory_root=pr_checks.ROOT,
 ):
     """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
@@ -247,7 +294,7 @@ def plan_for(
     `previous_changed`: the candidate's previous release is not the anchor's, so the product part runs (its upgrade
     journey starts from the previous release)."""
     carried = set(carried or ())
-    slow = tables["slow"]
+    slow_only = tables["slow_only"]
     python = set(selected["python"])
     browser = set(selected["browser"]) | set(smoke_browser)
     conformance = bool(selected.get("conformance"))
@@ -267,17 +314,18 @@ def plan_for(
         else:
             dropped.append(token)  # a test file that is gone since: nothing to run
     python = sorted(name for name in python if exists(name))
-    # The python lane runs `-m "not slow"`: a failed file's slow tests run in the contracts lane (-m slow) as well.
+    # The python lane runs `-m "not slow"`, so every file with a slow test runs those in the contracts lane (-m slow)
+    # as well; a file whose tests are all slow runs only there.
     contract_files = sorted(
         ({*pr_checks.CONTRACT_TESTS} if contracts else set())
-        | {n for n in python if n in slow}
+        | {n for n in python if n in slow_only or has_slow(n)}
         | {n for n in carried_python if has_slow(n)}
     )
-    python = [name for name in python if name not in slow]
+    python = [name for name in python if name not in slow_only]
     browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
     product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
-    factory = pr_checks.factory_reason(list(changed)) is not None or FACTORY in carried
+    factory = pr_checks.factory_reason(list(changed), root=factory_root) is not None or FACTORY in carried
     jobs = build_jobs(
         python, browser, contract_files, conformance, selected.get("rust") or [], product, desktop, tables
     )
@@ -298,11 +346,18 @@ def plan_for(
     }
 
 
+def warn(lines):
+    """Planner annotations go to stderr: stdout carries the matrix JSON."""
+    for line in lines:
+        print(line, file=sys.stderr)
+
+
 def build_jobs(python, browser, contract_files, conformance, rust, product, desktop, tables):
     """The gate's VMs for these files, grouped by measured seconds the way pr_checks.prepare groups them."""
     jobs = []
     if python:
         split, loads = pr_checks.groups(Counter(dict.fromkeys(python, 1)), tables["seconds"])
+        warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "Python"))
         jobs += [
             job(f"python-{i}", "python", files, seconds=load)
             for i, (files, load) in enumerate(zip(split, loads, strict=True), 1)
@@ -315,6 +370,7 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
             kind="browser",
             fallback=pr_checks.UNTIMED_SCRIPT_SECONDS,
         )
+        warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["browser"], pr_checks.JOB_SECONDS, "browser"))
         jobs += [
             job(f"browser-{i}", "browser", files, workers="2", binaries="no", seconds=load)
             for i, (files, load) in enumerate(zip(split, loads, strict=True), 1)
@@ -323,22 +379,34 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
     if conformance:
         jobs.append(job("conformance", "python", [pr_checks.CONFORMANCE], crates=list(rust)))
     if contract_files:
-        jobs.append(job("contracts", "python", contract_files))
+        # The contracts lane runs these files' slow tests (-m slow), packed into VMs by measured seconds like the python lane.
+        split, loads = pr_checks.groups(Counter(dict.fromkeys(contract_files, 1)), tables["seconds"])
+        warn(pr_checks.overrun_warnings(loads, pr_checks.SETUP_SECONDS["python"], pr_checks.JOB_SECONDS, "contracts"))
+        packed = [(files, load) for files, load in zip(split, loads, strict=True) if files]
+        names = ["contracts"] if len(packed) == 1 else [f"contracts-{i}" for i in range(1, len(packed) + 1)]
+        jobs += [job(name, "python", files, seconds=load) for name, (files, load) in zip(names, packed, strict=True)]
     if product:
-        jobs.append(job("product", "product", workers="2", binaries="no"))
+        # The product and desktop parts run hosted_release_check's native_binaries, so their VMs place the release binaries.
+        jobs.append(job("product", "product", workers="2"))
     if desktop:
-        jobs.append(job("desktop", "desktop", workers="2", binaries="no"))
+        jobs.append(job("desktop", "desktop", workers="2"))
     return jobs
 
 
 def plan_json(plan):
-    """The plan as the dispatch input carries it, or None when it is too big for one (the full validation runs then)."""
-    text = json.dumps(plan, separators=(",", ":"), sort_keys=True)
-    return text if len(text) <= MAX_PLAN_CHARS else None
+    """The plan as JSON text (one line). Release validation makes the plan itself from its checkout, so its size is no
+    limit: only the anchor, the head and the carried names are dispatched."""
+    return json.dumps(plan, separators=(",", ":"), sort_keys=True)
+
+
+# The full validation's python VMs (about 25,800 one-worker seconds of tests): 36 of them hold about 720 one-worker
+# seconds each, about 3 minutes of tests with setup on top, so none runs past 7 minutes. 28 ran 5-7.7 minutes each (Nov 9, run 42540470617).
+FULL_PYTHON_SHARDS = 36
 
 
 def full_matrix():
-    """The full validation's gate VMs: the product part, four browser shards, 28 python shards and the desktop part."""
+    """The full validation's gate VMs: the product part, four browser shards, FULL_PYTHON_SHARDS python shards and the
+    desktop part."""
     jobs = [{"name": "product", "part": "product", "shard": "", "workers": "2", "runner": RUNNER}]
     jobs += [
         {
@@ -355,12 +423,12 @@ def full_matrix():
         {
             "name": f"python-{k}",
             "part": "python",
-            "shard": f"{k}/28",
+            "shard": f"{k}/{FULL_PYTHON_SHARDS}",
             "workers": "4",
             "runner": RUNNER,
             **({} if k <= 2 else {"binaries": "no"}),
         }
-        for k in range(1, 29)
+        for k in range(1, FULL_PYTHON_SHARDS + 1)
     ]
     jobs.append({"name": "desktop", "part": "desktop", "shard": "", "workers": "2", "runner": RUNNER})
     return jobs
@@ -386,7 +454,7 @@ def matrix_of(plan_text):
 
 
 class Checkout:
-    """What a commit range selects, read from the checkout (the window job's, at main's head)."""
+    """What a commit range selects, read from the checkout (the train job's, at main's head)."""
 
     def __init__(self, root=ROOT):
         self.root = Path(root)
@@ -418,16 +486,17 @@ class Checkout:
         """The tokens the commits base..head select, or None when the diff cannot be read."""
         try:
             changed, selected = self.selected(base, head)
-        except Exception:  # noqa: BLE001 - an unreadable diff is a fact the window logs, not a crash
+        except Exception:  # noqa: BLE001 - an unreadable diff is a fact the train logs, not a crash
             return None
-        return selection_tokens(selected, changed)
+        return selection_tokens(selected, changed, self.root)
 
     def plan(self, base, head, carried, previous_changed=False):
-        """The incremental plan for base..head with the carried failures, or None when it is too big to dispatch.
-        `previous_changed`: the candidate's previous release is not the anchor's (plan_for runs the product part)."""
+        """The incremental plan for base..head with the carried failures, as JSON text. Raises when it cannot be made (a
+        commit missing from the checkout). `previous_changed`: the candidate's previous release is not the anchor's
+        (plan_for runs the product part)."""
         changed, selected = self.selected(base, head)
         _, smoke_browser = pr_checks.smoke(self.root)
-        tables = load_tables(self.root / "scripts" / "test-timings.json")
+        tables = load_tables(self.root / "scripts" / "test-timings.json", self.root)
         plan = plan_for(
             selected,
             changed,
@@ -437,8 +506,19 @@ class Checkout:
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
             previous_changed=previous_changed,
+            factory_root=self.root,
         )
         return plan_json(plan)
+
+
+def carried_of(text):
+    """The carried failures a dispatch names: a JSON list of tokens (empty text: none)."""
+    if not (text or "").strip():
+        return set()
+    names = json.loads(text)
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise ValueError("carried failures are a JSON list of test names")
+    return set(names)
 
 
 def main(argv=None):
@@ -446,7 +526,21 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="action", required=True)
     matrix = sub.add_parser("matrix", help="print the gate's matrix for a plan (empty: the full validation's)")
     matrix.add_argument("plan", nargs="?", default="")
+    plan = sub.add_parser("plan", help="print the incremental plan for anchor..head, made from a checkout")
+    plan.add_argument("--root", required=True, help="the checkout that holds the candidate's tree and history")
+    plan.add_argument("--base", required=True, help="the anchor commit")
+    plan.add_argument("--head", required=True, help="the candidate commit")
+    plan.add_argument("--carried", default="", help="JSON list of the carried failed tests")
+    plan.add_argument("--anchor-previous", default="", help="the release the anchor validated against")
+    plan.add_argument("--previous", required=True, help="the release this candidate is compared with")
     args = parser.parse_args(argv)
+    if args.action == "plan":
+        previous_changed = bool(args.anchor_previous) and args.anchor_previous != args.previous
+        text = Checkout(args.root).plan(
+            args.base, args.head, carried_of(args.carried), previous_changed=previous_changed
+        )
+        print(text)
+        return 0
     print(json.dumps(matrix_of(args.plan), separators=(",", ":")))
     return 0
 

@@ -22,6 +22,16 @@ STEPS = [
     ("Post Release QA", "review"),
     ("Done", "done"),
 ]
+NO_QA_STEPS = [
+    ("On Deck", "open"),
+    ("In Progress", "doing"),
+    ("Review 1", "review"),
+    ("Review 1 Fixes", "doing"),
+    ("Review 2", "review"),
+    ("Review 2 Fixes", "doing"),
+    ("Pending Release", "review"),
+    ("Done", "done"),
+]
 
 
 def receipt(api, task, head=HEAD):
@@ -52,9 +62,9 @@ def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runt
     return turn
 
 
-def ticket(api, step="Review 1", labels=()):
+def ticket(api, step="Review 1", labels=(), steps=STEPS):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in steps])
         rules.seed_dev(c)
     task = post(
         api,
@@ -353,6 +363,44 @@ def test_a_board_without_qa_merges_after_its_last_review_once_ci_is_green(api):
     assert len([m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]) == 1, "once per head"
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
     assert step(api, task) == "Pending Release"
+
+
+def test_a_board_without_qa_merges_once_review_2_approves_and_ci_is_green(api):
+    """The Dev board's own settings, with no flow set here: a board without QA steps hands Review 2's approval to the
+    merge, which waits for green CI."""
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    verdict(api, check(api, task, "Review 2: PR #412"), "approve")
+    assert step(api, task) == "Review 2"
+    assert not builder_jobs(api), "nothing to do until CI is green"
+    _suite(api, "github-actions", "completed", "success", sha=HEAD)
+    merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD
+    hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
+    assert step(api, task) == "Pending Release"
+
+
+def test_a_board_without_qa_files_an_unanswered_review_2_again_and_never_passes_it_on(api):
+    """Review 2 on the recommended board is filed again, not skipped: the stale check is closed and the change stays at
+    Review 2, with no merge handed off by the timeout."""
+    from datetime import timedelta
+
+    task = ticket(api, step="Review 2", steps=NO_QA_STEPS)
+    review = check(api, task, "Review 2: PR #412")
+    with api.app.state.store.transaction() as c:
+        later = H.parse_ts(H.now()) + timedelta(hours=2)
+        assert V.timeouts(c, later.strftime("%Y-%m-%dT%H:%M:%S.%fZ")) == [], "a refile moves no ticket"
+        assert H.task(c, review["id"])["status"] == "closed"
+    assert step(api, task) == "Review 2"
+    with api.app.state.store.read() as c:
+        events = {
+            (r[0], r[1])
+            for r in c.execute(
+                "SELECT subject_id, kind FROM history_events WHERE subject_id IN (?, ?)", (task["id"], review["id"])
+            )
+        }
+    assert (task["id"], "check_refiled") in events, "the stale check is recorded as refiled"
+    assert not {kind for _, kind in events} & {"round_skipped", "verdict_move"}, "the timeout passes nothing on"
+    assert not [m for m in builder_jobs(api) if "merge PR" in str(m)], "no merge is handed off by the timeout"
 
 
 def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_recorded(api):
@@ -851,6 +899,34 @@ def test_a_task_read_rebuilds_pending_checks_from_github(api, monkeypatch):
     assert [m["refs"]["pr_head"] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"] == [HEAD]
 
 
+def test_a_task_read_finishes_a_failed_head_behind_a_suite_that_never_started(api, monkeypatch):
+    """Each task read refreshes the link and moves its updated_at, so with the task open the pending sweep never finds
+    the link quiet: the read itself must read the checks of a failing link that still holds a running one."""
+    import threading
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
+    _suite(api, "github-actions", "completed", "cancelled", sha=HEAD, id=1)
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    assert _link(api, task)["checks"] == "failing" and not _failed_checks(api)
+    service, _ = _github(
+        api,
+        monkeypatch,
+        [
+            _suite_row(1, "github-actions", "completed", "cancelled", runs=2),
+            _suite_row(STUCK, "tico-team-bots", "queued"),
+        ],
+        [{"name": "tests", "status": "completed", "conclusion": "cancelled"}],
+    )
+    G.refresh_task_prs(service, task["id"])
+    for worker in threading.enumerate():
+        if worker.name == "tico-pr-refresh":
+            worker.join(5)
+    assert "pending" not in H._json(_link(api, task)["detail"], {})["checks"].values()
+    assert len(_failed_checks(api)) == 1
+
+
 # The suites are made when the test runs: a "queued 2 minutes ago" made at collection is stuck by the time a long suite
 # reaches it (github.STUCK_SUITE_MINUTES).
 @pytest.mark.parametrize(
@@ -1076,6 +1152,156 @@ def test_a_finished_suite_with_no_check_run_keeps_its_failure(api, monkeypatch):
     assert G.refresh_pending_checks(service) == [_link(api, task)["id"]]
     assert _link(api, task)["checks"] == "failing"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def _failed_checks(api):
+    with api.app.state.store.transaction() as c:
+        from backend import github as G
+
+        G.flush_wakes(c)
+    return [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "failed_check"]
+
+
+def test_a_failed_head_behind_a_suite_that_never_started_hands_the_failure_to_the_builder(api, monkeypatch):
+    """Nov 8, PR 3055: QA passed at the head, the Actions run was cancelled, and App suites never started. The failure
+    outranks the pending suites, so the link read "failing", the pending sweep skipped it, and the stale pending suites
+    kept the webhook from finishing the head: no failed-check hand-off came, and the ticket sat for hours."""
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)  # requested with the push, never started
+    _suite(api, "github-actions", "completed", "cancelled", sha=HEAD, id=1)
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    assert _link(api, task)["checks"] == "failing"
+    assert not _failed_checks(api), "the head never finished"
+    service, _ = _github(
+        api,
+        monkeypatch,
+        [
+            _suite_row(1, "github-actions", "completed", "cancelled", runs=2),
+            _suite_row(STUCK, "tico-team-bots", "queued"),
+        ],
+        [{"name": "tests", "status": "completed", "conclusion": "cancelled"}],
+    )
+    _quiet(api, task)
+    assert G.refresh_pending_checks(service) == []  # not a pending link: it was failing and still is
+    link = _link(api, task)
+    assert link["checks"] == "failing"
+    assert "pending" not in H._json(link["detail"], {})["checks"].values()
+    failed = _failed_checks(api)
+    assert len(failed) == 1 and (failed[0]["refs"]["pr_head"], failed[0]["refs"]["pr_result"]) == (HEAD, "fail")
+    # Nothing is pending any more: the next pass reads nothing and hands nothing over again.
+    _quiet(api, task)
+    G._pending_reads.clear()
+    G.refresh_pending_checks(service)
+    assert len(_failed_checks(api)) == 1
+
+
+def test_a_failed_head_with_a_check_still_running_on_github_is_not_finished_by_the_sweep(api, monkeypatch):
+    """A suite that is really going (a re-run of the failed job) keeps the failed head unfinished: its result may
+    still change, and the webhook finishes it when it lands."""
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)  # requested with the push, never started
+    _suite(api, "github-actions", "completed", "failure", sha=HEAD, id=1)
+    service, _ = _github(
+        api,
+        monkeypatch,
+        [
+            _suite_row(1, "github-actions", "completed", "failure", runs=2),
+            _suite_row(STUCK, "tico-team-bots", "in_progress", runs=1),
+        ],
+        [{"name": "tests", "status": "completed", "conclusion": "failure"}],
+    )
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert "pending" in H._json(_link(api, task)["detail"], {})["checks"].values()
+    assert not _failed_checks(api)
+
+
+def test_a_pending_head_read_failing_with_a_check_still_running_finishes_only_when_the_last_one_ends(api, monkeypatch):
+    """A read that finds one check failed while another is still going does not finish the head (as the webhook does
+    not); the read that finds the last one done hands the failure over once."""
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    assert _link(api, task)["checks"] == "pending"
+    rows = [
+        _suite_row(1, "github-actions", "completed", "failure", runs=2),
+        _suite_row(STUCK, "tico-team-bots", "in_progress", runs=1),
+    ]
+    service, _ = _github(api, monkeypatch, rows, [{"name": "tests", "status": "completed", "conclusion": "failure"}])
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert _link(api, task)["checks"] == "failing"
+    assert not _failed_checks(api), "a check is still going"
+    rows[1] = _suite_row(STUCK, "tico-team-bots", "completed", "success", runs=1)
+    _quiet(api, task)
+    G._pending_reads.clear()  # ten minutes on: the link's next read is due
+    G.refresh_pending_checks(service)
+    failed = _failed_checks(api)
+    assert len(failed) == 1 and failed[0]["refs"]["pr_head"] == HEAD
+    _quiet(api, task)
+    G._pending_reads.clear()
+    G.refresh_pending_checks(service)
+    assert len(_failed_checks(api)) == 1
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_a_running_check_the_stored_copy_left_out_still_finishes_the_head_once(api, monkeypatch, extra):
+    """CHECKS_KEPT checks failed (or one more, so a failure is left out too) and one is still going: the copy keeps
+    failures and leaves the running one out. The read that finds it done hands the failure over once."""
+    from backend import github as G
+
+    task = ticket(api, step="In QA")
+    verdict(api, check(api, task, "QA: PR #412"), "pass")
+    failed = G.CHECKS_KEPT + extra
+    runs = [{"name": f"shard {n}", "status": "completed", "conclusion": "failure"} for n in range(failed)]
+    runs.append({"name": "late", "status": "in_progress", "conclusion": None})
+    service, _ = _github(api, monkeypatch, [], runs)
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    link = _link(api, task)
+    stored = H._json(link["detail"], {})
+    assert link["checks"] == "failing" and stored.get(G.DROPPED_PENDING) is True
+    assert stored.get("checks_dropped") == ("failing" if extra else "pending")
+    assert not _failed_checks(api), "a check is still going"
+    _suite(api, "github-actions", "completed", "failure", sha=HEAD, id=9)  # a webhook: the copy shows no check going
+    assert not _failed_checks(api), "the left-out check is still going"
+    runs[-1] = {"name": "late", "status": "completed", "conclusion": "success"}
+    _quiet(api, task)
+    G._pending_reads.clear()
+    G.refresh_pending_checks(service)
+    assert len(_failed_checks(api)) == 1
+    assert G.DROPPED_PENDING not in H._json(_link(api, task)["detail"], {})
+    _quiet(api, task)
+    G._pending_reads.clear()
+    G.refresh_pending_checks(service)
+    assert len(_failed_checks(api)) == 1
+
+
+def test_a_check_starting_beside_a_truncated_finished_failure_is_saved_as_still_going(api, monkeypatch):
+    """More than CHECKS_KEPT checks finished failing; a re-run then starts. The copy, its state and its worst dropped
+    state are all unchanged, but the read must still save that a left-out check is going."""
+    from backend import github as G
+    from backend import stranded_resume as SR
+
+    task = ticket(api, step="In QA")
+    runs = [{"name": f"shard {n}", "status": "completed", "conclusion": "failure"} for n in range(G.CHECKS_KEPT + 1)]
+    service, _ = _github(api, monkeypatch, [], runs)
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert G.DROPPED_PENDING not in H._json(_link(api, task)["detail"], {})
+    runs.insert(0, {"name": "re-run", "status": "in_progress", "conclusion": None})  # oldest: left out of the copy
+    _quiet(api, task)
+    G._pending_reads.clear()
+    G.refresh_pending_checks(service)
+    assert H._json(_link(api, task)["detail"], {}).get(G.DROPPED_PENDING) is True
+    with api.app.state.store.read() as c:
+        assert SR._ci_going(c, task["id"])
 
 
 def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_the_read(api, monkeypatch):

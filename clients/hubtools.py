@@ -912,18 +912,17 @@ def tag_update(api, args):
 # ----------------------------------------------------------------------------- tasks
 @tool(
     "hub_task_create",
-    "File a task for a bot or a person. A task for a person is a decision "
-    "or a review: title says what you are asking, body under 120 words, and the body's first paragraph is "
-    "the ask: one or two plain sentences saying what you need and what happens after, at most 40 words, with "
-    "no ids, hashes, file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool "
-    "trial for Thursday? If yes, I'll send the invite.\" Details go below it (a ticket on a custom "
-    "type's board is exempt; asks stay on General). `dry_run` reports the "
-    "checks a create would fail and writes nothing. A person’s asking criteria can refuse the write as "
-    "ask_refused, with the reason and fix; no task is created. Post progress as an update.",
+    "File a task for a bot or a person. A task for a person is a decision or a review: the title says what you "
+    "ask, the body is under 120 words, and its first paragraph is the ask: one or two plain sentences on what you "
+    "need and what happens after, at most 40 words, with no ids, hashes, file paths, s3:// links or tool names "
+    "(\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial for Thursday? If yes, I'll send "
+    "the invite.\" Details go below (a ticket on a custom type's board is exempt; asks stay on General). "
+    "`dry_run` reports the checks a create would fail and writes nothing. A person’s asking criteria can refuse "
+    "the write as ask_refused, with the reason and fix; no task is created. Post progress as an update.",
     {
         "owner": _s("Who does it: a bot slug, a person id, or `me`"),
         "title": _s(
-            "Task title: General uses plain words without reference numbers or all-caps; custom types keep board references"
+            "Task title: General takes plain words, no reference numbers or all-caps; custom types keep board references"
         ),
         "body": _s("The details", default=""),
         "visibility": _s(
@@ -933,7 +932,7 @@ def tag_update(api, args):
         ),
         "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
         "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
-        "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+        "check_back_at": _s("When to check progress: ISO timestamp or duration such as 45m; defaults automatically"),
         "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
         "due": _s("ISO-8601 date-time with timezone"),
         "private": {
@@ -956,13 +955,12 @@ def tag_update(api, args):
         },
         "parent": _s(
             "Parent task id (or 8-character short id), when this is one part of a bigger task. Blocked on a "
-            "person's approval or input for your task? File it for them with your task as parent"
+            "person's approval or input? File it for them with this task as parent"
         ),
         "request_id": _s(
-            "A person's message this task carries: BotOps continuing its own chat, or another bot handing "
-            "BotOps something a person asked it for (their message id, or `turn` for the one that "
-            "started this run). BotOps then acts with that person's rights, or puts it to them as a "
-            "Confirm card"
+            "A person's message this task carries: BotOps continuing its own chat, or another bot handing BotOps "
+            "a person's request (their message id, or `turn` for the one that started this run). BotOps then acts "
+            "with that person's rights, or puts it to them as a Confirm card"
         ),
         "type": _s("Task type id or name; defaults to General"),
         "step": _s("Step id or name within the type; sets its status"),
@@ -992,9 +990,8 @@ def tag_update(api, args):
                 "status": {"type": "integer", "minimum": 100, "maximum": 599},
                 "endpoint": {"type": "string"},
             },
-            "description": "What refused, on a task to DevOps or a person: repo, HTTP status, endpoint "
-            "(e.g. ticoteam/tico, 403, workflow_dispatch). An open ask about the same three "
-            "joins this task instead of a second ask; the reply says so",
+            "description": "What refused, on a task to DevOps or a person: repo, HTTP status, endpoint (e.g. "
+            "ticoteam/tico, 403, workflow_dispatch). An open ask about the same three joins this task; the reply says so",
         },
         "top": {
             "type": "boolean",
@@ -1022,8 +1019,8 @@ def tag_update(api, args):
         "roles": {
             "type": "object",
             "additionalProperties": {"type": "array", "items": {"type": "string"}},
-            "description": "Who is on it by role, {role: [people or bots]}: each role named replaces that role's people, [] clears one, "
-            "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several",
+            "description": "Who is on it by role, {role: [people or bots]}: a named role's people are replaced, [] clears "
+            "it, an unnamed role stays. Roles are short names the team picks (developer, reviewer, qa); one person may hold several",
         },
         "model": _s(
             "A bot-owned task's own model, from hub_bot_model's list: its runs use it, not the bot's task model"
@@ -1387,16 +1384,16 @@ def task_list(api, args):
 
 @tool(
     "hub_task_question",
-    "Put one decision to a person as a task they own, in one call: a pick between 2 to 6 "
-    "options (an option may carry an image or file) or, with no options, Yes / No. Asked from a run on one of your "
-    "tasks it is that task's subtask and your task is blocked on it; their answer closes it and you hear it once. "
-    "Never to a bot: ask a bot in a DM. One decision, readable on its own. Each option says what happens if picked "
-    "(`then`); several picks (`multi`) mark the ones you recommend; no ids, paths, tool names or error output outside "
-    "`body`, or it is refused with what to fix, as the person's asking criteria may (ask_refused). One open question "
-    "per topic: asked again while your earlier one on the same topic (same `topic`, else the same parent) is open, "
-    "it updates that one (`folded: true`). Refused before anything is written: a question whose default is "
-    "reversible and internal (ask_default_go_ahead: just do it and note it on your task), and one an open question "
-    "to the same person already covers (ask_duplicate: wait on that one).",
+    "Put one decision to a person as a task they own, in one call: a pick between 2 to 6 options (an option may "
+    "carry an image or file) or, with no options, Yes / No. Asked from a run on one of your tasks it is that task's "
+    "subtask and your task is blocked on it; their answer closes it and you hear it once. Never to a bot: ask a bot "
+    "in a DM. One decision, readable on its own. Each option says what happens if picked (`then`); several picks "
+    "(`multi`) mark the ones you recommend; no ids, paths, tool names or error output outside `body`, or it is refused "
+    "with what to fix, as the person's asking criteria may (ask_refused). One open question per topic: asked again "
+    "while your earlier one on the same topic (same `topic`, else the same parent) is open, it updates that one "
+    "(`folded: true`). Refused before anything is written: a question whose default is reversible and internal "
+    "(ask_default_go_ahead: just do it and note it on your task), and one an open question to the same person "
+    "already covers (ask_duplicate: wait on that one).",
     {
         "question": _s("The question, readable with no other context", maxLength=300),
         "on": _s("The person who decides: their id"),
@@ -1418,8 +1415,7 @@ def task_list(api, args):
                 "properties": {
                     "label": _s("A short label", maxLength=60),
                     "then": _s(
-                        "What happens if it is picked, in a few plain words (\"engineering starts "
-                        "building\"): required",
+                        "What happens if it is picked, in a few plain words (\"engineering starts building\")",
                         maxLength=120,
                     ),
                     "recommended": {
@@ -1448,10 +1444,9 @@ def task_list(api, args):
             "type": "object",
             "additionalProperties": False,
             "required": ["do", "kind"],
-            "description": "What you will do if they don't answer, e.g. do: \"Yes\" (an option) or a short "
-            "plain sentence. A reversible, internal step is not asked: the question is refused "
-            "(ask_default_go_ahead), so do it and note it in one line on your task. Give a default for a send, "
-            "spending or a delete: it waits for an answer. Unanswered asks expire after 14 days",
+            "description": "What you do if they don't answer: do: \"Yes\" (an option) or a plain sentence. A reversible, "
+            "internal step is not asked (refused as ask_default_go_ahead: do it and note it on your task). A default "
+            "for a send, spending or a delete waits for an answer. Unanswered asks expire after 14 days",
             "properties": {
                 "do": _s("What you will do: one of the options, or one plain sentence", maxLength=300),
                 "kind": {
@@ -1478,8 +1473,7 @@ def task_list(api, args):
             "type": "object",
             "additionalProperties": False,
             "required": ["label", "amount", "what"],
-            "description": "Picking `label` also approves this spend: the answer's `spend_approval` is an approved "
-            "spend approval you consume once",
+            "description": "Picking `label` also approves this spend: the answer's `spend_approval` is consumed once",
             "properties": {
                 "label": _s("The option that approves it", maxLength=60),
                 "amount": _s("The amount, e.g. 12.50", maxLength=40),
@@ -1580,9 +1574,9 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
 @tool(
     "hub_task_update",
     "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
-    "Finish with `status: done` and a concise result note; the requester closes. "
-    "To reopen your done task, set doing or open; open requires a note and holds automatic starts for 60 minutes "
-    "unless a comment, new link or finished blocker changes it. The requester closes with hub_task_close.",
+    "Finish with `status: done` and a concise result note; the requester closes. To reopen your done task, set doing "
+    "or open; open requires a note and holds automatic starts for 60 minutes unless a comment, new link or finished "
+    "blocker changes it. The requester closes with hub_task_close.",
     {
         "id": TASK_ID,
         "private": {
@@ -1604,21 +1598,21 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
         "brief": BRIEF,
         "quiet": BRIEF_OLD,
         "owner": _s("Hand the task to this bot or person"),
-        "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+        "check_back_at": _s("When to check progress: ISO timestamp or duration such as 45m; defaults automatically"),
         "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
         "due": _s("ISO-8601 date-time with timezone"),
         "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
         "waiting_on": _s(
-            "With status waiting: the person you need (their id). The note is your question to them, "
-            "under the same rules as hub_task_create's body (its first paragraph). It becomes a question "
-            "task for them under this one; this task stays yours, blocked on it, and opens again with their "
-            "answer. Not a bot: message a bot in a DM, or link its task with hub_task_relate"
+            "With status waiting: the person you need (their id). The note is your question to them, under the same "
+            "rules as hub_task_create's body (its first paragraph). It becomes a question task for them under this one; "
+            "this task stays yours, blocked on it, and reopens with their answer. Not a bot: message a bot in a DM, or "
+            "link its task with hub_task_relate"
         ),
         "roles": {
             "type": "object",
             "additionalProperties": {"type": "array", "items": {"type": "string"}},
-            "description": "Who is on it by role, {role: [people or bots]}: each role named replaces that role's people, [] clears one, "
-            "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several",
+            "description": "Who is on it by role, {role: [people or bots]}: a named role's people are replaced, [] clears "
+            "it, an unnamed role stays. Roles are short names the team picks (developer, reviewer, qa); one person may hold several",
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
         "verdict": _s(
@@ -1697,9 +1691,10 @@ def task_done(api, args):
     return task_update(api, {**args, "status": "done"})
 
 
-# hub_task_bulk's filter: what hub_task_list filters by, plus ids.
+# hub_task_bulk's filter: what hub_task_list filters by, plus ids. `not_owner` is the CLI's --where-not-owner.
 TASK_BULK_FILTER = (
     "owner",
+    "not_owner",
     "requester",
     "status",
     "lane",
@@ -1717,54 +1712,38 @@ TASK_BULK_FILTER = (
 
 @tool(
     "hub_task_bulk",
-    "One change to every task a filter selects, in one call: move them to a step, set a status or "
-    "an owner, add or remove tags, or close them. The filter is hub_task_list's (owner, requester, status, label, "
-    "type, step, ...) plus `ids`, and must name at least one. Each task changes as hub_task_update or hub_task_close "
-    "would change it, with your rights: a task you may not change is skipped with the reason and the rest still "
-    "change. At most 200 tasks match a call; more is refused, so narrow the filter. `dry_run` answers the same counts "
-    "and changes nothing: run it first.",
+    "Change every task a filter selects: step, status, owner, tags or close, as hub_task_update or hub_task_close "
+    "would, with your rights (refused ones are skipped, with why). Filter: hub_task_list's plus `ids` and "
+    "`exclude_owner`; at least one. Over 200 is refused. Run `dry_run` (counts only) first.",
     {
         "filter": {
             "type": "object",
             "additionalProperties": False,
-            "description": "Which tasks: at least one of these",
             "properties": {
-                "owner": _s("Owner: a bot slug, a human id, or `me`"),
-                "requester": _s("Requester: a bot slug, a human id, or `me`"),
-                "status": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": list(TASK_STATUSES)},
-                    "description": "Only these statuses",
-                },
+                "owner": _s("Bot slug, human id or `me`"),
+                "exclude_owner": _s("All but this owner's (slug, human id or `me`)"),
+                "requester": _s("Bot slug, human id or `me`"),
+                "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)}},
                 "lane": {"type": "string", "enum": ["company", "product"]},
-                "label": _s("Only tasks carrying this tag"),
-                "type": _s("Only tasks of this type (id or name)"),
-                "step": _s("Only tasks in this step (id or name; with `type`, that type's step)"),
+                "label": _s("Tag"),
+                "type": _s("Type id or name"),
+                "step": _s("Step id or name (of `type`, if given)"),
                 "number": {"type": "integer", "minimum": 1, "maximum": 999999999},
-                "updated_since": _s("Only tasks changed after this ISO-8601 time with a timezone"),
-                "member": _s("Only tasks this person or bot is on in some role"),
-                "role": _s("With member: only tasks they are on in this role"),
+                "updated_since": _s("Changed after this ISO-8601 time, with zone"),
+                "member": _s("On the task in any role"),
+                "role": _s("With member: in this role"),
                 "snoozed": {"type": "string", "enum": ["hide", "only", "all"]},
-                "ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "maxItems": 100,
-                    "description": "Only these tasks (ids or numbers)",
-                },
+                "ids": {"type": "array", "items": {"type": "string"}, "maxItems": 100, "description": "Ids or numbers"},
             },
         },
         "action": {"type": "string", "enum": ["step", "status", "owner", "tags", "close"]},
-        "step": _s("With action step: the step to move them to (id or name within each task's type)"),
-        "status": {
-            "type": "string",
-            "enum": [s for s in TASK_STATUSES if s != "closed"],
-            "description": "With action status",
-        },
-        "owner": _s("With action owner: hand them to this bot or person"),
-        "add": {"type": "array", "items": {"type": "string"}, "description": "With action tags: tags to add"},
-        "remove": {"type": "array", "items": {"type": "string"}, "description": "With action tags: tags to take off"},
-        "note": _s("What changed, or why; goes with each task's change"),
-        "dry_run": {"type": "boolean", "default": False, "description": "Count what would change; change nothing"},
+        "step": _s("Action step: the step id or name"),
+        "status": {"type": "string", "enum": [s for s in TASK_STATUSES if s != "closed"]},
+        "owner": _s("Action owner: the new bot or person"),
+        "add": {"type": "array", "items": {"type": "string"}, "description": "Action tags: add"},
+        "remove": {"type": "array", "items": {"type": "string"}, "description": "Action tags: remove"},
+        "note": _s("Why; noted on each change"),
+        "dry_run": {"type": "boolean", "default": False, "description": "Count only"},
     },
     required=("filter", "action"),
     writes=True,
@@ -1774,7 +1753,13 @@ def task_bulk(api, args):
     for name in TASK_BULK_FILTER:  # the CLI's --where-owner, --where-step, ...
         if args.get("where_" + name) not in (None, []):
             where[name] = args["where_" + name]
-    for name in ("owner", "requester", "member"):
+    if "not_owner" in where:
+        # The alias names the same filter as exclude_owner: two different owners would not say which one leaves out.
+        alias = where.pop("not_owner")
+        if where.get("exclude_owner") not in (None, "", alias):
+            raise ValueError("not_owner and exclude_owner name the same filter: give one owner to leave out")
+        where["exclude_owner"] = alias
+    for name in ("owner", "exclude_owner", "requester", "member"):
         if where.get(name):
             where[name] = _target(api, where[name])
     if isinstance(where.get("status"), list):
@@ -5185,6 +5170,8 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "Updat
 
 def _page_fields(args):
     fields = {k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope") if args.get(k)}
+    if args.get("spec"):
+        fields["spec"] = True
     if "audience" in args and args["audience"] is not None:
         fields["audience"] = audience(args["audience"])
     return fields
@@ -5205,6 +5192,7 @@ def _page_fields(args):
         "replaces": {"type": "string"},
         "scope": {"enum": ["task", "bot"]},
         "path": _s("Repo-relative path"),
+        "spec": {"type": "boolean", "description": "A visual spec for the Product roadmap card in task"},
     },
     required=("name", "text"),
     writes=True,
@@ -6925,6 +6913,55 @@ def people_list(api, args):
         {k: p.get(k) for k in ("id", "name", "email", "title", "team", "reports_to", "github")}
         for p in api.get("org")["people"]
     ]
+
+
+@tool(
+    "hub_setup_show",
+    "Where Finish setup stands, for the owner or an admin: whether the welcome wizard is finished (`completed`, "
+    "`needed`), its saved answers and picks, the people the company file from setup names (`company_import.people`: "
+    "`id` is the key `hub_setup_invite` takes, `person` is set once they are on the roster, `invited_at` once Tico "
+    "mailed them), a company file that could not be imported (`company_import_failed`), and the getting-started "
+    "checklist (`getting_started.items`: `done`, `optional`, `skipped`).",
+    {},
+)
+def setup_show(api, args):
+    setup = api.get("setup")
+    started = api.get("getting-started")
+    return {**setup, "getting_started": {k: started.get(k) for k in ("items", "done", "total", "complete")}}
+
+
+@tool(
+    "hub_setup_complete",
+    "Finish the welcome wizard with the answers and picks it has saved (`hub_setup_show`), as the owner: the built-in "
+    "bots are created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. The "
+    "same as the wizard's Create my team. Answers with the setup record. The wizard's choices are saved with "
+    "`hub_api` PUT /api/v2/setup, or come from the company file or sample company the install was given.",
+    {},
+    writes=True,
+)
+def setup_complete(api, args):
+    return api.post("setup/complete", {}, key=_key(args))
+
+
+@tool(
+    "hub_setup_invite",
+    "Invite one person the company file from setup names, as the owner: they go on the roster and the sign-in list "
+    "with this email, the seats that waited with the owner now report to them, and Tico mails the invitation. "
+    "Inviting again sends again. Take `person_key` from `hub_setup_show` (`company_import.people[].id`). Answers with "
+    "the setup record.",
+    {
+        "person_key": _s("The person's id in the company file (`company_import.people[].id` from hub_setup_show)"),
+        "email": _s("Their email address; leave out to use the one they were added with"),
+    },
+    required=("person_key",),
+    writes=True,
+)
+def setup_invite(api, args):
+    return api.post(
+        f"setup/company/people/{quote(str(args['person_key']), safe='')}/invite",
+        {"email": args.get("email") or ""},
+        key=_key(args),
+    )
 
 
 @tool(
@@ -9389,15 +9426,13 @@ def grokbot_sync(api, args):
 # ----------------------------------------------------------------------------- updates
 @tool(
     "hub_changelog_list",
-    "Shipped Tico releases and team product announcements, with your own read state and full change bullets. "
+    "Product announcements, with your own read state and full change bullets. "
     "Use unread=true to catch up since your last look; reading does not mark anything read. "
-    "Only releases installed on this server or earlier appear. since_version selects releases newer than that version. "
     "next_offset reads the next page; unread_count counts all unread product entries, independently of filters.",
     {
         "kind": _s("product (default), activity, or all", enum=["product", "activity", "all"]),
         "unread": {"type": "boolean", "description": "Only product changes you have not acknowledged"},
         "q": _s("Search titles and change bullets"),
-        "since_version": _s("Only releases newer than this version, e.g. 0.3.0"),
         "offset": {"type": "integer", "minimum": 0, "description": "next_offset from the preceding page"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 250},
     },
@@ -9408,7 +9443,6 @@ def changelog_list(api, args):
         kind=args.get("kind") or "product",
         unread="true" if args.get("unread") else None,
         q=args.get("q"),
-        since_version=args.get("since_version"),
         offset=args.get("offset"),
         limit=args.get("limit"),
     )
@@ -9679,30 +9713,30 @@ def turns(api, args):
 
 @tool(
     "hub_pipeline",
-    "A task type's pipeline and the fleet's queues in one read, counted the way the Tasks board counts "
-    "(only tickets you may read; closed and finished ones never count). Defaults: the engineering board (Dev tickets), "
-    "snoozed tickets included, failures since 24h. Use it for \"where is work stuck and on whom\" instead of paging "
-    "hub_task_list or hub_sql. Fields, one line each:\n"
-    "- steps[]: each working step in board order: id, name, status.\n"
-    "- steps[].count / snoozed: tickets in the step now / how many of them are snoozed.\n"
-    "- steps[].oldest_hours / median_hours / oldest: time since tickets entered this step; `oldest` is that ticket's number (or id).\n"
-    "- steps[].ids / ids_more: up to 50 ticket numbers (or ids) in board order / how many more there are.\n"
+    "A task type's pipeline and the fleet's queues in one read, counted as the Tasks board counts (only tickets "
+    "you may read; closed and finished ones never count). Defaults: the engineering board, snoozed tickets included, "
+    "failures since 24h. For \"where is work stuck and on whom\", use it instead of paging hub_task_list or hub_sql. "
+    "Fields:\n"
+    "- steps[]: working steps in board order: id, name, status.\n"
+    "- steps[].count / snoozed: tickets in the step now / of them, snoozed.\n"
+    "- steps[].oldest_hours / median_hours / oldest: time since tickets entered the step; `oldest` is that ticket's number (or id).\n"
+    "- steps[].ids / ids_more: up to 50 ticket numbers (or ids), in board order / how many more.\n"
     "- steps[].by_owner: tickets per owner.\n"
     "- steps[].waits_on: tickets waiting on a bot, a person, something external (GitHub, a release) or nothing (the owner acts).\n"
-    "- steps[].waits_on_actor: tickets per actor waited on (an open child's or blocker's owner, an asked person, `person` for an approval).\n"
-    "- steps[].prs: open pull requests linked to the step's tickets and the oldest one's age in hours.\n"
-    "- no_step: live tickets of the type with no step of it, counted the same way (absent when none).\n"
-    "- total / truncated: tickets counted / true when the type holds more than 5000 live ones.\n"
-    "- queues.<bot>.running / stalled: runs out now / of those, silent for 5+ minutes.\n"
-    "- queues.<bot>.queued / oldest_queued_hours: jobs that will be handed out when a turn is free / the oldest one's wait.\n"
+    "- steps[].waits_on_actor: tickets per actor waited on: an open child's or blocker's owner, an asked person, or `person` for an approval.\n"
+    "- steps[].prs: open pull requests linked to the step's tickets, and the oldest one's age in hours.\n"
+    "- no_step: live tickets of the type with no step (absent when none).\n"
+    "- total / truncated: tickets counted / true above 5,000 live ones.\n"
+    "- queues.<bot>.running / stalled: runs out now / of those, silent 5+ minutes.\n"
+    "- queues.<bot>.queued / oldest_queued_hours: jobs handed out when a turn is free / the oldest one's wait.\n"
     "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
     "- queues.<bot>.quarantine_held: jobs held after repeated refusals; resume after cooldown or quarantine clear.\n"
-    "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
+    "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed, and are never counted as queued.\n"
     "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-    "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, run, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
+    "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, held or decided since `since`, newest first (20 at most): job, run, current (false once a later try ran), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when the run's conversation cannot be opened), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
     "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
-    "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
-    "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
+    "- failures.truncated / complete_after: true when the window held more failures than one read counts / whole counts only for failures after this time (null when not truncated).\n"
+    "- exceptions[] (engineering manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause, since; ticket (id, number, title, step, owner) for a ticket, check (id, title, owner) when the open check below it stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
     {
         "type": _s("Task type id or name; default the engineering board"),
         "owner": _s("Only tickets this person or bot owns"),
@@ -12226,6 +12260,7 @@ FINANCE_REPORTS = [
     "ar_aging",
     "spend_by",
     "campaigns",
+    "subscriptions",
     "close",
     "sales_tax",
     "1099",
@@ -12248,6 +12283,7 @@ FINANCE_METRICS = [
     "unattributed",
     "ad_spend",
     "per_conversion",
+    "subscriptions_monthly",
 ]
 FINANCE_SEARCH = [
     "entry",
@@ -12262,6 +12298,8 @@ FINANCE_SEARCH = [
     "project",
     "vendor",
     "campaign",
+    "receipt",
+    "subscription",
 ]
 FINANCE_INBOX = [
     "uncategorized",
@@ -12483,18 +12521,19 @@ def _fin_paged(api, path, query, key, budget):
 
 @tool(
     "hub_finance_search",
-    "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-    "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
-    "name, with their ids, for categorize, bill_create and rule_create. campaign finds an ad campaign by name with its "
-    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). Name a kind to page with "
-    "cursor; without one you get the first few of each kind (not accounts, vendors or campaigns: name that kind).",
+    "Search what you may see: entries, bank and card rows, bills, invoices, contacts, rules, cards (each with the "
+    "vendors it is saved on). account: chart lines by code or name, with ids, for categorize, bill_create and "
+    "rule_create. campaign: an ad campaign by name, with owner, spend, clicks and conversions. subscription: a "
+    "recurring charge by vendor name, with status, monthly cost and next charge. receipt: by file name or vendor "
+    "(status: unread, suggested, unmatched, attached, rejected). Name a kind to page with cursor; otherwise the first "
+    "few of each kind, except accounts, vendors, campaigns, subscriptions and receipts (name one).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),
         "status": _s("Row, document or card status"),
         "contact_id": _s("Bills/invoices: this vendor or customer"),
-        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
-        "account_id": _s("Entries/rows: this chart-of-accounts line"),
+        "vendor": _s("Cards: saved on this vendor (contact id or name)"),
+        "account_id": _s("Entries/rows: this chart line"),
         "money_account_id": _s("Entries/rows: this bank or card account"),
         "start": FIN_DAY,
         "end": FIN_DAY,
@@ -12502,7 +12541,7 @@ def _fin_paged(api, path, query, key, budget):
         "contact_kind": _s("Contacts: vendor, customer or both", enum=["vendor", "customer", "both"]),
         "active": {"type": "boolean", "description": "Contacts: active or not"},
         "rule_kind": _s("Rules: gate or posting", enum=["gate", "posting"]),
-        "month": _s("Campaigns: the month, YYYY-MM (default this month)"),
+        "month": _s("Campaigns: YYYY-MM (default this month)"),
         "cursor": _s("next_cursor from the last page (needs kind)"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"},
     },
@@ -12556,16 +12595,16 @@ def finance_search(api, args):
 
 @tool(
     "hub_finance_report",
-    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-    "ar_aging, spend_by, campaigns (the ad campaigns with their owner, spend, clicks and conversions), or close (a "
-    "month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
-    "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
+    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, "
+    "campaigns (owner, spend, clicks, conversions), subscriptions (monthly total, renewals in 30 days) or close (a "
+    "month's checklist). Rows past top_n fold into \"Other · n\". sales_tax and 1099 are a year's tax workpapers: "
+    "whole, and only for someone who sees everything.",
     {
         "kind": _s("The report", enum=FINANCE_REPORTS),
         "start": FIN_DAY,
         "end": FIN_DAY,
         "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
-        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
+        "basis": _s("cash or accrual (default: company's)", enum=["cash", "accrual"]),
         "compare": _s("prior adds the window before", enum=["prior"]),
         "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
         "by": _s(
@@ -12591,7 +12630,7 @@ def finance_search(api, args):
             "type": "integer",
             "minimum": 2000,
             "maximum": 2100,
-            "description": "sales_tax, 1099: the calendar year (this year when omitted)",
+            "description": "sales_tax, 1099: the year (default this year)",
         },
     },
     ("kind",),
@@ -12612,10 +12651,10 @@ def finance_report(api, args):
 
 @tool(
     "hub_finance_metric",
-    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, "
-    "spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, "
-    "unattributed, ad_spend (your campaigns' spend over start..end, this month by default), per_conversion (that spend "
-    "over the conversions, null with none).",
+    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, spend, "
+    "budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, "
+    "ad_spend (your campaigns' spend over start..end; default this month), per_conversion (ad spend over conversions, "
+    "null if none), subscriptions_monthly (monthly cost of active subscriptions, with count).",
     {
         "name": _s("The metric", enum=FINANCE_METRICS),
         "budget_id": _s("budget_remaining/budget_pct_used: the budget"),
@@ -12623,7 +12662,7 @@ def finance_report(api, args):
         "end": FIN_DAY,
         "account_id": _s("cash: one money account"),
         "team": _s("spend: one team"),
-        "teammate": _s("spend: one teammate (human:… or bot:…)"),
+        "teammate": _s("spend: one teammate (human:id or bot:id)"),
         "days": {"type": "integer", "minimum": 0, "maximum": 3650, "description": "ap_due/ar_overdue: within n days"},
     },
     ("name",),
@@ -12635,8 +12674,8 @@ def finance_metric(api, args):
 
 @tool(
     "hub_finance_brief",
-    "What changed in Finance for you: a few short lines about the money you may see (your budgets, your team's, "
-    "cash and burn where you see the company), with as_of (when those numbers last moved) and changed_since.",
+    "Finance changes for you: short lines on the money you may see (budgets, your team's, cash and burn where you see "
+    "the company), with as_of (when the numbers last moved) and changed_since.",
     {},
     (),
 )
@@ -12646,9 +12685,8 @@ def finance_brief(api, args):
 
 @tool(
     "hub_finance_act",
-    "Ask for one Finance action: committed, sent for approval, denied or failed. kind=help lists "
-    "every kind; kind=help with payload {\"kind\": k} gives k's fields. dry_run says what would happen. "
-    "Requires operation_id, which is the action's key: a retry never acts twice.",
+    "One Finance action: committed, sent for approval, denied or failed. kind=help lists kinds; kind=help with payload "
+    "{'kind': k} gives k's fields. Requires operation_id, the action's key: a retry never acts twice.",
     {
         "kind": _s("The action kind, or help"),
         "payload": {"type": "object", "description": "The kind's fields"},
@@ -12683,12 +12721,11 @@ def finance_action(api, args):
 
 @tool(
     "hub_finance_inbox",
-    "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-    "invoices, budgets near limit, failed syncs, months ready to close, books not reconciled for over a month "
-    "(unreconciled), emailed bills Finance did not take (bill_email); with counts per kind. Name a kind to page "
-    "through that kind alone, past its first 200.",
+    "Your Finance work queue, with counts per kind: uncategorized rows, bills to enter, receipts, bills due, overdue "
+    "invoices, budgets near limit, failed syncs, months ready to close, unreconciled (not reconciled for over a month), "
+    "bill_email (emailed bills Finance did not take). Name a kind to page through it alone, past its first 200.",
     {
-        "kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
+        "kind": _s("Only this kind, paged with cursor", enum=FINANCE_INBOX),
         "cursor": _s("next_cursor from the last page (same kind)"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Items per page (default 50)"},
     },
@@ -13385,6 +13422,11 @@ AUDIENCE = {
     "hub_message_redact": BOTOPS,
     "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    # Finish setup (backend/onboarding.py): the owner finishes it, and an admin reads it. A person's own agent, handed over
+    # from setup (docs/connect-an-agent.md), uses these with their personal token.
+    "hub_setup_show": ("owner", "admin"),
+    "hub_setup_complete": ("owner",),
+    "hub_setup_invite": ("owner",),
     "hub_skill_submit": PEOPLE + BOTS,  # any person or bot proposes; an admin approves (backend/skills.py)
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),  # a bot needs Create product repositories (server)
@@ -13695,7 +13737,7 @@ def listing(local=False, kind=None):
     ]
 
 
-# The tools Tico 0.2.21 renamed outright (CHANGELOG 0.2.21, Breaking changes). A call by an old name is answered with the new
+# The tools Tico 0.2.21 renamed outright (its breaking changes). A call by an old name is answered with the new
 # one. A family renamed by prefix (`hub_docs_*` is `hub_doc_*`) is answered only when the new name exists.
 RENAMED_TOOLS = {
     "hub_say": "hub_message_send",

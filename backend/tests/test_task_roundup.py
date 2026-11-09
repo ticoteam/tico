@@ -2111,6 +2111,58 @@ def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not
         assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
 
 
+def test_a_blocker_on_ice_puts_the_card_it_holds_on_no_bots_list(api):
+    """A waiting card whose blocker a person parked On ice (D69) is on no bot's list: the blocker waits on that person,
+    so its owner is not asked about it. Once the stage opens, the blocker's bot is listed again."""
+    from backend.tests.test_pipeline_foundation import step_id
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        stages = [{"name": "On ice", "status": "open"}, {"name": "Doing", "status": "doing"}]
+        typ = H.type_create(c, H.KEEPER, "Ice blockers", stages)["id"]
+        ice = step_id(c, typ, "On ice")
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (ice,))
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))[
+            "id"
+        ]
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (typ, ice, blocker))
+        assert task_roundup.run(c, DAY)["woke"] == []
+        assert lists(c, "ops") == [] and lists(c) == []
+        c.execute("UPDATE task_steps SET card_cap=NULL WHERE id=?", (ice,))  # the control: the stage opens
+        assert task_roundup.run(c, NOON)["woke"] == ["ops"]
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+
+
+@pytest.mark.parametrize("state", ["running", "queued"])
+def test_a_waiting_task_is_not_listed_to_a_bot_already_working_the_task_that_holds_it(api, state):
+    """PR #3092 factory sim (architect): Find stuck ran while the architect was mid-turn on Plan: Ticket 4 and told it
+    "Ticket 4: Waiting on you: Plan: Ticket 4", a wake for nothing. The line waits until that turn is over."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))[
+            "id"
+        ]
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (blocker,)).fetchone()[0]
+        working = "UPDATE jobs SET state=? WHERE bot_id='ops' AND message_id IN (SELECT id FROM messages WHERE conversation_id=?)"
+        c.execute(working, (state, conv))
+        assert "ops" not in task_roundup.run(c, DAY)["woke"], "ops is already working the blocker"
+        c.execute(working, ("completed", conv))
+        assert task_roundup.run(c, NOON)["woke"] == ["ops"], "still held after the turn: listed on the next run"
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+
+
 def test_a_person_owned_waiting_task_never_reaches_task_holds_and_a_bot_owned_one_still_does(api, monkeypatch):
     store = api.app.state.store
     with store.transaction() as c:
@@ -2134,7 +2186,7 @@ def test_a_person_owned_waiting_task_never_reaches_task_holds_and_a_bot_owned_on
         waits = task_roundup._blocked_waits(c, DAY)
         assert person not in seen, "a person-owned waiting task is dropped in SQL, before task_holds"
         assert mine in seen, "a bot-owned waiting task of an active bot still reaches task_holds"
-        assert [row["id"] for row, _ in waits.get("ops", [])] == [mine]
+        assert [row["id"] for row, *_ in waits.get("ops", [])] == [mine]
 
 
 def test_a_waiting_task_already_listed_for_its_update_is_not_returned_for_that_recipient(api):

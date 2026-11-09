@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Brand Owner are Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner and Brand Owner are Built-in bots; they cannot be archived or deleted.
 
-The 104 role templates, in nine groups with a Leadership extra, are described in
+The 119 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -654,8 +654,10 @@ Levers set in **Settings → Bots**, not in the repository:
   login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 100k, 150k, 250k tokens (the default),
-  400k, 600k or 1M. Claude Code, Codex and pi only. Changing it keeps the session. A bot's tasks can use another length
-  (**Task model**, **Task context length**).
+  400k, 600k or 1M. Claude Code and Codex follow it. pi follows it only on a Tico AI Gateway model, and there 250k or more
+  compacts at about 184k, the Gateway's 200,000-token window less the 16,384 pi keeps. pi's other models keep pi's own
+  compaction ([pi](harnesses.md#why-pi-is-the-catch-all)). Changing it keeps the session. A bot's tasks can use another
+  length (**Task model**, **Task context length**).
 - **Profile**: what wakes the bot and which tasks it takes: **Doer** (the default for a new bot), **Reviewer**, **Lead**,
   **Responder**, **Monitor** or **Custom**; each choice has a line saying what it does ([Profiles](how-it-works.md#profiles)).
   A Doer holds nonblocking news (a request it asked for finished, a person's review comments) and
@@ -765,10 +767,11 @@ has nothing to do with `bot-sales` in another's. Paths in instructions should th
 relative to the repository, or relative to the environment's workspace, never hard-coded to one
 computer's home directory.
 
-GitHub is optional. A plain git repository in the environment's workspace is enough for a bot to
-run: the runner reads the checkout on the computer, and the bot commits into it. A remote buys backup,
-review, and editing from somewhere other than the runner's computer, which is why preflight flags a
-missing remote. The bot's repository link is recorded on the bot in **Settings**, and that same
+GitHub is optional for a bot to run. A plain git repository in the environment's workspace is enough: the
+runner reads the checkout on the computer, and the bot commits into it. A remote buys backup, review, and editing
+from somewhere other than the runner's computer, which is why preflight flags a missing remote. Until GitHub is
+connected in **Tools**, under GitHub, a bot's files and memory exist only on its computer, with no backup, and Health
+and the bot's page say so. The bot's repository link is recorded on the bot in **Settings**, and that same
 repository can be cloned into another environment's workspace as a starting point there.
 
 Two consequences when you run more than one environment:

@@ -9,9 +9,9 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign; leave it out to search all but account, vendor and campaign), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `month` for campaigns), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
-| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
-| `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
+| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign, subscription, receipt; leave it out to search all but account, vendor, campaign, subscription and receipt), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `month` for campaigns, `status` for receipts), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
+| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, subscriptions, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
+| `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion, subscriptions_monthly) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
 | `hub_finance_brief` | `hub finance brief` | none | `{lines, as_of, changed_since, version}`: a few short lines about the money you may see (your budgets, your team's, cash and burn where you see the company, Watch findings, unattributed spend); `as_of` is when those numbers last moved (backend/finance/brief.py) |
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
@@ -53,6 +53,10 @@ zero-spend campaigns follow the same rule. Clicks and conversions come from the 
 Meta's `conversions` (or its `actions`) summed over the offsite and onsite conversion action types. `per_conversion` is
 the spend over the conversions in cents, null when there are none.
 
+Receipts (`GET /api/v2/finance/receipts?status=`, `hub_finance_search` `kind: receipt`) are Library files filed to Finance as receipts. Tico reads a receipt's amount, date and vendor from the file's indexed text (text, Markdown, HTML and CSV files; a PDF or an image has none until someone sets it with `receipt_read`), with no model call. A read receipt is suggested on the bank or card row it matches: the same amount (or a total with a tip of up to 30%), the same merchant, and a date within five days. A row never holds two suggestions. `receipt_match` accepts (attaching the file to the row) or refuses a suggestion, and `receipt_match_undo` puts an accept back. Auto-attach is off unless the book sets `receipt_auto_attach_at`. The briefing's "Needs you" line counts the card charges with no receipt and the matches to check. Tico never writes receipts to QuickBooks or Xero.
+
+Subscriptions (`GET /api/v2/finance/subscriptions?status=`, `hub_finance_search` `kind: subscription`, the `subscriptions` report and the `subscriptions_monthly` metric) are the recurring charges a book pays: one row per vendor paid from one card or money account. The daily look (`subscriptions.detect`, run once a day from the scheduler's Finance upkeep) suggests a monthly one when the vendor charged in each of the three calendar months before this one, at amounts within 25% of each other and on the same day of the month within 5 days, and an annual one when two charges are 11 to 13 months apart. It posts nothing to QuickBooks or Xero. A person with finance.book, the Bookkeeper included, confirms it with `subscription_confirm` (`subscription_id`, `status` active, ignored or cancelled, and optionally `amount`, `cadence`, `seats`); `subscription_undo` puts back the fields from before the latest confirmation. An active subscription's charge at least 10% above its expected amount is a price increase in Watch, and an active subscription on an idle bot's card is unused, as any monthly charge is. An ignored subscription raises no Watch finding and is never suggested again; a cancelled one's charges keep Watch's usual checks. A suggested or active subscription with no charge for two periods past its next charge is cancelled by the look, and one the look cancelled is suggested again when the vendor charges again. A reader sees a subscription when they see everything, own its attribution (or manage an owner), or see its latest charge's line. `monthly` is an annual amount over twelve.
+
 `vendor_merge {into, merge}` folds names and vendor contacts into `into` (a vendor). `merge` takes name keys (as a row reads
 them) or contact ids; every name a merged contact went by moves to `into`, and a native book archives the merged contact.
 Spend by vendor, budgets and attribution rules then count the names as `into`. A name already on another contact is
@@ -93,6 +97,38 @@ An internal transfer is `payment_create` with `method: "internal"`, `from_accoun
 hub finance act categorize --payload '{"feed_id":"fd_1","account_id":"acc_6100"}' --operation-id categorize:fd_1
 hub finance action fa_123
 ```
+
+## Statement uploads
+
+For a bank or card Tico cannot connect, `statement_post` takes a statement file: CSV, OFX or QFX (OFX 1.x and 2.x),
+base64 in `file`, 1 MB at most. It needs finance.book and acts like `reconcile`: the owner's commits, and a gate rule can
+ask for approval. A mirrored book (QuickBooks, Xero) refuses it, since its rows come from the provider; Tico never writes
+an upload to the provider.
+
+- Add the account first if Tico has none for it: `money_account_add {kind: bank|card_program, name, last4?, subtype?,
+  account_id?}` (finance.admin; a bot's asks the owner). It has no provider and no connection, and maps to `account_id`
+  or to a new line (from 1000 for a bank or debit card, 2100 for a credit card).
+- Review first: `POST /api/v2/finance/statements/preview {money_account_id, file, file_name?, signs?}` returns each row
+  (`id`, `date`, `description`, `amount`, `vendor`, `attribution` from the posting rule that would apply, `status`
+  `new` or `duplicate`), the tie-out `{opening, added, removed, ends, statement_says, off_by}`, how the signs were read
+  (`signs: {flipped, by}`) and a `token`. It stores only that token (30 minutes).
+- Post: `statement_post {money_account_id, file, file_name?, preview_token?, skip?, signs?}`. With `preview_token` the post
+  is refused unless it would insert exactly the New rows that preview showed. `skip` takes row ids to leave out. The
+  result is `{upload_id, new, duplicate, skipped, off_by, statement_id}`.
+- New rows enter the feed (provider id `upload:<FITID or row hash>`) and post exactly as a synced Mercury or Brex row:
+  vendor, posting rules, attribution, and bill, refund and card payment matching. A closing balance in the file becomes a manual
+  statement for `reconcile`.
+- Duplicates are strict and never inserted: a row whose file id is already in, or a feed row or hand-posted journal line
+  on the account with the same amount, a day either side and the same merchant. The same file posted again to the same
+  account is refused whole until its upload is undone.
+- Tie-out: opening (the file's, else the books' balance the day before the file starts) plus what the rows add, against
+  the statement's closing balance. A gap is a warning, never a refusal: the account then reads `off_by` (cents) in Sources
+  until a reconciliation runs through the statement's end.
+- Signs: amounts read money in positive. `signs` is `auto` (default), `as_shown` or `flipped`. Auto takes OFX as the file
+  shows it (the standard's direction, card statements included), else a CSV type column (Sale, Debit, Payment...), else
+  American Express's headers (flipped), else as shown. Pass the same `signs` to the post as to the preview.
+- `statement_undo {upload_id}` takes the upload's rows back out (their entries reversed) while none is reconciled;
+  otherwise it is refused naming the reconciled day.
 
 ## Sizes
 

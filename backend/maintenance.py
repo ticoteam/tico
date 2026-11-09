@@ -117,18 +117,25 @@ def day_start(at):
     return start if local >= start else start - timedelta(days=1)
 
 
+# How early a week or custom step still counts as due: a run starts a few seconds into its bucket.
+DUE_SLACK = timedelta(minutes=5)
+
+
 def due(row, at):
     """Whether a step is due at `at` by its "How often". The clock counts from its last attempt, not its last success:
-    a step that failed does not retry every run."""
+    a step that failed does not retry every run. A week or custom cadence is due DUE_SLACK early: a step's clock is its
+    run's start, which lands a few seconds into a bucket, so an exact comparison misses the bucket it was meant for by
+    seconds and slips a whole bucket (a 6-hour Find stuck ran 7 hours apart)."""
     if row["frequency"] == "run" or not row["last_started_at"]:
         return True
     last = H.parse_ts(row["last_started_at"])
     if row["frequency"] == "day":
         return last < day_start(at)
     if row["frequency"] == "week":
-        return at - last >= timedelta(days=7)
+        return at - last >= timedelta(days=7) - DUE_SLACK
     every = row["custom_every"] or 1
-    return at - last >= (timedelta(hours=every) if row["custom_unit"] == "hours" else timedelta(days=every))
+    gap = timedelta(hours=every) if row["custom_unit"] == "hours" else timedelta(days=every)
+    return at - last >= gap - DUE_SLACK
 
 
 def bucket(schedule, at):
@@ -583,7 +590,8 @@ def _finish(store, run_id, tally, error):
 
 
 def save_settings(c, actor, schedule=None, paused=None, monthly_cap_usd=None):
-    """The run's schedule, pause and monthly cap; only what is sent changes."""
+    """The run's schedule, pause and Decide's monthly cap (org rule checks spend from it too); only what is sent
+    changes."""
     if schedule is not None and schedule not in SCHEDULES:
         raise Problem("invalid", "Run every hour, every 2, 3, 6 or 12 hours, or once a day", 422)
     before, stored = run_settings(c), _stored(c)
@@ -712,7 +720,10 @@ def listing(c, settings, auth, who):
     last = c.execute("SELECT id FROM maintenance_runs ORDER BY started_at DESC LIMIT 1").fetchone()
     live = live_run(c, H.now())
     return {
-        "settings": {**cfg, "monthly_cap_usd_in_effect": budget_cap(c, settings)},
+        "settings": {
+            **cfg,
+            "monthly_cap_usd_in_effect": budget_cap(c, settings),
+        },
         "steps": rows,
         "last_run": _run_view(c, c.execute("SELECT * FROM maintenance_runs WHERE id=?", (last[0],)).fetchone())
         if last

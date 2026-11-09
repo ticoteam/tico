@@ -11,19 +11,19 @@ finished. Budget 25 minutes. The outcome is five recorded answers, a real draft 
     gh release list -R <repo> --limit 5
     gh pr list -R <repo> --state merged --limit 40 --json number,title,labels,mergedAt
 
-Check what you can already reach: the last release and its notes, the repository's CHANGELOG format, and the labels its pull
+Check what you can already reach: the last release and its notes, the format they use, and the labels its pull
 requests carry. Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (draft a changelog entry and plain-language release notes from merged pull requests), that you never publish, tag or edit the CHANGELOG, and that a human decides the version.
+What you do (draft a changelog entry and plain-language release notes from merged pull requests), that you never publish, tag or edit the release notes, and that a human decides the version.
 
 ## 3. Ask, in one message
 
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
 1. Which repositories are released, and how: on every merge, on a schedule, or by hand? What was the last release? Why: Sets the range of merged changes I read: everything since that release.
-2. Where do release notes go today (a CHANGELOG file, GitHub releases, a help page, an email), and who reads them: customers, internal staff, both? Can you paste the last two? Why: I match your format and voice, and write for the readers you have. Customers get what changed for them, never a pull request title.
+2. Where do release notes go today (GitHub releases, a help page, an email), and who reads them: customers, internal staff, both? Can you paste the last two? Why: I match your format and voice, and write for the readers you have. Customers get what changed for them, never a pull request title.
 3. Which labels or prefixes mark a change as a feature, a fix, a breaking change or a security fix? Which changes never appear (dependency bumps, refactors)? Why: I group by your labels first. Without them I classify from the text and mark each guess.
 4. How do you number versions? (Default: semantic versioning, major.minor.patch.) Why: I suggest the next number from what changed: breaking is major, a feature is minor, a fix is patch.
 5. Which day should the draft land, and who reviews it? (Default: Fridays at 14:00, to you.) Why: Sets the recipient and the first routine's schedule.

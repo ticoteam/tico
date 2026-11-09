@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -15,6 +16,9 @@ from . import system_routines as SR
 from .batch_work import isolated
 from .store import H, encode
 from . import sources as SRC
+
+if TYPE_CHECKING:
+    from .heartbeat import Context
 
 LOG = logging.getLogger("tico.scheduler")
 
@@ -483,6 +487,15 @@ def step_thread_loop_guard(ctx):
     ), not resumed
 
 
+def step_ci_sweep(ctx: "Context") -> tuple[str, bool]:
+    # The repository's workflow runs since the last sweep: recorded, priced and posted to Finance (backend/ci_runs.py).
+    from . import ci_runs
+    from .store import H
+
+    settings = ctx.settings
+    return ci_runs.sweep(ctx.store, ctx.github_app, settings.release_repo, settings.ci_rate_per_job_minute, H.now())
+
+
 def step_go_live_expiry(ctx):
     # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
     from . import go_live
@@ -637,6 +650,8 @@ class Scheduler:
                 steps.append(("finance_documents", lambda c: finance.watch_documents(c, stamp(at))))
             if self.finance_due("period", at, timedelta(days=1)):
                 steps.append(("finance_period", lambda c: finance.open_next_period(c, stamp(at))))
+            if self.finance_due("subscriptions", at, timedelta(days=1)):  # suggests and cancels (subscriptions.py)
+                steps.append(("finance_subscriptions", lambda c: finance.detect_subscriptions(c, stamp(at))))
         failed = 0
         for name, step in steps:
             try:

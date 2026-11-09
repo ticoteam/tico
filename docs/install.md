@@ -42,6 +42,12 @@ a local server, with no Open link.
 - The Gateway is enrolled from an invite whoever runs the install puts in the environment, `TICO_GATEWAY_INVITE`; you
   never type it, and the installer never prints it. With one, the Gateway connects on Tico's first start; without one
   the install still runs, on your subscriptions, and says the Gateway is not set up.
+- A server Tico hosts can be finished by the owner's own coding agent with no one signed in. Whoever runs the install
+  puts a one-time setup secret in the environment, `TICO_SETUP_HANDOFF` (32 to 128 letters, digits, `-` and `_`); like
+  the Gateway invite it is never typed, never printed and never saved: the server gets only its sha256 as
+  `TICO_SETUP_HANDOFF_HASH`, and it needs the https domain and `TICO_OWNER_EMAIL`. Tico's team, which runs these installs,
+  passes the secret to the customer's agent, which trades it once for a personal token of the owner
+  ([Handed over from setup](connect-an-agent.md#handed-over-from-setup)). Without the variable, nothing changes.
 - If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
   Computers > Add computer**.
 - It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
@@ -103,8 +109,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Eight built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
-   Bookkeeper, Counsel and Brand Owner. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Ten built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, Task Manager,
+   Finance Owner, Rules Owner, Brand Owner, Updates Owner and Automations Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -127,7 +133,7 @@ like the one above.
 **You need** the install above with its computer online, and one model sign-in on that computer: a ChatGPT sign-in for Codex,
 a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No GitHub account, outside Tool or real company data.
 
-1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
+1. **Check the AI provider is ready** before any real work. Open **Settings > General > Health > Details**: **Models** should read "Codex is signed
    in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
@@ -204,7 +210,7 @@ The server answers on this computer only: compose publishes the port on `127.0.0
 sign-in refuses to start. A public address always needs sign-in.
 
 Bots' pages and SVG show as **Open** cards here: they need a separate address to show inline. Turn on
-[Tico file hosting](files.md#tico-file-hosting) on the Gateway page and they show inline from your `ticofiles.com`
+[Tico file hosting](files.md#tico-file-hosting) in **Settings → Models → Tico Gateway** and they show inline from your `ticofiles.com`
 address; nothing has to reach this computer ([Visuals](visuals.md#self-hosting)).
 
 ### Add a domain and sign-in later
@@ -410,7 +416,7 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 |---|---|---|
 | `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) and `TICO_OIDC_LABEL` (the provider's name: a signed-out browser then gets a page with one "Sign in with <label>" button instead of going straight to the provider) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. The setup wizard's `--auth oidc --issuer <url> --client-id <id>` takes any issuer, with the secret from `TICO_OIDC_CLIENT_SECRET` in the environment and `--signin-label` for the button. On a server Tico hosts (`--hosted`), the owner sign-in link below stays as break-glass beside it (`TICO_OWNER_LINK_HASH`): it never calls the issuer, so the owner gets in while the issuer is down, and people already signed in stay signed in. |
 | `cloudflare` | `TICO_ACCESS_ISSUER`, `TICO_ACCESS_AUDIENCE` | Cloudflare Access in front of the tunnel |
-| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. |
+| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. The same holds for the setup handoff: `TICO_SETUP_HANDOFF` in the installer's environment (Tico's team passes it) reaches the server only as its hash, `TICO_SETUP_HANDOFF_HASH`, and the owner's agent trades the secret once for a token ([connect-an-agent.md](connect-an-agent.md#handed-over-from-setup)). |
 | unset (or `none`) | nothing; leave `TICO_DOMAIN` unset | The quick start. The server answers on `http://127.0.0.1:8765` and the owner signs in with the token from `docker compose exec server cat /data/local-owner.token` (`Authorization: Bearer <token>`, or `GET /api/v2/local-signin?token=...`). With `TICO_DOMAIN` set, the server refuses to start. |
 
 The owner is the first human on the roster; add the others in the app. The wizard writes these settings; to change
@@ -637,7 +643,7 @@ Tool Credentials need a grant per bot; `hub_credential_grant` targets a bot.
 
 Only that model credential comes this way: a bot's own credentials stay with that bot, and a computer never receives them.
 
-A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > Health shows
+A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > General > Health > Details shows
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
 BotOps to start it, then finish the sign-in in your browser.
 
@@ -662,7 +668,7 @@ curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh 
   sh install.sh --runner --url https://tico.example.com --code <code> --label "Build computer"
 ```
 
-`vX.Y.Z` is your server's release (Settings and Settings > Health show it); `--runner` exists from v0.2.1.
+`vX.Y.Z` is your server's release (Settings and Settings > General > Health > Details show it); `--runner` exists from v0.2.1.
 
 `install.sh --runner` installs Docker if it is missing, puts that release's `runner.compose.yaml` and a `.env`
 (`TICO_URL`, `TICO_CODE`, `TICO_RUNNER_LABEL`, and `TICO_TAG` and `TICO_UPDATER_TAG` pinned to the release) in
@@ -729,7 +735,7 @@ docker run -d --name tico-runner --restart unless-stopped -v tico-runner:/home/r
 
 The `--user 0` and capabilities are what keep the runner's own login out of the bots' reach (below); without them the
 container runs as one user, as it did before. It has no updater: it stays on the release you pinned until you pull a newer image and recreate the container, and
-Settings > Health says so.
+Settings > General > Health > Details says so.
 
 **Who runs what.** The container's entrypoint starts as root, with five capabilities and nothing else, only to prepare
 the volume; the runner itself is the `ticorun` user that owns `/home/runner/runner.json`, its state and the tools
@@ -992,7 +998,7 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 
 ## Update
 
-Use **Update now** (Settings, or Health → Version for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
+Use **Update now** (in the sidebar's new-version notice, or on the Version row under Settings → General → Health → Details for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
 
 ![Health Version row with Update now beside Check for updates](images/settings-stage1/settings-health-version-context.png)
 
@@ -1023,7 +1029,7 @@ With `updater` in `COMPOSE_PROFILES` and `TICO_UPDATER_URL=http://updater:8080` 
   server generates into the `tico-control` volume on first start, which only the server and updater mount;
 - `POST /update {"version": "vX.Y.Z" | "latest"}` downloads and verifies that release's compose bundle and replaces the files in it (never `.env`), pulls that image, recreates the server, waits up to 3 minutes for
   `/healthz`, rolls back the image and the bundle if it does not come back, and otherwise writes `TICO_TAG` into `.env`;
-- `GET /status` returns `{"state": "idle|pulling|restarting|healthy|rolled_back|failed", "from", "to", "message"}`;
+- `GET /status` returns `{"state": "idle|pulling|snapshotting|restarting|uncertain|healthy|rolled_back|failed", "from", "to", "message"}`;
 - both calls need `Authorization: Bearer <token>`. The server gets `TICO_UPDATER_URL` and `TICO_UPDATER_TOKEN`, and
   the running version as `TICO_VERSION` (also the image label `org.opencontainers.image.version`).
 

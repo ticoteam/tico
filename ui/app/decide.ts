@@ -75,18 +75,7 @@ interface DecOther {
   q?: undefined;
 }
 /** A task file as tfNorm (task-files.ts) keeps it for the card. */
-interface DecFile {
-  name: string;
-  mime?: string;
-  archived?: boolean;
-  versions: DecFileVersion[];
-}
-interface DecFileVersion {
-  n: number;
-  url: string;
-  mime?: string;
-  size?: number;
-}
+type DecFile = TfFile;
 /** A task comment as the card reads it (a note, a say, an ask). */
 interface DecComment {
   kind?: string;
@@ -97,9 +86,8 @@ interface DecComment {
   refs?: { note?: unknown } | null;
 }
 /** The frozen email an approval to send shows (`email_send_id`). */
-interface DecEmail {
-  preview_complete?: boolean;
-  send: { content_sha256?: string | null };
+interface DecEmail extends EmailSendPreview {
+  send: EmailSendPreviewSend;
 }
 /** What a card has read for its item: a task's files and comments, or a frozen email; `error` when that read failed. */
 interface DecData {
@@ -146,7 +134,7 @@ interface DecState {
   ticks: Map<string, Set<number>>;
   off: (() => void)[];
   fromList: boolean;
-  opener?: Element | null;
+  opener?: HTMLElement | null;
   shown?: string | null;
   busy?: boolean;
   lockUntil?: number;
@@ -187,9 +175,9 @@ function decideYesNoAsk(text: string | null | undefined): boolean {
 }
 // Each Needs you item's key: its kind and id.
 const decideItemKey = (it: DecItem) => ({approval: 'approval:', stale: 'stale:'}[it?.kind] || 'task:') + it?.id;
-function decideCards(items: DecItem[] | undefined): DecCard[] {
+function decideCards(items: (NeedsItem | DecItem)[] | undefined): DecCard[] {
   const me = myActor(), asks: DecCard[] = [], approvals: DecCard[] = [], waiting: DecCard[] = [], mine: DecCard[] = [], unexplained: DecCard[] = [];
-  for (const it of items || []) {
+  for (const it of items as DecItem[] || []) {
     if (it.kind === 'approval') { approvals.push({key: 'approval:' + it.id, type: 'approve', it, at: it.created_at}); continue; }
     if (it.kind === 'stale') { approvals.push({key: 'stale:' + it.id, type: 'stale', it, at: it.created_at}); continue; }
     if (!NEEDS_TASK_KINDS.includes(it.kind)) continue;
@@ -209,8 +197,8 @@ function decideCards(items: DecItem[] | undefined): DecCard[] {
 }
 // Declines open whole, as do tasks that ask for no yes or no and recommend nothing.
 const decideOnCard = (c: DecCard) => c.it.kind !== 'declined' && (c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask);
-function needsCards(items: DecItem[] | undefined): DecCard[] {
-  const folded = new Set((items || []).flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
+function needsCards(items: NeedsItem[] | undefined): DecCard[] {
+  const folded = new Set((items as DecItem[] | undefined || []).flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
   const cards = new Map<string, DecCard>();
   for (const c of decideCards(items)) {
     if (!decideOnCard(c) || cards.has(c.key) || (['task', 'pick'].includes(c.type)
@@ -280,7 +268,7 @@ function decideListKeys(): string[] {
   return [...new Set([...document.querySelectorAll<HTMLElement>('#task-body [data-need-card], #t-needs [data-need-card]')].map(el => el.dataset.needCard!))];
 }
 function decideDialog(): HTMLDialogElement {
-  let d = $('#need-card') as HTMLDialogElement | null;
+  let d: HTMLDialogElement | null = $('#need-card');
   if (d) return d;
   d = document.createElement('dialog');
   d.id = 'need-card'; d.className = 'dc-dialog'; d.setAttribute('aria-label', 'Needs you');
@@ -312,7 +300,7 @@ function decideDialog(): HTMLDialogElement {
   root.addEventListener('keydown', (ev: KeyboardEvent) => {
     const field = eventElement(ev) as HTMLTextAreaElement | null;
     if (!DEC || ev.key !== 'Enter' || ev.shiftKey || ev.isComposing || !field?.matches('.dc-note textarea') || !field.value.trim()) return;
-    const send = $('.dc-send, [data-dc-text]', root) as HTMLElement | null;
+    const send: HTMLElement | null = $('.dc-send, [data-dc-text]', root);
     if (send) { ev.preventDefault(); decideAct(DEC, send.dataset.dc!); }
   });
   // Esc in the note leaves the note; otherwise it closes the card.
@@ -334,11 +322,11 @@ function decideOpen(key: string = ''): boolean {
   if (!to) return false;
   if (fresh) {
     DEC = st;
-    if (typeof liveOn === 'function') st.off.push(liveOn('needs-list', (items: DecItem[]) => { if (DEC === st) decideRefresh(st, items); }));
+    if (typeof liveOn === 'function') st.off.push(liveOn('needs-list', (items: NeedsItem[]) => { if (DEC === st) decideRefresh(st, items); }));
     const keys = (ev: KeyboardEvent) => decideKey(st, ev);
     document.addEventListener('keydown', keys);
     st.off.push(() => document.removeEventListener('keydown', keys));
-    st.opener = document.activeElement;
+    st.opener = document.activeElement as HTMLElement | null;
   }
   st.at = to;
   if (TASKS_ST && $('#task-peek')?.open) taskPeekClose(TASKS_ST);
@@ -360,12 +348,12 @@ function decideStop() {
   DEC = null;
   void decideCommit(st);
   st.off.forEach(fn => fn());
-  const d = $('#need-card') as HTMLDialogElement | null;
+  const d: HTMLDialogElement | null = $('#need-card');
   if (d?.open) d.close();
   if (history.state?.needCard && !DEC_BACK) { DEC_BACK = true; history.back(); }
   needsListsRedraw();
   // Back to where the card was opened from, or the row of the card last shown.
-  const row = st.at && document.querySelector<HTMLElement>(`[data-need-card="${CSS.escape(st.at)}"]`);
+  const row = st.at ? document.querySelector<HTMLElement>(`[data-need-card="${CSS.escape(st.at)}"]`) : null;
   const to = st.opener?.isConnected ? st.opener : row?.querySelector<HTMLElement>('.tl-open') || row;
   to?.focus?.({preventScroll: true});
 }
@@ -399,7 +387,7 @@ async function decideWanted(id: string) {
 
 // The server's list changed (live, or a read after a write): drop what left, add what is new where the list has it.
 const decideLive = (st: DecState) => st.order.filter(k => !decideGone(k));
-function decideSync(st: DecState, items: DecItem[] | undefined) {
+function decideSync(st: DecState, items: NeedsItem[] | undefined) {
   const fresh = needsCards(items), keys = new Set(fresh.map(c => c.key));
   st.cards = new Map([...st.cards].filter(([k]) => keys.has(k)));
   for (const c of fresh) st.cards.set(c.key, c);
@@ -424,29 +412,30 @@ function decideSync(st: DecState, items: DecItem[] | undefined) {
   }
   st.order = order;
 }
-function decideRefresh(st: DecState, items: DecItem[] | undefined) {
-  const before = st.at, card = before && st.cards.get(before);
+function decideRefresh(st: DecState, items: NeedsItem[] | undefined) {
+  const before = st.at, card = before ? st.cards.get(before) : undefined;
   decideSync(st, items);
+  const now = before ? st.cards.get(before) : undefined;
   if (st.at !== before) decideRender(st, true);
-  else if (card && JSON.stringify([st.cards.get(before!)!.type, st.cards.get(before!)!.it]) !== JSON.stringify([card.type, card.it])) {
+  else if (card && now && JSON.stringify([now.type, now.it]) !== JSON.stringify([card.type, card.it])) {
     // The Stale tickets card mends its rows where they stand: an answered row goes, a new one comes, focus stays.
     if (card.type === 'stale') { decideStalePaint(st); return; }
     decideRedraw(st);
     // A new version: read its comments and files again. Until they land, the card shows (and Done sends) the old one.
-    if (st.cards.get(before!)!.it.version !== card.it.version) void decideLoad(st, st.cards.get(before!)!, true);
+    if (now.it.version !== card.it.version) void decideLoad(st, now, true);
   } else decidePaintHead(st);
 }
 // The current card changed under it (a live refresh): draw it again, buttons included, keeping what was typed.
 function decideRedraw(st: DecState) {
-  const box = $('.decide .dc-note textarea') as HTMLTextAreaElement | null, draft = box?.value || '', typing = box && document.activeElement === box;
+  const box: HTMLTextAreaElement | null = $('.decide .dc-note textarea'), draft = box?.value || '', typing = box && document.activeElement === box;
   decideRender(st);
-  const again = $('.decide .dc-note textarea') as HTMLTextAreaElement | null;
+  const again: HTMLTextAreaElement | null = $('.decide .dc-note textarea');
   if (again && draft) { again.value = draft; again.dispatchEvent(new Event('input', {bubbles: true})); }
   if (again && typing) again.focus({preventScroll: true});
 }
 // The card `dir` steps from the current one; Skip goes round to the first from the last.
 function decideStepKey(st: DecState, dir: number, round = false): string | null {
-  const live = decideLive(st), i = live.indexOf(st.at!);
+  const live = decideLive(st), i = live.indexOf(st.at ?? '');
   if (i < 0) return live[0] || null;
   const j = i + dir;
   return j >= 0 && j < live.length ? live[j]! : round && live.length > 1 ? live[(j + live.length) % live.length]! : null;
@@ -468,17 +457,18 @@ const decideCurrent = (st: DecState) => st.at ? st.cards.get(st.at) : null;
 function decidePaintHead(st: DecState) {
   const root = $('.decide');
   if (!root) return;
-  const live = decideLive(st), at = live.indexOf(st.at!), c = decideCurrent(st);
+  const live = decideLive(st), at = live.indexOf(st.at ?? ''), c = decideCurrent(st);
   if (live.length - at <= DEC_MORE_AT) void needsMoreShow();     // the next page of cards, before the last one is reached
   $('.dc-count', root)!.innerHTML = c ? `<span class="tnum">${at + 1} of ${live.length}</span>` : '';
-  ($('[data-dc="prev"]', root) as HTMLButtonElement).disabled = !c || at <= 0;
-  ($('[data-dc="next"]', root) as HTMLButtonElement).disabled = !c || at >= live.length - 1;
+  const prev: HTMLButtonElement = $('[data-dc="prev"]', root), next: HTMLButtonElement = $('[data-dc="next"]', root);
+  prev.disabled = !c || at <= 0;
+  next.disabled = !c || at >= live.length - 1;
 }
 function decideRender(st: DecState, enter = false) {
   const root = $('.decide');
   if (!root) return;
   decidePaintHead(st);
-  const c = decideCurrent(st), stage = $('.dc-stage', root) as HTMLElement, actions = $('.dc-actions', root) as HTMLElement;
+  const c = decideCurrent(st), stage: HTMLElement = $('.dc-stage', root), actions: HTMLElement = $('.dc-actions', root);
   st.shown = c?.key || null;                // every button and key acts on this card, and only once
   st.busy = false;
   root.classList.toggle('dc-empty', !c);
@@ -487,7 +477,7 @@ function decideRender(st: DecState, enter = false) {
     actions.innerHTML = actions.dataset.html = '';
     return;
   }
-  const from = c.type === 'approve' ? c.it.requester_id : c.type === 'stale' ? 'keeper' : c.type === 'pick' ? c.it.ask!.sender_id
+  const from = c.type === 'approve' ? c.it.requester_id : c.type === 'stale' ? 'keeper' : c.type === 'pick' ? c.it.ask?.sender_id
     : (c.it.waiting_on === myActor() || c.it.kind === 'waiting') && String(c.it.owner_id).startsWith('bot:') ? c.it.owner_id
     : c.it.requester_id || c.it.owner_id;
   const decide = c.type !== 'task' || c.yn;
@@ -508,18 +498,19 @@ function decideRender(st: DecState, enter = false) {
   // A card the note goes with: a comment on a task, a note with a decision, the answer to a question.
   const note = c.type === 'stale' ? '' : `<div class="dc-note"><textarea rows="1" maxlength="4000" aria-label="${decide ? 'Note' : 'Comment'}" placeholder="${decide ? 'Add a note' : 'Add a comment'}"></textarea>
       ${decide ? '' : `<button type="button" class="dc-send" data-dc="comment" aria-label="Send comment" title="${DC_SEND_WHY}" disabled>${ICON_SEND}</button>`}</div>`;
+  const due = decideDue(c.it);
   stage.innerHTML = `<article class="dc-card${enter ? ' in' : ''}" data-key="${esc(c.key)}">
     <div class="dc-who">${face}
       <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}${origin ? `<span class="dc-origin"> · ${esc(origin)}</span>` : ''}</div>
         <div class="dc-who-sub">${esc(sub)}</div></div>
-      ${decideDue(c.it) ? `<span class="tl-due${decideDue(c.it).late ? ' late' : ''}">${esc(decideDue(c.it).words)}</span>` : ''}
+      ${due ? `<span class="tl-due${due.late ? ' late' : ''}">${esc(due.words)}</span>` : ''}
       <span class="pill needs">${esc(chip)}</span>${fbButtonsHTML(decideFeedbackKey(c), {fixed: true})}</div>
     <div class="dc-body"></div>${note}
   </article>`;
   decidePaintBody(st);
   fbSync();
   actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
-  const card = $('.dc-card', stage) as HTMLElement;
+  const card: HTMLElement = $('.dc-card', stage);
   if (enter) requestAnimationFrame(() => requestAnimationFrame(() => card.classList.remove('in')));
   decideSwipe(st, card);
   void decideLoad(st, c);
@@ -538,7 +529,7 @@ function decideFeedbackKey(c: DecCard): string {
 // A card's deadline: a person's task's due date (a bot's own task's due is only when it looks again).
 const decideDue = (it: DecItem) => { const d = ['approval', 'stale'].includes(it.kind) ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
 function decidePaintBody(st: DecState) {
-  const c = decideCurrent(st), body = $('.decide .dc-body') as HTMLElement | null;
+  const c = decideCurrent(st), body: HTMLElement | null = $('.decide .dc-body');
   if (!c || !body) return;
   // Other bots' tasks waiting on the person for the same thing are named on the card.
   const html = c.type === 'approve' ? decideApprovalHTML(st, c) : c.type === 'stale' ? decideStaleHTML(c)
@@ -553,7 +544,7 @@ function decideAskRead(it: DecItem) {
   return taskAsksRead(it.id, ask.id);
 }
 function decideStalePaint(st: DecState) {
-  const c = decideCurrent(st), body = $('.decide .dc-body') as HTMLElement | null, actions = $('.decide .dc-actions') as HTMLElement;
+  const c = decideCurrent(st), body: HTMLElement | null = $('.decide .dc-body'), actions: HTMLElement = $('.decide .dc-actions');
   if (!c || !body) return;
   const html = decideStaleHTML(c), act = decideActionsHTML(c);
   if (body.dataset.html !== html) { tasksPatch(body, html); body.dataset.html = html; }
@@ -562,7 +553,7 @@ function decideStalePaint(st: DecState) {
 }
 const decideTwo = (c: DecCard): boolean => c.type === 'pick' && !c.q.multi && c.q.options.length === 2;
 // Yes / No reads No, Yes like an approval: the affirmative on the right.
-const decideYesNo = (c: DecCard) => decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
+const decideYesNo = (c: DecCard) => c.type === 'pick' && decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
 const decideRecommends = (c: DecCard) => c.type === 'task' && !!c.it.recommend?.ask;
 function decideActionsHTML(c: DecCard): string {
   const k = (key: string) => `<kbd>${key}</kbd>`;
@@ -596,7 +587,7 @@ function decidePickHTML(st: DecState, c: DecPick): string {
     + qcardFallbackHTML(c.it) + qcardDetailsHTML(c.it, c.q);
 }
 // Several picks: the ones ticked on this card, the recommended ones until the person changes them.
-function decideTicked(st: DecState | null | undefined, c: DecCard | undefined): Set<number> {
+function decideTicked(st: DecState | null | undefined, c: DecCard | null | undefined): Set<number> {
   if (!st || c?.type !== 'pick' || !c.q.multi) return new Set();
   if (!st.ticks.has(c.key)) st.ticks.set(c.key, qcardRecommended(c.q));
   return st.ticks.get(c.key)!;
@@ -605,7 +596,7 @@ function decideTick(st: DecState, i: number, on: boolean) {
   const c = decideCurrent(st), ticked = decideTicked(st, c);
   if (!c?.q?.multi || !(i >= 0 && i < c.q.options.length)) return;
   if (on) ticked.add(i); else ticked.delete(i);
-  const box = $(`.decide [data-qc-tick="${i}"]`) as HTMLInputElement | null; if (box) box.checked = on;
+  const box: HTMLInputElement | null = $(`.decide [data-qc-tick="${i}"]`); if (box) box.checked = on;
   qcardRetick($('.decide .dc-actions'), c.it, c.q, ticked, 'dc');
 }
 const DEC_APPROVAL_Q: Record<string, string> = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
@@ -691,7 +682,7 @@ async function decideLoad(st: DecState, c: DecCard, again = false): Promise<void
     } catch { st.data.set(c.it.id, {error: true}); }
     if (DEC === st && st.at === c.key) {
       decidePaintBody(st);
-      const actions = $('.decide .dc-actions') as HTMLElement | null;
+      const actions: HTMLElement | null = $('.decide .dc-actions');
       if (actions) actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
     }
     return;
@@ -710,7 +701,7 @@ async function decideLoad(st: DecState, c: DecCard, again = false): Promise<void
 
 // ---- acting
 // Who a card's answer goes to, named in its toast: the asking bot, the approval's requester, or the task's bot.
-const decideBot = (c: DecCard) => actorLabel(c.type === 'pick' ? c.it.ask!.sender_id : c.type === 'approve' ? c.it.requester_id
+const decideBot = (c: DecCard) => actorLabel(c.type === 'pick' ? c.it.ask?.sender_id : c.type === 'approve' ? c.it.requester_id
   : [c.it.owner_id, c.it.requester_id].find(a => String(a || '').startsWith('bot:')) || c.it.requester_id) || 'Tico';
 // What an action sends, as requests run in order when it commits, and what the toast says. Each request has its own
 // idempotency key from the start, so sending it again (pagehide while it is in flight) lands once.
@@ -750,12 +741,12 @@ function decideWriteBody(c: DecCard, what: string, i: number | undefined, note: 
   return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: note}}], label: `Sent to ${to}`};
 }
 function decideAct(st: DecState, what: string, i?: number, shown: string | null | undefined = st.shown) {
-  const key = st.at!, c = decideCurrent(st), root = $('.decide');
+  const key = st.at ?? '', c = decideCurrent(st), root = $('.decide');
   // A second tap while the card leaves, or a button from a card no longer current, does nothing.
   if (!c || !root || st.busy || key !== shown || performance.now() < (st.lockUntil || 0)) return;
   if (what === 'yes' && c.type === 'approve' && c.it.what === 'send' && c.it.payload?.email_send_id
       && !st.data.get(c.it.id)?.email?.preview_complete) return;
-  const card = $('.dc-card', root) as HTMLElement | null;
+  const card: HTMLElement | null = $('.dc-card', root);
   if (['skip', 'next', 'prev'].includes(what)) {
     const to = decideStepKey(st, what === 'prev' ? -1 : 1, what === 'skip');
     if (!to) return;
@@ -764,7 +755,7 @@ function decideAct(st: DecState, what: string, i?: number, shown: string | null 
     decideLeaveCard(st, card, what === 'prev' ? 'right' : 'left');
     return;
   }
-  const box = $('.dc-note textarea', root) as HTMLTextAreaElement | null, note = box?.value.trim() || '';
+  const box: HTMLTextAreaElement | null = $('.dc-note textarea', root), note = box?.value.trim() || '';
   if (what === 'comment' && !note) { box?.focus(); return; }
   if (what === 'ticked' && !decideTicked(st, c).size) return;
   // Request changes on a review goes with the note that says what to change.
@@ -788,7 +779,7 @@ function decideAct(st: DecState, what: string, i?: number, shown: string | null 
     DEC_HANDLED.delete(key); st.at = key;
     decideRender(st, true);
     needsListsRedraw();
-    const again = $('.decide .dc-note textarea') as HTMLTextAreaElement | null; if (again) { again.value = note; again.dispatchEvent(new Event('input', {bubbles: true})); }
+    const again: HTMLTextAreaElement | null = $('.decide .dc-note textarea'); if (again) { again.value = note; again.dispatchEvent(new Event('input', {bubbles: true})); }
   });
 }
 function decideLeaveCard(st: DecState, card: HTMLElement | null, side: 'left' | 'right') {
@@ -836,14 +827,17 @@ async function decideCommit(st: DecState) {
 }
 // A line for the person: in the card while it is open (a page toast would sit under it), else the page's toast.
 function needsSay(text: string, err = false) {
-  const t = DEC && ($('#need-card') as HTMLDialogElement | null)?.open && ($('.decide .dc-toast') as HTMLElement | null);
-  if (!t) { toast(text, err); return; }
-  clearTimeout(DEC!.toastTimer);
-  $('span', t)!.textContent = text;
-  ($('button', t) as HTMLButtonElement).hidden = true;
+  const st = DEC;
+  const t: HTMLElement | null = st && $('#need-card')?.open && $('.decide .dc-toast');
+  if (!st || !t) { toast(text, err); return; }
+  clearTimeout(st.toastTimer);
+  const label: HTMLElement | null = $('span', t), btn: HTMLButtonElement | null = $('button', t);
+  if (!label || !btn) throw new Error('The Needs you card has no toast text or button');
+  label.textContent = text;
+  btn.hidden = true;
   t.hidden = false;
-  DEC!.undo = null; DEC!.toastFor = null;
-  DEC!.toastTimer = setTimeout(() => { t.hidden = true; }, DEC_UNDO_MS);
+  st.undo = null; st.toastFor = null;
+  st.toastTimer = setTimeout(() => { t.hidden = true; }, DEC_UNDO_MS);
 }
 // The requests not yet confirmed, in order, each under the key it got when the action was taken.
 async function decideSend(st: DecState | null, p: DecPending) {
@@ -873,7 +867,8 @@ async function decideSend(st: DecState | null, p: DecPending) {
     decideSave();
     needsListsRedraw();
     if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
-    const changed = err.status === 409 || err.body?.error?.code === 'version_conflict';
+    const cerr = err.body?.error;
+    const changed = err.status === 409 || !!cerr && typeof cerr === 'object' && cerr.code === 'version_conflict';
     needsSay(changed ? 'That task changed. Look again.' : err.message, true);
     st.data.delete(String(p.key).replace(/^task:/, ''));
     if (DEC === st) {
@@ -907,11 +902,13 @@ document.addEventListener('click', e => {
   try { localStorage.removeItem(DEC_SAVED); } catch {}
 }, true);
 function decideToast(st: DecState, text: string, undo: () => void) {
-  const t = $('.decide .dc-toast') as HTMLElement | null;
+  const t: HTMLElement | null = $('.decide .dc-toast');
   if (!t) return;
   clearTimeout(st.toastTimer);
-  $('span', t)!.textContent = text;
-  ($('button', t) as HTMLButtonElement).hidden = false;
+  const label: HTMLElement | null = $('span', t), btn: HTMLButtonElement | null = $('button', t);
+  if (!label || !btn) throw new Error('The Needs you card has no toast text or button');
+  label.textContent = text;
+  btn.hidden = false;
   t.hidden = false;
   st.undo = undo;
   st.toastFor = st.pending;
@@ -919,7 +916,7 @@ function decideToast(st: DecState, text: string, undo: () => void) {
 }
 function decideToastHide(st: DecState, p: DecPending) {
   if (st.toastFor !== p) return;
-  const t = $('.decide .dc-toast') as HTMLElement | null;
+  const t: HTMLElement | null = $('.decide .dc-toast');
   if (t) t.hidden = true;
   st.undo = null;
 }
@@ -938,12 +935,12 @@ function decideClick(st: DecState, ev: Event) {
   if (!b || b.disabled || st.swiped) return;
   const what = b.dataset.dc!;
   if (what === 'close') { decideStop(); return; }
-  if (what === 'ask') { ($('.decide .dc-note textarea') as HTMLTextAreaElement | null)?.focus(); return; }
-  if (what === 'undo') { const undo = st.undo; st.undo = null; ($('.decide .dc-toast') as HTMLElement).hidden = true; undo?.(); return; }
+  if (what === 'ask') { const box: HTMLTextAreaElement | null = $('.decide .dc-note textarea'); box?.focus(); return; }
+  if (what === 'undo') { const undo = st.undo; st.undo = null; const bar: HTMLElement = $('.decide .dc-toast'); bar.hidden = true; undo?.(); return; }
   decideAct(st, what, Number(b.dataset.i));
 }
 function decideKey(st: DecState, ev: KeyboardEvent) {
-  if (DEC !== st || ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey || !($('#need-card') as HTMLDialogElement | null)?.open
+  if (DEC !== st || ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey || !$('#need-card')?.open
       || [...document.querySelectorAll('dialog[open]')].some(d => d.id !== 'need-card' && !d.contains($('#need-card')))) return;
   if (eventElement(ev)?.matches('textarea, input:not([type=checkbox]), select, [contenteditable]')) {   // a ticked pick keeps the keys
     if (ev.key === 'Escape') { ev.preventDefault(); (ev.target as HTMLElement).blur(); }
@@ -954,7 +951,7 @@ function decideKey(st: DecState, ev: KeyboardEvent) {
   let what: string | null = null, i: number | undefined;
   if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') what = ev.key === 'ArrowLeft' ? 'prev' : 'next';
   else if (k === 's') what = 'skip';
-  else if (k === 'c') { if (!$('.decide .dc-note textarea')) return; ev.preventDefault(); ($('.decide .dc-note textarea') as HTMLTextAreaElement).focus(); return; }   // every card, a multi too
+  else if (k === 'c') { const area: HTMLTextAreaElement | null = $('.decide .dc-note textarea'); if (!area) return; ev.preventDefault(); area.focus(); return; }   // every card, a multi too
   else if (c.type === 'pick' && c.q.multi) {
     // Several picks: a number ticks or unticks one; A says yes to all, T sends the ticked ones.
     if (/^[1-6]$/.test(k) && Number(k) <= c.q.options.length) {

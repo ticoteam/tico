@@ -1428,11 +1428,18 @@ def guard_write(c, who, path, auth):
         return
     if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
         return
+    if path == "/api/v2/ci/permits":
+        return  # a CI minutes permit publishes nothing; the route admits only the ticket's own workers (ci_runs.may_ask)
     if path == "/api/v2/rules":
         from . import counsel
 
         if counsel.run_read(c, who):
             return  # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
+    if path == "/api/v2/finance/actions":
+        from . import bookkeeper
+
+        if bookkeeper.private_finance_run(c, who):
+            return  # the Bookkeeper's Finance actions from its own Books check or Watch task; the act route checks the kind
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
 
 

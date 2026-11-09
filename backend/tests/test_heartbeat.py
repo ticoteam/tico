@@ -30,6 +30,7 @@ ORDER = [
     "snooze_ends",
     "queue_check",
     "milestone_waits",
+    "ci_sweep",
     "due_reminders",
     "updates",
     "company_page",
@@ -41,6 +42,7 @@ ORDER = [
     "stall_checks",
     "approval_expiry",
     "repository_waits",
+    "entity_links",
     "call_sweeps",
 ]
 

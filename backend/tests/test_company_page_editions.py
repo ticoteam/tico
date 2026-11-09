@@ -396,7 +396,7 @@ def test_a_rule_nobody_could_read_holds_the_edition(page, monkeypatch):
     org(page.api)
     rule(page.api, {"kind": "internal", "text": SECRET_RULE, "who": {"outside_editions": True}})
     real_engine, real_on = K.B.server_engine, K.on
-    for trouble in ("no_engine", "error", "checks_off"):
+    for trouble in ("no_engine", "error", "checks_off", "budget"):
         page.write_sql("DELETE FROM editions")
         judge = Judge(page.store, {SECRET_RULE: "globex"})
         page.api.app.state.judge = judge
@@ -407,6 +407,10 @@ def test_a_rule_nobody_could_read_holds_the_edition(page, monkeypatch):
             monkeypatch.setattr(K.B, "server_engine", lambda *a, **k: None)
         elif trouble == "error":
             judge.fail = RuntimeError("judge down")
+        elif trouble == "budget":  # the decisions cap leaves no room for the check's call
+            page.store.settings.decisions_monthly_usd = 1.0
+            with page.store.transaction() as c:
+                H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 0.999995})
         else:
             monkeypatch.setattr(K, "on", lambda c: False)
         edition = page.draft()

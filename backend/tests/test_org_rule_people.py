@@ -215,12 +215,12 @@ def test_a_persons_message_goes_through_unchecked_when_the_check_fails(ruled, mo
     api, judge = ruled
     block_everyone(api)
     if how == "timeout":
-        monkeypatch.setitem(K.DEADLINES, "medium", 0.2)
+        monkeypatch.setitem(K.DEADLINES, "low", 0.2)
         judge.hold = threading.Event()
     elif how == "budget":
-        api.app.state.store.settings.rules_monthly_usd = 1.0
+        api.app.state.store.settings.decisions_monthly_usd = 1.0
         with api.app.state.store.transaction() as c:
-            H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
+            H.event(c, H.KEEPER, "judge.spend", "person-ask-ingest@1", {"cost_usd": 5.0})
     else:
         judge.fail = RuntimeError("provider down")
     got = write(api, "cara-test", "Our favorite color is gold.")
