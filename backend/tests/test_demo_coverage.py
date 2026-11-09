@@ -14,14 +14,14 @@ from backend.tests.test_demo import NOW, signed_in
 UI = Path(__file__).resolve().parents[2] / "ui"
 WEEK_AGO = NOW - timedelta(days=7)
 
-NAV_LINK = re.compile(r'<a\b[^>]*\bdata-nav="([a-z-]+)"')          # static rail and account menu
-NAV_ROW = re.compile(r"\blink\('([a-z-]+)',")                       # redesign.js rows
+NAV_LINK = re.compile(r'<a\b[^>]*\bdata-nav="([a-z-]+)"')  # static rail and account menu
+NAV_ROW = re.compile(r"\blink\('([a-z-]+)',")  # redesign.js rows
 NAV_DATASET = re.compile(r"\.dataset\.nav\s*=\s*['\"]([a-z-]+)['\"]")  # rows added in code (finance)
 
 
 def nav_pages():
     pages = set(NAV_LINK.findall((UI / "index.html").read_text()))
-    for source in (UI / "app").glob("*.js"):
+    for source in sorted([*(UI / "app").glob("*.js"), *(UI / "app").glob("*.ts")]):
         text = source.read_text()
         pages.update(NAV_ROW.findall(text))
         pages.update(NAV_DATASET.findall(text))
@@ -40,8 +40,13 @@ PAGES = {
     "docs": page("docs", "docs"),
     "library": page("docs", "docs"),
     "files": page("files", "files"),
+    # Library › Skills (ui/app/skills.ts): the directory, its usage and proposals (backend/demo_sections/skills.py).
+    "skills": page("skills", "skills"),
+    # Library › Directory (ui/app/directory.ts): the people the demo's company works with (backend/demo_sections/directory.py).
+    "directory": page("entities/find/person", "rows"),
     "tools": page("tools", "integrations"),
-    "connections": page("connections", "connections"),
+    # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
+    "connections": page("tool-index", "rows"),
     "meetings": page("meetings", "meetings"),
     "meetings-live": page("live-meetings", "meetings"),
     "threads": page("threads", "threads"),
@@ -51,7 +56,7 @@ PAGES = {
     "growth": page("growth/numbers", "months", months=24),
     "finance": page("finance/transactions", "rows"),
     "rules": page("rules", "rules"),
-    # The Rules section's tabs, one row each under Rules (ui/app/org-rules.js reads).
+    # The Rules section's tabs, one row each under Rules (ui/app/org-rules.ts reads).
     "rules-internal": page("rules", "rules", kind="internal"),
     "rules-external": page("rules", "rules", kind="external"),
     "rules-due": page("rules/due", "due", next="3660d"),
@@ -85,7 +90,8 @@ def test_every_nav_page_has_a_demo_mapping():
     for name in sorted(nav_pages()):
         assert name in PAGES or name in NO_DEMO_DATA, (
             f"{name}: add a demo_sections module for {name}, then map it here "
-            "(PAGES in backend/tests/test_demo_coverage.py)")
+            "(PAGES in backend/tests/test_demo_coverage.py)"
+        )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -134,17 +140,28 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
 
 def test_meeting_follow_up_has_an_answerable_needs_you_card(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
-    linked = {row['task_id'] for meeting in meetings for row in
-              api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']}
+    linked = {
+        row['task_id']
+        for meeting in meetings
+        for row in api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']
+    }
     needs = api.get('/api/v2/needs-you?limit=200').json()['items']
-    assert any(it['id'] in linked and (it.get('ask') or {}).get('recipient_id') == 'human:ana'
-               and 'answer' in it.get('actions', []) for it in needs)
+
+    def filed_under_meeting(item):
+        detail = api.get(f"/api/v2/tasks/{item['id']}").json()['task']
+        return any(parent['id'] in linked for parent in detail['relations'].get('parent', []))
+
+    # The follow-up is a question task Ana owns, filed under the meeting's task; its card is answered by an update.
+    assert any('update' in it.get('actions', []) and filed_under_meeting(it) for it in needs)
 
 
 def test_demo_task_has_an_editor_for_the_live_task_page(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
-    task = next(row['task_id'] for meeting in meetings for row in
-                api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks'])
+    task = next(
+        row['task_id']
+        for meeting in meetings
+        for row in api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']
+    )
     detail = api.get(f'/api/v2/tasks/{task}').json()
     assert any(event['field'] == 'due' and event['actor'] == 'human:ana' for event in detail['events'])
 
@@ -163,9 +180,11 @@ def test_a_demo_task_has_a_page_made_by_its_person(api):
     pins = api.get("/api/v2/places/task:" + made["task_id"]).json()["pins"]
     assert any(p.get("page", {}).get("file_id") == made["file_id"] for p in pins)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT v.attempt_id,m.refs FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
-                        "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE v.file_id=?",
-                        (made["file_id"],)).fetchone()
+        row = c.execute(
+            "SELECT v.attempt_id,m.refs FROM bot_file_versions v JOIN attempts a ON a.id=v.attempt_id "
+            "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE v.file_id=?",
+            (made["file_id"],),
+        ).fetchone()
         assert row and made["task_id"] in row["refs"]
 
 
@@ -173,3 +192,12 @@ def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
     grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
     assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
     assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None
+
+
+def test_skills_page_has_usage_proposals_and_an_unused_install(api):
+    usage = api.get("/api/v2/skills/usage", params={"days": 30}).json()["skills"]
+    assert all(row["uses"] for row in usage) and any(row["top"] for row in usage)
+    pending = api.get("/api/v2/skills/proposals", params={"status": "pending"}).json()["proposals"]
+    assert {p["screen_status"] for p in pending} == {"pending", "screened"}
+    states = {i["coverage"] for i in api.get("/api/v2/skills/refund-check/usage").json()["installs"]}
+    assert {"used", "unused"} <= states

@@ -7,7 +7,12 @@ it is done. Tell the owner what changed and what remains blocked by missing info
 
 An approval is optional when a bot is genuinely unsure about a specific action. Use
 `hub approval request --kind spend|publish|merge` with the exact amount, content or
-pull request. Only a human decides a requested approval, and it can be consumed once. Do not add
+pull request.
+
+A docs change needs no approval. A `merge` request is refused when every file the pull request changes is under
+`docs/` or ends in `.md` or `.mdx`, and for any pull request in `ticoteam/tico-marketing-site` (code `docs_merge_no_approval`).
+Put a `Changelog:` line in its body that says what changed for readers, then merge it yourself once its checks are green.
+A pull request that mixes docs with code, or whose files cannot be read, is still requested as usual. Only a human decides a requested approval, and it can be consumed once. Do not add
 an approval step to work the owner already requested.
 
 An approval nobody decided is withdrawn when it is no longer needed, and you are told quietly: when

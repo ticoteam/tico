@@ -3,6 +3,7 @@
 The only durable lifecycle records are existing audit events. SQLite write transactions deduplicate
 close reports and reconcile old session opens after a restart. No credentials or tickets are persisted.
 """
+
 import asyncio
 import hmac
 import json
@@ -22,8 +23,12 @@ log = logging.getLogger(__name__)
 
 
 def private_request(request, settings):
-    return (bool(settings.screen_relay_key) and request.method == "POST" and request.url.path == PRIVATE_PATH
-            and hmac.compare_digest(request.headers.get("authorization", ""), "Bearer " + settings.screen_relay_key))
+    return (
+        bool(settings.screen_relay_key)
+        and request.method == "POST"
+        and request.url.path == PRIVATE_PATH
+        and hmac.compare_digest(request.headers.get("authorization", ""), "Bearer " + settings.screen_relay_key)
+    )
 
 
 def install_policy(app, store, auth, execution, settings):
@@ -33,6 +38,7 @@ def install_policy(app, store, auth, execution, settings):
             raise Problem("forbidden", "Private relay key required", 403)
         if body.get("kind") == "exit_link":
             from .browser_exit import authorize_link
+
             return authorize_link(store, auth, execution, body)
         if body.get("kind") == "browser":
             origin = body.get("origin")
@@ -40,11 +46,18 @@ def install_policy(app, store, auth, execution, settings):
                 raise Problem("forbidden", "Cross-site screens are not allowed", 403)
             return {"allowed": True}
         rid, sid, token = body.get("runner_id"), body.get("session_id"), body.get("authorization")
-        if (body.get("kind") != "runner" or not all(isinstance(v, str) for v in (rid, sid, token))
-                or len(rid) > 128 or len(sid) > 128 or len(token) > 8192 or type(body.get("control")) is not bool):
+        if (
+            body.get("kind") != "runner"
+            or not all(isinstance(v, str) for v in (rid, sid, token))
+            or len(rid) > 128
+            or len(sid) > 128
+            or len(token) > 8192
+            or type(body.get("control")) is not bool
+        ):
             raise Problem("forbidden", "Invalid relay authorization", 403)
         who = auth.authenticate({"authorization": token}, f"/api/v2/runners/me/screen/{sid}/ws", "GET")
         from .screen import _allows
+
         with store.read() as c:
             row = execution.runner(c, who) if who.role == "runner" and who.runner_id == rid else None
             if row is None or not _allows(row["screen"], body["control"]):
@@ -60,8 +73,12 @@ class RemoteRegistry:
     def __init__(self, store):
         self.store = store
         self.lock = threading.RLock()
-        self.http = httpx.Client(base_url=(store.settings.screen_relay_url or "http://127.0.0.1:1").rstrip("/"), timeout=2, trust_env=False,
-                                 headers={"Authorization": "Bearer " + store.settings.screen_relay_key})
+        self.http = httpx.Client(
+            base_url=(store.settings.screen_relay_url or "http://127.0.0.1:1").rstrip("/"),
+            timeout=2,
+            trust_env=False,
+            headers={"Authorization": "Bearer " + store.settings.screen_relay_key},
+        )
         self.lease, self.boot, self.sequence = "", "", 0
         self.generations, self.acks = {}, []
         # Browser exits (backend/browser_exit.py): the policy and bot-selection generations this lease's relay has
@@ -83,14 +100,18 @@ class RemoteRegistry:
             raise
         except (httpx.HTTPError, ValueError):
             self.healthy = False
-            raise Problem("screen_relay_unavailable", "The screen relay is unavailable. Try again shortly.", 503) from None
+            raise Problem(
+                "screen_relay_unavailable", "The screen relay is unavailable. Try again shortly.", 503
+            ) from None
 
     def _command(self, op, /, **fields):
         if not self.healthy:
             raise Problem("screen_relay_unavailable", "The screen relay is unavailable. Try again shortly.", 503)
         self.sequence += 1
         try:
-            answer = self._request("/control/v1/command", {"lease": self.lease, "sequence": self.sequence, "op": op, **fields})
+            answer = self._request(
+                "/control/v1/command", {"lease": self.lease, "sequence": self.sequence, "op": op, **fields}
+            )
             if answer.get("boot") != self.boot:
                 self.healthy = False
                 raise Problem("screen_relay_unavailable", "The screen relay restarted. Open a fresh screen.", 503)
@@ -112,7 +133,7 @@ class RemoteRegistry:
             answer = self._request("/control/v1/start", {"challenge": hello["challenge"], "lease": lease})
             self.lease, self.boot, self.sequence = lease, answer["boot"], 0
             self.generations.clear()
-            self.exit_pushed.clear()    # a new lease clears the relay's exit policies and bot generations too
+            self.exit_pushed.clear()  # a new lease clears the relay's exit policies and bot generations too
             self.bot_pushed.clear()
             self.healthy = True
         self._reconcile()
@@ -120,10 +141,18 @@ class RemoteRegistry:
     def admit(self, runner_id, actor, control, width, height, mode):
         with self.lock:
             sid = H.new_id()
-            reply = self._command("grant", id=sid, runner_id=runner_id, actor=actor, control=control,
-                                  generation=self.generations.get(runner_id, 0), mode=mode)
-            return SimpleNamespace(id=sid, runner_id=runner_id, actor=actor, control=control,
-                                   relay_lease=self.lease), reply["ticket"]
+            reply = self._command(
+                "grant",
+                id=sid,
+                runner_id=runner_id,
+                actor=actor,
+                control=control,
+                generation=self.generations.get(runner_id, 0),
+                mode=mode,
+            )
+            return SimpleNamespace(
+                id=sid, runner_id=runner_id, actor=actor, control=control, relay_lease=self.lease
+            ), reply["ticket"]
 
     def publish(self, session):
         with self.lock:
@@ -147,8 +176,9 @@ class RemoteRegistry:
             with self.lock:
                 generation = self.generations[runner_id] = self.generations.get(runner_id, 0) + 1
                 try:
-                    return self._command("mode", runner_id=runner_id, generation=generation, mode=mode,
-                                         reason=reason)["closed"]
+                    return self._command("mode", runner_id=runner_id, generation=generation, mode=mode, reason=reason)[
+                        "closed"
+                    ]
                 except Problem:
                     self.healthy = False
                     return 0  # Durable mode/revocation succeeds; the lease supplies the bounded socket cutoff.
@@ -158,8 +188,7 @@ class RemoteRegistry:
             return self._command("pending", runner_id=runner_id)["sessions"]
 
     # ------------------------------------------------------------------ browser exits (relay-rs/src/exit.rs)
-    EXIT_REFUSALS = ("exit_offline", "exit_not_shared", "exit_over_cap", "exit_busy", "exit_stale",
-                     "stale exit policy")
+    EXIT_REFUSALS = ("exit_offline", "exit_not_shared", "exit_over_cap", "exit_busy", "exit_stale", "stale exit policy")
 
     def _exit_command(self, op, /, **fields):
         """An exit operation: its answer, or the relay's refusal code as a string. Anything else is the relay
@@ -168,8 +197,9 @@ class RemoteRegistry:
             raise Problem("browser_exit_unavailable", "The relay is unavailable. Try again shortly.", 503)
         self.sequence += 1
         try:
-            response = self.http.post("/control/v1/command",
-                                      json={"lease": self.lease, "sequence": self.sequence, "op": op, **fields})
+            response = self.http.post(
+                "/control/v1/command", json={"lease": self.lease, "sequence": self.sequence, "op": op, **fields}
+            )
             answer = response.json()
         except (httpx.HTTPError, ValueError):
             self.healthy = False
@@ -195,18 +225,26 @@ class RemoteRegistry:
         """Send the exit computer's stored policy and its generation; the relay keeps the newest. A push that fails is
         logged and sent again by the next tick (_exit_reconcile); a grant carries the stored policy meanwhile."""
         from . import browser_exit
+
         with self.store.read() as c:
             p = browser_exit.policy(c, runner_id)
         with self.lock:
             epoch = self.lease
             try:
-                answer = self._exit_command("exit_policy", runner_id=runner_id, policy={
-                    "generation": p["generation"], "sharing": p["sharing"], "bots": p["bots"],
-                    "cap": p["daily_cap_bytes"]})
+                answer = self._exit_command(
+                    "exit_policy",
+                    runner_id=runner_id,
+                    policy={
+                        "generation": p["generation"],
+                        "sharing": p["sharing"],
+                        "bots": p["bots"],
+                        "cap": p["daily_cap_bytes"],
+                    },
+                )
             except Problem:
                 log.warning("browser exit policy for %s not pushed to the relay; retrying", runner_id)
                 return 0
-            if answer == "stale exit policy" or isinstance(answer, dict):     # the relay has this one or newer
+            if answer == "stale exit policy" or isinstance(answer, dict):  # the relay has this one or newer
                 if self.lease == epoch:
                     self.exit_pushed[runner_id] = max(self.exit_pushed.get(runner_id, 0), p["generation"])
                 return answer.get("closed", 0) if isinstance(answer, dict) else 0
@@ -217,6 +255,7 @@ class RemoteRegistry:
         """Tell the relay the bot's selection changed (its exit, or the computer it runs on): grants read before are
         refused and its tunnels opened under them close. Retried by the next tick when it fails."""
         from . import browser_exit
+
         with self.store.read() as c:
             generation = browser_exit.bot_generation(c, bot)
         with self.lock:
@@ -234,6 +273,7 @@ class RemoteRegistry:
         """Push what the relay is missing: generations committed but not pushed under this lease (a failed push, a
         new lease, a bot moved to another computer)."""
         from . import browser_exit
+
         with self.store.read() as c:
             exits, bots = browser_exit.generations(c)
         with self.lock:
@@ -267,19 +307,33 @@ class RemoteRegistry:
     def _record(c, report):
         sid, rid = report["id"], report["runner_id"]
         # These writes share SQLite's writer lock with open and revocation, including retried reports.
-        if c.execute("SELECT 1 FROM events WHERE action='runner.screen_close' AND target=? "
-                     "AND json_extract(detail,'$.session_id')=?", (rid, sid)).fetchone():
+        if c.execute(
+            "SELECT 1 FROM events WHERE action='runner.screen_close' AND target=? "
+            "AND json_extract(detail,'$.session_id')=?",
+            (rid, sid),
+        ).fetchone():
             return
-        opened = c.execute("SELECT actor,detail FROM events WHERE action='runner.screen_open' AND target=? "
-                           "AND json_extract(detail,'$.session_id')=?", (rid, sid)).fetchone()
+        opened = c.execute(
+            "SELECT actor,detail FROM events WHERE action='runner.screen_open' AND target=? "
+            "AND json_extract(detail,'$.session_id')=?",
+            (rid, sid),
+        ).fetchone()
         if not opened:  # A prepared grant whose opening transaction rolled back has nothing to audit.
             return
         detail = json.loads(opened["detail"])
-        if (detail.get("relay_lease") != report["lease"] or opened["actor"] != report["actor"]
-                or bool(detail.get("control")) != report["control"]):
+        if (
+            detail.get("relay_lease") != report["lease"]
+            or opened["actor"] != report["actor"]
+            or bool(detail.get("control")) != report["control"]
+        ):
             raise RuntimeError("Relay report does not match its committed grant")
-        H.event(c, opened["actor"], "runner.screen_close", rid,
-                {"session_id": sid, "control": report["control"], "seconds": report["seconds"], "code": report["code"]})
+        H.event(
+            c,
+            opened["actor"],
+            "runner.screen_close",
+            rid,
+            {"session_id": sid, "control": report["control"], "seconds": report["seconds"], "code": report["code"]},
+        )
 
     def _reconcile(self):
         reconcile_sessions(self.store, self.lease)
@@ -294,6 +348,7 @@ class RemoteRegistry:
         # Browser-exit usage the relay holds beyond the batch in hand is collected in this tick, up to a limit, so no
         # backlog builds up: a relay that stops on its own loses at most about one tick's bytes.
         from . import browser_exit
+
         for _ in range(EXIT_BATCHES_PER_TICK):
             with self.lock:
                 answer = self._command("heartbeat", ack=self.acks, exit_ack=self.exit_acks)
@@ -342,6 +397,7 @@ class RemoteRegistry:
         heartbeats until Python has collected the browser-exit usage it holds. Collected here until none is left or
         the deadline passes; what's left stays in the relay for the next lease."""
         from . import browser_exit
+
         with self.lock:
             if not self.healthy:
                 return
@@ -363,16 +419,28 @@ class RemoteRegistry:
 def reconcile_sessions(store, lease=""):
     while True:
         with store.transaction() as c:
-            rows = c.execute("SELECT o.target,o.actor,o.detail FROM events o WHERE o.action='runner.screen_open' "
-                             "AND json_extract(o.detail,'$.relay_lease') IS NOT NULL "
-                             "AND json_extract(o.detail,'$.relay_lease')<>? AND NOT EXISTS "
-                             "(SELECT 1 FROM events x WHERE x.action='runner.screen_close' AND x.target=o.target "
-                             "AND json_extract(x.detail,'$.session_id')=json_extract(o.detail,'$.session_id')) "
-                             "LIMIT 256", (lease,)).fetchall()
+            rows = c.execute(
+                "SELECT o.target,o.actor,o.detail FROM events o WHERE o.action='runner.screen_open' "
+                "AND json_extract(o.detail,'$.relay_lease') IS NOT NULL "
+                "AND json_extract(o.detail,'$.relay_lease')<>? AND NOT EXISTS "
+                "(SELECT 1 FROM events x WHERE x.action='runner.screen_close' AND x.target=o.target "
+                "AND json_extract(x.detail,'$.session_id')=json_extract(o.detail,'$.session_id')) "
+                "LIMIT 256",
+                (lease,),
+            ).fetchall()
             for row in rows:
                 detail = json.loads(row["detail"])
-                RemoteRegistry._record(c, {"id": detail["session_id"], "runner_id": row["target"], "actor": row["actor"],
-                                 "control": bool(detail["control"]), "lease": detail["relay_lease"], "seconds": 0, "code": 1012})
+                RemoteRegistry._record(
+                    c,
+                    {
+                        "id": detail["session_id"],
+                        "runner_id": row["target"],
+                        "actor": row["actor"],
+                        "control": bool(detail["control"]),
+                        "lease": detail["relay_lease"],
+                        "seconds": 0,
+                        "code": 1012,
+                    },
+                )
         if len(rows) < 256:
             break
-

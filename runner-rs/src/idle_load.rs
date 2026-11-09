@@ -67,17 +67,26 @@ pub async fn run_loop(runner: Arc<Runner>) {
             break;
         }
         let t = thresholds();
-        let Ok(sample) = tokio::task::spawn_blocking(take_sample).await else { continue };
+        let Ok(sample) = tokio::task::spawn_blocking(take_sample).await else {
+            continue;
+        };
         let found = hourly.findings(&sample, t);
         let at = text_of(&iso(&json!(epoch_s().floor())));
-        match runner.client.post("runners/idle-load", &body(&at, &found), None).await {
+        match runner
+            .client
+            .post("runners/idle-load", &body(&at, &found), None)
+            .await
+        {
             Ok(_) => REFUSED.store(false, Ordering::SeqCst),
             Err(e) if not_taken(e.status) => {
                 if !REFUSED.swap(true, Ordering::SeqCst) {
                     log("Tico runner: this server does not take idle load; it is asked again at the next hour");
                 }
             }
-            Err(e) => log(&format!("Tico runner: idle load not sent: {}", describe(&e))),
+            Err(e) => log(&format!(
+                "Tico runner: idle load not sent: {}",
+                describe(&e)
+            )),
         }
     }
 }
@@ -90,17 +99,28 @@ fn not_taken(status: u16) -> bool {
 
 /// The settings from the environment, read at each sample.
 pub fn thresholds() -> Thresholds {
-    Thresholds { cpu: env_number("HEALTH_BUSY_CPU", 50.0), mb: env_number("HEALTH_BUSY_MB", 2048.0) }
+    Thresholds {
+        cpu: env_number("HEALTH_BUSY_CPU", 50.0),
+        mb: env_number("HEALTH_BUSY_MB", 2048.0),
+    }
 }
 
 fn env_number(name: &str, default: f64) -> f64 {
-    std::env::var(name).ok().and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
 }
 
 /// A name as a finding carries it: the base name, its letters, digits and `._-`, at most 40 characters, or `unknown`.
 pub fn clean(name: &str) -> String {
     let base = name.rsplit('/').next().unwrap_or("");
-    let kept: String = base.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).take(NAME_MAX).collect();
+    let kept: String = base
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(NAME_MAX)
+        .collect();
     if kept.is_empty() {
         "unknown".into()
     } else {
@@ -115,7 +135,11 @@ fn take_sample() -> Sample {
     let mut sample = parse_ps(&ps, &crate::harness_tools::turn_executables());
     if crate::env::which("docker", &std::env::var("PATH").unwrap_or_default()).is_some() {
         let format = "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}";
-        if let Some(out) = output_within("docker", &["stats", "--no-stream", "--format", format], DOCKER_LIMIT) {
+        if let Some(out) = output_within(
+            "docker",
+            &["stats", "--no-stream", "--format", format],
+            DOCKER_LIMIT,
+        ) {
             sample.extend(parse_docker(&out));
         }
     }
@@ -126,7 +150,13 @@ fn take_sample() -> Sample {
 /// read: a command that printed what it had counts. The pipe is drained while the command runs, so a long listing
 /// cannot stall it.
 fn output_within(program: &str, args: &[&str], limit: Duration) -> Option<String> {
-    let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
     let mut out = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -136,7 +166,12 @@ fn output_within(program: &str, args: &[&str], limit: Duration) -> Option<String
     let deadline = Instant::now() + limit;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return reader.join().ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+            Ok(Some(_)) => {
+                return reader
+                    .join()
+                    .ok()
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+            }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
             _ => {
                 let _ = child.kill();
@@ -152,8 +187,12 @@ fn output_within(program: &str, args: &[&str], limit: Duration) -> Option<String
 pub fn parse_ps(out: &str, turns: &[String]) -> Sample {
     let mut seen = Sample::new();
     for line in out.lines() {
-        let Some((cpu, rss, comm)) = ps_fields(line) else { continue };
-        let (Ok(cpu), Ok(rss)) = (cpu.parse::<f64>(), rss.parse::<u64>()) else { continue };
+        let Some((cpu, rss, comm)) = ps_fields(line) else {
+            continue;
+        };
+        let (Ok(cpu), Ok(rss)) = (cpu.parse::<f64>(), rss.parse::<u64>()) else {
+            continue;
+        };
         if !cpu.is_finite() {
             continue;
         }
@@ -200,11 +239,15 @@ pub fn parse_docker(out: &str) -> Sample {
         if parts.len() < 3 {
             continue;
         }
-        let Ok(cpu) = parts[1].trim().trim_end_matches('%').trim().parse::<f64>() else { continue };
+        let Ok(cpu) = parts[1].trim().trim_end_matches('%').trim().parse::<f64>() else {
+            continue;
+        };
         let used = parts[2].split('/').next().unwrap_or("").trim();
         let mb = match memory_re().captures(used) {
             Some(c) => {
-                let Ok(amount) = c[1].parse::<f64>() else { continue };
+                let Ok(amount) = c[1].parse::<f64>() else {
+                    continue;
+                };
                 amount * unit_mb(&c[2])
             }
             None => 0.0,
@@ -231,7 +274,11 @@ pub fn over_threshold(sample: &Sample, t: Thresholds) -> Vec<Finding> {
     sample
         .iter()
         .filter(|(_, (cpu, mb))| *cpu >= t.cpu || *mb >= t.mb)
-        .map(|(name, (cpu, mb))| Finding { name: name.clone(), cpu: *cpu, mb: *mb })
+        .map(|(name, (cpu, mb))| Finding {
+            name: name.clone(),
+            cpu: *cpu,
+            mb: *mb,
+        })
         .collect()
 }
 
@@ -248,8 +295,16 @@ impl Hourly {
         let previous = std::mem::take(&mut self.last);
         let now = over_threshold(sample, t);
         self.last = now.iter().map(|f| f.name.clone()).collect();
-        let mut both: Vec<Finding> = now.into_iter().filter(|f| previous.contains(&f.name)).collect();
-        both.sort_by(|a, b| b.cpu.total_cmp(&a.cpu).then(b.mb.total_cmp(&a.mb)).then(a.name.cmp(&b.name)));
+        let mut both: Vec<Finding> = now
+            .into_iter()
+            .filter(|f| previous.contains(&f.name))
+            .collect();
+        both.sort_by(|a, b| {
+            b.cpu
+                .total_cmp(&a.cpu)
+                .then(b.mb.total_cmp(&a.mb))
+                .then(a.name.cmp(&b.name))
+        });
         both.truncate(MAX_BUSY);
         both
     }
@@ -261,7 +316,10 @@ fn round1(x: f64) -> f64 {
 
 /// The post: when the sample was taken (RFC 3339, UTC) and its findings.
 pub fn body(sampled_at: &str, found: &[Finding]) -> Value {
-    let busy: Vec<Value> = found.iter().map(|f| json!({"name": f.name, "cpu": round1(f.cpu), "mb": round1(f.mb)})).collect();
+    let busy: Vec<Value> = found
+        .iter()
+        .map(|f| json!({"name": f.name, "cpu": round1(f.cpu), "mb": round1(f.mb)}))
+        .collect();
     json!({"sampled_at": sampled_at, "busy": busy})
 }
 
@@ -269,17 +327,28 @@ pub fn body(sampled_at: &str, found: &[Finding]) -> Value {
 mod tests {
     use super::*;
 
-    const T: Thresholds = Thresholds { cpu: 50.0, mb: 2048.0 };
+    const T: Thresholds = Thresholds {
+        cpu: 50.0,
+        mb: 2048.0,
+    };
 
     fn sample(rows: &[(&str, f64, f64)]) -> Sample {
-        rows.iter().map(|(name, cpu, mb)| (name.to_string(), (*cpu, *mb))).collect()
+        rows.iter()
+            .map(|(name, cpu, mb)| (name.to_string(), (*cpu, *mb)))
+            .collect()
     }
 
     #[test]
     fn names_are_base_names_without_odd_characters() {
         assert_eq!(clean("/usr/bin/python3"), "python3");
-        assert_eq!(clean("Google Chrome Helper (Renderer)"), "GoogleChromeHelperRenderer");
-        assert_eq!(clean("/Applications/Foo.app/Contents/MacOS/Foo.v2_beta-1"), "Foo.v2_beta-1");
+        assert_eq!(
+            clean("Google Chrome Helper (Renderer)"),
+            "GoogleChromeHelperRenderer"
+        );
+        assert_eq!(
+            clean("/Applications/Foo.app/Contents/MacOS/Foo.v2_beta-1"),
+            "Foo.v2_beta-1"
+        );
         assert_eq!(clean("é"), "unknown");
         assert_eq!(clean("/usr/bin/"), "unknown");
         assert_eq!(clean(&"a".repeat(60)).len(), 40);
@@ -287,7 +356,11 @@ mod tests {
 
     #[test]
     fn busy_is_at_or_above_either_threshold() {
-        let s = sample(&[("process:cpu", 50.0, 1.0), ("process:mem", 0.0, 2048.0), ("process:quiet", 49.9, 2047.9)]);
+        let s = sample(&[
+            ("process:cpu", 50.0, 1.0),
+            ("process:mem", 0.0, 2048.0),
+            ("process:quiet", 49.9, 2047.9),
+        ]);
         let mut names: Vec<String> = over_threshold(&s, T).into_iter().map(|f| f.name).collect();
         names.sort();
         assert_eq!(names, ["process:cpu", "process:mem"]);
@@ -327,18 +400,27 @@ mod tests {
         assert!(hourly.findings(&first, T).is_empty());
         let second = sample(&[("process:a", 70.0, 1.0), ("process:c", 90.0, 1.0)]);
         let found = hourly.findings(&second, T);
-        assert_eq!(found.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["process:a"]);
+        assert_eq!(
+            found.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            ["process:a"]
+        );
         assert_eq!(found[0].cpu, 70.0);
         // Busy, quiet, busy: never two in a row.
-        assert!(hourly.findings(&sample(&[("process:a", 1.0, 1.0)]), T).is_empty());
-        assert!(hourly.findings(&sample(&[("process:a", 80.0, 1.0)]), T).is_empty());
+        assert!(hourly
+            .findings(&sample(&[("process:a", 1.0, 1.0)]), T)
+            .is_empty());
+        assert!(hourly
+            .findings(&sample(&[("process:a", 80.0, 1.0)]), T)
+            .is_empty());
         // Nothing busy is still a sample, so the next hour starts from empty.
         assert!(hourly.findings(&sample(&[]), T).is_empty());
     }
 
     #[test]
     fn at_most_fifty_findings_and_the_highest_cpu_first() {
-        let s: Sample = (0..60).map(|i| (format!("process:p{i:02}"), (50.0 + i as f64, 1.0))).collect();
+        let s: Sample = (0..60)
+            .map(|i| (format!("process:p{i:02}"), (50.0 + i as f64, 1.0)))
+            .collect();
         let mut hourly = Hourly::default();
         hourly.findings(&s, T);
         let found = hourly.findings(&s, T);
@@ -349,7 +431,11 @@ mod tests {
 
     #[test]
     fn the_post_names_the_sample_time_and_each_finding() {
-        let found = [Finding { name: "process:python3".into(), cpu: 72.46, mb: 3000.0 }];
+        let found = [Finding {
+            name: "process:python3".into(),
+            cpu: 72.46,
+            mb: 3000.0,
+        }];
         assert_eq!(
             body("2026-11-04T10:00:00+00:00", &found),
             json!({"sampled_at": "2026-11-04T10:00:00+00:00", "busy": [{"name": "process:python3", "cpu": 72.5, "mb": 3000.0}]})

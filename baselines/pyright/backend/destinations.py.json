@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/destinations.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

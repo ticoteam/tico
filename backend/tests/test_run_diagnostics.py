@@ -1,4 +1,5 @@
 """Core failure/stall flow and bounded private fallback export, using only synthetic API fixtures."""
+
 import json
 
 import pytest
@@ -23,18 +24,25 @@ def listed(api, aid):
     return next(r for r in get(api, 'bots/ops/turns') if r['id'] == aid)
 
 
-@pytest.mark.parametrize(('cause', 'expected'), [
-    ({'error': 'killed', 'exit_code': -15, 'process_exit': True}, 'Process exited (signal 15)'),
-    ({'error': 'out of memory', 'exit_code': -9, 'process_exit': True}, 'Process exited (signal 9)'),
-    ({'exit_code': -9, 'process_exit': True, 'oom_killed': True}, 'OOM-killed (reported by the runner)'),
-    ({'end_reason': 'Timeout: max_run_minutes (60 minutes)'}, 'Timeout: max_run_minutes (60 minutes)'),
-    ({'error': {'code': 'server_error', 'message': 'upstream failed'}},
-     'Model error: {"code": "server_error", "message": "upstream failed"}'),
-])
+@pytest.mark.parametrize(
+    ('cause', 'expected'),
+    [
+        ({'error': 'killed', 'exit_code': -15, 'process_exit': True}, 'Process exited (signal 15)'),
+        ({'error': 'out of memory', 'exit_code': -9, 'process_exit': True}, 'Process exited (signal 9)'),
+        ({'exit_code': -9, 'process_exit': True, 'oom_killed': True}, 'OOM-killed (reported by the runner)'),
+        ({'end_reason': 'Timeout: max_run_minutes (60 minutes)'}, 'Timeout: max_run_minutes (60 minutes)'),
+        (
+            {'error': {'code': 'server_error', 'message': 'upstream failed'}},
+            'Model error: {"code": "server_error", "message": "upstream failed"}',
+        ),
+    ],
+)
 def test_kill_timeout_and_model_error_record_end_reason_and_last_tool(api, cause, expected):
     machine, _, a = start(api)
-    events = [{'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}},
-              {'seq': 2, 'kind': 'diagnostic' if 'end_reason' in cause else 'error', 'payload': cause}]
+    events = [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}},
+        {'seq': 2, 'kind': 'diagnostic' if 'end_reason' in cause else 'error', 'payload': cause},
+    ]
     post(api, f"attempts/{a['id']}/events", {'events': events}, machine['token'])
     post(api, f"attempts/{a['id']}/complete", {'outcome': 'failed', 'last_seq': 2}, machine['token'])
     row = listed(api, a['id'])
@@ -47,7 +55,9 @@ def test_kill_timeout_and_model_error_record_end_reason_and_last_tool(api, cause
     post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner': 'ops'})
     next_run = claim(api, machine, 'ops')
     assert next_run
-    assert next(r for r in get(api, 'bots/ops/turns', next_run['token']) if r['id'] == a['id'])['end_reason'] == expected
+    assert (
+        next(r for r in get(api, 'bots/ops/turns', next_run['token']) if r['id'] == a['id'])['end_reason'] == expected
+    )
 
 
 def test_lost_heartbeat_records_end_reason_even_before_start(api):
@@ -62,13 +72,18 @@ def test_lost_heartbeat_records_end_reason_even_before_start(api):
 
 def test_stall_sweep_warns_without_stopping_and_renewal_clears_it(api):
     machine, _, a = start(api)
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}}]},
+        machine['token'],
+    )
     base = H.now()
     # A long lease isolates the diagnostic sweeper from the existing expiry/recovery policy.
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(base, hours=1), a['id']))
     from backend.scheduler import Scheduler
+
     Scheduler(api.app.state.store, api.app.state.execution).tick(H.parse_ts(H.shift(base, seconds=299)))
     assert not listed(api, a['id'])['stalled']
     at = H.shift(base, seconds=301)
@@ -88,9 +103,13 @@ def test_stall_sweep_warns_without_stopping_and_renewal_clears_it(api):
 @pytest.mark.parametrize('finished', [False, True])
 def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(api, tmp_path, finished):
     from clients.hubtools import write_fixture
+
     machine, msg, a = setup_attempt(api)
     post(api, f"attempts/{a['id']}/started", {'thread_id': 'stderr'}, machine['token'])
-    raw = '\n'.join(f'line {n}' for n in range(300)) + '\nAPI key: sk-test_abcdefghijklmnopqrstuvwxyz0123456789\nfinal failure'
+    raw = (
+        '\n'.join(f'line {n}' for n in range(300))
+        + '\nAPI key: sk-test_abcdefghijklmnopqrstuvwxyz0123456789\nfinal failure'
+    )
     post(api, f"attempts/{a['id']}/diagnostics", {'tail': raw}, machine['token'])
     found = get(api, f"attempts/{a['id']}/capture")
     assert not found['stream_captured'] and found['transcript'] == ''
@@ -122,9 +141,20 @@ def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(ap
     assert len(get(api, f"attempts/{a['id']}/capture")['stderr_tail'].encode()) <= 65536
     alien = runner(api)
     post(api, f"attempts/{a['id']}/diagnostics", {'tail': 'wrong computer'}, alien['token'], expected=403)
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'error', 'payload': {'error': 'Process exited (signal 15)',
-                                             'exit_code': -15, 'process_exit': True}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {
+            'events': [
+                {
+                    'seq': 1,
+                    'kind': 'error',
+                    'payload': {'error': 'Process exited (signal 15)', 'exit_code': -15, 'process_exit': True},
+                }
+            ]
+        },
+        machine['token'],
+    )
     if finished:
         post(api, f"attempts/{a['id']}/complete", {'outcome': 'failed', 'last_seq': 1}, machine['token'])
         assert 'final failure' not in api.get(f"/api/runs/{a['id']}/log", headers=headers()).text
@@ -135,11 +165,14 @@ def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(ap
     get(api, f"attempts/{a['id']}/capture", expected=404)
 
 
-@pytest.mark.parametrize(('outcome', 'text', 'stopped', 'expected'), [
-    ('completed', 'done', False, 'Finished'),
-    ('interrupted', 'Runner restarted during execution', False, 'Runner restarted during execution'),
-    ('interrupted', '', True, 'Canceled by human:ana'),
-])
+@pytest.mark.parametrize(
+    ('outcome', 'text', 'stopped', 'expected'),
+    [
+        ('completed', 'done', False, 'Finished'),
+        ('interrupted', 'Runner restarted during execution', False, 'Runner restarted during execution'),
+        ('interrupted', '', True, 'Canceled by human:ana'),
+    ],
+)
 def test_finished_restart_and_canceled_reasons(api, outcome, text, stopped, expected):
     machine, _, a = start(api)
     if stopped:
@@ -150,16 +183,22 @@ def test_finished_restart_and_canceled_reasons(api, outcome, text, stopped, expe
 
 def test_failed_reply_text_never_becomes_list_reason(api):
     machine, _, a = start(api)
-    post(api, f"attempts/{a['id']}/complete",
-         {'outcome': 'failed', 'last_seq': 0, 'text': 'private reply text'}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/complete",
+        {'outcome': 'failed', 'last_seq': 0, 'text': 'private reply text'},
+        machine['token'],
+    )
     assert listed(api, a['id'])['end_reason'] == 'Process failed (no exit status reported)'
 
 
 def test_a_restart_report_on_an_expired_run_is_not_reported_as_a_lost_heartbeat(api):
     machine, _, a = start(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='expired',finished_at=?,result=? WHERE id=?",
-                  (H.now(), json.dumps({'text': run_diagnostics.RESTART_TEXT}), a['id']))
+        c.execute(
+            "UPDATE attempts SET state='expired',finished_at=?,result=? WHERE id=?",
+            (H.now(), json.dumps({'text': run_diagnostics.RESTART_TEXT}), a['id']),
+        )
         run_diagnostics.finish(c, a['id'], 'interrupted')
     assert listed(api, a['id'])['end_reason'] == run_diagnostics.RESTART_TEXT
 
@@ -167,10 +206,18 @@ def test_a_restart_report_on_an_expired_run_is_not_reported_as_a_lost_heartbeat(
 def test_a_planned_pause_reason_is_scrubbed_and_never_taken_from_reply_text(api):
     machine, _, a = start(api)
     secret = 'sk-test_abcdefghijklmnopqrstuvwxyz0123456789'
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused ' + secret + ' ' + 'x' * 600}}]}, machine['token'])
-    post(api, f"attempts/{a['id']}/complete", {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1,
-         'text': 'private partial reply'}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused ' + secret + ' ' + 'x' * 600}}]},
+        machine['token'],
+    )
+    post(
+        api,
+        f"attempts/{a['id']}/complete",
+        {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1, 'text': 'private partial reply'},
+        machine['token'],
+    )
     reason = listed(api, a['id'])['end_reason']
     assert reason.startswith('Paused ') and len(reason) <= 500
     assert secret not in reason and 'private partial reply' not in reason
@@ -180,16 +227,24 @@ def test_a_planned_pause_reason_is_scrubbed_and_never_taken_from_reply_text(api)
 def test_a_saved_pause_event_does_not_override_a_completion_that_cannot_resume(api, late):
     machine, _, a = start(api)
     line = "Paused at the computer's drain time limit; work and session saved, queued to continue"
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]},
+        machine['token'],
+    )
     if late:
         with api.app.state.store.transaction() as c:
             c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
             api.app.state.execution.expire(c)
         assert listed(api, a['id'])['end_reason'] == line
         assert get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]['paused'] == line
-    post(api, f"attempts/{a['id']}/complete",
-         {'outcome': 'interrupted', 'yielded': False, 'fallback': 'claude', 'last_seq': 1}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/complete",
+        {'outcome': 'interrupted', 'yielded': False, 'fallback': 'claude', 'last_seq': 1},
+        machine['token'],
+    )
     assert listed(api, a['id'])['end_reason'] == 'Process interrupted (no exit status reported)'
     run = get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]
     assert run['id'] == a['id'] and run['paused'] is None and run['job_state'] == 'uncertain'
@@ -201,16 +256,24 @@ def test_a_late_update_hand_back_keeps_its_saved_pause_and_does_not_use_a_start_
     monkeypatch.setattr(execution, 'PRE_START_TRIES', 1)
     machine, _, a = setup_attempt(api)
     line = 'Handed back before starting because the computer is updating; queued to continue'
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'status', 'payload': {'yielded': line}}]},
+        machine['token'],
+    )
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
         api.app.state.execution.expire(c)
         assert c.execute('SELECT state FROM jobs WHERE id=?', (a['job_id'],)).fetchone()[0] == 'queued'
     # The saved event proves the pause even before its completion reaches the hub.
     assert listed(api, a['id'])['end_reason'] == line
-    result = post(api, f"attempts/{a['id']}/complete",
-                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1}, machine['token'])
+    result = post(
+        api,
+        f"attempts/{a['id']}/complete",
+        {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1},
+        machine['token'],
+    )
     assert result['filed']
     with api.app.state.store.read() as c:
         row = c.execute('SELECT state,result FROM attempts WHERE id=?', (a['id'],)).fetchone()
@@ -227,22 +290,34 @@ def test_a_late_yield_report_without_a_pause_event_uses_the_pause_fallback(api):
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
         api.app.state.execution.expire(c)
-    result = post(api, f"attempts/{a['id']}/complete",
-                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 0}, machine['token'])
+    result = post(
+        api,
+        f"attempts/{a['id']}/complete",
+        {'outcome': 'interrupted', 'yielded': True, 'last_seq': 0},
+        machine['token'],
+    )
     assert result['filed']
     assert listed(api, a['id'])['end_reason'] == PAUSED
 
 
 def test_canceling_an_expired_run_takes_precedence_over_its_late_pause(api):
     machine, _, a = start(api)
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused for the computer to update'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'status', 'payload': {'yielded': 'Paused for the computer to update'}}]},
+        machine['token'],
+    )
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), a['id']))
         api.app.state.execution.expire(c)
     post(api, 'bots/ops/stop', {'run_id': a['id']})
-    result = post(api, f"attempts/{a['id']}/complete",
-                  {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1}, machine['token'])
+    result = post(
+        api,
+        f"attempts/{a['id']}/complete",
+        {'outcome': 'interrupted', 'yielded': True, 'last_seq': 1},
+        machine['token'],
+    )
     assert result['filed']
     assert listed(api, a['id'])['end_reason'] == 'Canceled by human:ana'
     run = get(api, f"tasks/{a['task']['id']}/run-view")['runs'][0]
@@ -255,14 +330,17 @@ def test_canceling_an_expired_run_takes_precedence_over_its_late_pause(api):
 def silent_since(api, aid, started):
     """A run started at `started_at`, with no heartbeat and no event since: its computer went quiet at that moment."""
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET started_at=?,created_at=?,lease_until=? WHERE id=?',
-                  (started, started, H.shift(H.now(), hours=2), aid))
+        c.execute(
+            'UPDATE attempts SET started_at=?,created_at=?,lease_until=? WHERE id=?',
+            (started, started, H.shift(H.now(), hours=2), aid),
+        )
         c.execute('UPDATE attempt_diagnostics SET heartbeat_at=NULL,last_event_at=? WHERE attempt_id=?', (started, aid))
 
 
 def tick(api, at):
     """One scheduler pass at `at`, by a server that has been listening since long before the silences these tests set up."""
     from backend.scheduler import Scheduler
+
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
     scheduler.listening_since = H.shift(H.now(), days=-1)
     scheduler.tick(H.parse_ts(at))
@@ -298,8 +376,9 @@ def test_server_outage_is_not_the_computers_silence_for_the_cap(api):
 
     def capped():
         with api.app.state.store.read() as c:
-            return c.execute('SELECT 1 FROM events WHERE target=? AND action=?',
-                             (a['id'], run_diagnostics.CAP_EVENT)).fetchone()
+            return c.execute(
+                'SELECT 1 FROM events WHERE target=? AND action=?', (a['id'], run_diagnostics.CAP_EVENT)
+            ).fetchone()
 
     with api.app.state.store.transaction() as c:
         run_diagnostics.cap(c, t0, H.shift(t0, minutes=-(run_diagnostics.STALL_MINUTES - 2)))
@@ -339,8 +418,12 @@ def test_a_server_capped_run_does_not_come_back_on_renewal_and_its_late_result_i
     """The computer comes back after the cap with the same assignment: its renewal is refused, the run stays ended,
     and a late result from the turn is still filed as the turn's outcome."""
     machine, _, a = start(api)
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}}]},
+        machine['token'],
+    )
     t0 = H.now()
     silent_since(api, a['id'], H.shift(t0, minutes=-70))
     tick(api, t0)
@@ -350,8 +433,11 @@ def test_a_server_capped_run_does_not_come_back_on_renewal_and_its_late_result_i
     assert renewal.status_code == 409
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
-    late = api.post(f"/api/v2/attempts/{a['id']}/complete", json={'outcome': 'completed', 'last_seq': 1},
-                    headers=headers(machine['token']))
+    late = api.post(
+        f"/api/v2/attempts/{a['id']}/complete",
+        json={'outcome': 'completed', 'last_seq': 1},
+        headers=headers(machine['token']),
+    )
     assert late.status_code == 200
     assert listed(api, a['id'])['end_reason'] == 'Finished'
 
@@ -359,8 +445,11 @@ def test_a_server_capped_run_does_not_come_back_on_renewal_and_its_late_result_i
 def test_a_clean_stop_reports_its_saved_diagnostic_even_with_no_reply(api):
     """A clean stop sends an empty reply; its end reason is the computer's saved diagnostic, not the completion's text."""
     machine, _, a = start(api)
-    post(api, f"attempts/{a['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'diagnostic', 'payload': {'end_reason': 'Runner stopped during execution'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{a['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'diagnostic', 'payload': {'end_reason': 'Runner stopped during execution'}}]},
+        machine['token'],
+    )
     post(api, f"attempts/{a['id']}/complete", {'outcome': 'interrupted', 'text': '', 'last_seq': 1}, machine['token'])
     assert listed(api, a['id'])['end_reason'] == 'Runner stopped during execution'
-

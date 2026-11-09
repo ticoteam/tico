@@ -1,5 +1,6 @@
 """setup/cell_wake.py: a sleeping company's first requests are held while its server starts once, then sent on to it
 as they came, and answered by it. Run on the cell's fake System, against a fake server on loopback."""
+
 import http.client
 import json
 import socket
@@ -15,21 +16,29 @@ from setup.tests.test_cell import FakeSystem, ROOT, add_args, host, ready, recor
 
 class Upstream(BaseHTTPRequestHandler):
     """The company's server: answers 201 with what it got, in two chunks."""
+
     protocol_version = "HTTP/1.1"
 
     def do_any(self):
         if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
             body = b""
-            while (size := int(self.rfile.readline().strip(), 16)):
+            while size := int(self.rfile.readline().strip(), 16):
                 body += self.rfile.read(size)
                 self.rfile.readline()
             self.rfile.readline()
         else:
             body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        self.server.seen.append({"method": self.command, "path": self.path, "headers": dict(self.headers),
-                                 "body": body})
-        out = json.dumps({"method": self.command, "path": self.path, "length": len(body),
-                          "body": body.decode(errors="replace")[:100]}).encode()
+        self.server.seen.append(
+            {"method": self.command, "path": self.path, "headers": dict(self.headers), "body": body}
+        )
+        out = json.dumps(
+            {
+                "method": self.command,
+                "path": self.path,
+                "length": len(body),
+                "body": body.decode(errors="replace")[:100],
+            }
+        ).encode()
         self.send_response(201, "Made")
         self.send_header("Content-Type", "application/json")
         self.send_header("Set-Cookie", "a=1")
@@ -79,8 +88,13 @@ def asleep(ready, upstream):
     made = {}
 
     def start(max_connections=W.MAX_CONNECTIONS, **kw):
-        svc = W.Service(ready.root, ready.system, upstream=lambda c: upstream.server_address,
-                        make_cell=lambda: cell.Cell(ready.root, ready.system, ready.etc, ROOT / "compose.yaml"), **kw)
+        svc = W.Service(
+            ready.root,
+            ready.system,
+            upstream=lambda c: upstream.server_address,
+            make_cell=lambda: cell.Cell(ready.root, ready.system, ready.etc, ROOT / "compose.yaml"),
+            **kw,
+        )
         made["listener"] = W.serve(svc, ("127.0.0.1", 0), max_connections)
         svc.port = made["listener"].server_address[1]
         return svc
@@ -92,8 +106,7 @@ def asleep(ready, upstream):
         made["listener"].server_close()
 
 
-def send(svc, method="GET", path="/", body=None, headers=None, slug="boatyard", host="boatyard.tico.team",
-         timeout=20):
+def send(svc, method="GET", path="/", body=None, headers=None, slug="boatyard", host="boatyard.tico.team", timeout=20):
     c = http.client.HTTPConnection("127.0.0.1", svc.port, timeout=timeout)
     h = {"Host": host, **({cell.WAKE_HEADER: slug} if slug is not None else {}), **(headers or {})}
     c.request(method, path, body=body, headers=h, encode_chunked=bool(h.get("Transfer-Encoding")))
@@ -109,8 +122,14 @@ def test_concurrent_requests_share_one_start_and_get_the_servers_answers(asleep,
     answers = [None] * 12
 
     def one(i):
-        answers[i] = send(svc, "POST", f"/api/v2/things?i={i}", body=f"body {i}".encode(),
-                          headers={"Content-Type": "text/plain", "X-Trace": str(i)})
+        answers[i] = send(
+            svc,
+            "POST",
+            f"/api/v2/things?i={i}",
+            body=f"body {i}".encode(),
+            headers={"Content-Type": "text/plain", "X-Trace": str(i)},
+        )
+
     threads = [threading.Thread(target=one, args=(i,)) for i in range(12)]
     for t in threads:
         t.start()
@@ -119,14 +138,20 @@ def test_concurrent_requests_share_one_start_and_get_the_servers_answers(asleep,
     assert slow.ups == 1 and svc.starts == 1
     for i, (r, data) in enumerate(answers):
         assert (r.status, r.reason) == (201, "Made")
-        assert json.loads(data) == {"method": "POST", "path": f"/api/v2/things?i={i}", "length": len(f"body {i}"),
-                                    "body": f"body {i}"}
+        assert json.loads(data) == {
+            "method": "POST",
+            "path": f"/api/v2/things?i={i}",
+            "length": len(f"body {i}"),
+            "body": f"body {i}",
+        }
         assert r.getheader("Set-Cookie") == "a=1" and r.getheader("Content-Type") == "application/json"
     got = {s["headers"]["X-Trace"]: s for s in upstream.seen}
     assert len(got) == 12 and got["3"]["headers"]["Host"] == "boatyard.tico.team"
-    assert cell.WAKE_HEADER not in got["3"]["headers"]       # the route's own header goes no further
-    assert record(asleep)["state"] == "running" and "reverse_proxy 127.0.0.1:20000" in \
-        (asleep.root / "router" / "Caddyfile").read_text()
+    assert cell.WAKE_HEADER not in got["3"]["headers"]  # the route's own header goes no further
+    assert (
+        record(asleep)["state"] == "running"
+        and "reverse_proxy 127.0.0.1:20000" in (asleep.root / "router" / "Caddyfile").read_text()
+    )
     # awake: the next request is proxied straight away, with no start
     r, _ = send(svc, "PUT", "/x", body=b"y")
     assert r.status == 201 and slow.ups == 1
@@ -149,7 +174,7 @@ def test_a_failed_wake_answers_503_and_does_not_start_again_at_once(asleep, upst
     assert r.getheader("Content-Type").startswith("text/plain") and b"<" not in data
     assert record(asleep)["state"] == "sleeping" and asleep.system.ps["boatyard"][0] == "exited"
     r, _ = send(svc, "GET", "/")
-    assert r.status == 503 and slow.ups == 1 and svc.starts == 1      # within FAILED_FOR: no start loop
+    assert r.status == 503 and slow.ups == 1 and svc.starts == 1  # within FAILED_FOR: no start loop
     assert upstream.seen == []
 
 
@@ -175,9 +200,16 @@ def test_health_probes_never_wake_a_company(asleep):
     assert slow.ups == 0 and svc.starts == 0 and record(asleep)["state"] == "sleeping"
 
 
-@pytest.mark.parametrize("slug, name", [(None, "boatyard.tico.team"), ("other", "boatyard.tico.team"),
-                                        ("boatyard", "other.tico.team"), ("../boatyard", "boatyard.tico.team"),
-                                        ("boatyard", "")])
+@pytest.mark.parametrize(
+    "slug, name",
+    [
+        (None, "boatyard.tico.team"),
+        ("other", "boatyard.tico.team"),
+        ("boatyard", "other.tico.team"),
+        ("../boatyard", "boatyard.tico.team"),
+        ("boatyard", ""),
+    ],
+)
 def test_only_the_company_the_route_names_on_its_own_host(asleep, slug, name):
     slow = Slow(asleep.system)
     svc = asleep.start()
@@ -212,7 +244,7 @@ def test_a_body_over_the_servers_limit_is_refused_before_a_start(asleep, upstrea
     r, _ = send(svc, "POST", "/x", body=b"x" * 11)
     assert r.status == 413 and slow.ups == 0
     r, _ = send(svc, "POST", "/x", body=iter([b"x" * 6, b"x" * 6]), headers={"Transfer-Encoding": "chunked"})
-    assert r.status == 413 and upstream.seen == []         # streamed: refused once past the limit, never sent whole
+    assert r.status == 413 and upstream.seen == []  # streamed: refused once past the limit, never sent whole
     r, _ = send(svc, "POST", "/x", body=b"x" * 10)
     assert r.status == 201
 
@@ -237,7 +269,7 @@ def test_held_requests_are_capped_per_company(asleep):
 
 def test_connections_are_capped(asleep):
     svc = asleep.start(max_connections=1)
-    idle = socket.create_connection(("127.0.0.1", svc.port))      # holds the only place, sending nothing
+    idle = socket.create_connection(("127.0.0.1", svc.port))  # holds the only place, sending nothing
     try:
         time.sleep(0.1)
         r, data = send(svc, timeout=5)
@@ -245,7 +277,7 @@ def test_connections_are_capped(asleep):
     finally:
         idle.close()
     deadline = time.monotonic() + 5
-    while True:                                                   # the place is free again
+    while True:  # the place is free again
         r, _ = send(svc)
         if r.status == 201:
             break
@@ -263,7 +295,7 @@ def test_a_websocket_wakes_the_company_then_is_asked_to_connect_again(asleep, up
 
 def test_a_server_that_does_not_answer_after_the_wake_is_a_503_not_a_502(asleep):
     svc = asleep.start()
-    svc.upstream = lambda c: ("127.0.0.1", 1)                      # nothing listens
+    svc.upstream = lambda c: ("127.0.0.1", 1)  # nothing listens
     r, data = send(svc)
     assert r.status == 503 and data == (cell.HOLD_BODY + "\n").encode()
 
@@ -277,6 +309,7 @@ def test_the_wake_unit_runs_this_module():
 
 # --- timed wakes: the record's wake_at starts the company without a request (WAKE_SWEEP loop) ----------------------
 
+
 def settled(svc, slug="boatyard"):
     """The start the last sweep began (or joined) has finished, one way or the other."""
     a = svc.attempts.get(slug)
@@ -287,7 +320,7 @@ def settled(svc, slug="boatyard"):
 def test_a_timed_wake_due_within_a_minute_starts_the_company(asleep):
     slow = Slow(asleep.system)
     svc = asleep.start()
-    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))     # already asleep: only the time changes
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))  # already asleep: only the time changes
     assert svc.sweep() == ["boatyard"]
     assert settled(svc).ok
     assert record(asleep)["state"] == "running" and "wake_at" not in record(asleep)
@@ -319,10 +352,10 @@ def test_a_failed_timed_wake_is_tried_again_on_a_later_sweep_not_at_once(asleep)
     svc = asleep.start()
     asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(10))
     assert svc.sweep() == ["boatyard"] and not settled(svc).ok
-    assert record(asleep)["state"] == "sleeping" and record(asleep)["wake_at"]      # the time stays until it works
-    assert svc.sweep() == ["boatyard"] and svc.starts == 1                     # within FAILED_FOR: no start loop
+    assert record(asleep)["state"] == "sleeping" and record(asleep)["wake_at"]  # the time stays until it works
+    assert svc.sweep() == ["boatyard"] and svc.starts == 1  # within FAILED_FOR: no start loop
     asleep.system.health.pop("boatyard.tico.team")
-    svc.failed_for = 0                                                         # as if FAILED_FOR had passed
+    svc.failed_for = 0  # as if FAILED_FOR had passed
     assert svc.sweep() == ["boatyard"] and settled(svc).ok
     assert slow.ups == 2 and svc.starts == 2 and record(asleep)["state"] == "running"
     assert "wake_at" not in record(asleep)
@@ -333,7 +366,7 @@ def test_the_timed_wake_loop_sweeps_at_once_and_returns_when_stopped(asleep):
     asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(5))
     stopping = threading.Event()
     stopping.set()
-    svc.timed_wakes(stopping)                                                  # one sweep, then it returns
+    svc.timed_wakes(stopping)  # one sweep, then it returns
     assert settled(svc).ok and record(asleep)["state"] == "running"
 
 
@@ -350,15 +383,16 @@ def test_a_stale_sweep_never_wakes_a_company_whose_wake_at_was_moved_or_cleared(
     svc = asleep.start()
     asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))
     go = held_wake(svc)
-    assert svc.sweep() == ["boatyard"]                          # read due, without the lock
+    assert svc.sweep() == ["boatyard"]  # read due, without the lock
     tomorrow = utc_in(86400)
     asleep("sleep", "--company", "boatyard", *(["--wake-at", tomorrow] if how == "postponed" else []))
     go.set()
     a = settled(svc)
     assert a.skipped and not a.ok and slow.ups == 0
-    assert record(asleep)["state"] == "sleeping" and record(asleep).get("wake_at") == \
-        (tomorrow if how == "postponed" else None)
-    r, _ = send(svc)                                            # a request still wakes it, with a start of its own
+    assert record(asleep)["state"] == "sleeping" and record(asleep).get("wake_at") == (
+        tomorrow if how == "postponed" else None
+    )
+    r, _ = send(svc)  # a request still wakes it, with a start of its own
     assert r.status == 201 and slow.ups == 1 and svc.starts == 2 and record(asleep)["state"] == "running"
 
 
@@ -368,13 +402,13 @@ def test_a_request_that_joins_a_timed_start_wakes_the_company_whatever_wake_at_s
     asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(30))
     go = held_wake(svc)
     assert svc.sweep() == ["boatyard"]
-    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(86400))     # postponed, then a visitor comes
+    asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(86400))  # postponed, then a visitor comes
     joined, attempt = threading.Event(), svc.attempt
     svc.attempt = lambda slug, timed=False: (attempt(slug, timed), joined.set())[0]
     answer = {}
     visitor = threading.Thread(target=lambda: answer.update(r=send(svc)[0]))
     visitor.start()
-    assert joined.wait(10) and svc.attempts["boatyard"].asked     # the request has joined the timed start
+    assert joined.wait(10) and svc.attempts["boatyard"].asked  # the request has joined the timed start
     go.set()
     visitor.join(30)
     assert answer["r"].status == 201 and settled(svc).ok
@@ -392,13 +426,14 @@ def test_a_request_that_joins_after_the_timed_check_said_not_due_still_wakes_it(
         checked.set()
         go.wait(10)
         return found
+
     svc.due = due
     held = held_wake(svc)
     assert svc.sweep() == ["boatyard"]
     asleep("sleep", "--company", "boatyard", "--wake-at", utc_in(86400))
     held.set()
-    assert checked.wait(10)                                     # the timed start found it not due, under the lock
-    a = svc.attempt("boatyard")                                 # a request joins before the start gives up
+    assert checked.wait(10)  # the timed start found it not due, under the lock
+    a = svc.attempt("boatyard")  # a request joins before the start gives up
     assert a is svc.attempts["boatyard"] and a.asked and svc.starts == 1
     go.set()
     assert a.done.wait(30) and a.ok and not a.skipped

@@ -1,6 +1,6 @@
 // Offline regression for company subscriptions given to computers (backend/model_subscriptions.py): a subscription is a
 // company's saved plan login or API key; a computer holds at most one per AI tool; a bot never picks one.
-//  - Settings has a Models tab between Computers and Repositories with Subscriptions, Tico Gateway, Defaults and
+//  - Settings has a Models tab after Computers with Subscriptions, Tico Gateway, Defaults and
 //    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
 //  - Add subscription: a kind search box that starts on Claude plan, a required name, an owner (you unless changed), the
 //    own-bots line, POST {kind, name, secret} (owner_id only when changed); an API key has no owner and no such line;
@@ -96,11 +96,11 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json(bots);
@@ -202,7 +202,7 @@ async function until(page, check, what) {
 async function navigation(browser) {
   const {page, errors} = await open(browser, {tab: 'general'});
   const tabs = await page.locator('#settings-tabs > [data-settings-tab]').evaluateAll(list => list.map(b => b.dataset.settingsTab));
-  assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 3), ['devices', 'models', 'repos'], 'Models sits between Computers and Repositories');
+  assert.deepEqual(tabs.slice(tabs.indexOf('devices'), tabs.indexOf('devices') + 2), ['devices', 'models'], 'Models sits after Computers');
   for (const alias of ['models', 'providers', 'chat', 'subscriptions', 'limits']) {
     await page.evaluate(() => settingsShow('general'));
     await page.evaluate(alias => settingsShow(alias), alias);
@@ -222,7 +222,7 @@ async function navigation(browser) {
     assert.equal(await page.locator('#settings-tasks').isVisible(), true, `${alias} opens Tasks`);
   }
   for (const alias of ['credentials', 'cloud']) {
-    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), '#/integrations');
+    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), alias === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools');
   }
   assert.deepEqual(errors, []);
   await page.close();

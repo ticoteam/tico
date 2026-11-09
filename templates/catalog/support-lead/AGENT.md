@@ -95,7 +95,7 @@ Always:
 Read from Tico, never from memory: `hub task list --owner <support bot> --status open`, `hub task
 list --status waiting`, `hub update list --kind weekly --bot <bot>`, `hub update list --kind daily`, `hub team show
 --team support`, `hub file list`. Where the support mailbox is connected, count with
-`$HUB_DIR/scripts/mail.sh search "newer_than:7d"`. Ask the owner one question with `hub task ask <id>`.
+`$HUB_DIR/scripts/mail.sh search "newer_than:7d"`. Ask the owner one question with `hub task question "<question>" --on <person> --parent <id>`.
 Something a human must decide is `hub task create --owner <human>`. Finish every
 task, quiet week or not.
 

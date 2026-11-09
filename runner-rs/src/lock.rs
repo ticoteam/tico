@@ -16,7 +16,10 @@ impl FileLock {
     /// The caller has acquired flock on this file's open file description.
     pub fn from_locked(file: File) -> Self {
         // SAFETY: getpid has no preconditions.
-        Self { file, owner: unsafe { libc::getpid() } }
+        Self {
+            file,
+            owner: unsafe { libc::getpid() },
+        }
     }
 }
 
@@ -57,13 +60,18 @@ pub(crate) fn inherited_files() -> impl Drop {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
 
-    struct Child { release: UnixStream, pid: libc::pid_t }
+    struct Child {
+        release: UnixStream,
+        pid: libc::pid_t,
+    }
     impl Drop for Child {
         fn drop(&mut self) {
             let _ = self.release.write_all(b"x");
             // SAFETY: wait only for the child this helper starts, retrying an interrupted wait.
             while unsafe { libc::waitpid(self.pid, std::ptr::null_mut(), 0) } < 0
-                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {}
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+            }
         }
     }
     let (release, wait) = UnixStream::pair().unwrap();
@@ -101,7 +109,10 @@ mod tests {
         let child = inherited_files();
         assert_eq!(acquire(&path).err().as_deref(), Some(HELD));
         drop(held);
-        assert!(acquire(&path).is_ok(), "a forked child retained the released registration lock");
+        assert!(
+            acquire(&path).is_ok(),
+            "a forked child retained the released registration lock"
+        );
         drop(child);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -114,17 +125,37 @@ mod tests {
 
         // Rust holds it: Python is refused.
         let held = acquire(&path).unwrap();
-        let out = Command::new("python3").args(["-c", PY_TRY]).arg(&path).output().unwrap();
+        let out = Command::new("python3")
+            .args(["-c", PY_TRY])
+            .arg(&path)
+            .output()
+            .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "held");
-        assert_eq!(acquire(&path).err().as_deref(), Some(HELD), "a second open file is refused too");
+        assert_eq!(
+            acquire(&path).err().as_deref(),
+            Some(HELD),
+            "a second open file is refused too"
+        );
         drop(held);
-        let out = Command::new("python3").args(["-c", PY_TRY]).arg(&path).output().unwrap();
+        let out = Command::new("python3")
+            .args(["-c", PY_TRY])
+            .arg(&path)
+            .output()
+            .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "got");
 
         // Python holds it: Rust is refused until Python exits.
-        let mut python = Command::new("python3").args(["-c", PY_HOLD]).arg(&path).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut python = Command::new("python3")
+            .args(["-c", PY_HOLD])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
         let mut line = String::new();
-        BufReader::new(python.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        BufReader::new(python.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
         assert_eq!(line.trim(), "holding");
         assert_eq!(acquire(&path).err().as_deref(), Some(HELD));
         python.stdin.take().unwrap().write_all(b"").unwrap();

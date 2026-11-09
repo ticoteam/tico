@@ -19,21 +19,6 @@
   ],
   "bots": [
     {
-      "id": "marketer",
-      "template": "brand",
-      "title": "Marketing Lead",
-      "dept": "marketing",
-      "lead": false,
-      "core": false,
-      "reason": "Fixture",
-      "start": true,
-      "routine": "",
-      "tools": [],
-      "about": "",
-      "runtime": null,
-      "existing": false
-    },
-    {
       "id": "seller",
       "template": "account-manager",
       "title": "Account Manager",

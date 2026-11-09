@@ -1,4 +1,5 @@
 """Gate runner Git commands and report old locks without removing or moving them."""
+
 import contextlib
 import fcntl
 import os
@@ -31,7 +32,7 @@ def metadata_roots(root):
         pointer = read_regular(git_dir, SMALL).decode().strip()
         if not pointer.startswith("gitdir: "):
             return ()
-        admin = (root / pointer[len("gitdir: "):]).resolve(strict=True)
+        admin = (root / pointer[len("gitdir: ") :]).resolve(strict=True)
         back = read_regular(admin / "gitdir", SMALL).decode().strip()
         if Path(back).resolve(strict=True) != git_dir:
             return ()
@@ -80,7 +81,9 @@ def report(root, stderr, git_dir):
     if "File exists" not in stderr or git_dir is None:
         return ""
     names = re.findall(r"'([^'\n]+\.lock)'", stderr)
-    names += [name.strip("'") + ".lock" for name in re.findall(r"could not lock config file ([^\n]+): File exists", stderr)]
+    names += [
+        name.strip("'") + ".lock" for name in re.findall(r"could not lock config file ([^\n]+): File exists", stderr)
+    ]
     for name in names:
         path = Path(name)
         if not path.is_absolute():
@@ -92,8 +95,10 @@ def report(root, stderr, git_dir):
             age = time.time() - metadata.st_mtime
             if not stat.S_ISREG(metadata.st_mode) or age < OLD_S:
                 continue
-            return (f"repository copy needs attention: Git lock is {int(age // 60)} minutes old. "
-                    f"Check no Git is running, then run: rm -- {shlex.quote(str(path))}")
+            return (
+                f"repository copy needs attention: Git lock is {int(age // 60)} minutes old. "
+                f"Check no Git is running, then run: rm -- {shlex.quote(str(path))}"
+            )
         except OSError:
             continue
     return ""

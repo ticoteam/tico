@@ -1,4 +1,5 @@
 """Pull request references share one identity, including when a URL has a query or fragment."""
+
 import re
 from urllib.parse import urlsplit
 
@@ -13,7 +14,13 @@ def identity(value):
     try:
         parsed = urlsplit(str(url or "").strip())
         path = PATH.fullmatch(parsed.path)
-        if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or not path:
+        if (
+            parsed.scheme.lower() not in ("http", "https")
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or not path
+        ):
             return None
         host = parsed.hostname.lower() + (f":{parsed.port}" if parsed.port else "")
     except ValueError:

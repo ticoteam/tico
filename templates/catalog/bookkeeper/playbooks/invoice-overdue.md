@@ -36,8 +36,8 @@ marked done with one line.
    a. Write the `text` exactly as it came, to a file, and draft it:
       `mail draft --as bookkeeper --mailbox <mailbox> --to <each address in to> --subject "<subject>" --body-file <file>
       --json`. Keep the draft id it returns. Change nothing: not a word, not a space. The send checks the text.
-   b. Send it: `mail send --as bookkeeper --mailbox <mailbox> --draft <draft id> --approval-issue <send_approval_id>
-      --issue <this task id>`. Nothing else sends it, and outbound_send stays off for this bot.
+   b. Send it: `mail send --as bookkeeper --mailbox <mailbox> --draft <draft id> --approval <send_approval_id>
+      --issue <this task id>`. Tico checks the approval against the frozen email. Nothing else sends it.
    c. Report the outcome once. Delivered:
       `hub finance act invoice_delivery --payload '{"invoice_id":"<id>","stage":<stage>,"delivered":true}'`.
       Not sent: the same with `"delivered":false,"reason":"<what the mail said, in a few words>"`. Leave `stage` out

@@ -11,13 +11,13 @@ the test to put `approve` (writes auth.json) or `deny` (fails) in $CODEX_HOME.
 Scripted prompts: HANG streams one delta and then waits, once per $FAKE_LOG, until its parent goes away; LIMIT
 fails the turn with a usage limit (after some token usage when $FAKE_LIMIT_SPENDS names codex); SLOW streams one delta and answers after $FAKE_SLOW seconds (2), or at once
 after a steer, whose text the answer then carries."""
+
 import json
 import os
 import queue
 import sys
 import threading
 import time
-from memory_tidy_fixture import custody, reply as packet_reply
 
 GRANTED = ("ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "HOME", "CODEX_HOME")
 
@@ -42,11 +42,34 @@ def schema(out):
 def finish(thread, turn, number, reply):
     for chunk in (reply[:5], reply[5:]):
         send({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": chunk}})
-    send({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,
-          "item": {"type": "agentMessage", "id": "m%d" % number, "text": reply, "phase": "final_answer"}}})
-    send({"method": "thread/tokenUsage/updated", "params": {"threadId": thread, "turnId": turn, "tokenUsage": {
-        "total": {"inputTokens": 7 * number, "cachedInputTokens": 3 * number, "outputTokens": 2 * number, "totalTokens": 9 * number},
-        "last": {"inputTokens": 7, "cachedInputTokens": 3, "outputTokens": 2, "totalTokens": 9}}}})
+    send(
+        {
+            "method": "item/completed",
+            "params": {
+                "threadId": thread,
+                "turnId": turn,
+                "item": {"type": "agentMessage", "id": "m%d" % number, "text": reply, "phase": "final_answer"},
+            },
+        }
+    )
+    send(
+        {
+            "method": "thread/tokenUsage/updated",
+            "params": {
+                "threadId": thread,
+                "turnId": turn,
+                "tokenUsage": {
+                    "total": {
+                        "inputTokens": 7 * number,
+                        "cachedInputTokens": 3 * number,
+                        "outputTokens": 2 * number,
+                        "totalTokens": 9 * number,
+                    },
+                    "last": {"inputTokens": 7, "cachedInputTokens": 3, "outputTokens": 2, "totalTokens": 9},
+                },
+            },
+        }
+    )
     record({"harness": "codex", "method": "turn/completed", "thread": thread, "turn": turn, "at": time.time()})
     send({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
 
@@ -61,10 +84,17 @@ def main():
         if by_file and not os.path.exists(os.path.join(home, "auth.json")):
             print("Not logged in")
             sys.exit(1)
-        print("Logged in using an API key - sk-***" if os.environ.get("FAKE_CODEX_LOGIN") == "apikey" else "Logged in using ChatGPT")
+        print(
+            "Logged in using an API key - sk-***"
+            if os.environ.get("FAKE_CODEX_LOGIN") == "apikey"
+            else "Logged in using ChatGPT"
+        )
         return
     if by_file and sys.argv[1:3] == ["login", "--device-auth"]:
-        print("Open this link\n  https://auth.openai.com/codex/device \nEnter this one-time code\n   ABCD-1234", flush=True)
+        print(
+            "Open this link\n  https://auth.openai.com/codex/device \nEnter this one-time code\n   ABCD-1234",
+            flush=True,
+        )
         deadline = time.time() + 120
         while time.time() < deadline:
             if os.path.exists(os.path.join(home, "deny")):
@@ -88,10 +118,11 @@ def main():
         for line in sys.stdin:
             lines.put(line)
         lines.put(None)
+
     threading.Thread(target=read, daemon=True).start()
     threads, turns, parent, cwds = 0, 0, os.getppid(), {}
     goals = {}
-    slow = None          # (thread, turn, number, due) of the turn answering later
+    slow = None  # (thread, turn, number, due) of the turn answering later
     while True:
         try:
             line = lines.get(timeout=0.05)
@@ -136,19 +167,37 @@ def main():
             if params.get("refreshToken") is not False:
                 send({"id": rid, "error": {"code": -32600, "message": "refreshToken must be false"}})
                 continue
-            account = ({"type": "apiKey"} if os.environ.get("FAKE_CODEX_LOGIN") == "apikey"
-                       else {"type": "chatgpt", "email": "dev@acme.example", "planType": "pro"})
+            account = (
+                {"type": "apiKey"}
+                if os.environ.get("FAKE_CODEX_LOGIN") == "apikey"
+                else {"type": "chatgpt", "email": "dev@acme.example", "planType": "pro"}
+            )
             send({"id": rid, "result": {"account": account, "requiresOpenaiAuth": True}})
         elif method == "account/rateLimits/read":
             # As a ChatGPT login answers it: the 5-hour window first, the weekly one second, resets in epoch seconds.
             record({"harness": "codex", "method": method})
             if os.environ.get("FAKE_CODEX_LOGIN") == "apikey":
-                send({"id": rid, "error": {"code": -32600, "message": "chatgpt authentication required to read rate limits"}})
+                send(
+                    {
+                        "id": rid,
+                        "error": {"code": -32600, "message": "chatgpt authentication required to read rate limits"},
+                    }
+                )
                 continue
             now = int(time.time())
-            send({"id": rid, "result": {"rateLimits": {"limitId": "codex", "planType": "pro",
-                  "primary": {"usedPercent": 40, "windowDurationMins": 300, "resetsAt": now + 3 * 3600},
-                  "secondary": {"usedPercent": 12, "windowDurationMins": 10080, "resetsAt": now + 3 * 86400}}}})
+            send(
+                {
+                    "id": rid,
+                    "result": {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "planType": "pro",
+                            "primary": {"usedPercent": 40, "windowDurationMins": 300, "resetsAt": now + 3 * 3600},
+                            "secondary": {"usedPercent": 12, "windowDurationMins": 10080, "resetsAt": now + 3 * 86400},
+                        }
+                    },
+                }
+            )
         elif method == "turn/steer":
             text = " ".join(part.get("text", "") for part in params.get("input", []))
             record({"harness": "codex", "method": method, "thread": thread, "steer": text})
@@ -162,8 +211,18 @@ def main():
             turns += 1
             turn = "acme-turn-%d-%d" % (os.getpid(), turns)
             text = " ".join(part.get("text", "") for part in params.get("input", []))
-            record({"harness": "codex", "method": method, "thread": thread, "turn": turn, "prompt": text,
-                    "cwd": cwds.get(thread), "env": {k: os.environ.get(k) for k in GRANTED}, "at": time.time(), **custody(cwds.get(thread))})
+            record(
+                {
+                    "harness": "codex",
+                    "method": method,
+                    "thread": thread,
+                    "turn": turn,
+                    "prompt": text,
+                    "cwd": cwds.get(thread),
+                    "env": {k: os.environ.get(k) for k in GRANTED},
+                    "at": time.time(),
+                }
+            )
             if "REMEMBER" in text and cwds.get(thread):
                 # As a bot does: a lesson left uncommitted in memory/.
                 os.makedirs(os.path.join(cwds[thread], "memory"), exist_ok=True)
@@ -174,29 +233,68 @@ def main():
             marker = os.environ["FAKE_LOG"] + ".hung"
             if "HANG" in text and not os.path.exists(marker):
                 open(marker, "w").close()
-                send({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": "Working on it"}})
+                send(
+                    {
+                        "method": "item/agentMessage/delta",
+                        "params": {"threadId": thread, "turnId": turn, "delta": "Working on it"},
+                    }
+                )
                 while os.getppid() == parent:
                     time.sleep(0.1)
                 return
             if "LIMIT" in text:
                 if "codex" in os.environ.get("FAKE_LIMIT_SPENDS", ""):
-                    send({"method": "thread/tokenUsage/updated", "params": {"threadId": thread, "turnId": turn, "tokenUsage": {
-                        "total": {"inputTokens": 5, "cachedInputTokens": 0, "outputTokens": 1, "totalTokens": 6},
-                        "last": {"inputTokens": 5, "cachedInputTokens": 0, "outputTokens": 1, "totalTokens": 6}}}})
-                send({"method": "turn/completed", "params": {"threadId": thread, "turn": {
-                    "id": turn, "status": "failed", "error": {"message": "You've hit your usage limit. Try again later."}}}})
+                    send(
+                        {
+                            "method": "thread/tokenUsage/updated",
+                            "params": {
+                                "threadId": thread,
+                                "turnId": turn,
+                                "tokenUsage": {
+                                    "total": {
+                                        "inputTokens": 5,
+                                        "cachedInputTokens": 0,
+                                        "outputTokens": 1,
+                                        "totalTokens": 6,
+                                    },
+                                    "last": {
+                                        "inputTokens": 5,
+                                        "cachedInputTokens": 0,
+                                        "outputTokens": 1,
+                                        "totalTokens": 6,
+                                    },
+                                },
+                            },
+                        }
+                    )
+                send(
+                    {
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": thread,
+                            "turn": {
+                                "id": turn,
+                                "status": "failed",
+                                "error": {"message": "You've hit your usage limit. Try again later."},
+                            },
+                        },
+                    }
+                )
                 continue
             if "SLOW" in text:
-                send({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": "Working on it"}})
+                send(
+                    {
+                        "method": "item/agentMessage/delta",
+                        "params": {"threadId": thread, "turnId": turn, "delta": "Working on it"},
+                    }
+                )
                 slow = (thread, turn, turns, time.monotonic() + float(os.environ.get("FAKE_SLOW") or 2))
                 continue
-            if "PUBLISH" in text:                # a deliverable the runner publishes as a Tico file
+            if "PUBLISH" in text:  # a deliverable the runner publishes as a Tico file
                 os.makedirs(os.path.join(cwds.get(thread) or os.getcwd(), "reports"), exist_ok=True)
                 with open(os.path.join(cwds.get(thread) or os.getcwd(), "reports", "acme.md"), "w") as report:
                     report.write("# Acme report\n")
             reply = "Acme reply."
-            if os.environ.get("FAKE_MEMORY_TIDY"):
-                reply = packet_reply(text)
             if os.environ.get("ACME_API_KEY"):
                 reply += " The key is " + os.environ["ACME_API_KEY"]
             finish(thread, turn, turns, reply)

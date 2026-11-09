@@ -1,4 +1,5 @@
 """The Company page's tables; hubdb.MIGRATIONS applies this once. Later changes are new migrations, never edits."""
+
 COMPANY_PAGE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS company_page_settings (
   id TEXT PRIMARY KEY CHECK (id = 'company'), transparency TEXT NOT NULL DEFAULT 'closed'

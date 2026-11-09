@@ -10,13 +10,13 @@
                                          summary first, then the whole redacted bundle
     hq-tickets payload TK-XXXXXXXX FILE  the JSON for `hub approval request --kind publish --payload-file`
     hq-tickets reply TK-XXXXXXXX FILE [--approval ID]
-                                         post FILE when a person turned sending on for this bot in Tico
-                                         (bot.yaml's outbound_send only asks); an optional approval must match
-                                         these bytes and this ticket
+                                         post FILE as this bot's sending policy in Tico allows: On their own posts,
+                                         Ask first needs a person's approval of these bytes for this ticket, Never
+                                         keeps the reply a draft
     hq-tickets close-signature hm-... FILE
                                          a release shipped the fix for one Health Monitor signature: post FILE as the
                                          fixed-in reply on every open ticket with that signature, and close each.
-                                         Same sending switch as reply; running it again closes nothing new
+                                         Only On their own; running it again closes nothing new
     hq-tickets link TK-XXXXXXXX '#123'   the ticoteam/tico issue or pull request that will fix the ticket: when a release
                                          ships it, HQ posts "Fixed in vX, update here" on the ticket by itself
 
@@ -37,7 +37,6 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import yaml
 
 TICKET = re.compile(r"TK-[A-Z2-7]{8}")
 SIGNATURE = re.compile(r"hm-[0-9a-f]{12}")
@@ -358,39 +357,43 @@ def approved(approval_id, ticket_id, data, run=subprocess.run):
 
 def mail_policy(env):
     """The mail connector's policy module (connectors/mail/policy.py), from the Tico checkout a bot turn names in
-    HUB_DIR. Its `switch` reads the server-held setting a person sets (GET /api/v2/bots/<slug>/mail-settings)."""
+    HUB_DIR. Its `sending_policy` reads the bot's sending policy a person sets in Tico
+    (GET /api/v2/bots/<slug>/email-sending-policy)."""
     hub = (env.get("HUB_DIR") or "").strip()
     if hub and hub not in sys.path:
         sys.path.insert(0, hub)
     try:
         from connectors.mail import policy                # noqa: PLC0415 - found through HUB_DIR at run time
     except Exception:
-        raise Refused("could not load Tico's mail sending check (HUB_DIR); keep the reply as a draft") from None
+        raise Refused("could not load Tico's sending policy check (HUB_DIR); keep the reply as a draft") from None
     return policy
 
 
-def bot_yaml():
-    """This bot's manifest, for the message only: `outbound_send` in it is a request, not the switch."""
-    path = Path("bot.yaml")
-    if not path.is_file():
-        path = Path("employee.yaml")
-    try:
-        manifest = yaml.safe_load(path.read_text())
-    except (OSError, yaml.YAMLError):
-        return {}
-    return manifest if isinstance(manifest, dict) else {}
-
-
-def sending_enabled(env):
-    """Refuse unless a person turned sending on for this bot in Tico. bot.yaml's `outbound_send` only asks; with no
-    server value, or no Tico reachable from this run, the reply stays a draft (docs/mail.md, "Turning sending on")."""
+def sending_mode(env):
+    """This bot's sending mode as Tico answers it: on_their_own, ask_first or never. Refuses when the run names no
+    bot or Tico cannot be asked: the reply stays a draft (docs/mail.md, "Turning sending on")."""
     slug = (env.get("HUB_BOT") or env.get("HUB_EMPLOYEE") or "").strip()
     if not slug:
-        raise Refused("this run does not name its bot (HUB_BOT), so it cannot read the mail setting from Tico; "
+        raise Refused("this run does not name its bot (HUB_BOT), so it cannot read its sending policy from Tico; "
                       "keep the reply as a draft")
-    switch = mail_policy(env).switch(slug, bot_yaml())
-    if not switch["on"]:
-        raise Refused(f"outbound_send is off for {slug}: {switch['detail']}; keep the reply as a draft")
+    answer = mail_policy(env).sending_policy(slug)
+    if answer is None:
+        raise Refused(f"Tico did not answer {slug}'s sending policy; keep the reply as a draft")
+    return str(answer["effective"].get("mode") or "never")
+
+
+def sending_allowed(env, approval=False):
+    """Refuse unless the sending policy lets this post go: On their own always, Ask first only with a person's
+    approval of the exact text (`approval`), Never not at all."""
+    mode = sending_mode(env)
+    if mode == "on_their_own":
+        return mode
+    if mode == "ask_first" and approval:
+        return mode
+    if mode == "ask_first":
+        raise Refused("sending is Ask first for this bot: request a publish approval for this exact reply "
+                      "(`hq-tickets payload`) and pass it with --approval; keep the reply as a draft until then")
+    raise Refused("sending is Never for this bot (Tools > the mailbox > Limits); keep the reply as a draft")
 
 
 def main(argv, env=None, out=print, opener=None, run=subprocess.run, emit=None, now=None):
@@ -423,14 +426,14 @@ def main(argv, env=None, out=print, opener=None, run=subprocess.run, emit=None, 
         elif command == "reply" and TICKET.fullmatch(args[0] if args else "") and (
                 len(args) == 2 or (len(args) == 4 and args[2] == "--approval")):
             data, text = read_reply(args[1])
-            sending_enabled(env)
+            sending_allowed(env, approval=len(args) == 4)
             if len(args) == 4:
                 approved(args[3], args[0], data, run)
             done = hq.call("POST", f"/v1/staff/tickets/{args[0]}/reply", {"body": text})
             out(f"posted reply {done['reply_id']} on {args[0]}" + ("; the person gave an email, so an email reply is pending" if done.get("email_pending") else ""))
         elif command == "close-signature" and len(args) == 2 and SIGNATURE.fullmatch(args[0]):
             data, text = read_reply(args[1])
-            sending_enabled(env)
+            sending_allowed(env)
             done = hq.call("POST", "/v1/staff/tickets/by-signature/close",
                            {"signature": args[0], "body": text})
             closed = done.get("closed") or []

@@ -8,6 +8,7 @@ import os
 import sqlite3
 import threading
 import time
+import weakref
 from collections import deque
 from contextlib import ExitStack, contextmanager
 
@@ -297,7 +298,8 @@ CREATE TABLE IF NOT EXISTS credentials(
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0);
+ updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
+ tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -305,7 +307,7 @@ CREATE TABLE IF NOT EXISTS granola_connections(
 CREATE TABLE IF NOT EXISTS credential_grants(
  id TEXT PRIMARY KEY, credential_id TEXT NOT NULL REFERENCES credentials(id),
  subject TEXT NOT NULL, granted_by TEXT NOT NULL, parent_id TEXT REFERENCES credential_grants(id),
- created_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT);
+ created_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT, access_level TEXT NOT NULL DEFAULT 'read_write');
 CREATE UNIQUE INDEX IF NOT EXISTS credential_grant_active ON credential_grants(credential_id,subject) WHERE revoked_at IS NULL;
 CREATE TABLE IF NOT EXISTS archives(
  source TEXT PRIMARY KEY, digest TEXT NOT NULL, imported_at TEXT NOT NULL,
@@ -403,6 +405,7 @@ def refused(c, identity, exc, savepoint="domain_write"):
     c.execute("ROLLBACK TO " + savepoint)
     c.execute("RELEASE " + savepoint)
     from . import strategy_acts
+
     if isinstance(exc, strategy_acts.Proposed):
         # Not a mistake to count toward quarantine: what stays the owner's becomes their proposal instead.
         strategy_acts.settle(c, exc)
@@ -410,24 +413,38 @@ def refused(c, identity, exc, savepoint="domain_write"):
     # Gate notifications survive the refused move, while its step and reviewer wake roll back.
     if getattr(exc, "review_gate", None):
         from . import review_gate
+
         review_gate.notify(c, identity.actor, exc.review_gate)
         # A refused review move is retried by Tico once what refused it clears (backend/move_retry.py).
         from . import move_retry
+
         move_retry.remember(c, identity.actor, exc.review_gate)
     if notice := getattr(exc, "task_hold", None):
         from .task_blocked import hold
+
         hold(c, notice["task"], notice["reason"], notice["kind"])
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
-        H.refuse(c, identity.actor, exc.rule, exc.detail, exc.severity, task=getattr(exc, 'task', None),
-                 scope=getattr(exc, 'scope', None))
+        H.refuse(
+            c,
+            identity.actor,
+            exc.rule,
+            exc.detail,
+            exc.severity,
+            task=getattr(exc, 'task', None),
+            scope=getattr(exc, 'scope', None),
+        )
     except H.Refused:
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422,
-                   retryable=getattr(exc, "retryable", False))
+    return Problem(
+        exc.rule,
+        exc.detail,
+        403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422,
+        retryable=getattr(exc, "retryable", False),
+    )
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -436,6 +453,8 @@ def refused(c, identity, exc, savepoint="domain_write"):
 # (binding is not NULL) and are never swept: an ambiguous external call is never repeated.
 IDEMPOTENCY_RETENTION_HOURS = 48
 MAIL_RETENTION_DAYS = 180
+
+
 # Polls carry nothing a retry could double: a replayed heartbeat or lease renewal just
 # answers again, and an empty claim handed out no lease. They arrive every 15 s per runner
 # (the heartbeat reply carries every assignment), and grew to most of the database file. A claim that leased a job stays replayable so a lost reply cannot
@@ -469,8 +488,10 @@ def retire_health_rows(c):
     """Delete health rows from retired mechanisms so they are neither shown nor alerted on. Idempotent."""
     c.execute("DELETE FROM service_health WHERE service LIKE 'processing:%'")
     if os.environ.get("TICO_BACKUP_MODE"):
-        c.execute(f"DELETE FROM service_health WHERE service IN ({','.join('?' * len(SNAPSHOT_BACKUP_ROWS))})",
-                  SNAPSHOT_BACKUP_ROWS)
+        c.execute(
+            f"DELETE FROM service_health WHERE service IN ({','.join('?' * len(SNAPSHOT_BACKUP_ROWS))})",
+            SNAPSHOT_BACKUP_ROWS,
+        )
 
 
 def sweep_idempotency(store, now=None, batch=5000):
@@ -483,16 +504,18 @@ def sweep_idempotency(store, now=None, batch=5000):
     deleted = 0
     while True:
         with store.transaction() as c:
-            removed = c.execute("DELETE FROM idempotency WHERE rowid IN "
-                                "(SELECT rowid FROM idempotency WHERE binding IS NULL AND created_at<? LIMIT ?)",
-                                (cutoff, batch)).rowcount
+            removed = c.execute(
+                "DELETE FROM idempotency WHERE rowid IN "
+                "(SELECT rowid FROM idempotency WHERE binding IS NULL AND created_at<? LIMIT ?)",
+                (cutoff, batch),
+            ).rowcount
         deleted += removed
         if removed < batch:
             return deleted
 
 
 DELTA_RETENTION_DAYS = 1
-DELTA_SWEEP_MAX = 200_000     # rows one hourly pass deletes at most, so a first backlog drains over hours
+DELTA_SWEEP_MAX = 200_000  # rows one hourly pass deletes at most, so a first backlog drains over hours
 
 
 def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
@@ -507,7 +530,7 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     one created before the cutoff and still unfinished, or not whole, is passed over for good (its pieces stay)."""
     at = now or H.now()
     cutoff = H.shift(at, days=-DELTA_RETENTION_DAYS)
-    created_before = H.shift(at, days=-DELTA_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
+    created_before = H.shift(at, days=-DELTA_RETENTION_DAYS - 1)  # a run finishing a day after it began is late
     with store.read() as c:
         mark = c.execute("SELECT value FROM registry_metadata WHERE key='delta-sweep-mark'").fetchone()
     mark = json.loads(mark[0]) if mark else ["", ""]
@@ -521,27 +544,32 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
                 "AND json_extract(m.payload,'$.final')=1)) "
                 "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS whole "
                 "FROM attempts a WHERE a.created_at<? AND (a.created_at,a.id)>(?,?) ORDER BY a.created_at,a.id LIMIT 200",
-                (created_before, *mark)).fetchall()
+                (created_before, *mark),
+            ).fetchall()
         done = [r["id"] for r in rows if r["whole"] and r["finished_at"] and r["finished_at"] < cutoff]
         while done and deleted < most:
             with store.transaction() as c:
                 removed = c.execute(
                     "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events WHERE attempt_id IN (%s) "
                     "AND kind='delta' AND CASE WHEN json_valid(payload) THEN "
-                    "json_extract(payload,'$.delta_kind') END IS NOT 'thought' LIMIT ?)"
-                    % ",".join("?" * len(done)), (*done, batch)).rowcount
+                    "json_extract(payload,'$.delta_kind') END IS NOT 'thought' LIMIT ?)" % ",".join("?" * len(done)),
+                    (*done, batch),
+                ).rowcount
             deleted += removed
             if removed < batch:
                 break
         else:
             if done:
-                break                   # the cap was reached inside this group: it is taken up again next pass
+                break  # the cap was reached inside this group: it is taken up again next pass
         if not rows:
             break
         mark = [rows[-1]["created_at"], rows[-1]["id"]]
         with store.transaction() as c:
-            c.execute("INSERT INTO registry_metadata VALUES('delta-sweep-mark',?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(mark),))
+            c.execute(
+                "INSERT INTO registry_metadata VALUES('delta-sweep-mark',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps(mark),),
+            )
         if len(rows) < 200:
             break
     return deleted
@@ -561,7 +589,7 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""
     at = now or H.now()
     cutoff = H.shift(at, days=-TOKEN_RETENTION_DAYS)
-    created_before = H.shift(at, days=-TOKEN_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
+    created_before = H.shift(at, days=-TOKEN_RETENTION_DAYS - 1)  # a run finishing a day after it began is late
     with store.read() as c:
         mark = c.execute("SELECT value FROM registry_metadata WHERE key='tokens-sweep-mark'").fetchone()
     mark = json.loads(mark[0]) if mark else ["", ""]
@@ -573,22 +601,28 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
                 "AND (a.input_tokens IS NOT NULL OR a.usage_reason IS NOT NULL)) "
                 "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS recorded "
                 "FROM attempts a WHERE a.created_at<? AND (a.created_at,a.id)>(?,?) ORDER BY a.created_at,a.id LIMIT 200",
-                (created_before, *mark)).fetchall()
+                (created_before, *mark),
+            ).fetchall()
         if not rows:
             break
         done = [r["id"] for r in rows if r["recorded"] and r["finished_at"] and r["finished_at"] < cutoff]
         while done:
             with store.transaction() as c:
-                removed = c.execute("DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events "
-                                    "WHERE attempt_id IN (%s) AND kind='tokens' LIMIT ?)" % ",".join("?" * len(done)),
-                                    (*done, batch)).rowcount
+                removed = c.execute(
+                    "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events "
+                    "WHERE attempt_id IN (%s) AND kind='tokens' LIMIT ?)" % ",".join("?" * len(done)),
+                    (*done, batch),
+                ).rowcount
             deleted += removed
             if removed < batch:
                 break
         mark = [rows[-1]["created_at"], rows[-1]["id"]]
         with store.transaction() as c:
-            c.execute("INSERT INTO registry_metadata VALUES('tokens-sweep-mark',?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(mark),))
+            c.execute(
+                "INSERT INTO registry_metadata VALUES('tokens-sweep-mark',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps(mark),),
+            )
         if len(rows) < 200:
             break
     return deleted
@@ -604,10 +638,24 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
 # often (credentials.record_use). Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
 # Seven days: writers only, or readers that look back no further than a week (bot.drain: deploy_draining reads the
 # last hour, release_deploy_drains a week at most).
-EVENT_NOISE_ACTIONS = ("sql.query", "wake.skipped", "message.delivered", "message.read", "status.set", "turn.start",
-                       "turn.finish", "github.checks_read", "rate_limit.set", "attempt.fallback", "attempt.lease-held",
-                       "job.suppress", "bot.drain", "operator.deployment-undrain", "listen.judgment",
-                       "bot.repository_read")
+EVENT_NOISE_ACTIONS = (
+    "sql.query",
+    "wake.skipped",
+    "message.delivered",
+    "message.read",
+    "status.set",
+    "turn.start",
+    "turn.finish",
+    "github.checks_read",
+    "rate_limit.set",
+    "attempt.fallback",
+    "attempt.lease-held",
+    "job.suppress",
+    "bot.drain",
+    "operator.deployment-undrain",
+    "listen.judgment",
+    "bot.repository_read",
+)
 EVENT_NOISE_RETENTION_DAYS = 7
 # Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
 # the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
@@ -617,7 +665,7 @@ EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
 # held the one writer for 6-10 s and every request queued behind it; 500 holds it for about one second.
 EVENT_SWEEP_BATCH = 500
-EVENT_SWEEP_MAX = 20000      # rows one hourly pass deletes at most; a larger backlog drains over later passes
+EVENT_SWEEP_MAX = 20000  # rows one hourly pass deletes at most; a larger backlog drains over later passes
 
 
 def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX):
@@ -627,8 +675,10 @@ def sweep_events(store, now=None, batch=EVENT_SWEEP_BATCH, most=EVENT_SWEEP_MAX)
     backlog drains there and the 30-day tier follows."""
     at = now or H.now()
     deleted = 0
-    for key, actions, days in (("events-noise-mark", EVENT_NOISE_ACTIONS, EVENT_NOISE_RETENTION_DAYS),
-                               ("events-sweep-30-mark", EVENT_SWEEP_ACTIONS, EVENT_RETENTION_DAYS)):
+    for key, actions, days in (
+        ("events-noise-mark", EVENT_NOISE_ACTIONS, EVENT_NOISE_RETENTION_DAYS),
+        ("events-sweep-30-mark", EVENT_SWEEP_ACTIONS, EVENT_RETENTION_DAYS),
+    ):
         deleted += _sweep_event_tier(store, key, actions, H.shift(at, days=-days), batch, most - deleted)
     return deleted
 
@@ -650,25 +700,30 @@ def _sweep_event_tier(store, key, actions, cutoff, batch, most):
     deleted = 0
     while deleted < most:
         with store.read() as c:
-            rows = c.execute(f"SELECT rowid,created_at FROM events INDEXED BY events_ts WHERE created_at>=? AND created_at<? "
-                             f"AND action IN ({marks}) ORDER BY created_at LIMIT ?",
-                             (mark, cutoff, *actions, batch)).fetchall()
+            rows = c.execute(
+                f"SELECT rowid,created_at FROM events INDEXED BY events_ts WHERE created_at>=? AND created_at<? "
+                f"AND action IN ({marks}) ORDER BY created_at LIMIT ?",
+                (mark, cutoff, *actions, batch),
+            ).fetchall()
         if not rows:
             mark = cutoff
             break
         with store.transaction() as c:
-            removed = c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rows))})",
-                                [row["rowid"] for row in rows]).rowcount
+            removed = c.execute(
+                f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rows))})", [row["rowid"] for row in rows]
+            ).rowcount
         deleted += removed
         mark = rows[-1]["created_at"]
         if len(rows) < batch:
             mark = cutoff
             break
         if not removed:
-            break               # the rows left the table under the scan: the next pass starts again from the mark
+            break  # the rows left the table under the scan: the next pass starts again from the mark
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                  (key, json.dumps(mark)))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(mark)),
+        )
     return deleted
 
 
@@ -681,12 +736,12 @@ def _sweep_event_tier(store, key, actions, cutoff, batch, most):
 # Paced, not back to back: a batch of 500 deletes plus the WAL checkpoint it triggers held the writer gate for 5-7 s on
 # TIDY's first pass (scheduler.py:437), so writers waited up to 9 s against the 10 s WRITE_WAIT. 200 rows per write, then
 # a pause, lets writers in between batches.
-TRIM_BATCH = 200           # deletes per write transaction
-TRIM_PAUSE = 0.5           # seconds slept after each write transaction
-TRIM_PAGE = 2000           # rows read per read transaction
-TRIM_READ_PAUSE = 0.05     # seconds slept between read pages
-TRIM_MAX = 50_000          # deletes one hourly pass makes at most
-_sleep = time.sleep        # the pauses go through this so tests can run without waiting
+TRIM_BATCH = 200  # deletes per write transaction
+TRIM_PAUSE = 0.5  # seconds slept after each write transaction
+TRIM_PAGE = 2000  # rows read per read transaction
+TRIM_READ_PAUSE = 0.05  # seconds slept between read pages
+TRIM_MAX = 50_000  # deletes one hourly pass makes at most
+_sleep = time.sleep  # the pauses go through this so tests can run without waiting
 TRIM_ACTIONS = ("credential.revealed", "credential.sent_to_computer")
 TRIM_MARK = "credential-use-trim"
 
@@ -711,8 +766,11 @@ def _trim_stream(store, action, target, before, page):
     while True:
         limit = page + len(seen)
         with store.read() as c:
-            rows = c.execute("SELECT rowid,id,created_at,actor,detail FROM events WHERE action=? AND target=? "
-                             "AND created_at>=? AND created_at<? ORDER BY created_at LIMIT ?", (action, target, last, before, limit)).fetchall()
+            rows = c.execute(
+                "SELECT rowid,id,created_at,actor,detail FROM events WHERE action=? AND target=? "
+                "AND created_at>=? AND created_at<? ORDER BY created_at LIMIT ?",
+                (action, target, last, before, limit),
+            ).fetchall()
         fresh = [row for row in rows if not (row["created_at"] == last and row["id"] in seen)]
         yield from fresh
         if len(rows) < limit or not fresh:
@@ -727,6 +785,7 @@ def _trim_target(store, target, before, batch, budget, page):
     (deleted, finished). When `budget` runs out first the walk stops, and the next pass walks the credential again:
     the rows it kept decide the same again, so nothing already passed is deleted twice."""
     from .credentials import USE_WINDOW
+
     last, doomed, deleted = {}, [], 0
     streams = [_trim_stream(store, action, target, before, page) for action in TRIM_ACTIONS]
     for row in heapq.merge(*streams, key=lambda row: (row["created_at"], row["id"])):
@@ -766,8 +825,9 @@ def _trim_next_target(store, after):
     found = []
     for action in TRIM_ACTIONS:
         with store.read() as c:
-            row = c.execute("SELECT target FROM events WHERE action=? AND target>? ORDER BY target LIMIT 1",
-                            (action, after)).fetchone()
+            row = c.execute(
+                "SELECT target FROM events WHERE action=? AND target>? ORDER BY target LIMIT 1", (action, after)
+            ).fetchone()
         if row:
             found.append(row[0])
     return min(found) if found else None
@@ -775,8 +835,10 @@ def _trim_next_target(store, after):
 
 def _trim_save(store, mark):
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                  (TRIM_MARK, json.dumps(mark)))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (TRIM_MARK, json.dumps(mark)),
+        )
 
 
 def sweep_credential_uses(store, now=None, batch=TRIM_BATCH, most=TRIM_MAX, page=TRIM_PAGE):
@@ -811,7 +873,7 @@ def sweep_credential_uses(store, now=None, batch=TRIM_BATCH, most=TRIM_MAX, page
 VACUUM_STEP_PAGES = 2000
 # Free pages kept in the file for reuse, so the next writes take them without growing the file again.
 VACUUM_FLOOR_PAGES = 1000
-VACUUM_PASS_MAX = 256 * 1024 * 1024      # bytes one hourly pass returns at most; the rest waits for the next pass
+VACUUM_PASS_MAX = 256 * 1024 * 1024  # bytes one hourly pass returns at most; the rest waits for the next pass
 _vacuum_hint_logged = False
 
 
@@ -829,7 +891,8 @@ def reclaim_free_pages(store, step=VACUUM_STEP_PAGES, floor=VACUUM_FLOOR_PAGES, 
                 _vacuum_hint_logged = True
                 logging.getLogger(__name__).info(
                     "hub database has auto_vacuum=%s: a VACUUM would let the sweeps' freed pages go back to the disk",
-                    mode)
+                    mode,
+                )
             return 0
         page = c.execute("PRAGMA page_size").fetchone()[0]
     budget = most // page
@@ -860,8 +923,9 @@ def sweep_mail(store, now=None, batch=5000):
     deleted, touched = 0, set()
     while True:
         with store.transaction() as c:
-            rows = c.execute("SELECT mailbox,msg_id FROM mail_messages WHERE epoch>0 AND epoch<? LIMIT ?",
-                             (cutoff, batch)).fetchall()
+            rows = c.execute(
+                "SELECT mailbox,msg_id FROM mail_messages WHERE epoch>0 AND epoch<? LIMIT ?", (cutoff, batch)
+            ).fetchall()
             for row in rows:
                 touched.add(row["mailbox"])
                 c.execute("DELETE FROM mail_fts WHERE mailbox=? AND msg_id=?", (row["mailbox"], row["msg_id"]))
@@ -873,11 +937,14 @@ def sweep_mail(store, now=None, batch=5000):
     # oldest month just aged out would otherwise keep claiming it until the next publish.
     for address in sorted(touched):
         with store.transaction() as c:
-            c.execute("UPDATE mail_mailboxes SET "
-                      "message_count=(SELECT count(*) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL),"
-                      "oldest_epoch=(SELECT min(epoch) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL),"
-                      "newest_epoch=(SELECT max(epoch) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL) "
-                      "WHERE address=?", (address, address, address, address))
+            c.execute(
+                "UPDATE mail_mailboxes SET "
+                "message_count=(SELECT count(*) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL),"
+                "oldest_epoch=(SELECT min(epoch) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL),"
+                "newest_epoch=(SELECT max(epoch) FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL) "
+                "WHERE address=?",
+                (address, address, address, address),
+            )
     return deleted
 
 
@@ -893,11 +960,23 @@ def readiness_document(value):
     value = value if isinstance(value, dict) else {}
     if value.get("schema_version") in (0, 1) and isinstance(value.get("bots"), dict):
         return value
-    return {"schema_version": 0, "runtimes": {},
-            "bots": {str(bot): {"ready": ready is True, "runtime": "", "model": "",
-                                "repository_present": ready is True, "repository_revision": "",
-                                "configuration_valid": ready is True, "problems": []}
-                     for bot, ready in value.items() if isinstance(ready, bool)}}
+    return {
+        "schema_version": 0,
+        "runtimes": {},
+        "bots": {
+            str(bot): {
+                "ready": ready is True,
+                "runtime": "",
+                "model": "",
+                "repository_present": ready is True,
+                "repository_revision": "",
+                "configuration_valid": ready is True,
+                "problems": [],
+            }
+            for bot, ready in value.items()
+            if isinstance(ready, bool)
+        },
+    }
 
 
 def bot_readiness(value, bot):
@@ -938,18 +1017,19 @@ def message_page(c, cid, *, before=None, since=None, limit=200):
     if since:
         clauses.append("created_at>?")
         args.append(since)
-    rows = c.execute("SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC LIMIT ?",
-                     (*args, limit + 1)).fetchall()
+    rows = c.execute(
+        "SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC LIMIT ?", (*args, limit + 1)
+    ).fetchall()
     more = len(rows) > limit
     messages = [{**dict(r), "refs": json.loads(r["refs"] or "{}")} for r in reversed(rows[:limit])]
-    return {"messages": messages, "has_more": more,
-            "next_before": messages[0]["id"] if more and messages else None}
+    return {"messages": messages, "has_more": more, "next_before": messages[0]["id"] if more and messages else None}
 
 
 def task_message_page(c, task, **kwargs):
     """Messages about this task. A dedicated task thread returns the whole conversation;
     a shared chat room returns only rows tagged with this task id."""
     from . import bot_home_merge
+
     # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are in the
     # room, its recorded Home and the Home it is in now. The last one is the room the task's messages belong to.
     cids = bot_home_merge.history_ids(c, task["conversation_id"])
@@ -980,12 +1060,13 @@ class Problem(Exception):
         self.extra = extra or {}
 
 
-POOL_IDLE = 16     # read connections kept open between reads
+POOL_IDLE = 16  # read connections kept open between reads
 
 
 def _pooled(base):
     """`base` for pooled reads: one a caller changed (a function, an authorizer, a progress handler, a pragma that
     lasts) is closed after its read instead of reused, so no state reaches another caller's read."""
+
     def taint(name):
         method = getattr(base, name)
 
@@ -994,18 +1075,40 @@ def _pooled(base):
             if hasattr(self, "read_cache"):
                 self.read_cache.clear()
             return method(self, *args, **kwargs)
+
         return changed
 
-    names = ("create_function", "create_aggregate", "create_window_function", "create_collation", "set_authorizer",
-             "set_progress_handler", "set_trace_callback", "enable_load_extension", "setlimit", "executescript")
+    names = (
+        "create_function",
+        "create_aggregate",
+        "create_window_function",
+        "create_collation",
+        "set_authorizer",
+        "set_progress_handler",
+        "set_trace_callback",
+        "enable_load_extension",
+        "setlimit",
+        "executescript",
+    )
     body = {name: taint(name) for name in names if hasattr(base, name)}
+
     def clear(self):
         if hasattr(self, "read_cache"):
             self.read_cache.clear()
 
     def execute(self, statement, *args, **kwargs):
         # Explicit transaction control starts a new snapshot even without row changes.
-        if (statement.lstrip().split(None, 1) or [""])[0].upper() in ("BEGIN", "COMMIT", "END", "ROLLBACK", "SAVEPOINT", "RELEASE", "CREATE", "ALTER", "DROP"):
+        if (statement.lstrip().split(None, 1) or [""])[0].upper() in (
+            "BEGIN",
+            "COMMIT",
+            "END",
+            "ROLLBACK",
+            "SAVEPOINT",
+            "RELEASE",
+            "CREATE",
+            "ALTER",
+            "DROP",
+        ):
             clear(self)
         return base.execute(self, statement, *args, **kwargs)
 
@@ -1013,12 +1116,13 @@ def _pooled(base):
         def completed(self, *args, **kwargs):
             clear(self)
             return getattr(base, name)(self, *args, **kwargs)
+
         return completed
 
     body.update(execute=execute, commit=finish("commit"), rollback=finish("rollback"))
     body["tainted"] = False
     body["pool_file"] = None
-    body["tables_seen"] = {}    # {pool_file: tables seen to exist}, shared by this store's connections (hubdb._has_table)
+    body["tables_seen"] = {}  # {pool_file: tables seen to exist}, shared by this store's connections (hubdb._has_table)
     return type("Pooled" + base.__name__, (base,), body)
 
 
@@ -1060,6 +1164,16 @@ class WriterGate:
                 self.queue[0].set()
 
 
+def _close_idle(conns):
+    """Closes a store's idle read connections once the store is freed (weakref.finalize in Store.__init__). An open
+    sqlite connection that the garbage collector frees warns, so the store closes its own first."""
+    while conns:
+        try:
+            conns.pop().close()
+        except sqlite3.Error:
+            pass
+
+
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
@@ -1070,26 +1184,44 @@ class Store:
         self.factory = sqlite3.Connection
         if recorder is not None:
             from . import flight
+
             self.factory = flight.connection_class(recorder)
-            flight.ACTIVE = recorder        # times write transactions on connections opened outside the Store
+            flight.ACTIVE = recorder  # times write transactions on connections opened outside the Store
         # Reads reuse their connections (`read`): a new one parses the whole schema before its first statement,
         # which on a large install cost more than most reads themselves.
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
+        self._pool_finalizer = weakref.finalize(self, _close_idle, self.pool)
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
         # Requests in another app must neither drain this store's runs nor consume its pending wakeup.
         self.automation_bell = threading.Event()
         from .provenance_clock import Cache
+
         self.provenance_cache = Cache()
-        self.roster_rows = {}       # {statement: (roster_clock count, rows)}, shared by this store's connections
+        self.roster_rows = {}  # {statement: (roster_clock count, rows)}, shared by this store's connections
         from .row_clock import Cache as RowCache
+
         self.row_cache = RowCache()
 
     def connect(self, factory=None, check_same_thread=True):
-        c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
-                            factory=factory or self.factory, check_same_thread=check_same_thread)
+        c = sqlite3.connect(
+            str(self.settings.db_path),
+            timeout=WRITE_WAIT,
+            isolation_level=None,
+            factory=factory or self.factory,
+            check_same_thread=check_same_thread,
+        )
+        try:
+            self._configure(c)
+        except BaseException:
+            # The caller never receives the connection, so nothing else would close it.
+            c.close()
+            raise
+        return c
+
+    def _configure(self, c):
         H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
@@ -1107,20 +1239,22 @@ class Store:
         c.execute("PRAGMA mmap_size=268435456")
         # The WAL file is cut back to this size after a checkpoint; a large write (a migration) otherwise keeps its peak.
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
-        return c
 
     @SRC.scoped("system:migration")
     def migrate(self):
         """The preflight and the pending migrations only (hubdb.connect runs them), for create_app before its installs."""
         from . import migrations as Migrations
+
         Migrations.preflight(self.settings.db_path)
         H.connect(self.settings.db_path).close()
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):
-        from . import redesign_migration    # the one-time move to Automations, at the end of this method
+        from . import redesign_migration  # the one-time move to Automations, at the end of this method
+
         self.settings.db_path.parent.mkdir(parents=True, exist_ok=True)
         # Refuses a database this code must not open, before anything writes to it (backend/migrations).
         from . import migrations as Migrations
+
         Migrations.preflight(self.settings.db_path, adopt_legacy=adopt_legacy)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
             # hubdb.connect ran hubdb's numbered steps, then the pending migration files, then its own startup schema
@@ -1129,101 +1263,140 @@ class Store:
             # CREATE below makes the new shape (backend/migrations).
             c.executescript(SCHEMA)
             from . import start_places as _start_places
+
             c.executescript(_start_places.SCHEMA)
             _start_places.restore_waits(c)
             from . import org_turns as _org_turns
+
             c.executescript(_org_turns.SCHEMA)
             from . import updates as _updates
+
             c.executescript(_updates.SCHEMA)
             _updates.ensure_schema(c)
             from . import update_feeds as _update_feeds
+
             c.executescript(_update_feeds.SCHEMA)
             from . import runner_versions as _runner_versions
+
             c.executescript(_runner_versions.SCHEMA)
             _runner_versions.ensure_schema(c)
             from . import files as _files
+
             c.executescript(_files.SCHEMA)
             from . import memory_history as _memory_history
+
             c.executescript(_memory_history.SCHEMA)
             from . import stale_review as _stale_review
+
             c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
+
             c.executescript(_stall_triage.SCHEMA)
             from . import ask_ingest as _ask_ingest
+
             c.executescript(_ask_ingest.SCHEMA)
             from . import rule_suggestions as _rule_suggestions
+
             c.executescript(_rule_suggestions.SCHEMA)
             from . import system_routines as _system_routines
+
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
             from . import task_rules as _task_rules
+
             c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
-            _teammate_access.ensure(c)              # people's and groups' See/Read/Write (docs/permissions.md)
+
+            _teammate_access.ensure(c)  # people's and groups' See/Read/Write (docs/permissions.md)
             from . import rules as _rules
+
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
             _rules.seed_dev(c)
             from . import check_pools as _check_pools
+
             _check_pools.ensure(c)
             _check_pools.seed(c)
             from . import step_flow as _step_flow
+
             _step_flow.ensure(c)
             _step_flow.seed(c)
+            from . import pipeline_engine as _pipeline_engine
+
+            _pipeline_engine.boot(c)  # prefixes D and P, default Warn after, open stage visits
             _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
+
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs
+
             _docs.ensure_schema(c, self.settings)
             from . import doc_sources as _doc_sources
+
             _doc_sources.ensure_schema(c)
             from . import bot_tools as _bot_tools
+
             c.executescript(_bot_tools.SCHEMA)
-            from . import mail_settings as _mail_settings
-            c.executescript(_mail_settings.SCHEMA)
             from . import company_storage as _company_storage
+
             c.executescript(_company_storage.SCHEMA)
             from . import tico_storage as _tico_storage
+
             c.executescript(_tico_storage.SCHEMA)
             from . import model_subscriptions as _model_subscriptions
+
             c.executescript(_model_subscriptions.SCHEMA)
             from . import google_connect as _google_connect
+
             _google_connect.ensure_schema(c)
             from . import support as _support
+
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
+
             c.executescript(_inbound.SCHEMA)
             from . import bills_address as _bills_address
+
             c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access
+
             c.executescript(_support_access.SCHEMA)
             from . import credential_cards as _credential_cards
+
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
+
             c.executescript(_watchers.SCHEMA)
             from . import cloud_machines as _cloud_machines
+
             c.executescript(_cloud_machines.SCHEMA)
             from . import browser_exit as _browser_exit
+
             c.executescript(_browser_exit.TRIGGERS)
             # A stop's reservation against the claim (backend/cloud_machines.py `reserve`); NULL is none.
             H.add_column(c, "cloud_machines", "stop_until", "REAL")
             from . import screening as _screening
+
             c.executescript(_screening.SCHEMA)
             from . import bot_task_tabs as _bot_task_tabs
+
             c.executescript(_bot_task_tabs.SCHEMA)
             # The sidebar's widgets: order, hidden and heights (Editable bot sidebar); NULL is the default four.
             H.add_column(c, "bot_task_tabs", "widgets", "TEXT")
             from . import learned as _learned
+
             c.executescript(_learned.SCHEMA)
             from . import cards as _cards
+
             c.executescript(_cards.SCHEMA)
-            from . import memory_tidy_cards as _memory_tidy_cards
-            c.executescript(_memory_tidy_cards.SCHEMA)
             from . import task_manager as _task_manager
+
             c.executescript(_task_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper
+
             c.executescript(_bookkeeper.SCHEMA)
             from . import maintenance_health as _maintenance_health
+
             c.executescript(_maintenance_health.SCHEMA)
             # How bad a finding is (a rise is a change), and whether a noisy check has been seen once and waits for its
             # confirmation run (backend/maintenance_steps/check_health.py). Only a filed finding is listed or reported.
@@ -1231,20 +1404,25 @@ class Store:
             H.add_column(c, "health_findings", "severity", "TEXT NOT NULL DEFAULT 'warn'")
             # The production checks' last answers and alert tasks (backend/invariants.py).
             from . import invariants as _invariants
+
             c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
+
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight
+
             c.executescript(_flight.SCHEMA)
             for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER"), ("top", "TEXT")):
                 H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
+
             c.executescript(_performance.SCHEMA)
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
+
             _listening.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
@@ -1280,24 +1458,39 @@ class Store:
                 # credential held in plaintext by the release before that, and no longer collectable, goes now.
                 H.add_column(c, "agent_pairings", "token_key", "TEXT NOT NULL DEFAULT ''")
                 from .agents import wipe_unclaimable
+
                 wipe_unclaimable(c)
                 # Who added each credential, for the record. Older rows take it from their audit event once, when the
                 # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
                 # The person a Slack DM mapping was opened for, and the person a queued copy is for. A DM with no verified
                 # inbound message yet has none: its copies fail closed. A backfill reads each DM's verified history once.
-                for (channel,) in c.execute("SELECT DISTINCT channel FROM slack_threads WHERE channel LIKE 'D%' "
-                                            "AND recipient_actor IS NULL").fetchall():
-                    actors = {r[0] for r in c.execute(
-                        "SELECT DISTINCT actor FROM slack_events WHERE channel=? AND actor LIKE 'human:%' "
-                        "AND state IN ('routed','recorded')", (channel,))}
+                for (channel,) in c.execute(
+                    "SELECT DISTINCT channel FROM slack_threads WHERE channel LIKE 'D%' AND recipient_actor IS NULL"
+                ).fetchall():
+                    actors = {
+                        r[0]
+                        for r in c.execute(
+                            "SELECT DISTINCT actor FROM slack_events WHERE channel=? AND actor LIKE 'human:%' "
+                            "AND state IN ('routed','recorded')",
+                            (channel,),
+                        )
+                    }
                     if len(actors) == 1:
-                        c.execute("UPDATE slack_threads SET recipient_actor=? WHERE channel=? AND recipient_actor IS NULL",
-                                  (actors.pop(), channel))
+                        c.execute(
+                            "UPDATE slack_threads SET recipient_actor=? WHERE channel=? AND recipient_actor IS NULL",
+                            (actors.pop(), channel),
+                        )
                 if "created_by" not in {row[1] for row in c.execute("PRAGMA table_info(credentials)")}:
                     H.add_column(c, "credentials", "created_by", "TEXT")
-                    c.executemany("UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
-                                  [(r[0], r[1]) for r in c.execute(
-                                      "SELECT actor,target FROM events WHERE action='credential.created' ORDER BY created_at")])
+                    c.executemany(
+                        "UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
+                        [
+                            (r[0], r[1])
+                            for r in c.execute(
+                                "SELECT actor,target FROM events WHERE action='credential.created' ORDER BY created_at"
+                            )
+                        ],
+                    )
                 # A credential a member stored for their own bot (`Vault.write`'s member path). Every row already here
                 # starts at 0: on a server that ran the backfill above, `created_by` named every admin who ever added a
                 # company credential as its owner, and nothing recorded which rows a member stored, so none stay theirs.
@@ -1319,7 +1512,9 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=4").fetchone():
                     columns = {row[1] for row in c.execute("PRAGMA table_info(bot_transitions)")}
                     if "without_checkpoint" not in columns:
-                        c.execute("ALTER TABLE bot_transitions ADD COLUMN without_checkpoint INTEGER NOT NULL DEFAULT 0")
+                        c.execute(
+                            "ALTER TABLE bot_transitions ADD COLUMN without_checkpoint INTEGER NOT NULL DEFAULT 0"
+                        )
                     c.execute("INSERT INTO cloud_migrations VALUES(4,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=5").fetchone():
                     c.execute("DROP INDEX IF EXISTS one_active_personal_room")
@@ -1333,33 +1528,45 @@ class Store:
                         c.execute("ALTER TABLE conversations ADD COLUMN room_key TEXT")
                     # Existing one-human Tico threads are already private in practice. Mark
                     # that contract explicitly before the authorization layer starts using it.
-                    for conversation in c.execute(
-                            "SELECT id,kind,task_id,participants FROM conversations").fetchall():
+                    for conversation in c.execute("SELECT id,kind,task_id,participants FROM conversations").fetchall():
                         participants = json.loads(conversation["participants"] or "[]")
                         scope, owner, room = ("task", None, None) if conversation["task_id"] else ("direct", None, None)
                         humans = [p for p in participants if str(p).startswith("human:")]
-                        if (conversation["kind"] == "chat" and not conversation["task_id"]
-                                and "bot:coo" in participants and len(humans) == 1):
+                        if (
+                            conversation["kind"] == "chat"
+                            and not conversation["task_id"]
+                            and "bot:coo" in participants
+                            and len(humans) == 1
+                        ):
                             scope, owner, room = "personal", humans[0], "coo"
-                        c.execute("UPDATE conversations SET scope=?,owner_id=?,room_key=? WHERE id=?",
-                                  (scope, owner, room, conversation["id"]))
+                        c.execute(
+                            "UPDATE conversations SET scope=?,owner_id=?,room_key=? WHERE id=?",
+                            (scope, owner, room, conversation["id"]),
+                        )
                     # A person gets one current Tico control room. Older duplicates remain as
                     # readable archives and are never merged with another person's history.
                     duplicate_keys = c.execute(
                         "SELECT owner_id,room_key FROM conversations WHERE scope='personal' "
-                        "AND closed_at IS NULL GROUP BY owner_id,room_key HAVING count(*)>1").fetchall()
+                        "AND closed_at IS NULL GROUP BY owner_id,room_key HAVING count(*)>1"
+                    ).fetchall()
                     for owner, room in duplicate_keys:
                         rows = c.execute(
                             "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? "
                             "AND room_key=? AND closed_at IS NULL "
-                            "ORDER BY COALESCE(last_message_at,created_at) DESC,id DESC", (owner, room)).fetchall()
+                            "ORDER BY COALESCE(last_message_at,created_at) DESC,id DESC",
+                            (owner, room),
+                        ).fetchall()
                         for old in rows[1:]:
                             c.execute("UPDATE conversations SET closed_at=? WHERE id=?", (H.now(), old["id"]))
-                    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
-                              "ON conversations(owner_id,room_key) "
-                              "WHERE scope='personal' AND closed_at IS NULL")
-                    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
-                              "ON conversations(room_key) WHERE scope='shared' AND closed_at IS NULL")
+                    c.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
+                        "ON conversations(owner_id,room_key) "
+                        "WHERE scope='personal' AND closed_at IS NULL"
+                    )
+                    c.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
+                        "ON conversations(room_key) WHERE scope='shared' AND closed_at IS NULL"
+                    )
                     c.execute("INSERT INTO cloud_migrations VALUES(5,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=6").fetchone():
                     columns = {row[1] for row in c.execute("PRAGMA table_info(bot_config)")}
@@ -1375,28 +1582,40 @@ class Store:
                         if name not in columns:
                             c.execute(f"ALTER TABLE bot_config ADD COLUMN {name} {declaration}")
                     for row in c.execute(
-                            f"SELECT bc.bot,{BS.CONFIG} AS config,b.effort FROM bot_config bc {BS.JOIN} "
-                            "JOIN bots b ON b.slug=bc.bot").fetchall():
+                        f"SELECT bc.bot,{BS.CONFIG} AS config,b.effort FROM bot_config bc {BS.JOIN} "
+                        "JOIN bots b ON b.slug=bc.bot"
+                    ).fetchall():
                         config = json.loads(row["config"] or "{}")
                         # A model decision moves the previously seeded Grok
                         # workers from medium to high. Do this once for an existing cloud DB;
                         # subsequent choices remain backend-managed and are never reconciled
                         # from the bootstrap YAML. (The model is read from config: migration 0043 copied
                         # the old bots.model into it where config had none.)
-                        if (config.get("model") == "grok-4.6"
-                                and (config.get("reasoning_effort") or row["effort"]) == "medium"):
+                        if (
+                            config.get("model") == "grok-4.6"
+                            and (config.get("reasoning_effort") or row["effort"]) == "medium"
+                        ):
                             config["reasoning_effort"] = "high"
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
-                        mode = str(config.get("thread_mode") or
-                                   ("personal" if row["bot"] == "coo" else "shared" if row["bot"] == "cpo" else "personal"))
+                        mode = str(
+                            config.get("thread_mode")
+                            or ("personal" if row["bot"] == "coo" else "shared" if row["bot"] == "cpo" else "personal")
+                        )
                         BS.write(c, row["bot"], config)
                         c.execute(
                             "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"
                             "definition_updated_at=coalesce(definition_updated_at,?),"
                             "definition_updated_by=coalesce(definition_updated_by,?) WHERE bot=?",
-                            (str(config.get("description") or ""), config.get("reports_to"),
-                             str(config.get("repo") or ("emp-" + row["bot"])), mode,
-                             H.now(), H.KEEPER, row["bot"]))
+                            (
+                                str(config.get("description") or ""),
+                                config.get("reports_to"),
+                                str(config.get("repo") or ("emp-" + row["bot"])),
+                                mode,
+                                H.now(),
+                                H.KEEPER,
+                                row["bot"],
+                            ),
+                        )
                     c.execute("INSERT INTO cloud_migrations VALUES(6,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=7").fetchone():
                     # The live roster predates the Product Manager rename. Move only the
@@ -1418,9 +1637,11 @@ class Store:
                     # A bot cannot usefully execute a message it sent to itself. The former
                     # trigger queued those rows and could turn an accidental task ask into a
                     # reply cascade; backend/enqueue.py queues no job for one.
-                    c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND EXISTS "
-                              "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id "
-                              "AND m.sender_id=m.recipient_id)")
+                    c.execute(
+                        "UPDATE jobs SET state='completed' WHERE state='queued' AND EXISTS "
+                        "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id "
+                        "AND m.sender_id=m.recipient_id)"
+                    )
                     c.execute("INSERT INTO cloud_migrations VALUES(8,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=9").fetchone():
                     # Routines a runner reads from a bot repository are marked 'repo' so the
@@ -1433,9 +1654,13 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=10").fetchone():
                     columns = {row[1] for row in c.execute("PRAGMA table_info(schedules)")}
                     for name, definition in {
-                        "routine_key": "TEXT", "definition": "TEXT NOT NULL DEFAULT '{}'",
-                        "source_repo": "TEXT NOT NULL DEFAULT ''", "source_revision": "TEXT NOT NULL DEFAULT ''",
-                        "version": "INTEGER NOT NULL DEFAULT 0", "deleted_at": "TEXT", "updated_at": "TEXT"
+                        "routine_key": "TEXT",
+                        "definition": "TEXT NOT NULL DEFAULT '{}'",
+                        "source_repo": "TEXT NOT NULL DEFAULT ''",
+                        "source_revision": "TEXT NOT NULL DEFAULT ''",
+                        "version": "INTEGER NOT NULL DEFAULT 0",
+                        "deleted_at": "TEXT",
+                        "updated_at": "TEXT",
                     }.items():
                         if name not in columns:
                             c.execute(f"ALTER TABLE schedules ADD COLUMN {name} {definition}")
@@ -1466,9 +1691,10 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(15,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
+
                     for row in c.execute(
-                            f"SELECT bc.bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} "
-                            "JOIN bots b ON b.slug=bc.bot").fetchall():
+                        f"SELECT bc.bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.slug=bc.bot"
+                    ).fetchall():
                         config, changed = backfill_config(json.loads(row["config"] or "{}"), slug=row["bot"])
                         if changed:
                             BS.write(c, row["bot"], config)
@@ -1497,8 +1723,13 @@ class Store:
                     # Channels read like an employee reads them: stored channel messages carry
                     # their author and any edit or deletion; readers keep a cursor per channel.
                     columns = {row[1] for row in c.execute("PRAGMA table_info(slack_events)")}
-                    for name, declaration in (("author", "TEXT NOT NULL DEFAULT 'human'"), ("author_name", "TEXT"),
-                                              ("edited_at", "TEXT"), ("deleted_at", "TEXT"), ("updated_at", "TEXT")):
+                    for name, declaration in (
+                        ("author", "TEXT NOT NULL DEFAULT 'human'"),
+                        ("author_name", "TEXT"),
+                        ("edited_at", "TEXT"),
+                        ("deleted_at", "TEXT"),
+                        ("updated_at", "TEXT"),
+                    ):
                         if name not in columns:
                             c.execute(f"ALTER TABLE slack_events ADD COLUMN {name} {declaration}")
                     c.execute("INSERT INTO cloud_migrations VALUES(22,?)", (H.now(),))
@@ -1539,13 +1770,18 @@ class Store:
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner_id, rank)")
                     # day one looks like yesterday: every open task keeps its creation order
                     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-                    c.execute(f"UPDATE tasks SET rank=(SELECT COUNT(*) FROM tasks t2 WHERE t2.owner_id=tasks.owner_id "
-                              f"AND t2.status IN ({marks}) AND t2.created_at<=tasks.created_at) "
-                              f"WHERE rank IS NULL AND status IN ({marks})", (*H.ACTIVE_STATUSES, *H.ACTIVE_STATUSES))
+                    c.execute(
+                        f"UPDATE tasks SET rank=(SELECT COUNT(*) FROM tasks t2 WHERE t2.owner_id=tasks.owner_id "
+                        f"AND t2.status IN ({marks}) AND t2.created_at<=tasks.created_at) "
+                        f"WHERE rank IS NULL AND status IN ({marks})",
+                        (*H.ACTIVE_STATUSES, *H.ACTIVE_STATUSES),
+                    )
                     # product and engineering bots' open work starts in the product lane
-                    c.execute(f"UPDATE tasks SET lane='product' WHERE status IN ({marks}) AND owner_id IN "
-                              f"(SELECT 'bot:' || bot FROM bot_config WHERE team IN ({','.join('?' * len(H.LANE_TEAMS))}))",
-                              (*H.ACTIVE_STATUSES, *H.LANE_TEAMS))
+                    c.execute(
+                        f"UPDATE tasks SET lane='product' WHERE status IN ({marks}) AND owner_id IN "
+                        f"(SELECT 'bot:' || bot FROM bot_config WHERE team IN ({','.join('?' * len(H.LANE_TEAMS))}))",
+                        (*H.ACTIVE_STATUSES, *H.LANE_TEAMS),
+                    )
                     c.execute("INSERT INTO cloud_migrations VALUES(29,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=30").fetchone():
                     # main_pushes (backend/github.py): CREATE TABLE IF NOT EXISTS above installs it;
@@ -1555,9 +1791,11 @@ class Store:
                     # Existing Close audio imports keep their external identity as the new
                     # transcript-only worker takes over. hubdb's additive migration made the
                     # table before the cloud schema and this transaction run.
-                    c.execute("INSERT OR IGNORE INTO recording_source_refs "
-                              "(source,resource_type,external_id,meeting_id,created_at) "
-                              "SELECT source,'call',external_id,meeting_id,created_at FROM import_refs")
+                    c.execute(
+                        "INSERT OR IGNORE INTO recording_source_refs "
+                        "(source,resource_type,external_id,meeting_id,created_at) "
+                        "SELECT source,'call',external_id,meeting_id,created_at FROM import_refs"
+                    )
                     c.execute("INSERT INTO cloud_migrations VALUES(31,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=32").fetchone():
                     # The market graph (backend/market.py). hubdb's MARKET_SCHEMA step created the
@@ -1570,14 +1808,20 @@ class Store:
                     # Task list pages filter by lane and status, page finished work by its
                     # completion time, and hydrate these relations in batches.
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_lane_status_rank ON tasks(lane,status,rank,created_at)")
-                    c.execute("CREATE INDEX IF NOT EXISTS tasks_active_lane_rank ON tasks("
-                              "lane,(rank IS NULL),rank,created_at,id) WHERE status IN "
-                              "('open','doing','waiting','review','ready','declined')")
-                    c.execute("CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
-                              "lane,COALESCE(closed_at,done_at,updated_at,created_at) DESC,id DESC) "
-                              "WHERE status IN ('done','closed')")
+                    c.execute(
+                        "CREATE INDEX IF NOT EXISTS tasks_active_lane_rank ON tasks("
+                        "lane,(rank IS NULL),rank,created_at,id) WHERE status IN "
+                        "('open','doing','waiting','review','ready','declined')"
+                    )
+                    c.execute(
+                        "CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
+                        "lane,COALESCE(closed_at,done_at,updated_at,created_at) DESC,id DESC) "
+                        "WHERE status IN ('done','closed')"
+                    )
                     c.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
-                    c.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)")
+                    c.execute(
+                        "CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)"
+                    )
                     c.execute("INSERT INTO cloud_migrations VALUES(33,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=34").fetchone():
                     # Personal API tokens (backend/personal_tokens.py): a person's own bearer for
@@ -1611,13 +1855,16 @@ class Store:
                 # The provider choice goes in first: seeding the roster and the curator resolve
                 # their runtime and model from it.
                 from . import providers
+
                 providers.seed_from_env(c, self.settings, H.now())
                 from . import access
+
                 access.seed(c, self.settings, H.now())
                 access.retire_bot_lists(c, self.settings, H.now())
                 access.raise_bot_limit(c, H.now())
                 self.seed_goals(c)
                 from . import routines as R
+
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=41").fetchone():
                     # No daily open-tasks run per bot; one BotOps sweep instead.
                     R.retire_open_tasks_checks(c)
@@ -1630,8 +1877,10 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=43").fetchone():
                     # A company goal is one owned by `company`, not just one with no parent. A
                     # person's goal with no parent and goals under it used to be the company goal.
-                    c.execute("UPDATE goals SET owner_id='company' WHERE parent_id IS NULL AND owner_id LIKE 'human:%' "
-                              "AND id IN (SELECT parent_id FROM goals WHERE parent_id IS NOT NULL)")
+                    c.execute(
+                        "UPDATE goals SET owner_id='company' WHERE parent_id IS NULL AND owner_id LIKE 'human:%' "
+                        "AND id IN (SELECT parent_id FROM goals WHERE parent_id IS NOT NULL)"
+                    )
                     c.execute("INSERT INTO cloud_migrations VALUES(43,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=44").fetchone():
                     # KPIs stand on their own (backend/kpis.py). hubdb's KPIS_SCHEMA added the columns and
@@ -1639,12 +1888,14 @@ class Store:
                     # with an improvement target; this gives every KPI a slug (the folder name in the Goal
                     # Manager's repository) and records that the goals' automatic colours have been worked out.
                     from . import kpis as _kpis
+
                     _kpis.fill_slugs(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(44,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=45").fetchone():
                     # A starter bot's status `needs_onboarding` is now `needs_setup` (backend/statuses.py).
                     # Readers accept both for one release.
                     from . import statuses as _statuses
+
                     _statuses.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(45,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=46").fetchone():
@@ -1665,6 +1916,7 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=50").fetchone():
                     H._apply(c, H.REPOSITORIES_SCHEMA)
                     from .repositories import migrate
+
                     migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(50,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=51").fetchone():
@@ -1701,12 +1953,13 @@ class Store:
                     # runner_states.capabilities (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(58,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
-                    H._apply(c, H.WAITING_ON_SCHEMA)
+                    # tasks.waiting_on, which 20261106112609_derived_waiting drops: it ran before this step.
                     c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=60").fetchone():
                     # Every task-to-task relationship in task_relations; tasks.parent_id and
                     # tasks.blocked_by move into it and are dropped (hubdb migration 30 does the same).
                     from . import task_relations as _task_relations
+
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=61").fetchone():
@@ -1726,71 +1979,83 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=64").fetchone():
                     # Finance's tables, indexes and invariant triggers, every phase's (backend/finance/store/schema.py).
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.create(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(64,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=65").fetchone():
                     # Finance phase 1 (banking, cards, payments, gate rules): its new fin_* tables, and the columns it
                     # added to tables migration 64 made. Idempotent, so an install made after phase 1 changes nothing.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.phase1(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(65,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=66").fetchone():
                     # Finance phase 2 (bills, invoices, contacts, settlements, the cash view, posting rules): new fin_*
                     # tables and columns. Idempotent like 65.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.phase2(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(66,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=67").fetchone():
                     # Finance phase 3 (bot cards): the saved-card record, which vendor accounts a card is saved on.
                     # Idempotent like 65 and 66.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.phase3(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(67,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=68").fetchone():
                     # Finance phase 4 (the mirror of QuickBooks or Xero): external refs with their revision, and the
                     # restatements of closed months. Idempotent like 65.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.phase4(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(68,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=69").fetchone():
                     # Finance's Stripe feed: indexes on the charge link and the source id in each Stripe row's raw json,
                     # which the refund lookups search by (backend/finance/store/schema.py). Idempotent like 65.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.stripe(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(69,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=70").fetchone():
                     # Finance tax (spec §11): the sales tax jurisdictions and the due dates seeded for the outside
                     # obligations. Idempotent, like 66.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.tax(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(70,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=71").fetchone():
                     # Finance history imports (spec §4.1): the fin_raw_imports table. Idempotent like 65.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.raw_import(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(71,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=72").fetchone():
                     # Finance close snapshots (fin_close_snapshots): a closed month reads the account tree it closed
                     # with. Idempotent like 66.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.close_snapshots(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(72,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=73").fetchone():
                     # The books gaps: fin_transfers, internal transfers between our own bank accounts
                     # (backend/finance/transfers.py). Idempotent like 65 and 66.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.gaps_books(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(73,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=74").fetchone():
                     # Finance's mirror columns (unknown writes, provider line ids) and fin_credit_refunds on an
                     # install that took migrations 64 to 68 before they existed. Idempotent like 65.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.create(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(74,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=75").fetchone():
                     # The journal line each matched bank row took (fin_feed_txns.entry_line_id), on an install that
                     # took migrations 64 to 74 before it. Idempotent like 65.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.feed_lines(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=76").fetchone():
@@ -1798,90 +2063,111 @@ class Store:
                     # tags
                     # Finance lines take. Project dimensions move to projects keeping each tag's value (schema.catalog).
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.catalog(c, H.now())
                     c.execute("INSERT INTO cloud_migrations VALUES(76,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=77").fetchone():
                     # Purchase orders and estimates (backend/finance/store/purchasing.py), and the bill line an order line
                     # is billed on. Idempotent like 76.
                     from .finance.store import schema as _finance_schema
+
                     _finance_schema.purchasing(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(77,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
+
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
                 # column, in one UPDATE. Unversioned and idempotent; it reads only the small unsettled-carried index.
                 H.notes_settle_catch_up(c, None)
-                H.ensure_market_reads(c)
                 # Setup commands cleared in Settings before a clear released the row (backend/repositories.py).
                 # Unversioned and idempotent like the trash below: it matches nothing once those rows are released.
                 from .repositories import release_cleared_overrides
+
                 release_cleared_overrides(c)
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
                 from .task_delete import ensure as ensure_task_trash
+
                 ensure_task_trash(c)
                 # Tasks waiting for room for a worktree (backend/worktree_waits.py). Unversioned like the trash.
                 from .worktree_waits import ensure as ensure_worktree_waits
+
                 ensure_worktree_waits(c)
                 # Milestone waits (backend/milestone_waits.py). Unversioned like the trash.
                 from .milestone_waits import ensure as ensure_milestone_waits
+
                 ensure_milestone_waits(c)
                 # Failed-run back-off and run budgets (backend/run_backoff.py, backend/turn_budgets.py). Unversioned
                 # like the trash: an older release never reads the tables.
                 from .run_backoff import ensure as ensure_run_backoff
                 from .turn_budgets import ensure as ensure_turn_budgets
+
                 ensure_run_backoff(c)
                 ensure_turn_budgets(c)
                 # The redesign's automations (backend/automations.py).
                 # Unversioned like the trash: an older release never reads the tables.
                 from . import automations as _automations
+
                 _automations.ensure(c)
                 from . import redesign_migration as _migration
-                _migration.ensure(c)                    # the cutover's record and the 30-minute limit columns
+
+                _migration.ensure(c)  # the cutover's record and the 30-minute limit columns
                 # Recruiting seats (backend/lifecycle.py). Unversioned like the trash.
                 from .lifecycle import ensure as ensure_seats
+
                 ensure_seats(c)
                 # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
                 # Unversioned like the trash: an older release never reads the tables or the columns.
                 from .company import ensure as ensure_company
+
                 ensure_company(c)
                 # The team's strategy: versions, choices, their history, and each goal's choice (backend/strategy.py).
                 # Unversioned the same way; the first run makes the draft from the company profile.
                 from .strategy import ensure as ensure_strategy
+
                 ensure_strategy(c)
                 # The built-in Marketing task type marketing ideas are filed as (backend/marketing_tasks.py).
                 from .marketing_tasks import ensure as ensure_marketing
+
                 ensure_marketing(c)
                 # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules
+
                 ensure_org_rules(c)
                 # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
                 from .org_rule_check import ensure as ensure_org_rule_check
+
                 ensure_org_rule_check(c)
                 # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
                 from .counsel import ensure as ensure_rule_reads
+
                 ensure_rule_reads(c)
                 # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
                 from .lenses import ensure as ensure_lenses
+
                 ensure_lenses(c)
                 # Page monitors and the weekly market briefing (backend/market_watch.py, backend/market_briefing.py).
                 # Unversioned the same way: an older release never reads the tables.
                 from .market_briefing import ensure as ensure_market_briefing
                 from .market_watch import ensure as ensure_market_watch
+
                 ensure_market_watch(c)
                 ensure_market_briefing(c)
                 from .market import ensure_turn_sources
-                ensure_turn_sources(c)                  # which automation turn changed the graph (redesign)
+
+                ensure_turn_sources(c)  # which automation turn changed the graph (redesign)
                 # Pages, the files' search text and hard deletes (backend/pages.py, backend/file_library.py).
                 # Unversioned the same way: an older release never reads the tables.
                 from .pages import ensure as ensure_pages
                 from .file_library import ensure as ensure_file_library
+
                 ensure_pages(c)
                 ensure_file_library(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments
+
                 retire_assignments(c)
                 # A service key's scope (backend/service_keys.py); every older key files tasks. Unversioned like
                 # the trash: an older release reads the table as before and never sees the column.
@@ -1895,20 +2181,25 @@ class Store:
                 # At most one active attempt per bot and lane (attempts.lane, clients/sessions.py lane): a task-keyed turn
                 # runs in its own lane beside the bot's other tasks, everything else in `main`.
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
-                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot_id,lane) "
-                          "WHERE state IN ('leased','running')")
+                c.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot_id,lane) "
+                    "WHERE state IN ('leased','running')"
+                )
                 # A bot's wake preset holds its nonblocking notices and sweeps at enqueue time (backend/wake_presets.py).
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
                 from .wake_presets import ensure as ensure_wake_presets
+
                 ensure_wake_presets(c)
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
+
                 ensure_changes(c)
                 # Finance's org-chart triggers, on every start (backend/finance/store/tico.py watch_org). Finance's cloud
                 # migrations make them too, but once: migration 0070 dropped fin_view_bot_update (it read bot_config.config)
                 # and the bot_settings triggers only exist from the move on, so an install past the move never got them.
                 # IF NOT EXISTS: a start makes only what is missing.
                 from .finance.store import tico as _finance_tico
+
                 _finance_tico.watch_org(c)
                 # A new bot's repository access, when its declaration names none: the company's default
                 # (backend/repositories.py). A bot's settings row is made with it (backend/bot_settings.py write).
@@ -1924,102 +2215,97 @@ class Store:
                 # tasks, a bot's or computer's attempts, a job's attempts, and the events read by
                 # action and target (quarantines, drains, who opened a conversation). Idempotent,
                 # so no migration number to collide with another branch's.
-                for name, spec in (("tasks_goal", "tasks(goal_id, status)"),
-                                   # History replay reads the tasks made in a window (backend/replay.py).
-                                   ("tasks_created", "tasks(created_at)"),
-                                   ("task_links_repo_kind", "task_links(repo COLLATE NOCASE, kind)"),
-                                   ("task_links_repo_url", "task_links(kind, state, url COLLATE NOCASE)"),
-                                   ("attempts_bot_created", "attempts(bot_id, created_at)"),
-                                   # A bot's latest usage-limited attempt (execution.last_limit), read per Health render.
-                                   ("attempts_bot_finished", "attempts(bot_id, finished_at)"),
-                                   ("attempts_job", "attempts(job_id)"),
-                                   # Lease maintenance walks only active runs, never their history.
-                                   ("attempts_live_lease", "attempts(lease_until,id) WHERE state IN ('leased','running')"),
-                                   ("jobs_queued", "jobs(id,bot_id,message_id) WHERE state='queued'"),
-                                   ("attempts_runner_state", "attempts(runner_id, state)"),
-                                   # The turns a computer ran in a window, read under the write lock by an
-                                   # open overload (backend/performance.py `_runs`).
-                                   ("attempts_runner_finished", "attempts(runner_id, finished_at)"),
-                                   # A computer asking after the tasks its session checkouts are kept for.
-                                   ("attempts_bot_lane", "attempts(bot_id, lane)"),
-                                   # Recent failed and finished runs (Health, Fleet check, the census, /api/runs).
-                                   # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
-                                   ("attempts_finished_state", "attempts(state, finished_at) WHERE finished_at IS NOT NULL"),
-                                   ("events_action_target", "events(action, target, created_at)"),
-                                   # One action's rows in a time window, with no target (Health's limited runs, the
-                                   # judge's month, MCP calls): events_action_target walks every row of the action
-                                   # (911 ms on TIDY), events_ts every action's rows in the window.
-                                   ("events_action_ts", "events(action, created_at)"),
-                                   # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
-                                   # expression word for word, or SQLite sorts every conversation.
-                                   ("conversations_recent", "conversations(COALESCE(last_message_at, created_at))"),
-                                   # A person's open chat with a bot (hubdb._pair_conversation, on every say()).
-                                   ("conversations_open_kind", "conversations(kind, COALESCE(last_message_at, created_at)) "
-                                    "WHERE closed_at IS NULL AND task_id IS NULL"),
-                                   # Open approvals: a task's (auto_tasks.waiting on the claim path), a requester's
-                                   # (status_counts, task_privacy), and the oldest first (expiry, Needs you).
-                                   ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
-                                   ("approvals_open_requester", "approvals(requested_by_id) WHERE decision IS NULL"),
-                                   ("approvals_open_created", "approvals(created_at) WHERE decision IS NULL"),
-                                   # A requester's consumed approvals, one lookup per stopped run (execution.retry_facts).
-                                   ("approvals_requested_consumed", "approvals(requested_by_id, consumed_at)"),
-                                   # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
-                                   # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
-                                   ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
-                                   ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
-                                   ("jobs_uncertain", "jobs(created_at) WHERE state='uncertain'"),
-                                   # Open asks to someone, deleted or not (hubdb.tasks_asked_of); conversation_id too,
-                                   # so Health's silent_waits keeps a good plan.
-                                   ("messages_open_ask_to",
-                                    "messages(recipient_id, conversation_id) WHERE kind='ask' AND answered_by_id IS NULL"),
-                                   # Replaced asks to someone (views.went_away, on every Needs you read).
-                                   ("messages_superseded_asks_to",
-                                    "messages(recipient_id, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL"),
-                                   # PRs at a commit (github.pr_signal, on every check and status webhook): the
-                                   # query's expression word for word.
-                                   ("task_links_pr_head", "task_links(json_extract(detail,'$.head_sha')) WHERE kind='pr'"),
-                                   # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
-                                   ("attempts_task", "attempts(task_id, created_at)"),
-                                   # A message's runs: task_delete counts them on every delete, and topic_change
-                                   # and the run visibility (sql.py) look them up by message.
-                                   ("attempts_message", "attempts(message_id)"),
-                                   # Runs by when their record closed: bot hours, health, the usage reads.
-                                   ("attempts_settled", "attempts(settled_at)"),
-                                   # A bot's last settled run (the team list's latest run, check_pools): one seek.
-                                   ("attempts_bot_settled",
-                                    "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
-                                   # A bot's runs newest first (the bot's Runs page, H.turns).
-                                   ("attempts_bot_created", "attempts(bot_id, created_at)"),
-                                   # A conversation's runs: task_delete counts them, the foreign key check of a
-                                   # deleted conversation reads them, and stream_capture looks them up.
-                                   ("attempt_conversations_conversation", "attempt_conversations(conversation_id)"),
-                                   # A task's file activity: task_delete counts it, and the activity a person may
-                                   # see by task (sql.py) reads it.
-                                   ("bot_file_activity_task", "bot_file_activity(task_id)"),
-                                   # A blob's provenance (task_privacy.blob_readable), read for every
-                                   # version of every file a bot's Files tab lists and for each download.
-                                   ("message_assets_blob", "message_assets(blob_id)"),
-                                   ("blob_media_poster", "blob_media(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
-                                   ("blob_media_thumb", "blob_media(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
-                                   ("bot_file_versions_poster",
-                                    "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
-                                   ("bot_file_versions_thumb",
-                                    "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
-                                   # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
-                                   # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
-                                   ("tasks_private_status",
-                                    "tasks(id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0"),
-                                   # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
-                                   ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, guest)"),
-                                   ("tasks_owner_status_cover",
-                                    "tasks(owner_id, status, id, requester_id, private, guest, waiting_on)"),
-                                   ("tasks_requester_status_cover",
-                                    "tasks(requester_id, status, id, owner_id, private, guest, waiting_on)"),
-                                   # A person's view of a bot's settings changes (settings_admin.history): the manager
-                                   # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
-                                   # column, added above.
-                                   ("settings_changes_bot_via_id", "settings_changes(bot, via, created_at, id)"),
-                                   ("conversations_id_task", "conversations(id, task_id)")):
+                for name, spec in (
+                    ("tasks_goal", "tasks(goal_id, status)"),
+                    # History replay reads the tasks made in a window (backend/replay.py).
+                    ("tasks_created", "tasks(created_at)"),
+                    ("task_links_repo_kind", "task_links(repo COLLATE NOCASE, kind)"),
+                    ("task_links_repo_url", "task_links(kind, state, url COLLATE NOCASE)"),
+                    ("attempts_bot_created", "attempts(bot_id, created_at)"),
+                    # A bot's latest usage-limited attempt (execution.last_limit), read per Health render.
+                    ("attempts_bot_finished", "attempts(bot_id, finished_at)"),
+                    ("attempts_job", "attempts(job_id)"),
+                    # Lease maintenance walks only active runs, never their history.
+                    ("attempts_live_lease", "attempts(lease_until,id) WHERE state IN ('leased','running')"),
+                    ("jobs_queued", "jobs(id,bot_id,message_id) WHERE state='queued'"),
+                    ("attempts_runner_state", "attempts(runner_id, state)"),
+                    # The turns a computer ran in a window, read under the write lock by an
+                    # open overload (backend/performance.py `_runs`).
+                    ("attempts_runner_finished", "attempts(runner_id, finished_at)"),
+                    # A computer asking after the tasks its session checkouts are kept for.
+                    ("attempts_bot_lane", "attempts(bot_id, lane)"),
+                    # Recent failed and finished runs (Health, Fleet check, the census, /api/runs).
+                    # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
+                    ("attempts_finished_state", "attempts(state, finished_at) WHERE finished_at IS NOT NULL"),
+                    ("events_action_target", "events(action, target, created_at)"),
+                    # One action's rows in a time window, with no target (Health's limited runs, the
+                    # judge's month, MCP calls): events_action_target walks every row of the action
+                    # (911 ms on TIDY), events_ts every action's rows in the window.
+                    ("events_action_ts", "events(action, created_at)"),
+                    # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
+                    # expression word for word, or SQLite sorts every conversation.
+                    ("conversations_recent", "conversations(COALESCE(last_message_at, created_at))"),
+                    # A person's open chat with a bot (hubdb._pair_conversation, on every say()).
+                    (
+                        "conversations_open_kind",
+                        "conversations(kind, COALESCE(last_message_at, created_at)) "
+                        "WHERE closed_at IS NULL AND task_id IS NULL",
+                    ),
+                    # Open approvals: a task's (auto_tasks.waiting on the claim path), a requester's
+                    # (status_counts, task_privacy), and the oldest first (expiry, Needs you).
+                    ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
+                    ("approvals_open_requester", "approvals(requested_by_id) WHERE decision IS NULL"),
+                    ("approvals_open_created", "approvals(created_at) WHERE decision IS NULL"),
+                    # A requester's consumed approvals, one lookup per stopped run (execution.retry_facts).
+                    ("approvals_requested_consumed", "approvals(requested_by_id, consumed_at)"),
+                    # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
+                    # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
+                    ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
+                    ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
+                    ("jobs_uncertain", "jobs(created_at) WHERE state='uncertain'"),
+                    # PRs at a commit (github.pr_signal, on every check and status webhook): the
+                    # query's expression word for word.
+                    ("task_links_pr_head", "task_links(json_extract(detail,'$.head_sha')) WHERE kind='pr'"),
+                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
+                    ("attempts_task", "attempts(task_id, created_at)"),
+                    # A message's runs: task_delete counts them on every delete, and topic_change
+                    # and the run visibility (sql.py) look them up by message.
+                    ("attempts_message", "attempts(message_id)"),
+                    # Runs by when their record closed: bot hours, health, the usage reads.
+                    ("attempts_settled", "attempts(settled_at)"),
+                    # A bot's last settled run (the team list's latest run, check_pools): one seek.
+                    ("attempts_bot_settled", "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
+                    # A bot's runs newest first (the bot's Runs page, H.turns).
+                    ("attempts_bot_created", "attempts(bot_id, created_at)"),
+                    # A conversation's runs: task_delete counts them, the foreign key check of a
+                    # deleted conversation reads them, and stream_capture looks them up.
+                    ("attempt_conversations_conversation", "attempt_conversations(conversation_id)"),
+                    # A task's file activity: task_delete counts it, and the activity a person may
+                    # see by task (sql.py) reads it.
+                    ("bot_file_activity_task", "bot_file_activity(task_id)"),
+                    # A blob's provenance (task_privacy.blob_readable), read for every
+                    # version of every file a bot's Files tab lists and for each download.
+                    ("message_assets_blob", "message_assets(blob_id)"),
+                    ("blob_media_poster", "blob_media(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
+                    ("blob_media_thumb", "blob_media(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
+                    ("bot_file_versions_poster", "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
+                    ("bot_file_versions_thumb", "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
+                    # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
+                    # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
+                    (
+                        "tasks_private_status",
+                        "tasks(id, requester_id, owner_id, readers, private, status) WHERE private IS NOT 0",
+                    ),
+                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
+                    ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, readers)"),
+                    ("tasks_owner_status_cover", "tasks(owner_id, status, id, requester_id, private, readers)"),
+                    ("tasks_requester_status_cover", "tasks(requester_id, status, id, owner_id, private, readers)"),
+                    # A person's view of a bot's settings changes (settings_admin.history): the manager
+                    # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
+                    # column, added above.
+                    ("settings_changes_bot_via_id", "settings_changes(bot, via, created_at, id)"),
+                    ("conversations_id_task", "conversations(id, task_id)"),
+                ):
                     c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
                 # The settings_changes indexes these replace, which lack id (the schema above and the list).
                 for name in ("settings_changes_created", "settings_changes_bot", "settings_changes_bot_via"):
@@ -2034,15 +2320,18 @@ class Store:
                 R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema
+
                 ensure_assistant_schema(c)
                 # Tico no longer records: a meeting left waiting on audio or transcription is
                 # finished with what it has (backend/meetings.py). Idempotent, no migration number.
                 from .meetings import retire_capture
+
                 retire_capture(c)
                 retire_health_rows(c)
                 if seed_market and not self.settings.test_identities:
                     from . import market as Market
                     from .blobs import Blobs
+
                     Market.ensure_curator(c)
                     document = Market.load_snapshot(self.settings.registry_dir)
                     sources = Market.locate_sources(self.settings.registry_dir.parent)
@@ -2050,46 +2339,72 @@ class Store:
                 # Market pages the seed wrote before pages carried `seeded`: hide the untouched ones while the graph
                 # is empty (backend/market.py). Idempotent, no migration number.
                 from . import market as Market
+
                 Market.mark_seeded_pages(c)
+                # The Directory's boot step: flags Market's company/self as self, and the kind of each organization Market
+                # wrote without one (backend/entities/store.py boot). Idempotent.
+                from .entities import store as Directory
+
+                Directory.boot(c)
                 # Finished tasks still holding an earlier close time (H.clear_finished_close_times). Idempotent.
                 H.clear_finished_close_times(c)
                 # Teams, org groups and derived departments become groups, once (backend/groups.py). Idempotent,
                 # so no migration number to collide with another branch's.
                 from . import groups as Groups
+
                 Groups.migrate(c, self.settings)
                 # The Goal Manager becomes the Strategy Bot on every install, once (backend/strategy_bot.py).
                 # Idempotent.
                 from . import strategy_bot as StrategyBot
+
                 StrategyBot.migrate(c)
                 # Cards waiting in the owner's earlier Strategy Bot chat move to their Assistant room
                 # (backend/assistant.py: one Assistant for everyone). Idempotent.
                 from . import assistant as Assistant
+
                 Assistant.migrate(c, self.settings)
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
+
                 Profiles.migrate(c)
                 # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
                 # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
+
                 Redesign.repair_stale_review(c)
                 # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
                 # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
                 # failure here is logged, never raised: the repair is tried again at the next start.
                 try:
                     Redesign.repair_inbox_prompts(c)
-                except Exception:  # noqa: BLE001 - startup goes on
+                except Exception:  # startup goes on
                     logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
+                # The waits 20261106112609_derived_waiting staged become question tasks, blockers or note lines, once:
+                # a no-op when nothing is staged (backend/question_tasks.py move_waits).
+                # The open asks 20261106131713_asks_to_question_tasks staged become question tasks or DMs first, so a
+                # moved wait finds the question task its ask became (backend/question_tasks.py move_asks).
+                from . import question_tasks as QuestionTasks
+
+                QuestionTasks.move_asks(c)
+                QuestionTasks.move_waits(c)
                 from . import releases as Releases
+
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION
+
                 if not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (FILE_MIGRATION,)).fetchone():
                     pending = [r[0] for r in c.execute("SELECT slug FROM bots")]
                     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (FILE_MIGRATION, encode(pending)))
                     c.execute("INSERT OR IGNORE INTO registry_metadata VALUES(?,?)", (HUB_MIGRATION, encode([])))
                 elif not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (HUB_MIGRATION,)).fetchone():
                     # Installs that ran 0.2.30's migration: every bot it already covered gets the HUB_ pass.
-                    done = set(json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?",
-                                                    (FILE_MIGRATION,)).fetchone()[0]))
+                    done = set(
+                        json.loads(
+                            c.execute("SELECT value FROM registry_metadata WHERE key=?", (FILE_MIGRATION,)).fetchone()[
+                                0
+                            ]
+                        )
+                    )
                     again = [r[0] for r in c.execute("SELECT slug FROM bots") if r[0] not in done]
                     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (HUB_MIGRATION, encode(again)))
                 # Every task is its own session by default now (clients/sessions.py). Older servers wrote
@@ -2101,7 +2416,11 @@ class Store:
                 record = c.execute("SELECT value FROM registry_metadata WHERE key='onboarding'").fetchone()
                 if record:
                     choices = H._json(record[0], {})
-                    if isinstance(choices, dict) and isinstance(choices.get("answers"), dict) and "never_without_person" in choices["answers"]:
+                    if (
+                        isinstance(choices, dict)
+                        and isinstance(choices.get("answers"), dict)
+                        and "never_without_person" in choices["answers"]
+                    ):
                         choices["answers"].pop("never_without_person")
                         c.execute("UPDATE registry_metadata SET value=? WHERE key='onboarding'", (encode(choices),))
                 c.commit()
@@ -2109,12 +2428,15 @@ class Store:
                 c.rollback()
                 raise
             from . import provenance_clock, roster_clock
+
             provenance_clock.ensure(c)
             roster_clock.ensure(c)
             from . import row_clock
+
             row_clock.ensure(c)
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
+
             read_deps.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
@@ -2123,11 +2445,18 @@ class Store:
             # checked and rewrote the stored values; this installs the triggers and CHECKs on tables the module code
             # above created on a new file, and refreshes them when a list changes. Idempotent.
             from . import status_values as _status_values
+
             _status_values.enforce(c)
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.
         redesign_migration.cutover(self)
+
+    def close(self):
+        """Closes the store's idle read connections now, as the finalizer does once the store is freed. A connection
+        still in use is closed when _give receives it, since the finalizer is no longer alive."""
+        with self.pool_lock:
+            self._pool_finalizer()
 
     @contextmanager
     def read(self):
@@ -2161,11 +2490,15 @@ class Store:
         with self.pool_lock:
             if identity != self.pool_file:
                 # A restored or replaced database file: connections to the old one are not reused.
-                stale, self.pool, self.pool_file = self.pool, [], identity
+                stale = list(self.pool)
+                self.pool.clear()  # in place: the finalizer registered in __init__ holds this list
+                self.pool_file = identity
                 from .provenance_clock import Cache
+
                 self.provenance_cache = Cache()
                 self.roster_rows = {}
                 from .row_clock import Cache as RowCache
+
                 self.row_cache = RowCache()
             else:
                 stale = []
@@ -2187,7 +2520,7 @@ class Store:
         c.automation_bell = self.automation_bell
         c.provenance_changes = c.total_changes
         c.provenance_start = None
-        c.settings = self.settings      # the server's own settings, for work that holds only the connection
+        c.settings = self.settings  # the server's own settings, for work that holds only the connection
         return c
 
     def _give(self, c):
@@ -2201,7 +2534,14 @@ class Store:
         except sqlite3.Error:
             c.tainted = True
         with self.pool_lock:
-            if not c.tainted and c.pool_file == self.pool_file and len(self.pool) < POOL_IDLE:
+            # Once the store is freed, its finalizer has closed the idle connections: one given back after that would
+            # wait in a dead pool, open, until the garbage collector frees it (and warns).
+            if (
+                self._pool_finalizer.alive
+                and not c.tainted
+                and c.pool_file == self.pool_file
+                and len(self.pool) < POOL_IDLE
+            ):
                 self.pool.append(c)
                 return
         c.close()
@@ -2213,9 +2553,11 @@ class Store:
         connection runs synchronous=FULL for this transaction and goes back to the pool at its default. SQLite refuses
         to change the setting inside a transaction, so it is set before BEGIN, from `checkout`."""
         from .flight import begin
+
         # The gate is released only after commit/rollback, including message-link maintenance.
         with ExitStack() as stack:
             c = None
+
             def checkout():
                 nonlocal c
                 c = stack.enter_context(self.read())
@@ -2224,10 +2566,12 @@ class Store:
                     # Registered after the read, so it runs before the connection is given back, even when BEGIN fails.
                     stack.callback(c.execute, f"PRAGMA synchronous={H.synchronous('NORMAL')}")
                 return c
+
             done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
             try:
                 c.write_transaction = True
                 from . import provenance_clock
+
                 c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
@@ -2268,6 +2612,7 @@ class Store:
             return []
         added = G.seed(c, document, lambda owner: H.resolve_actor(c, owner))
         from . import market as Market
+
         Market.ensure_curator(c)
         return added
 
@@ -2286,6 +2631,7 @@ class Store:
             # A roster entry with no runtime or model follows the company's provider choice;
             # with none made yet it stays unresolved and turns refuse to start until it is.
             from . import providers
+
             choice = providers.load(c, self.settings)
             entries = {slug: providers.fill(choice, entry) for slug, entry in entries.items()}
             H.sync_registry(c, entries, roster)
@@ -2295,17 +2641,29 @@ class Store:
             for slug, entry in entries.items():
                 team = P.team_of(slug, entries, people)
                 operator = seed_operator(slug, team, people, owner)
-                mode = str(entry.get("thread_mode") or
-                           ("personal" if slug == "coo" else "shared" if slug == "cpo" else "personal"))
+                mode = str(
+                    entry.get("thread_mode")
+                    or ("personal" if slug == "coo" else "shared" if slug == "cpo" else "personal")
+                )
                 c.execute(
                     "INSERT INTO bot_config(bot,team,owner_id,description,reports_to,repo,"
                     "thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (slug, team, operator, str(entry.get("description") or ""),
-                     entry.get("reports_to"), str(entry.get("repo") or ("emp-" + slug)), mode,
-                     H.now(), H.KEEPER))
+                    (
+                        slug,
+                        team,
+                        operator,
+                        str(entry.get("description") or ""),
+                        entry.get("reports_to"),
+                        str(entry.get("repo") or ("emp-" + slug)),
+                        mode,
+                        H.now(),
+                        H.KEEPER,
+                    ),
+                )
                 BS.write(c, slug, json.loads(encode(entry)))
             self.seed_goals(c)
             from . import groups as Groups
+
             Groups.migrate(c, self.settings)
 
     @staticmethod
@@ -2315,9 +2673,15 @@ class Store:
     def saved(self, c, identity, operation, key):
         """Whether this Idempotency-Key already has a saved answer here: `mutate` replays it (or refuses other content
         under the key) without running the write again, so a check made before `mutate` must not refuse it."""
-        return bool(key) and len(key) <= 200 and c.execute(
-            "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
-            (self._principal(identity), operation, key)).fetchone() is not None
+        return (
+            bool(key)
+            and len(key) <= 200
+            and c.execute(
+                "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                (self._principal(identity), operation, key),
+            ).fetchone()
+            is not None
+        )
 
     def mutate(self, identity, operation, key, body, fn, check=None, durable=False, retry_body=None):
         if not key or len(key) > 200:
@@ -2326,14 +2690,17 @@ class Store:
         principal = self._principal(identity)
         refusal = logged = None
         # Only a money write asks for the durable commit; every other keyed write keeps the plain call.
-        with (self.transaction(durable=True) if durable else self.transaction()) as c:
+        with self.transaction(durable=True) if durable else self.transaction() as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
+
             validate_identity(c, identity)
             if check:
                 check(c)
-            row = c.execute("SELECT * FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
-                            (principal, operation, key)).fetchone()
+            row = c.execute(
+                "SELECT * FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                (principal, operation, key),
+            ).fetchone()
             if row:
                 result = json.loads(row["response"])
                 if row["request_hash"] != hashed:
@@ -2342,6 +2709,7 @@ class Store:
                         raise Problem("idempotency_conflict", "This key was used for different content", 409)
                 from .auth import Auth
                 from . import task_privacy as privacy
+
                 replay_auth = Auth(self)
                 replay_auth.sync_access(c)
                 aid = saved = None
@@ -2356,6 +2724,7 @@ class Store:
                 replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
                 if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):
                     from . import task_context
+
                     task = (saved.get("make_page") or {}).get("task") or saved.get("task")
                     saved["task_context"] = task_context.for_turn(c, replay_auth, replay_principal, task)
                 # Cached results keep their retry semantics, but access is current on every retry.
@@ -2363,17 +2732,23 @@ class Store:
                 for part in operation.split("/"):
                     if H.task(c, part):
                         task_ids.add(part)
+
                 def referenced(value):
                     if isinstance(value, dict):
                         if "requester_id" in value and "owner_id" in value and value.get("id"):
                             task_ids.add(value["id"])
                         for name, item in value.items():
-                            if name in ("task", "task_id", "parent_id", "blocked_by") and isinstance(item, str) and H.task(c, item):
+                            if (
+                                name in ("task", "task_id", "parent_id", "blocked_by")
+                                and isinstance(item, str)
+                                and H.task(c, item)
+                            ):
                                 task_ids.add(item)
                             referenced(item)
                     elif isinstance(value, list):
                         for item in value:
                             referenced(item)
+
                 referenced(result)
                 if operation == "/api/v2/task-bulk":
                     for rows in result.get("tasks", {}).values():
@@ -2383,11 +2758,14 @@ class Store:
                 privacy.require_payload(c, replay_principal, result)
                 if '/meetings/' in operation or operation.endswith('/meetings'):
                     from .meeting_items import redact
+
                     result = redact(c, replay_principal, replay_auth, result)
                 from .files import readable_page_refs
+
                 return readable_page_refs(c, replay_auth, replay_principal, result)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
+
             c.execute("SAVEPOINT domain_write")
             since = changes.mark(c)
             try:
@@ -2395,15 +2773,23 @@ class Store:
                 logged = changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
-                logged = None                   # rolled back with the write
+                logged = None  # rolled back with the write
                 refusal = refused(c, identity, exc)
-                result = {"_refusal": {"code": refusal.code, "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
-                                       "status": refusal.status}}
+                result = {
+                    "_refusal": {
+                        "code": refusal.code,
+                        "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
+                        "status": refusal.status,
+                    }
+                }
             if not is_poll(operation, result):
-                cached = ({k: v for k, v in result.items() if k != 'requester_token'}
-                          if isinstance(result, dict) else result)
-                c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
-                          (principal, operation, key, hashed, encode(cached), H.now()))
+                cached = (
+                    {k: v for k, v in result.items() if k != 'requester_token'} if isinstance(result, dict) else result
+                )
+                c.execute(
+                    "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
+                    (principal, operation, key, hashed, encode(cached), H.now()),
+                )
         self.ring(logged)
         if refusal:
             # This key now records a rolled-back operation, not an earlier successful delivery.
@@ -2411,15 +2797,20 @@ class Store:
             raise refusal
         return result
 
-    def write(self, identity, fn):
+    def write(self, identity, fn, *, validate=True):
         """`mutate` without an idempotency record, for a route whose request is its own: the same
-        identity check under the write lock, and the same all-or-nothing refusal."""
+        identity check under the write lock, and the same all-or-nothing refusal. `validate=False` is for a write the
+        server makes for itself on a bot's behalf (backend/files.py, a review page): it has no credential to check, and
+        `fn` checks the records it writes."""
         refusal = logged = None
         with self.transaction() as c:
-            from .auth import validate_identity
-            validate_identity(c, identity)
+            if validate:
+                from .auth import validate_identity
+
+                validate_identity(c, identity)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
+
             c.execute("SAVEPOINT domain_write")
             since = changes.mark(c)
             try:
@@ -2427,7 +2818,7 @@ class Store:
                 logged = changes.claim(c, since, identity.actor)
                 c.execute("RELEASE domain_write")
             except H.Refused as exc:
-                logged = None                   # rolled back with the write
+                logged = None  # rolled back with the write
                 refusal = refused(c, identity, exc)
         self.ring(logged)
         if refusal:
@@ -2437,12 +2828,16 @@ class Store:
     def ring(self, seq):
         """After a commit that logged changes: wake the open event streams (backend/events.py)."""
         from .events import ring
+
         ring(self, seq)
 
     def enqueue_existing(self):
         from .enqueue import external_bot_sql
+
         with self.transaction() as c:
-            c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) "
-                      "SELECT m.id,m.id,substr(m.recipient_id,5),m.created_at FROM messages m "
-                      "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
-                      + external_bot_sql("m.recipient_id"))
+            c.execute(
+                "INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) "
+                "SELECT m.id,m.id,substr(m.recipient_id,5),m.created_at FROM messages m "
+                "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
+                + external_bot_sql("m.recipient_id")
+            )

@@ -1,4 +1,4 @@
-// Setup's first two steps (ui/setup-strategy.js, ui/app/welcome.js) against a stand-in for the setup record, the
+// Setup's first two steps (ui/setup-strategy.ts, ui/app/welcome.js) against a stand-in for the setup record, the
 // research job (POST /api/v2/strategy/draft-from, polled) and the strategy draft (fixtures only, the Acme example).
 // What are you building saves the website and the line, then starts the research once (Back and Next again starts no
 // second one). Your bets polls it, then shows the proposed bets as claims: Keep makes one active (Rules out and Wrong
@@ -79,7 +79,7 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     const config = {...CONFIG, onboarding_needed: record.needed};
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Silva', role: 'owner', cloud: true, email: 'ana@acme.example', config});
     if (p === '/api/v2/config') return json(config);

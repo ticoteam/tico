@@ -1,0 +1,6 @@
+{
+  "backend/bot_tools.py": {
+    "B905": 3,
+    "F401": 1
+  }
+}

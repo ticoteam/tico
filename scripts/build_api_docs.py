@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Keep the API guide's operation groups aligned with the committed OpenAPI tags."""
+
 import json
 import re
 import sys

@@ -339,12 +339,13 @@ async function messageAct(page, text, label, phone) {
     await journey(browser, hub, 'bot page', 'dana', async (page, phone, name) => {
       await step(page, 'bot Home', phone, name, async () => {
         await shell(page, `#/bot/${BOT}/home`, '#bot-work')();
-        // A phone names them in the top line; a desktop switches above the talk.
-        await page.locator(phone ? '#btabs [data-bt="home"]' : '.bot-talk-switch [data-talk="home"]').waitFor({timeout: WAIT});
+        // Home is the chat; the DM is behind the Incognito toggle above it, at every width.
+        await page.locator(phone ? '#btabs [data-bt="home"]' : '#bot-incognito[aria-pressed="false"]').waitFor({timeout: WAIT});
         await snap(page, 'bot-home', phone);
       });
       await step(page, 'bot DM', phone, name, async () => {
-        await page.locator(phone ? '#btabs [data-bt="dm"]' : '.bot-talk-switch [data-talk="dm"]').click();
+        await page.locator('#bot-incognito').click();
+        await page.locator('#bot-incognito[aria-pressed="true"]').waitFor({timeout: WAIT});
         await sleep(800);
         await snap(page, 'bot-dm', phone);
       });
@@ -487,11 +488,11 @@ async function messageAct(page, text, label, phone) {
     // ------------------------------------------------------------------ Connect: Slack, Find a thread, Summarize
     await journey(browser, hub, 'connect', 'dana', async (page, phone, name) => {
       await step(page, 'connections page', phone, name, async () => {
-        await shell(page, '#/library/connections', '#cn-slack')();
+        await shell(page, '#/tools/slack', '#tool-slack-links')();
         await snap(page, 'connect-page', phone);
       });
       await step(page, 'Slack section', phone, name, async () => {
-        await page.locator('#cn-slack').scrollIntoViewIfNeeded();
+        await page.locator('#tool-slack-links').scrollIntoViewIfNeeded();
         await snap(page, 'connect-slack', phone);
       });
       await step(page, 'find a thread', phone, name, async () => {

@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/scheduler.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 48,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 48,
+                    "endColumn": 52,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 61,
+                    "endColumn": 65,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

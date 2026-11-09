@@ -11,7 +11,7 @@ the necessary Tools. Apply requested changes when those Tools are available.
     hub task show <id>
 
 Find the goal (more leads, a launch, lower cost), the budget and the date. If the goal or the budget
-is missing, ask once with `hub task ask <id>` and stop.
+is missing, ask once with `hub task question "<question>" --on <person> --parent <id>` and stop.
 
 ## 2. Check it against the targets
 

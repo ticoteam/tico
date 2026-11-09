@@ -15,11 +15,21 @@ def test_active_assignments_by_runner_match_per_computer_and_reuses_the_map(api)
         assert by is views.assignments_by_runner(c)[1]
         assert "coo" not in by.get(a["runner_id"], set())
         assert by[b["runner_id"]] == {"cpo"}
-        per_a = {r[0] for r in c.execute(
-            "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-            "WHERE a.runner_id=? AND b.state<>'archived'", (a["runner_id"],))}
-        per_b = {r[0] for r in c.execute(
-            "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-            "WHERE a.runner_id=? AND b.state<>'archived'", (b["runner_id"],))}
+        per_a = {
+            r[0]
+            for r in c.execute(
+                "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
+                "WHERE a.runner_id=? AND b.state<>'archived'",
+                (a["runner_id"],),
+            )
+        }
+        per_b = {
+            r[0]
+            for r in c.execute(
+                "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
+                "WHERE a.runner_id=? AND b.state<>'archived'",
+                (b["runner_id"],),
+            )
+        }
         assert by.get(a["runner_id"], set()) == per_a
         assert by[b["runner_id"]] == per_b
