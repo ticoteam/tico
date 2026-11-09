@@ -1,5 +1,6 @@
 """The editions routes for owners and admins (plan §10). A bot gets a 403 at every one of them, reads included. Each write
 that changes an edition's text runs its checks once the write has committed, because the judge is a model call."""
+
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Query, Request
@@ -60,8 +61,10 @@ def _period(c, audience_id, author, start, end):
     end = end or today.isoformat()
     if start:
         return start, end
-    row = c.execute("SELECT max(period_end) FROM editions WHERE audience_id=? AND author=? AND period_end<?",
-                    (audience_id, author, end)).fetchone()
+    row = c.execute(
+        "SELECT max(period_end) FROM editions WHERE audience_id=? AND author=? AND period_end<?",
+        (audience_id, author, end),
+    ).fetchone()
     try:
         last = datetime.fromisoformat(row[0]).date() + timedelta(days=1) if row and row[0] else None
     except ValueError:
@@ -85,8 +88,13 @@ def register(app, store, auth, mutate):
             return E.full_view(c, edition_id)
 
     @app.get("/api/v2/editions")
-    def editions_list(request: Request, audience: str | None = None, status: str | None = None,
-                      before: str | None = None, limit: int = Query(default=25, ge=1, le=E.LIST_MAX)):
+    def editions_list(
+        request: Request,
+        audience: str | None = None,
+        status: str | None = None,
+        before: str | None = None,
+        limit: int = Query(default=25, ge=1, le=E.LIST_MAX),
+    ):
         admin(request)
         with store.read() as c:
             return {**E.listing(c, audience, status, before, limit), "schedule_problems": S.problems(c)}
@@ -101,6 +109,7 @@ def register(app, store, auth, mutate):
             author = _source(c, body.audience_id, body.author)
             start, end = _period(c, body.audience_id, author, body.period_start, body.period_end)
             return E.claim(c, who.actor, body.audience_id, author, start, end)
+
         claimed = mutate(request, body, work)
         if claimed["fresh"]:
             return E.run_draft(store, claimed["edition_id"], judge(request))

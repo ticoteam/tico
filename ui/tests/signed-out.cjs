@@ -1,4 +1,4 @@
-// Signed out mid-session (ui/app/session.js): every sign-in ends in one banner, and the live stream stops retrying.
+// Signed out mid-session (ui/app/session.ts): every sign-in ends in one banner, and the live stream stops retrying.
 //  - a proxy (Cloudflare Access) answers the API and the event stream with a 302 to its login on another origin: the
 //    banner shows, the stream stops reconnecting, the Assistant chat draft and the page's place are kept through the sign-in;
 //  - the same for a 401 carrying `WWW-Authenticate: Cloudflare-Access`;
@@ -50,10 +50,10 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
       return route.fulfill({status: 302, headers: {location: ACCESS}, body: ''});
     }
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p.startsWith('/api/')) {
       if (p === '/api/v2/events') seen.streams++;
       if (p === '/api/v2/me') seen.me++;

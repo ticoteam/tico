@@ -1,4 +1,4 @@
-// Overview › Dashboard and team pages (ui/app/dashboard.js, backend/cards.py) against a fake server shaped as
+// Overview › Dashboard and team pages (ui/app/dashboard.ts, backend/cards.py) against a fake server shaped as
 // GET/PUT /api/v2/places/{place}, POST /places/{place}/order, /api/v2/pins and /api/v2/cards answer: the Dashboard
 // opens with its default cards and the Campus tab beside it; the first change saves the defaults, then the order goes
 // by pin ids (keys and a pointer drag); a card is added from its form, sized from its menu and removed; a page is
@@ -122,7 +122,7 @@ async function open(browser, {viewport = DESKTOP, hash = '#/overview', me = OWNE
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events' || p.endsWith('/watch')) return;
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
@@ -158,8 +158,9 @@ async function shot(page, name) {
       const {page, errors, fake} = await open(browser);
       await page.locator('#dash-grid .dash-pin').first().waitFor();
       assert.deepEqual(await headings(page), ['Tasks by status', 'Done per week', 'Needs you', 'Latest pages'], 'the default cards');
-      assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Company');
-      assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1, 'Overview is current');
+      assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Dashboard');
+      assert.equal(await page.locator('#main h1').first().innerText(), 'Company', 'the page is Company');
+      assert.equal(await page.locator('#side a[data-nav="overview"].cur').count(), 1, 'Company is current');
       assert.equal(await page.locator('.dash-stat strong').first().innerText(), '4');
       assert.equal(await page.locator('#dash-grid a[href="#/task/t1"]').count(), 1, 'Needs you links its top items');
       assert.equal(await page.locator('#dash-grid a[href="#/page/f1"]').count(), 1, 'Latest pages links each page');

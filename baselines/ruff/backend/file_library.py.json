@@ -1,0 +1,7 @@
+{
+  "backend/file_library.py": {
+    "BLE001": 4,
+    "F811": 1,
+    "S110": 1
+  }
+}

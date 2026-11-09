@@ -5,6 +5,7 @@ Rust crates build with `cargo build --locked`. An edit to requirements.in, packa
 regenerating its lock passes a PR's tests and fails the image build or Release validation instead. These checks read
 the files only (no resolver, no network), so they run on every PR.
 """
+
 import json
 import re
 import tomllib
@@ -49,9 +50,12 @@ def check_satisfied(source, lock):
     pins = locked(lock)
     for requirement in requested(source):
         name = canonicalize_name(requirement.name)
-        assert name in pins, f'{source.name} asks for {requirement}, but {lock.name} does not lock it: recompile the lock'
+        assert name in pins, (
+            f'{source.name} asks for {requirement}, but {lock.name} does not lock it: recompile the lock'
+        )
         assert requirement.specifier.contains(pins[name], prereleases=True), (
-            f'{source.name} asks for {requirement}, {lock.name} locks {pins[name]}: recompile the lock')
+            f'{source.name} asks for {requirement}, {lock.name} locks {pins[name]}: recompile the lock'
+        )
 
 
 def test_python_locks_satisfy_what_they_lock():
@@ -71,7 +75,9 @@ def test_package_lock_matches_package_json():
     lock = json.loads((ROOT / 'package-lock.json').read_text())
     root = lock['packages']['']
     for section in ('dependencies', 'devDependencies'):
-        assert root.get(section, {}) == manifest.get(section, {}), f'package-lock.json {section} is stale: run npm install'
+        assert root.get(section, {}) == manifest.get(section, {}), (
+            f'package-lock.json {section} is stale: run npm install'
+        )
         for name, spec in manifest.get(section, {}).items():
             assert re.fullmatch(r'\d+\.\d+\.\d+', spec), f'package.json {name} {spec!r} is not an exact version'
             installed = lock['packages'].get(f'node_modules/{name}', {}).get('version')
@@ -86,18 +92,20 @@ def cargo_requirement_allows(requirement, version):
         comparator = comparator.strip()
         if comparator in ('*', ''):
             continue
-        match = re.fullmatch(r'(\^|~|=|>=|<=|>|<)?\s*(\d+)(?:\.(\d+|\*|x|X))?(?:\.(\d+|\*|x|X))?(?:[-+]\S*)?', comparator)
+        match = re.fullmatch(
+            r'(\^|~|=|>=|<=|>|<)?\s*(\d+)(?:\.(\d+|\*|x|X))?(?:\.(\d+|\*|x|X))?(?:[-+]\S*)?', comparator
+        )
         assert match, f'unrecognised Cargo version requirement {comparator!r}'
         op = match.group(1) or '^'
         given = []
         for part in match.groups()[1:]:
             if part is None or part in '*xX':
-                op = '~' if part and op == '^' else op   # 1.* means >=1.0.0, <2.0.0, like ~1
+                op = '~' if part and op == '^' else op  # 1.* means >=1.0.0, <2.0.0, like ~1
                 break
             given.append(int(part))
         low = tuple(given + [0] * (3 - len(given)))
 
-        def bump(index):   # the first version past `given` at that position: (1, 2) at 1 -> (1, 3, 0)
+        def bump(index):  # the first version past `given` at that position: (1, 2) at 1 -> (1, 3, 0)
             return tuple(given[:index] + [given[index] + 1] + [0] * (2 - index))
 
         if op == '^':
@@ -113,7 +121,7 @@ def cargo_requirement_allows(requirement, version):
             ok = have >= low
         elif op == '<':
             ok = have < low
-        else:   # <=
+        else:  # <=
             ok = have < bump(len(given) - 1) if len(given) < 3 else have <= low
         if not ok:
             return False
@@ -157,13 +165,29 @@ def test_cargo_locks_match_their_manifests():
         assert not problems, f'{crate}: {problems}: run cargo update -p <crate> and commit Cargo.lock'
 
 
-@pytest.mark.parametrize('requirement, version, allowed', [
-    ('1', '1.53.3', True), ('1', '2.0.0', False), ('0.2', '0.2.190', True), ('0.2', '0.3.0', False),
-    ('0.2.191', '0.2.190', False), ('0.2.191', '0.2.191', True), ('^0.0.3', '0.0.4', False), ('0.22', '0.23.1', False),
-    ('~1.2', '1.2.9', True), ('~1.2', '1.3.0', False), ('=1.2.3', '1.2.4', False), ('>=1, <2', '1.9.0', True),
-    ('>=1, <2', '2.0.0', False), ('1.*', '1.7.0', True), ('1.*', '2.0.0', False), ('*', '9.9.9', True),
-    ('>1.2', '1.2.9', False), ('<=1.2', '1.2.9', True),
-])
+@pytest.mark.parametrize(
+    'requirement, version, allowed',
+    [
+        ('1', '1.53.3', True),
+        ('1', '2.0.0', False),
+        ('0.2', '0.2.190', True),
+        ('0.2', '0.3.0', False),
+        ('0.2.191', '0.2.190', False),
+        ('0.2.191', '0.2.191', True),
+        ('^0.0.3', '0.0.4', False),
+        ('0.22', '0.23.1', False),
+        ('~1.2', '1.2.9', True),
+        ('~1.2', '1.3.0', False),
+        ('=1.2.3', '1.2.4', False),
+        ('>=1, <2', '1.9.0', True),
+        ('>=1, <2', '2.0.0', False),
+        ('1.*', '1.7.0', True),
+        ('1.*', '2.0.0', False),
+        ('*', '9.9.9', True),
+        ('>1.2', '1.2.9', False),
+        ('<=1.2', '1.2.9', True),
+    ],
+)
 def test_cargo_requirements_follow_cargos_rules(requirement, version, allowed):
     assert cargo_requirement_allows(requirement, version) is allowed
 

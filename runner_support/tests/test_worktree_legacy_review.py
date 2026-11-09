@@ -1,4 +1,5 @@
 """Independent contract checks for legacy add and pending setup reporting."""
+
 import json
 
 import pytest
@@ -27,15 +28,24 @@ def test_legacy_add_consumes_actual_provision_response(prepared, trees, monkeypa
     if pending:
         detail.update(checkout_state='legacy_present', setup_pending=True)
     with api.app_state.store.transaction() as c:
-        c.execute('UPDATE task_links SET state=?,detail=? WHERE id=?',
-                  ('pending' if pending else 'present', json.dumps(detail), link['link_id']))
+        c.execute(
+            'UPDATE task_links SET state=?,detail=? WHERE id=?',
+            ('pending' if pending else 'present', json.dumps(detail), link['link_id']),
+        )
     response = post(api, route, {'repo': 'Acme/product'}, 'bot-test')
     assert response.status_code == 200, response.text
     assert response.json()['state'] == ('pending' if pending else 'present')
     client.post.return_value = response.json()
-    client.get.return_value = {'configured': True, 'repositories': [{
-        'full_name': 'Acme/product', 'access': 'write', 'default_branch': 'main',
-    }]}
+    client.get.return_value = {
+        'configured': True,
+        'repositories': [
+            {
+                'full_name': 'Acme/product',
+                'access': 'write',
+                'default_branch': 'main',
+            }
+        ],
+    }
     monkeypatch.setenv('HUB_TASK_ID', task)
     monkeypatch.setattr(W.repositories, 'worktree_base', lambda *args: (base, 'main'))
 
@@ -57,9 +67,15 @@ def test_legacy_heartbeat_does_not_report_pending_setup_present(trees):
     path = workspace / row['path']
     path.parent.mkdir(parents=True)
     git(base, 'worktree', 'add', '--no-track', '-b', row['branch'], str(path), 'origin/main')
-    row.update(state='present', detail_json=json.dumps({
-        'checkout_state': 'legacy_present', 'setup_pending': True,
-    }))
+    row.update(
+        state='present',
+        detail_json=json.dumps(
+            {
+                'checkout_state': 'legacy_present',
+                'setup_pending': True,
+            }
+        ),
+    )
     report = W.inspect(workspace, row)
     assert report['state'] != 'present', report
     assert W._read_marker(workspace, row['id']) is None
@@ -67,7 +83,8 @@ def test_legacy_heartbeat_does_not_report_pending_setup_present(trees):
 
 @pytest.mark.parametrize(('setup_pending', 'missing_tracked'), [(False, False), (True, False), (False, True)])
 def test_previously_demoted_legacy_link_recovers_only_after_runner_verification(
-        prepared, trees, setup_pending, missing_tracked):
+    prepared, trees, setup_pending, missing_tracked
+):
     api, task, _ = prepared
     workspace, base, remote, _, _ = trees
     link = post(api, f'tasks/{task}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
@@ -85,17 +102,20 @@ def test_previously_demoted_legacy_link_recovers_only_after_runner_verification(
         tracked.write_text('kept tracked edit')
     (path / 'notes.txt').write_text('kept untracked note')
     legacy_history = {
-        'owner': 'bot:cmo', 'current_branch': link['branch'],
-        'last_commit': git(path, 'rev-parse', 'HEAD'), 'dirty_files': 2,
+        'owner': 'bot:cmo',
+        'current_branch': link['branch'],
+        'last_commit': git(path, 'rev-parse', 'HEAD'),
+        'dirty_files': 2,
     }
     if setup_pending:
         legacy_history['setup_pending'] = True
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state='pending',detail=? WHERE id=?",
-                  (json.dumps(legacy_history), link['link_id']))
+        c.execute(
+            "UPDATE task_links SET state='pending',detail=? WHERE id=?", (json.dumps(legacy_history), link['link_id'])
+        )
     with api.app_state.store.read() as c:
         row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
-    row['detail_json'] = row.pop('detail')       # the row as runners/me/worktrees hands it out (backend/runner_wire.py)
+    row['detail_json'] = row.pop('detail')  # the row as runners/me/worktrees hands it out (backend/runner_wire.py)
 
     report = W.inspect(workspace, row)
     if setup_pending or missing_tracked:
@@ -104,8 +124,12 @@ def test_previously_demoted_legacy_link_recovers_only_after_runner_verification(
         assert report['state'] == 'present' and report['checkout_state'] == 'legacy_present', report
         assert report['dirty_files'] == 2
 
-    beat = {'version': '0.3.22', 'platform': 'test',
-            'readiness': {'schema_version': 1, 'worktrees': True}, 'worktrees': [report]}
+    beat = {
+        'version': '0.3.22',
+        'platform': 'test',
+        'readiness': {'schema_version': 1, 'worktrees': True},
+        'worktrees': [report],
+    }
     response = post(api, 'runners/heartbeat', beat, 'runner-test')
     assert response.status_code == 200, response.text
     with api.app_state.store.read() as c:

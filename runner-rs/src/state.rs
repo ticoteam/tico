@@ -75,18 +75,31 @@ fn sql(e: rusqlite::Error) -> String {
 
 impl State {
     pub fn open(directory: &Path) -> Result<State, String> {
-        std::fs::create_dir_all(directory).map_err(|e| format!("cannot create {}: {e}", directory.display()))?;
+        std::fs::create_dir_all(directory)
+            .map_err(|e| format!("cannot create {}: {e}", directory.display()))?;
         // 0700, or under isolation the layout bots can traverse to their gh shim (crate::isolation::protect_state).
         crate::isolation::protect_state(directory).map_err(|e| e.to_string())?;
         let path = directory.join("runner.sqlite");
-        std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(&path).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
         let conn = Connection::open(&path).map_err(sql)?;
-        conn.busy_timeout(std::time::Duration::from_secs(10)).map_err(sql)?;
+        conn.busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(sql)?;
         conn.execute_batch(SCHEMA).map_err(sql)?;
-        conn.execute_batch("PRAGMA synchronous=FULL;").map_err(sql)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-        Ok(State { directory: directory.to_path_buf(), conn: Arc::new(Mutex::new(conn)) })
+        conn.execute_batch("PRAGMA synchronous=FULL;")
+            .map_err(sql)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| e.to_string())?;
+        Ok(State {
+            directory: directory.to_path_buf(),
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     /// A call from async code, run on the blocking pool: the connection's lock, a busy database and each commit's
@@ -97,7 +110,10 @@ impl State {
     }
 
     /// One use of the shared connection (the files outbox and memory reports keep their own tables in it).
-    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>) -> Result<T, String> {
+    pub(crate) fn with<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> rusqlite::Result<T>,
+    ) -> Result<T, String> {
         let mut conn = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         f(&mut conn).map_err(sql)
     }
@@ -105,10 +121,21 @@ impl State {
     pub fn record(&self, attempt: &Value) -> Result<(), String> {
         let id = attempt["id"].as_str().unwrap_or_default().to_string();
         let payload = attempt.to_string();
-        self.with(|c| c.execute("INSERT OR IGNORE INTO attempts(id,payload,phase) VALUES(?,?,'claimed')", params![id, payload]).map(|_| ()))
+        self.with(|c| {
+            c.execute(
+                "INSERT OR IGNORE INTO attempts(id,payload,phase) VALUES(?,?,'claimed')",
+                params![id, payload],
+            )
+            .map(|_| ())
+        })
     }
 
-    pub fn input_phase(&self, aid: &str, mid: &str, phase: Option<&str>) -> Result<Option<String>, String> {
+    pub fn input_phase(
+        &self,
+        aid: &str,
+        mid: &str,
+        phase: Option<&str>,
+    ) -> Result<Option<String>, String> {
         self.with(|c| {
             if let Some(p) = phase {
                 c.execute(
@@ -121,7 +148,13 @@ impl State {
     }
 
     pub fn phase(&self, aid: &str, phase: &str) -> Result<(), String> {
-        self.with(|c| c.execute("UPDATE attempts SET phase=? WHERE id=?", params![phase, aid]).map(|_| ()))
+        self.with(|c| {
+            c.execute(
+                "UPDATE attempts SET phase=? WHERE id=?",
+                params![phase, aid],
+            )
+            .map(|_| ())
+        })
     }
 
     pub fn stderr(&self, aid: &str, tail: &str) -> Result<(), String> {
@@ -141,7 +174,13 @@ impl State {
     }
 
     pub fn stderr_sent(&self, aid: &str, revision: i64) -> Result<(), String> {
-        self.with(|c| c.execute("UPDATE attempt_stderr SET uploaded=max(uploaded,?) WHERE attempt_id=?", params![revision, aid]).map(|_| ()))
+        self.with(|c| {
+            c.execute(
+                "UPDATE attempt_stderr SET uploaded=max(uploaded,?) WHERE attempt_id=?",
+                params![revision, aid],
+            )
+            .map(|_| ())
+        })
     }
 
     pub fn append(&self, aid: &str, kind: &str, payload: &Value) -> Result<i64, String> {
@@ -150,8 +189,15 @@ impl State {
         APPENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.with(|c| {
             let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let seq: i64 = tx.query_row("SELECT coalesce(max(seq),0)+1 FROM events WHERE attempt_id=?", params![aid], |r| r.get(0))?;
-            tx.execute("INSERT INTO events VALUES(?,?,?,?)", params![aid, seq, kind, text])?;
+            let seq: i64 = tx.query_row(
+                "SELECT coalesce(max(seq),0)+1 FROM events WHERE attempt_id=?",
+                params![aid],
+                |r| r.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO events VALUES(?,?,?,?)",
+                params![aid, seq, kind, text],
+            )?;
             tx.commit()?;
             Ok(seq)
         })
@@ -168,7 +214,11 @@ impl State {
         APPENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.with(|c| {
             let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let first: i64 = tx.query_row("SELECT coalesce(max(seq),0)+1 FROM events WHERE attempt_id=?", params![aid], |r| r.get(0))?;
+            let first: i64 = tx.query_row(
+                "SELECT coalesce(max(seq),0)+1 FROM events WHERE attempt_id=?",
+                params![aid],
+                |r| r.get(0),
+            )?;
             {
                 let mut insert = tx.prepare_cached("INSERT INTO events VALUES(?,?,?,?)")?;
                 for (offset, (kind, text)) in rows.iter().enumerate() {
@@ -197,16 +247,29 @@ impl State {
     }
 
     pub fn ack(&self, aid: &str, seq: i64) -> Result<(), String> {
-        self.with(|c| c.execute("UPDATE attempts SET ack=max(ack,?) WHERE id=?", params![seq, aid]).map(|_| ()))
+        self.with(|c| {
+            c.execute(
+                "UPDATE attempts SET ack=max(ack,?) WHERE id=?",
+                params![seq, aid],
+            )
+            .map(|_| ())
+        })
     }
 
     pub fn finish(&self, aid: &str, completion: &Map<String, Value>) -> Result<Value, String> {
         self.with(|c| {
-            let seq: i64 = c.query_row("SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?", params![aid], |r| r.get(0))?;
+            let seq: i64 = c.query_row(
+                "SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?",
+                params![aid],
+                |r| r.get(0),
+            )?;
             let mut done = completion.clone();
             done.insert("last_seq".into(), Value::from(seq));
             let done = Value::Object(done);
-            c.execute("UPDATE attempts SET phase='uploading',completion=? WHERE id=?", params![done.to_string(), aid])?;
+            c.execute(
+                "UPDATE attempts SET phase='uploading',completion=? WHERE id=?",
+                params![done.to_string(), aid],
+            )?;
             Ok(done)
         })
     }
@@ -230,16 +293,28 @@ impl State {
     pub fn recovery(&self, aid: &str, text: &str) -> Result<Option<Value>, String> {
         self.with(|c| {
             let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let row: Option<(String, Option<String>)> =
-                tx.query_row("SELECT phase, completion FROM attempts WHERE id=?", params![aid], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+            let row: Option<(String, Option<String>)> = tx
+                .query_row(
+                    "SELECT phase, completion FROM attempts WHERE id=?",
+                    params![aid],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
             let done = match row {
                 None => None,
                 Some((phase, _)) if phase == "synced" || phase == "historical" => None,
                 Some((_, Some(saved))) => Some(serde_json::from_str(&saved).unwrap_or(Value::Null)),
                 Some((_, None)) => {
-                    let seq: i64 = tx.query_row("SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?", params![aid], |r| r.get(0))?;
+                    let seq: i64 = tx.query_row(
+                        "SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?",
+                        params![aid],
+                        |r| r.get(0),
+                    )?;
                     let done = json!({"outcome": "interrupted", "text": text, "last_seq": seq});
-                    tx.execute("UPDATE attempts SET phase='uploading',completion=? WHERE id=?", params![done.to_string(), aid])?;
+                    tx.execute(
+                        "UPDATE attempts SET phase='uploading',completion=? WHERE id=?",
+                        params![done.to_string(), aid],
+                    )?;
                     Some(done)
                 }
             };
@@ -263,21 +338,38 @@ impl State {
             let tx = c.transaction()?;
             let seen: std::collections::HashMap<String, String> = {
                 let mut q = tx.prepare("SELECT path,stamp FROM left_out_reported WHERE bot=?")?;
-                let rows = q.query_map([bot], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                let rows = q.query_map([bot], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?;
                 rows.collect::<rusqlite::Result<_>>()?
             };
             for path in seen.keys().filter(|p| !files.iter().any(|(f, _)| f == *p)) {
-                tx.execute("DELETE FROM left_out_reported WHERE bot=? AND path=?", (bot, path))?;
+                tx.execute(
+                    "DELETE FROM left_out_reported WHERE bot=? AND path=?",
+                    (bot, path),
+                )?;
             }
             for (path, stamp) in files {
-                tx.execute("INSERT OR REPLACE INTO left_out_reported VALUES(?,?,?)", (bot, path, stamp))?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO left_out_reported VALUES(?,?,?)",
+                    (bot, path, stamp),
+                )?;
             }
             tx.commit()?;
-            Ok(files.iter().filter(|(p, s)| seen.get(p) != Some(s)).map(|(p, _)| p.clone()).collect())
+            Ok(files
+                .iter()
+                .filter(|(p, s)| seen.get(p) != Some(s))
+                .map(|(p, _)| p.clone())
+                .collect())
         })
     }
 
-    pub fn session(&self, bot: &str, conversation: &str, runtime: &str) -> Result<Option<String>, String> {
+    pub fn session(
+        &self,
+        bot: &str,
+        conversation: &str,
+        runtime: &str,
+    ) -> Result<Option<String>, String> {
         self.with(|c| {
             c.query_row(
                 "SELECT thread FROM sessions WHERE bot=? AND conversation=? AND runtime=?",
@@ -288,12 +380,30 @@ impl State {
         })
     }
 
-    pub fn save_session(&self, bot: &str, conversation: &str, runtime: &str, thread: &str) -> Result<(), String> {
-        self.with(|c| c.execute("INSERT OR REPLACE INTO sessions VALUES(?,?,?,?)", params![bot, conversation, runtime, thread]).map(|_| ()))
+    pub fn save_session(
+        &self,
+        bot: &str,
+        conversation: &str,
+        runtime: &str,
+        thread: &str,
+    ) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "INSERT OR REPLACE INTO sessions VALUES(?,?,?,?)",
+                params![bot, conversation, runtime, thread],
+            )
+            .map(|_| ())
+        })
     }
 
     /// Drop a failed provider thread without deleting a newer replacement.
-    pub fn forget_session(&self, bot: &str, conversation: &str, runtime: &str, thread: &str) -> Result<(), String> {
+    pub fn forget_session(
+        &self,
+        bot: &str,
+        conversation: &str,
+        runtime: &str,
+        thread: &str,
+    ) -> Result<(), String> {
         self.with(|c| {
             c.execute(
                 "DELETE FROM sessions WHERE bot=? AND conversation=? AND runtime=? AND thread=?",
@@ -310,7 +420,13 @@ impl State {
     /// A session seen for the first time at epoch 0 was never cleared and resumes. Seen first at a later epoch,
     /// a Clear may have come after its saved thread (one clicked after an upgrade, before the first turn on this
     /// runner): that thread is dropped once, a cold turn rather than a lost Clear.
-    pub fn epoch_moved(&self, bot: &str, conversation_id: &str, session: &str, epoch: i64) -> Result<bool, String> {
+    pub fn epoch_moved(
+        &self,
+        bot: &str,
+        conversation_id: &str,
+        session: &str,
+        epoch: i64,
+    ) -> Result<bool, String> {
         self.with(|c| {
             let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let seen: Option<i64> = tx
@@ -335,9 +451,17 @@ impl State {
     pub fn cursor(&self, thread: &str, message: Option<&str>) -> Result<Option<String>, String> {
         self.with(|c| {
             if let Some(m) = message {
-                c.execute("INSERT OR REPLACE INTO session_cursors VALUES(?,?)", params![thread, m])?;
+                c.execute(
+                    "INSERT OR REPLACE INTO session_cursors VALUES(?,?)",
+                    params![thread, m],
+                )?;
             }
-            c.query_row("SELECT message FROM session_cursors WHERE thread=?", params![thread], |r| r.get(0)).optional()
+            c.query_row(
+                "SELECT message FROM session_cursors WHERE thread=?",
+                params![thread],
+                |r| r.get(0),
+            )
+            .optional()
         })
     }
 
@@ -346,9 +470,17 @@ impl State {
     pub fn repo_rules(&self, thread: &str, digest: Option<&str>) -> Result<Option<String>, String> {
         self.with(|c| {
             if let Some(d) = digest {
-                c.execute("INSERT OR REPLACE INTO session_repo_rules VALUES(?,?)", params![thread, d])?;
+                c.execute(
+                    "INSERT OR REPLACE INTO session_repo_rules VALUES(?,?)",
+                    params![thread, d],
+                )?;
             }
-            c.query_row("SELECT digest FROM session_repo_rules WHERE thread=?", params![thread], |r| r.get(0)).optional()
+            c.query_row(
+                "SELECT digest FROM session_repo_rules WHERE thread=?",
+                params![thread],
+                |r| r.get(0),
+            )
+            .optional()
         })
     }
 }
@@ -366,31 +498,62 @@ mod tests {
         let state = State::open(&temp()).unwrap();
         state.save_session("ops", "bot", "claude", "t-old").unwrap();
         state.save_session("ops", "bot", "codex", "x-old").unwrap();
-        state.save_session("ops", "task:t1", "claude", "t-task").unwrap();
+        state
+            .save_session("ops", "task:t1", "claude", "t-task")
+            .unwrap();
         // First sight at epoch 0 (never cleared) is only recorded; the same epoch again resumes.
         assert!(!state.epoch_moved("ops", "", "bot", 0).unwrap());
         assert!(!state.epoch_moved("ops", "", "bot", 0).unwrap());
-        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-old"));
+        assert_eq!(
+            state.session("ops", "bot", "claude").unwrap().as_deref(),
+            Some("t-old")
+        );
         // A Clear in any direct chat moves the bot's epoch: the shared thread goes, for every runtime; the task's stays.
         assert!(state.epoch_moved("ops", "", "bot", 1).unwrap());
         assert_eq!(state.session("ops", "bot", "claude").unwrap(), None);
         assert_eq!(state.session("ops", "bot", "codex").unwrap(), None);
-        assert_eq!(state.session("ops", "task:t1", "claude").unwrap().as_deref(), Some("t-task"));
+        assert_eq!(
+            state
+                .session("ops", "task:t1", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("t-task")
+        );
         // The new thread then resumes at that epoch.
         state.save_session("ops", "bot", "claude", "t-new").unwrap();
         assert!(!state.epoch_moved("ops", "", "bot", 1).unwrap());
-        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-new"));
+        assert_eq!(
+            state.session("ops", "bot", "claude").unwrap().as_deref(),
+            Some("t-new")
+        );
         // A conversation's own thread moves with that conversation's epoch, apart from the bot's.
-        state.save_session("ops", "conversation:c-ana", "claude", "c-old").unwrap();
-        assert!(!state.epoch_moved("ops", "c-ana", "conversation:c-ana", 0).unwrap());
-        assert!(state.epoch_moved("ops", "c-ana", "conversation:c-ana", 1).unwrap());
-        assert_eq!(state.session("ops", "conversation:c-ana", "claude").unwrap(), None);
-        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-new"));
+        state
+            .save_session("ops", "conversation:c-ana", "claude", "c-old")
+            .unwrap();
+        assert!(!state
+            .epoch_moved("ops", "c-ana", "conversation:c-ana", 0)
+            .unwrap());
+        assert!(state
+            .epoch_moved("ops", "c-ana", "conversation:c-ana", 1)
+            .unwrap());
+        assert_eq!(
+            state
+                .session("ops", "conversation:c-ana", "claude")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            state.session("ops", "bot", "claude").unwrap().as_deref(),
+            Some("t-new")
+        );
         // Another bot's sessions are its own.
         state.save_session("cfo", "bot", "claude", "f-old").unwrap();
         assert!(!state.epoch_moved("cfo", "", "bot", 0).unwrap());
         assert!(state.epoch_moved("ops", "", "bot", 2).unwrap());
-        assert_eq!(state.session("cfo", "bot", "claude").unwrap().as_deref(), Some("f-old"));
+        assert_eq!(
+            state.session("cfo", "bot", "claude").unwrap().as_deref(),
+            Some("f-old")
+        );
     }
 
     #[test]
@@ -400,11 +563,20 @@ mod tests {
         state.save_session("ops", "bot", "claude", "t-old").unwrap();
         drop(state);
         let db = rusqlite::Connection::open(dir.join("runner.sqlite")).unwrap();
-        db.execute("INSERT INTO session_sizes(thread, turns, last_input) VALUES ('t-old', 3, 612000)", []).unwrap();
+        db.execute(
+            "INSERT INTO session_sizes(thread, turns, last_input) VALUES ('t-old', 3, 612000)",
+            [],
+        )
+        .unwrap();
         drop(db);
         let state = State::open(&dir).unwrap();
-        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-old"));
-        state.forget_session("ops", "bot", "claude", "t-old").unwrap();
+        assert_eq!(
+            state.session("ops", "bot", "claude").unwrap().as_deref(),
+            Some("t-old")
+        );
+        state
+            .forget_session("ops", "bot", "claude", "t-old")
+            .unwrap();
         assert_eq!(state.session("ops", "bot", "claude").unwrap(), None);
     }
 
@@ -412,13 +584,18 @@ mod tests {
     fn a_clear_made_before_the_first_turn_on_this_runner_still_starts_a_new_thread() {
         let state = State::open(&temp()).unwrap();
         // Upgraded: a thread saved by an older runner, no epoch row, and the chat cleared since (epoch 1).
-        state.save_session("ops", "bot", "claude", "t-before-upgrade").unwrap();
+        state
+            .save_session("ops", "bot", "claude", "t-before-upgrade")
+            .unwrap();
         assert!(state.epoch_moved("ops", "", "bot", 1).unwrap());
         assert_eq!(state.session("ops", "bot", "claude").unwrap(), None);
         // Once: the new thread resumes at that epoch.
         state.save_session("ops", "bot", "claude", "t-new").unwrap();
         assert!(!state.epoch_moved("ops", "", "bot", 1).unwrap());
-        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-new"));
+        assert_eq!(
+            state.session("ops", "bot", "claude").unwrap().as_deref(),
+            Some("t-new")
+        );
         // First sight at a later epoch with no saved thread has nothing to drop.
         assert!(!state.epoch_moved("ops", "c-cara", "task:t9", 3).unwrap());
     }
@@ -432,12 +609,28 @@ mod tests {
         let listed = state.unfinished().unwrap();
         assert_eq!(listed.len(), 3);
         // After the listing: one turn finishes on its own, one result reaches the server.
-        state.finish("done", json!({"outcome": "completed", "text": "hi"}).as_object().unwrap()).unwrap();
+        state
+            .finish(
+                "done",
+                json!({"outcome": "completed", "text": "hi"})
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
         state.phase("sent", "synced").unwrap();
         let why = "Runner restarted during execution";
-        assert_eq!(state.recovery("done", why).unwrap().unwrap()["outcome"], "completed");
-        assert_eq!(state.recovery("lost", why).unwrap().unwrap()["outcome"], "interrupted");
-        assert_eq!(state.recovery("lost", why).unwrap().unwrap()["outcome"], "interrupted");
+        assert_eq!(
+            state.recovery("done", why).unwrap().unwrap()["outcome"],
+            "completed"
+        );
+        assert_eq!(
+            state.recovery("lost", why).unwrap().unwrap()["outcome"],
+            "interrupted"
+        );
+        assert_eq!(
+            state.recovery("lost", why).unwrap().unwrap()["outcome"],
+            "interrupted"
+        );
         assert!(state.recovery("sent", why).unwrap().is_none());
     }
 
@@ -446,16 +639,30 @@ mod tests {
         let dir = temp();
         let state = State::open(&dir).unwrap();
         state.record(&json!({"id": "a1", "bot": "ops"})).unwrap();
-        state.record(&json!({"id": "a1", "bot": "changed"})).unwrap();
+        state
+            .record(&json!({"id": "a1", "bot": "changed"}))
+            .unwrap();
         for i in 0..150 {
-            assert_eq!(state.append("a1", "delta", &json!({"text": i})).unwrap(), i + 1);
+            assert_eq!(
+                state.append("a1", "delta", &json!({"text": i})).unwrap(),
+                i + 1
+            );
         }
         let batch = state.pending("a1").unwrap();
-        assert_eq!((batch.len(), batch[0]["seq"].as_i64(), batch[99]["seq"].as_i64()), (100, Some(1), Some(100)));
+        assert_eq!(
+            (
+                batch.len(),
+                batch[0]["seq"].as_i64(),
+                batch[99]["seq"].as_i64()
+            ),
+            (100, Some(1), Some(100))
+        );
         state.ack("a1", 100).unwrap();
         state.ack("a1", 40).unwrap();
         assert_eq!(state.pending("a1").unwrap()[0]["seq"], 101);
-        let done = state.finish("a1", json!({"outcome": "completed"}).as_object().unwrap()).unwrap();
+        let done = state
+            .finish("a1", json!({"outcome": "completed"}).as_object().unwrap())
+            .unwrap();
         assert_eq!(done["last_seq"], 150);
         let rows = state.unfinished().unwrap();
         assert_eq!((rows.len(), rows[0].phase.as_str()), (1, "uploading"));
@@ -471,25 +678,51 @@ mod tests {
         let state = State::open(&dir).unwrap();
         state.record(&json!({"id": "a1"})).unwrap();
         state.record(&json!({"id": "a2"})).unwrap();
-        assert_eq!(state.append("a1", "delta", &json!({"text": "first"})).unwrap(), 1);
+        assert_eq!(
+            state
+                .append("a1", "delta", &json!({"text": "first"}))
+                .unwrap(),
+            1
+        );
         let rows = vec![
             ("tool".to_string(), json!({"name": "ls"}).to_string()),
             ("delta".to_string(), json!({"text": "second"}).to_string()),
-            ("message".to_string(), json!({"text": "third", "final": true}).to_string()),
+            (
+                "message".to_string(),
+                json!({"text": "third", "final": true}).to_string(),
+            ),
         ];
         state.append_batch("a1", &rows).unwrap();
         state.append_batch("a1", &[]).unwrap();
-        state.append("a2", "delta", &json!({"text": "other"})).unwrap();
+        state
+            .append("a2", "delta", &json!({"text": "other"}))
+            .unwrap();
         let stored: Vec<(i64, String)> = state
             .with(|c| {
-                let mut stmt = c.prepare("SELECT seq, kind FROM events WHERE attempt_id = 'a1' ORDER BY seq")?;
-                let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+                let mut stmt =
+                    c.prepare("SELECT seq, kind FROM events WHERE attempt_id = 'a1' ORDER BY seq")?;
+                let rows =
+                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
                 rows.collect()
             })
             .unwrap();
-        assert_eq!(stored, vec![(1, "delta".to_string()), (2, "tool".to_string()), (3, "delta".to_string()), (4, "message".to_string())]);
+        assert_eq!(
+            stored,
+            vec![
+                (1, "delta".to_string()),
+                (2, "tool".to_string()),
+                (3, "delta".to_string()),
+                (4, "message".to_string())
+            ]
+        );
         let batch = state.pending("a1").unwrap();
-        assert_eq!((batch[2]["payload"]["text"].as_str(), batch[3]["payload"]["final"].as_bool()), (Some("second"), Some(true)));
+        assert_eq!(
+            (
+                batch[2]["payload"]["text"].as_str(),
+                batch[3]["payload"]["final"].as_bool()
+            ),
+            (Some("second"), Some(true))
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -498,7 +731,9 @@ mod tests {
         let dir = temp();
         let state = State::open(&dir).unwrap();
         state.record(&json!({"id": "a1"})).unwrap();
-        state.append("a1", "status", &json!({"yielded": "kept"})).unwrap();
+        state
+            .append("a1", "status", &json!({"yielded": "kept"}))
+            .unwrap();
         // The store refuses one kind. The rows before it in the batch must not stay.
         state.with(|c| c.execute_batch("CREATE TRIGGER refuse_boom BEFORE INSERT ON events WHEN NEW.kind = 'boom' BEGIN SELECT RAISE(ABORT, 'planted failure'); END;")).unwrap();
         let rows = vec![
@@ -508,7 +743,12 @@ mod tests {
         ];
         let err = state.append_batch("a1", &rows).unwrap_err();
         assert!(err.starts_with("runner.sqlite:"), "{err}");
-        let kinds: Vec<String> = state.pending("a1").unwrap().iter().map(|e| e["kind"].as_str().unwrap_or_default().to_string()).collect();
+        let kinds: Vec<String> = state
+            .pending("a1")
+            .unwrap()
+            .iter()
+            .map(|e| e["kind"].as_str().unwrap_or_default().to_string())
+            .collect();
         assert_eq!(kinds, vec!["status".to_string()]);
         assert_eq!(state.append("a1", "delta", &json!({})).unwrap(), 2);
         std::fs::remove_dir_all(dir).ok();
@@ -519,17 +759,36 @@ mod tests {
         let dir = temp();
         let state = State::open(&dir).unwrap();
         state.record(&json!({"id": "a2", "bot": "ops"})).unwrap();
-        state.append("a2", "message", &json!({"text": "hi"})).unwrap();
-        state.save_session("ops", "bot", "claude", "thread-1").unwrap();
-        state.interrupted("a2", "Runner restarted during execution").unwrap();
+        state
+            .append("a2", "message", &json!({"text": "hi"}))
+            .unwrap();
+        state
+            .save_session("ops", "bot", "claude", "thread-1")
+            .unwrap();
+        state
+            .interrupted("a2", "Runner restarted during execution")
+            .unwrap();
         drop(state);
         let script = "import sqlite3,sys,json\nc=sqlite3.connect(sys.argv[1])\nprint(c.execute('pragma journal_mode').fetchone()[0])\nprint(json.loads(c.execute('select completion from attempts').fetchone()[0])['outcome'])\nprint(c.execute('select thread from sessions').fetchone()[0])\nprint(','.join(r[0] for r in c.execute(\"select name from sqlite_master where type='table' order by name\")))";
-        let out = std::process::Command::new("python3").args(["-c", script]).arg(dir.join("runner.sqlite")).output().unwrap();
+        let out = std::process::Command::new("python3")
+            .args(["-c", script])
+            .arg(dir.join("runner.sqlite"))
+            .output()
+            .unwrap();
         // Every table SCHEMA declares, by name, so a new table can't leave a stale count behind (#1244 did).
-        let mut tables: Vec<&str> = SCHEMA.split("CREATE TABLE IF NOT EXISTS ").skip(1).map(|t| t.split('(').next().unwrap().trim()).collect();
+        let mut tables: Vec<&str> = SCHEMA
+            .split("CREATE TABLE IF NOT EXISTS ")
+            .skip(1)
+            .map(|t| t.split('(').next().unwrap().trim())
+            .collect();
         tables.sort();
         let tables = tables.join(",");
-        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["wal", "interrupted", "thread-1", tables.as_str()]);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            ["wal", "interrupted", "thread-1", tables.as_str()]
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 }

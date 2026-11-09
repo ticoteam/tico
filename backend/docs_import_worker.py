@@ -8,6 +8,7 @@ kills it at the time limit and removes the work directory after it exits.
 Importing this module has no side effects. Run as a script, it puts its own folder on sys.path to find docs_import,
 which is standard library only; imported as backend.docs_import_worker, it imports docs_import from the package.
 """
+
 import json
 import resource
 import sys

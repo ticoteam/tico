@@ -46,7 +46,10 @@ fn entropy(token: &str) -> f64 {
         *counts.entry(*c).or_default() += 1;
     }
     let n = chars.len() as f64;
-    -counts.values().map(|&c| c as f64 / n * (c as f64 / n).log2()).sum::<f64>()
+    -counts
+        .values()
+        .map(|&c| c as f64 / n * (c as f64 / n).log2())
+        .sum::<f64>()
 }
 
 /// A reason when `text` looks like a credential value, else "" (access_entry.secret_in).
@@ -57,7 +60,9 @@ pub fn secret_in(text: &str) -> String {
     for token in text.split(|c: char| c.is_whitespace() || ",;()\"'<>".contains(c)) {
         let long = token.chars().count() >= 24;
         if long
-            && token.chars().all(|c| c.is_ascii_alphanumeric() || "_+/=-".contains(c))
+            && token
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_+/=-".contains(c))
             && token.chars().any(|c| c.is_ascii_lowercase())
             && token.chars().any(|c| c.is_ascii_uppercase())
             && token.chars().any(|c| c.is_ascii_digit())
@@ -71,12 +76,19 @@ pub fn secret_in(text: &str) -> String {
 
 /// The variable names `${NAME}` placeholders in `text` refer to, in order.
 pub fn placeholders(text: &str) -> Vec<String> {
-    placeholder_re().captures_iter(text).map(|c| c[1].to_string()).collect()
+    placeholder_re()
+        .captures_iter(text)
+        .map(|c| c[1].to_string())
+        .collect()
 }
 
 /// `text` with each `${VAR}` replaced by env[VAR], for a harness that cannot read the placeholder itself.
 pub fn expand(text: &str, env: &Env) -> String {
-    placeholder_re().replace_all(text, |c: &regex::Captures| env.get(&c[1]).cloned().unwrap_or_default()).into_owned()
+    placeholder_re()
+        .replace_all(text, |c: &regex::Captures| {
+            env.get(&c[1]).cloned().unwrap_or_default()
+        })
+        .into_owned()
 }
 
 fn loopback_host(url: &url::Url) -> bool {
@@ -95,28 +107,53 @@ fn loopback_host(url: &url::Url) -> bool {
 /// A `mcp:` block, validated and normalised: {url, transport, headers?} (access_entry.clean_mcp).
 pub fn clean_mcp(mcp: &Value, env: &str) -> Result<Value, String> {
     let Some(m) = mcp.as_object() else {
-        return Err("mcp is an object such as {url: \"https://mcp.example.com/mcp\", transport: http}".into());
+        return Err(
+            "mcp is an object such as {url: \"https://mcp.example.com/mcp\", transport: http}"
+                .into(),
+        );
     };
-    let mut unknown: Vec<&String> = m.keys().filter(|k| !["url", "transport", "headers"].contains(&k.as_str())).collect();
+    let mut unknown: Vec<&String> = m
+        .keys()
+        .filter(|k| !["url", "transport", "headers"].contains(&k.as_str()))
+        .collect();
     unknown.sort();
     if !unknown.is_empty() {
-        return Err(format!("mcp does not take {}; it takes url, transport, headers", unknown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")));
+        return Err(format!(
+            "mcp does not take {}; it takes url, transport, headers",
+            unknown
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
-    let url = crate::manifest::text_or_empty(m.get("url")).trim().to_string();
+    let url = crate::manifest::text_or_empty(m.get("url"))
+        .trim()
+        .to_string();
     if url.is_empty() || url.chars().count() > 500 || url.chars().any(char::is_whitespace) {
         return Err("mcp.url is the server's address, such as https://mcp.example.com/mcp".into());
     }
     let parsed = url::Url::parse(&url).map_err(|_| "mcp.url is not a valid address".to_string())?;
     match parsed.scheme() {
-        "http" if !loopback_host(&parsed) => return Err("mcp.url must be https; plain http is only for a server on this computer (localhost)".into()),
+        "http" if !loopback_host(&parsed) => return Err(
+            "mcp.url must be https; plain http is only for a server on this computer (localhost)"
+                .into(),
+        ),
         "http" | "https" => {}
         _ => return Err("mcp.url must be https".into()),
     }
-    if parsed.host().is_none() || !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some_and(|f| !f.is_empty()) {
+    if parsed.host().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some_and(|f| !f.is_empty())
+    {
         return Err("mcp.url is a plain address: a host, no password and no #fragment".into());
     }
     if url.contains("${") || !secret_in(&url).is_empty() {
-        return Err("mcp.url holds no credential (put it in a header as ${VAR}, never in the address)".into());
+        return Err(
+            "mcp.url holds no credential (put it in a header as ${VAR}, never in the address)"
+                .into(),
+        );
     }
     let transport = {
         let t = crate::manifest::text_or_empty(m.get("transport"));
@@ -131,7 +168,11 @@ pub fn clean_mcp(mcp: &Value, env: &str) -> Result<Value, String> {
         None | Some(Value::Null) => &empty,
         Some(v) if !truthy(Some(v)) && !v.is_object() => &empty,
         Some(Value::Object(h)) if h.len() <= MAX_HEADERS => h,
-        Some(_) => return Err(format!("mcp.headers is an object of at most {MAX_HEADERS} headers")),
+        Some(_) => {
+            return Err(format!(
+                "mcp.headers is an object of at most {MAX_HEADERS} headers"
+            ))
+        }
     };
     static NAME: OnceLock<Regex> = OnceLock::new();
     let name_re = re(&NAME, r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$");
@@ -141,8 +182,15 @@ pub fn clean_mcp(mcp: &Value, env: &str) -> Result<Value, String> {
         if !name_re.is_match(&name) || NOT_SETTABLE.contains(&name.to_lowercase().as_str()) {
             return Err(format!("'{name}' is not a header name Tico will send"));
         }
-        let Some(value) = value.as_str().filter(|v| !v.trim().is_empty() && v.chars().count() <= 500 && !v.contains('\n') && !v.contains('\r')) else {
-            return Err(format!("mcp.headers.{name} is one line of text, such as \"Bearer ${{JIRA_API_TOKEN}}\""));
+        let Some(value) = value.as_str().filter(|v| {
+            !v.trim().is_empty()
+                && v.chars().count() <= 500
+                && !v.contains('\n')
+                && !v.contains('\r')
+        }) else {
+            return Err(format!(
+                "mcp.headers.{name} is one line of text, such as \"Bearer ${{JIRA_API_TOKEN}}\""
+            ));
         };
         let bare = placeholder_re().replace_all(value, "");
         if bare.contains('$') {
@@ -155,7 +203,11 @@ pub fn clean_mcp(mcp: &Value, env: &str) -> Result<Value, String> {
         }
         for used in placeholders(value) {
             if used != env {
-                let own = if env.is_empty() { "(set `env`) ".to_string() } else { format!("(${{{env}}}) ") };
+                let own = if env.is_empty() {
+                    "(set `env`) ".to_string()
+                } else {
+                    format!("(${{{env}}}) ")
+                };
                 return Err(format!("mcp.headers.{name} uses ${{{used}}}, but only the entry's own env variable {own}may be a placeholder"));
             }
         }
@@ -178,11 +230,15 @@ fn has_mcp(entry: &Value) -> bool {
 }
 
 fn entry_env(entry: &Value) -> String {
-    crate::manifest::text_or_empty(entry.get("env")).trim().to_string()
+    crate::manifest::text_or_empty(entry.get("env"))
+        .trim()
+        .to_string()
 }
 
 fn service_of(entry: &Value) -> String {
-    crate::manifest::text_or_empty(entry.get("service")).trim().to_lowercase()
+    crate::manifest::text_or_empty(entry.get("service"))
+        .trim()
+        .to_lowercase()
 }
 
 /// [(entry, cleaned mcp)] for each `tools:` entry with a valid `mcp:` block.
@@ -200,8 +256,22 @@ pub fn declared(tools: &Value) -> Vec<(Value, Value)> {
 
 /// The name a harness shows the model: the service, safe for a tool name (`google-drive` -> `google_drive`).
 pub fn server_name(service: &str) -> String {
-    let name: String = service.to_lowercase().chars().map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' { c } else { '_' }).collect();
-    if name.is_empty() { "mcp".into() } else { name }
+    let name: String = service
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        "mcp".into()
+    } else {
+        name
+    }
 }
 
 /// (servers, problems) for one run. A server is {name, service, url, transport, headers, env}; one whose
@@ -210,11 +280,22 @@ pub fn servers_for_run(tools: &Value, env: &Env) -> (Vec<Value>, Vec<String>) {
     let (mut servers, mut problems, mut used) = (vec![], vec![], HashSet::new());
     for (entry, mcp) in declared(tools) {
         let service = service_of(&entry);
-        let mut needs: Vec<String> = mcp["headers"].as_object().into_iter().flatten().flat_map(|(_, v)| placeholders(&text_of(v))).collect();
+        let mut needs: Vec<String> = mcp["headers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, v)| placeholders(&text_of(v)))
+            .collect();
         needs.sort();
         needs.dedup();
-        if needs.iter().any(|v| env.get(v).is_none_or(|x| x.trim().is_empty())) {
-            problems.push(format!("{service}: MCP server not passed, {} is not granted to this bot", needs.join(", ")));
+        if needs
+            .iter()
+            .any(|v| env.get(v).is_none_or(|x| x.trim().is_empty()))
+        {
+            problems.push(format!(
+                "{service}: MCP server not passed, {} is not granted to this bot",
+                needs.join(", ")
+            ));
             continue;
         }
         let (mut name, mut n) = (server_name(&service), 1);
@@ -255,7 +336,15 @@ pub fn unsupported(servers: &[Value], runtime: &str, harness: &str) -> Vec<(Valu
         .iter()
         .filter(|s| !allowed.contains(&text_of(&s["transport"])))
         .map(|s| {
-            let reason = if why.is_empty() { format!("it takes {} servers, not {}", allowed.join(" and "), text_of(&s["transport"])) } else { why.clone() };
+            let reason = if why.is_empty() {
+                format!(
+                    "it takes {} servers, not {}",
+                    allowed.join(" and "),
+                    text_of(&s["transport"])
+                )
+            } else {
+                why.clone()
+            };
             (s.clone(), format!("{name} cannot use it: {reason}"))
         })
         .collect()
@@ -263,7 +352,11 @@ pub fn unsupported(servers: &[Value], runtime: &str, harness: &str) -> Vec<(Valu
 
 pub fn supported(servers: &[Value], runtime: &str, harness: &str) -> Vec<Value> {
     let (_, allowed, _) = support(runtime, harness);
-    servers.iter().filter(|s| allowed.contains(&text_of(&s["transport"]))).cloned().collect()
+    servers
+        .iter()
+        .filter(|s| allowed.contains(&text_of(&s["transport"])))
+        .cloned()
+        .collect()
 }
 
 /// Readiness warnings for one bot: each MCP server its harness cannot pass. Needs no credential.
@@ -271,7 +364,12 @@ pub fn warnings_for(tools: &Value, runtime: &str, harness: &str) -> Vec<String> 
     let servers: Vec<Value> = declared(tools).iter().map(|(e, m)| json!({"service": service_of(e), "transport": m["transport"], "url": m["url"]})).collect();
     unsupported(&servers, runtime, harness)
         .into_iter()
-        .map(|(s, why)| format!("{}: its MCP server is not passed to the bot's runs. {why}", text_of(&s["service"])))
+        .map(|(s, why)| {
+            format!(
+                "{}: its MCP server is not passed to the bot's runs. {why}",
+                text_of(&s["service"])
+            )
+        })
         .collect()
 }
 
@@ -314,7 +412,11 @@ pub fn pi_config(servers: &[Value]) -> Map<String, Value> {
 pub fn gemini_config(servers: &[Value]) -> Map<String, Value> {
     let mut out = Map::new();
     for s in servers {
-        let key = if s["transport"] == "http" { "httpUrl" } else { "url" };
+        let key = if s["transport"] == "http" {
+            "httpUrl"
+        } else {
+            "url"
+        };
         let mut row = Map::new();
         row.insert(key.into(), s["url"].clone());
         let headers = headers_of(s);
@@ -331,7 +433,10 @@ pub fn grok_config(servers: &[Value], env: &Env) -> Vec<Value> {
     servers
         .iter()
         .map(|s| {
-            let headers: Vec<Value> = headers_of(s).iter().map(|(k, v)| json!({"name": k, "value": expand(&text_of(v), env)})).collect();
+            let headers: Vec<Value> = headers_of(s)
+                .iter()
+                .map(|(k, v)| json!({"name": k, "value": expand(&text_of(v), env)}))
+                .collect();
             json!({"type": s["transport"], "name": s["name"], "url": s["url"], "headers": headers})
         })
         .collect()
@@ -349,10 +454,16 @@ pub fn codex_config(servers: &[Value], env: &Env, process_env: &Env) -> Map<Stri
         for (name, value) in headers_of(s) {
             let value = text_of(&value);
             let found = placeholders(&value);
-            let var = if found.len() == 1 { found[0].clone() } else { String::new() };
+            let var = if found.len() == 1 {
+                found[0].clone()
+            } else {
+                String::new()
+            };
             let held = process_env.get(&var).filter(|v| !v.is_empty());
             if !var.is_empty() && held.is_some() && held == env.get(&var) {
-                if name.to_lowercase() == "authorization" && value.trim() == format!("Bearer ${{{var}}}") {
+                if name.to_lowercase() == "authorization"
+                    && value.trim() == format!("Bearer ${{{var}}}")
+                {
                     table.insert("bearer_token_env_var".into(), json!(var));
                     continue;
                 }
@@ -378,14 +489,22 @@ pub fn codex_config(servers: &[Value], env: &Env, process_env: &Env) -> Map<Stri
 /// takes a `tico_` prefix, so a bot's table never merges into a disabled stub.
 pub fn codex_merge(servers: &mut Map<String, Value>, remote: Map<String, Value>) {
     for (name, table) in remote {
-        let key = if servers.contains_key(&name) || name == "hub" { format!("tico_{name}") } else { name };
+        let key = if servers.contains_key(&name) || name == "hub" {
+            format!("tico_{name}")
+        } else {
+            name
+        };
         servers.insert(key, table);
     }
 }
 
 /// reachable | auth_failed | unreachable, from one cheap request: an MCP `initialize` POST, or the GET that
 /// opens an SSE stream. Redirects are not followed, so a credential never leaves for another host.
-pub async fn reachability(url: &str, transport: &str, headers: &[(String, String)]) -> &'static str {
+pub async fn reachability(
+    url: &str,
+    transport: &str,
+    headers: &[(String, String)],
+) -> &'static str {
     let Ok(http) = crate::tls::http_builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(REACH_TIMEOUT_S))
@@ -398,7 +517,10 @@ pub async fn reachability(url: &str, transport: &str, headers: &[(String, String
         http.get(url).header("Accept", "text/event-stream")
     } else {
         let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"tico-runner","version":"1"}}}"#;
-        http.post(url).header("Content-Type", "application/json").header("Accept", "application/json, text/event-stream").body(body)
+        http.post(url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .body(body)
     };
     for (k, v) in headers {
         if !v.contains('\n') && !v.contains('\r') {
@@ -430,20 +552,38 @@ impl Reach {
     /// counted reachable when it refuses.
     pub fn status(&self, bot: &str, row: &Value, entry: &Value) -> String {
         let mcp = &row["mcp"];
-        let needs: Vec<String> = mcp["headers"].as_object().into_iter().flatten().flat_map(|(_, v)| placeholders(&text_of(v))).collect();
+        let needs: Vec<String> = mcp["headers"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, v)| placeholders(&text_of(v)))
+            .collect();
         if !needs.is_empty() && entry.get("vault").and_then(|v| v.as_str()) != Some("hub") {
             return "unchecked".into();
         }
         let (url, transport) = (text_of(&mcp["url"]), text_of(&mcp["transport"]));
-        let key = format!("{bot}\u{1f}{}\u{1f}{url}\u{1f}{transport}", text_of(&row["service"]));
+        let key = format!(
+            "{bot}\u{1f}{}\u{1f}{url}\u{1f}{transport}",
+            text_of(&row["service"])
+        );
         let seen = self.seen.lock().unwrap().get(&key).cloned();
-        let stale = seen.as_ref().is_none_or(|(at, _)| at.elapsed() >= Duration::from_secs(REACH_TTL_S));
+        let stale = seen
+            .as_ref()
+            .is_none_or(|(at, _)| at.elapsed() >= Duration::from_secs(REACH_TTL_S));
         if stale && self.probing.lock().unwrap().insert(key.clone()) {
-            let (cache, probing, needed) = (self.seen.clone(), self.probing.clone(), !needs.is_empty());
+            let (cache, probing, needed) =
+                (self.seen.clone(), self.probing.clone(), !needs.is_empty());
             tokio::spawn(async move {
                 let status = reachability(&url, &transport, &[]).await;
-                let status = if status == "auth_failed" && needed { "reachable" } else { status };
-                cache.lock().unwrap().insert(key.clone(), (Instant::now(), status.to_string()));
+                let status = if status == "auth_failed" && needed {
+                    "reachable"
+                } else {
+                    status
+                };
+                cache
+                    .lock()
+                    .unwrap()
+                    .insert(key.clone(), (Instant::now(), status.to_string()));
                 probing.lock().unwrap().remove(&key);
             });
         }
@@ -468,7 +608,10 @@ mod tests {
     use super::*;
 
     fn env(pairs: &[(&str, &str)]) -> Env {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn tools() -> Value {
@@ -483,19 +626,46 @@ mod tests {
 
     #[test]
     fn a_block_is_validated_like_access_entry_clean_mcp() {
-        let ok = clean_mcp(&json!({"url": " https://mcp.example.com/mcp ", "headers": {"X-Key": "${K}"}}), "K").unwrap();
-        assert_eq!(ok, json!({"url": "https://mcp.example.com/mcp", "transport": "http", "headers": {"X-Key": "${K}"}}));
+        let ok = clean_mcp(
+            &json!({"url": " https://mcp.example.com/mcp ", "headers": {"X-Key": "${K}"}}),
+            "K",
+        )
+        .unwrap();
+        assert_eq!(
+            ok,
+            json!({"url": "https://mcp.example.com/mcp", "transport": "http", "headers": {"X-Key": "${K}"}})
+        );
         assert!(clean_mcp(&json!({"url": "http://localhost:8080/mcp"}), "").is_ok());
         assert!(clean_mcp(&json!({"url": "http://127.0.0.1/mcp"}), "").is_ok());
         let err = |m: Value, e: &str| clean_mcp(&m, e).unwrap_err();
         assert!(err(json!({"url": "http://example.com"}), "").contains("must be https"));
         assert!(err(json!({"url": "https://u:p@example.com"}), "").contains("plain address"));
-        assert!(err(json!({"url": "https://x.com", "headers": {"A": "${OTHER}"}}), "K").contains("only the entry's own env variable (${K})"));
-        assert!(err(json!({"url": "https://x.com", "headers": {"A": "Bearer sk-abcdefghijklmnop"}}), "").contains("looks like a credential"));
-        assert!(err(json!({"url": "https://x.com", "headers": {"Host": "x"}}), "").contains("'Host' is not a header name"));
-        assert!(err(json!({"url": "https://x.com", "headers": {"A": "$HOME"}}), "").contains("may only use"));
-        assert!(err(json!({"url": "https://x.com", "transport": "stdio"}), "").contains("one of http, sse"));
-        assert!(err(json!({"url": "https://x.com", "command": "x"}), "").contains("does not take command"));
+        assert!(err(
+            json!({"url": "https://x.com", "headers": {"A": "${OTHER}"}}),
+            "K"
+        )
+        .contains("only the entry's own env variable (${K})"));
+        assert!(err(
+            json!({"url": "https://x.com", "headers": {"A": "Bearer sk-abcdefghijklmnop"}}),
+            ""
+        )
+        .contains("looks like a credential"));
+        assert!(err(
+            json!({"url": "https://x.com", "headers": {"Host": "x"}}),
+            ""
+        )
+        .contains("'Host' is not a header name"));
+        assert!(err(
+            json!({"url": "https://x.com", "headers": {"A": "$HOME"}}),
+            ""
+        )
+        .contains("may only use"));
+        assert!(
+            err(json!({"url": "https://x.com", "transport": "stdio"}), "")
+                .contains("one of http, sse")
+        );
+        assert!(err(json!({"url": "https://x.com", "command": "x"}), "")
+            .contains("does not take command"));
         assert!(err(json!({"url": "https://x.com/?k=${K}"}), "K").contains("holds no credential"));
         assert_eq!(secret_in("a normal sentence"), "");
         assert!(!secret_in("token Zq8vR2mXk4Lp9Wn3Ts7Yb1Cd6Fg").is_empty());
@@ -505,35 +675,80 @@ mod tests {
     fn servers_for_a_run_need_their_granted_variable_and_each_harness_takes_its_transports() {
         let (servers, problems) = servers_for_run(&tools(), &env(&[]));
         assert_eq!(servers.len(), 1, "linear needs LINEAR_API_KEY");
-        assert_eq!(problems, ["linear: MCP server not passed, LINEAR_API_KEY is not granted to this bot"]);
+        assert_eq!(
+            problems,
+            ["linear: MCP server not passed, LINEAR_API_KEY is not granted to this bot"]
+        );
         let (servers, problems) = servers_for_run(&tools(), &env(&[("LINEAR_API_KEY", "v")]));
         assert!(problems.is_empty());
-        assert_eq!(servers.iter().map(|s| text_of(&s["name"])).collect::<Vec<_>>(), ["linear", "docs"]);
+        assert_eq!(
+            servers
+                .iter()
+                .map(|s| text_of(&s["name"]))
+                .collect::<Vec<_>>(),
+            ["linear", "docs"]
+        );
         assert_eq!(supported(&servers, "claude", "").len(), 2);
         let codex = unsupported(&servers, "codex", "");
         assert_eq!(codex.len(), 1);
-        assert_eq!(codex[0].1, "Codex cannot use it: it takes http servers, not sse");
+        assert_eq!(
+            codex[0].1,
+            "Codex cannot use it: it takes http servers, not sse"
+        );
         assert_eq!(supported(&servers, "gemini", "antigravity").len(), 0);
         // Pi takes streamable HTTP only: the SSE server is named, the HTTP one passes.
         assert_eq!(supported(&servers, "pi", "").len(), 1);
-        assert!(unsupported(&servers, "pi", "")[0].1.ends_with("cannot use it: it takes http servers, not sse"));
+        assert!(unsupported(&servers, "pi", "")[0]
+            .1
+            .ends_with("cannot use it: it takes http servers, not sse"));
         let warnings = warnings_for(&tools(), "codex", "");
         assert_eq!(warnings, ["docs: its MCP server is not passed to the bot's runs. Codex cannot use it: it takes http servers, not sse"]);
         let claude = claude_config(&servers);
-        assert_eq!(claude["linear"], json!({"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}}));
-        assert_eq!(claude["docs"], json!({"type": "sse", "url": "https://docs.example.com/sse"}));
+        assert_eq!(
+            claude["linear"],
+            json!({"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer ${LINEAR_API_KEY}"}})
+        );
+        assert_eq!(
+            claude["docs"],
+            json!({"type": "sse", "url": "https://docs.example.com/sse"})
+        );
         let gemini = gemini_config(&servers);
-        assert_eq!((gemini["linear"]["httpUrl"].as_str(), gemini["docs"]["url"].as_str()), (Some("https://mcp.linear.app/mcp"), Some("https://docs.example.com/sse")));
+        assert_eq!(
+            (
+                gemini["linear"]["httpUrl"].as_str(),
+                gemini["docs"]["url"].as_str()
+            ),
+            (
+                Some("https://mcp.linear.app/mcp"),
+                Some("https://docs.example.com/sse")
+            )
+        );
     }
 
     #[test]
     fn codex_reads_env_headers_itself_and_resolves_the_rest() {
         let server = |headers: Value| json!({"name": "svc", "url": "https://x.com/mcp", "transport": "http", "headers": headers});
         let granted = env(&[("K", "secret-value")]);
-        let held = codex_config(&[server(json!({"Authorization": "Bearer ${K}", "X-Key": "${K}", "X-Basic": "Basic ${K}"}))], &granted, &granted);
-        assert_eq!(held["svc"], json!({"url": "https://x.com/mcp", "bearer_token_env_var": "K", "env_http_headers": {"X-Key": "K"}, "http_headers": {"X-Basic": "Basic secret-value"}}));
-        let absent = codex_config(&[server(json!({"Authorization": "Bearer ${K}"}))], &granted, &env(&[]));
-        assert_eq!(absent["svc"]["http_headers"], json!({"Authorization": "Bearer secret-value"}));
+        let held = codex_config(
+            &[server(
+                json!({"Authorization": "Bearer ${K}", "X-Key": "${K}", "X-Basic": "Basic ${K}"}),
+            )],
+            &granted,
+            &granted,
+        );
+        assert_eq!(
+            held["svc"],
+            json!({"url": "https://x.com/mcp", "bearer_token_env_var": "K", "env_http_headers": {"X-Key": "K"}, "http_headers": {"X-Basic": "Basic secret-value"}})
+        );
+        let absent = codex_config(
+            &[server(json!({"Authorization": "Bearer ${K}"}))],
+            &granted,
+            &env(&[]),
+        );
+        assert_eq!(
+            absent["svc"]["http_headers"],
+            json!({"Authorization": "Bearer secret-value"})
+        );
         let mut stubs = Map::new();
         stubs.insert("svc".into(), json!({"enabled": false}));
         let mut remote = Map::new();
@@ -541,7 +756,10 @@ mod tests {
         remote.insert("hub".into(), json!({"url": "b"}));
         remote.insert("new".into(), json!({"url": "c"}));
         codex_merge(&mut stubs, remote);
-        assert_eq!(stubs.keys().cloned().collect::<Vec<_>>(), ["svc", "tico_svc", "tico_hub", "new"]);
+        assert_eq!(
+            stubs.keys().cloned().collect::<Vec<_>>(),
+            ["svc", "tico_svc", "tico_hub", "new"]
+        );
     }
 
     #[tokio::test]
@@ -563,6 +781,9 @@ mod tests {
         assert_eq!(reachability(&url, "http", &[]).await, "reachable");
         assert_eq!(reachability(&url, "sse", &[]).await, "unreachable");
         assert_eq!(reachability(&url, "http", &[]).await, "reachable");
-        assert_eq!(reachability("http://127.0.0.1:9/mcp", "http", &[]).await, "unreachable");
+        assert_eq!(
+            reachability("http://127.0.0.1:9/mcp", "http", &[]).await,
+            "unreachable"
+        );
     }
 }

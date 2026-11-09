@@ -3,6 +3,7 @@
 Unrelated historical blobs are not loaded. Small source maps are loaded only when a
 query touches that kind of content, and recursive lookups have bounded LRU caches.
 """
+
 from collections import defaultdict
 from functools import cached_property, lru_cache
 import re
@@ -28,6 +29,9 @@ class ReadIndex:
         self.private = {r["id"]: dict(r) for r in row_clock.parties(c)}
         # Meeting participant grants belong to one task, even when its parties match another task's.
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
+        from . import counsel
+
+        self.denied.update(counsel.denied_page_copies(c, who))
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
@@ -50,16 +54,25 @@ class ReadIndex:
         # room's meeting set is empty, which reads as allowed, so it needs no lookup per room.
         self.bound_rooms = self.meeting_rooms = None
         if rooms:
-            self.bound_rooms = {row[0] for row in c.execute(
-                "SELECT id FROM conversations WHERE substr(room_key,1,?)=?", (len(ROOM_PREFIX), ROOM_PREFIX))}
+            self.bound_rooms = {
+                row[0]
+                for row in c.execute(
+                    "SELECT id FROM conversations WHERE substr(room_key,1,?)=?", (len(ROOM_PREFIX), ROOM_PREFIX)
+                )
+            }
             self.meeting_rooms = set(self.bound_rooms)
             if c.execute("SELECT 1 FROM live_meeting_turns LIMIT 1").fetchone():
                 # The legacy keeper inputs live_privacy.Sources reads room by room, for every room at once.
-                self.meeting_rooms.update(row[0] for row in c.execute(
-                    "SELECT DISTINCT m.conversation_id FROM messages m JOIN live_meeting_turns t "
-                    "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
-                    "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
-                    "WHERE m.sender_id=? AND m.recipient_id='bot:'||t.bot", (H.KEEPER,)))
+                self.meeting_rooms.update(
+                    row[0]
+                    for row in c.execute(
+                        "SELECT DISTINCT m.conversation_id FROM messages m JOIN live_meeting_turns t "
+                        "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
+                        "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
+                        "WHERE m.sender_id=? AND m.recipient_id='bot:'||t.bot",
+                        (H.KEEPER,),
+                    )
+                )
 
     @cached_property
     def task_ids(self):
@@ -83,8 +96,13 @@ class ReadIndex:
         same messages. A scalar is checked by its own path, not here."""
         for key in ("task", "task_id"):
             value = refs.get(key)
-            if isinstance(value, list) and not (value and all(
-                    isinstance(tid, str) and self.known_task(tid) and not (denied and tid in self.denied) for tid in value)):
+            if isinstance(value, list) and not (
+                value
+                and all(
+                    isinstance(tid, str) and self.known_task(tid) and not (denied and tid in self.denied)
+                    for tid in value
+                )
+            ):
                 return False
         return True
 
@@ -114,8 +132,11 @@ class ReadIndex:
         return frozenset(ids)
 
     def content(self, value):
-        return ((not self.denied or not self.denied.intersection(self.references(value)))
-                and self.meetings.readable(self.principals, self.meetings.references(value)))
+        return (
+            privacy.page_content_readable(self.c, self.principals, value)
+            and (not self.denied or not self.denied.intersection(self.references(value)))
+            and self.meetings.readable(self.principals, self.meetings.references(value))
+        )
 
     def conversation(self, cid):
         if self.meeting_rooms is not None and cid not in self.meeting_rooms:
@@ -133,15 +154,21 @@ class ReadIndex:
 
     def attempts(self):
         if self._attempts is None:
-            rows = {r["id"]: {**dict(r), "messages": [r["message_id"]], "tasks": set()} for r in self.c.execute(
-                "SELECT a.id,a.bot_id,a.created_at,a.finished_at,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id")}
+            rows = {
+                r["id"]: {**dict(r), "messages": [r["message_id"]], "tasks": set()}
+                for r in self.c.execute(
+                    "SELECT a.id,a.bot_id,a.created_at,a.finished_at,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id"
+                )
+            }
             for aid, mid in self.c.execute("SELECT attempt_id,message_id FROM attempt_inputs"):
                 if aid in rows:
                     rows[aid]["messages"].append(mid)
             for tid, aid in self.c.execute("SELECT id,carried_by FROM tasks WHERE carried_by IS NOT NULL"):
                 if aid in rows and tid in self.private:
                     rows[aid]["tasks"].add(tid)
-            for aid, detail in self.c.execute("SELECT target,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ")"):
+            for aid, detail in self.c.execute(
+                "SELECT target,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ")"
+            ):
                 if aid in rows:
                     rows[aid]["tasks"].update(self.references(H._json(detail, {}) or {}))
             self._attempts = rows
@@ -151,15 +178,19 @@ class ReadIndex:
         # A LIMIT or a time window must not load every historical run. Keep the
         # fleet/event interval map separate from these primary-key SQL reads.
         row = self.c.execute(
-            "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (aid,)).fetchone()
+            "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (aid,)
+        ).fetchone()
         if not row:
             return set()
         ids = {r[0] for r in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)) if r[0] in self.private}
-        for detail, in self.c.execute("SELECT detail FROM events WHERE action IN (" +
-                                     privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)):
+        for (detail,) in self.c.execute(
+            "SELECT detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
+        ):
             ids.update(self.references(H._json(detail, {}) or {}))
-        mids = [row["message_id"], *(r[0] for r in self.c.execute(
-            "SELECT message_id FROM attempt_inputs WHERE attempt_id=?", (aid,)))]
+        mids = [
+            row["message_id"],
+            *(r[0] for r in self.c.execute("SELECT message_id FROM attempt_inputs WHERE attempt_id=?", (aid,))),
+        ]
         for mid in mids:
             ids.update(self.sources(self.target_message(mid), include_run=False))
         return frozenset(ids)
@@ -170,15 +201,20 @@ class ReadIndex:
             groups = defaultdict(list)
             for row in self.attempts().values():
                 groups[row["bot_id"]].append(row)
+
             def build(rows):
                 if not rows:
                     return None
                 middle = len(rows) // 2
                 row = rows[middle]
-                left, right = build(rows[:middle]), build(rows[middle + 1:])
+                left, right = build(rows[:middle]), build(rows[middle + 1 :])
                 end = row["finished_at"] or row["lease_until"]
                 return row, end, max(end, left[2] if left else "", right[2] if right else ""), left, right
-            self._intervals = {slug: build(sorted(rows, key=lambda r: r["created_at"])) for slug, rows in groups.items()}
+
+            self._intervals = {
+                slug: build(sorted(rows, key=lambda r: r["created_at"])) for slug, rows in groups.items()
+            }
+
         def search(node):
             if not node or node[2] < ts:
                 return
@@ -188,6 +224,7 @@ class ReadIndex:
                 if ts <= end:
                     yield row["id"]
                 yield from search(right)
+
         return search(self._intervals.get(bot))
 
     def attempt(self, aid):
@@ -195,8 +232,9 @@ class ReadIndex:
             direct = self._direct_attempt(aid)
             if direct is not None:
                 return direct
-            return (self.meetings.attempt_readable(self.principals, aid)
-                    and not self.denied.intersection(self.attempt_sources(aid)))
+            return self.meetings.attempt_readable(self.principals, aid) and not self.denied.intersection(
+                self.attempt_sources(aid)
+            )
         except ValueError:
             return False
 
@@ -207,7 +245,9 @@ class ReadIndex:
             "SELECT m.conversation_id,m.refs,m.in_reply_to FROM attempts a JOIN jobs j ON j.id=a.job_id "
             "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
             "SELECT m.conversation_id,m.refs,m.in_reply_to FROM attempt_inputs i "
-            "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid, aid))
+            "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
+            (aid, aid),
+        )
         found = False
         for row in rows:
             found = True
@@ -220,10 +260,12 @@ class ReadIndex:
                 return False
         if not found:
             return None
-        if any(tid in self.denied for tid, in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,))):
+        if any(tid in self.denied for (tid,) in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,))):
             return False
-        for action, detail in self.c.execute("SELECT action,detail FROM events WHERE action IN (" +
-                                            privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)):
+        for action, detail in self.c.execute(
+            "SELECT action,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?",
+            (aid,),
+        ):
             data = H._json(detail, {}) or {}
             if not isinstance(data, dict):
                 return None
@@ -233,7 +275,9 @@ class ReadIndex:
                 try:
                     meetings = self.meetings.references(data)
                     if data.get("message_id"):
-                        meetings.update(self.meetings.message(self.target_message(data["message_id"]), include_run=False))
+                        meetings.update(
+                            self.meetings.message(self.target_message(data["message_id"]), include_run=False)
+                        )
                     if not self.meetings.readable(self.principals, meetings):
                         return False
                 except Problem:
@@ -282,24 +326,23 @@ class ReadIndex:
 
     def message(self, mid, cid, refs, reply):
         if isinstance(refs, (dict, list)):
-            refs = H._dump(refs)                # a message view holds refs decoded; the index reads stored text
+            refs = H._dump(refs)  # a message view holds refs decoded; the index reads stored text
         try:
             # Most history rows have no inherited provenance. Validate their
             # room once per request, retaining unknown/deleted task denial.
             if refs in (None, "", "{}") and not reply:
                 return self.plain_room(cid)
             # Do not retain large arbitrary reference payloads as cache keys.
-            direct = (self.direct_message(cid, refs) if len(refs or "") <= 4096
-                      else self._direct_message(cid, refs))
+            direct = self.direct_message(cid, refs) if len(refs or "") <= 4096 else self._direct_message(cid, refs)
             if direct is not None:
                 if not direct or not reply or reply == mid:
                     return direct
                 parent = self.direct_parent(reply)
                 if parent is not None:
                     return parent
-            return (self.meetings.message_readable(self.principals,
-                    {"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply})
-                    and not self.denied.intersection(self.message_sources(mid, cid, refs, reply)))
+            return self.meetings.message_readable(
+                self.principals, {"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply}
+            ) and not self.denied.intersection(self.message_sources(mid, cid, refs, reply))
         except ValueError:
             return False
 
@@ -327,15 +370,20 @@ class ReadIndex:
         data = H._json(refs, {}) or {}
         if not isinstance(data, dict):
             raise ValueError("Unsupported message provenance")
+        if not privacy.page_message_readable(self.c, self.principals, data):
+            return False
         run = data.get("run")
         aid = data.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if any(isinstance(data.get(key), list) and data[key] for key in ("answers", "inputs")):
             return None
         tid = H.message_task_id({"refs": data}, {"task_id": self.conversation_tasks.get(cid)})
-        return (self.plain_room(cid) and (not tid or (self.known_task(tid) and tid not in self.denied))
-                and self.listed_tasks_known(data)
-                and (not self.possible_content(refs or "") or self.content(data))
-                and (not include_run or not aid or self.attempt(aid)))
+        return (
+            self.plain_room(cid)
+            and (not tid or (self.known_task(tid) and tid not in self.denied))
+            and self.listed_tasks_known(data)
+            and (not self.possible_content(refs or "") or self.content(data))
+            and (not include_run or not aid or self.attempt(aid))
+        )
 
     def _direct_parent(self, mid):
         # A single non-inherited parent has at most two visited messages. Longer
@@ -357,11 +405,16 @@ class ReadIndex:
             rows = defaultdict(set)
             for tag, tid in self.c.execute("SELECT tag_id,task_id FROM task_tags"):
                 rows[tag].add(tid)
-            for target, detail in self.c.execute("SELECT target,detail FROM events INDEXED BY events_tag_attach "
-                                                 "WHERE action='tag.attach'"):
+            for target, detail in self.c.execute(
+                "SELECT target,detail FROM events INDEXED BY events_tag_attach WHERE action='tag.attach'"
+            ):
                 data = H._json(detail, {}) or {}
                 # Tag history contains explicit task references, not arbitrary prose.
-                rows[target].update(v for v in privacy.reference_strings(data.get("task_id") or data.get("task") or "") if self.known_task(v))
+                rows[target].update(
+                    v
+                    for v in privacy.reference_strings(data.get("task_id") or data.get("task") or "")
+                    if self.known_task(v)
+                )
             self._tags = rows
         return self._tags
 
@@ -376,11 +429,15 @@ class ReadIndex:
             return False
         msg = self.target_message(target)
         try:
-            if msg and (msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
-                        or not self.meetings.message_readable(self.principals, msg)):
+            if msg and (
+                msg.get("deleted_at")
+                or msg.get("deleted")
+                or self.denied.intersection(self.sources(msg))
+                or not self.meetings.message_readable(self.principals, msg)
+            ):
                 return False
         except ValueError:
-            return False    # provenance that cannot be read (a list naming a missing task) hides this row, not the query
+            return False  # provenance that cannot be read (a list naming a missing task) hides this row, not the query
         if not self.conversation(target):
             return False
         meeting = self.c.execute("SELECT * FROM live_meetings WHERE id=?", (target,)).fetchone()
@@ -401,8 +458,10 @@ class ReadIndex:
                 rows[bid]["tasks"].add(tid)
             for bid, mid in self.c.execute("SELECT blob_id,message_id FROM message_assets"):
                 rows[bid]["messages"].add(mid)
-            for r in self.c.execute("SELECT v.blob_id,v.poster_blob_id,v.thumb_blob_id,v.attempt_id,f.task_id,f.scope "
-                                    "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id"):
+            for r in self.c.execute(
+                "SELECT v.blob_id,v.poster_blob_id,v.thumb_blob_id,v.attempt_id,f.task_id,f.scope "
+                "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id"
+            ):
                 for bid in filter(None, (r["blob_id"], r["poster_blob_id"], r["thumb_blob_id"])):
                     if r["task_id"]:
                         rows[bid]["tasks"].add(r["task_id"])
@@ -431,9 +490,16 @@ class ReadIndex:
         for mid in row["messages"]:
             msg = self.target_message(mid)
             try:
-                if (not msg or msg.get("deleted_at") or msg.get("deleted") or self.denied.intersection(self.sources(msg))
-                        or not self.meetings.message_readable(self.principals, msg)):
+                if (
+                    not msg
+                    or msg.get("deleted_at")
+                    or msg.get("deleted")
+                    or self.denied.intersection(self.sources(msg))
+                    or not self.meetings.message_readable(self.principals, msg)
+                ):
                     return False
             except ValueError:
-                return False    # the message's provenance cannot be read (see event): this attachment is hidden
-        return all(self.attempt(aid) for aid in row["attempts"]) and all(self.blob(parent, seen) for parent in row["parents"])
+                return False  # the message's provenance cannot be read (see event): this attachment is hidden
+        return all(self.attempt(aid) for aid in row["attempts"]) and all(
+            self.blob(parent, seen) for parent in row["parents"]
+        )

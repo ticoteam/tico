@@ -1,4 +1,5 @@
 """Thread-scoped native goals, delivered through the conversation's existing job queue."""
+
 import json
 from typing import Literal
 
@@ -10,8 +11,13 @@ from .store import H, Problem, bot_readiness, readiness_document, encode
 from . import bot_settings as BS
 
 TICO_COMMANDS = [
-    {"name": "goal", "args": "<objective>", "help": "Pin a goal the bot works toward", "kind": "tico",
-     "sub": ["pause", "resume", "clear", "edit"]},
+    {
+        "name": "goal",
+        "args": "<objective>",
+        "help": "Pin a goal the bot works toward",
+        "kind": "tico",
+        "sub": ["pause", "resume", "clear", "edit"],
+    },
     {"name": "new", "args": "", "help": "New chat", "kind": "tico"},
     {"name": "task", "args": "<title>", "help": "Make a task for this bot", "kind": "tico"},
     {"name": "branch", "args": "", "help": "Make my branch", "kind": "tico"},
@@ -38,36 +44,48 @@ def capabilities(c, auth, conv):
     elif not bots and conv.get("audience") in ("personal", "members") and not conv.get("parent_id"):
         # A DM made as threads make one (threads.dm) lists its people as members, not participants: a bot's DM is
         # the bot's chat, as the bot's chat room was.
-        bots = [H.actor_id(r[0]) for r in c.execute(
-            "SELECT actor FROM thread_members WHERE thread_id=? AND actor LIKE 'bot:%'", (conv["id"],))]
+        bots = [
+            H.actor_id(r[0])
+            for r in c.execute(
+                "SELECT actor FROM thread_members WHERE thread_id=? AND actor LIKE 'bot:%'", (conv["id"],)
+            )
+        ]
     if len(bots) != 1 or bots[0] == auth.settings.assistant_bot:
         return None, False, []
     bot = bots[0]
     config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
-                    "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
+    row = c.execute(
+        "SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+        "WHERE a.bot=? AND r.revoked_at IS NULL",
+        (bot,),
+    ).fetchone()
     report = readiness_document(row[0]) if row else {}
     detail = bot_readiness(row[0], bot) if row else {}
     if "goals" not in detail:
         detail = report.get("runtimes", {}).get(runtime, {})
         if "goals" not in detail:
-            detail = next((row for row in report.get("harnesses", {}).values()
-                           if row.get("runtime") == runtime), {})
+            detail = next((row for row in report.get("harnesses", {}).values() if row.get("runtime") == runtime), {})
     # Goals are probed per installed version and reported on the heartbeat; only that report says yes.
     supported = detail.get("goals") is True
-    commands = [*TICO_COMMANDS, *[{key: value for key, value in command.items() if value is not None}
-                                for command in detail.get("commands", [])
-                                if command.get("kind") == "harness" and command.get("name") not in
-                                {item["name"] for item in TICO_COMMANDS}]]
+    commands = [
+        *TICO_COMMANDS,
+        *[
+            {key: value for key, value in command.items() if value is not None}
+            for command in detail.get("commands", [])
+            if command.get("kind") == "harness" and command.get("name") not in {item["name"] for item in TICO_COMMANDS}
+        ],
+    ]
     return bot, supported, commands
 
 
 def readable_active(c, auth, who, bot, conversations=None):
     """`conversations`: the bot's active goals' conversation ids, when the caller has read them already."""
     if conversations is None:
-        conversations = [row[0] for row in c.execute(
-            "SELECT conversation_id FROM chat_goals WHERE bot=? AND status='active'", (bot,))]
+        conversations = [
+            row[0]
+            for row in c.execute("SELECT conversation_id FROM chat_goals WHERE bot=? AND status='active'", (bot,))
+        ]
     for conversation in conversations:
         try:
             auth.conversation(c, who, conversation)
@@ -90,7 +108,8 @@ def report(c, attempt, payload):
     # A task room's goal rides every turn on the task (task_goal_row), not only messages sent under it:
     # the attempt was handed this revision, which the payload must still name.
     if (context.get("id") != goal["id"] or context.get("updated_at") != goal["updated_at"]) and not (
-            room.get("kind") == "task" and room.get("task_id")):
+        room.get("kind") == "task" and room.get("task_id")
+    ):
         return
     if payload.get("goal_id") != goal["id"] or payload.get("revision") != goal["updated_at"]:
         return
@@ -112,14 +131,23 @@ def report(c, attempt, payload):
         if row and row["status"] in ("done", "closed"):
             status = "met"
     now = H.now()
-    c.execute("UPDATE chat_goals SET status=?,note=?,updated_at=?,ended_at=? WHERE id=?",
-              (status, note, now, now if status in ("met", "stopped", "cleared") else None, goal["id"]))
+    c.execute(
+        "UPDATE chat_goals SET status=?,note=?,updated_at=?,ended_at=? WHERE id=?",
+        (status, note, now, now if status in ("met", "stopped", "cleared") else None, goal["id"]),
+    )
     if status in ("met", "stopped"):
         # A notice to the bot itself stays in the chat without waking it or notifying people.
-        H._write_message(c, "bot:" + goal["bot"], "bot:" + goal["bot"],
-              ("Goal met: " if status == "met" else "Goal stopped: ") + goal["objective"] +
-              ("\n" + note if note else ""), H.conversation(c, goal["conversation_id"]), "notice",
-              {"chat_goal": goal["id"], "goal_status": status}, None, None)
+        H._write_message(
+            c,
+            "bot:" + goal["bot"],
+            "bot:" + goal["bot"],
+            ("Goal met: " if status == "met" else "Goal stopped: ") + goal["objective"] + ("\n" + note if note else ""),
+            H.conversation(c, goal["conversation_id"]),
+            "notice",
+            {"chat_goal": goal["id"], "goal_status": status},
+            None,
+            None,
+        )
     H.event(c, "bot:" + goal["bot"], "chat.goal", goal["conversation_id"], {"status": status})
     if room.get("kind") == "task" and room.get("task_id"):
         task_goal_ended(c, goal, room["task_id"], status, note)
@@ -132,10 +160,13 @@ TASK_GOAL_CHARS = 3500
 def task_goal_objective(task, objective, steps=()):
     """What a task's native goal holds the bot to: the task's own objective, then marking it done, or on a
     steps-only type (`steps`, its step names) moving it to the step its work has reached."""
-    tail = (f"\nThen move task {task['id']} to the step its work has reached ({', '.join(steps)}) with a summary "
-            f"(hub task update {task['id']} --step \"<step>\" --note ...)." if steps else
-            f"\nThen mark task {task['id']} done with a summary (hub task update {task['id']} --status done --note ...).")
-    return objective[:TASK_GOAL_CHARS - len(tail)].rstrip() + tail
+    tail = (
+        f"\nThen move task {task['id']} to the step its work has reached ({', '.join(steps)}) with a summary "
+        f"(hub task update {task['id']} --step \"<step>\" --note ...)."
+        if steps
+        else f"\nThen mark task {task['id']} done with a summary (hub task update {task['id']} --status done --note ...)."
+    )
+    return objective[: TASK_GOAL_CHARS - len(tail)].rstrip() + tail
 
 
 def task_goal_row(c, auth, conv, bot, task, objective):
@@ -154,8 +185,10 @@ def task_goal_row(c, auth, conv, bot, task, objective):
         return goal if goal["status"] == "active" else None
     now = H.now()
     c.execute("DELETE FROM chat_goals WHERE conversation_id=?", (conv["id"],))
-    c.execute("INSERT INTO chat_goals VALUES(?,?,?,?,?,?,?,?,?,?)",
-              (H.new_id(), conv["id"], bot, objective, "active", "", H.KEEPER, now, now, None))
+    c.execute(
+        "INSERT INTO chat_goals VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (H.new_id(), conv["id"], bot, objective, "active", "", H.KEEPER, now, now, None),
+    )
     H.event(c, H.KEEPER, "chat.goal", conv["id"], {"status": "active", "task": task["id"]})
     return current(c, conv["id"])
 
@@ -172,14 +205,33 @@ def clear_task_goal(c, conv):
     if not goal or goal["set_by"] != H.KEEPER or goal["status"] not in ("active", "paused"):
         return None
     now = H.now()
-    c.execute("UPDATE chat_goals SET status='cleared',note=?,updated_at=?,ended_at=? WHERE id=?",
-              ("The task's goal was turned off", now, now, goal["id"]))
-    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
-              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)",
-              (conv["id"],))
-    H._write_message(c, H.KEEPER, "bot:" + goal["bot"], "/goal clear", conv, "say",
-                     {"task": conv["task_id"], "command": True, "goal_action": "clear", "goal_id": goal["id"],
-                      "goal_revision": now, "goal_objective": goal["objective"]}, None, None)
+    c.execute(
+        "UPDATE chat_goals SET status='cleared',note=?,updated_at=?,ended_at=? WHERE id=?",
+        ("The task's goal was turned off", now, now, goal["id"]),
+    )
+    c.execute(
+        "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+        "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)",
+        (conv["id"],),
+    )
+    H._write_message(
+        c,
+        H.KEEPER,
+        "bot:" + goal["bot"],
+        "/goal clear",
+        conv,
+        "say",
+        {
+            "task": conv["task_id"],
+            "command": True,
+            "goal_action": "clear",
+            "goal_id": goal["id"],
+            "goal_revision": now,
+            "goal_objective": goal["objective"],
+        },
+        None,
+        None,
+    )
     H.event(c, H.KEEPER, "chat.goal", conv["id"], {"status": "cleared", "task": conv["task_id"]})
     return current(c, conv["id"])
 
@@ -195,11 +247,17 @@ def task_goal_ended(c, goal, task_id, status, note):
         # Only the goal Tico set for the task, for its objective as it stands: a goal a person set in the room
         # ("summarize where it is") being met says nothing about the task (its "Goal met" line is in the room).
         from .execution import current_task_goal
+
         wanted = current_task_goal(c, goal["bot"], row)
         # A steps-only type's task is finished by the bot moving it to a step, not by its goal being met.
         steps = H.steps_only(c, row)
-        if (row["status"] in ("open", "doing") and goal["set_by"] == H.KEEPER and wanted and not steps
-                and goal["objective"] == task_goal_objective(row, wanted["objective"], steps)):
+        if (
+            row["status"] in ("open", "doing")
+            and goal["set_by"] == H.KEEPER
+            and wanted
+            and not steps
+            and goal["objective"] == task_goal_objective(row, wanted["objective"], steps)
+        ):
             H.task_update(c, row["owner_id"], task_id, status="done", note=(note or "Goal met.")[:4000], strict=False)
         return
     if status in ("paused", "stopped"):
@@ -225,9 +283,11 @@ def install(app, store, auth, mutate, send):
             # A goal is words the conversation's readers see: a private run sets one only where its own work may
             # post (the same check as a message; task_privacy.private_thread_destination for a native thread).
             from . import task_privacy
+
             task_privacy.require_destination(c, who, who.actor, cid, {})
             goal = set_goal(c, auth, who, cid, body.action, body.objective, send)
             return {"goal": goal}
+
         return mutate(request, body, work)
 
 
@@ -293,22 +353,41 @@ def set_goal(c, auth, who, cid, action, objective, send):
     status = {"pause": "paused", "clear": "cleared"}.get(action, "active")
     if action == "set":
         c.execute("DELETE FROM chat_goals WHERE conversation_id=?", (cid,))
-        c.execute("INSERT INTO chat_goals VALUES(?,?,?,?,?,?,?,?,?,?)",
-                  (H.new_id(), cid, bot, objective, status, "", who.actor, now, now, None))
+        c.execute(
+            "INSERT INTO chat_goals VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (H.new_id(), cid, bot, objective, status, "", who.actor, now, now, None),
+        )
     else:
         # Whoever changes a goal owns it from then on: a person's clear or edit of the goal Tico set for a
         # task is theirs, so the task's goal does not bring it back (task_goal_row) or end it (clear_task_goal).
-        c.execute("UPDATE chat_goals SET objective=?,status=?,note=?,updated_at=?,ended_at=?,set_by=? WHERE conversation_id=?",
-                  (objective if action == "edit" else goal["objective"], status, "", now,
-                   now if status == "cleared" else None, who.actor, cid))
+        c.execute(
+            "UPDATE chat_goals SET objective=?,status=?,note=?,updated_at=?,ended_at=?,set_by=? WHERE conversation_id=?",
+            (
+                objective if action == "edit" else goal["objective"],
+                status,
+                "",
+                now,
+                now if status == "cleared" else None,
+                who.actor,
+                cid,
+            ),
+        )
     goal = current(c, cid)
     # Superseded controls must never reset a newer objective when the computer catches up.
-    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
-              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)", (cid,))
+    c.execute(
+        "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+        "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)",
+        (cid,),
+    )
     text = "/goal clear" if action in ("pause", "clear") else "/goal " + goal["objective"]
     message = send(c, who, M.MessageCreate(to="bot:" + bot, text=text, conversation_id=cid, command=True))
-    refs = {**(message.get("refs") or {}), "goal_action": action, "goal_id": goal["id"],
-            "goal_revision": now, "goal_objective": goal["objective"]}
+    refs = {
+        **(message.get("refs") or {}),
+        "goal_action": action,
+        "goal_id": goal["id"],
+        "goal_revision": now,
+        "goal_objective": goal["objective"],
+    }
     c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
     # The objective is stored after send()'s own recheck: charge the final references.
     H.held_queue_recheck(c, message["id"])

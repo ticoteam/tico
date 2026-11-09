@@ -30,13 +30,23 @@ PUSHABLE = SECTIONS
 # who is primary for the product team in registry/people.yaml, else the environment owner.
 FEATURE_TEAM = "product"
 # Labels that describe a process on the old board, never a request; a push carrying one is refused.
-PROCESS_LABELS = {"blocked", "blocked by specs", "needs architecture review", "needs peer review",
-                  "spec reviewed", "in review", "ready for qa"}
+PROCESS_LABELS = {
+    "blocked",
+    "blocked by specs",
+    "needs architecture review",
+    "needs peer review",
+    "spec reviewed",
+    "in review",
+    "ready for qa",
+}
 DUPLICATE_RATIO = 0.8
 DOC_BOT = "doc-updater"
+# A doc update goes to the owner it names, else to DOC_BOT when the person can send it work.
+DOC_OWNER_NAMED = "Pick someone on this team to own this doc update, then push again."
+DOC_OWNER_DEFAULT = "Pick who this doc update is for, then push again."
 # Only these keys mean anything per section, so anything else is a mistake worth naming.
 DETAIL_KEYS = {
-    "doc": ("document", "change", "why"),
+    "doc": ("document", "change", "why", "owner"),
     "task": ("owner", "due", "priority", "body"),
     "feature": ("side", "app", "area", "bug", "current", "expected", "labels"),
 }
@@ -71,31 +81,6 @@ class ItemPush(M.Contract):
     private: bool = False
 
 
-class CommentCreate(M.Contract):
-    text: str = Field(min_length=1, max_length=4_000)
-    at_ms: int | None = Field(default=None, ge=0, le=86_400_000)
-
-
-# ----------------------------------------------------------------------------- comments
-def comments(c, rid, people=None):
-    """The thread on one meeting, oldest first, with the author's roster name."""
-    people = people if people is not None else roster(c)
-    out = []
-    for row in c.execute("SELECT * FROM meeting_comments WHERE meeting_id=? ORDER BY created_at, id", (rid,)):
-        person = P.person(H.actor_id(row["author"]), people) if str(row["author"]).startswith("human:") else None
-        out.append({**dict(row), "author_name": (person or {}).get("name") or row["author"]})
-    return out
-
-
-def comment(c, record, who, body):
-    """Anyone who can open the meeting can add to its thread; the recorder's own note is separate."""
-    ts, cid = H.now(), H.new_id()
-    c.execute("INSERT INTO meeting_comments(id,meeting_id,author,text,at_ms,created_at) VALUES(?,?,?,?,?,?)",
-              (cid, record["id"], who.actor, body.text.strip(), body.at_ms, ts))
-    H.event(c, who.actor, "meeting.comment_added", record["id"], {"comment": cid})
-    return comments(c, record["id"])[-1]
-
-
 def detail_of(section, value):
     """The detail a section understands. An unknown key is a mistake, not something to drop."""
     if value is None:
@@ -105,8 +90,9 @@ def detail_of(section, value):
     allowed = DETAIL_KEYS[section]
     extra = sorted(set(value) - set(allowed))
     if extra:
-        raise Problem("detail", f"A {section} item has no {', '.join(extra)}; it takes "
-                                f"{', '.join(allowed) or 'no detail'}", 422)
+        raise Problem(
+            "detail", f"A {section} item has no {', '.join(extra)}; it takes {', '.join(allowed) or 'no detail'}", 422
+        )
     out = {}
     for key, raw in value.items():
         if raw is None or raw == "":
@@ -151,15 +137,20 @@ def one(c, rid, iid):
 def listing(c, who, rid, auth):
     """Every item on this meeting, grouped by section, plus whether this person may push."""
     record = media.authorized(c, who, rid)
-    rows = [view(r, c, who, auth) for r in c.execute(
-        "SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created_at, id", (rid,))]
+    rows = [
+        view(r, c, who, auth)
+        for r in c.execute("SELECT * FROM meeting_items WHERE meeting_id=? ORDER BY created_at, id", (rid,))
+    ]
     private = media.effective_audience(record['metadata']) != 'team'
     allowed = meeting_audience.audience(c, auth, record=record) if private and auth else None
-    return {"id": rid, "can_send": record.get("review_state", "live") == "live",
-            "can_push": record.get("review_state", "live") == "live",
-            "audience": sorted(allowed) if allowed is not None else None,
-            "sections": {section: [r for r in rows if r["section"] == section] for section in SECTIONS},
-            "counts": {"proposed": sum(1 for r in rows if r["status"] == "proposed" and r["section"] in PUSHABLE)}}
+    return {
+        "id": rid,
+        "can_send": record.get("review_state", "live") == "live",
+        "can_push": record.get("review_state", "live") == "live",
+        "audience": sorted(allowed) if allowed is not None else None,
+        "sections": {section: [r for r in rows if r["section"] == section] for section in SECTIONS},
+        "counts": {"proposed": sum(1 for r in rows if r["status"] == "proposed" and r["section"] in PUSHABLE)},
+    }
 
 
 # ----------------------------------------------------------------------------- writing
@@ -168,11 +159,24 @@ def add(c, record, author, body):
     section = body.section
     detail = detail_of(section, body.detail)
     ts, iid = H.now(), H.new_id()
-    c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail,quote,at_ms,status,"
-              "created_by,updated_by,pushed_at,result_ref,created_at,updated_at,proposed_task_id) "
-              "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?,?)",
-              (iid, record["id"], section, body.text.strip(), json.dumps(detail, sort_keys=True),
-               body.quote.strip(), body.at_ms, author, ts, ts, body.proposed_task_id))
+    c.execute(
+        "INSERT INTO meeting_items(id,meeting_id,section,text,detail,quote,at_ms,status,"
+        "created_by,updated_by,pushed_at,result_ref,created_at,updated_at,proposed_task_id) "
+        "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?,?)",
+        (
+            iid,
+            record["id"],
+            section,
+            body.text.strip(),
+            json.dumps(detail, sort_keys=True),
+            body.quote.strip(),
+            body.at_ms,
+            author,
+            ts,
+            ts,
+            body.proposed_task_id,
+        ),
+    )
     H.event(c, author, "meeting.item_added", record["id"], {"item": iid, "section": section})
     return view(one(c, record["id"], iid))
 
@@ -195,15 +199,18 @@ def edit(c, rid, author, iid, body, *, bump_version=True):
     if bump_version:
         sets.append("version=version+1")
     if body.text is not None:
-        sets.append("text=?"); args.append(body.text.strip())
+        sets.append("text=?")
+        args.append(body.text.strip())
     if body.detail is not None:
         merged = json.loads(row["detail"] or "{}")
         for key in body.detail:
             merged.pop(key, None)
         merged.update(detail_of(row["section"], body.detail))
-        sets.append("detail=?"); args.append(json.dumps(merged, sort_keys=True))
+        sets.append("detail=?")
+        args.append(json.dumps(merged, sort_keys=True))
     if body.status is not None:
-        sets.append("status=?"); args.append(body.status)
+        sets.append("status=?")
+        args.append(body.status)
     c.execute(f"UPDATE meeting_items SET {','.join(sets)} WHERE id=? AND meeting_id=?", (*args, iid, rid))
     if body.status == "dismissed":
         H.event(c, author, "meeting.item_dismissed", rid, {"item": iid, "section": row["section"]})
@@ -239,23 +246,55 @@ def owner_of(c, detail):
 def push_task(c, settings, task_create, who, record, row, detail, private=False):
     owner = owner_of(c, detail)
     priority = detail.get("priority") or "p2"
-    body = "\n\n".join([detail.get("body") or "", f"Priority: {priority}", source(settings, record, row, person_name(c, who))])
-    created = task_create(c, who, M.TaskCreate(title=row["text"][:300], body=body, owner=owner,
-                                              due=detail.get("due") or None,
-                                              private=bool(private or record['metadata'].get('private')
-                                                           or media.effective_audience(record['metadata']) != 'team')))
+    body = "\n\n".join(
+        [detail.get("body") or "", f"Priority: {priority}", source(settings, record, row, person_name(c, who))]
+    )
+    created = task_create(
+        c,
+        who,
+        M.TaskCreate(
+            title=row["text"][:300],
+            body=body,
+            owner=owner,
+            due=detail.get("due") or None,
+            private=bool(
+                private or record['metadata'].get('private') or media.effective_audience(record['metadata']) != 'team'
+            ),
+        ),
+    )
     return created["task"]["id"]
 
 
-def push_doc(c, settings, task_create, who, record, row, detail):
-    body = "\n\n".join(part for part in [
-        "Document: " + (detail.get("document") or "(the meeting did not name one)"),
-        "Change: " + (detail.get("change") or row["text"]),
-        ("Why: " + detail["why"]) if detail.get("why") else "",
-        source(settings, record, row, person_name(c, who)),
-    ] if part)
-    created = task_create(c, who, M.TaskCreate(title=("Doc update: " + row["text"])[:300], body=body,
-                                               owner="bot:" + DOC_BOT))
+def doc_owner(c, auth, who, detail):
+    """Who a doc update is for: the owner the person named, else the documentation bot when this team has it and
+    the person may send it work. Anything else is refused as a choice to make, never as "Unknown recipient"."""
+    named = str(detail.get("owner") or "").strip()
+    if not named:
+        bot = H.resolve_actor(c, DOC_BOT)
+        if not bot or not auth.bot_access(c, who, H.actor_id(bot))["write"]:
+            raise Problem("owner", DOC_OWNER_DEFAULT, 422)
+        return bot
+    actor = H.resolve_actor(c, named)
+    if not actor or actor == H.KEEPER:
+        raise Problem("owner", DOC_OWNER_NAMED, 422)
+    if actor.startswith("bot:"):
+        auth.require_write(c, who, H.actor_id(actor), missing=DOC_OWNER_NAMED)
+    return actor
+
+
+def push_doc(c, settings, task_create, who, record, row, detail, auth):
+    owner = doc_owner(c, auth, who, detail)
+    body = "\n\n".join(
+        part
+        for part in [
+            "Document: " + (detail.get("document") or "(the meeting did not name one)"),
+            "Change: " + (detail.get("change") or row["text"]),
+            ("Why: " + detail["why"]) if detail.get("why") else "",
+            source(settings, record, row, person_name(c, who)),
+        ]
+        if part
+    )
+    created = task_create(c, who, M.TaskCreate(title=("Doc update: " + row["text"])[:300], body=body, owner=owner))
     return created["task"]["id"]
 
 
@@ -279,8 +318,10 @@ def feature_fields(settings, record, row, detail, name):
         if str(label).strip().lower() in PROCESS_LABELS:
             raise Problem("label", f'"{label}" is a process label, not a request; leave it off', 403)
     if detail.get("bug"):
-        what = (f"**Current behavior**\n{detail.get('current') or sentence}\n\n"
-                f"**Expected behavior**\n{detail.get('expected') or ''}").strip()
+        what = (
+            f"**Current behavior**\n{detail.get('current') or sentence}\n\n"
+            f"**Expected behavior**\n{detail.get('expected') or ''}"
+        ).strip()
     else:
         what = sentence
     return {"title": title, "labels": labels, "body": what + "\n\n" + source(settings, record, row, name)}
@@ -324,11 +365,19 @@ def push_feature(c, settings, task_create, who, record, row, detail, force, auth
         found = feature_duplicate(c, fields["title"], who, auth)
         if found:
             found["url"] = f"{settings.public_url}/#/task/{found['id']}"
-            raise Problem("duplicate", "A task on the board already says this: "
-                          f"{found['name']} ({found['list']})", 409, extra={"duplicate": found})
+            raise Problem(
+                "duplicate",
+                f"A task on the board already says this: {found['name']} ({found['list']})",
+                409,
+                extra={"duplicate": found},
+            )
     # A feature request is a backlog item (a bug, a feature), not an ask, so rule 7 does not shape it.
-    created = task_create(c, who, M.TaskCreate(title=fields["title"], body=fields["body"], owner=feature_owner(c),
-                                               labels=fields["labels"]), lint=False)
+    created = task_create(
+        c,
+        who,
+        M.TaskCreate(title=fields["title"], body=fields["body"], owner=feature_owner(c), labels=fields["labels"]),
+        lint=False,
+    )
     return created["task"]["id"]
 
 
@@ -345,13 +394,15 @@ def pushable(c, who, rid, iid):
 
 def record_push(c, who, rid, iid, ref):
     row = one(c, rid, iid)
-    if row["status"] == "pushed":                 # a second click, or a concurrent one: one result
+    if row["status"] == "pushed":  # a second click, or a concurrent one: one result
         return view(row)
     ts = H.now()
-    c.execute("UPDATE meeting_items SET version=version+1,status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=? "
-              "WHERE id=? AND meeting_id=?", (ref, ts, who.actor, ts, iid, rid))
-    H.event(c, who.actor, "meeting.item_pushed", rid,
-            {"item": iid, "section": row["section"], "result": ref})
+    c.execute(
+        "UPDATE meeting_items SET version=version+1,status='pushed',result_ref=?,pushed_at=?,updated_by=?,updated_at=? "
+        "WHERE id=? AND meeting_id=?",
+        (ref, ts, who.actor, ts, iid, rid),
+    )
+    H.event(c, who.actor, "meeting.item_pushed", rid, {"item": iid, "section": row["section"], "result": ref})
     return view(one(c, rid, iid))
 
 
@@ -361,12 +412,14 @@ def install_meeting_items(app, store, mutate, task_create, auth):
 
     def reply(request, body, work, rid):
         try:
+
             def receipt(c):
                 result = work(c)
                 if 'item' in result:
                     result = {**result, 'item_id': result['item']['id']}
                     result.pop('item')
                 return result
+
             result = mutate(request, body, receipt, check=lambda c: media.authorized(c, request.state.identity, rid))
         except Problem as exc:
             if exc.code == "version_conflict":
@@ -389,30 +442,12 @@ def install_meeting_items(app, store, mutate, task_create, auth):
         with store.read() as c:
             return listing(c, who, rid, auth)
 
-    @app.get("/api/v2/meetings/{rid}/comments")
-    @app.get("/api/meetings/{rid}/comments")
-    def thread(request: Request, rid: str):
-        who = request.state.identity
-        human_only(who)
-        with store.read() as c:
-            media.authorized(c, who, rid)
-            return {"id": rid, "comments": comments(c, rid)}
-
-    @app.post("/api/v2/meetings/{rid}/comments")
-    @app.post("/api/meetings/{rid}/comments")
-    def say(request: Request, rid: str, body: CommentCreate):
-        who = request.state.identity
-        human_only(who)
-        def work(c):
-            record = media.authorized(c, who, rid)
-            return {"comment": comment(c, record, who, body)}
-        return reply(request, body, work, rid)
-
     @app.post("/api/v2/meetings/{rid}/items")
     @app.post("/api/meetings/{rid}/items")
     def create(request: Request, rid: str, body: ItemCreate):
         who = request.state.identity
         human_only(who)
+
         def work(c):
             record = media.authorized(c, who, rid)
             if body.proposed_task_id:
@@ -437,6 +472,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                 item = record_push(c, who, rid, item["id"], body.result_ref)
                 meeting_audience.record_sent_link(c, rid, body.result_ref, who.actor)
             return {"item": item}
+
         return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}/link")
@@ -444,6 +480,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
     def accept_link(request: Request, rid: str, iid: str, body: M.Empty):
         who = request.state.identity
         human_only(who)
+
         def work(c):
             media.require_live(media.authorized(c, who, rid))
             row = one(c, rid, iid)
@@ -454,9 +491,13 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             if row['section'] != 'task' or not row['proposed_task_id']:
                 raise Problem('proposal', 'This item has no task to link', 409)
             task = auth.task(c, who, row['proposed_task_id'])
-            c.execute('INSERT OR IGNORE INTO meeting_task_links(id,meeting_id,task_id,kind,created_by,created_at) '
-                      "VALUES(?,?,?,'proposal',?,?)", (H.new_id(), rid, task['id'], who.actor, H.now()))
+            c.execute(
+                'INSERT OR IGNORE INTO meeting_task_links(id,meeting_id,task_id,kind,created_by,created_at) '
+                "VALUES(?,?,?,'proposal',?,?)",
+                (H.new_id(), rid, task['id'], who.actor, H.now()),
+            )
             return {'item': record_push(c, who, rid, iid, task['id']), 'pushed': True}
+
         return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}")
@@ -464,9 +505,11 @@ def install_meeting_items(app, store, mutate, task_create, auth):
     def change(request: Request, rid: str, iid: str, body: ItemEdit):
         who = request.state.identity
         human_only(who)
+
         def work(c):
             media.authorized(c, who, rid)
             return {"item": edit(c, rid, who.actor, iid, body)}
+
         return reply(request, body, work, rid)
 
     @app.post("/api/v2/meetings/{rid}/items/{iid}/push")
@@ -474,6 +517,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
     def push(request: Request, rid: str, iid: str, body: ItemPush):
         who = request.state.identity
         human_only(who)
+
         def work(c):
             record, row = pushable(c, who, rid, iid)
             if body.result_ref is not None:
@@ -495,11 +539,23 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             require_version(row, body.version)
             if body.text is not None or body.detail is not None:
                 # The final edits and task creation are one atomic version change.
-                edit(c, rid, who.actor, iid, ItemEdit(version=body.version, text=body.text, detail=body.detail), bump_version=False)
+                edit(
+                    c,
+                    rid,
+                    who.actor,
+                    iid,
+                    ItemEdit(version=body.version, text=body.text, detail=body.detail),
+                    bump_version=False,
+                )
                 row = one(c, rid, iid)
             detail = json.loads(row["detail"] or "{}")
-            owner = (owner_of(c, detail) if row["section"] == "task" else
-                     "bot:" + (H.resolve_bot(c, DOC_BOT) or {}).get("id", DOC_BOT) if row["section"] == "doc" else feature_owner(c))
+            owner = (
+                owner_of(c, detail)
+                if row["section"] == "task"
+                else doc_owner(c, auth, who, detail)
+                if row["section"] == "doc"
+                else feature_owner(c)
+            )
             participants = meeting_audience.check(c, auth, who, owner, record=record)
 
             def create_task(c, who, body, **kwargs):
@@ -507,8 +563,15 @@ def install_meeting_items(app, store, mutate, task_create, auth):
                     body = body.model_copy(update={"private": True})
                 created = task_create(c, who, body, **kwargs)
                 actual = H.task(c, created['task']['id'])
-                meeting_audience.check(c, auth, who, actual['owner_id'], record=record, guest=actual.get('guest'),
-                                       requester=actual['requester_id'])
+                meeting_audience.check(
+                    c,
+                    auth,
+                    who,
+                    actual['owner_id'],
+                    record=record,
+                    readers=H.task_readers(actual),
+                    requester=actual['requester_id'],
+                )
                 meeting_audience.grant(c, actual['id'], participants, who.actor)
                 meeting_audience.record_sent_link(c, rid, actual['id'], who.actor)
                 return created
@@ -516,11 +579,12 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             if row["section"] == "task":
                 result = push_task(c, settings, create_task, who, record, row, detail, body.private)
             elif row["section"] == "doc":
-                result = push_doc(c, settings, create_task, who, record, row, detail)
+                result = push_doc(c, settings, create_task, who, record, row, detail, auth)
             else:
                 # a close match on the board is refused; `force` is the person saying they meant it
                 result = push_feature(c, settings, create_task, who, record, row, detail, body.force, auth)
             return {"item": record_push(c, who, rid, iid, result), "pushed": True}
+
         return reply(request, body, work, rid)
 
     return {"add": add, "listing": listing}

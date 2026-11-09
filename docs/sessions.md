@@ -107,7 +107,7 @@ a runner from this release or later; an older runner keeps resuming the old thre
 
 In a long DM with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
 and shows a quiet **Topic changed** line above your message. The bot no longer carries the old conversation, which keeps
-long DMs cheaper and on topic. An owner or an admin turns this on or off in **Settings > System**, **Start fresh when
+long DMs cheaper and on topic. An owner or an admin turns this on or off in **Automations > System jobs**, **Start fresh when
 the topic changes** (off by default). It never happens in task threads or group threads, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
@@ -153,7 +153,9 @@ the bot ends its turn and Tico wakes the task when its worktree is ready ([Task 
 or a person, cleans one up first. A task's worktree goes when the task is finished: at the end of
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
 with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
-See [Task worktrees](worktrees.md) for code worktrees and cleanup.
+Before making or reusing a session folder, the Computer checks its full path against the Tico install. A link
+such as `sessions` pointing into the install stops the turn with the path named in the error, before any folder
+or Git work. See [Task worktrees](worktrees.md) for code worktrees and cleanup.
 
 A private live meeting's bot turns get a worktree of their own the same way, `sessions/bot-<slug>/private-<id>`, but
 nothing in it is ever saved: it is never committed for the bot or pushed, and it is deleted, unsaved changes and all,

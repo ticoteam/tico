@@ -11,8 +11,10 @@ The pump (`updates.dispatch`, scheduler.py's tick) sends the rest one at a time:
 today's requests is queued or out (`updates.cycle_done`). Maintenance completes the pending step once the cycle drains;
 the scheduler's pump never builds a queue itself.
 """
+
 from .. import updates
 from ..store import H
+
 
 def did_work(c, bot_id, since):
     """Whether the bot settled a turn that wrote something after `since` (an ISO timestamp; "" for all of it).
@@ -21,8 +23,14 @@ def did_work(c, bot_id, since):
     not work. Messages a bot sends and the commits it makes to its memory do not count: bots reply on every wake and
     rewrite their memory, so every woken bot would look like it worked and the zero-work skip would never fire.
     Bounded on attempts.created_at (indexed with bot_id by attempts_bot_created)."""
-    return c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND created_at>? AND did_nothing=0 "
-                     "AND coalesce(state,'')<>'failed' LIMIT 1", (bot_id, since)).fetchone() is not None
+    return (
+        c.execute(
+            "SELECT 1 FROM attempts WHERE bot_id=? AND created_at>? AND did_nothing=0 "
+            "AND coalesce(state,'')<>'failed' LIMIT 1",
+            (bot_id, since),
+        ).fetchone()
+        is not None
+    )
 
 
 def _since(c, bot):
@@ -38,11 +46,18 @@ def _reports_will_post(c, bot, day, since, chart):
     if not reports:
         return False
     marks = ",".join("?" * len(reports))
-    if c.execute(f"SELECT 1 FROM updates WHERE bot IN ({marks}) AND created_at>? LIMIT 1",
-                 (*reports, since)).fetchone():
+    if c.execute(
+        f"SELECT 1 FROM updates WHERE bot IN ({marks}) AND created_at>? LIMIT 1", (*reports, since)
+    ).fetchone():
         return True
-    return c.execute(f"SELECT 1 FROM update_queue WHERE day=? AND redo=0 AND delivery_only=0 AND state IN ('queued','sent') "
-                     f"AND bot IN ({marks}) LIMIT 1", (day, *reports)).fetchone() is not None
+    return (
+        c.execute(
+            f"SELECT 1 FROM update_queue WHERE day=? AND redo=0 AND delivery_only=0 AND state IN ('queued','sent') "
+            f"AND bot IN ({marks}) LIMIT 1",
+            (day, *reports),
+        ).fetchone()
+        is not None
+    )
 
 
 def plan_request(c, bot, day, chart=None):
@@ -56,8 +71,15 @@ def plan_request(c, bot, day, chart=None):
 
 
 def _result(status, reason, checked=0, found=0, details=None):
-    return {"status": status, "reason": reason, "checked": checked, "found": found, "woke": 0, "cost_usd": 0.0,
-            "details": details or {}}
+    return {
+        "status": status,
+        "reason": reason,
+        "checked": checked,
+        "found": found,
+        "woke": 0,
+        "cost_usd": 0.0,
+        "details": details or {},
+    }
 
 
 def _at(ctx):
@@ -81,14 +103,16 @@ def run(c, ctx):
 def _cycle(c, ctx, local):
     day = local.date().isoformat()
     kind = updates.kind_for(day)
-    settings = ctx["store"].settings        # the app's settings; ctx["settings"] is this step's own row
+    settings = ctx["store"].settings  # the app's settings; ctx["settings"] is this step's own row
     writer = updates.writer_for(c, settings, ctx["store"])
     built = updates.build_queue(c, day, kind, settings.assistant_bot if writer else None)
     c.execute("UPDATE update_queue SET run_id=? WHERE day=? AND run_id IS NULL", (ctx["run_id"], day))
     chart = updates._chart(c)
     skipped = delivered = asked = 0
-    rows = c.execute("SELECT * FROM update_queue WHERE state='queued' AND day=? AND redo=0 AND bot NOT LIKE 'human:%' "
-                     "ORDER BY rank", (day,)).fetchall()
+    rows = c.execute(
+        "SELECT * FROM update_queue WHERE state='queued' AND day=? AND redo=0 AND bot NOT LIKE 'human:%' ORDER BY rank",
+        (day,),
+    ).fetchall()
     for row in rows:
         decided = plan_request(c, row["bot"], day, chart)
         if decided == "skip":
@@ -99,10 +123,26 @@ def _cycle(c, ctx, local):
         delivered += decided == "deliver"
         asked += decided == "ask"
     # Pending while any of today's requests is queued or out: the pump sends the queued ones and settles the ones out.
-    open_ = c.execute("SELECT count(*) FROM update_queue WHERE day=? AND state IN ('queued','sent')", (day,)).fetchone()[0]
-    details = {"day": day, "kind": kind, "built": built, "asked": asked, "delivery_only": delivered,
-               "skipped": skipped, "open": open_}
-    reason = (f"today's {kind} cycle: {open_} requests queued or out, {skipped} skipped (no work since their last update), "
-              f"{delivered} delivery-only")
-    return _result("ran" if updates.cycle_done(c, day) else "pending", reason, checked=len(rows),
-                   found=asked + delivered, details=details)
+    open_ = c.execute(
+        "SELECT count(*) FROM update_queue WHERE day=? AND state IN ('queued','sent')", (day,)
+    ).fetchone()[0]
+    details = {
+        "day": day,
+        "kind": kind,
+        "built": built,
+        "asked": asked,
+        "delivery_only": delivered,
+        "skipped": skipped,
+        "open": open_,
+    }
+    reason = (
+        f"today's {kind} cycle: {open_} requests queued or out, {skipped} skipped (no work since their last update), "
+        f"{delivered} delivery-only"
+    )
+    return _result(
+        "ran" if updates.cycle_done(c, day) else "pending",
+        reason,
+        checked=len(rows),
+        found=asked + delivered,
+        details=details,
+    )

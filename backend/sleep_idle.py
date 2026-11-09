@@ -25,6 +25,7 @@ The call is made outside any write transaction. A refusal that only says "not no
 asked again after 15 minutes; anything else backs off up to six hours and reaches Health. Rehearsal and demo never ask,
 and a server that is not hosted never does either.
 """
+
 import asyncio
 import json
 import threading
@@ -40,30 +41,32 @@ from .hook_relay import Failed, Link, Stop, link_of
 from .models import Contract
 from .store import Problem
 
-TRANSPORT = None                 # tests' fake HQ, never the live one
-EVERY = 300                      # seconds between looks for quiet
-CELL_EVERY = 60                  # the same on a cell
-HOSTED_FOR = 6 * 3600            # how long HQ's word on "hosted" is kept
-HOSTED_RETRY = 300               # a failed hosted check is not repeated sooner
-SOON = 15 * 60                   # a routine due this soon keeps the server up; also the wait after an answer
+TRANSPORT = None  # tests' fake HQ, never the live one
+EVERY = 300  # seconds between looks for quiet
+CELL_EVERY = 60  # the same on a cell
+HOSTED_FOR = 6 * 3600  # how long HQ's word on "hosted" is kept
+HOSTED_RETRY = 300  # a failed hosted check is not repeated sooner
+SOON = 15 * 60  # a routine due this soon keeps the server up; also the wait after an answer
 BACKOFF_MAX = 6 * 3600
-UI_EVERY = 60                    # the last-seen mark moves at most this often
+UI_EVERY = 60  # the last-seen mark moves at most this often
 ANSWER_CAP = 64 * 1024
 HOURS_MAX = 24
-CELL_MINUTES = 15                # a cell company with no listener minutes and no owner `hours` sleeps after this long
-MINUTES_MAX = 24 * 60            # the listener's own ceiling; 0 there means never
-POLICY_FOR = 60                  # seconds a cell's listener answer is kept
+CELL_MINUTES = 15  # a cell company with no listener minutes and no owner `hours` sleeps after this long
+MINUTES_MAX = 24 * 60  # the listener's own ceiling; 0 there means never
+POLICY_FOR = 60  # seconds a cell's listener answer is kept
 POLICY = {"at": None, "minutes": None}
-NOT_NOW = ("busy", "cooldown")   # HQ refusals that are no failure
-STREAM = "/api/v2/events"        # an open stream says nothing about a person being there
+NOT_NOW = ("busy", "cooldown")  # HQ refusals that are no failure
+STREAM = "/api/v2/events"  # an open stream says nothing about a person being there
 # Outgoing sends: a row waiting for its next try (`next_attempt_at`, NULL = now) keeps the server up only when that try is
 # near; one Svix-style retry ten hours away must not. `sending` always does.
-SENDS = {"slack_posts": "state IN ('ready','retry','rate_limited')",
-         "webhook_sends": "state IN ('ready')",
-         "personal_alerts": "state='pending'"}
-NO_KEY = "Connect the Tico Gateway in Settings > Gateway first: Sleep when idle asks Tico with its key."
+SENDS = {
+    "slack_posts": "state IN ('ready','retry','rate_limited')",
+    "webhook_sends": "state IN ('ready')",
+    "personal_alerts": "state='pending'",
+}
+NO_KEY = "Connect the Tico Gateway in Settings > Models first: Sleep when idle asks Tico with its key."
 NOT_HOSTED = "Sleep when idle is only for servers Tico hosts."
-now = time.time                  # tests' controlled clock
+now = time.time  # tests' controlled clock
 
 
 class SleepSet(Contract):
@@ -74,16 +77,34 @@ class SleepSet(Contract):
 # ----------------------------------------------------------------------------- state
 def state(c):
     row = c.execute("SELECT * FROM sleep_idle_state WHERE singleton=1").fetchone()
-    current = dict(row) if row else {"hours": 0, "runners": 1, "changed_by": "", "changed_at": None, "hosted": None,
-                                     "layout": "", "checked_at": None, "last_request_at": None, "last_result": "",
-                                     "last_wake_at": None, "last_error": "", "failures": 0, "next_ask": None}
+    current = (
+        dict(row)
+        if row
+        else {
+            "hours": 0,
+            "runners": 1,
+            "changed_by": "",
+            "changed_at": None,
+            "hosted": None,
+            "layout": "",
+            "checked_at": None,
+            "last_request_at": None,
+            "last_result": "",
+            "last_wake_at": None,
+            "last_error": "",
+            "failures": 0,
+            "next_ask": None,
+        }
+    )
     return current
 
 
 def save(c, **fields):
     c.execute("INSERT OR IGNORE INTO sleep_idle_state(singleton) VALUES(1)")
-    c.execute("UPDATE sleep_idle_state SET " + ",".join(k + "=?" for k in fields) + " WHERE singleton=1",
-              tuple(fields.values()))
+    c.execute(
+        "UPDATE sleep_idle_state SET " + ",".join(k + "=?" for k in fields) + " WHERE singleton=1",
+        tuple(fields.values()),
+    )
 
 
 def cell_minutes():
@@ -144,27 +165,35 @@ def routine_times(c, at):
     when = datetime.fromtimestamp(at, timezone.utc)
     out = []
     if table(c, "automations"):
-        for row in c.execute("SELECT trigger_type, next_due_at, flow FROM automations WHERE enabled=1 "
-                             "AND deleted_at IS NULL AND next_due_at IS NOT NULL").fetchall():
+        for row in c.execute(
+            "SELECT trigger_type, next_due_at, flow FROM automations WHERE enabled=1 "
+            "AND deleted_at IS NULL AND next_due_at IS NOT NULL"
+        ).fetchall():
             if row[0] == "due":
                 # A due day wakes the server when its run starts (the lead time before it), not on the day.
                 if not row[1]:
                     continue
                 from . import automation_due as D
+
                 trigger = (json.loads(row[2] or "{}").get("trigger")) or {}
-                out.append(D.fire_at(date.fromisoformat(row[1]), D.open_days_of(trigger), D.zone_of(trigger)).timestamp())
+                out.append(
+                    D.fire_at(date.fromisoformat(row[1]), D.open_days_of(trigger), D.zone_of(trigger)).timestamp()
+                )
             elif (due := epoch(row[1])) is not None:
                 out.append(due)
-    out.extend(t for t in fixed_times(c, when) if t > at)      # one already past is being run by the scheduler now
+    out.extend(t for t in fixed_times(c, when) if t > at)  # one already past is being run by the scheduler now
     from . import maintenance
+
     if table(c, "maintenance_runs") and (due := maintenance.next_due(c, when)) is not None:
         out.append(due.timestamp())
     out.extend(later_sends(c, at))
     if table(c, "alert_preferences"):
         from . import personal_alerts
+
         out.extend(personal_alerts.future_deadlines(c, at))
     # A deferred item's deadline wakes its bot like a schedule (backend/delivery.py); one past is due now.
     from . import delivery
+
     if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
         out.append(max(due, at))
     out.extend(edition_times(c, when))
@@ -174,6 +203,7 @@ def routine_times(c, at):
 def edition_times(c, when):
     """When the Company page next opens a draft (backend/company_page/schedule.py); nothing while it is Closed."""
     from .company_page import schedule
+
     try:
         found = schedule.next_wake(c, when) if table(c, "audiences") else None
     except Exception:
@@ -185,6 +215,7 @@ def fixed_times(c, when):
     """Next run of each switched-on system job set to a time of day, and of the release schedule."""
     from . import release_flow
     from . import system_routines as SR
+
     out = []
     try:
         last = SR.last_started(c, list(SR.CONTROLS))
@@ -209,8 +240,9 @@ def later_sends(c, at):
     out = []
     for name, where in SENDS.items():
         if table(c, name):
-            row = c.execute(f"SELECT min(next_attempt_at) FROM {name} WHERE {where} AND next_attempt_at>?",
-                            (stamp(at + SOON),)).fetchone()
+            row = c.execute(
+                f"SELECT min(next_attempt_at) FROM {name} WHERE {where} AND next_attempt_at>?", (stamp(at + SOON),)
+            ).fetchone()
             if row and row[0] and (found := epoch(row[0])):
                 out.append(found)
     return out
@@ -219,6 +251,7 @@ def later_sends(c, at):
 def online_computer(c):
     """Whether a bot computer was heard from in the last two minutes (getting_started's own test of "online")."""
     from .getting_started import _online_runners
+
     return bool(_online_runners(c))
 
 
@@ -226,19 +259,28 @@ def busy(c, at):
     """The first thing keeping the server up right now, or ''. Names are stable: the CLI and the app show them."""
     if c.execute("SELECT 1 FROM jobs WHERE state='queued' LIMIT 1").fetchone():
         return "run_queued"
-    if (c.execute("SELECT 1 FROM jobs WHERE state IN ('leased','running') LIMIT 1").fetchone()
-            or c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') LIMIT 1").fetchone()):
+    if (
+        c.execute("SELECT 1 FROM jobs WHERE state IN ('leased','running') LIMIT 1").fetchone()
+        or c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') LIMIT 1").fetchone()
+    ):
         return "run_in_progress"
-    if table(c, "worktree_waits") and c.execute("SELECT 1 FROM worktree_waits WHERE state IN ('waiting','reserved') LIMIT 1").fetchone():
+    if (
+        table(c, "worktree_waits")
+        and c.execute("SELECT 1 FROM worktree_waits WHERE state IN ('waiting','reserved') LIMIT 1").fetchone()
+    ):
         return "task_session"
     if c.execute("SELECT 1 FROM runner_harness_actions WHERE state IN ('requested','running') LIMIT 1").fetchone():
         return "runner_job"
     if cloud_access.strict_cell() and online_computer(c):
         return "computer_online"
     for name, where in SENDS.items():
-        if table(c, name) and c.execute(
+        if (
+            table(c, name)
+            and c.execute(
                 f"SELECT 1 FROM {name} WHERE state='sending' OR ({where} AND coalesce(next_attempt_at,'')<=?) LIMIT 1",
-                (stamp(at + SOON),)).fetchone():
+                (stamp(at + SOON),),
+            ).fetchone()
+        ):
             return "send_pending"
     if (times := routine_times(c, at)) and times[0] <= at + SOON:
         return "routine_due"
@@ -247,8 +289,10 @@ def busy(c, at):
 
 def last_work(c, at, span):
     """When the last run started or ended, or None; `span` in seconds. Only recent runs are looked at (the created index)."""
-    row = c.execute("SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE created_at>=?",
-                    (stamp(at - span - 48 * 3600),)).fetchone()
+    row = c.execute(
+        "SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE created_at>=?",
+        (stamp(at - span - 48 * 3600),),
+    ).fetchone()
     return epoch(row[0]) if row and row[0] else None
 
 
@@ -296,8 +340,13 @@ class SleepIdle:
     def seen(self, who, path):
         """A person using the app signed in. A token, a bot or a stream does not count: a script polling must not keep a
         server up, and an open stream only says a tab exists."""
-        if (who.role not in ("owner", "human") or who.via or who.via_token or not path.startswith("/api/")
-                or path.startswith(STREAM)):
+        if (
+            who.role not in ("owner", "human")
+            or who.via
+            or who.via_token
+            or not path.startswith("/api/")
+            or path.startswith(STREAM)
+        ):
             return
         at = now()
         if at - self.ui_at >= UI_EVERY:
@@ -349,7 +398,7 @@ class SleepIdle:
         with self.store.read() as c:
             current = state(c)
             link = self.link(c)
-        minutes, source = effective(current)           # a cell's listener is asked here, outside any transaction
+        minutes, source = effective(current)  # a cell's listener is asked here, outside any transaction
         if not minutes or (not link and not cloud_access.strict_cell()):
             return
         if not self.hosted(link):
@@ -362,8 +411,13 @@ class SleepIdle:
             wake = wake_time(c, at) if quiet["idle"] else None
         if not quiet["idle"]:
             return
-        detail = {"minutes": minutes, "source": source, "runners": bool(current["runners"]),
-                  "idle_since": iso(quiet["since"]), "wake_at": iso(wake)}
+        detail = {
+            "minutes": minutes,
+            "source": source,
+            "runners": bool(current["runners"]),
+            "idle_since": iso(quiet["since"]),
+            "wake_at": iso(wake),
+        }
         with self.store.transaction() as c:
             H.event(c, "keeper", "server.sleep", "", detail)
         self.request(link, current, minutes, wake, quiet["since"])
@@ -394,8 +448,15 @@ class SleepIdle:
                 result, error, failures = "failed", failed.code, current["failures"] + 1
                 delay = min(BACKOFF_MAX, SOON * 2 ** (failures - 1))
         with self.store.transaction() as c:
-            save(c, last_request_at=at, last_result=result, last_wake_at=iso(wake) if result == "requested" else None,
-                 last_error=error, failures=failures, next_ask=at + delay)
+            save(
+                c,
+                last_request_at=at,
+                last_result=result,
+                last_wake_at=iso(wake) if result == "requested" else None,
+                last_error=error,
+                failures=failures,
+                next_ask=at + delay,
+            )
             if result == "not_hosted":
                 save(c, hosted=0, layout="", checked_at=at)
 
@@ -404,8 +465,11 @@ class SleepIdle:
         blocker = busy(c, at)
         marks = [self.started, self.ui_at, last_work(c, at, minutes * 60) or 0]
         since = max(marks)
-        return {"idle": not blocker and at - since >= minutes * 60, "since": None if blocker else since,
-                "blocker": blocker}
+        return {
+            "idle": not blocker and at - since >= minutes * 60,
+            "since": None if blocker else since,
+            "blocker": blocker,
+        }
 
     async def loop(self, stop):
         while not stop.is_set():
@@ -415,10 +479,12 @@ class SleepIdle:
                 pass
             if stop.is_set():
                 return
+            from . import system_routines as SR  # each look is one run of Sleep when idle (Settings > Routines)
+
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "sleep_idle", self.tick)
             except Exception:
-                pass                                # the next look tries again; the failure is in the state row
+                pass  # the next look tries again; the failure is in the state row
 
     # ------------------------------------------------------------------------- what people see and change
     def view(self, c, minutes, source):
@@ -430,15 +496,26 @@ class SleepIdle:
         quiet = self.quiet(c, minutes, now()) if minutes and hosted else None
         last = None
         if current["last_request_at"]:
-            last = {"at": iso(current["last_request_at"]), "result": current["last_result"],
-                    "wake_at": current["last_wake_at"]}
-        return {"hosted": bool(hosted), "layout": current["layout"] or None, "hours": current["hours"],
-                "minutes": minutes, "source": source, "managed": bool(cell), "runners": bool(current["runners"]),
-                "active": active,
-                "idle_since": iso(quiet["since"]) if quiet else None,
-                "blocker": quiet["blocker"] if quiet else "",
-                "wake_at": iso(wake_time(c, now())) if active else None,
-                "last_request": last, "last_error": current["last_error"]}
+            last = {
+                "at": iso(current["last_request_at"]),
+                "result": current["last_result"],
+                "wake_at": current["last_wake_at"],
+            }
+        return {
+            "hosted": bool(hosted),
+            "layout": current["layout"] or None,
+            "hours": current["hours"],
+            "minutes": minutes,
+            "source": source,
+            "managed": bool(cell),
+            "runners": bool(current["runners"]),
+            "active": active,
+            "idle_since": iso(quiet["since"]) if quiet else None,
+            "blocker": quiet["blocker"] if quiet else "",
+            "wake_at": iso(wake_time(c, now())) if active else None,
+            "last_request": last,
+            "last_error": current["last_error"],
+        }
 
     def read(self):
         """The state; a first look at a server nobody has asked about yet also asks HQ whether it is hosted."""
@@ -456,25 +533,35 @@ class SleepIdle:
         with self.store.read() as c:
             current, link = state(c), self.link(c)
         target = current["hours"] if hours is None else hours
-        if target and not cloud_access.strict_cell():      # turning it on needs HQ's word that this server is Tico's
+        if target and not cloud_access.strict_cell():  # turning it on needs HQ's word that this server is Tico's
             if not link:
                 raise Problem("gateway", NO_KEY, 409)
             try:
                 hosted = self.hosted(link, force=True)
             except Failed as failed:
-                raise Problem("gateway", "Tico did not answer. Try again in a minute." if failed.code == "unreachable"
-                              else f"Tico refused this ({failed.code}).", 502) from None
+                raise Problem(
+                    "gateway",
+                    "Tico did not answer. Try again in a minute."
+                    if failed.code == "unreachable"
+                    else f"Tico refused this ({failed.code}).",
+                    502,
+                ) from None
             if not hosted:
                 raise Problem("not_hosted", NOT_HOSTED, 409)
         fields = {"next_ask": None, "failures": 0, "last_error": ""}
-        if hours is not None:       # the owner's idle time, and the mark that they set one (a runners-only change is not)
+        if hours is not None:  # the owner's idle time, and the mark that they set one (a runners-only change is not)
             fields.update(hours=hours, changed_by=who.actor, changed_at=H.now())
         if runners is not None:
             fields["runners"] = int(runners)
         with self.store.transaction() as c:
             save(c, **fields)
-            H.event(c, who.actor, "server.sleep_set", "", {"hours": target, "runners": bool(
-                current["runners"] if runners is None else runners)})
+            H.event(
+                c,
+                who.actor,
+                "server.sleep_set",
+                "",
+                {"hours": target, "runners": bool(current["runners"] if runners is None else runners)},
+            )
         return self.read()
 
 
@@ -484,11 +571,18 @@ def health(c, settings=None):
     hosted = cloud_access.strict_cell() or current["hosted"]
     if not effective(current)[0] or not hosted or not current["last_error"]:
         return None
-    words = ("Tico does not accept this server's Gateway key" if current["last_error"] == "key_revoked"
-             else "this server cannot reach Tico" if current["last_error"] == "unreachable"
-             else f"Tico refused it ({current['last_error']})")
-    return {"status": "warn", "summary": f"Sleep when idle is on, but the last request to stop this server failed: {words}. "
-                                         "The server keeps running and tries again."}
+    words = (
+        "Tico does not accept this server's Gateway key"
+        if current["last_error"] == "key_revoked"
+        else "this server cannot reach Tico"
+        if current["last_error"] == "unreachable"
+        else f"Tico refused it ({current['last_error']})"
+    )
+    return {
+        "status": "warn",
+        "summary": f"Sleep when idle is on, but the last request to stop this server failed: {words}. "
+        "The server keeps running and tries again.",
+    }
 
 
 def install(app, settings, store, auth):
