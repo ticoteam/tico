@@ -101,7 +101,7 @@ def prime_parked(conn, message_ids):
     ids = sorted({str(m) for m in message_ids if m})
     if cache(conn) is None or not ids or not _parked_tables(conn):
         return
-    found = {(mid,): None for mid in ids}
+    found: dict[tuple[str], tuple[object] | None] = {(mid,): None for mid in ids}
     for part in chunks(ids):
         for row in conn.execute(
             "SELECT m.id, "
