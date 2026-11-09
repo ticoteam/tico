@@ -199,7 +199,7 @@ interface Employee {
 /** A team (group) on the org chart. */
 interface OrgGroup {
   id: string;
-  name?: string;
+  name?: string | undefined;
   lead?: string;   // the lead's ref (person:<id> or bot:<slug>), "" for none (backend/groups.py)
   order?: number;
   parent?: string;
