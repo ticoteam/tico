@@ -16,32 +16,27 @@ def seen_on_overview(api, token):
     return {p["id"] for p in get(api, "pipelines/overview?period=7d", token)["pipelines"]}
 
 
-def test_the_owner_sets_goal_and_judge_and_a_plain_member_changes_nothing(api):
+def test_the_owner_sets_the_goal_and_a_plain_member_changes_nothing(api):
     pipeline = make_pipeline(api, "Launches")
 
-    out = settings(api, pipeline, {"goal": "  Ship launches on time  ", "judge_model": "jev"})
-    assert out["goal"] == "Ship launches on time" and out["judge_model"] == "jev"
+    out = settings(api, pipeline, {"goal": "  Ship launches on time  "})
+    assert out["goal"] == "Ship launches on time"
     read = read_settings(api, pipeline)
-    assert read["goal"] == out["goal"] and read["judge_models"] == ["haiku-5.5", "jev", "sonnet"]
-    assert read["default_judge_model"] == "haiku-5.5"
+    assert read["goal"] == out["goal"] and "judge_model" not in read and "judge_models" not in read
 
-    # A field left out stays as it is.
-    settings(api, pipeline, {"goal": "Keep going"})
-    assert read_settings(api, pipeline)["judge_model"] == "jev"
-
-    # An empty goal clears it, and a null judge model takes the default back.
-    out = settings(api, pipeline, {"goal": "", "judge_model": None})
-    assert out["goal"] is None and out["judge_model"] is None
+    # An empty goal clears it.
+    out = settings(api, pipeline, {"goal": ""})
+    assert out["goal"] is None
 
     settings(api, pipeline, {"goal": "Nope"}, token="cara-test", expected=403)
     assert read_settings(api, pipeline)["goal"] is None
 
 
-def test_a_judge_model_must_be_one_the_judge_offers_and_a_long_goal_is_refused(api):
+def test_the_judge_model_is_not_a_setting_and_a_long_goal_is_refused(api):
     pipeline = make_pipeline(api, "Judged")
-    settings(api, pipeline, {"judge_model": "gpt-9"}, expected=422)
+    settings(api, pipeline, {"judge_model": "jev"}, expected=422)  # every pipeline is judged by Jev: no choice to send
     settings(api, pipeline, {"goal": "x" * 201}, expected=422)
-    assert read_settings(api, pipeline)["judge_model"] is None
+    assert read_settings(api, pipeline)["goal"] is None
 
 
 def test_a_private_pipeline_leaves_its_factory_and_refuses_one(api):

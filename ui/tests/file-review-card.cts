@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // A file review on the question card (ui/app/question-card.ts, backend/file_reviews.py): the versions under review show
 // inline, four at most and the rest as chips; Request changes waits for the note that says what to change; in a pick
 // each option sits under its own picture, and the spend a pick approves is said under them.
@@ -8,7 +8,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var DEC: Tasks.Globals['DEC'];
+declare var DEC_OUTBOX: Tasks.Globals['DEC_OUTBOX'];
+declare var decideOpen: Tasks.Globals['decideOpen'];
+declare var decideStop: Tasks.Globals['decideStop'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const SHOTS = process.env.REVIEW_SHOTS || '';
 const NOW = Date.now(), at = (hours: number) => new Date(NOW - hours * 3600e3).toISOString();
 

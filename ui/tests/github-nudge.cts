@@ -4,13 +4,13 @@
 // get no card. The team's answer is read once per page, and visiting Tools › GitHub asks again. Fixtures only, no
 // network. TICO_SCREENSHOT_DIR keeps the bot page and the task at desktop and phone width, light and dark.
 import type {Browser, Page, LaunchOptions, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {html, isUiPath, serveUi} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, isUiPath, serveUi} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();

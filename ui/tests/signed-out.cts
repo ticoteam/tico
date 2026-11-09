@@ -13,12 +13,12 @@ import type {Browser, Page, Route} from 'playwright';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof import('./support/assistant-chat.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {assistantView} = require('./support/assistant-chat.cts') as import('./support/assistant-chat.cts').Api;
 const path: typeof import('node:path') = require('node:path');
 const SHOTS = process.env.TICO_UI_SHOTS || '';
-const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 interface Seen {streams: number; me: number; login: string | null; top: string | null}
 interface Ctx {page: Page; state: {mode: string}; seen: Seen}

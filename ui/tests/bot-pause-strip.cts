@@ -1,12 +1,12 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // The bot's Settings pause row: one-click pause, refusal/retry, refresh, permissions, billing and phone layout. No strip
 // on the page itself; the header's Paused badge follows the control. Synthetic fixtures only.
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type HoldNext = {captured: () => void; finished: () => void; wait: Promise<void>};
 type Held = {captured: Promise<void>; finished: Promise<void>; release: () => void};
 type PauseState = {revision: number; paused?: boolean; record?: {name: string; at: string} | null; tasks?: number; billing?: boolean; reads?: number; holdNext?: HoldNext; fail?: boolean};

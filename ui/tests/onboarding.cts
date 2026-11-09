@@ -1,7 +1,7 @@
 // Offline browser regression for the first-run wizard: a company whose config
 // says onboarding_needed lands on #/welcome instead of Tasks and keeps a "Finish setup" entry; the
 // eight steps save a draft with PUT /api/v2/setup on every Next (the first two, What are you building and Your bets, are
-// ui/tests/setup-strategy.cjs's; here the strategy draft is already ready, so they are passed straight through) (there is no assistant to name, and an
+// ui/tests/setup-strategy.cts's; here the strategy draft is already ready, so they are passed straight through) (there is no assistant to name, and an
 // optional "Connect your agent" step opens connectAgent()). The company says what it does, then builds its org chart:
 // it picks departments, answers one question per department, sees "Recruiting bots…", checks the suggested bots and
 // watches the chart grow; the finished chart can rename or re-point a bot. Nothing is created until "Create my team",
@@ -11,17 +11,17 @@
 // the bot page and the org chart carry the same mark.
 // Settings -> Bots reuses the catalog cards. Fixtures only - no server, no network.
 import type {Locator, Page} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as ThreadsFake from './support/threads-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as ThreadsFake from './support/threads-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
-const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile, harnesses} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cts'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 // Shapes of the fixtures and of the page's own globals (declared, not defined: the page supplies them).
 type Config = {environment_id: string; company_name: string; app_name: string; assistant_name: string; assistant_bot: string;
   public_url: string; runner_url: string; github_owner: string; local: boolean; release: string; onboarding_needed: boolean;

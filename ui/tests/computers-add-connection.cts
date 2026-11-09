@@ -3,13 +3,13 @@
 // Each computer has one login per AI tool (#1259): named subscriptions a runner still reports are not shown, and a
 // tool already signed in has no second sign-in. Every request is intercepted.
 import type {LaunchOptions, Locator, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 declare const S: {config: {hosted?: string}};
 declare function loadSettings(): Promise<void> | void;
 interface PageWin { hostedOpened: unknown[][] }
@@ -95,7 +95,7 @@ const shot = async (locator: Locator, name: string) => { if (SHOTS) await locato
     await add.locator('[data-add-tool=codex]').click();
     await shot(add, 'add-2-kind');
     assert.match(await add.locator('h2').innerText(), /Add Codex/);
-    // API key, for a tool whose key is not the computer's own: the way there, and Back (ui/tests/model-keys.cjs: Add key).
+    // API key, for a tool whose key is not the computer's own: the way there, and Back (ui/tests/model-keys.cts: Add key).
     await add.locator('[data-add-kind=api_key]').click();
     assert.match(await add.innerText(), /Codex takes its key from Credentials/);
     assert.equal(await add.locator('a[href="#/tools/keys?show=credentials"]').count(), 1);

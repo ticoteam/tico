@@ -1,19 +1,19 @@
 // Tools (ui/app/tools.ts, tools-api.js and the inbox pages under it) over a fake API in backend/api_tools.py's shapes: GET
 // /api/v2/tool-index (rows, counts), one API tool (GET/PATCH /api/v2/api-tools/<id>, PUT …/access/<subject>, POST
-// …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cjs) for a mailbox's page and its Limits.
+// …/check, GET …/activity) and the mailboxes fake (support/mailboxes-fake.cts) for a mailbox's page and its Limits.
 // Covers: the list, its filters and Needs you; an API tool's level change, Check now and Move to proxy; the Activity
 // tab's filter; Who can see it (Private pills, Only listed's Who | Why, Remove, Add through the audience picker, back
 // to Everyone) and Finance's read-only row; a Google Ads tool's Finance card (bot pick, switching the import on); the
 // mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each page in each theme and width.
-import type * as MailboxesFake from './support/mailboxes-fake.cjs';
-import type * as GoogleFake from './support/google-fake.cjs';
+import type * as MailboxesFake from './support/mailboxes-fake.cts';
+import type * as GoogleFake from './support/google-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
-const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
+const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as MailboxesFake.Api;
+const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 
 interface Audience {everyone: boolean; people: string[]; teams: string[]; bots: string[]}
 interface ApiAccess {subject: string; kind: string; id: string; name: string; initials: string; level: string; last_used_at: string | null; fixed?: boolean}

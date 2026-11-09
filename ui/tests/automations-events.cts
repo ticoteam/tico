@@ -1,12 +1,12 @@
-// Automations with an event trigger (ui/app/automations*.js) against the fake hub in support/automations-fake.cjs: an
+// Automations with an event trigger (ui/app/automations*.js) against the fake hub in support/automations-fake.cts: an
 // event reads as a few words everywhere (the list's Trigger column, the trigger card, a wake rule's condition, the
 // editor), never its dotted id (task.done, tico.notice, tico.builtin.*); the id is only the chip's tooltip, and the
 // editor still saves it; Custom… takes a name the catalog does not list, saved as typed. A phone first, then a computer.
 import type {Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 const base = {owner_id: 'person:dana', enabled: true, version: 1, steps: []};
 const tweak = (fx: AutomationsFakeSupport.AutomationsFixture) => fx.automations.push(
@@ -81,7 +81,7 @@ const rowText = (page: Page, id: string) => page.locator(`tr.au-row[data-row="${
       await page.locator('.au-ed .au-save').click();
       await page.waitForFunction(() => document.querySelector('.au-trig .au-c1')?.textContent === 'Task finished');
       const saved = writes.find(w => w.method === 'PATCH' && w.body?.trigger)!;
-      assert.deepEqual(saved.body.trigger, {type: 'event', name: 'task.done'});
+      assert.deepEqual(saved.body!.trigger, {type: 'event', name: 'task.done'});
       // A name of one's own: Custom… and a box for it; saved exactly as typed.
       await page.locator('.au-card[data-open="trigger"]').click();
       await pick.selectOption('__custom');
@@ -93,7 +93,7 @@ const rowText = (page: Page, id: string) => page.locator(`tr.au-row[data-row="${
       await shot(page, 'desktop-events-custom');
       await page.locator('.au-ed .au-save').click();
       await page.waitForFunction(() => document.querySelector('.au-trig .au-c1')?.textContent === 'Deploy finished');
-      assert.deepEqual(writes.filter(w => w.method === 'PATCH' && w.body?.trigger).at(-1)!.body.trigger, {type: 'event', name: 'custom.deploy_finished'});
+      assert.deepEqual(writes.filter(w => w.method === 'PATCH' && w.body?.trigger).at(-1)!.body!.trigger, {type: 'event', name: 'custom.deploy_finished'});
       // Back to a catalog event drops the box.
       await page.locator('.au-card[data-open="trigger"]').click();
       assert.equal(await pick.locator('option:checked').innerText(), 'Custom…');

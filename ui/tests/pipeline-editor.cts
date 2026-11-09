@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
 // The pipeline editor (ui/app/pipeline-editor.ts), opened from the pencil by the pipeline's name on the Tasks page.
 //  - the pencil shows only where GET /api/v2/pipelines/{id}/rights says the reader may edit;
-//  - settings: goal, judge, factory, private (with who may see it), prefix, owner and manager save through
+//  - settings: goal, factory, private (with who may see it), prefix, owner and manager save through
 //    PATCH /v2/pipelines/{id}/settings, read back from GET /v2/pipelines/{id}/settings;
 //  - a stage: rename, move, add and remove save the whole list through the task-type route; Warn after saves minutes
 //    (hours and days converted) or "Don't warn" (null);
@@ -9,16 +9,16 @@ import type {Route} from 'playwright';
 //  - Then adds and removes a link; a phone opens the editor as a bottom sheet with no sideways scroll.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {html, isUiPath, serveUi} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 type Write = {method: string; p: string; body: unknown};
 type Req = {id: string; name: string; kind: string; needs: unknown; reviewed_by: string; reviewer_id: string | null; backup_reviewer_id?: string | null};
 type State = {type: {id: string; name: string; prefix: string; pipeline_owner_id: string; manager: string | null;
     steps: {id: string; name: string; status: string; limit_minutes: number | null}[]};
   reqs: Record<string, Req[]>; links: {id: string; [k: string]: unknown}[]; stageReads: number;
-  settings: {id: string; name: string; prefix: string; goal: string | null; judge_model: string | null; visibility: string; factory_id: string | null;
-    owner_id: string | null; manager_id: string | null; members: string[]; judge_models: string[]; default_judge_model: string};
+  settings: {id: string; name: string; prefix: string; goal: string | null; visibility: string; factory_id: string | null;
+    owner_id: string | null; manager_id: string | null; members: string[]};
   factories: {id: string; name: string; goal: null; owner_id: null; manager_id: null; position: number}[]};
 
 // The server refuses Nobody with a reviewer or a backup (backend/pipeline_requirements.py): the fixture answers the same 422.
@@ -39,7 +39,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
   const state: State = {type: {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager, steps: steps()},
     reqs: {s2: [{id: 'r1', name: 'Screenshot', kind: 'attachment', needs: {formats: ['image'], newer_than_change: true, is_work: false}, reviewed_by: 'nobody', reviewer_id: null}]},
     links: [], stageReads: 0,
-    settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', judge_model: null, visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: manager, members: [], judge_models: ['haiku-5.5', 'jev', 'sonnet'], default_judge_model: 'haiku-5.5'},
+    settings: {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: 'Ship tickets fast', visibility: 'company', factory_id: 'f1', owner_id: 'human:ana', manager_id: manager, members: []},
     factories: [{id: 'f1', name: 'Product', goal: null, owner_id: null, manager_id: null, position: 0}, {id: 'f2', name: 'Growth', goal: null, owner_id: null, manager_id: null, position: 1}]};
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
@@ -96,7 +96,6 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
       if ('owner_id' in body) { s.owner_id = body.owner_id; state.type.pipeline_owner_id = body.owner_id; }
       if ('manager_id' in body) { s.manager_id = body.manager_id; state.type.manager = body.manager_id; }
       if ('goal' in body) s.goal = body.goal || null;
-      if ('judge_model' in body) s.judge_model = body.judge_model || null;
       if (body.visibility) { s.visibility = body.visibility; if (body.visibility === 'members') s.factory_id = null; }
       if ('factory_id' in body) s.factory_id = body.factory_id || null;
       if (body.members) s.members = body.members;
@@ -136,18 +135,14 @@ async function desktop(browser: import('playwright').Browser) {
   await page.locator('[data-pe-setting=manager_id]').selectOption('bot:lead');
   await page.waitForFunction(() => (document.querySelector('[data-pe-setting=manager_id]')! as HTMLInputElement).value === 'bot:lead');
   assert.deepEqual(last(writes, '/api/v2/pipelines/dev/settings'), {manager_id: 'bot:lead'});
-  // Goal saves on blur; Judge shows the default when none is set, then saves its choice; Factory picks a live one;
+  // Goal saves on blur; Factory picks a live one;
   // Private sends the visibility, then who may see it, and a private pipeline has no factory.
   const nextSettings = () => page.waitForRequest(r => r.method() === 'PATCH' && new URL(r.url()).pathname === '/api/v2/pipelines/dev/settings');
-  assert.equal(await page.locator('[data-pe-setting=judge_model]').inputValue(), 'haiku-5.5');
   let saving = nextSettings();
   await page.locator('[data-pe-setting=goal]').fill('Launch the spring line');
   await page.locator('[data-pe-setting=goal]').blur();
   assert.deepEqual((await saving).postDataJSON(), {goal: 'Launch the spring line'});
   await page.waitForFunction(() => (document.querySelector('[data-pe-setting=goal]')! as HTMLInputElement).value === 'Launch the spring line');
-  saving = nextSettings();
-  await page.locator('[data-pe-setting=judge_model]').selectOption('jev');
-  assert.deepEqual((await saving).postDataJSON(), {judge_model: 'jev'});
   saving = nextSettings();
   await page.locator('[data-pe-setting=factory_id]').selectOption('f2');
   assert.deepEqual((await saving).postDataJSON(), {factory_id: 'f2'});
@@ -379,8 +374,8 @@ async function typingSurvivesRedraw(browser: import('playwright').Browser) {
   await page.locator('.pe-stage').first().waitFor();
   await page.locator('[data-pe-setting=goal]').fill('Ship faster');
   const reads = state.stageReads;
-  // The judge saves on change: its save reloads the editor (every stage's requirements are read again) while the Goal has focus.
-  await page.evaluate(() => document.querySelector('[data-pe-setting=judge_model]')!.dispatchEvent(new Event('change', {bubbles: true})));
+  // The factory saves on change: its save reloads the editor (every stage's requirements are read again) while the Goal has focus.
+  await page.evaluate(() => document.querySelector('[data-pe-setting=factory_id]')!.dispatchEvent(new Event('change', {bubbles: true})));
   const end = Date.now() + 5000;
   while (state.stageReads < reads + 3) { if (Date.now() > end) throw new Error('the editor was not redrawn'); await new Promise(r => setTimeout(r, 25)); }
   await settled(page);

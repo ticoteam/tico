@@ -1,4 +1,4 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-fixes.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/pipeline-review-fixes.cts
 // The ▶ review queue's held forms, checked one scenario at a time at a phone's 390 by 844, dark and light:
 //   - a plain question (no picks) is answered in words, as the task page answers one (the same answers call);
 //   - the question card's held copy is scoped to the open ▶: closing ▶ drops it, and fresh Needs you data wins over it;
@@ -6,7 +6,7 @@
 //   - a subtask shows its body, acceptance criteria and files, with an Open link to the task;
 //   - Done on a subtask sends the note typed in its box, as the task page saves a note on Done.
 import type {Browser, Page} from 'playwright';
-import type {PipelineInstallOptions} from './support/pipeline-fixture.cjs';
+import type {PipelineInstallOptions} from './support/pipeline-fixture.cts';
 const {chromium} = require('playwright');
 
 // Page globals the review's held-form checks read (declared here: each spec is its own module).
@@ -14,8 +14,8 @@ declare var S: {v2: Record<string, unknown>};
 declare var QC_HELD: Map<string, {kind: string; ask: {refs: {questions: {question: string}[]}}}>;
 declare function qcardItem(row: {id: string}): {it?: {ask?: {refs?: {questions?: {question?: string}[]}}}} | null;
 const assert = require('node:assert/strict');
-const {install} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+const {install} = require('./support/pipeline-fixture.cts');
+const {t} = (() => { try { return require('./support/load.cts'); } catch { return {t: (ms: number) => ms}; } })();
 
 const PHONE = {width: 390, height: 844};
 const QUESTION_TEXT = "Does 'close all' include bot-owned tasks?";

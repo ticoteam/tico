@@ -11,8 +11,8 @@
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 type Page = import('playwright').Page;
 type TaskModel = {harness: string; model: string; reasoning_effort: string; runtime: string; compact_at: number | null};
 // The bot as the test serves and edits it (the fields it reads or writes).

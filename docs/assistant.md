@@ -25,7 +25,7 @@ or a count.
 
 The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
 the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
-left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cjs`
+left running; and with reduced motion it holds still and says what it is doing in a word. `ui/tests/dot-perf.cts`
 holds it to budgets in Chrome: 10 s idle with no layout, at most 4 style recalcs per idle swap and under 150 ms of work; with the
 CPU slowed 4x, opening, a reply and closing keep frame gaps at p95 20 ms and max 50 ms with no long task over 50 ms.
 Opening and closing change no `hidden` attribute anywhere and add nothing to the page, which the same test checks: on

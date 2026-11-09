@@ -4,13 +4,13 @@
 // and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
 // Fixtures only.
 import type {Browser, Page} from 'playwright';
-import type {ThreadsMessage} from './support/threads-fake.cjs';
+import type {ThreadsMessage} from './support/threads-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {threadsFake} = require('./support/threads-fake.cts') as import('./support/threads-fake.cts').Api;
 
 interface Person {id: string; role: string; name: string; email: string; cloud: boolean; bot_admin?: boolean}
 interface View {

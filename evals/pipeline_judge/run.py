@@ -1,4 +1,4 @@
-"""Pipeline judge matrix: python -m evals.pipeline_judge.run --models haiku-5.5,jev,sonnet [--dry-run] [--out DIR].
+"""Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
 cases.json holds 34 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
 text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
@@ -217,7 +217,7 @@ def write(results, out):
 
 def main(argv=None, env=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--models", default="haiku-5.5,jev,sonnet")
+    parser.add_argument("--models", default="jev")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--only", help="one case id")
     parser.add_argument("--out", default=str(HERE / "results"))
@@ -238,7 +238,7 @@ def main(argv=None, env=None):
             if engine is None:
                 skipped.append(name)
                 continue
-            judges[name] = lambda case, engine=engine, name=name: adapter.judge_once(engine, case, name)
+            judges[name] = lambda case, engine=engine: adapter.judge_once(engine, case)
         if skipped:
             print(INCOMPLETE.format(names=", ".join(skipped)), file=sys.stderr)
             return 2

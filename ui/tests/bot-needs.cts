@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // A bot's task rail is one Tasks section with four tabs, each with its count: Needs you (what this bot needs from the
 // person: a question it asked on another bot's task, even a finished one, a task of its own
 // waiting on them, a question outside any task), Doing (Open/Doing tasks it holds, newest first), Blocked (each saying
@@ -10,8 +10,8 @@ import type * as Routes from './support/routes.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type Task = {id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string; rank: null;
   labels: string[]; tags: string[]; links: string[]; parts: {total: number; done: number}; version: number; created_at: string; updated_at: string;
   waiting_on?: string; note?: string; ask?: Record<string, unknown>; done_at?: string; type_id?: string};

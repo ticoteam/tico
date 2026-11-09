@@ -1,16 +1,16 @@
 // Files kept for the visit (fileKeep, ui/app/viewer.ts) stay within a 64 MB budget per cache, but the file just
 // loaded is never the one let go: a picture over the budget on its own opened blank, in the viewer and as a chat
 // picture. Older files nothing shows still go. Fixtures only.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as ThreadsFake from './support/threads-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as ThreadsFake from './support/threads-fake.cts';
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const zlib: typeof import('node:zlib') = require('node:zlib');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
 declare const VIEW_FILES: Map<string, unknown>;
 declare function viewFile(id: string, name: string): Promise<{url: string}>;
 declare function chatImageURL(file: {id: string; name: string; content_type: string}): string;

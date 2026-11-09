@@ -8,9 +8,9 @@
 // old addresses land where they moved. Then Sources flags a clash, Strategy has How we sell, Brand's Edit publishes,
 // and Goals switches its KPIs between Tree, Loops and Journey. Phone only.
 import type {Page} from 'playwright';
-import type * as R from './support/redesign-e2e.cjs';
+import type * as R from './support/redesign-e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {run, open, go, ok, shot, t} = require('./support/redesign-e2e.cjs') as typeof R;
+const {run, open, go, ok, shot, t} = require('./support/redesign-e2e.cts') as R.Api;
 
 const REMOVED = /\/api\/v2\/(gtm|growth\/(ideas|segments|evidence|working|week|numbers))/;
 // The test hub's clock stands still here (evals/factory/world.py).

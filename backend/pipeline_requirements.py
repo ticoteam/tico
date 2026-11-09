@@ -15,7 +15,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import hubdb
-from . import pipeline_judges, pipeline_rights
+from . import pipeline_rights
 from .models import Contract
 from .store import Problem
 
@@ -75,7 +75,7 @@ class RequirementBody(Contract):
 
 class PipelineSettingsBody(Contract):
     """What a pipeline's owner or an admin sets. Every field is optional; a field left out stays as it is. The route
-    passes only the fields the body sent, so for goal, judge_model and factory_id an empty value (or null) clears it;
+    passes only the fields the body sent, so for goal and factory_id an empty value (or null) clears it;
     visibility and members are left alone when null. manager_id is `bot:<id>` or `<id>`, an active bot: an empty string
     clears it, and null leaves it as it is."""
 
@@ -84,7 +84,6 @@ class PipelineSettingsBody(Contract):
     manager_id: str | None = Field(default=None, max_length=128)
     manager_every_minutes: int | None = Field(default=None, ge=EVERY_MIN, le=EVERY_MAX)
     goal: str | None = Field(default=None, max_length=GOAL_MAX)
-    judge_model: str | None = Field(default=None, max_length=32)
     visibility: Literal["company", "members"] | None = None
     members: list[str] | None = Field(default=None, max_length=MEMBERS_MAX)
     factory_id: str | None = Field(default=None, max_length=128)
@@ -385,15 +384,6 @@ def set_prefix(conn: "sqlite3.Connection", actor: str, pipeline_id: str, prefix:
     return value
 
 
-def _judge_model(value: str | None) -> str | None:
-    """A pipeline's judge model: one of pipeline_judges.MODELS, or None (the default) for an empty value."""
-    if not value:
-        return None
-    if value not in pipeline_judges.MODELS:
-        raise Problem("validation", f"The judge model is one of: {', '.join(pipeline_judges.MODELS)}", 422)
-    return value
-
-
 def _member_ref(value: object) -> str:
     """A pipeline member as its actor reference: "human:<id>" for a person (the "person:" form is accepted) or "bot:<slug>"."""
     ref = str(value or "").strip()
@@ -412,9 +402,9 @@ def _factory_live(conn: "sqlite3.Connection", factory_id: str) -> bool:
 
 
 def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any]:
-    """A pipeline's settings: what its owner and admins see and set. A null judge_model is the default judge."""
+    """A pipeline's settings: what its owner and admins see and set."""
     row = conn.execute(
-        "SELECT id, name, prefix, goal, judge_model, pipeline_visibility AS visibility, factory_id, "
+        "SELECT id, name, prefix, goal, pipeline_visibility AS visibility, factory_id, "
         "pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes, stuck_after_hours, "
         "ask_person_after_hours, question_expiry_days FROM task_types WHERE id=?",
         (pipeline_id,),
@@ -429,15 +419,10 @@ def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any
 
 
 def settings_read(conn: "sqlite3.Connection", actor: str, pipeline_id: str) -> dict[str, Any]:
-    """A pipeline's settings for a reader who may see it, with the judge models a pipeline may be given. A members-only
-    pipeline is not found by anyone outside it."""
+    """A pipeline's settings for a reader who may see it. A members-only pipeline is not found by anyone outside it."""
     if not pipeline_rights.may_see(conn, actor, pipeline_id):
         raise Problem("not_found", "No such pipeline", 404)
-    return {
-        **settings_view(conn, pipeline_id),
-        "judge_models": list(pipeline_judges.MODELS),
-        "default_judge_model": pipeline_judges.DEFAULT_MODEL,
-    }
+    return settings_view(conn, pipeline_id)
 
 
 def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -461,8 +446,6 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
     for column in ("stuck_after_hours", "ask_person_after_hours", "question_expiry_days"):
         if column in body:
             sets[column] = None if body[column] is None else int(body[column])
-    if "judge_model" in body:
-        sets["judge_model"] = _judge_model(body["judge_model"])
     if body.get("visibility") is not None:
         sets["pipeline_visibility"] = body["visibility"]
         if body["visibility"] == "members":
@@ -610,7 +593,7 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
 
     @app.get("/api/v2/pipelines/{pipeline_id}/settings")
     def pipeline_settings_read(request: Request, pipeline_id: str) -> dict[str, Any]:
-        """The pipeline's settings and the judge models it may be given. A members-only pipeline is a 404 to anyone outside it."""
+        """The pipeline's settings. A members-only pipeline is a 404 to anyone outside it."""
         who = request.state.identity
         guard.domain(who)
         with db.read() as c:
@@ -618,7 +601,7 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
 
     @app.patch("/api/v2/pipelines/{pipeline_id}/settings")
     def pipeline_settings(request: Request, pipeline_id: str, body: PipelineSettingsBody) -> dict[str, Any]:
-        """The pipeline's prefix, owner, manager, manager cadence, goal, judge model, visibility, members and factory.
+        """The pipeline's prefix, owner, manager, manager cadence, goal, visibility, members and factory.
         Only the fields sent change. The pipeline's owner and admins only."""
         who = request.state.identity
 

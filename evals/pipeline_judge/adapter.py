@@ -3,30 +3,22 @@ as it does in production: the state is built by the server's own `_state`, and t
 (`text_of_bytes`, the one the server's read uses), from the case's text as the bytes Tico would hold. This file supplies only
 the model call, through the same Gateway clients the server uses.
 
-A model name picks its Gateway route, the one the server uses for it:
-
-    jev         Decide Low (clients/judge.py `gateway`, the Gateway's Low model)
-    sonnet      Decide Medium (the Gateway's Medium language model)
-    haiku-5.5   the Gateway's Low chat tier, written as backend/pipeline_judges.py writes it (`gateway_writer`)
-
-All three need TICO_GATEWAY_KEY; the URL is the server's own (backend/config.py `_gateway_url`). Nothing calls Anthropic
-directly. Costs are the Gateway's `cost_usd` when it gives one, else tokens at PRICES. PRICES are estimates: Haiku's and
-Jev's are the Gateway lineup's (docs/ai-gateway.md), and Medium's is an assumption."""
+The only judge model is Jev, Decide Low (clients/judge.py `gateway`, the Gateway's Low model), the route the server uses.
+It needs TICO_GATEWAY_KEY; the URL is the server's own (backend/config.py `_gateway_url`). Nothing calls Anthropic
+directly. Costs are the Gateway's `cost_usd` when it gives one, else tokens at PRICES. PRICES is an estimate from the
+Gateway lineup (docs/ai-gateway.md)."""
 
 import hashlib
-import io
 import json
 import os
 import sqlite3
-import time
 from contextlib import closing
 
 from backend import pipeline_judges as P
-from clients import gateway as G
 from clients import judge as J
 
 MODELS = tuple(P.MODELS)
-PRICES = {"jev": (0.06, 0.0), "haiku-5.5": (0.15, 0.75), "sonnet": (3.0, 15.0)}
+PRICES = {"jev": (0.06, 0.0)}
 QUESTION_SET = P.QUESTION_SET
 QUESTIONS = P._questions()  # the server's question set, not a copy
 
@@ -120,40 +112,6 @@ def _decide(name, key, url):
     return engine
 
 
-def _haiku(key, url):
-    """Haiku on the Gateway's Low chat tier. The writer keeps no usage on a good answer, so the response is read here
-    first and its usage kept; the body is then handed back unchanged."""
-    from backend import gateway_tiers
-
-    model = gateway_tiers.default_model("low")
-    usage: dict = {}
-
-    def opener(request, timeout):
-        with J.gateway_open(request, timeout) as response:
-            body = response.read()
-        payload = json.loads(body or b"{}")
-        usage.clear()
-        usage.update(J.clean_usage(payload.get("usage")) if isinstance(payload, dict) else {})
-        return io.BytesIO(body)
-
-    write = J.gateway_writer(lambda: key, G.chat_base(url), model, timeout=P.GATEWAY_TIMEOUT, opener=opener)
-
-    def engine(_model, state, questions, label):
-        usage.clear()
-        started = time.monotonic()
-        parsed = write(P.JUDGE_SYSTEM, json.dumps(state, sort_keys=True, default=str))
-        return {
-            "p": parsed.get("p"),
-            "reason": " ".join(str(parsed.get("reason") or "").split()),
-            "provider": J.GATEWAY_PROVIDER,
-            "model": write.model,
-            "cost_usd": cost_usd("haiku-5.5", usage),
-            "latency_ms": round((time.monotonic() - started) * 1000),
-        }
-
-    return engine
-
-
 def build_engine(name, env=None):
     """The model call for `name` (the server's ENGINE shape), or None when the environment has no Gateway key."""
     if name not in MODELS:
@@ -165,10 +123,10 @@ def build_engine(name, env=None):
     from backend.config import _gateway_url
 
     url = _gateway_url()
-    return _haiku(key, url) if name == "haiku-5.5" else _decide(name, key, url)
+    return _decide(name, key, url)
 
 
-def judge_once(engine, case, model=""):
+def judge_once(engine, case):
     """(probability the requirement is met, cost in USD, milliseconds) for one case, through the server's `judge_once`
     with `engine` as the model call. Raises J.JudgeError when the model call fails: the caller counts that as unsure."""
     failed: list[str] = []
@@ -180,10 +138,8 @@ def judge_once(engine, case, model=""):
             failed.append(J.error_code(exc))
             raise
 
-    with closing(
-        sqlite3.connect(":memory:")
-    ) as c:  # judge_once reads the connection only to pick a model, and it is given
-        result = P.judge_once(c, _requirement(case), _attachment(case), model, engine=ask)
+    with closing(sqlite3.connect(":memory:")) as c:  # judge_once takes a connection; the judge reads nothing from it
+        result = P.judge_once(c, _requirement(case), _attachment(case), engine=ask)
     if failed:
         raise J.JudgeError(failed[0], "the model call failed")
     return float(result["p"]), float(result["cost_usd"]), int(result["latency_ms"])

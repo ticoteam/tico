@@ -3,13 +3,13 @@
 // tooltip under the pointer, an overloads table that links Replay, the busiest processes, and a table view. Turning
 // it off and deleting the history go to the server. Every request is intercepted.
 import type {LaunchOptions, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 // The Computers page's performance settings, as the app keeps them in the page.
 declare const SETTINGS_DATA: {machines: {performance: string}[]};
 

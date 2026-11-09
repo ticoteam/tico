@@ -1,5 +1,5 @@
 /* ui/app/pipeline-editor.ts — The pipeline editor: a pipeline's stages, their requirements and Warn after times, the
-   links that hand tickets on, and its goal, judge, factory, privacy, owner, manager and prefix. It opens from the pencil by the pipeline's name on the
+   links that hand tickets on, and its goal, factory, privacy, owner, manager and prefix. It opens from the pencil by the pipeline's name on the
    Tasks page, which shows only to a reader who may change the pipeline's rules (GET /api/v2/pipelines/{id}/rights).
    Every control calls a route that exists: stage names and order use the task-type route (movers only, so those
    controls show only to a mover), requirements and settings use backend/pipeline_requirements.py, links use
@@ -23,7 +23,7 @@ interface PeState {
   mover: boolean; warn: string; cap: string; link: string;
   /** Whether the reader may change the pipeline's rules (its owner and admins): the manager is a choice only then. */
   mayEdit: boolean;
-  /** The settings block's server view (goal, judge, factory, privacy, members), or null when the route did not answer. */
+  /** The settings block's server view (goal, factory, privacy, members), or null when the route did not answer. */
   settings: PipelineSettings | null;
   /** The live factories for the Factory choice, or null when the list did not load (the choice is then left out). */
   factories: PipelineFactory[] | null;
@@ -163,14 +163,11 @@ function peStageHTML(state: PeState, stage: PeStage, i: number, count: number): 
     <div class="pe-form-slot" data-pe-slot="${esc(stage.id)}"></div></li>`;
 }
 
-const PE_JUDGE_LABELS: Record<string, string> = {'haiku-5.5': 'Haiku 5.5', jev: 'Jev', sonnet: 'Sonnet'};
-
-/** The Goal, Judge, Factory and Private rows of the settings block. They show only when the server sent the settings. */
+/** The Goal, Factory and Private rows of the settings block. They show only when the server sent the settings. */
 function peGoalHTML(state: PeState): string {
   const s = state.settings;
   if (!s) return '';
   const isPrivate = s.visibility === 'members';
-  const judges: [string, string][] = s.judge_models.map(v => [v, PE_JUDGE_LABELS[v] ?? v]);
   const factories = (state.factories ?? []).map(f => ({id: f.id, name: f.name}));
   // A member the roster does not show (a hidden person, an archived bot) still gets a checked box, so saving keeps it.
   const roster = [...pePeople(), ...peBots()];
@@ -180,7 +177,6 @@ function peGoalHTML(state: PeState): string {
         `<label class="pe-check"><input type="checkbox" data-pe-member value="${esc(p.id)}"${s.members.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('')}</fieldset>`
     : '';
   return `<label class="pe-f"><span>Goal</span><input name="goal" maxlength="200" value="${esc(s.goal ?? '')}" data-pe-setting="goal" autocomplete="off"></label>
-      <label class="pe-f"><span>Judge</span><select data-pe-setting="judge_model">${peOptions(judges, s.judge_model ?? s.default_judge_model)}</select></label>
       ${state.factories ? `<label class="pe-f"><span>Factory</span><select data-pe-setting="factory_id"${isPrivate ? ' disabled' : ''}>${peWho(factories, s.factory_id, 'None')}</select></label>` : ''}
       ${peStuckHTML(s)}
       <label class="pe-check"><input type="checkbox" role="switch" data-pe-private${isPrivate ? ' checked' : ''}> Private</label>

@@ -1,10 +1,10 @@
 // A "What wakes" automation whose wake rule names a step its type does not have (GET payload `problems`) says so in one
 // warning line: on its row in the list and in its detail header. A clean automation shows no line. Against the fake hub in
-// support/automations-fake.cjs; a computer.
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+// support/automations-fake.cts; a computer.
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, DESKTOP, sideways} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, DESKTOP, sideways} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 (async () => {
   const browser = await chromium.launch();

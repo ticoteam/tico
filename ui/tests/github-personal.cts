@@ -4,14 +4,14 @@
 // settings and the uninstall page on github.com/settings. Without a connection, the form asks for one account or organization
 // name. Desktop and phone, light and dark: TICO_UI_SHOTS=<dir> saves the card in each.
 import type {Locator, LaunchOptions, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, isUiPath, serveUi} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, isUiPath, serveUi} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const VIEWPORTS = {desktop: {width: 1440, height: 900}, phone: {width: 390, height: 844}};

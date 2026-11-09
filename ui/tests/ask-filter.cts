@@ -1,11 +1,15 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // What bots may put on you: chores use ordinary Needs you rows, refused asks have no kept-items section,
 // and Settings saves mode, the main budget and criteria. NEEDS_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var tasksLoad: Tasks.Globals['tasksLoad'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const SHOTS = process.env.NEEDS_SHOTS || '';
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 

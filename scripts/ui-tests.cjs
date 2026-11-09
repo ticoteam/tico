@@ -149,7 +149,7 @@ const TRACE = {line: 8192, call: 240, calls: 10, pending: 20, report: 8192};
 // seconds is stopped with everything it started; if it has still not exited `grace` seconds later, the run ends
 // anyway and says so. Playwright's call log (DEBUG=pw:api) is held apart from the output, bounded: it names the
 // browser calls a stopped script was still waiting on, which is the hang point.
-function runScript(script, {env = process.env, timeout, preload = path.join(__dirname, '..', 'ui', 'tests', 'support', 'browser.cjs'),
+function runScript(script, {env = process.env, timeout, preload = path.join(__dirname, '..', 'ui', 'tests', 'support', 'browser.cts'),
                             stop = stopTree, grace = 5}) {
   return new Promise(resolve => {
     const t0 = Date.now();

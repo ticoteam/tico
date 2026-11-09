@@ -1,13 +1,13 @@
-// Automations (redesign, ui/app/automations*.js) against the fake hub in support/automations-fake.cjs: the overview is one
+// Automations (redesign, ui/app/automations*.js) against the fake hub in support/automations-fake.cts: the overview is one
 // dense row per automation grouped by trigger, no switches, filters on the left (behind a Filters button on a phone), a
 // 5m/1h/24h/7d range kept across visits, and a Runs tab of every run newest first. A row opens the flow with a "‹
 // Automations" link back that keeps the filters, tab and range. Inside, the header switch turns it off, Runs lists dense
 // rows, a tap opens a run's steps, More reads the next page; ⋯ deletes, but not a built-in.
 import type {Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 type Box = {x: number; y: number; width: number; height: number};
 

@@ -11,9 +11,9 @@ const crypto = require('node:crypto') as typeof import('node:crypto');
 const path = require('node:path') as typeof import('node:path');
 const readline = require('node:readline') as typeof import('node:readline');
 const {spawn, execFileSync} = require('node:child_process') as typeof import('node:child_process');
-import type * as PageSupport from './support/page.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+import type * as PageSupport from './support/page.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();
 
 // What the server prints on its first stdout line, and the child process that serves it.
 interface Tico { child: import('node:child_process').ChildProcess; public: string; url: string; token: string; db: string; registry: string }

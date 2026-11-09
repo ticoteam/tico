@@ -7,11 +7,11 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
 const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), min = 60e3;
@@ -53,7 +53,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     // A list, as the server sends it: the catch-all {} broke the sidebar tree whenever it landed ahead of
-    // /api/v2/status, and the bot page never opened (the bot-needs.cjs hang from the v0.3.54 release check).
+    // /api/v2/status, and the bot page never opened (the bot-needs.cts hang from the v0.3.54 release check).
     if (p === '/api/issues') return json([]);
     if (p === '/api/employees') return json(bots);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});

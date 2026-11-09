@@ -1,13 +1,13 @@
 // Strategy › Goals (ui/app/goals.ts goalSheetOpen, ui/goals-kpis.ts goalsRender) against the fake hub in
-// support/strategy-fake.cjs (the Acme example): no Strategy line on top; "+ Goal" in the head; tapping a goal opens it
+// support/strategy-fake.cts (the Acme example): no Strategy line on top; "+ Goal" in the head; tapping a goal opens it
 // on its own (title, owner, colour, metric, target, due, Remove), a sheet on a phone and a side panel on a computer;
 // tapping a line opens its goal, or a new one for its owner when they have none; "+" on every line (and a long press on
 // a phone) adds a goal for that owner, a group's for its lead; the name still opens the owner's panel. A member gets only their own goals to set and reads the rest.
 import type {Page} from 'playwright';
-import type * as StrategyFakeSupport from './support/strategy-fake.cjs';
+import type * as StrategyFakeSupport from './support/strategy-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs') as typeof StrategyFakeSupport;
+const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cts') as StrategyFakeSupport.Api;
 
 const HASH = '#/strategy/goals';
 const goalWrites = (writes: StrategyFakeSupport.StrategyWrite[]) => writes.filter(w => w.path.startsWith('/api/v2/goals')).map(w => [w.path, w.body]);

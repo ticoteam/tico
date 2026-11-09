@@ -6,8 +6,8 @@ import type {Route} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 const bot = (name: string, display_name: string, org_parent: string, over: Record<string, unknown> = {}) => ({name, display_name, org_parent, reports_to: org_parent.startsWith('p:') ? 'human:' + org_parent.slice(2) : org_parent.slice(2),
   host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: [], ...over});

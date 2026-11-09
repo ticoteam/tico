@@ -10,9 +10,9 @@
 // (a manager reads a bot report's private tasks, but nothing else private); Gina sees T1 and P2 (a reader). A private
 // task a teammate may not read is refused by the hub, and the page does not open it. Runs on a desktop only. task-list.js and task-modal.js do branch on the phone (the sheet is a modal there),
 // but the asserts are about the hub's answers to each teammate, which no width changes, and e2e-core opens the sheet on both.
-import type * as E2E from './support/e2e.cjs';
+import type * as E2E from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {journey, open, go, must, call, assertClean, expectFailure, t, SEEDS} = require('./support/e2e.cjs') as typeof E2E;
+const {journey, open, go, must, call, assertClean, expectFailure, t, SEEDS} = require('./support/e2e.cts') as E2E.Api;
 
 const TITLES: Record<string, string> = {T1: 'Team launch checklist', P1: 'Omar private review', P2: 'Private release cut'};
 const SEES: Record<string, Record<string, boolean>> = {

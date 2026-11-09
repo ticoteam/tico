@@ -1,13 +1,13 @@
 // Automations for a viewer without edit rights (can_edit false on every automation, CONTRACT §2) against the fake hub in
-// support/automations-fake.cjs: no switches, no "+", the spend limit is shown but not a button, an editor shows its
+// support/automations-fake.cts: no switches, no "+", the spend limit is shown but not a button, an editor shows its
 // fields off with no Save, ⋯ offers Versions only and Versions offers no Restore; a proposal can be read, not turned on.
 // A phone first, then a computer. Then the built-in switch rule: only the top of the org (can_pause) gets the switch on a
 // built-in; anyone else reads "Built-in: can’t be turned off". A system job says what it does and that it is fixed.
 import type {Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 async function readOnly(page: Page, writes: AutomationsFakeSupport.Write[]) {
   await page.waitForSelector('.au-card[data-open="f1"]');

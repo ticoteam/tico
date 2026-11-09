@@ -19,15 +19,16 @@ as it did before, so rolling back a stage is retiring its requirement rows.
 
 ## 2. Judge model bar
 
-Run `python -m evals.pipeline_judge.run --models haiku-5.5,jev,sonnet` (real calls; not CI; keys in the environment as
+Every pipeline requirement is judged by Jev alone (Decide Low), so this is the one model to check. Run
+`python -m evals.pipeline_judge.run --models jev` (real calls; not CI; keys in the environment as
 `evals/pipeline_judge/adapter.py` says). 34 labeled cases, Dev and Marketing, with traps (missing file, older work version,
 wrong screen, lead with no email, draft, placeholder page, self-review).
 
-- A model may be a pipeline's judge only with **0 false "met"** (a met verdict where the label says not met or unsure).
+- Jev must have **0 false "met"** (a met verdict where the label says not met or unsure).
 - Accuracy 90% or better, and the unsure rate no higher than the labeled unsure share (10 of 34, about 29%, since every screenshot is unsure: the judge is shown no image text) plus 10 points. Unsure is
   cheap (it goes to a person); a wrong met is not.
-- p95 latency under the judge tick's budget (30 s), and cost per decision under 1 cent at the default model.
-- The default (Haiku 5.5) must pass. A model that fails stays selectable only as "needs a person for every call".
+- p95 latency under the judge tick's budget (30 s), and cost per decision under 1 cent.
+- Jev must pass.
 - Keep the JSON and the table from the run with the approval.
 
 ## 3. UI: desktop and phone

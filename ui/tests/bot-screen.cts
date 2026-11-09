@@ -2,11 +2,11 @@
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();
 
 // The bot's computer as the operations list and the bot list give it.
 interface Machine { runner_id: string; label: string; platform: string; screen: string; screen_available: boolean; owner_id: string | null;
