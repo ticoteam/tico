@@ -13,12 +13,13 @@ import pytest
 from backend import assistant, cloud_access, cloud_machines as CM, team_rules
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, headers, setup_attempt
-from backend.tests.test_openapi_v2 import conforms
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn
-from backend.tests.test_settings_assistant import mcp as assistant_mcp
+from backend.tests.helpers.api import headers, setup_attempt
+from backend.tests.test_api import api
+from backend.tests.helpers.openapi_v2 import conforms
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn
+from backend.tests.helpers.settings_assistant import mcp as assistant_mcp
 
 PATH = "/api/v2/cloud-machines/support"
 KEY = "tgw-synthetic-fixture-key-0042"

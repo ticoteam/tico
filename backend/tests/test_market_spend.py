@@ -5,51 +5,13 @@ import pytest
 
 from backend import market_spend as MS
 from backend.store import H
-from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_company import with_strategy_bot
-from backend.tests.test_market import _librarian, _seed
-from backend.tests.test_sql import query
-from backend.tests.test_strategy import publish, ready
-
-B = 1_000_000_000
-
-
-def evidence(api, quote="Analysts count 40,000 small landlords.", token="ana-test"):
-    return post(api, "market/evidence", {"source_kind": "news", "quote": quote, "our_read": "A count."}, token=token)[
-        "evidence"
-    ]["id"]
-
-
-def defined(api, **more):
-    """A market with a root, and two top-level segments with a sub-segment under the first."""
-    put(
-        api,
-        "market/definition",
-        {
-            "root_name": "Rental software",
-            "description": "Software for small landlords.",
-            "year": 2026,
-            "params": {"adoption": {"value": 0.1, "judgement": True}},
-            **more,
-        },
-    )
-    first = post(api, "market/segments", {"name": "Screening"})["segment"]["id"]
-    second = post(api, "market/segments", {"name": "Payments"})["segment"]["id"]
-    sub = post(api, "market/segments", {"name": "Credit checks", "parent_id": first})["segment"]["id"]
-    return first, second, sub
-
-
-def size(api, segment, spend=B, low=None, high=None, expected=200, token="ana-test", **more):
-    body = {
-        "segment_id": segment,
-        "method": "owner",
-        "spend_usd": spend,
-        "low_usd": spend / 2 if low is None else low,
-        "high_usd": spend * 2 if high is None else high,
-        **more,
-    }
-    out = post(api, "market/sizes", body, token=token, expected=expected)
-    return out["size"] if expected == 200 else out
+from backend.tests.helpers.api import get, post, put, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.company import with_strategy_bot
+from backend.tests.helpers.market import _librarian, _seed
+from backend.tests.helpers.sql import query
+from backend.tests.helpers.strategy import publish, ready
+from backend.tests.helpers.market_spend import B, defined, evidence, size
 
 
 def test_only_the_owner_and_the_librarian_write_the_spend_tables(api):

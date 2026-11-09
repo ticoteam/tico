@@ -4,7 +4,7 @@ name; search hits and breadcrumbs say the same name; a DM is still named by the 
 ana (owner), ben and cara, plus eve and fay (seeded here)."""
 
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_thread_api import get_thread, new_thread, say, search
+from backend.tests.helpers.thread_api import get_thread, new_thread, say, search
 
 
 def rename(api, thread_id, title, token="ana-test"):

@@ -1,8 +1,9 @@
 """A bot reads send-instruction authority from Tico, using the mail-sending management rule."""
 
 from backend.store import H, encode
-from backend.tests.test_api import api, as_member, claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_member_bots import botops  # noqa: F401
+from backend.tests.helpers.api import as_member, claim, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.member_bots import botops  # noqa: F401
 
 
 def test_a_bot_reads_whether_the_messages_sender_may_manage_its_mail_sending(api):

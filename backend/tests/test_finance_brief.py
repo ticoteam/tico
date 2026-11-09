@@ -5,16 +5,7 @@ cash, burn and unattributed spend, a person with no view none). The brief is cac
 is handed the lines only when they differ from the ones that reader was last handed."""
 
 from backend.finance import brief as BR
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT,
-    OWNER,
-    account,
-    act,
-    books,
-    finance_template,
-    spend,
-    store,
-)
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store
 
 LATER = "2026-10-15T14:00:00.000000Z"
 LATEST = "2026-10-15T15:00:00.000000Z"

@@ -2,8 +2,9 @@
 every bot's open work that has not moved in a day and waits on nobody, and starts it."""
 
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_tasks_board import bot_token
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.tasks_board import bot_token
 
 
 def age(api, tid, hours=30):

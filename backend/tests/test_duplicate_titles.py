@@ -20,7 +20,7 @@ def conn(api):
         yield c
 
 
-from backend.tests.test_tasks_board import api  # noqa: E402,F401
+from backend.tests.helpers.tasks_board import api  # noqa: E402,F401
 
 
 def test_unfinished_titles_are_taken_whatever_their_case_and_spacing(conn):

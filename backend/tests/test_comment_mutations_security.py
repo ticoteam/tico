@@ -3,8 +3,8 @@
 import pytest
 
 from backend.store import H, message_page
-from backend.tests.test_api import as_member, headers, restrict
-from backend.tests.test_tasks_board import api, get, post  # noqa: F401
+from backend.tests.helpers.api import as_member, headers, restrict
+from backend.tests.helpers.tasks_board import api, get, post  # noqa: F401
 from backend import bot_settings as BS
 
 

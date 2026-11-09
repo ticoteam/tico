@@ -4,8 +4,9 @@ address names, from the same visibility as Needs you and the task page. Nothing 
 import pytest
 
 from backend import visuals as V
-from backend.tests.test_api import api, as_member, headers, post, restrict  # noqa: F401  (fixtures)
-from backend.tests.test_files import turn
+from backend.tests.helpers.api import as_member, headers, post, restrict  # noqa: F401  (fixtures)
+from backend.tests.test_api import api  # noqa: F401  (fixtures)
+from backend.tests.helpers.files import turn
 
 VISUALS = "http://visuals.localhost:9001"
 ON_VISUALS = {"host": "visuals.localhost:9001"}

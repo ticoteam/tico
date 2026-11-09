@@ -7,15 +7,7 @@ day: no due date, a due date not yet passed, and a stage not yet reached are eac
 from backend import bot_settings as BS
 from backend import mailbox_access as MA
 from backend.finance.core.errors import CONFLICT
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT,
-    OWNER,
-    account,
-    act,
-    books,
-    finance_template,
-    store,
-)
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store
 
 EMAIL = "ap@acme-retail.example"
 BOX = "books@acme.example"

@@ -396,6 +396,8 @@ jobs:
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+      - name: Test imports (no file imports a test module; shared names live in helpers/)
+        run: python3 scripts/check_test_imports.py --base "$BASE_SHA"
       # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
       # the pinned versions and hashes in scripts/pinned_tool.sh) skips the download.
       - name: Cache pinned tools

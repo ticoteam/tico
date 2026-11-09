@@ -12,9 +12,9 @@ import pytest
 
 from backend.entities import store as ES
 from backend.store import H
-from backend.tests.test_api import get, post  # noqa: F401
-from backend.tests.test_org_rule_check import COLOR, Judge, color_rule, events, hold_row, ruled, say, sql  # noqa: F401
-from backend.tests.test_org_rules import api, edit, org, rule  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.org_rule_check import COLOR, Judge, color_rule, events, hold_row, ruled, say, sql  # noqa: F401
+from backend.tests.helpers.org_rules import api, edit, org, rule  # noqa: F401
 
 ACME = "Nothing goes to Acme Lights."
 
@@ -156,7 +156,7 @@ def test_the_third_structured_block_in_a_day_escalates_with_one_review_task(bloc
 
 
 # ---- letters: a do-not-contact by letter holds a bot's letter (backend/letters.py) --------------------------------
-from backend.tests.test_letters import RECIPIENT, grant, hq, quote, send  # noqa: E402, F401
+from backend.tests.helpers.letters import RECIPIENT, grant, hq, quote, send  # noqa: F401
 
 JANE_DNC = "Do not contact Jane Doe by letter."
 

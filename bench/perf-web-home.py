@@ -22,10 +22,10 @@ if __name__ == "__main__":
 
 from backend import bot_settings as BS, threads
 from backend.store import H, Problem
-from backend.tests import test_api
-from backend.tests.test_api import headers
+from backend.tests import test_api as api_fixture  # the api fixture itself
+from backend.tests.helpers.api import headers
 
-api = test_api.api  # the fixture, bound so that tests can take it
+api = api_fixture.api  # the fixture, bound so that tests can take it
 BOTS = [f"bot{n:02d}" for n in range(70)]
 THREADS, DMS, POSTS = int(os.environ.get("THREADS", 1200)), int(os.environ.get("DMS", 150)), 6
 UPDATE_DAYS = 30

@@ -5,8 +5,8 @@ Synthetic fixtures (Acme), a fake Mercury."""
 
 from backend.finance import reads as FR
 from backend.finance.core.errors import CONFLICT, DENIED, NOT_FOUND
-from backend.tests.test_finance_ap import _bill, _vendor
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_ap import _bill, _vendor
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,

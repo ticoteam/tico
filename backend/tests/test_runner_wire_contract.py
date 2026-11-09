@@ -16,8 +16,9 @@ import uuid
 
 from backend import models as M
 from backend.store import H
-from backend.tests.test_api import api, assign, headers, post, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_events import live  # noqa: F401  (a listening server for the event stream)
+from backend.tests.helpers.api import assign, headers, post, runner  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.events import live  # noqa: F401  (a listening server for the event stream)
 from scripts import check_wire_contract as W
 
 CONTRACT = W.load()

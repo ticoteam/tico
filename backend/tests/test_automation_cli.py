@@ -2,44 +2,15 @@
 the CLI and MCP run the same tool, so the same rights and the same payloads as the UI."""
 
 import json
-from urllib.parse import urlencode
 
 import pytest
 
-from backend.tests.test_api import api, get, headers  # noqa: F401
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
-from backend.tests.test_automation_api import NOTE_STEP, as_bot
-from clients import hubcli, remotecli, hubtools
-
-
-class Client:
-    """The hub client over the test app, as one caller."""
-
-    def __init__(self, api, token):
-        self.api, self.token = api, token
-
-    def _call(self, method, path, body=None):
-        r = self.api.request(method, "/api/v2/" + path, json=body, headers=headers(self.token))
-        if r.status_code != 200:
-            raise remotecli.APIError(str(r.status_code), r.text, r.status_code)
-        return r.json()
-
-    def call(self, method, path, body=None, key=None, query=None):
-        query = urlencode({k: v for k, v in (query or {}).items() if v is not None})
-        return self._call(method, path + ("?" + query if query else ""), body)
-
-    def get(self, path, **params):
-        return self.call("GET", path, query=params)
-
-    def post(self, path, body, key=None):
-        return self._call("POST", path, body)
-
-    def patch(self, path, body, key=None):
-        return self._call("PATCH", path, body)
-
-
-def cli(api, token, *argv):
-    return remotecli.automation(Client(api, token), hubcli.parser().parse_args(["automation", *argv]))
+from backend.tests.helpers.api import get
+from backend.tests.test_api import api
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.automation_api import NOTE_STEP, as_bot
+from clients import remotecli, hubtools
+from backend.tests.helpers.automation_cli import Client, cli
 
 
 @pytest.fixture
@@ -91,7 +62,7 @@ def test_the_inbox_send_switch_from_the_cli(api):
 
 def test_botops_acts_with_the_askers_rights(api, botops):
     """BotOps over MCP: the owner's ask lets it save; a member's ask is refused what she may not change."""
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     flow = {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": []}
     attempt = turn(api, botops, person="ana-test", text="Make ops an automation")
@@ -123,7 +94,7 @@ def test_the_cli_discards_a_proposal_and_lists_the_question_sets_and_the_guide(a
 
 
 def test_botops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, botops):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     ana = turn(api, botops, person="ana-test", text="Turn off replies from my inbox")
     err, out = mcp(api, "hub_inbox_send", {"inbox": "ana@acme.example", "send": False}, ana["token"])

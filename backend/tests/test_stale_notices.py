@@ -6,7 +6,8 @@ legacy check whose turn already started is the rest of that turn, so it runs. A 
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def fleet(api):
@@ -131,7 +132,7 @@ def test_a_late_warning_for_a_ticket_that_has_left_its_step_is_dropped(api):
 
 
 def test_news_about_a_step_the_ticket_has_left_is_dropped(api):
-    from backend.tests.test_dev_ticket_rules import dev_type
+    from backend.tests.helpers.dev_ticket_rules import dev_type
 
     r = fleet(api)
     with api.app.state.store.transaction() as c:
@@ -164,7 +165,7 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
     # Tico makes a refused review move itself once a receipt is posted (backend/move_retry.py): the refusal the Builder
     # was told of is then no longer news. A ticket still held keeps it.
     from backend import review_gate
-    from backend.tests.test_dev_ticket_rules import dev_type
+    from backend.tests.helpers.dev_ticket_rules import dev_type
 
     r = fleet(api)
     with api.app.state.store.transaction() as c:

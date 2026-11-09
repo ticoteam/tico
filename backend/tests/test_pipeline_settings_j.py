@@ -7,7 +7,8 @@ The fixture's people are ana (owner), ben (an Admin through bot_admins) and cara
 import uuid
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 
 
 def make_pipeline(api, name, owner="human:ana"):

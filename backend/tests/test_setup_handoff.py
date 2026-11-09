@@ -13,7 +13,7 @@ from backend.app import create_app
 from backend.config import Settings
 from backend.store import H, digest
 from backend.tests.test_api import api, api_settings, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_mcp import call, rpc
+from backend.tests.helpers.mcp import call, rpc
 
 OWNER, ADMIN = "ana-test", "ben-test"
 PATH = "/api/v2/setup/handoff"

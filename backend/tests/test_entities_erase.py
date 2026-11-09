@@ -15,7 +15,8 @@ from backend import hubdb as H
 from backend import market as M
 from backend.entities import erase as ER
 from backend.entities import store as ES
-from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.helpers.api import get, headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 ANA, BEN, CARA, BOT = "human:ana", "human:ben", "human:cara", "bot:ops"
 # What names the person in the database: her id, names, addresses and CRM id. A scan for any of them must find nothing.

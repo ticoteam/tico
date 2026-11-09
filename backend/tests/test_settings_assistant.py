@@ -14,35 +14,13 @@ from backend.assistant import valid_operation
 from backend.auth import Identity
 from backend.settings_entries import ENTRIES
 from backend.store import Problem
-from backend.tests.test_api import api, as_member, get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_botops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops  # noqa: F401  (fixture)
+from backend.tests.helpers.api import as_member, get, headers, post, put  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.botops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)
 from clients import hubtools
-from clients.tico import APIError
-
-
-def mcp(api, name, args, token):
-    """A `hub` tool in the Assistant's run, answered by this server: `(error, payload)` as the MCP helper gives."""
-
-    class Turn:
-        def call(self, method, path, body=None, key=None, query=None, delegate=False):
-            extra = {"X-Tico-On-Behalf-Of": delegate if isinstance(delegate, str) else "turn"} if delegate else {}
-            r = api.request(method, "/api/v2/" + path, json=body, params=query, headers={**headers(token), **extra})
-            if r.status_code >= 400:
-                raise APIError(r.json()["error"]["code"], r.json()["error"]["detail"], status=r.status_code)
-            return r.json()
-
-        def get(self, path, **query):
-            return self.call("GET", path, query=query)
-
-        def post(self, path, body=None, key=None):
-            return self.call("POST", path, body or {}, key)
-
-    try:
-        return False, hubtools.BY_NAME[name]["fn"](Turn(), args)
-    except APIError as refused:
-        return True, {"error": refused.code, "detail": str(refused)}
+from backend.tests.helpers.settings_assistant import mcp
 
 
 def release_times(api):
@@ -370,8 +348,8 @@ ASSISTANT_REFUSED = {"mail.intake"}
 def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role):
     """Stage 1's sweep (test_settings_parity) asked of the person's Assistant on their cited words: every entry ran, was
     a card or was refused exactly as for BotOps, gaps included."""
-    from backend.tests import test_settings_parity as parity
-    from backend.tests.test_api import runner
+    from backend.tests.helpers import settings_parity as parity
+    from backend.tests.helpers.api import runner
 
     token, person = parity.PEOPLE[role]
     objects = parity._objects(api, runner(api))

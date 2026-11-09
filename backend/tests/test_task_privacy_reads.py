@@ -8,14 +8,16 @@ import pytest
 from backend import question_tasks as QT, read_cache, sql as SQL, task_privacy, views
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
+from backend.tests.helpers.task_privacy_reads import sql, traced, traced_get
 
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -26,12 +28,6 @@ def task(api, *, requester="human:cara", owner="human:ben", private=True, title=
         return H.task_create(
             c, requester, title, "Confidential attachment and comment.", owner, private=private, lint=False, **fields
         )
-
-
-def sql(api, text, token="ana-test"):
-    response = api.post("/api/v2/sql", json={"sql": text}, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json()["rows"]
 
 
 def legacy_message(api, tid, *, body="Private legacy comment"):
@@ -45,7 +41,7 @@ def legacy_message(api, tid, *, body="Private legacy comment"):
 def test_participant_permission_is_never_reused_for_another_tasks_content(api, monkeypatch):
     from backend import read_deps, row_clock
     from backend.privacy_index import ReadIndex
-    from backend.tests.test_meeting_items import record, add, push
+    from backend.tests.helpers.meeting_items import record, add, push
 
     rid = record(api, {'private': True, 'participants': ['ben@acme.example']})
     iid = add(api, rid, {'section': 'task', 'text': 'Participant task', 'detail': {'owner': 'human:ana'}})['item']['id']
@@ -597,33 +593,6 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
         f"event scaling: 500 attempts/events {before[1]} SQLite statements/{before[2]:.4f}s; "
         f"3000 attempts/events {after[1]} statements/{after[2]:.4f}s"
     )
-
-
-def traced_get(api, path, token):
-    """The response to one GET and the number of SQL statements it ran on every pooled connection."""
-    response, statements = traced(api, lambda: get(api, path, token))
-    return response, len(statements)
-
-
-def traced(api, request):
-    """The result of `request()` and the SQL statements it ran on every pooled connection."""
-    store = api.app.state.store
-    statements, take, give = [], store._take, store._give
-
-    def traced():
-        c = take()
-        c.set_trace_callback(statements.append)
-        return c
-
-    def untraced(c):
-        c.set_trace_callback(None)
-        give(c)
-
-    store._take, store._give = traced, untraced
-    try:
-        return request(), statements
-    finally:
-        store._take, store._give = take, give
 
 
 def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenance(api):

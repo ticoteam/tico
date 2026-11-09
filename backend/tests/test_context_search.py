@@ -1,8 +1,9 @@
 """Source discovery is identical over HTTP and MCP, with no private-source leakage."""
 
 from backend import market, meetings
-from backend.tests.test_api import api, headers, setup_attempt, runner  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers, setup_attempt, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.mcp import call
 
 
 def seed(api):

@@ -20,8 +20,8 @@ from backend.finance.store import mirror as SX
 from backend.finance.store import purchasing as SP
 from backend.records import reads as RR
 from backend.records import store as RS
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-from backend.tests.test_finance_mirror import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_mirror import (
     FakeBooks,
     LATER,
     _connection,

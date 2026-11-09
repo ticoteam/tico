@@ -2,36 +2,15 @@
 
 from backend import task_relations as TR
 from backend.store import H
-from backend.tests.test_api import api, claim, post  # noqa: F401
-from backend.tests.test_task_lanes import task_bot
-
-
-def finish(api, machine, attempt, text="Work recorded."):
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "last_seq": 0, "text": text},
-        machine["token"],
-    )
-
-
-def start(api, machine, task, thread):
-    turn = claim(api, machine)
-    assert (turn["task"]["id"], turn["lane"]) == (task, "task:" + task)
-    post(api, f"attempts/{turn['id']}/started", {"thread_id": thread}, machine["token"])
-    return turn
+from backend.tests.helpers.api import claim, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_lanes import task_bot
+from backend.tests.helpers.subtask_results import finish, queued_in, start
 
 
 def queued(api, bot):
     with api.app.state.store.read() as c:
         return queued_in(c, bot)
-
-
-def queued_in(c, bot):
-    return [
-        H.message(c, r[0])
-        for r in c.execute("SELECT message_id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY rowid", (bot,))
-    ]
 
 
 def test_nested_reviews_return_once_to_the_live_builder_then_builder_returns_to_the_lead(api):

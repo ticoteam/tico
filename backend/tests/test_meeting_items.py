@@ -6,64 +6,11 @@ The task, doc and feature pushes go through the real hub task path, because that
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import restrict
-from backend.tests.test_bot_access import bot, bot_id
-from backend.tests.test_api import api, get, headers  # noqa: F401
-
-
-def record(api, body=None, token="ana-test"):
-    """A finished meeting of the caller's, filed through the import API."""
-    body = body or {}
-    calendar = body.pop("calendar", None)
-    r = api.post(
-        "/api/v2/meetings/import",
-        json={
-            "title": "Pricing call",
-            "transcript": "Dana: We agreed to ship on Friday.",
-            "review": "live",
-            **({"participants": calendar["attendees"]} if calendar else {}),
-            **body,
-        },
-        headers=headers(token),
-    )
-    assert r.status_code == 200, r.text
-    return r.json()["id"]
-
-
-def items(api, rid, token="ana-test", expected=200):
-    r = api.get(f"/api/meetings/{rid}/items", headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def add(api, rid, body, token="ana-test", expected=200, key=None):
-    r = api.post(f"/api/meetings/{rid}/items", json=body, headers=headers(token, key))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def change(api, rid, iid, body, token="ana-test", expected=200, key=None):
-    body = {
-        "version": next(
-            i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid
-        ),
-        **body,
-    }
-    r = api.post(f"/api/meetings/{rid}/items/{iid}", json=body, headers=headers(token, key))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def push(api, rid, iid, body=None, token="ana-test", expected=200, key=None):
-    body = {
-        "version": next(
-            i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid
-        ),
-        **(body or {}),
-    }
-    r = api.post(f"/api/meetings/{rid}/items/{iid}/push", json=body, headers=headers(token, key))
-    assert r.status_code == expected, r.text
-    return r.json()
+from backend.tests.helpers.api import restrict
+from backend.tests.helpers.bot_access import bot, bot_id
+from backend.tests.helpers.api import get, headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.meeting_items import add, change, items, push, record
 
 
 def test_a_private_meeting_keeps_its_items_to_the_people_the_invite_names(api):

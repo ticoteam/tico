@@ -15,8 +15,8 @@ from backend import requirement_attachments as A
 from backend import task_privacy as privacy
 from backend.store import Problem
 
-from .test_pipeline_foundation import ANA, T, hub, insert, step_id
-from .test_pipeline_foundation import boot as foundation_boot
+from backend.tests.helpers.pipeline_foundation import ANA, T, hub, insert, step_id  # noqa: F401
+from backend.tests.helpers.pipeline_foundation import boot as foundation_boot  # noqa: F401
 
 TEMPLATE = {}
 

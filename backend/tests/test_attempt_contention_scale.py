@@ -13,8 +13,9 @@ import pytest
 from backend import execution, flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode, _pooled
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_attempt_contention import fleet
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.attempt_contention import fleet
 from backend.enqueue import enqueue_stored
 
 

@@ -3,57 +3,10 @@
 import json
 
 from backend import judge as B
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_mcp import call
-
-QUESTIONS = {
-    "bucket": {
-        "type": "choice",
-        "instructions": "Where does it go?",
-        "criteria": {"archive": "noise", "reply": "answer it"},
-    },
-    "is_ask": {"type": "noul", "instructions": "Is someone asking for something?"},
-}
-
-
-class FakeJudge:
-    def __init__(self):
-        self.calls, self.fail = [], None
-
-    def __call__(self, state, questions, label=None):
-        self.calls.append({"state": state, "questions": questions, "label": label})
-        if self.fail:
-            raise self.fail
-        return {
-            "model": "judge-1.13.0",
-            "usage": {"input_tokens": 90, "output_tokens": 0},
-            "ms": 180,
-            "answers": {
-                "bucket": {
-                    "type": "choice",
-                    "choice": "reply",
-                    "confidence": 0.8,
-                    "probabilities": {"archive": 0.2, "reply": 0.8},
-                },
-                "is_ask": {"type": "noul", "noul": 0.9},
-            },
-        }
-
-
-def fake(api):
-    engine = FakeJudge()
-    api.app.state.judge = engine
-    return engine
-
-
-def events(api, actor):
-    with api.app.state.store.read() as c:
-        return [
-            (r["target"], json.loads(r["detail"]))
-            for r in c.execute(
-                "SELECT target, detail FROM events WHERE action='judge.call' AND actor=? ORDER BY created_at", (actor,)
-            )
-        ]
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.judge import FakeJudge, QUESTIONS, events, fake
 
 
 def test_a_person_or_a_bot_judges_and_the_audit_keeps_the_answers_not_the_state(api):

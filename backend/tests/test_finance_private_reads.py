@@ -10,7 +10,7 @@ from backend.finance import budgeting, tab
 from backend.finance import reads as FR
 from backend.finance.store import actions as SX
 from backend.finance.context import load
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     ACME_ADDRESS,
     AT,
     MERCURY,
@@ -170,7 +170,7 @@ def test_a_cards_spent_total_is_not_shown_when_it_holds_a_private_line(books):
     """Codex round 6 #3: a 100.00 card charge re-categorized onto a private line, attributed to someone else. The
     holder's Transactions leave it out, so their Cards read shows no spent total either (it would give the amount
     away); the owner, with full detail, still sees it."""
-    from backend.tests.test_finance_banking import LATER, _arrives, _card_for_eve, _txn
+    from backend.tests.helpers.finance_banking import LATER, _arrives, _card_for_eve, _txn
 
     fake = FakeMercury()
     connect(books, fake)
@@ -201,7 +201,7 @@ OCT_END = "2026-10-31T12:00:00.000000Z"
 def _october_debit_paid_by_a_november_payroll_bill(c) -> None:
     """A 40.00 debit posted to Other expenses in October; October closed in November; a private payroll bill dated
     November is paid from that row, so the "Pays bill" reclass posts in November. Gus sees the P&L, not payroll."""
-    from backend.tests.test_finance_ap import _ingest, _txn
+    from backend.tests.helpers.finance_ap import _ingest, _txn
 
     made = act(
         c,

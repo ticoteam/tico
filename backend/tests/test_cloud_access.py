@@ -9,30 +9,13 @@ import pytest
 
 from backend import automations, cloud_access, company_billing, routines
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_company_billing import ANSWER, KEY, URL, FakeHQ
-from backend.tests.test_gateway_enroll import fake_hq
-from backend.tests.test_gateway_enroll import setup as enroll_setup
-from backend.tests.test_gateway_enroll import tick
-
-BILLING_URL = "https://app.tico.dev/billing/boatyard"
-
-
-def signals(access="open", reason=None, **extra):
-    return {
-        "plan": "trial",
-        "access": access,
-        "reason": reason,
-        "balance_micros": 0 if access != "open" else 2_000_000,
-        "trial_ends": "2026-11-12T00:00:00Z",
-        "trial_days_left": 14,
-        "card": None,
-        "auto_recharge": False,
-        "period_end": None,
-        "price_micros": 20_000_000,
-        "billing_url": BILLING_URL,
-        **extra,
-    }
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.company_billing import ANSWER, KEY, URL, FakeHQ
+from backend.tests.helpers.gateway_enroll import fake_hq
+from backend.tests.helpers.gateway_enroll import setup as enroll_setup
+from backend.tests.helpers.gateway_enroll import tick
+from backend.tests.helpers.cloud_access import BILLING_URL, signals
 
 
 @pytest.fixture
@@ -162,8 +145,8 @@ def test_frozen_holds_tico_model_turns_and_lets_a_bot_on_its_own_model_run(api, 
 
 def test_frozen_holds_a_bot_on_a_tico_model_until_credit_lands(api, monkeypatch, hq):  # noqa: F811
     from backend import health
-    from backend.tests.test_claim_refusals import health_admin, held
-    from backend.tests.test_models_preset import choose, connected, on_tico
+    from backend.tests.helpers.claim_refusals import health_admin, held
+    from backend.tests.helpers.models_preset import choose, connected, on_tico
 
     connected(api, monkeypatch)
     choose(api, "", enabled=("anthropic", "openai", "tico"))

@@ -4,7 +4,7 @@ import pytest
 
 from setup import dns, state, verify
 from setup.tests import fakes
-from setup.tests.test_preview_flags import CREATE, DESTROY, DOMAIN, NAME, ZONE, go, record, server, world
+from setup.tests.helpers.preview_flags import CREATE, DESTROY, DOMAIN, NAME, ZONE, go, record, server, world
 
 PUBLIC = "acme.tico.dev"
 

@@ -5,23 +5,13 @@ from datetime import datetime, timedelta, timezone
 
 from backend import task_rules as R
 from backend.store import H
-from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, post, put, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.hold_rows import set_holds
+from backend.tests.helpers.task_rules import department
 
 AT = datetime(2026, 10, 24, 12, tzinfo=timezone.utc)
-
-
-def department(api):
-    with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        roster['org_groups'] = {
-            'engineering': {'name': 'Engineering'},
-            'web': {'name': 'Web', 'parent': 'engineering'},
-            'marketing': {'name': 'Marketing'},
-        }
-        next(p for p in roster['people'] if p['id'] == 'cara')['team'] = 'web'
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
 
 
 def done(api, monkeypatch, title='Prepare export', hours=25):

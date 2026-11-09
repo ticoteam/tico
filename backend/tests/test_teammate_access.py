@@ -5,71 +5,20 @@ Dee. Eve is a peer in Sales. Ana owns the company and Ben is an admin. Each test
 every place that shows people the same question.
 """
 
-import pytest
-
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import teammate_access as TA
-from backend.auth import Identity
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (fixture)
-from backend.tests.test_bot_access import bot
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.bot_access import bot
 from backend import bot_settings as BS
-
-EVERYONE = {"everyone": True}
-NOBODY = {"everyone": False}
-
-
-@pytest.fixture
-def acme(api):
-    store = api.app.state.store
-    store.settings.test_identities["dee-test"] = Identity("human:dee", "human", "dee@acme.example")
-    with store.transaction() as c:
-        people = [
-            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-            {"id": "ben", "email": "ben@acme.example"},
-            {"id": "cara", "email": "cara@acme.example", "reports_to": "dee"},
-            {"id": "dee", "email": "dee@acme.example"},
-            {"id": "eve", "email": "eve@acme.example"},
-            {"id": "fay", "email": "fay@acme.example"},
-        ]
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
-        H.sync_registry(c, {}, {"people": people})
-    bot(api, "counsel")
-    bot(api, "analyst")
-    post(api, "groups", {"name": "Legal", "add": {"people": ["cara"]}})
-    post(api, "groups", {"name": "Contracts", "parent": "legal", "add": {"people": ["fay"], "bots": ["counsel"]}})
-    post(api, "groups", {"name": "Sales", "add": {"people": ["eve"]}})
-    tokens = {p: p + "-test" for p in ("ana", "ben", "cara", "dee", "eve", "fay")}
-    tokens["counsel"] = post(api, "bots/counsel/agent-credential", {})["token"]
-    return api, tokens
-
-
-def who(api, name):
-    if name in ("counsel", "analyst"):
-        with api.app.state.store.read() as c:
-            return Identity("bot:" + H.resolve_bot(c, name)["id"], "bot")
-    return api.app.state.store.settings.test_identities[name + "-test"]
+from backend.tests.helpers.teammate_access import EVERYONE, NOBODY, acme, set_access, sql_column, who
 
 
 def levels(api, viewer, target):
     store = api.app.state.store
     with store.read() as c:
         return TA.levels_for(c, who(api, viewer), target, api.app.state.auth)
-
-
-def set_access(api, path, token="ana-test", expected=200, **levels_):
-    current = api.get(f"/api/v2/{path}/access", headers=headers(token))
-    revision = current.json()["revision"] if current.status_code == 200 else 0
-    body = {"see": EVERYONE, "read": EVERYONE, "write": EVERYONE, "revision": revision, **levels_}
-    r = api.put(f"/api/v2/{path}/access", json=body, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def sql_column(api, sql, token):
-    r = api.post("/api/v2/sql", json={"sql": sql}, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return sorted(row[0] for row in r.json()["rows"])
 
 
 def test_people_start_open_and_groups_write_to_their_members(acme):
@@ -258,8 +207,8 @@ def test_sql_fragment_and_reader_sets_agree_with_levels(acme):
 
 
 def test_the_tools_and_the_cli_set_access_as_whoever_asked(acme):
-    from backend.tests.test_automation_cli import Client
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.automation_cli import Client
+    from backend.tests.helpers.mcp import call as mcp
     from clients import hubcli, remotecli
 
     api, tokens = acme
@@ -283,8 +232,8 @@ def test_the_tools_and_the_cli_set_access_as_whoever_asked(acme):
 
 
 def test_botops_sets_access_with_the_rights_of_the_person_who_asked(acme):
-    from backend.tests.test_botops_parity import act
-    from backend.tests.test_member_bots import botops as make_botops, finish, turn
+    from backend.tests.helpers.botops_parity import act
+    from backend.tests.helpers.member_bots import botops as make_botops, finish, turn
 
     api, tokens = acme
     machine = make_botops.__wrapped__(api)
@@ -572,8 +521,8 @@ def problem(response):
 
 
 def test_botops_sets_access_as_the_person_without_the_delegation_header(acme):
-    from backend.tests.test_botops_parity import act
-    from backend.tests.test_member_bots import botops as make_botops, finish, turn
+    from backend.tests.helpers.botops_parity import act
+    from backend.tests.helpers.member_bots import botops as make_botops, finish, turn
 
     api, tokens = acme
     machine = make_botops.__wrapped__(api)

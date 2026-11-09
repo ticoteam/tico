@@ -7,7 +7,7 @@ from backend import hubdb as H
 from backend import pipeline_requirements as R
 from backend.store import Problem
 
-from .test_pipeline_foundation import ANA, boot, hub, step_id
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, step_id
 
 BEN = "human:ben"
 

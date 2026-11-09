@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from setup import cell, cell_wake as W
-from setup.tests.test_cell import FakeSystem, ROOT, add_args, host, ready, record, utc_in  # noqa: F401
+from setup.tests.helpers.cell import FakeSystem, ROOT, add_args, host, ready, record, utc_in  # noqa: F401
 
 
 class Upstream(BaseHTTPRequestHandler):

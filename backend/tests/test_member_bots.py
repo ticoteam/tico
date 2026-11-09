@@ -4,60 +4,10 @@ Ana owns the Team and Ben is an admin (the base fixture). Cara is a member: she 
 add teammates through BotOps, which acts as her, checked with her full rights.
 """
 
-import pytest
-
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
-from backend import bot_settings as BS
-
-
-def call(api, method, path, token, body=None):
-    kwargs = {"headers": headers(token)}
-    if body is not None:
-        kwargs["json"] = body
-    return getattr(api, method)("/api/v2/" + path, **kwargs)
-
-
-def close_computer(api, machine):
-    """An admin closes a computer to members' bots (a new one takes them by default)."""
-    assert (
-        call(api, "post", f"runners/{machine['runner_id']}/member-bots", "ben-test", {"accepts": False}).status_code
-        == 200
-    )
-    return machine
-
-
-@pytest.fixture
-def botops(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
-        BS.write(c, 'botops', {'name': 'botops', 'runtime': 'fake', 'status': 'active'})
-    machine = runner(api)
-    assign(api, machine, "botops")
-    ready(api, machine, ["botops"])
-    return machine
-
-
-def turn(api, machine, person="cara-test", text="Build me a bot"):
-    """A person chats with BotOps; its runner claims that message: the attempt whose token BotOps acts with."""
-    post(api, "chat/botops", {"text": text}, token=person)
-    return claim(api, machine, "botops")
-
-
-def finish(api, machine, attempt):
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, machine["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
-
-
-def register(api, attempt, slug, **fields):
-    return call(
-        api,
-        "post",
-        "bots/register",
-        attempt["token"],
-        {"slug": slug, "display_name": slug.title(), "on_behalf_of": "turn", **fields},
-    )
+from backend.tests.helpers.api import claim, get, headers, post, put, runner
+from backend.tests.test_api import api
+from backend.tests.helpers.member_bots import botops, call, close_computer, finish, register, turn
 
 
 def test_a_member_registers_a_bot_through_botops_and_owns_it(api, botops):
