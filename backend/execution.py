@@ -2944,6 +2944,15 @@ def _work_of(c, message_id, conversation_id):
     return work_task_id(H.message(c, message_id, include_deleted=True), H.conversation(c, conversation_id))
 
 
+def _ended_work(c, message_id):
+    """(task id, status) when a message's work is on a closed or declined task, else None: work that end_task_work
+    would have canceled had it still been queued at the close."""
+    msg = H.message(c, message_id, include_deleted=True)
+    task_id = msg and work_task_id(msg, H.conversation(c, msg["conversation_id"]))
+    row = task_id and c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+    return (task_id, row["status"]) if row and row["status"] in ("closed", "declined") else None
+
+
 HAND_BACK_WAIT = 15  # seconds before a handed-back job is handed out again, doubled for each hand-back
 HAND_BACK_MAX = 300
 
@@ -6332,6 +6341,15 @@ class Execution:
                 c.execute(
                     "UPDATE jobs SET state='canceled',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid)
                 )
+                continue
+            ended = _ended_work(c, mid)
+            job = ended and c.execute(
+                "SELECT id,bot_id,attempt_id,message_id FROM jobs WHERE message_id=? AND attempt_id=?", (mid, aid)
+            ).fetchone()
+            if job:
+                # Its task was closed or declined while this input waited (end_task_work): it does not run again.
+                suppress_notice(c, dict(job), ended[0], f"Its task was {H.TASK_ENDED[ended[1]]}.")
+                c.execute("UPDATE jobs SET attempt_id=NULL WHERE id=?", (job["id"],))
                 continue
             c.execute("UPDATE jobs SET state='queued',attempt_id=NULL WHERE message_id=? AND attempt_id=?", (mid, aid))
             H.event(c, H.KEEPER, "job.input_returned", aid, {"message_id": mid})

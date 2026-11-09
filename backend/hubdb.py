@@ -8328,8 +8328,9 @@ def task_update(
         _parent_finished(conn, after, row["status"], actor, told=heard, wake=wake_others)
     if asked_in:
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner_id")}}
-    if status in ("closed", "declined") and (row or {}).get("status") != status and not closing_step:
-        # A close or decline that set the status here (a close with a step ends in task_close, which stops the work itself).
+    if status in ("closed", "declined") and (row or {}).get("status") != status:
+        # Last, so a wake this update queued after the status (a new owner's assignment) is stopped too. A close with a
+        # step already stopped the work in task_close; this then cancels only what was queued since.
         stop_ended_work(conn, actor, task_id, status)
     return {**after, "warnings": plain} if plain else after
 

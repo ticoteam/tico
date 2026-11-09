@@ -94,10 +94,17 @@ def test_the_turn_making_the_close_is_not_stopped(api):
 
 
 def test_closing_a_parent_stops_the_turn_running_on_its_subtask(api):
-    machine, parent, attempt, conversation = task_turn(api, "Launch")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    # The parent is a person's, so the one bot turn that runs is the subtask's.
+    parent = post(api, "tasks", {"owner": "ana", "title": "Launch", "body": "Ship it."})
     who = requester(api, parent["id"])
     with api.app.state.store.transaction() as c:
-        child = H.task_create(c, who, "Write the notes", "", "ops", parent_id=parent["id"], lint=False)
+        child = H.task_create(c, who, "Write the notes", "Count them.", "ops", parent_id=parent["id"], lint=False)
+    attempt = claim(api, machine)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT task_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == child["id"]
     with api.app.state.store.transaction() as c:
         H.task_close(c, who, parent["id"], note="Launch cancelled")
     with api.app.state.store.read() as c:
@@ -111,7 +118,8 @@ def test_closing_a_parent_stops_the_turn_running_on_its_subtask(api):
             == 0
         )
     assert stop_flag(api, attempt["id"]) == who
-    assert any(said.startswith("Stopped 1 running turn") for said in work_events(api, parent["id"]))
+    said = work_events(api, parent["id"]) + work_events(api, child["id"])
+    assert sum(line.startswith("Stopped 1 running turn") for line in said) == 1
 
 
 def answer_after_close(api, close):
@@ -149,3 +157,48 @@ def test_a_stopped_turns_answer_is_filed_not_posted_to_the_closed_task(api):
 def test_an_unstopped_turn_still_posts_its_answer(api):
     posted, final = answer_after_close(api, close=False)
     assert posted == 1
+
+
+def test_an_input_the_stopped_turn_never_got_does_not_run_again_on_the_closed_task(api):
+    machine, task, attempt, conversation = task_turn(api)
+    who = requester(api, task["id"])
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, machine["token"])
+    follow = post(
+        api, "messages", {"to": "ops", "kind": "say", "text": "Also check the footer.", "conversation_id": conversation}
+    )
+    polled = post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]
+    assert follow["id"] in {m["id"] for m in polled}
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, who, task["id"], note="Not needed.")
+    assert stop_flag(api, attempt["id"]) == who
+    # The runner ends the stopped turn before the steer reached the runtime: that input is not put back in the queue.
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "interrupted", "last_seq": 0, "text": "", "undelivered": [follow["id"]]},
+        machine["token"],
+    )
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (follow["id"],)).fetchone()[0] == "canceled"
+        assert not c.execute(
+            "SELECT 1 FROM events WHERE action='job.input_returned' AND detail LIKE ?", (f'%{follow["id"]}%',)
+        ).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' AND m.conversation_id=?",
+            (conversation,),
+        ).fetchone()
+
+
+def test_a_close_through_a_step_that_also_hands_the_task_on_leaves_no_run_queued(api):
+    machine, task, attempt, conversation = task_turn(api)
+    who = requester(api, task["id"])
+    # The new owner's assignment is queued after task_close stopped the work, so the update stops it too.
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, who, task["id"], step="general-closed", owner="coo", note="Handled elsewhere.")
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "closed"
+        assert not c.execute(
+            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' AND m.conversation_id=?",
+            (conversation,),
+        ).fetchone()
+    assert stop_flag(api, attempt["id"]) == who
