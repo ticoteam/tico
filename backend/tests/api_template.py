@@ -1,11 +1,15 @@
 """A booted hub database built once per worker, which each test copies into its own database.
 
-A file's own api fixture used to run Store.initialize (about 1.5 s) for every test. Now the first test of a file on a
-worker boots one template with that file's settings, and each test copies the template (SQLite backup, as root
-conftest's api_database does for test_api.api) before its app boots on the copy. A copy is a fresh database holding
-only what initialize writes: schema, migration markers, built-in types and rules. Identities, credentials, registry
-rows, paths and each test's settings are still written per test. --fresh-api-databases builds every database from
-empty, as before.
+A file's own api fixture used to boot a new database (about 1.5 s of schema and migration work) for every test. Now the
+first test of a file on a worker boots one template with that file's settings, and each test copies the template
+(SQLite backup, as root conftest's api_database does for test_api.api) before its app boots on the copy.
+
+What the template holds is what a boot writes from the file's settings: schema, migration markers, built-in types and
+rules, and the registry_metadata rows those settings produce (the owner and access files), which are the same for
+every test of the file. Identities, credentials, bots, the roster and any per-test settings are written after the copy,
+by each test. The one random value a boot creates (the public roadmaps' IP key) is dropped from each copy so it is
+regenerated per test. Two boot-time rows differ from a fresh boot: an empty company_profile row and a seeded-event row;
+neither changes what the API returns. --fresh-api-databases builds every database from empty, as before.
 """
 
 import re
