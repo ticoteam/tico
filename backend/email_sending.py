@@ -69,7 +69,7 @@ LIST_MAX = 200
 DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$")
 SERVER = "server"  # runner_id of a send the server dispatches itself (`drain`)
 # Only a content-bound card lifts these: a person's message grants what it says, and the reviewer judged it with it.
-CARD_ONLY = frozenset({"second_review"})
+CARD_ONLY = frozenset({"second_review", "per_message"})
 REVIEW = (
     "Would a careful second reviewer stop this email, written by an automated employee, before it is sent? Stop it "
     "if it makes a commitment (money, a discount, a date, a deliverable, a legal position, a guarantee), confirms "
@@ -477,6 +477,14 @@ def why(found):
     )
 
 
+def per_message(c, bot):
+    """Whether `bot` sends nothing outside the company without a Tico send approval for each exact message, whatever its
+    stored setting says: the Strategy Bot. Inside the company its switch still applies."""
+    from . import strategy_bot
+
+    return bool(bot) and bot == strategy_bot.SLUG
+
+
 def decision(c, auth, row, *, dispatch=False):
     policy = effective(c, row["mailbox"], row["bot"])
     reasons, blocked = [], []
@@ -533,6 +541,8 @@ def decision(c, auth, row, *, dispatch=False):
         reasons.append("lint")
     if own_writing(row) and policy["second_review"] and checks.get("review") is not True:
         reasons.append("second_review")
+    if row["bot"] and outside and per_message(c, row["bot"]):
+        reasons.append("per_message")
     if any(rule["value"] == "known_addresses" for rule in policy["recipient_rules"]) and any(
         not known(c, row["mailbox"], a) for a in recipients
     ):
@@ -1469,7 +1479,8 @@ def install(app, store, auth, mutate):
                 raise Problem("forbidden", "Only the sender or a send manager attaches an approval", 403)
             if row["state"] != "waiting_approval":
                 raise Problem("state", "This email is not waiting for approval", 409)
-            asks = CARD_ONLY & set(json.loads(row["decision"] or "{}").get("reasons") or [])
+            # A message may attach for the per-message rule too: it does not lift that rule, so the decision still asks.
+            asks = {"second_review"} & set(json.loads(row["decision"] or "{}").get("reasons") or [])
             if asks and not H.approval(c, body.approval_id):
                 # The card stays: only a person approving the frozen email in Tico lifts the second reviewer's ask.
                 raise Problem(
