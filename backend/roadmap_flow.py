@@ -25,6 +25,23 @@ def _dev(row):
     return bool(re.fullmatch(DEV_NAME, row[1] or '', re.I) or re.fullmatch(DEV_NAME, row[0] or '', re.I))
 
 
+def dev_board(c, ident, name):
+    """Whether a type gets the Dev board's flow, rules and pools: a type named Dev tickets (Tico Team's), or a type with
+    the engineering role laid out as the Dev board, with a Review 1 step (company_default's Engineering, once setup has
+    given it the board's stages). The booted Engineering type, or tico_default's, has no Review 1 and is no Dev board."""
+    if _dev((ident, name)):
+        return True
+    if 'role' not in {r[1] for r in c.execute('PRAGMA table_info(task_types)')}:
+        return False
+    return bool(
+        c.execute(
+            'SELECT 1 FROM task_types t JOIN task_steps s ON s.type_id=t.id '
+            "WHERE t.id=? AND t.role=? AND s.name='Review 1' COLLATE NOCASE LIMIT 1",
+            (ident, ENGINEERING),
+        ).fetchone()
+    )
+
+
 def migrate(c):
     """Give the Product roadmap and Dev tickets types their role, once. The roadmap is the type its legacy bot
     manages, else the type with the role's own id; engineering goes to every type its legacy bot manages (each

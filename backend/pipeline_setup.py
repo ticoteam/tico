@@ -725,6 +725,25 @@ def seat_filled(conn: sqlite3.Connection, actor: str, seat_id: str, bot: str) ->
             continue
         conn.execute("UPDATE task_types SET manager = ?, updated_at = ? WHERE id = ?", (bot_id, H.now(), row["id"]))
         H.event(conn, actor, "pipeline.manager_seated", str(row["id"]), {"seat": seat_id, "bot": bot_id})
+    # A pr-reviewer hired into its seat (reviewer-1, reviewer-2) joins the Engineering pipeline's review pools.
+    from . import check_pools
+
+    pools: Any = check_pools
+    pools.join_reviewers(conn)
+
+
+def _seed_dev_boards(conn: sqlite3.Connection) -> None:
+    """The Dev board's flow, hand-off rows and reviewer pools on each Dev board (roadmap_flow.dev_board), each given once.
+    Setup runs this after it lays out the stages: the boot seeds ran while the Engineering pipeline still had the booted
+    stages (Todo, Doing, ...), which match none of the board's. A Dev tickets type seeded before keeps what it has."""
+    from . import check_pools, rules, step_flow
+
+    flows: Any = step_flow
+    wakes: Any = rules
+    pools: Any = check_pools
+    flows.seed(conn)
+    wakes.seed_dev(conn)
+    pools.seed(conn)
 
 
 def _pipeline(
@@ -742,6 +761,9 @@ def _pipeline(
     if existing is None:
         row = H.type_create(conn, actor, spec["name"], _pipeline_stages(spec), mover=True, numbered=True)
         made.append(f"pipeline {spec['name']}")
+        # A role pipeline made here (no type held its role) takes the role, so its flows find it by role, not by name.
+        if spec.get("role") and _one(conn, "SELECT id FROM task_types WHERE role = ?", (spec["role"],)) is None:
+            conn.execute("UPDATE task_types SET role = ? WHERE id = ?", (spec["role"], row["id"]))
     else:
         row = existing
         if replace and not existing.get("role"):
@@ -893,6 +915,7 @@ def apply_factory_setup(
             p["name"]: _pipeline(c, actor, p, factories, replace, made, unresolved, (bindings or {}).get(p["name"]))
             for p in spec["pipelines"]
         }
+        _seed_dev_boards(c)
         missing_links: list[str] = []
         for link in spec["links"]:
             missing = _link(c, actor, link, pipelines, made)
