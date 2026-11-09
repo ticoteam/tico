@@ -119,6 +119,7 @@ class Run:
             ci_fail=s.ci_fail,
             signed_in=s.signed_in,
             capacity=s.capacity,
+            pipelines=s.pipelines,
         ) as w:
             self.w = w
             team = self.team(w)
@@ -637,6 +638,7 @@ class Scenario:
     signed_in: tuple = ()  # runtimes the computer reports signed in (empty: the plain per-bot readiness map)
     capacity: int = 4  # the computer's slots, as its heartbeat says
     fleet: int = 0  # extra bots beyond the team, for a backlog (their turns do nothing)
+    pipelines: tuple = ()  # more pipelines beside the board's, as `POST task-types` bodies (World: none by default)
 
 
 def tickets(run, w, n, owner=None, step=None, title="Ticket"):
