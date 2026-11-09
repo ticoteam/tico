@@ -5359,10 +5359,10 @@ def _unblock(conn, done_task, told=()):
 
 def _answered(conn, actor, task_id, card, told=None):
     """`card`, an ask this rule filed (ask_card) that a bot's task is blocked on, is done, declined or closed by `actor`: the
-    task's note becomes the answer, it opens again when nothing else holds it, it no longer waits on a declined card,
-    and its bot is woken on it once, unless `told` (_subtask_wake) already woke it there. The note names the person
-    as answering only when they finished the card, so a bot closing it never puts its words in their mouth. Returns
-    whether this was such a task."""
+    task's note records the answer or closure, it opens again when nothing else holds it, it no longer waits on a
+    declined card, and its bot is woken on it once, unless `told` (_subtask_wake) already woke it there. The note names
+    the person as answering only when they finished the card, so a bot closing it never puts its words in their mouth.
+    Returns whether this was such a task."""
     person = ask_card(conn, card)
     row = task(conn, task_id)
     if not person or not row or not is_bot(row["owner_id"]) or row["status"] not in ACTIVE_STATUSES:
@@ -5382,18 +5382,28 @@ def _answered(conn, actor, task_id, card, told=None):
         return False
     name = person_name(conn, person)
     said = str(card.get("note") or "").strip() or {"done": "Done.", "declined": "Declined."}.get(card["status"], "")
+    if card.get("questions") and card["status"] == "declined":
+        answer = _json(card.get("answer"), {})
+        if not isinstance(answer, dict):
+            answer = {}
+        said = str(answer.get("other") or "").strip() or "Declined."
     if card.get("questions") and '"body_sources"' in str(card.get("answer") or ""):
         # A question task's answer that copies a page's words stays on that task, redacted per reader there; the
         # bot task's note only says it was answered.
         said = ""
     closer = "The system" if actor == KEEPER else person_name(conn, actor)  # the keeper closes an ask that expired
-    if card["status"] == "closed":
+    if card.get("questions") and card["status"] == "declined":
+        who = "Question closed (declined)"
+        note = f"{who}: {card['title']}" + (f"\n{said}" if said else "")
+    elif card["status"] == "closed":
         who = f"{name} closed the ask" if actor == person else f"{closer} closed the ask to {name}"
+        note = f"{who}: {said}" if said else f"{who}."
     else:
         who = f"{name} answered" if actor == person else f"{closer} closed the ask to {name}"
-    note = f"{who}: {said}" if said else f"{who}."
+        note = f"{who}: {said}" if said else f"{who}."
     if card["status"] != "done":
-        TR.remove_blocker(conn, KEEPER, row["id"], card["id"], keeper_note=f"answered: {card['title']}")
+        keeper_note = note if card.get("questions") and card["status"] == "declined" else f"answered: {card['title']}"
+        TR.remove_blocker(conn, KEEPER, row["id"], card["id"], keeper_note=keeper_note)
     row = task(conn, row["id"])
     if row["status"] == "waiting" and not waiting_for(conn, row):
         # A board ticket held on the ask goes back to the step it left, as any hold that clears does; opening it would

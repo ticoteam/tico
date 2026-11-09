@@ -157,6 +157,17 @@ def test_a_decline_closes_it_declined(api, monkeypatch):
     assert done["answer"]["other"] == "Wait for the site owner."
     assert "closed the question (declined)" in result["answer"]["text"].lower()
     assert "answered" not in result["answer"]["text"].lower()
+    parent_note = get(api, f"tasks/{work['id']}")["task"]["note"]
+    assert "Question closed (declined): Archive the September drafts?" in parent_note
+    assert "Wait for the site owner." in parent_note
+    assert "answered" not in parent_note.lower()
+    with api.app.state.store.read() as c:
+        relation = next(
+            event
+            for event in H.task_history(c, work["id"])
+            if event["field"] == "blocked_by" and event["old"] == card["id"] and event["new"] is None
+        )
+        assert relation["note"] == parent_note
     # The bot hears one closed (declined) result with the note, not an answer.
     wake = _to_ops(api, since)
     assert len(wake) == 1
@@ -178,12 +189,23 @@ def test_a_dismissal_with_answers_is_refused_without_changing_the_question(api):
 
 
 def test_a_dismissal_without_a_note_closes_the_question(api):
-    _, _, attempt = setup_attempt(api)
-    card = _ask(api, attempt["token"], "Archive the September drafts?")["task"]
+    work, attempt = _work(api)
+    card = _ask(api, attempt["token"], "Archive the September drafts?", parent=work["id"])["task"]
     result = _answer(api, card["id"], {"dismiss": True})
     done = get(api, f"tasks/{card['id']}")["task"]
     assert done["status"] == "declined" and done["answer"]["other"] is None
     assert "closed the question (declined)" in result["answer"]["text"].lower()
+    parent_note = get(api, f"tasks/{work['id']}")["task"]["note"]
+    assert "Question closed (declined): Archive the September drafts?" in parent_note
+    assert "Declined." in parent_note
+    assert "answered" not in parent_note.lower()
+    with api.app.state.store.read() as c:
+        relation = next(
+            event
+            for event in H.task_history(c, work["id"])
+            if event["field"] == "blocked_by" and event["old"] == card["id"] and event["new"] is None
+        )
+        assert relation["note"] == parent_note
 
 
 def test_only_the_question_recipient_can_close_it(api):
