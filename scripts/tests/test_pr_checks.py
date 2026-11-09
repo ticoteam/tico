@@ -497,12 +497,12 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # test_system_jobs_list scans all of backend/ for recorded job keys, so it is one more.
     # test_entities_visible_lint scans all of backend/ for reads of the Directory's tables, so it is one more.
     # scripts/release_train.py plans incremental release validations through pr_checks.py, which lists every test file,
-    # so its five script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check;
-    # seconds each) run for any test file change too.
+    # so its six script tests (release_train, release_increment, release_notes, release_workflow, hosted_release_check,
+    # main_red; seconds each) run for any test file change too.
     # The three baseline test modules come with it too: the OWNED_DATA table in pr_checks.py names them by path, and a
-    # test-file change reaches that table (34 with the table, 31 without). Still far from the suite.
+    # test-file change reaches that table (35 with the table, 32 without). Still far from the suite.
     alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 35
+    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 36
     loops = checks.selection(["backend/task_loops.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
