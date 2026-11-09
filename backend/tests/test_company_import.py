@@ -1565,9 +1565,9 @@ def test_the_real_factory_setup_makes_the_nine_pipelines_with_their_managers(env
 
 def test_the_real_factory_setup_gives_engineering_the_dev_flow_and_its_reviewers(environment):
     """The Engineering pipeline is found by its role, not a Dev name: after setup restages it, its stages carry the Dev
-    board's flow (review checks at Review 1 and 2, the merge after Review 2, Pending Release waits on the merge), its
-    Pending Release note to the Release Manager, and the company's pr-reviewer bot in both review pools."""
-    from backend import redesign_migration, step_flow
+    board's flow (review checks at Review 1 and 2, a failed review back to Build, the merge after Review 2, Release waits
+    on the merge), its Release note to the Release Manager, and the company's pr-reviewer bot in both review pools."""
+    from backend import step_flow
 
     api = environment()
     preview_and_import(api, live_text())
@@ -1578,25 +1578,27 @@ def test_the_real_factory_setup_gives_engineering_the_dev_flow_and_its_reviewers
         r["name"]: r for r in rows(api, "SELECT id,name,flow,check_pool FROM task_steps WHERE type_id=?", (ident,))
     }
     flows = {name: json.loads(s["flow"] or "{}") for name, s in steps.items()}
+    build = steps["Build"]["id"]
     assert flows["Review 1"]["check"] == "review" and flows["Review 1"]["gate"]
-    assert flows["Review 1"]["on_fail"] == steps["Review 1 Fixes"]["id"]
+    assert flows["Review 1"]["on_fail"] == build
     assert flows["Review 2"]["check"] == "review" and flows["Review 2"]["on_pass"] == step_flow.MERGE
-    assert flows["Review 2"]["on_fail"] == steps["Review 2 Fixes"]["id"]
-    assert flows["Review 2 Fixes"] == {"after_green": step_flow.MERGE}
-    assert flows["Pending Release"] == {"on_merge": True, "can_hold": False}
-    assert flows["On Deck"]["backlog"]["over"] == 10
+    assert flows["Review 2"]["on_fail"] == build
+    assert flows["Release"] == {"on_merge": True, "can_hold": False}
+    assert flows["Build"]["backlog"]["over"] == 10
     reviewer = bot_ids(api)["code-reviewer"]
     for name in ("Review 1", "Review 2"):
         assert json.loads(steps[name]["check_pool"]) == [reviewer], name
-    for name in ("On Deck", "In Progress", "Pending Release", "Done"):
+    for name in ("Build", "Release", "Closed"):
         assert steps[name]["check_pool"] is None, name
     with api.app.state.store.read() as c:
-        wakes = [
+        notes = [
             r["note"]
-            for r in redesign_migration.wake_rows(c, "step_entered")
-            if (r["scope_kind"], r["scope_id"]) == ("type", ident)
+            for r in c.execute(
+                "SELECT note FROM rules WHERE scope_kind='type' AND scope_id=? AND event='step_entered' AND enabled=1",
+                (ident,),
+            ).fetchall()
         ]
-    assert wakes == ["Pending Release entered: a note to the Release Manager"]
+    assert "Release entered: a note to the Release Manager" in notes
 
 
 def test_a_factory_setup_that_fails_is_rolled_back_recorded_and_the_team_stays(environment, monkeypatch):
