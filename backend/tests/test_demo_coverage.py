@@ -76,6 +76,9 @@ PAGES = {
     "recruit": page("seats", "seats"),
 }
 
+# Overview's Factories tab uses the pipeline map in addition to the landing-page pins.
+PAGE_EXTRAS = {"overview": (page("pipelines/overview", "factories", period="1d"),)}
+
 # Nav pages that the demo does not fill, with the reason.
 NO_DEMO_DATA = {
     "welcome": "Finish setup shows only until setup is done, and the demo starts set up.",
@@ -108,12 +111,21 @@ def api(tmp_path_factory):
 
 
 def _page_has_demo_data(api, name):
-    path, key, query = PAGES[name]
-    response = api.get("/api/v2/" + path, params=query)
-    assert response.status_code == 200, f"{name}: GET /api/v2/{path} returned {response.status_code}"
-    body = response.json()
-    items = body if key is None else body.get(key)
-    assert items, f"{name}: GET /api/v2/{path} has no {key or 'items'} in the demo"
+    for path, key, query in (PAGES[name], *PAGE_EXTRAS.get(name, ())):
+        response = api.get("/api/v2/" + path, params=query)
+        assert response.status_code == 200, f"{name}: GET /api/v2/{path} returned {response.status_code}"
+        body = response.json()
+        items = body if key is None else body.get(key)
+        assert items, f"{name}: GET /api/v2/{path} has no {key or 'items'} in the demo"
+        if name == "overview" and path == "pipelines/overview":
+            factory = next((row for row in items if row.get("name") == "Engineering"), None)
+            assert factory is not None, "overview: no Engineering factory in the demo"
+            assert factory.get("scoreboard") == {
+                "merges_per_hour": 0.13,
+                "queued_to_merged_median_minutes": None,
+                "merged_to_production_median_minutes": 60,
+                "queue_size": 1,
+            }
 
 
 def _full_page_audience_editor_has_a_restricted_example(api):

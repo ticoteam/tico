@@ -102,7 +102,7 @@ function ofHTML(map: OfMap): string {
       <div><dt>Merges / hour</dt><dd class="tnum">${s.merges_per_hour.toFixed(2)}</dd></div>
       <div><dt>Queued to merged median</dt><dd class="tnum">${value(s.queued_to_merged_median_minutes)}</dd></div>
       <div><dt>Merged to production median</dt><dd class="tnum">${value(s.merged_to_production_median_minutes)}</dd></div>
-      <div><dt title="Cards currently at In QA or Review 2">Queue size (now)</dt><dd class="tnum">${s.queue_size}</dd></div>
+      <div><dt title="Green, reviewed, unmerged pull requests currently in GitHub's merge queue">Queue size (now)</dt><dd class="tnum">${s.queue_size}</dd></div>
     </dl></section>`;
   };
   const factoryById = new Map(map.factories.map(f => [f.id, f]));

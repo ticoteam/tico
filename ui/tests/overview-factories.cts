@@ -66,6 +66,8 @@ async function desktop(browser: import('playwright').Browser) {
   assert.deepEqual(await page.locator('.of-factory h2').allInnerTexts(), ['Lead factory', 'Other pipelines']);
   assert.deepEqual(await page.locator('.of-scoreboard dt').allInnerTexts(),
     ['Merges / hour', 'Queued to merged median', 'Merged to production median', 'Queue size (now)']);
+  assert.equal(await page.locator('.of-scoreboard dt').nth(3).getAttribute('title'),
+    "Green, reviewed, unmerged pull requests currently in GitHub's merge queue");
   assert.deepEqual(await page.locator('.of-scoreboard dd').allInnerTexts(), ['0.13', '3h', '1h', '4']);
   assert.deepEqual(await page.locator('.of-name').allInnerTexts(), ['Campaigns', 'Sales', 'Help desk']);
   assert.match(await page.locator('[data-of-pl=camp]').innerText(), /5 open.*2 Late.*1 running.*1 for you/s);

@@ -481,12 +481,14 @@ def _inputs(c: "sqlite3.Connection", firsts: dict[str, str], seen: str, since: s
 def _factory_scoreboard(
     c: "sqlite3.Connection", engineering: dict[str, list[str]], seen: str, since: str, now: str
 ) -> dict[str, Row]:
-    """The Engineering factory's last-day throughput and current Review 2 queue.
+    """The Engineering factory's last-day throughput and current GitHub merge queue.
 
-    The former In QA/Post Release QA steps were renamed Review 2/Watch 24h by the
-    2026-11-09 factory ruling. Keep the old names readable for boards that have not
-    yet adopted those names. Durations are cohort-based: queue-to-merge ends at a
-    merge in the window; merge-to-production ends at a production-stage entry in it.
+    Queue timing starts at In QA and production timing ends at Post Release QA, as
+    the scoreboard spec defines them. On the current flow In QA follows the merge,
+    so those cards have no eligible queued-to-merged sample. Queue size counts only
+    open PRs that are green, approved on the current head, and queued at that head.
+    Durations are cohort-based: merge-to-production ends at a production-stage
+    entry in the window.
     """
     result: dict[str, Row] = {
         fid: {
@@ -500,8 +502,8 @@ def _factory_scoreboard(
     if not engineering:
         return result
 
-    queue_names = ("In QA", "Review 2")
-    production_names = ("Post Release QA", "Watch 24h")
+    queue_names = ("In QA",)
+    production_names = ("Post Release QA",)
     factory_types = {pid: fid for fid, pids in engineering.items() for pid in pids}
     ids = list(factory_types)
     marks = _marks(ids)
@@ -509,15 +511,25 @@ def _factory_scoreboard(
     queue_steps = [str(s["id"]) for s in stage_rows if s["name"] in queue_names]
     production_steps = [str(s["id"]) for s in stage_rows if s["name"] in production_names]
 
-    if queue_steps:
-        for row in _rows(
-            c,
-            f"SELECT type_id, COUNT(*) AS n FROM tasks WHERE ({seen}) AND type_id IN ({marks}) "
-            f"AND step_id IN ({_marks(queue_steps)}) AND status NOT IN ({_marks(FINISHED)}) GROUP BY type_id",
-            [*ids, *queue_steps, *FINISHED],
+    for row in _rows(
+        c,
+        "SELECT tasks.type_id, l.checks, l.review_state, l.detail FROM tasks "
+        "JOIN task_links l ON l.task_id=tasks.id "
+        f"WHERE ({seen}) AND tasks.type_id IN ({marks}) AND l.kind='pr' AND l.state='open' "
+        "AND l.checks='passing' AND l.review_state='approved'",
+        ids,
+    ):
+        detail = cast(dict[str, Any], H._json(row["detail"], {}) or {})
+        head = str(detail.get("head_sha") or "")
+        queue = cast(dict[str, Any], detail.get("merge_queue") or {})
+        if (
+            head
+            and detail.get("health_reviewed_head") == head
+            and queue.get("state") == "queued"
+            and queue.get("head") == head
         ):
             fid = factory_types[str(row["type_id"])]
-            result[fid]["queue_size"] += int(row["n"] or 0)
+            result[fid]["queue_size"] += 1
 
     queue_select = (
         "(SELECT max(e.created_at) FROM history_events e WHERE e.subject_type='task' AND e.subject_id=l.task_id "

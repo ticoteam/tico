@@ -291,15 +291,16 @@ def test_a_factory_with_no_links_renders_cleanly(api):
     assert week["factories"][0]["done"] == 0
 
 
-def test_engineering_factory_scoreboard_uses_last_day_stage_and_merge_times(api):
+def test_engineering_factory_scoreboard_uses_live_order_and_current_merge_queue(api):
     factory = make_factory(api, "Engineering")
     typ, steps = make_type(
         api,
         "Scoreboard flow",
         [
             {"name": "Building", "status": "doing"},
+            {"name": "Review 1", "status": "review"},
             {"name": "In QA", "status": "review"},
-            {"name": "Watch 24h", "status": "review"},
+            {"name": "Post Release QA", "status": "review"},
         ],
         factory=factory,
         role="engineering",
@@ -311,12 +312,13 @@ def test_engineering_factory_scoreboard_uses_last_day_stage_and_merge_times(api)
         return (now - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
     cards = [card(api, typ, steps["Building"]) for _ in range(3)]
-    # These three cards provide hand-checkable queue->merge times of 180, 360,
-    # and 30 minutes, and merge->production times of 120, 60, and 30 minutes.
-    for task, queued_h, merged_h, produced_h, number in zip(
+    # In the live order, In QA follows merge, so none has a queue-to-merge
+    # interval. Merge-to-production is 120, 60, and 30 minutes; the median is 60.
+    for task, review_h, merged_h, queued_h, produced_h, number in zip(
         cards,
-        (23, 17, 6),
+        (21, 12, 6.5),
         (20, 11, 5.5),
+        (19.75, 10.8, 5.25),
         (18, 10, 5),
         (901, 902, 903),
         strict=True,
@@ -329,6 +331,16 @@ def test_engineering_factory_scoreboard_uses_last_day_stage_and_merge_times(api)
                 "human:ana",
                 "step",
                 old=steps["Building"],
+                new=steps["Review 1"],
+                created_at=stamp(review_h),
+            )
+            H.history_event(
+                c,
+                "task",
+                task["id"],
+                "human:ana",
+                "step",
+                old=steps["Review 1"],
                 new=steps["In QA"],
                 created_at=stamp(queued_h),
             )
@@ -339,10 +351,13 @@ def test_engineering_factory_scoreboard_uses_last_day_stage_and_merge_times(api)
                 "human:ana",
                 "step",
                 old=steps["In QA"],
-                new=steps["Watch 24h"],
+                new=steps["Post Release QA"],
                 created_at=stamp(produced_h),
             )
-            c.execute("UPDATE tasks SET step_id=?, status='review' WHERE id=?", (steps["Watch 24h"], task["id"]))
+            c.execute(
+                "UPDATE tasks SET step_id=?, status='review' WHERE id=?",
+                (steps["Post Release QA"], task["id"]),
+            )
             c.execute(
                 "INSERT INTO task_links(id,task_id,kind,url,state,created_at,pr_merged_at) VALUES(?,?,?,?,?,?,?)",
                 (
@@ -355,13 +370,41 @@ def test_engineering_factory_scoreboard_uses_last_day_stage_and_merge_times(api)
                     stamp(merged_h),
                 ),
             )
-    waiting = card(api, typ, steps["In QA"])
-    assert waiting["id"]
+
+    def queued_pr(checks: str = "passing", review_state: str = "approved", reviewed_head_matches: bool = True) -> None:
+        task = card(api, typ, steps["Review 1"])
+        head = "head-" + task["id"]
+        detail = {
+            "head_sha": head,
+            "health_reviewed_head": head if reviewed_head_matches else "older-head",
+            "merge_queue": {"state": "queued", "head": head},
+        }
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "INSERT INTO task_links(id,task_id,kind,url,state,checks,review_state,detail,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    "score-queue-" + task["id"],
+                    task["id"],
+                    "pr",
+                    "https://github.com/ticoteam/tico/pull/" + task["id"],
+                    "open",
+                    checks,
+                    review_state,
+                    H._dump(detail),
+                    stamp(1),
+                ),
+            )
+
+    queued_pr()
+    queued_pr(checks="pending")
+    queued_pr(review_state="changes_requested")
+    queued_pr(reviewed_head_matches=False)
 
     scoreboard = next(f for f in overview(api, "1d")["factories"] if f["id"] == factory)["scoreboard"]
     assert scoreboard == {
         "merges_per_hour": 0.13,
-        "queued_to_merged_median_minutes": 180,
+        "queued_to_merged_median_minutes": None,
         "merged_to_production_median_minutes": 60,
         "queue_size": 1,
     }
