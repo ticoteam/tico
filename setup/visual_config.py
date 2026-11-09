@@ -4,6 +4,7 @@ Discovery is read-only. Only explicit apply records intent. A private journal
 and one process lock fence revisions across bounded calls; provisioning, keys,
 provider settings and public application APIs are outside this command.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,8 +27,18 @@ from . import visual_contract as wire
 from .envfile import parse
 
 ROOT = Path("/opt/tico")
-IDENTITY = ("account_id", "company_id", "workspace_id", "preview_id", "attempt_id", "address",
-            "public_hostname", "hostname", "instance_id", "install_id")
+IDENTITY = (
+    "account_id",
+    "company_id",
+    "workspace_id",
+    "preview_id",
+    "attempt_id",
+    "address",
+    "public_hostname",
+    "hostname",
+    "instance_id",
+    "install_id",
+)
 JOURNAL = ".visual-config.json"
 LOCK = ".visual-config.lock"
 MAX_JOURNAL = 1024 * 1024
@@ -37,8 +48,11 @@ def read_file(path, limit, *, private=False):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_size > limit
-                or (private and (info.st_mode & 0o077 or info.st_uid != os.geteuid()))):
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_size > limit
+            or (private and (info.st_mode & 0o077 or info.st_uid != os.geteuid()))
+        ):
             raise wire.Pending("private_file_invalid")
         raw = os.read(fd, limit + 1)
         if len(raw) > limit:
@@ -51,19 +65,34 @@ def read_file(path, limit, *, private=False):
 def installer_capability(root):
     root = Path(root)
     value = wire.decode(read_file(root / "installer-manifest.json", 65536), 65536)
-    if (not isinstance(value, dict) or set(value) != {"protocol", "revision", "files", "runtime_files"}
-            or value["protocol"] != wire.PROTOCOL or not wire.matches(wire.REVISION, value["revision"])
-            or not isinstance(value["files"], dict) or not isinstance(value["runtime_files"], dict)
-            or set(value["runtime_files"]) != set(wire.RUNTIME_FILES)):
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"protocol", "revision", "files", "runtime_files"}
+        or value["protocol"] != wire.PROTOCOL
+        or not wire.matches(wire.REVISION, value["revision"])
+        or not isinstance(value["files"], dict)
+        or not isinstance(value["runtime_files"], dict)
+        or set(value["runtime_files"]) != set(wire.RUNTIME_FILES)
+    ):
         raise wire.Pending("installer_source_unsupported")
-    required = {"setup/__init__.py", "setup/cli.py", "setup/settings.py", "setup/envfile.py",
-                "setup/contract.py", "setup/visual_contract.py", "setup/visual_config.py", "compose.yaml"}
+    required = {
+        "setup/__init__.py",
+        "setup/cli.py",
+        "setup/settings.py",
+        "setup/envfile.py",
+        "setup/contract.py",
+        "setup/visual_contract.py",
+        "setup/visual_config.py",
+        "compose.yaml",
+    }
     if not required <= set(value["files"]) or len(value["files"]) > 100:
         raise wire.Pending("installer_source_unsupported")
     for name, digest in value["files"].items():
-        if (not (name == "compose.yaml" or wire.matches(r"setup/[a-z_][a-z0-9_]*\.py", name))
-                or not wire.matches(wire.HEX, digest)
-                or hashlib.sha256(read_file(root / name, 2 * 1024 * 1024)).hexdigest() != digest):
+        if (
+            not (name == "compose.yaml" or wire.matches(r"setup/[a-z_][a-z0-9_]*\.py", name))
+            or not wire.matches(wire.HEX, digest)
+            or hashlib.sha256(read_file(root / name, 2 * 1024 * 1024)).hexdigest() != digest
+        ):
             raise wire.Pending("installer_source_modified")
     if any(not wire.matches(wire.HEX, digest) for digest in value["runtime_files"].values()):
         raise wire.Pending("installer_source_unsupported")
@@ -110,8 +139,13 @@ def load(root):
         value = wire.decode(read_file(root / JOURNAL, MAX_JOURNAL, private=True), MAX_JOURNAL)
     except FileNotFoundError:
         return {"schema": 1, "identity": None, "current": None, "operations": {}}
-    if (not isinstance(value, dict) or set(value) != {"schema", "identity", "current", "operations"}
-            or type(value["schema"]) is not int or value["schema"] != 1 or not isinstance(value["operations"], dict)):
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema", "identity", "current", "operations"}
+        or type(value["schema"]) is not int
+        or value["schema"] != 1
+        or not isinstance(value["operations"], dict)
+    ):
         raise wire.Pending("journal_unsupported")
     return value
 
@@ -138,7 +172,7 @@ def patch_environment(raw, configuration):
                 quote, escaped, closed = value[0], False, False
                 for index, char in enumerate(value[1:], 1):
                     if char == quote and not escaped:
-                        closed = not value[index + 1:].strip() or value[index + 1:].lstrip().startswith(b"#")
+                        closed = not value[index + 1 :].strip() or value[index + 1 :].lstrip().startswith(b"#")
                         break
                     escaped = char == 92 and not escaped
                 if not closed:
@@ -183,15 +217,31 @@ def select(journal, request, raw):
             raise wire.Pending("prior_operation_unsettled")
         if hashlib.sha256(raw).hexdigest() != current["desired_sha256"]:
             raise wire.Pending("environment_changed")
-        if request["enabled"] and current["request"]["enabled"] and request["lease_id"] != current["request"]["lease_id"]:
+        if (
+            request["enabled"]
+            and current["request"]["enabled"]
+            and request["lease_id"] != current["request"]["lease_id"]
+        ):
             raise wire.Pending("retirement_required")
-        if request["enabled"] and not current["request"]["enabled"] and request["lease_id"] == current["request"]["lease_id"]:
+        if (
+            request["enabled"]
+            and not current["request"]["enabled"]
+            and request["lease_id"] == current["request"]["lease_id"]
+        ):
             raise wire.Pending("lease_stale")
     desired = patch_environment(raw, wire.configuration(request))
-    operation = {"request": request, "original_sha256": hashlib.sha256(raw).hexdigest(),
-                 "desired_sha256": hashlib.sha256(desired).hexdigest(), "stage": "intent", "mutation_pending": False,
-                 "former_probe": (current.get("probe_fingerprint") if current["request"]["enabled"]
-                                  else current.get("former_probe")) if current else None}
+    operation = {
+        "request": request,
+        "original_sha256": hashlib.sha256(raw).hexdigest(),
+        "desired_sha256": hashlib.sha256(desired).hexdigest(),
+        "stage": "intent",
+        "mutation_pending": False,
+        "former_probe": (
+            current.get("probe_fingerprint") if current["request"]["enabled"] else current.get("former_probe")
+        )
+        if current
+        else None,
+    }
     operations[request["operation_id"]] = operation
     journal.update(identity=identity, current=request["operation_id"])
     return operation
@@ -203,15 +253,18 @@ def instance_id():
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None
+
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    token_request = urllib.request.Request("http://169.254.169.254/latest/api/token", method="PUT",
-                                          headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"})
+    token_request = urllib.request.Request(
+        "http://169.254.169.254/latest/api/token", method="PUT", headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"}
+    )
     with opener.open(token_request, timeout=1) as response:
         token = response.read(1025).decode("ascii")
     if not token or len(token) > 1024 or any(ord(char) < 33 or ord(char) > 126 for char in token):
         raise wire.Pending("instance_identity_unknown")
-    request = urllib.request.Request("http://169.254.169.254/latest/meta-data/instance-id",
-                                     headers={"X-aws-ec2-metadata-token": token})
+    request = urllib.request.Request(
+        "http://169.254.169.254/latest/meta-data/instance-id", headers={"X-aws-ec2-metadata-token": token}
+    )
     with opener.open(request, timeout=1) as response:
         identity = response.read(64).decode("ascii")
     if not wire.matches(r"i-[0-9a-f]{8,17}", identity):
@@ -239,9 +292,15 @@ class Docker:
         timeout = min(timeout, self.deadline - time.monotonic())
         if timeout <= 0:
             raise wire.Pending("operation_deadline")
-        process = subprocess.Popen(args, cwd=self.root, env=self.environment,
-                                   stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+        process = subprocess.Popen(
+            args,
+            cwd=self.root,
+            env=self.environment,
+            stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         try:
             if on_start:
                 on_start(process_identity(process.pid))
@@ -257,8 +316,20 @@ class Docker:
         return raw
 
     def compose(self, *args, **kwargs):
-        return self.run(["docker", "compose", "--project-directory", str(self.root), "--env-file", str(self.root / ".env"),
-                         "-f", str(self.root / "compose.yaml"), *args], **kwargs)
+        return self.run(
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                str(self.root),
+                "--env-file",
+                str(self.root / ".env"),
+                "-f",
+                str(self.root / "compose.yaml"),
+                *args,
+            ],
+            **kwargs,
+        )
 
     def container(self, service):
         # An existing stopped Caddy is still the recorded operation's repair
@@ -270,17 +341,31 @@ class Docker:
 
     def runtime(self, verb, payload=None):
         args = ["docker", "exec", "-i", self.container("server"), "python", "-B", "-m", "backend.visual_config", verb]
-        return wire.decode(self.run(args, input=wire.encoded(payload) if payload is not None else None,
-                                    timeout=12 if verb == "probe" else 8), 65536)
+        return wire.decode(
+            self.run(
+                args, input=wire.encoded(payload) if payload is not None else None, timeout=12 if verb == "probe" else 8
+            ),
+            65536,
+        )
 
     def caddy(self, expected=None):
         container = self.container("caddy")
-        source = self.run(["docker", "exec", container, "sha256sum", "/generated/supervisor.sh"], limit=256).decode().split()[0]
+        source = (
+            self.run(["docker", "exec", container, "sha256sum", "/generated/supervisor.sh"], limit=256)
+            .decode()
+            .split()[0]
+        )
         self.run(["docker", "exec", container, "/bin/sh", "/generated/supervisor.sh", "health"], timeout=4, limit=1024)
-        applied = wire.decode(self.run(["docker", "exec", container, "cat", "/tmp/tico-caddy/applied"], limit=1024), 1024)
-        if (set(applied) != {"file_sha256", "generation", "pid", "supervisor_pid"}
-                or not wire.matches(wire.HEX, applied["generation"]) or not wire.matches(wire.HEX, applied["file_sha256"])
-                or type(applied["pid"]) is not int or type(applied["supervisor_pid"]) is not int):
+        applied = wire.decode(
+            self.run(["docker", "exec", container, "cat", "/tmp/tico-caddy/applied"], limit=1024), 1024
+        )
+        if (
+            set(applied) != {"file_sha256", "generation", "pid", "supervisor_pid"}
+            or not wire.matches(wire.HEX, applied["generation"])
+            or not wire.matches(wire.HEX, applied["file_sha256"])
+            or type(applied["pid"]) is not int
+            or type(applied["supervisor_pid"]) is not int
+        ):
             raise wire.Pending("applied_generation_pending")
         if expected and any(applied[key] != expected[key] for key in ("generation", "file_sha256")):
             raise wire.Pending("applied_generation_pending")
@@ -308,9 +393,14 @@ def supported(root, docker):
     if any(observed.get(key) != value for key, value in expected.items()):
         raise wire.Pending("selected_runtime_unsupported")
     docker.container("caddy")
-    return {"protocol": wire.PROTOCOL, "installer_revision": selected["revision"],
-            "runtime_revision": running["revision"], "initial_flags": True,
-            "same_instance_apply": True, "applied_receipt": True}
+    return {
+        "protocol": wire.PROTOCOL,
+        "installer_revision": selected["revision"],
+        "runtime_revision": running["revision"],
+        "initial_flags": True,
+        "same_instance_apply": True,
+        "applied_receipt": True,
+    }
 
 
 def bound(request, observed):
@@ -336,13 +426,15 @@ def reconcile(root, docker, journal, operation):
             raise wire.Pending("mutation_outcome_unknown")
         # A lost response is recoverable only after its exact client has exited
         # and a fresh healthy container has reached the requested generation.
-        if (docker.healthy(pending["service"]) == pending["before"]
-                or before["configuration"] != wire.configuration(request)):
+        if docker.healthy(pending["service"]) == pending["before"] or before["configuration"] != wire.configuration(
+            request
+        ):
             raise wire.Pending("mutation_outcome_unknown")
         if pending["service"] == "caddy":
             docker.caddy(before)
-        operation.update(mutation_pending=False,
-                         stage="server_started" if pending["service"] == "server" else "applied")
+        operation.update(
+            mutation_pending=False, stage="server_started" if pending["service"] == "server" else "applied"
+        )
         save(root, journal)
     raw = read_file(root / ".env", 262144, private=True)
     current_sha = hashlib.sha256(raw).hexdigest()
@@ -367,20 +459,39 @@ def reconcile(root, docker, journal, operation):
         container = docker.container(service)  # Never activate an absent profile/service.
         operation["mutation_pending"] = {"service": service, "before": container, "client": None}
         save(root, journal)
+
         def started(identity):
             operation["mutation_pending"]["client"] = identity
             save(root, journal)
+
         # The detached owner retains its flock past the SSM command deadline.
         # A lost Docker response remains durable uncertainty, never a retry.
-        docker.compose("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", "--no-build",
-                       "--wait", "--wait-timeout", "45", service, timeout=55, limit=8192, on_start=started)
+        docker.compose(
+            "up",
+            "-d",
+            "--no-deps",
+            "--force-recreate",
+            "--pull",
+            "never",
+            "--no-build",
+            "--wait",
+            "--wait-timeout",
+            "45",
+            service,
+            timeout=55,
+            limit=8192,
+            on_start=started,
+        )
         operation.update(mutation_pending=False, stage=following)
         save(root, journal)
     after = docker.runtime("observe")
     bound(request, after)
-    if (after["configuration"] != wire.configuration(request)
-            or after["revision"] != before["revision"] or after["runtime_files"] != before["runtime_files"]
-            or after["unrelated_digest"] != operation["unrelated_digest"]):
+    if (
+        after["configuration"] != wire.configuration(request)
+        or after["revision"] != before["revision"]
+        or after["runtime_files"] != before["runtime_files"]
+        or after["unrelated_digest"] != operation["unrelated_digest"]
+    ):
         raise wire.Pending("running_configuration_mismatch")
     source, applied = docker.caddy(after)
     if source != after["runtime_files"]["docker/caddy-supervisor.sh"]:
@@ -393,8 +504,9 @@ def reconcile(root, docker, journal, operation):
     if checked != after:
         raise wire.Pending("runtime_changed")
     docker.caddy(after)
-    if (instance_id() != request["instance_id"] or read_file(root / ".env", 262144, private=True) !=
-            patch_environment(raw, wire.configuration(request))):
+    if instance_id() != request["instance_id"] or read_file(root / ".env", 262144, private=True) != patch_environment(
+        raw, wire.configuration(request)
+    ):
         raise wire.Pending("installation_changed")
     operation["stage"] = "verified"
     operation["probe_fingerprint"] = fingerprint
@@ -405,10 +517,15 @@ def reconcile(root, docker, journal, operation):
 def worker(request, root=ROOT):
     with guard(root):
         journal = load(root)
-        if journal["current"] != request["operation_id"] or journal["operations"][journal["current"]]["request"] != request:
+        if (
+            journal["current"] != request["operation_id"]
+            or journal["operations"][journal["current"]]["request"] != request
+        ):
             raise wire.Pending("operation_missing")
-        journal["operations"][journal["current"]]["owner"] = {"process": process_identity(os.getpid()),
-                                                                 "deadline": int(time.time()) + 150}
+        journal["operations"][journal["current"]]["owner"] = {
+            "process": process_identity(os.getpid()),
+            "deadline": int(time.time()) + 150,
+        }
         save(root, journal)
         return reconcile(root, Docker(root), journal, journal["operations"][journal["current"]])
 
@@ -431,9 +548,16 @@ def apply(request, root=ROOT, *, docker=None, launch=True):
             # probes, especially after rollback or token expiry.
             return reconcile(root, docker, journal, operation)
         argument = base64.urlsafe_b64encode(wire.encoded(request)).rstrip(b"=").decode()
-        subprocess.Popen([sys.executable, "-B", "-m", "setup.visual_config", "_reconcile", "--request", argument], cwd=root,
-                         env=docker.environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+        subprocess.Popen(
+            [sys.executable, "-B", "-m", "setup.visual_config", "_reconcile", "--request", argument],
+            cwd=root,
+            env=docker.environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
     raise wire.Pending("operation_pending")
 
 
@@ -442,18 +566,24 @@ def status(root=ROOT):
     operation = journal["operations"].get(journal["current"])
     result = {"protocol": wire.PROTOCOL, "status": "pending", "operation": None}
     if operation:
-        result["operation"] = {"operation_id": operation["request"]["operation_id"],
-                               "revision": operation["request"]["revision"], "stage": operation["stage"],
-                               "mutation_pending": operation["mutation_pending"], "owner": operation.get("owner"),
-                               "saved_configuration": hashlib.sha256(read_file(root / ".env", 262144, private=True)).hexdigest()
-                                                      == operation["desired_sha256"]}
+        result["operation"] = {
+            "operation_id": operation["request"]["operation_id"],
+            "revision": operation["request"]["revision"],
+            "stage": operation["stage"],
+            "mutation_pending": operation["mutation_pending"],
+            "owner": operation.get("owner"),
+            "saved_configuration": hashlib.sha256(read_file(root / ".env", 262144, private=True)).hexdigest()
+            == operation["desired_sha256"],
+        }
         # Current observations are diagnostic only; status never emits a proof
         # receipt, advances the journal, creates a lock or changes runtime state.
         docker = Docker(root)
         try:
             observed = docker.runtime("observe")
             docker.caddy(observed)
-            result["observed"] = {key: observed[key] for key in ("revision", "install_id", "generation", "file_sha256", "configuration")}
+            result["observed"] = {
+                key: observed[key] for key in ("revision", "install_id", "generation", "file_sha256", "configuration")
+            }
         except Exception:
             result["observed"] = None
     return result
@@ -480,7 +610,11 @@ def main(argv=None):
         sys.stdout.buffer.write(wire.encoded(result) + b"\n")
         return 0
     except Exception as error:
-        reason = str(error) if isinstance(error, wire.Pending) and wire.matches(r"[a-z_]{1,64}", str(error)) else "operation_pending"
+        reason = (
+            str(error)
+            if isinstance(error, wire.Pending) and wire.matches(r"[a-z_]{1,64}", str(error))
+            else "operation_pending"
+        )
         sys.stdout.buffer.write(wire.encoded({"status": "pending", "reason": reason}) + b"\n")
         return 2
 

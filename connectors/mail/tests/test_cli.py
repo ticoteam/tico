@@ -9,11 +9,11 @@ import contextlib, io, json, os, sys, tempfile, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fake                    # noqa: E402,F401  (puts the hub on sys.path)
+import fake  # noqa: E402,F401  (puts the hub on sys.path)
 
-from connectors.mail import db, gmail as gm                          # noqa: E402
-from connectors.mail import access, audit as audit_log              # noqa: E402
-from connectors.mail import __main__ as cli                          # noqa: E402
+from connectors.mail import db, gmail as gm  # noqa: E402
+from connectors.mail import access, audit as audit_log  # noqa: E402
+from connectors.mail import __main__ as cli  # noqa: E402
 
 MANIFESTS = {
     "influencer": """
@@ -32,16 +32,28 @@ access:
 """,
 }
 
-HEADERS = {"From": "Acme Growth <hello@acme.io>", "To": "ana@acme.example",
-           "Subject": "Grow your rentals", "Date": "Tue, 02 Sep 2026 09:00:00 -0700",
-           "List-Unsubscribe": "<https://acme.io/u/1>"}
-PLAIN = {"From": "Real Person <person@customer.example>", "To": "ana@acme.example",
-         "Subject": "Pricing question", "Date": "Tue, 02 Sep 2026 09:30:00 -0700"}
-INVOICE = {"From": "billing@supplier.example", "To": "ana@acme.example",
-           "Subject": "Invoice 4471 is past due", "Date": "Tue, 02 Sep 2026 08:00:00 -0700",
-           "List-Unsubscribe": "<https://supplier.example/u>"}
+HEADERS = {
+    "From": "Acme Growth <hello@acme.io>",
+    "To": "ana@acme.example",
+    "Subject": "Grow your rentals",
+    "Date": "Tue, 02 Sep 2026 09:00:00 -0700",
+    "List-Unsubscribe": "<https://acme.io/u/1>",
+}
+PLAIN = {
+    "From": "Real Person <person@customer.example>",
+    "To": "ana@acme.example",
+    "Subject": "Pricing question",
+    "Date": "Tue, 02 Sep 2026 09:30:00 -0700",
+}
+INVOICE = {
+    "From": "billing@supplier.example",
+    "To": "ana@acme.example",
+    "Subject": "Invoice 4471 is past due",
+    "Date": "Tue, 02 Sep 2026 08:00:00 -0700",
+    "List-Unsubscribe": "<https://supplier.example/u>",
+}
 
-OLD, MID, NEW = 1788278400000, 1788364800000, 1788368400000     # Sep 1 09:00, Sep 2 09:00, 10:00
+OLD, MID, NEW = 1788278400000, 1788364800000, 1788368400000  # Sep 1 09:00, Sep 2 09:00, 10:00
 
 
 def corpus():
@@ -96,13 +108,15 @@ class Rules(CLI):
         return {self.service.name_of(l) for l in self.service.store[mid]["labelIds"]}
 
     def test_dry_run_touches_nothing(self):
-        rc, payload, _ = self.run_json("rules", "run", "--as", "influencer", "--since", "2026-08-31T00:00:00Z",
-                                       "--dry-run", "--json")
+        rc, payload, _ = self.run_json(
+            "rules", "run", "--as", "influencer", "--since", "2026-08-31T00:00:00Z", "--dry-run", "--json"
+        )
         self.assertEqual(rc, 0)
         self.assertTrue(payload["dry_run"])
         self.assertEqual(self.service.modified, [])
         self.assertEqual(payload["counts"]["unsubscribe-is-marketing"], 2)
         self.assertEqual(payload["counts"]["payment-risk-words"], 1)
+
 
 class Audit(CLI):
     def test_the_audit_line_never_carries_a_body(self):

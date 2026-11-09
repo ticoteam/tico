@@ -5,6 +5,7 @@ settles it, and the asker is told.
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). Everything here is synthetic: the test
 database, made-up bots, and no request leaves the test server.
 """
+
 import json
 
 from backend.store import H
@@ -17,8 +18,9 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 def asks(api, person):
     """The requests filed for `person` by an ask: (task, the card it carries)."""
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT * FROM assistant_actions WHERE owner=? AND ask IS NOT NULL",
-                         ("human:" + person,)).fetchall()
+        rows = c.execute(
+            "SELECT * FROM assistant_actions WHERE owner=? AND ask IS NOT NULL", ("human:" + person,)
+        ).fetchall()
         return [(H.task(c, json.loads(r["ask"])["task"]), dict(r)) for r in rows]
 
 
@@ -65,7 +67,7 @@ def test_a_members_yes_to_asking_an_admin_gives_an_admin_one_request_with_a_card
     with api.app.state.store.read() as c:
         room = c.execute("SELECT * FROM conversations WHERE id=?", (card["conversation_id"],)).fetchone()
     assert "human:ben" in room["participants"] and "bot:botops" in room["participants"]
-    assert not asks(api, "ana") and not asks(api, "cara")                      # one request, to one person
+    assert not asks(api, "ana") and not asks(api, "cara")  # one request, to one person
     tap = post(api, f"assistant/actions/{card['id']}/confirm", {}, "ben-test")["action"]
     assert tap["status"] == "done", tap
     assert times(api) == ["09:30"]
@@ -104,12 +106,12 @@ def test_the_same_ask_again_is_the_same_request(api, botops):
 
 def test_no_ask_for_a_setting_the_asker_may_change_or_one_only_a_person_changes(api, botops):
     err, got = ask(api, botops, "ben", "release.times", "09:30")
-    assert err and got["error"] == "may", got                                  # Ben may: he sets it
+    assert err and got["error"] == "may", got  # Ben may: he sets it
     err, got = ask(api, botops, "cara", "hooks.wake_url", "https://wake.acme.example/x")
     assert err and got["error"] == "person_only" and "the owner changes it in Settings" in got["detail"], got
     err, got = ask(api, botops, "cara", "release.times", "09:30", to="cara")
-    assert err and got["error"] == "no_one", got                               # never the asker
-    for key in ("me.tokens", "webhooks.outgoing.create"):                       # hers to make, in Settings
+    assert err and got["error"] == "no_one", got  # never the asker
+    for key in ("me.tokens", "webhooks.outgoing.create"):  # hers to make, in Settings
         err, got = ask(api, botops, "cara", key, "{}")
         assert err and got["error"] == "person_only" and "you change it yourself" in got["detail"], got
     assert not asks(api, "ben") and not asks(api, "ana")
@@ -119,27 +121,30 @@ def test_an_asked_card_nobody_taps_expires_within_the_hour_after_a_day_and_tells
     """Review 1 (delta): the hourly sweep expires an asked card left a day, as a late tap would find it, so the request
     is declined, the asker is told and the ask no longer holds one of her five. A newer card is left alone."""
     from backend import approval_expiry
+
     before = times(api)
     assert not ask(api, botops, "cara", "release.times", "07:45")[0]
-    err, got = ask(api, botops, "cara", "release.times", "08:15")              # one waiting ask per setting
+    err, got = ask(api, botops, "cara", "release.times", "08:15")  # one waiting ask per setting
     assert err and got["error"] == "already_asked" and len(asks(api, "ben")) == 1, got
     [(_, old)] = asks(api, "ben")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE assistant_actions SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-25), old["id"]))
         assert approval_expiry.sweep(c)["cards"] == [old["id"]]
-        assert approval_expiry.sweep(c)["cards"] == []                           # once
-    assert not ask(api, botops, "cara", "release.times", "08:15")[0]           # asked afresh once it expired
+        assert approval_expiry.sweep(c)["cards"] == []  # once
+    assert not ask(api, botops, "cara", "release.times", "08:15")[0]  # asked afresh once it expired
     [new] = [card for _, card in asks(api, "ben") if card["id"] != old["id"]]
     with api.app.state.store.transaction() as c:
-        assert approval_expiry.sweep(c)["cards"] == []                           # a newer card is left alone
+        assert approval_expiry.sweep(c)["cards"] == []  # a newer card is left alone
     status = {card["id"]: (card["status"], task["status"]) for task, card in asks(api, "ben")}
     assert status == {old["id"]: ("expired", "declined"), new["id"]: ("pending", "open")}, status
     [said] = told(api, "cara", old["id"])
     assert "expired" in said and "nothing changed" in said, said
     assert not told(api, "cara", new["id"]) and times(api) == before
     with api.app.state.store.read() as c:
-        waiting = c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending' AND "
-                            "json_extract(ask, '$.asker')='human:cara'").fetchone()[0]
+        waiting = c.execute(
+            "SELECT count(*) FROM assistant_actions WHERE status='pending' AND "
+            "json_extract(ask, '$.asker')='human:cara'"
+        ).fetchone()[0]
     assert waiting == 1
 
 
@@ -168,8 +173,8 @@ def test_two_people_asking_for_the_same_change_never_share_one_request(api, boto
     [(task, first)] = asks(api, "ana")
     assert task["requester_id"] == "human:ben", task
     post(api, f"assistant/actions/{first['id']}/cancel", {}, "ana-test")
-    assert len(told(api, "ben", first["id"])) == 1                             # Ben hears; Cara asked nothing
-    err, got = ask(api, botops, "cara", "team.rules.go_ahead_days", 3)          # once settled, hers is her own
+    assert len(told(api, "ben", first["id"])) == 1  # Ben hears; Cara asked nothing
+    err, got = ask(api, botops, "cara", "team.rules.go_ahead_days", 3)  # once settled, hers is her own
     assert not err, got
     [(task, second)] = [(t, card) for t, card in asks(api, "ana") if card["id"] != first["id"]]
     assert task["requester_id"] == "human:cara" and task["status"] == "open", task
@@ -193,29 +198,32 @@ def test_an_asked_confirm_cut_off_by_a_restart_settles_its_request_once_without_
     expiry, which now settles its ask: the task declined and the asker told once that it may not have finished.
     One the old expiry left failed with its task open is settled by the hourly sweep, once."""
     from backend import approval_expiry
+
     before = times(api)
     assert not ask(api, botops, "cara", "release.times", "06:00")[0]
     [(_, cut)] = asks(api, "ben")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET status='running', running_since=? WHERE id=?",
-                  (H.shift(H.now(), seconds=-300), cut["id"]))
-    r = api.get("/api/v2/assistant", headers=headers("ben-test"))                # the Assistant's own expiry runs
+        c.execute(
+            "UPDATE assistant_actions SET status='running', running_since=? WHERE id=?",
+            (H.shift(H.now(), seconds=-300), cut["id"]),
+        )
+    r = api.get("/api/v2/assistant", headers=headers("ben-test"))  # the Assistant's own expiry runs
     assert r.status_code == 200, r.text
     [(task, card)] = asks(api, "ben")
     assert (card["status"], task["status"]) == ("failed", "declined"), (card, task)
     [said] = told(api, "cara", cut["id"])
     assert "cut off" in said and "may or may not have changed" in said, said
-    assert not ask(api, botops, "cara", "release.times", "06:30")[0]           # settled, so asked afresh
+    assert not ask(api, botops, "cara", "release.times", "06:30")[0]  # settled, so asked afresh
     [orphan] = [card for _, card in asks(api, "ben") if card["id"] != cut["id"]]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET status='failed' WHERE id=?", (orphan["id"],))   # as before this fix
+        c.execute("UPDATE assistant_actions SET status='failed' WHERE id=?", (orphan["id"],))  # as before this fix
     for _ in range(2):
         with api.app.state.store.transaction() as c:
             approval_expiry.sweep(c)
     status = {card["id"]: (card["status"], task["status"]) for task, card in asks(api, "ben")}
     assert status[orphan["id"]] == ("failed", "declined"), status
     assert len(told(api, "cara", cut["id"])) == 1 and len(told(api, "cara", orphan["id"])) == 1
-    assert times(api) == before                                                # nothing ran again
+    assert times(api) == before  # nothing ran again
 
 
 def test_a_bot_that_made_an_incoming_trigger_may_change_it_as_its_route_allows(api):
@@ -223,6 +231,7 @@ def test_a_bot_that_made_an_incoming_trigger_may_change_it_as_its_route_allows(a
     agrees, and a bot that didn't make it, or one that made an outgoing webhook, still may not."""
     from types import SimpleNamespace
     from backend import settings_catalog as K
+
     trigger = post(api, "triggers", {"name": "Made by a bot"})["trigger"]
     maker, other = (SimpleNamespace(role="bot", actor=a, support="", email="") for a in ("bot:maker", "bot:other"))
     with api.app.state.store.transaction() as c:
@@ -251,8 +260,10 @@ def test_a_members_raw_refused_write_names_who_may_as_hub_settings_does(api, bot
     revoke = act(api, cara, "POST", f"computers/{machine['runner_id']}/revoke", {})
     rename = act(api, cara, "POST", f"triggers/{trigger['id']}", {"name": "Cara's now"})
     finish(api, botops, cara)
-    for refused, name, who in ((revoke, "Revoke a computer", "The computer's operator, an admin or the owner"),
-                               (rename, "Incoming trigger", "The person who made it, an admin or the owner")):
+    for refused, name, who in (
+        (revoke, "Revoke a computer", "The computer's operator, an admin or the owner"),
+        (rename, "Incoming trigger", "The person who made it, an admin or the owner"),
+    ):
         assert refused.status_code == 403, refused.text
         error = refused.json()["error"]
         assert error["who_may"] == who and error["fix"].startswith("Only " + who[0].lower() + who[1:]), error
@@ -268,14 +279,16 @@ def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_
     from backend.tests.test_api import as_member
     from backend.tests.test_assistant import assistant_turn
     from backend.tests.test_settings_assistant import mcp as assistant_mcp
+
     as_member(api, "cara@acme.example")
     r, attempt = assistant_turn(api, "cara-test", "Yes, ask an admin to set the release to 09:30")
     token = attempt["token"]
     err, got = assistant_mcp(api, "hub_settings_ask", {"key": "release.times", "value": "09:30"}, token)
-    assert err and got["error"] == "on_behalf_of", got                         # not cited: nothing asked
+    assert err and got["error"] == "on_behalf_of", got  # not cited: nothing asked
     assert not asks(api, "ben")
-    err, got = assistant_mcp(api, "hub_settings_ask", {"key": "release.times", "value": "09:30",
-                                                       "on_behalf_of": "turn"}, token)
+    err, got = assistant_mcp(
+        api, "hub_settings_ask", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token
+    )
     assert not err and got["asked"]["person"] == "human:ben", got
     [(task, card)] = asks(api, "ben")
     assert task["requester_id"] == "human:cara" and card["path"] == "/api/v2/release-schedule", (task, card)
@@ -283,9 +296,13 @@ def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_
     assert times(api) == ["09:30"]
     [said] = told(api, "cara", card["id"])
     with api.app.state.store.read() as c:
-        room = c.execute("SELECT m.conversation_id, v.room_key FROM messages m JOIN conversations v ON "
-                         "v.id=m.conversation_id WHERE m.body=?", (said,)).fetchone()
+        room = c.execute(
+            "SELECT m.conversation_id, v.room_key FROM messages m JOIN conversations v ON "
+            "v.id=m.conversation_id WHERE m.body=?",
+            (said,),
+        ).fetchone()
     assert room["room_key"] == "assistant", dict(room)
-    raw = api.patch("/api/v2/release-schedule", json={"times": ["10:00"]},
-                    headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"})
+    raw = api.patch(
+        "/api/v2/release-schedule", json={"times": ["10:00"]}, headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"}
+    )
     assert raw.status_code == 403 and raw.json()["error"]["who_may"] == "The owner or an admin", raw.text

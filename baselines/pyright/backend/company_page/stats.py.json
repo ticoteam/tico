@@ -1,0 +1,54 @@
+{
+    "files": {
+        "./backend/company_page/stats.py": [
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 82,
+                    "endColumn": 108,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 97,
+                    "endColumn": 104,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 48,
+                    "endColumn": 64,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 31,
+                    "endColumn": 46,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 32,
+                    "endColumn": 48,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 101,
+                    "endColumn": 114,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

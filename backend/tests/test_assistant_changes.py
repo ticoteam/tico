@@ -61,16 +61,20 @@ def test_a_close_through_the_route_is_listed_and_restored_to_its_exact_prior_sta
     restored = restore(api, change["id"])
     assert restored["restored"] is True and restored["already"] is False
     after = task_row(api, task["id"])
-    assert (after["status"], after["closed_at"], after["closed_by_id"]) == (
-        before["status"], None, None)
+    assert (after["status"], after["closed_at"], after["closed_by_id"]) == (before["status"], None, None)
     assert task["id"] in needs_ids(api)
 
 
 def test_restoring_a_change_twice_changes_nothing_and_says_so(api):
     task = post(api, "tasks", {"title": "Twice", "body": "x", "owner": "human:ben"}, token="ben-test")
     r, attempt = assistant_turn(api, "ben-test", "Close it")
-    asked(api, f"tasks/{task['id']}", {"version": task["version"], "close": True}, attempt["token"],
-          turn_message(api, attempt))
+    asked(
+        api,
+        f"tasks/{task['id']}",
+        {"version": task["version"], "close": True},
+        attempt["token"],
+        turn_message(api, attempt),
+    )
     cid = changes_for(api, f"task:{task['id']}")[0]["id"]
     assert restore(api, cid)["already"] is False
     version = task_row(api, task["id"])["version"]
@@ -130,8 +134,11 @@ def test_a_setting_the_assistant_changes_through_the_route_is_listed_and_restore
     said = turn_message(api, attempt)
     rev = get(api, "bots/ops", "ana-test")["revision"]
     asked(api, "bots/ops/keep-tasks-going", {"keep_tasks_going": 3, "expected_revision": rev}, attempt["token"], said)
-    [change] = [c for c in get(api, "assistant/changes?days=30", "ana-test")["changes"]
-                if c["object"] == "setting:ops:keep_tasks_going"]
+    [change] = [
+        c
+        for c in get(api, "assistant/changes?days=30", "ana-test")["changes"]
+        if c["object"] == "setting:ops:keep_tasks_going"
+    ]
     assert change["undoable"] is True
     restore(api, change["id"], token="ana-test")
     assert get(api, "bots/ops", "ana-test")["keep_tasks_going"] is None
@@ -143,8 +150,11 @@ def test_a_setting_marked_as_the_assistants_is_listed_and_restored(api):
     post(api, "bots/ops/keep-tasks-going", {"keep_tasks_going": 3, "expected_revision": rev}, token="ana-test")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE settings_changes SET via='assistant' WHERE bot='ops' AND field='keep_tasks_going'")
-    [change] = [c for c in get(api, "assistant/changes?days=30", "ana-test")["changes"]
-                if c["object"] == "setting:ops:keep_tasks_going"]
+    [change] = [
+        c
+        for c in get(api, "assistant/changes?days=30", "ana-test")["changes"]
+        if c["object"] == "setting:ops:keep_tasks_going"
+    ]
     assert change["undoable"] is True
     restore(api, change["id"], token="ana-test")
     assert get(api, "bots/ops", "ana-test")["keep_tasks_going"] is None
@@ -153,8 +163,13 @@ def test_a_setting_marked_as_the_assistants_is_listed_and_restored(api):
 def test_someone_elses_change_is_not_found(api):
     task = post(api, "tasks", {"title": "Ana's", "body": "x", "owner": "human:ben"}, token="ben-test")
     r, attempt = assistant_turn(api, "ben-test", "Close it")
-    asked(api, f"tasks/{task['id']}", {"version": task["version"], "close": True}, attempt["token"],
-          turn_message(api, attempt))
+    asked(
+        api,
+        f"tasks/{task['id']}",
+        {"version": task["version"], "close": True},
+        attempt["token"],
+        turn_message(api, attempt),
+    )
     cid = changes_for(api, f"task:{task['id']}")[0]["id"]
     restore(api, cid, token="cara-test", expected=404)
 
@@ -169,8 +184,10 @@ def test_a_message_citing_the_assistant_is_listed_however_its_refs_are_spaced(ap
 
 
 def test_the_list_pages_and_stays_small(api):
-    tasks = [post(api, "tasks", {"title": f"Stale item {n}", "body": "x", "owner": "human:ben"}, token="ben-test")
-             for n in range(3)]
+    tasks = [
+        post(api, "tasks", {"title": f"Stale item {n}", "body": "x", "owner": "human:ben"}, token="ben-test")
+        for n in range(3)
+    ]
     r, attempt = assistant_turn(api, "ben-test", "Close the stale items")
     said = turn_message(api, attempt)
     for task in tasks:
@@ -187,8 +204,13 @@ def test_a_close_restores_the_exact_status_it_closed_from(api):
     task = post(api, "tasks", {"title": "Mid-flight", "body": "x", "owner": "human:ben"}, token="ben-test")
     doing = post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"}, token="ben-test")
     r, attempt = assistant_turn(api, "ben-test", "Close the mid-flight task")
-    asked(api, f"tasks/{task['id']}", {"version": doing["version"], "close": True}, attempt["token"],
-          turn_message(api, attempt))
+    asked(
+        api,
+        f"tasks/{task['id']}",
+        {"version": doing["version"], "close": True},
+        attempt["token"],
+        turn_message(api, attempt),
+    )
     restore(api, changes_for(api, f"task:{task['id']}")[0]["id"])
     row = task_row(api, task["id"])
     assert (row["status"], row["closed_at"], row["closed_by_id"]) == ("doing", None, None)
@@ -198,8 +220,13 @@ def test_undoing_an_assistant_reopen_leaves_the_task_closed_again(api):
     task = post(api, "tasks", {"title": "Reopen then undo", "body": "x", "owner": "human:ben"}, token="ben-test")
     post(api, f"tasks/{task['id']}", {"version": task["version"], "close": True}, token="ben-test")
     r, attempt = assistant_turn(api, "ben-test", "Reopen the task")
-    asked(api, f"tasks/{task['id']}", {"version": task_row(api, task["id"])["version"], "status": "doing"},
-          attempt["token"], turn_message(api, attempt))
+    asked(
+        api,
+        f"tasks/{task['id']}",
+        {"version": task_row(api, task["id"])["version"], "status": "doing"},
+        attempt["token"],
+        turn_message(api, attempt),
+    )
     assert task_row(api, task["id"])["status"] == "doing"
     [change] = changes_for(api, f"task:{task['id']}")
     assert change["undoable"] is True
@@ -215,8 +242,11 @@ def test_a_manager_who_is_not_the_owner_undoes_their_own_assistant_setting(api):
     post(api, "bots/ops/keep-tasks-going", {"keep_tasks_going": 2, "expected_revision": rev}, token="cara-test")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE settings_changes SET via='assistant' WHERE bot='ops' AND field='keep_tasks_going'")
-    [change] = [c for c in get(api, "assistant/changes?days=30", "cara-test")["changes"]
-                if c["object"] == "setting:ops:keep_tasks_going"]
+    [change] = [
+        c
+        for c in get(api, "assistant/changes?days=30", "cara-test")["changes"]
+        if c["object"] == "setting:ops:keep_tasks_going"
+    ]
     assert change["undoable"] is True
     restore(api, change["id"], token="cara-test")
     assert get(api, "bots/ops", "cara-test")["keep_tasks_going"] is None
@@ -226,7 +256,9 @@ def test_a_change_to_a_task_the_person_can_no_longer_see_names_no_title(api):
     task = post(api, "tasks", {"title": "Ben's soon-private task", "body": "x", "owner": "human:ben"}, token="ben-test")
     as_assistant(api, "human:ben", lambda c: H.task_close(c, "human:ben", task["id"], note=""))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1, owner_id='human:ana', requester_id='human:ana' WHERE id=?", (task["id"],))
+        c.execute(
+            "UPDATE tasks SET private=1, owner_id='human:ana', requester_id='human:ana' WHERE id=?", (task["id"],)
+        )
     assert api.get(f"/api/v2/tasks/{task['id']}", headers=headers("ben-test")).status_code == 404
     [change] = changes_for(api, f"task:{task['id']}")
     assert change["what"] == "Closed a task you can no longer see"
@@ -241,12 +273,14 @@ def test_an_automation_change_is_not_restored_by_someone_who_no_longer_manages_i
         now = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
         before = dict(now, name="Earlier name")
         after = dict(now, owner="human:ana")
-        c.execute("INSERT INTO audit_log (id, created_at, actor, object, before, after, via) VALUES (?,?,?,?,?,?,?)",
-                  (H.new_id(), H.now(), "human:ben", f"automation:{aid}", json.dumps(before), json.dumps(after),
-                   "assistant"))
+        c.execute(
+            "INSERT INTO audit_log (id, created_at, actor, object, before, after, via) VALUES (?,?,?,?,?,?,?)",
+            (H.new_id(), H.now(), "human:ben", f"automation:{aid}", json.dumps(before), json.dumps(after), "assistant"),
+        )
         c.execute("UPDATE automations SET flow=? WHERE id=?", (json.dumps(after), aid))
-    [change] = [c for c in get(api, "assistant/changes?days=30", "ben-test")["changes"]
-                if c["object"] == f"automation:{aid}"]
+    [change] = [
+        c for c in get(api, "assistant/changes?days=30", "ben-test")["changes"] if c["object"] == f"automation:{aid}"
+    ]
     assert change["undoable"] is False and change["why_not"] == "you no longer manage this automation"
     restore(api, change["id"], token="ben-test", expected=409)
 
@@ -268,6 +302,7 @@ def test_an_approval_undone_then_decided_again_cannot_be_restored_from_the_first
 
 def test_the_restore_route_is_admitted_on_the_cited_turn(api):
     from backend import assistant
+
     assert assistant.write_allowed("POST", "/api/v2/assistant/changes/x/restore", body=b"{}", actor="human:ben")
 
 
@@ -295,8 +330,10 @@ def test_a_note_only_update_right_after_a_close_does_not_reopen_it(api):
 
 
 def test_five_changes_page_two_at_a_time_with_no_gaps_and_no_early_end(api):
-    tasks = [post(api, "tasks", {"title": f"Page {n}", "body": "x", "owner": "human:ben"}, token="ben-test")
-             for n in range(5)]
+    tasks = [
+        post(api, "tasks", {"title": f"Page {n}", "body": "x", "owner": "human:ben"}, token="ben-test")
+        for n in range(5)
+    ]
     as_assistant(api, "human:ben", lambda c: [H.task_close(c, "human:ben", t["id"], note="") for t in tasks])
     mine = {f"task:{t['id']}" for t in tasks}
     pages, before = [], ""

@@ -66,7 +66,7 @@ Always:
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Ask the requester one question with
-`hub task ask <id>`; batch every owner question into that one ask. Something a human must do
+`hub task question "<question>" --on <person> --parent <id>`; batch every owner question into that one ask. Something a human must do
 (enter, reconcile, chase a receipt) is `hub task create --owner <person>`.
 Overdue invoices are the Accounts Receivable Specialist's (`ar-followup`); an unentered or disputed
 bill is the Accounts Payable Specialist's (`accounts-payable`); a purchase question is the Procurement

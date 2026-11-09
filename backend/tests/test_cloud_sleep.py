@@ -5,8 +5,19 @@ import time
 
 import pytest
 
-from backend import (check_models, cloud_machines as CM, execution, health, org_turns, providers, start_places,
-                     thread_bot_status, usage_limits, views)
+from backend import (
+    check_models,
+    cloud_machines as CM,
+    execution,
+    health,
+    org_turns,
+    providers,
+    start_places,
+    task_relations as TR,
+    thread_bot_status,
+    usage_limits,
+    views,
+)
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, ready, runner  # noqa: F401
 from backend.tests.test_cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
@@ -19,17 +30,26 @@ def asleep_bot(cloud):
     ready(cloud.api, computer, ['ops'])
     stopped_when_idle(cloud)
     with cloud.store.transaction() as c:
-        c.execute('UPDATE runner_states SET last_seen_at=? WHERE runner_id=?',
-                  (H.shift(H.now(), hours=-1), computer['runner_id']))
+        c.execute(
+            'UPDATE runner_states SET last_seen_at=? WHERE runner_id=?',
+            (H.shift(H.now(), hours=-1), computer['runner_id']),
+        )
     return computer
 
 
 def waiting_task(cloud):
     with cloud.store.transaction() as c:
         task = H.task_create(c, 'human:ana', 'Wait for a decision', '', 'bot:ops', private=False)
-        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (task['id'],))
-        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
-                  (H.shift(H.now(), hours=-4),))
+        # Waiting on Ana: a question task for her under it holds it (derived).
+        H.task_update(
+            c,
+            'bot:ops',
+            task['id'],
+            status='waiting',
+            waiting_on='human:ana',
+            note="Approve the plan? I'll start after.",
+        )
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-4),))
     return task
 
 
@@ -47,7 +67,8 @@ def test_health_names_the_task_wait_without_calling_a_sleeping_bot_stuck(cloud):
     assert 'Starting' not in queue['summary'] and not body['stuck']
     assert cloud.tick(10) == []
     with cloud.store.transaction() as c:
-        c.execute('UPDATE tasks SET waiting_on=NULL WHERE id=?', (task['id'],))
+        [card] = TR.child_ids(c, task['id'])
+        H.task_update(c, 'human:ana', card, status='done', note='Yes.')  # answered: the task opens again
     assert cloud.tick(10) == ['start']
     body = get(cloud.api, 'health')
     queue = next(row for row in body['checks'] if row['id'] == 'queue')
@@ -73,47 +94,71 @@ def test_a_sleeping_bots_hold_does_not_hide_its_signed_out_check(cloud, company_
         work(cloud)
         with cloud.store.transaction() as c:
             parent = H.task_create(c, 'human:ana', 'Change to check', '', 'bot:ops', private=False)
-            c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
-                      "(SELECT id FROM messages WHERE conversation_id=?)", (parent['conversation_id'],))
-            c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
-                      (H.shift(H.now(), hours=-4),))
+            c.execute(
+                "UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
+                "(SELECT id FROM messages WHERE conversation_id=?)",
+                (parent['conversation_id'],),
+            )
+            c.execute(
+                "UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-4),)
+            )
             org_turns.save(c, org_turns.LEVELS, {'warning_per_person': 1, 'stop_per_person': 1})
-            c.executemany("INSERT INTO attempts(id,bot_id,lane,state,created_at) VALUES(?,'cpo',?,'running',?)",
-                          [(f'company-turn-{i}', f'task:company-turn-{i}', H.now())
-                           for i in range(org_turns.levels(c)['stop'])])
+            c.executemany(
+                "INSERT INTO attempts(id,bot_id,lane,state,created_at) VALUES(?,'cpo',?,'running',?)",
+                [(f'company-turn-{i}', f'task:company-turn-{i}', H.now()) for i in range(org_turns.levels(c)['stop'])],
+            )
             assert org_turns.admission(c)['at_stop']
     else:
         parent = waiting_task(cloud)
-    readiness = {'schema_version': 1, 'bots': {'ops': {'ready': True}},
-                 'runtimes': {'grok': {'installed': True, 'authenticated': 'missing'}}}
+    readiness = {
+        'schema_version': 1,
+        'bots': {'ops': {'ready': True}},
+        'runtimes': {'grok': {'installed': True, 'authenticated': 'missing'}},
+    }
     with cloud.store.transaction() as c:
-        check = H.task_create(c, 'bot:ops', 'Check the change', '', 'bot:ops',
-                              parent_id=parent['id'], private=False)
-        check_models.record(c, 'bot:ops', check['id'], {
-            'runtime': 'grok', 'model': providers.recommended('xai')['id'],
-            'harness': 'grok', 'effort': '', 'role': 'check'})
+        check = H.task_create(c, 'bot:ops', 'Check the change', '', 'bot:ops', parent_id=parent['id'], private=False)
+        check_models.record(
+            c,
+            'bot:ops',
+            check['id'],
+            {
+                'runtime': 'grok',
+                'model': providers.recommended('xai')['id'],
+                'harness': 'grok',
+                'effort': '',
+                'role': 'check',
+            },
+        )
         c.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?', (encode(readiness), computer['runner_id']))
-        c.execute("UPDATE jobs SET created_at=? WHERE state='queued' AND message_id IN "
-                  "(SELECT id FROM messages WHERE conversation_id=?)",
-                  (H.shift(H.now(), hours=-1), check['conversation_id']))
+        c.execute(
+            "UPDATE jobs SET created_at=? WHERE state='queued' AND message_id IN "
+            "(SELECT id FROM messages WHERE conversation_id=?)",
+            (H.shift(H.now(), hours=-1), check['conversation_id']),
+        )
     with cloud.store.read() as c:
         args = (c, cloud.store.settings, computer['runner_id'], 'ops')
         first_reason = None if company_stopped else 'task_wait'
         assert execution.bot_claimable(*args, ignore_refusals=CM.STALE)[0] == first_reason
         assert [why for _, why in execution.queued_reasons(*args, ignore_refusals=CM.STALE)] == [
-            first_reason, 'check_model']
+            first_reason,
+            'check_model',
+        ]
     body = get(cloud.api, 'health')
     queue = next(row for row in body['checks'] if row['id'] == 'queue')
     assert queue['status'] == 'bad'
     assert [(row['bot'], row['reason']) for row in queue['items']] == [('ops', 'check_model')]
     assert [(row['bot'], row['reason']) for row in body['stuck']] == [('ops', 'check_model')]
     assert {group['reason']: group['queued'] for group in body['stuck'][0]['queue_reasons']} == {
-        'slow' if company_stopped else 'task_wait': 1, 'check_model': 1}
+        'slow' if company_stopped else 'task_wait': 1,
+        'check_model': 1,
+    }
     assert queue['items'][0]['fixes'] == [health._fix(*health.BOT_SETTINGS)]
     if company_stopped:
         readiness['runtimes']['grok']['authenticated'] = 'ready'
         with cloud.store.transaction() as c:
-            c.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?', (encode(readiness), computer['runner_id']))
+            c.execute(
+                'UPDATE runner_states SET readiness=? WHERE runner_id=?', (encode(readiness), computer['runner_id'])
+            )
         body = get(cloud.api, 'health')
         queue = next(row for row in body['checks'] if row['id'] == 'queue')
         assert queue['status'] == 'info' and not body['stuck']
@@ -121,30 +166,35 @@ def test_a_sleeping_bots_hold_does_not_hide_its_signed_out_check(cloud, company_
         assert queue['items'][0]['fixes'] == [health._fix(*health.RUNS)]
 
 
-@pytest.mark.parametrize('refused,reasons,expected', [
-    ('company_limit', (None, 'check_model'), 'check_model'),
-    ('company_limit', ('check_model', None), 'check_model'),
-    ('task_wait', ('task_wait', None, 'check_model'), 'check_model'),
-    ('company_limit', (None, 'task_next_run', 'uncertain'), 'uncertain'),
-    ('task_wait', ('task_wait', None, 'private_update'), 'private_update'),
-    ('company_limit', (*health.QUEUE_WAITS, None, 'unreadable'), 'unreadable'),
-    ('company_limit', (None, 'check_model', 'uncertain'), 'check_model'),
-    ('company_limit', ('uncertain', None, 'check_model'), 'uncertain'),
-    ('company_limit', (None,), 'company_limit'),
-    ('company_limit', (None, 'task_wait'), 'company_limit'),
-    ('task_wait', ('task_next_run', None, 'task_wait'), 'task_wait'),
-    ('uncertain', (None, 'task_wait'), 'uncertain'),
-])
+@pytest.mark.parametrize(
+    'refused,reasons,expected',
+    [
+        ('company_limit', (None, 'check_model'), 'check_model'),
+        ('company_limit', ('check_model', None), 'check_model'),
+        ('task_wait', ('task_wait', None, 'check_model'), 'check_model'),
+        ('company_limit', (None, 'task_next_run', 'uncertain'), 'uncertain'),
+        ('task_wait', ('task_wait', None, 'private_update'), 'private_update'),
+        ('company_limit', (*health.QUEUE_WAITS, None, 'unreadable'), 'unreadable'),
+        ('company_limit', (None, 'check_model', 'uncertain'), 'check_model'),
+        ('company_limit', ('uncertain', None, 'check_model'), 'uncertain'),
+        ('company_limit', (None,), 'company_limit'),
+        ('company_limit', (None, 'task_wait'), 'company_limit'),
+        ('task_wait', ('task_next_run', None, 'task_wait'), 'task_wait'),
+        ('uncertain', (None, 'task_wait'), 'uncertain'),
+    ],
+)
 def test_sleeping_queue_selects_a_refusal_needing_a_fix_before_ready_jobs_or_waits(
-        cloud, monkeypatch, refused, reasons, expected):
+    cloud, monkeypatch, refused, reasons, expected
+):
     asleep_bot(cloud)
     work(cloud)
     oldest = H.shift(H.now(), hours=-1)
     with cloud.store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (oldest,))
     monkeypatch.setattr(health, '_claimable', lambda *args, **kwargs: (refused, None, False))
-    monkeypatch.setattr(execution, 'queued_reasons', lambda *args, **kwargs: (
-        ({'created_at': oldest}, reason) for reason in reasons))
+    monkeypatch.setattr(
+        execution, 'queued_reasons', lambda *args, **kwargs: (({'created_at': oldest}, reason) for reason in reasons)
+    )
     body = get(cloud.api, 'health')
     queue = next(row for row in body['checks'] if row['id'] == 'queue')
     assert [(row['bot'], row['reason']) for row in queue['items']] == [('ops', expected)]
@@ -160,8 +210,10 @@ def test_claimable_work_left_asleep_past_the_cutoff_is_still_a_problem(cloud, sp
     asleep_bot(cloud)
     work(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
-                  (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1),))
+        c.execute(
+            "UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
+            (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1),),
+        )
         if spent:
             job = c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0]
             CM.save(c, 'ops', wake_key='job:' + job, woke_at=cloud.at[0])
@@ -176,12 +228,17 @@ def test_ignoring_last_boot_readiness_keeps_a_sleeping_bots_spending_hold(cloud)
     computer = asleep_bot(cloud)
     work(cloud)
     with cloud.store.transaction() as c:
-        c.execute("INSERT INTO attempts(id,bot_id,state,created_at,settled_at,exit,est_cost_usd) "
-                  "VALUES('spent-run','ops','completed',?,?,'completed',5)", (H.now(), H.now()))
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,state,created_at,settled_at,exit,est_cost_usd) "
+            "VALUES('spent-run','ops','completed',?,?,'completed',5)",
+            (H.now(), H.now()),
+        )
         usage_limits.save_own(c, 'ops', {'daily_usd': 1}, None)
         c.execute("UPDATE runner_states SET readiness='{}' WHERE runner_id=?", (computer['runner_id'],))
-        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
-                  (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1),))
+        c.execute(
+            "UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
+            (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1),),
+        )
     with cloud.store.read() as c:
         args = (c, cloud.store.settings, computer['runner_id'], 'ops')
         assert execution.bot_claimable(*args)[0] == 'readiness_unknown'
@@ -200,8 +257,7 @@ def test_a_young_claimable_job_is_not_aged_by_an_old_task_wait(cloud, readiness)
     waiting_task(cloud)
     message = work(cloud)
     if readiness:
-        document = ('{}' if readiness == 'readiness_unknown' else
-                    '{"schema_version":1,"bots":{"ops":{"ready":false}}}')
+        document = '{}' if readiness == 'readiness_unknown' else '{"schema_version":1,"bots":{"ops":{"ready":false}}}'
         with cloud.store.transaction() as c:
             c.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?', (document, computer['runner_id']))
         with cloud.store.read() as c:
@@ -213,8 +269,10 @@ def test_a_young_claimable_job_is_not_aged_by_an_old_task_wait(cloud, readiness)
     row = next(row for row in get(cloud.api, 'computers')['computers'] if row['id'] == computer['runner_id'])
     assert any('person' in w['reason'] and w['count'] == 1 for w in row['turn_counts']['waits'])
     with cloud.store.transaction() as c:
-        c.execute('UPDATE jobs SET created_at=? WHERE message_id=?',
-                  (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1), message['id']))
+        c.execute(
+            'UPDATE jobs SET created_at=? WHERE message_id=?',
+            (H.shift(H.now(), minutes=-health.QUEUE_MINUTES - 1), message['id']),
+        )
     body = get(cloud.api, 'health')
     queue = next(row for row in body['checks'] if row['id'] == 'queue')
     assert queue['status'] == 'bad' and 'Not started after 15 min' in queue['summary']
@@ -251,8 +309,11 @@ def test_a_failing_sleeping_job_diagnostic_does_not_break_computer_listings(clou
             fail(job_id)
         return login_check(c, settings, runner_id, bot, config, job_id, **kwargs)
 
-    monkeypatch.setattr(execution, 'job_refusal' if check == 'task' else 'login_refusal',
-                        task_check if check == 'task' else per_job_login)
+    monkeypatch.setattr(
+        execution,
+        'job_refusal' if check == 'task' else 'login_refusal',
+        task_check if check == 'task' else per_job_login,
+    )
     for path, key in [('computers', 'computers'), ('operations', 'machines')]:
         checked.clear()
         rows = {row['id']: row for row in get(cloud.api, path)[key]}
@@ -279,7 +340,7 @@ def test_a_storage_failure_in_sleeping_queue_diagnostics_still_fails_the_read(cl
 
 def test_resting_computer_splits_job_waits_without_a_stale_sample_label(cloud):
     computer = asleep_bot(cloud)
-    memory(cloud.api, computer, .86, at=int(time.time()) // 60 * 60 - 300)
+    memory(cloud.api, computer, 0.86, at=int(time.time()) // 60 * 60 - 300)
     waiting_task(cloud)
     work(cloud)
     rid = computer['runner_id']
@@ -300,7 +361,7 @@ def test_resting_computer_splits_job_waits_without_a_stale_sample_label(cloud):
 def test_recent_contact_does_not_keep_a_memory_warning_after_a_planned_stop(cloud):
     computer = asleep_bot(cloud)
     rid = computer['runner_id']
-    memory(cloud.api, computer, .86)
+    memory(cloud.api, computer, 0.86)
     with cloud.store.transaction() as c:
         c.execute('UPDATE runner_states SET last_seen_at=? WHERE runner_id=?', (H.now(), rid))
     body = get(cloud.api, 'health')
@@ -318,11 +379,13 @@ def test_last_boot_holds_do_not_deadlock_a_stopped_machines_wake(cloud, hold):
     work(cloud)
     if hold != 'readiness':
         at = int(time.time()) // 60 * 60 - (300 if hold == 'stale_sample' else 0)
-        memory(cloud.api, computer, .86, at=at)
+        memory(cloud.api, computer, 0.86, at=at)
     with cloud.store.transaction() as c:
         # A bot's own message exercises admission's load brake too; a person's message skips it.
-        c.execute("UPDATE messages SET sender_id='bot:cpo' WHERE id IN "
-                  "(SELECT message_id FROM jobs WHERE bot_id='ops' AND state='queued')")
+        c.execute(
+            "UPDATE messages SET sender_id='bot:cpo' WHERE id IN "
+            "(SELECT message_id FROM jobs WHERE bot_id='ops' AND state='queued')"
+        )
         if hold == 'readiness':
             c.execute("UPDATE runner_states SET readiness='{}' WHERE runner_id=?", (computer['runner_id'],))
     with cloud.store.read() as c:
@@ -336,7 +399,9 @@ def test_last_boot_holds_do_not_deadlock_a_stopped_machines_wake(cloud, hold):
         assert found['want'].startswith('job:')
         assert CM.decide(CM.row(c, 'ops'), found, cloud.at[0], 300)[0] == 'start'
     if hold == 'memory':
-        assert not any(row['id'] == 'runner_load:' + computer['runner_id'] for row in get(cloud.api, 'health')['checks'])
+        assert not any(
+            row['id'] == 'runner_load:' + computer['runner_id'] for row in get(cloud.api, 'health')['checks']
+        )
     assert cloud.tick(10) == ['start']
     # A wake does not bypass the checks the running computer still needs to clear.
     assert claim(cloud.api, computer) is None
@@ -345,7 +410,7 @@ def test_last_boot_holds_do_not_deadlock_a_stopped_machines_wake(cloud, hold):
 @pytest.mark.parametrize('recent_contact', [False, True])
 def test_resting_chat_labels_do_not_say_starting_or_not_reporting(cloud, recent_contact):
     computer = asleep_bot(cloud)
-    memory(cloud.api, computer, .86, at=int(time.time()) // 60 * 60 - 300)
+    memory(cloud.api, computer, 0.86, at=int(time.time()) // 60 * 60 - 300)
     if recent_contact:
         with cloud.store.transaction() as c:
             c.execute('UPDATE runner_states SET last_seen_at=? WHERE runner_id=?', (H.now(), computer['runner_id']))

@@ -13,7 +13,6 @@ LINES = [
     ("*", "human:ana", 3, "Decisions only. Put the rest in the daily note."),
     ("*", "bot:legal-review", None, "Contracts and claims only, with the draft attached."),
     ("*", "human:eli", 10, None),
-
     # Finance: the team reaches only who's listed.
     ("group:finance", "human:ana", 2, "Spend over $5k and month-end only."),
     ("group:finance", "bot:finance-lead", None, None),
@@ -25,17 +24,14 @@ LINES = [
     ("bot:pricing", "group:sales", 3, "New price sheets go through the Sales Manager."),
     ("bot:ar-followup", "bot:account-manager", 2, "Past-due accounts over 30 days."),
     ("bot:spend-watcher", "group:marketing", 1, "Ad spend over plan, once a day."),
-
     # Legal: reaches only who's listed.
     ("group:legal", "human:ana", None, None),
     ("group:legal", "group:marketing", 4, "Send back marked-up copy, not a rewrite."),
     ("group:legal", "bot:sales", 2, "Contract redlines."),
-
     # HR: the Recruiter reaches only who's listed.
     ("bot:recruiter", "human:ana", 1, "Offers only."),
     ("bot:recruiter", "human:eli", 2, "Engineering candidates."),
     ("bot:recruiter", "human:cara", 2, "Sales and marketing candidates."),
-
     # Product and engineering
     ("bot:pr-reviewer", "group:product", None, None),
     ("bot:pr-reviewer", "human:eli", 2, "Blocking reviews only."),
@@ -45,32 +41,33 @@ LINES = [
     ("group:support", "group:product", 5, "Bugs need repro steps and the unit's log."),
     ("bot:support", "bot:firmware", None, "Calibration bugs only, with the unit's log."),
     ("group:marketing", "bot:firmware", 0, "Ask the Product Manager instead."),
-
     # Marketing
     ("group:marketing", "bot:support", 0, "Customer quotes go to Sales."),
     ("bot:content", "bot:legal-review", 2, "Claims about brightness and safety."),
     ("bot:paid-media", "bot:finance-lead", 1, "Budget changes over $1k."),
     ("bot:creators", "human:cara", 1, "Creator contracts only."),
     ("bot:seo", "bot:content", None, "Keyword briefs, one per post."),
-    ("bot:seo", "human:ana", 1, "Small questions wait for one daily note. Message me sooner only if it costs money or affects customers."),
+    (
+        "bot:seo",
+        "human:ana",
+        1,
+        "Small questions wait for one daily note. Message me sooner only if it costs money or affects customers.",
+    ),
     ("bot:community", "bot:support", 10, "Hand off any owner with a broken unit."),
     ("bot:email-marketing", "bot:sales-ops", 2, "List pulls on Mondays."),
     ("bot:reputation", "group:marketing", 1, "Review trends, weekly."),
-
     # Sales
     ("bot:sdr", "human:cara", 0, "Send qualified leads to the Sales Manager."),
     ("bot:sdr", "bot:sales-engineer", 3, "Demos for accounts over 50 units."),
     ("group:sales", "bot:pricing", 2, "Discounts over 15%."),
     ("bot:bids", "group:legal", 1, "Tender terms before submission."),
     ("bot:retail", "bot:inventory", 4, "Store reset counts."),
-
     # Operations
     ("group:operations", "human:ben", 5, None),
     ("bot:logistics", "bot:support", None, "Carrier delays over two days."),
     ("bot:quality", "bot:firmware", 2, "Field failures with batch numbers."),
     ("bot:compliance", "group:legal", None, None),
     ("bot:returns", "bot:accounts-payable", 3, "Refunds over $200."),
-
     # Support
     ("bot:support", "human:ben", 1, None),
     ("bot:support", "bot:pricing", 0, "Price questions go to the Sales Manager."),

@@ -17,6 +17,10 @@ from pathlib import Path
 
 import pytest
 
+# run_on_terminal forks with pty.fork() while pytest-xdist's threads run. The child only execs bash, so the stdlib's
+# forkpty warning about locks held by other threads does not apply to these tests.
+pytestmark = pytest.mark.filterwarnings('ignore:This process .* is multi-threaded, use of forkpty:DeprecationWarning')
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / 'scripts/google-setup.sh'
 CODE = 'code123'
@@ -27,8 +31,10 @@ ROLE = 'roles/orgpolicy.policyAdmin'
 KEY_POLICIES = ['iam.disableServiceAccountKeyCreation', 'iam.managed.disableServiceAccountKeyCreation']
 SECRET = 'FAKEKEYMATERIAL'
 GENERIC_REFUSAL = 'FAILED_PRECONDITION: Key creation is blocked.'
-POLICY_REFUSAL = ('FAILED_PRECONDITION: Key creation is not allowed by organization policy '
-                  'constraints/iam.disableServiceAccountKeyCreation.')
+POLICY_REFUSAL = (
+    'FAILED_PRECONDITION: Key creation is not allowed by organization policy '
+    'constraints/iam.disableServiceAccountKeyCreation.'
+)
 ORPHAN = {'kid': 'orphan-old', 'validAfterTime': '2026-11-01T09:00:00.000000Z'}
 NEWER = {'kid': 'other-newer', 'validAfterTime': '2026-11-03T12:00:00.000000Z'}
 
@@ -205,11 +211,27 @@ else:
 '''
 
 DEFAULTS = {
-    'orgs': ['111'], 'projects': [], 'sa': [], 'enforced': [], 'overridden': [], 'policy_sets': [], 'bindings': [],
-    'keys': [], 'deleted': [], 'counter': 0, 'key_refusals': 0, 'key_refusal_text': GENERIC_REFUSAL,
-    'describe_refused': False, 'policy_needs_role': False, 'conditional': False, 'set_always_denied': False,
+    'orgs': ['111'],
+    'projects': [],
+    'sa': [],
+    'enforced': [],
+    'overridden': [],
+    'policy_sets': [],
+    'bindings': [],
+    'keys': [],
+    'deleted': [],
+    'counter': 0,
+    'key_refusals': 0,
+    'key_refusal_text': GENERIC_REFUSAL,
+    'describe_refused': False,
+    'policy_needs_role': False,
+    'conditional': False,
+    'set_always_denied': False,
     'upload_mode': 'ok',
-    'latest': True, 'active': None, 'uploaded': None, 'account': CALLER,
+    'latest': True,
+    'active': None,
+    'uploaded': None,
+    'account': CALLER,
 }
 
 
@@ -251,14 +273,28 @@ class Hub:
         return {k['kid'] for k in self.state()['keys']}
 
     def env(self):
-        return {'PATH': f'{self.bin}:/usr/bin:/bin', 'HOME': str(self.bin.parent), 'FAKE_STATE': str(self.state_path),
-                'FAKE_LOG': str(self.log), 'FAKE_CODE': CODE, 'TMPDIR': str(self.scratch),
-                'TICO_RETRY_BASE': '0', 'TICO_KEY_WAIT': '5'}
+        return {
+            'PATH': f'{self.bin}:/usr/bin:/bin',
+            'HOME': str(self.bin.parent),
+            'FAKE_STATE': str(self.state_path),
+            'FAKE_LOG': str(self.log),
+            'FAKE_CODE': CODE,
+            'TMPDIR': str(self.scratch),
+            'TICO_RETRY_BASE': '0',
+            'TICO_KEY_WAIT': '5',
+        }
 
     def run(self, *args, **extra_env):
         env = {**self.env(), **extra_env}
-        return subprocess.run(['bash', str(self.script), *(args or (CODE,))], env=env, stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=120, start_new_session=True)
+        return subprocess.run(
+            ['bash', str(self.script), *(args or (CODE,))],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            start_new_session=True,
+        )
 
     def calls(self):
         if not self.log.exists():
@@ -267,11 +303,13 @@ class Hub:
 
     def gcloud(self, *prefix):
         """The arguments after the prefix, for each gcloud call that starts with it."""
-        return [c[1 + len(prefix):] for c in self.calls() if c[0] == 'gcloud' and c[1:1 + len(prefix)] == list(prefix)]
+        return [
+            c[1 + len(prefix) :] for c in self.calls() if c[0] == 'gcloud' and c[1 : 1 + len(prefix)] == list(prefix)
+        ]
 
     def index(self, *prefix):
         for i, c in enumerate(self.calls()):
-            if c[0] == 'gcloud' and c[1:1 + len(prefix)] == list(prefix):
+            if c[0] == 'gcloud' and c[1 : 1 + len(prefix)] == list(prefix):
                 return i
         raise AssertionError(f'no gcloud call starting with {prefix}')
 
@@ -327,7 +365,12 @@ def test_fresh_run_makes_the_key_sends_it_and_removes_only_the_orphans(tmp_path)
     assert created[1:] == [f'--labels=tico-setup={INSTALL}', '--organization=111']
 
     services = hub.gcloud('services', 'enable')[0]
-    for api in ['gmail.googleapis.com', 'calendar-json.googleapis.com', 'orgpolicy.googleapis.com', 'iam.googleapis.com']:
+    for api in [
+        'gmail.googleapis.com',
+        'calendar-json.googleapis.com',
+        'orgpolicy.googleapis.com',
+        'iam.googleapis.com',
+    ]:
         assert api in services
 
     sa = f'tico-mail@{project}.iam.gserviceaccount.com'
@@ -390,7 +433,9 @@ def test_a_refused_override_grants_the_policy_admin_role_then_removes_it(tmp_pat
     assert f'--member=user:{CALLER}' in add and f'--role={ROLE}' in add
     (remove,) = hub.gcloud('organizations', 'remove-iam-policy-binding')
     assert f'--member=user:{CALLER}' in remove and f'--role={ROLE}' in remove
-    assert hub.index('organizations', 'add-iam-policy-binding') < hub.index('organizations', 'remove-iam-policy-binding')
+    assert hub.index('organizations', 'add-iam-policy-binding') < hub.index(
+        'organizations', 'remove-iam-policy-binding'
+    )
     assert hub.state()['bindings'] == []
 
 
@@ -535,7 +580,7 @@ def test_an_empty_setup_code_is_refused_before_anything_runs(tmp_path):
 @pytest.mark.parametrize('cut', ['last_line', 'middle'])
 def test_a_truncated_download_runs_nothing(tmp_path, cut):
     text = filled_script()
-    text = text[:text.rindex('main "$@"')] if cut == 'last_line' else text[:len(text) // 2]
+    text = text[: text.rindex('main "$@"')] if cut == 'last_line' else text[: len(text) // 2]
     hub = Hub(tmp_path, script=text)
     result = hub.run()
     assert hub.calls() == []

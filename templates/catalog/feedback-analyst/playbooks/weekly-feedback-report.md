@@ -41,7 +41,7 @@ Run every change through `skills/read-a-change-in-counts/SKILL.md` before you ca
 ## 5. Check the launches
 
 If a shipped change with a success measure reached 14 days this week, run `playbooks/after-launch-read.md` for it. If
-you do not know which changes shipped, ask once on the task with `hub task ask <id>`.
+you do not know which changes shipped, ask once on the task with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## 6. Write and hand over
 

@@ -12,6 +12,7 @@ A lookup that cannot finish is unknown and the write is not sent again. A 429 wa
 per pass; past it the pass stops, and the books wait out Retry-After across passes (`hold`). A 401 gets one new token from
 HQ and the call is tried again; a redirect is never followed. Every call returns a Read or a Sent: it never raises for an
 answer from Xero."""
+
 import json
 import logging
 import os
@@ -35,33 +36,64 @@ from .core.qbo import as_list, as_map
 from .mirror import Read, Record, Sent
 
 BASE = "https://api.xero.com/api.xro/2.0"
-BASE_ENV = "TICO_XERO_BASE"          # a developer's override: a local fake (scripts/fake_xero.py) and nothing else
+BASE_ENV = "TICO_XERO_BASE"  # a developer's override: a local fake (scripts/fake_xero.py) and nothing else
 OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-NAMESPACE = uuid.UUID("3b8e2f7a-6c1d-4f5e-9a40-7d2c1b9e6f10")   # Idempotency-Keys are uuid5 of the outbox key here
-PAGE = 100                            # Xero returns 100 rows a page; a shorter page is the last
-MAX_PAGES = 200                       # a change window longer than this (20,000 rows) is not read; its pass reports it
-FIND_PAGES = 50                       # a lookup for a write reads this many pages (5,000 rows); past them it cannot tell
-CHANGE_EVERY = 240                    # seconds between change-feed reads: a change is seen within five minutes (§10)
-ORDER = "UpdatedDateUTC DESC"         # newest first, so rows edited during a read move to the front (re-read, not skipped)
-CHANGE_ORDER = "UpdatedDateUTC ASC"   # oldest first: a list cut at the cap is complete to its last row read
-EXTRA = {"parties": {"includeArchived": "true"}, "bank_transfers": {"includeDeleted": "true"},
-         # archived options are listed too: a bill or journal line on one still names it, and its archive is a change
-         "tracking": {"includeArchived": "true"}}
-UNPAGED = ("accounts", "bank_transfers", "tracking")   # Xero returns these whole, with no page parameter
-ENDPOINTS = {"accounts": "Accounts", "parties": "Contacts", "items": "Items", "tracking": "TrackingCategories",
-             "invoices": "Invoices", "credit_notes": "CreditNotes",
-             "payments": "Payments", "manual_journals": "ManualJournals", "bank_transactions": "BankTransactions",
-             "bank_transfers": "BankTransfers", "overpayments": "Overpayments", "prepayments": "Prepayments"}
-WRAPPER = {"Account": "Accounts", "Contact": "Contacts", "Item": "Items", "Invoice": "Invoices", "Bill": "Invoices",
-           "Payment": "Payments", "BillPayment": "Payments", "CreditMemo": "CreditNotes",
-           "ManualJournal": "ManualJournals", "BankTransaction": "BankTransactions"}     # a write's kind -> its list
-ID_KEY = {"Account": "AccountID", "Contact": "ContactID", "Item": "ItemID", "Invoice": "InvoiceID", "Bill": "InvoiceID",
-          "Payment": "PaymentID", "BillPayment": "PaymentID", "CreditMemo": "CreditNoteID",
-          "ManualJournal": "ManualJournalID", "BankTransaction": "BankTransactionID"}
+NAMESPACE = uuid.UUID("3b8e2f7a-6c1d-4f5e-9a40-7d2c1b9e6f10")  # Idempotency-Keys are uuid5 of the outbox key here
+PAGE = 100  # Xero returns 100 rows a page; a shorter page is the last
+MAX_PAGES = 200  # a change window longer than this (20,000 rows) is not read; its pass reports it
+FIND_PAGES = 50  # a lookup for a write reads this many pages (5,000 rows); past them it cannot tell
+CHANGE_EVERY = 240  # seconds between change-feed reads: a change is seen within five minutes (§10)
+ORDER = "UpdatedDateUTC DESC"  # newest first, so rows edited during a read move to the front (re-read, not skipped)
+CHANGE_ORDER = "UpdatedDateUTC ASC"  # oldest first: a list cut at the cap is complete to its last row read
+EXTRA = {
+    "parties": {"includeArchived": "true"},
+    "bank_transfers": {"includeDeleted": "true"},
+    # archived options are listed too: a bill or journal line on one still names it, and its archive is a change
+    "tracking": {"includeArchived": "true"},
+}
+UNPAGED = ("accounts", "bank_transfers", "tracking")  # Xero returns these whole, with no page parameter
+ENDPOINTS = {
+    "accounts": "Accounts",
+    "parties": "Contacts",
+    "items": "Items",
+    "tracking": "TrackingCategories",
+    "invoices": "Invoices",
+    "credit_notes": "CreditNotes",
+    "payments": "Payments",
+    "manual_journals": "ManualJournals",
+    "bank_transactions": "BankTransactions",
+    "bank_transfers": "BankTransfers",
+    "overpayments": "Overpayments",
+    "prepayments": "Prepayments",
+}
+WRAPPER = {
+    "Account": "Accounts",
+    "Contact": "Contacts",
+    "Item": "Items",
+    "Invoice": "Invoices",
+    "Bill": "Invoices",
+    "Payment": "Payments",
+    "BillPayment": "Payments",
+    "CreditMemo": "CreditNotes",
+    "ManualJournal": "ManualJournals",
+    "BankTransaction": "BankTransactions",
+}  # a write's kind -> its list
+ID_KEY = {
+    "Account": "AccountID",
+    "Contact": "ContactID",
+    "Item": "ItemID",
+    "Invoice": "InvoiceID",
+    "Bill": "InvoiceID",
+    "Payment": "PaymentID",
+    "BillPayment": "PaymentID",
+    "CreditMemo": "CreditNoteID",
+    "ManualJournal": "ManualJournalID",
+    "BankTransaction": "BankTransactionID",
+}
 TIMEOUT = 20
 TRIES_429 = 3
-PASS_WAIT = 5.0                       # seconds one pass may sleep on rate limits in all; past it the pass stops
-HOLD_DEFAULT = 60.0                   # seconds the books wait after a rate limit that gave no Retry-After
+PASS_WAIT = 5.0  # seconds one pass may sleep on rate limits in all; past it the pass stops
+HOLD_DEFAULT = 60.0  # seconds the books wait after a rate limit that gave no Retry-After
 MAX_TEXT = 300
 log = logging.getLogger(__name__)
 _warned = [False]
@@ -73,10 +105,10 @@ def _no_body() -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Reply:
-    status: int                       # 0: unreachable, timed out, or no token (the write may or may not have landed)
+    status: int  # 0: unreachable, timed out, or no token (the write may or may not have landed)
     body: dict[str, Any] = field(default_factory=_no_body)
     retry_after: float = 0.0
-    note: str = ""                    # why there is no answer, for a status 0
+    note: str = ""  # why there is no answer, for a status 0
 
 
 Transport = Callable[[str, str, Mapping[str, str], bytes | None], Reply]
@@ -130,7 +162,8 @@ def _urllib(method: str, url: str, headers: Mapping[str, str], data: bytes | Non
         with opener.open(request, timeout=TIMEOUT) as response:
             return _reply(response.status, response.read(), response.headers.get("Retry-After"))
     except urllib.error.HTTPError as e:
-        return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
+        with e:
+            return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
     except (urllib.error.URLError, TimeoutError, OSError):
         return Reply(0, note="Xero did not answer")
 
@@ -250,26 +283,51 @@ class Xero:
 
     entities: tuple[str, ...] = M.BOOK_ENTITIES["xero"]
     # One cursor per entity with a change time (bills come from the invoices list); bank transfers have none.
-    feeds: tuple[str, ...] = ("accounts", "parties", "items", "tracking", "invoices", "credit_notes", "payments",
-                              "overpayments", "prepayments", "bank_transactions", "manual_journals")
+    feeds: tuple[str, ...] = (
+        "accounts",
+        "parties",
+        "items",
+        "tracking",
+        "invoices",
+        "credit_notes",
+        "payments",
+        "overpayments",
+        "prepayments",
+        "bank_transactions",
+        "manual_journals",
+    )
 
-    def __init__(self, tenant: str, tokens: Callable[[bool], str], *, base: str | None = None,
-                 transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep,
-                 location: str = "") -> None:
+    def __init__(
+        self,
+        tenant: str,
+        tokens: Callable[[bool], str],
+        *,
+        base: str | None = None,
+        transport: Transport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        location: str = "",
+    ) -> None:
         self.tenant, self.tokens = tenant, tokens
         self.base = (base or base_url()).rstrip("/")
         self.transport = transport or _urllib
         self.sleep = sleep
-        self.hold = 0.0                   # seconds the books wait before the next pass: the Retry-After that stopped this one
-        self._location = location         # the tracking category whose options are locations ("" for none)
+        self.hold = 0.0  # seconds the books wait before the next pass: the Retry-After that stopped this one
+        self._location = location  # the tracking category whose options are locations ("" for none)
         self._roles: dict[str, str] | None = None
         self._codes: dict[str, str] = {}  # an account's key to its code, for the items that name it
         self._contact = ""
         self._waited = 0.0
         self._held = False
 
-    def _call(self, method: str, path: str, *, query: Mapping[str, str] | None = None,
-              body: Mapping[str, Any] | None = None, headers: Mapping[str, str] | None = None) -> Reply:
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: Mapping[str, str] | None = None,
+        body: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Reply:
         if self._held:
             return Reply(429, {"Message": "Xero is rate limiting; this pass stops and the next one resumes"}, self.hold)
         url = f"{self.base}/{path}" + (f"?{urllib.parse.urlencode(query)}" if query else "")
@@ -281,8 +339,12 @@ class Xero:
         refreshed = False
         tries = 0
         while True:
-            head = {"Authorization": f"Bearer {token}", "xero-tenant-id": self.tenant, "Accept": "application/json",
-                    **(headers or {})}
+            head = {
+                "Authorization": f"Bearer {token}",
+                "xero-tenant-id": self.tenant,
+                "Accept": "application/json",
+                **(headers or {}),
+            }
             if data is not None:
                 head["Content-Type"] = "application/json"
             reply = self.transport(method, url, head, data)
@@ -307,8 +369,9 @@ class Xero:
     def _rows(self, entity: str, page: int, since: str = "", order: str = ORDER) -> tuple[list[dict[str, Any]], Reply]:
         """One list's rows as Xero gave them, and the answer; no rows when the answer is not a list."""
         name = ENDPOINTS[entity]
-        reply = self._call("GET", name, query=_query(entity, page, order),
-                           headers={"If-Modified-Since": since} if since else None)
+        reply = self._call(
+            "GET", name, query=_query(entity, page, order), headers={"If-Modified-Since": since} if since else None
+        )
         if reply.status != 200:
             return [], reply
         return [as_map(raw) or {} for raw in as_list(reply.body.get(name))], reply
@@ -361,8 +424,10 @@ class Xero:
             cid = str(category.get("TrackingCategoryID") or "")
             for raw in as_list(category.get("Options")):
                 option = as_map(raw) or {}
-                roles.setdefault(f"option:{category.get('Name') or ''}/{option.get('Name') or ''}",
-                                 f"TrackingOption:{cid}/{option.get('TrackingOptionID') or ''}")
+                roles.setdefault(
+                    f"option:{category.get('Name') or ''}/{option.get('Name') or ''}",
+                    f"TrackingOption:{cid}/{option.get('TrackingOptionID') or ''}",
+                )
         roles["location"] = self._location
         self._codes.update(codes)
         self._roles = roles
@@ -383,7 +448,7 @@ class Xero:
             if len(got) < PAGE:
                 break
             number += 1
-        return self._taken(entity, rows[skip:skip + size])
+        return self._taken(entity, rows[skip : skip + size])
 
     def changed(self, since: Mapping[str, str]) -> Read:
         """The change feed, one cursor per entity (see feeds), each read from its own stamp, oldest change first. Each
@@ -429,7 +494,7 @@ class Xero:
                     moved = max(ims, (last - timedelta(microseconds=1)).replace(microsecond=0))
                     ims, page = (moved, 1) if moved != ims else (ims, page + 1)
                 else:
-                    page += 1       # the rows of one timestamp fill the page: the next page of that same second
+                    page += 1  # the rows of one timestamp fill the page: the next page of that same second
             else:
                 cut = max(start, newest - timedelta(milliseconds=1))
                 through.append((entity, cut.strftime("%Y-%m-%dT%H:%M:%S.%fZ")))
@@ -454,19 +519,25 @@ class Xero:
                         record = self._found(entity, row)
                     except ValueError as e:  # its options cannot be read yet: found again, not bound bare
                         return Sent(False, error=f"Xero did not answer the lookup: {e}"[:MAX_TEXT])
-                    return Sent(True, kind=kind, external_id=str(row[id_key]),
-                                revision=X.stamp(row.get("UpdatedDateUTC")), record=record)
+                    return Sent(
+                        True,
+                        kind=kind,
+                        external_id=str(row[id_key]),
+                        revision=X.stamp(row.get("UpdatedDateUTC")),
+                        record=record,
+                    )
             if entity in UNPAGED or len(rows) < PAGE:
                 return None
-        return Sent(False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True,
-                    unknown=True)
+        return Sent(
+            False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True, unknown=True
+        )
 
     def _found(self, entity: str, row: dict[str, Any]) -> M.Document | M.Journal | M.Settlement | None:
         """The record a found row reads as, for the books to check the write it answers against. Raises ValueError when
         the lookups the record reads by cannot be read, so the caller asks again rather than binding it without one."""
         self._ensure()
         got = self._taken(entity, [row])
-        for record in (got.records if got.ok else ()):
+        for record in got.records if got.ok else ():
             if isinstance(record, (M.Document, M.Journal, M.Settlement)):
                 return record
         return None
@@ -478,7 +549,7 @@ class Xero:
             return None
         reply = self._call("GET", f"CreditNotes/{_quote(note_id)}")
         if reply.status == 400:
-            return None                   # Xero holds no such credit note, so no allocation of it can have landed
+            return None  # Xero holds no such credit note, so no allocation of it can have landed
         if reply.status != 200:
             return _lookup_failure(reply)
         notes = [as_map(raw) or {} for raw in as_list(reply.body.get("CreditNotes"))]
@@ -487,10 +558,17 @@ class Xero:
         for raw in as_list(note.get("Allocations")):
             item = as_map(raw) or {}
             target = as_map(item.get("Invoice")) or {}
-            if str(target.get("InvoiceID") or "") == invoice_id and not item.get("IsDeleted") \
-                    and Decimal(str(item.get("Amount") or 0)) == amount:
-                return Sent(True, kind="Payment", external_id=f"CreditNote:{note_id}",
-                            revision=X.stamp(note.get("UpdatedDateUTC")))
+            if (
+                str(target.get("InvoiceID") or "") == invoice_id
+                and not item.get("IsDeleted")
+                and Decimal(str(item.get("Amount") or 0)) == amount
+            ):
+                return Sent(
+                    True,
+                    kind="Payment",
+                    external_id=f"CreditNote:{note_id}",
+                    revision=X.stamp(note.get("UpdatedDateUTC")),
+                )
         return None
 
     def _unspecified(self) -> str:
@@ -517,15 +595,15 @@ class Xero:
     def _find(self, op: str, body: Mapping[str, Any], key: str) -> Sent | None:
         mark = _marker(key)
         if op == "journal.create" and body.get("feed"):
-            return self._lookup("bank_transactions", "BankTransaction",
-                                lambda r: mark in str(r.get("Reference") or ""))
+            return self._lookup("bank_transactions", "BankTransaction", lambda r: mark in str(r.get("Reference") or ""))
         if op == "journal.create":
             return self._lookup("manual_journals", "ManualJournal", lambda r: mark in str(r.get("Narration") or ""))
         if op in ("bill.create", "invoice.create"):
             kind = "Bill" if op == "bill.create" else "Invoice"
             side = "ACCPAY" if kind == "Bill" else "ACCREC"
-            return self._lookup("invoices", kind,
-                                lambda r: r.get("Type") == side and mark in str(r.get("Reference") or ""))
+            return self._lookup(
+                "invoices", kind, lambda r: r.get("Type") == side and mark in str(r.get("Reference") or "")
+            )
         if op in ("payment.invoice", "payment.bill"):
             kind = "BillPayment" if op == "payment.bill" else "Payment"
             return self._lookup("payments", kind, lambda r: mark in str(r.get("Reference") or ""))
@@ -551,23 +629,25 @@ class Xero:
         if not note_id:
             return Sent(False, error="not a Xero write: no credit note to apply", final=True)
         payload = X.allocation_body(body)
-        reply = self._call("PUT", f"CreditNotes/{_quote(note_id)}/Allocations", body=payload,
-                           headers={"Idempotency-Key": _idem(key)})
+        reply = self._call(
+            "PUT", f"CreditNotes/{_quote(note_id)}/Allocations", body=payload, headers={"Idempotency-Key": _idem(key)}
+        )
         if not 200 <= reply.status < 300:
             return Sent(False, error=_fault(reply) if reply.status else reply.note, final=reply.status == 400)
         got = self._call("GET", f"CreditNotes/{_quote(note_id)}")
         notes = as_list(got.body.get("CreditNotes")) if got.status == 200 else []
         note = as_map(notes[0]) if notes else None
-        if note is None:                  # the allocation landed; the answer is asked for again, and found by find
+        if note is None:  # the allocation landed; the answer is asked for again, and found by find
             return Sent(False, error="Xero did not answer the lookup")
-        return Sent(True, kind="Payment", external_id=f"CreditNote:{note_id}",
-                    revision=X.stamp(note.get("UpdatedDateUTC")))
+        return Sent(
+            True, kind="Payment", external_id=f"CreditNote:{note_id}", revision=X.stamp(note.get("UpdatedDateUTC"))
+        )
 
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:
         """One write, idempotent by its Idempotency-Key. Only a refusal from Xero itself is final."""
         if op.startswith("item."):
             try:
-                self._ensure()        # a lookup Xero would not answer is not the write's refusal
+                self._ensure()  # a lookup Xero would not answer is not the write's refusal
             except ValueError as e:
                 return Sent(False, error=str(e)[:MAX_TEXT])
         try:
@@ -591,6 +671,7 @@ class Xero:
             return Sent(False, error=reply.note)
         made = as_map((as_list(reply.body.get(WRAPPER[kind])) or [None])[0]) or {}
         if 200 <= reply.status < 300 and made.get(ID_KEY[kind]):
-            return Sent(True, kind=kind, external_id=str(made[ID_KEY[kind]]),
-                        revision=X.stamp(made.get("UpdatedDateUTC")))
-        return Sent(False, error=_fault(reply), final=reply.status == 400)     # a validation refusal says the same again
+            return Sent(
+                True, kind=kind, external_id=str(made[ID_KEY[kind]]), revision=X.stamp(made.get("UpdatedDateUTC"))
+            )
+        return Sent(False, error=_fault(reply), final=reply.status == 400)  # a validation refusal says the same again

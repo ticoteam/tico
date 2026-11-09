@@ -8,6 +8,7 @@ Where the cash leaves, as for a payment marked paid (spec §4.3):
   instead; it is then the row that posts Dr 1100.
 - An account with no connection: no bank row will ever show the payment, so the credit goes to payments clearing
   (1050) and the bank's own line is not touched."""
+
 from typing import Any
 
 from . import handlers, posting
@@ -24,7 +25,7 @@ from .store import banking as SK
 from .store import ledger as SL
 
 KIND = "gateway_topup"
-PREFIX = "gateway_topup"        # a top-up's entry is sourced "bank" with source id PREFIX:<action id>
+PREFIX = "gateway_topup"  # a top-up's entry is sourced "bank" with source id PREFIX:<action id>
 MEMO_MOST = 140
 
 
@@ -35,6 +36,7 @@ def topup_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     from .banking import feed_line, mark_posted, open_day, post_row, unpost_row
     from .documents import CLEARING, clearing
     from .tab import sees_money_account
+
     if ctx.book.mode == "mirror":
         raise FinanceError(NOT_AVAILABLE, "a Gateway top-up is not available while the books are a provider's")
     V.only(p, ("money_account_id", "amount", "date", "memo", "feed_id"))
@@ -50,8 +52,9 @@ def topup_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("that bank account has no active line in the books")
     gateway = next((a for a in ctx.accounts.values() if a.code == usage.CREDIT), None)
     if gateway is None or not gateway.active:
-        raise FinanceError(NOT_FOUND,
-                           f"the Gateway credit account ({usage.CREDIT}) is not in the books or is not active")
+        raise FinanceError(
+            NOT_FOUND, f"the Gateway credit account ({usage.CREDIT}) is not in the books or is not active"
+        )
     amount = V.amount(p)
     if amount <= 0:
         raise invalid("amount is more than zero (minor units)")
@@ -62,11 +65,13 @@ def topup_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if feed_id:
         row = _feed_row(ctx, who, money, feed_id, amount)
     elif connected and _unposted_row(ctx, money, amount, when) is not None:
-        raise FinanceError(CONFLICT, "a bank row of this amount is already in the feed and may be this payment; "
-                                     "name it with feed_id")
+        raise FinanceError(
+            CONFLICT, "a bank row of this amount is already in the feed and may be this payment; name it with feed_id"
+        )
     day = open_day(ctx, when) if row is None else str(row["txn_date"])
-    memo = (V.opt_text(p, "memo", MEMO_MOST) or f"Gateway credit top-up from {money['name']}") + \
-        ("" if day == when or row is not None else f" (dated {when})")
+    memo = (V.opt_text(p, "memo", MEMO_MOST) or f"Gateway credit top-up from {money['name']}") + (
+        "" if day == when or row is not None else f" (dated {when})"
+    )
     for account_id in (bank.id, gateway.id):
         if not handlers.may_write(ctx, who, account_id, {}):
             raise denied("those lines are outside your view")
@@ -77,32 +82,61 @@ def topup_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if row is not None:
             if row["entry_id"]:
                 unpost_row(ctx, row, "re-categorized")
-            t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
-                          txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
-                          counterparty=str(row["counterparty"]), description=str(row["description"]),
-                          card_id=str(row["card_id"] or ""))
+            t = F.FeedTxn(
+                provider_id=str(row["provider_id"]),
+                account_id="",
+                amount=int(row["amount"]),
+                txn_date=str(row["txn_date"]),
+                status=F.POSTED,
+                kind=str(row["kind"]),
+                counterparty=str(row["counterparty"]),
+                description=str(row["description"]),
+                card_id=str(row["card_id"] or ""),
+            )
             entry = post_row(ctx, str(row["id"]), t, [feed_line(gateway.id, amount)], bank.id, [])
             mark_posted(ctx, [str(row["id"])], entry)
-            return {"entry_id": entry, "money_account_id": str(money["id"]), "amount": amount,
-                    "date": str(row["txn_date"]), "feed_id": str(row["id"])}
+            return {
+                "entry_id": entry,
+                "money_account_id": str(money["id"]),
+                "amount": amount,
+                "date": str(row["txn_date"]),
+                "feed_id": str(row["id"]),
+            }
         line = bank if connected else clearing(ctx, who)
-        e = L.Entry(book_id=ctx.book.id, entry_date=day, memo=memo[:200], source="bank",
-                    source_id=f"{PREFIX}:{aid}",
-                    lines=(L.Line(account_id=gateway.id, amount=amount, currency=base, original_amount=amount),
-                           L.Line(account_id=line.id, amount=-amount, currency=base, original_amount=-amount)))
+        e = L.Entry(
+            book_id=ctx.book.id,
+            entry_date=day,
+            memo=memo[:200],
+            source="bank",
+            source_id=f"{PREFIX}:{aid}",
+            lines=(
+                L.Line(account_id=gateway.id, amount=amount, currency=base, original_amount=amount),
+                L.Line(account_id=line.id, amount=-amount, currency=base, original_amount=-amount),
+            ),
+        )
         entry_id, _ = posting.post(ctx, e, by=who, action_id=aid)
-        return {"entry_id": entry_id, "money_account_id": str(money["id"]), "amount": amount, "date": day,
-                "feed_id": None}
-    return Plan(K.default_gate(ctx.org, who, KIND),
-                f"Top up Gateway credit with {amount / 100:.2f} {base} from {money['name']} on {day}"[:200], apply,
-                resolved={"date": when},
-                facts={"amount": amount, "accounts": sorted({gateway.code, credit_code})})
+        return {
+            "entry_id": entry_id,
+            "money_account_id": str(money["id"]),
+            "amount": amount,
+            "date": day,
+            "feed_id": None,
+        }
+
+    return Plan(
+        K.default_gate(ctx.org, who, KIND),
+        f"Top up Gateway credit with {amount / 100:.2f} {base} from {money['name']} on {day}"[:200],
+        apply,
+        resolved={"date": when},
+        facts={"amount": amount, "accounts": sorted({gateway.code, credit_code})},
+    )
 
 
 def _feed_row(ctx: Ctx, who: str, money: Any, feed_id: str, amount: int) -> Any:
     """The bank row a top-up names: money out of this account, of this amount, not pending, ignored, reconciled, a
     payment or card charge, one side of a transfer, already paying a document or already a top-up's bank side."""
     from .banking import seen
+
     row = SK.get(ctx.c, "fin_feed_txns", feed_id)
     if row is None or not seen(ctx, who, row):
         raise FinanceError(NOT_FOUND, "no such feed row in your view")
@@ -128,6 +162,7 @@ def _feed_row(ctx: Ctx, who: str, money: Any, feed_id: str, amount: int) -> Any:
 def _unposted_row(ctx: Ctx, money: Any, amount: int, day: str) -> Any:
     """A settled row of this amount on this account, within the match window of `day`, that no entry has taken yet."""
     from .documents import match_window
+
     start, end = match_window(day)
     for r in SK.transfer_candidates(ctx.c, [str(money["id"])], -amount, start, end):
         if r["entry_id"] is None and str(r["status"]) == "new" and not r["request_id"] and not r["card_id"]:
@@ -145,6 +180,7 @@ def waiting_for(ctx: Ctx, money: Any, t: F.FeedTxn) -> list[str]:
     day, that no bank row has taken yet: the row is their bank side. banking._settle links the row when there is
     exactly one."""
     from .documents import match_window
+
     bank = str(money["account_id"])
     start, end = match_window(t.txn_date)
     found: list[str] = []

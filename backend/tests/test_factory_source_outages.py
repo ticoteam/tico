@@ -1,4 +1,5 @@
 """Small factory boundary scenarios also run in hosted PR checks; the full factory explores more seeds."""
+
 import pytest
 
 from evals.factory.cases.source_outages import SCENARIOS

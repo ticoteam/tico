@@ -1,4 +1,4 @@
-// Strategy › Budget (ui/app/strategy-budget.js) against a fake hub: the org chart as one tree of budgets. A small team
+// Strategy › Budget (ui/app/strategy-budget.ts) against a fake hub: the org chart as one tree of budgets. A small team
 // (fixtures/redesign-org.json with redesign-usage-limits.json and redesign-task-caps.json, the Acme example): each row's
 // spend over the period picked (30 days unless changed, kept for the next visit), rows under their parent by it, the
 // window that binds, Paused and a caps chip; a group's pool against what is under it; where a row's spend went; search
@@ -117,7 +117,7 @@ async function open(browser, {team = small(), viewport = DESKTOP, viewer = 'ana'
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push([method, p + url.search, body]);

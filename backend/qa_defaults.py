@@ -1,9 +1,18 @@
 """Creation-time QA classification. Explicit authorship always wins over path rules."""
+
 from pathlib import PurePosixPath
 
 RENDERED = ("ui/", "desktop/", "app/")
-BEHAVIOUR = ("backend/chat", "backend/conversation", "backend/message", "backend/bot_to_bot",
-             "backend/wake", "backend/execution", "backend/turn", "backend/runner")
+BEHAVIOUR = (
+    "backend/chat",
+    "backend/conversation",
+    "backend/message",
+    "backend/bot_to_bot",
+    "backend/wake",
+    "backend/execution",
+    "backend/turn",
+    "backend/runner",
+)
 NOTE = "QA: not checkable live (rendered UI); check the rendered result on the release candidate."
 
 
@@ -13,9 +22,11 @@ def classify(paths, *, qa=None, not_checkable_live=False):
         path = str(PurePosixPath(value.replace("\\", "/"))).removeprefix("./").lower()
         parts = PurePosixPath(path).parts
         # Tests or documentation nested under a visible component remain non-QA.
-        if (any(p in ("test", "tests", "__tests__", "docs") for p in parts)
-                or path.startswith((".github/", "ci/", "scripts/"))
-                or path.endswith((".md", ".rst", ".txt"))):
+        if (
+            any(p in ("test", "tests", "__tests__", "docs") for p in parts)
+            or path.startswith((".github/", "ci/", "scripts/"))
+            or path.endswith((".md", ".rst", ".txt"))
+        ):
             continue
         if path.startswith(RENDERED):
             visible, rendered = True, True
@@ -27,9 +38,17 @@ def classify(paths, *, qa=None, not_checkable_live=False):
 
 def create(c, task_id, paths, qa, not_checkable_live=False, explicit_qa=False):
     from .repositories import save_metadata
-    save_metadata(c, "qa-default:" + task_id, {"author": qa if qa is not None else True if explicit_qa else None,
-                                               "paths": paths or [], "prs": [],
-                                               "not_checkable_live": not_checkable_live})
+
+    save_metadata(
+        c,
+        "qa-default:" + task_id,
+        {
+            "author": qa if qa is not None else True if explicit_qa else None,
+            "paths": paths or [],
+            "prs": [],
+            "not_checkable_live": not_checkable_live,
+        },
+    )
 
 
 def pr_created(c, pr, paths):
@@ -41,6 +60,7 @@ def pr_created(c, pr, paths):
     from . import hubdb as H
     from .github import _links_for
     from .repositories import metadata, save_metadata
+
     for link in _links_for(c, pr["html_url"]):
         task = H.task(c, link["task_id"])
         if not task:
@@ -60,8 +80,11 @@ def pr_created(c, pr, paths):
         elif pr_labels & {"no qa", "no-qa", "qa:no"}:
             author = False
         # A qa tag already supplied by a person is never removed by a default.
-        result = classify(paths, qa=author if author is not None else True if "qa" in labels else None,
-                          not_checkable_live=state.get("not_checkable_live", False))
+        result = classify(
+            paths,
+            qa=author if author is not None else True if "qa" in labels else None,
+            not_checkable_live=state.get("not_checkable_live", False),
+        )
         wanted = [k for k in labels if k != "qa"] + (["qa"] if result["qa"] else [])
         if set(wanted) != set(labels):
             H._set_task_tags(c, H.KEEPER, task["id"], wanted, "QA default at PR creation")

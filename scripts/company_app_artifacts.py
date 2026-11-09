@@ -4,6 +4,7 @@ Streaming AES-GCM uses the existing private updater signing secret with a separa
 key derivation domain. Authentication binds each archive to its company, tag and run.
 Plaintext stays on ephemeral build/publisher disks and in the company's bucket.
 """
+
 import hmac
 import os
 import re
@@ -15,7 +16,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 MAGIC = b"TICOAPP1"
-LIMIT = 2 * 1024 ** 3
+LIMIT = 2 * 1024**3
 NAME = re.compile(r"[\w][\w. +()-]{0,200}")
 
 
@@ -37,9 +38,13 @@ def pack(company, target):
         from app_release import classify
     files = classify(f"app/target/{target}/release/bundle")["files"]
     names = [p.name for p in files]
-    if (not files or len(files) > 32 or len(set(names)) != len(names)
-            or any(not NAME.fullmatch(name) for name in names)
-            or sum(p.stat().st_size for p in files) > LIMIT):
+    if (
+        not files
+        or len(files) > 32
+        or len(set(names)) != len(names)
+        or any(not NAME.fullmatch(name) for name in names)
+        or sum(p.stat().st_size for p in files) > LIMIT
+    ):
         raise ValueError("Invalid company bundles")
     key, aad = context(company)
     nonce = os.urandom(12)
@@ -48,10 +53,12 @@ def pack(company, target):
     Path("out").mkdir(exist_ok=True)
     with Path("out/bundles.enc").open("wb") as output:
         output.write(MAGIC + nonce)
+
         class Writer:
             def write(self, data):
                 output.write(encryptor.update(data))
                 return len(data)
+
         with tarfile.open(fileobj=Writer(), mode="w|") as archive:
             for path in files:
                 archive.add(path, arcname=path.name, recursive=False)
@@ -96,8 +103,13 @@ def unpack(company):
                 with tarfile.open(fileobj=plain, mode="r|") as archive:
                     for member in archive:
                         total += member.size
-                        if (not member.isfile() or not NAME.fullmatch(member.name)
-                                or member.name in names or len(names) >= 32 or total > LIMIT):
+                        if (
+                            not member.isfile()
+                            or not NAME.fullmatch(member.name)
+                            or member.name in names
+                            or len(names) >= 32
+                            or total > LIMIT
+                        ):
                             raise ValueError("Invalid company archive member")
                         names.add(member.name)
                         with archive.extractfile(member) as data, (destination / member.name).open("xb") as output:

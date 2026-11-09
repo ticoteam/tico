@@ -10,13 +10,22 @@ from backend.tests.demo_template import copy_demo
 def test_copies_keep_wal_rows_and_private_files(tmp_path):
     root = tmp_path / "template"
     root.mkdir()
-    settings = Settings(db_path=root / "hub.sqlite", registry_dir=root / "registry", blob_dir=root / "blobs",
-                        local_owner_token_file=root / "local-owner.token",
-                        company_integrations_dir=root / "registry" / "integrations")
+    settings = Settings(
+        db_path=root / "hub.sqlite",
+        registry_dir=root / "registry",
+        blob_dir=root / "blobs",
+        local_owner_token_file=root / "local-owner.token",
+        company_integrations_dir=root / "registry" / "integrations",
+    )
     settings.company_integrations_dir.mkdir(parents=True)
     settings.blob_dir.mkdir()
-    files = [settings.registry_dir / "people.yaml", settings.blob_dir / "attachment",
-             settings.local_owner_token_file, settings.company_integrations_dir / "query.sql", root / ".tico-demo"]
+    files = [
+        settings.registry_dir / "people.yaml",
+        settings.blob_dir / "attachment",
+        settings.local_owner_token_file,
+        settings.company_integrations_dir / "query.sql",
+        root / ".tico-demo",
+    ]
     for path in files:
         path.write_text("original")
     with closing(sqlite3.connect(settings.db_path)) as source:

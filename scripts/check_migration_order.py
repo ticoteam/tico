@@ -3,6 +3,7 @@
 
 Fetch the base branch tip with full history before running this check; --head is the PR head, not its merge commit.
 """
+
 import argparse
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -56,8 +57,9 @@ def check(base, head="HEAD", base_name="main", root=ROOT):
 
     ancestor = git("merge-base", base, head).strip()
     # Disable rename detection: a new numbered path still needs checking when its contents match an old file.
-    added = git("diff", "--name-only", "--diff-filter=A", "--no-renames", "-z", ancestor, head,
-                "--", DIRECTORY).split("\0")
+    added = git("diff", "--name-only", "--diff-filter=A", "--no-renames", "-z", ancestor, head, "--", DIRECTORY).split(
+        "\0"
+    )
     head_files = git("ls-tree", "-r", "--name-only", "-z", head, "--", DIRECTORY).split("\0")
     base_files = git("ls-tree", "-r", "--name-only", "-z", base, "--", DIRECTORY).split("\0")
     return errors(added, head_files, base_files, base_name)

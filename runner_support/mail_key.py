@@ -8,6 +8,7 @@ bot's turn asks the supervisor, over the credential socket, for a short-lived to
 (runner_support/credential_socket.py). Without the layout (a Mac, or Docker started the old way) the key
 stays where it was and bots can read it: `exposed` says so, and Settings > Health shows a warning.
 """
+
 import json
 import os
 import stat
@@ -19,7 +20,7 @@ from . import isolation
 from .outage import log
 
 FILE = "google-sa.json"
-GRANTS = "google-oauth.json"        # people's own connected Google accounts (connectors/mail/oauth.py)
+GRANTS = "google-oauth.json"  # people's own connected Google accounts (connectors/mail/oauth.py)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -55,7 +56,11 @@ def _carry_one(config, config_path, name, marker_name):
             return False
         if not config.get("operator") or any(previous.get(k) != config.get(k) for k in ("operator", "url")):
             return False
-        if previous.get("environment") and config.get("environment") and previous["environment"] != config["environment"]:
+        if (
+            previous.get("environment")
+            and config.get("environment")
+            and previous["environment"] != config["environment"]
+        ):
             return False
         old_id = str(previous.get("runner_id") or "")
         new_id = str(config.get("runner_id") or "")
@@ -67,7 +72,12 @@ def _carry_one(config, config_path, name, marker_name):
 
         def safe_directory(directory):
             info = directory.lstat()
-            if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_dev != parent.st_dev or info.st_mode & 0o066:
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != uid
+                or info.st_dev != parent.st_dev
+                or info.st_mode & 0o066
+            ):
                 return False
             return True
 
@@ -94,7 +104,12 @@ def _carry_one(config, config_path, name, marker_name):
             return False
         with os.fdopen(descriptor, "rb") as handle:
             info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_dev != parent.st_dev or info.st_mode & 0o077:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != uid
+                or info.st_dev != parent.st_dev
+                or info.st_mode & 0o077
+            ):
                 return False
             descriptor, temporary = tempfile.mkstemp(prefix="." + name + "-", dir=new)
             with os.fdopen(descriptor, "wb") as output:
@@ -103,7 +118,7 @@ def _carry_one(config, config_path, name, marker_name):
                 output.flush()
                 os.fsync(output.fileno())
             try:
-                os.link(temporary, new / name)     # publish a complete file without replacing an existing key
+                os.link(temporary, new / name)  # publish a complete file without replacing an existing key
             except FileExistsError:
                 carried()
                 return False
@@ -115,8 +130,10 @@ def _carry_one(config, config_path, name, marker_name):
         return False
     except (OSError, ValueError, TypeError) as exc:
         if stale.exists():
-            log(f"Tico runner: could not carry the protected {name} to this registration ({type(exc).__name__}); "
-                "check free space and permissions on the runner volume; the old key is unchanged")
+            log(
+                f"Tico runner: could not carry the protected {name} to this registration ({type(exc).__name__}); "
+                "check free space and permissions on the runner volume; the old key is unchanged"
+            )
         return False
     finally:
         if temporary is not None:
@@ -156,7 +173,7 @@ def protect(config):
                 handle.write(data)
             os.replace(temporary, new)
             old.unlink()
-        except (OSError, ValueError) as exc:     # ValueError: a workspace grants file that is not JSON; both stay
+        except (OSError, ValueError) as exc:  # ValueError: a workspace grants file that is not JSON; both stay
             log(f"Tico runner: could not move {name} out of the bots' reach ({type(exc).__name__})")
             continue
         log(f"Tico runner: moved {name} out of workspace/secrets to {new}; bots ask the runner for mail access")
@@ -167,6 +184,7 @@ def protect(config):
 def _merged_grants(protected, incoming):
     """The protected grants with the workspace's merged in, so a move never drops a grant already protected."""
     from connectors.mail.oauth import merge_into
+
     try:
         kept = json.loads(protected.read_text())
     except ValueError:
@@ -184,6 +202,7 @@ def status(config):
             return "exposed"
         return "protected" if any(protected_path(config).with_name(n).is_file() for n in (FILE, GRANTS)) else None
     from .connectors import mail_credential_present
+
     return "exposed" if mail_credential_present(config) else None
 
 
@@ -195,22 +214,32 @@ def held_by_computer(config):
     if not isolation.enabled() or os.environ.get("TICO_SIDE_JOBS") != "1":
         return False
     from .connectors import mail_credential_present
+
     return mail_credential_present(config)
 
 
 def minter(config, script=None):
     """(service, mailbox) -> {"token", "expiry"}: the mail CLI, run here with the key, prints one token."""
     from .connectors import mail_cli_env, mail_umask
+
     script = script or ROOT / "scripts" / "mail.sh"
     key = protected_path(config)
 
     def mint(service, mailbox):
         env = mail_cli_env(config, key)
         env["GOOGLE_SA_KEY"] = str(key)
-        result = subprocess.run([str(script), "mint-token", "--mailbox", mailbox, "--service", service],
-                                cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                timeout=60, env=env, **mail_umask())
+        result = subprocess.run(
+            [str(script), "mint-token", "--mailbox", mailbox, "--service", service],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            **mail_umask(),
+        )
         if result.returncode:
             raise RuntimeError("mint-token failed")
         return json.loads(result.stdout)
+
     return mint

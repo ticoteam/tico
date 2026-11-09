@@ -23,7 +23,11 @@ pub struct AppDriver;
 
 /// The command a host holds: the driver, the app, and the bot in it as JSON.
 pub fn command(driver: &std::path::Path, delivery: &Delivery) -> Vec<String> {
-    vec![driver.display().to_string(), delivery.app.clone(), delivery.bot.to_string()]
+    vec![
+        driver.display().to_string(),
+        delivery.app.clone(),
+        delivery.bot.to_string(),
+    ]
 }
 
 fn app(cmd: &[String]) -> &str {
@@ -31,7 +35,9 @@ fn app(cmd: &[String]) -> &str {
 }
 
 fn bot(cmd: &[String]) -> Value {
-    cmd.get(2).and_then(|b| serde_json::from_str(b).ok()).unwrap_or(Value::Null)
+    cmd.get(2)
+        .and_then(|b| serde_json::from_str(b).ok())
+        .unwrap_or(Value::Null)
 }
 
 impl Wire for AppDriver {
@@ -65,7 +71,10 @@ impl Wire for AppDriver {
     }
 
     fn timed_out(turn: &mut Turn) {
-        Self::on_event(&json!({"type": "error", "code": "timeout", "detail": ""}), turn);
+        Self::on_event(
+            &json!({"type": "error", "code": "timeout", "detail": ""}),
+            turn,
+        );
     }
 
     fn on_event(msg: &Value, turn: &mut Turn) {
@@ -89,7 +98,12 @@ impl Wire for AppDriver {
                     turn.reply = text_of(&msg["text"]);
                 } else {
                     let name = text_of(&bot(&turn.cmd)["name"]);
-                    turn.error = appdriver::failure_line(app(&turn.cmd), &code, &text_of(&msg["detail"]), &name);
+                    turn.error = appdriver::failure_line(
+                        app(&turn.cmd),
+                        &code,
+                        &text_of(&msg["detail"]),
+                        &name,
+                    );
                 }
             }
             _ => {}
@@ -148,32 +162,61 @@ mod tests {
     }
 
     /// A driver that saves its request, prints `lines` and exits `rc` (or, with `hang`, waits to be killed).
-    fn driver(dir: &std::path::Path, name: &str, lines: &[Value], rc: i32, hang: bool) -> std::path::PathBuf {
+    fn driver(
+        dir: &std::path::Path,
+        name: &str,
+        lines: &[Value],
+        rc: i32,
+        hang: bool,
+    ) -> std::path::PathBuf {
         let path = dir.join(name);
         let out: String = lines.iter().map(|l| format!("echo '{l}'\n")).collect();
-        let tail = if hang { format!("echo $$ > '{}'\nexec sleep 30\n", dir.join(format!("{name}.pid")).display()) } else { format!("exit {rc}\n") };
-        crate::util::write_script(&path, &format!("#!/bin/sh\ncat > '{}'\n{out}{tail}", dir.join(format!("{name}.request")).display()));
+        let tail = if hang {
+            format!(
+                "echo $$ > '{}'\nexec sleep 30\n",
+                dir.join(format!("{name}.pid")).display()
+            )
+        } else {
+            format!("exit {rc}\n")
+        };
+        crate::util::write_script(
+            &path,
+            &format!(
+                "#!/bin/sh\ncat > '{}'\n{out}{tail}",
+                dir.join(format!("{name}.request")).display()
+            ),
+        );
         path
     }
 
     fn host(slug: &str, driver: &std::path::Path, tx: super::super::Events) -> AppDriverHost {
-        let delivery = Delivery { app: "grok".into(), bot: json!({"id": "b-1", "name": "Acme Helper"}) };
+        let delivery = Delivery {
+            app: "grok".into(),
+            bot: json!({"id": "b-1", "name": "Acme Helper"}),
+        };
         let h = AppDriverHost::new(slug, command(driver, &delivery), tx);
         h.start();
         h
     }
 
     fn settings(dir: &std::path::Path) -> Settings {
-        Settings { cwd: dir.display().to_string(), ..Default::default() }
+        Settings {
+            cwd: dir.display().to_string(),
+            ..Default::default()
+        }
     }
 
     fn strip(events: Vec<Value>) -> Vec<Value> {
-        events.into_iter().filter(|e| e["kind"] != "status").collect()
+        events
+            .into_iter()
+            .filter(|e| e["kind"] != "status")
+            .collect()
     }
 
     #[tokio::test]
     async fn a_send_streams_its_reply_and_every_error_fails_the_turn_in_plain_words() {
-        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let good = [
             json!({"type": "status", "state": "sending"}),
@@ -195,8 +238,13 @@ mod tests {
                 json!({"kind": "turn_completed", "status": "completed"}),
             ]
         );
-        let request: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("good.request")).unwrap()).unwrap();
-        assert_eq!(request, json!({"op": "send", "app": "grok", "bot": {"id": "b-1", "name": "Acme Helper"}, "text": "When is the launch?", "timeout_s": 900}));
+        let request: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("good.request")).unwrap())
+                .unwrap();
+        assert_eq!(
+            request,
+            json!({"op": "send", "app": "grok", "bot": {"id": "b-1", "name": "Acme Helper"}, "text": "When is the launch?", "timeout_s": 900})
+        );
         h.stop().await;
 
         let cases = [
@@ -213,43 +261,82 @@ mod tests {
         ];
         for (code, detail, line) in cases {
             let (tx, mut rx) = mpsc::unbounded_channel();
-            let h = host("helper", &driver(&dir, code, &[json!({"type": "error", "code": code, "detail": detail})], 1, false), tx);
+            let h = host(
+                "helper",
+                &driver(
+                    &dir,
+                    code,
+                    &[json!({"type": "error", "code": code, "detail": detail})],
+                    1,
+                    false,
+                ),
+                tx,
+            );
             let thread = h.start_thread(&settings(&dir));
             h.start_turn(&thread, "hi", None).unwrap();
-            assert_eq!(strip(turn_events(&mut rx).await), [json!({"kind": "turn_failed", "error": line, "limit": false})], "{code}");
+            assert_eq!(
+                strip(turn_events(&mut rx).await),
+                [json!({"kind": "turn_failed", "error": line, "limit": false})],
+                "{code}"
+            );
             h.stop().await;
         }
         let reports = appdriver::take_reports_for("helper");
         assert_eq!(reports.len(), cases.len(), "every failed send is reported");
-        assert!(reports.iter().any(|body| body["error"]["code"] == "ui_changed" && body["error"]["detail"] == "no send button"));
+        assert!(reports
+            .iter()
+            .any(|body| body["error"]["code"] == "ui_changed"
+                && body["error"]["detail"] == "no send button"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn needs_human_is_the_bots_reply_and_asks_the_server_for_its_person() {
-        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let ask = "Which account should I bill?";
-        let lines = [json!({"type": "error", "code": "needs_human", "detail": "the bot asked a question", "text": ask})];
+        let lines = [
+            json!({"type": "error", "code": "needs_human", "detail": "the bot asked a question", "text": ask}),
+        ];
         let (tx, mut rx) = mpsc::unbounded_channel();
         let h = host("asker", &driver(&dir, "ask", &lines, 1, false), tx);
         let thread = h.start_thread(&settings(&dir));
         h.start_turn(&thread, "Send the invoice", None).unwrap();
         assert_eq!(
             strip(turn_events(&mut rx).await),
-            [json!({"kind": "message", "text": ask, "final": true}), json!({"kind": "turn_completed", "status": "completed"})]
+            [
+                json!({"kind": "message", "text": ask, "final": true}),
+                json!({"kind": "turn_completed", "status": "completed"})
+            ]
         );
-        assert_eq!(appdriver::take_reports_for("asker"), [json!({"app": "grok", "messages": [], "error": {"code": "needs_human", "detail": "the bot asked a question", "text": ask}})]);
+        assert_eq!(
+            appdriver::take_reports_for("asker"),
+            [
+                json!({"app": "grok", "messages": [], "error": {"code": "needs_human", "detail": "the bot asked a question", "text": ask}})
+            ]
+        );
         h.stop().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn an_interrupt_kills_the_driver() {
-        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let h = host("slow", &driver(&dir, "slow", &[json!({"type": "status", "state": "waiting"})], 0, true), tx);
+        let h = host(
+            "slow",
+            &driver(
+                &dir,
+                "slow",
+                &[json!({"type": "status", "state": "waiting"})],
+                0,
+                true,
+            ),
+            tx,
+        );
         let thread = h.start_thread(&settings(&dir));
         let turn = h.start_turn(&thread, "hi", None).unwrap();
         let pid_file = dir.join("slow.pid");
@@ -258,23 +345,40 @@ mod tests {
             tokio::task::yield_now().await;
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         h.interrupt(&turn);
-        assert_eq!(strip(turn_events(&mut rx).await), [json!({"kind": "turn_completed", "status": "interrupted"})]);
+        assert_eq!(
+            strip(turn_events(&mut rx).await),
+            [json!({"kind": "turn_completed", "status": "interrupted"})]
+        );
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the driver is gone");
         h.stop().await;
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[tokio::test]
     async fn a_driver_that_closes_stdout_and_hangs_is_stopped_at_the_deadline_and_frees_the_app() {
-        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("mute");
         let pid_file = dir.join("mute.pid");
-        crate::util::write_script(&path, &format!("#!/bin/sh\ncat > /dev/null\nexec 1>&-\necho $$ > '{}'\nexec sleep 30\n", pid_file.display()));
+        crate::util::write_script(
+            &path,
+            &format!(
+                "#!/bin/sh\ncat > /dev/null\nexec 1>&-\necho $$ > '{}'\nexec sleep 30\n",
+                pid_file.display()
+            ),
+        );
         DEADLINE.with(|d| d.set(Some(Duration::from_secs(2))));
         // An app of its own, so the other tests here don't share its gate.
-        let delivery = Delivery { app: "mute-chat".into(), bot: json!({"id": "b-9", "name": "Quiet"}) };
+        let delivery = Delivery {
+            app: "mute-chat".into(),
+            bot: json!({"id": "b-9", "name": "Quiet"}),
+        };
         let (tx, mut rx) = mpsc::unbounded_channel();
         let h = AppDriverHost::new("mute", command(&path, &delivery), tx);
         h.start();
@@ -283,14 +387,30 @@ mod tests {
         h.start_turn(&thread, "hi", None).unwrap();
         assert_eq!(
             strip(turn_events(&mut rx).await),
-            [json!({"kind": "diagnostic", "end_reason": "Timeout: tico-appdriver harness execution limit (2 seconds)"}),
-             json!({"kind": "turn_failed", "error": "Mute-chat on this Mac didn't finish its reply in time", "exit_code": -15, "process_exit": true, "limit": false})]
+            [
+                json!({"kind": "diagnostic", "end_reason": "Timeout: tico-appdriver harness execution limit (2 seconds)"}),
+                json!({"kind": "turn_failed", "error": "Mute-chat on this Mac didn't finish its reply in time", "exit_code": -15, "process_exit": true, "limit": false})
+            ]
         );
-        assert!(started.elapsed() < Duration::from_secs(8), "stopped at the deadline, not the driver's 30 s");
-        let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "stopped at the deadline, not the driver's 30 s"
+        );
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the driver is reaped");
-        assert!(appdriver::gate("mute-chat").try_lock_owned().is_ok(), "the app's gate is free again");
-        assert_eq!(appdriver::take_reports_for("mute").len(), 1, "the timeout is reported");
+        assert!(
+            appdriver::gate("mute-chat").try_lock_owned().is_ok(),
+            "the app's gate is free again"
+        );
+        assert_eq!(
+            appdriver::take_reports_for("mute").len(),
+            1,
+            "the timeout is reported"
+        );
         DEADLINE.with(|d| d.set(None));
         h.stop().await;
         std::fs::remove_dir_all(dir).unwrap();

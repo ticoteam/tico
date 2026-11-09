@@ -12,7 +12,7 @@ const {unrouted} = require('./support/routes.cjs');
 // Each of these lit the dot or filled the menu before Amendment v3. None may do so now.
 const NOISE_HEALTH = {audience: 'owner', stuck: [], attention: 3, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures: [], checks: [
   {id: 'version', label: 'Version', status: 'warn', summary: 'Tico 0.3.80 is available. You are on 0.3.79.', fixes: [{label: 'Update', href: '', tab: '', click: '#new-version'}]},
-  {id: 'models', label: 'Models', status: 'bad', summary: "Builder's Claude login was rejected. Sign in again.", fixes: [{label: 'Open Credentials', href: '#/credentials'}]},
+  {id: 'models', label: 'Models', status: 'bad', summary: "Builder's Claude login was rejected. Sign in again.", fixes: [{label: 'Open Keys', href: '#/tools/keys?show=credentials'}]},
   {id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []}]};
 const NOISE_ISSUES = [
   // A Tico update on a computer: its Restart lives in Settings > Health, never in the menu.
@@ -41,7 +41,7 @@ const NOISE_ISSUES = [
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
-          : name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/me') return json({id: 'chris', email: 'chris@tico.team', role: 'owner', cloud: true, config});
       if (p === '/api/v2/config') return json(config);

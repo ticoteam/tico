@@ -1,5 +1,6 @@
 """Follow-up times on tasks: who may set one, what a change records, and that finished or deferred work gets none. A queued
 check-back wake from before its removal is obsolete when its bot claims it."""
+
 import pytest
 
 from backend import task_check_backs as CB
@@ -56,7 +57,9 @@ def test_human_snooze_wins_over_a_bot_follow_up_set_inside_it(api):
 def test_a_queued_check_back_wake_is_obsolete_whatever_its_task_says_next(api):
     with api.app.state.store.transaction() as c:
         row = task(c)
-        wake = H._wake(c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back")
+        wake = H._wake(
+            c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back"
+        )
         message = H.message(c, wake["id"])
         job = c.execute("SELECT * FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()
         assert CB.stale(c, message, job)
@@ -68,6 +71,7 @@ def test_a_queued_check_back_wake_is_obsolete_whatever_its_task_says_next(api):
 
 def test_an_unstarted_check_back_wake_is_obsolete_at_claim(api):
     from backend.tests.test_api import assign, claim, ready, runner
+
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
@@ -76,7 +80,9 @@ def test_an_unstarted_check_back_wake_is_obsolete_at_claim(api):
         # Under way, not open: an open task of an active bot is an assigned start the claim would hand out instead.
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row["id"],))
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
-        wake = H._wake(c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back")
+        wake = H._wake(
+            c, row, "bot:ops", "Check on it.", {"wake": "check_back", "task": row["id"]}, trigger="check_back"
+        )
     assert claim(api, r, "ops") is None, "a legacy check-back nobody has started is obsolete, whatever its task says"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()[0] == "canceled"
@@ -124,6 +130,7 @@ def test_result_consumer_must_record_disposition_instead_of_reparking(api):
 
 def test_deferred_assignment_fires_at_its_deadline_and_sets_no_follow_up_of_its_own(api):
     from backend import delivery
+
     with api.app.state.store.transaction() as c:
         row = task(c, next_run=True)
         deadline = delivery.defer(c, "ops", "task", row["id"], task_id=row["id"], defer_for="24h")
@@ -135,7 +142,9 @@ def test_generic_update_persists_date_only_and_note_only_edits(api):
     row = post(api, "tasks", {"owner": "ops", "title": "Inspect the update", "body": "x"})
     updated = post(api, f"tasks/{row['id']}", {"version": row["version"], "check_back_at": "2h"})
     assert updated["check_back_at"] > H.now()
-    note = post(api, f"tasks/{row['id']}", {"version": updated["version"], "check_back_note": "Verify the real assignment."})
+    note = post(
+        api, f"tasks/{row['id']}", {"version": updated["version"], "check_back_note": "Verify the real assignment."}
+    )
     assert note["check_back_note"] == "Verify the real assignment."
     assert note["check_back_at"] == updated["check_back_at"]
 
@@ -152,6 +161,7 @@ def test_results_returned_get_no_follow_up(api):
 
 def test_deferred_delivery_is_due_at_its_deadline_and_stays_unsettled(api):
     from backend import delivery
+
     with api.app.state.store.transaction() as c:
         row = task(c, next_run=True)
         deadline = delivery.defer(c, "ops", "task", row["id"], task_id=row["id"], defer_for="24h")
