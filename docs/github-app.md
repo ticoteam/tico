@@ -527,7 +527,8 @@ Checks left pending are read afresh from GitHub: by the background pass once a l
 GitHub's current check runs, statuses and suites. A suite that has had no check run for 10 minutes never started (an
 installed App's suite, such as a deploy or monitoring service with nothing to run on that push). That suite is not
 pending, so it never holds a green head. Checks that leave pending this way finish the head as a webhook's last
-check would: the ticket moves on, or the Builder is woken to merge, at most once per head.
+check would: the ticket moves on, or the merge is next (Tico merges a bot's ticket itself, docs/releasing.md#tico-merges;
+otherwise the Builder is woken to merge), at most once per head.
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
 Wake rules for `pr_checks_done` and `pr_review` (in the **What wakes** automations on the Automations page) change what these do.
 

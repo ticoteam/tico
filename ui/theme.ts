@@ -18,8 +18,13 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
       if (title) title.textContent = 'Tico couldn’t finish loading';
     }
   };
+  // Only Tico's own files count. A script the network adds (Cloudflare's analytics beacon, which the page's
+  // script-src 'self' blocks) or an extension's script failing says nothing about whether Tico loaded.
+  const own = (url: string): boolean => { try { return new URL(url, location.href).origin === location.origin; } catch { return false; } };
   addEventListener('error', event => {
-    if (event.target instanceof HTMLScriptElement || event.target instanceof HTMLLinkElement && event.target.rel === 'stylesheet'
+    const target = event.target;
+    if (target instanceof HTMLScriptElement && own(target.src)
+        || target instanceof HTMLLinkElement && target.rel === 'stylesheet' && own(target.href)
         || !appLoaded && event instanceof ErrorEvent && /\/tico\/ui\//.test(event.filename)) {
       failed = true; check();
     }
