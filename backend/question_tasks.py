@@ -728,10 +728,11 @@ def take_recommendation(
 
 
 def open_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Open question tasks a bot put to a person, oldest question first."""
+    """Open question tasks a bot put to a person, oldest question first. A question On ice (D69) is left out, as a snoozed
+    one is: a parked card is never late, so no sweep sends it back or closes it on its date."""
     rows: list[dict[str, Any]] = H._rows(
         conn.execute(
-            f"SELECT * FROM {H.TASKS} t WHERE {OPEN_SQL} "
+            f"SELECT * FROM {H.TASKS} t WHERE {OPEN_SQL} AND NOT {H.ON_ICE % 't'} "
             "AND owner_id LIKE 'human:%' AND requester_id LIKE 'bot:%' ORDER BY coalesce(asked_at, created_at)"
         )
     )
