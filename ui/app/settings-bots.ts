@@ -2,22 +2,43 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const settingsBotName = id => botRow(id)?.display_name || botSlug(id);
-const settingsPerson = id => SETTINGS_DATA.people.find(person => person.id === id);
-const settingsPersonName = id => settingsPerson(id)?.name || id || 'Unassigned';
+// A model choice as a bot row stores it (its own model, `fallback`, `task_model`): older rows say runtime and effort.
+interface SettingsBotChoice { harness?: string; runtime?: string; model?: string | null; reasoning_effort?: string | null; effort?: string | null; }
+// A bot's task settings (backend/task_models.py `stored`): a task model, a task effort and a task context length.
+interface SettingsTaskModel extends SettingsBotChoice { compact_at?: number | null; }
+// The three parts a picker value ('harness::model::effort') holds.
+interface SettingsChoice { harness: string; model: string; effort: string; }
+// A Gateway pick (settingsTierParse): its tier id, level, Fast flag and version ('auto' for always the latest).
+interface SettingsTierPick { tier: string; level: string; fast: boolean; version: string; }
+// The three picker kinds a bot has: its own model, its fallback, and the model its tasks run on.
+type SettingsChoiceKind = 'model' | 'fallback' | 'task';
+interface SettingsChoiceKindSpec { name: string; of: (e: SettingsBot) => SettingsBotChoice | null | undefined; none?: boolean | string; }
+// A bot row as the Bots settings read it (GET /api/employees): its model choices, revision and readiness.
+interface SettingsBot extends CloudMachineBot {
+  model?: string; runtime?: string; effort?: string; reasoning_effort?: string; resolved_model?: string; resolved_runtime?: string;
+  fallback?: SettingsBotChoice | null; task_model?: SettingsTaskModel | null; task_model_warning?: string | null;
+  revision?: number; role?: string; description?: string; can_manage?: boolean;
+  readiness?: { gateway?: string | null; problems?: string[] } | null;
+  agent?: (BotAgent & { model?: string; harness?: string }) | null;
+  task_flow?: { going: number; waiting: number } | null; keep_tasks_going?: number | null;
+}
+
+const settingsBotName = (id: unknown) => botRow(id)?.display_name || botSlug(id);
+const settingsPerson = (id: string | null | undefined) => SETTINGS_DATA.people.find(person => person.id === id);
+const settingsPersonName = (id: string | null | undefined) => settingsPerson(id)?.name || id || 'Unassigned';
 let SETTINGS_KEEP_MODEL = '';
-const settingsModel = id => SETTINGS_DATA.models.find(model => model.id === id);
-const settingsHarness = id => (SETTINGS_DATA.harnesses || []).find(row => row.id === id);
-const settingsModelName = id => settingsModel(id)?.label || settingsTierName(id) || id || 'Not set';
-const settingsHarnessName = id => settingsHarness(id)?.label || id || '';
-const settingsEffortName = effort => ({low:'low', medium:'medium', high:'high', xhigh:'xhigh', max:'max', ultra:'ultra'})[effort] || effort || '';
-const settingsChoiceValue = (harness, model, effort) => [harness || '', model || '', effort || ''].join('::');
-function settingsChoiceFromValue(value) {
+const settingsModel = (id: string | null | undefined) => SETTINGS_DATA.models.find(model => model.id === id);
+const settingsHarness = (id: string | null | undefined) => (SETTINGS_DATA.harnesses || []).find(row => row.id === id);
+const settingsModelName = (id: string | null | undefined) => settingsModel(id)?.label || settingsTierName(id) || id || 'Not set';
+const settingsHarnessName = (id: string | null | undefined) => settingsHarness(id)?.label || id || '';
+const settingsEffortName = (effort: string | null | undefined) => ({low:'low', medium:'medium', high:'high', xhigh:'xhigh', max:'max', ultra:'ultra'} as Record<string, string>)[String(effort)] || effort || '';
+const settingsChoiceValue = (harness: string | null | undefined, model: string | null | undefined, effort: string | null | undefined) => [harness || '', model || '', effort || ''].join('::');
+function settingsChoiceFromValue(value: string | null | undefined): SettingsChoice {
   const parts = String(value || '').split('::');
   return {harness: parts[0] || '', model: parts[1] || '', effort: parts[2] || ''};
 }
 // "Claude Opus 5 · high · 1M" (modelChoiceWords and modelContextWords, ui/app/format.ts); the tool that runs it only when it is not the model's own.
-const settingsChoiceLabel = (harness, model, effort) => {
+const settingsChoiceLabel = (harness: string | null | undefined, model: string | null | undefined, effort: string | null | undefined) => {
   if (!model) return 'not set';
   const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
   const words = modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
@@ -27,37 +48,38 @@ const settingsChoiceLabel = (harness, model, effort) => {
 // ----------------------------------------------------------------- Tico AI Gateway picks
 // A Gateway bot's model is a pick, not a name: Level · Fast · Version (GET /v2/models `gateway`, backend/gateway_tiers.py).
 // The stored model is the id they make: tico-{level}[-fast][-{version}], no version meaning always the latest.
-const settingsIsTico = id => /^tico-/.test(id || '');
+const settingsIsTico = (id: string | null | undefined) => /^tico-/.test(id || '');
 const settingsGateway = () => SETTINGS_DATA.gateway?.tiers && Object.keys(SETTINGS_DATA.gateway.tiers).length ? SETTINGS_DATA.gateway : null;
 // {tier, level, fast, version ('auto' when none)} for a tier id, or null for any other id.
-function settingsTierParse(id) {
+function settingsTierParse(id: string | null | undefined): SettingsTierPick | null {
   const gw = settingsGateway(), m = /^(tico-[a-z0-9-]+?)(?:-(\d+\.\d+))?$/.exec(String(id || ''));
-  const tier = m && gw?.tiers[m[1]];
-  return tier ? {tier: m[1], level: tier.level, fast: tier.fast, version: m[2] || 'auto'} : null;
+  if (!m) return null;
+  const tier = gw?.tiers[String(m[1])];
+  return tier ? {tier: String(m[1]), level: tier.level, fast: tier.fast, version: m[2] || 'auto'} : null;
 }
-const settingsTierId = t => `${t.tier}${t.version === 'auto' ? '' : '-' + t.version}`;
-const settingsTierKey = (level, fast) => `tico-${level}${fast ? '-fast' : ''}`;
-function settingsTierName(id) {
+const settingsTierId = (t: SettingsTierPick) => `${t.tier}${t.version === 'auto' ? '' : '-' + t.version}`;
+const settingsTierKey = (level: string, fast: boolean) => `tico-${level}${fast ? '-fast' : ''}`;
+function settingsTierName(id: string | null | undefined) {
   const t = settingsTierParse(id);
-  return t ? `${SETTINGS_DATA.gateway.tiers[t.tier].name}${t.version === 'auto' ? ' (auto)' : ' ' + t.version}` : '';
+  return t ? `${SETTINGS_DATA.gateway?.tiers[t.tier]?.name}${t.version === 'auto' ? ' (auto)' : ' ' + t.version}` : '';
 }
 // "Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M" for a pick, from the catalog's version rows (another id from its model row).
-function settingsTierLine(id) {
-  const t = settingsTierParse(id), tier = t && SETTINGS_DATA.gateway.tiers[t.tier];
-  const now = tier && tier.versions.find(v => v.version === (t.version === 'auto' ? tier.current : t.version));
+function settingsTierLine(id: string) {
+  const t = settingsTierParse(id), tier = t && SETTINGS_DATA.gateway?.tiers[t.tier];
+  const now = tier && tier.versions.find(v => v.version === (t?.version === 'auto' ? tier.current : t?.version));
   if (now) return [now.model, modelContextWords(now.context), `$${now.price.input.toFixed(2)} / $${now.price.output.toFixed(2)} per 1M`]
     .filter(Boolean).join(' · ');
   return settingsModel(id)?.description?.replace(/ underneath$/, '') || '';
 }
 // In the model list a Tico model says what runs underneath it: "Medium 1.0 (Claude Sonnet 5.5 underneath)".
 // The same list says the window the model takes: "grok 4.6 · 500K" (modelContextWords, ui/app/format.ts).
-const settingsModelPickName = id => {
+const settingsModelPickName = (id: string) => {
   const row = settingsModel(id), context = modelContextWords(row?.context_tokens);
   const name = /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
   return context ? `${name} · ${context}` : name;
 };
 // A bot with no model of its own follows the team default; say which one it resolves to.
-function settingsDefaultLabel(e) {
+function settingsDefaultLabel(e: SettingsBot) {
   if (e.model || !e.resolved_model) return 'not set';
   const row = settingsModel(e.resolved_model);
   return `team default (${settingsChoiceLabel(e.resolved_runtime, e.resolved_model, row?.default_effort || '')})`;
@@ -79,7 +101,7 @@ function settingsAllChoices() {
 // Harness the team has no provider for: shown greyed out to whoever can turn it on, never silently
 // missing, so a shipped vendor arrives with its way in (Muse Code stayed invisible while Meta was off).
 // Only admins see them: anyone else gets no way in, just clutter.
-function settingsOffHarnesses(choices) {
+function settingsOffHarnesses(choices: {harness: string | undefined}[]) {
   const enabled = SETTINGS_DATA.enabledProviders || [];
   if (!enabled.length || !settingsIsAdmin()) return [];
   const have = new Set(choices.map(row => row.harness));
@@ -90,14 +112,14 @@ function settingsOffHarnesses(choices) {
 }
 // What the bot's computer cannot run, as the server judges it (backend/readiness.py `can_run`, sent with
 // /v2/operations as `runnable`): {can_run: false, problem, short, computer, sign_in, move}. Not listed: not refused.
-function settingsRuntimeBlock(e, harness) {
+function settingsRuntimeBlock(e: SettingsBot | null | undefined, harness: string | undefined) {
   const answer = e && !e.agent && harness ? SETTINGS_DATA.runnable?.[e.id]?.[harness] : null;
   if (!answer || answer.can_run !== false) return null;
   return {runtime: settingsHarness(harness)?.runtime || harness, short: answer.short || "can't run", reason: answer.problem || "Can't run here",
     computer: answer.computer, move: answer.move,
     signIn: answer.sign_in && (settingsIsAdmin() || settingsMachineOperator(answer.computer?.id) === S.me?.id) ? answer.sign_in : null};
 }
-const settingsMachineOperator = id => (SETTINGS_DATA.machines || []).find(row => row.id === id)?.owner_id;
+const settingsMachineOperator = (id: string | undefined) => (SETTINGS_DATA.machines || []).find(row => row.id === id)?.owner_id;
 // One line per harness this computer cannot run that has a way out: sign in here, or move the bot.
 function settingsBlockedNote(e, harnesses) {
   return harnesses.map(id => [id, settingsRuntimeBlock(e, id)]).filter(([, block]) => block && (block.move || block.signIn))
@@ -116,158 +138,10 @@ document.addEventListener('click', event => {
   const move = event.target.closest('[data-choice-move]');
   if (move) void settingsMoveForModel(move);
 });
-// Keep the three choices local until Apply, so selecting a harness cannot start a transition. `none` allows no
-// choice at all, named by it when it is a string ("Same as bot" for a task model), else "None". `noEffort` hides the
-// Effort picker where another one stands beside it (a task model's is Task effort, settingsTaskParts).
-function settingsChoiceFields(current = '', disabled = false, none = false, label = 'Model settings', noEffort = false) {
-  return `<div class="settings-model-choice" role="group" aria-label="${esc(label)}" data-choice-fields data-current="${esc(current)}" ${disabled ? 'data-readonly' : ''} ${none ? `data-allow-none="${esc(none === true ? 'None' : none)}"` : ''}>
-    <label>Harness / provider<select data-choice-harness aria-label="Harness / provider" ${disabled ? 'disabled' : ''}></select></label>
-    <label data-choice-model-label>Model<select data-choice-model aria-label="Model" ${disabled ? 'disabled' : ''}></select></label>
-    <div class="settings-tier" data-choice-tier hidden></div>
-    <label ${noEffort ? 'hidden' : ''}>Effort<select data-choice-effort aria-label="Effort" ${disabled ? 'disabled' : ''}></select></label>
-    <div class="settings-choice-blocks" data-choice-blocks></div>
-  </div>`;
-}
-function settingsWireChoiceFields(fields, onChange = () => {}) {
-  const harness = fields.querySelector('[data-choice-harness]');
-  const model = fields.querySelector('[data-choice-model]');
-  const effort = fields.querySelector('[data-choice-effort]');
-  const tierBox = fields.querySelector('[data-choice-tier]');
-  const modelLabel = fields.querySelector('[data-choice-model-label]');
-  const all = settingsAllChoices(), readonly = fields.hasAttribute('data-readonly');
-  // The Gateway's picks are made in the tier controls; its rows stay out of the Model list (and one virtual
-  // harness, "Tico AI Gateway", stands for them). `real` maps it back to the pi harness the bot runs them on.
-  const gw = settingsGateway(), viaTier = !!gw && all.some(row => settingsIsTico(row.model));
-  const choices = viaTier ? all.filter(row => !settingsIsTico(row.model)) : all;
-  // A bot's own Model control greys out what its computer cannot run; bulk change checks each bot on Apply.
-  const box = fields.closest('[data-bot-choice]');
-  const bot = box?.dataset.botChoice ? S.emps.find(row => row.id === box.dataset.botChoice) : null;
-  const guard = box?.dataset.kind === 'model' ? bot : null;
-  const block = id => guard ? settingsRuntimeBlock(guard, id) : null;
-  const option = (value, label, selected, disabled = false) => `<option value="${esc(value)}" ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
-  let picked = settingsChoiceFromValue(fields.dataset.current);
-  if (viaTier && settingsIsTico(picked.model)) picked.harness = 'tico';
-  let legacy = viaTier && picked.harness === 'tico' && !settingsTierParse(picked.model);   // an id the catalog lacks, until a control changes it
-  const inTier = () => viaTier && picked.harness === 'tico';
-  const real = () => inTier() ? {...picked, harness: 'pi'} : picked;
-  const start = settingsTierKey('medium', false);
-  // The tier the controls show: the model's own, or (an id the catalog lacks, nothing chosen yet) Medium.
-  const shown = () => settingsTierParse(picked.model) || {tier: start, level: 'medium', fast: false, version: gw.tiers[start]?.current || '1.0'};
-  const tierEfforts = t => { const row = settingsModel(`${t.tier}-${gw.tiers[t.tier]?.current}`) || settingsModel(picked.model);
-    return {list: row?.efforts?.length ? [...row.efforts] : ['low', 'high', 'max'], def: row?.default_effort || 'high'}; };
-  const setTier = t => {
-    const key = settingsTierKey(t.level, t.fast);
-    if (!gw.tiers[key]) return;
-    legacy = false;
-    // Auto stays Auto; a pinned version stays only where the destination tier has it, else that tier's current one.
-    const has = version => (gw.tiers[key].versions || []).some(v => v.version === version);
-    const next = {...t, tier: key, version: t.version === 'auto' || has(t.version) ? t.version : gw.tiers[key].current};
-    const efforts = tierEfforts(next);
-    picked = {harness: 'tico', model: settingsTierId(next), effort: efforts.list.includes(picked.effort) ? picked.effort : efforts.def};
-  };
-  const paintTier = () => {
-    const t = shown(), tier = gw.tiers[t.tier];
-    const now = tier?.current;
-    const versions = [...(tier?.versions || [])];   // newest first
-    tierBox.innerHTML = `<div class="settings-tier-row">
-        <label>Level<select data-tier-level aria-label="Level" ${readonly ? 'disabled' : ''}>
-          ${legacy ? option('', 'Choose', true, true) : ''}
-          ${gw.levels.map(l => option(l.id, l.name, !legacy && l.id === t.level)).join('')}</select></label>
-        <label class="settings-tier-fast"><input type="checkbox" data-tier-fast ${t.fast ? 'checked' : ''} ${readonly ? 'disabled' : ''}>Fast</label>
-        <label>Version<select data-tier-version aria-label="Version" ${readonly ? 'disabled' : ''}>
-          ${legacy ? option('', `${settingsModelName(picked.model)}`, true, true) : ''}
-          ${versions.map(v => option(v.version, v.version + (v.version === now ? ' (current)' : ''), !legacy && t.version === v.version)).join('')}
-          ${option('auto', 'Auto (always latest)', !legacy && t.version === 'auto')}</select></label></div>
-      <p class="settings-tier-line" data-tier-line>${esc(settingsTierLine(picked.model))}</p>`;
-    tierBox.querySelector('[data-tier-level]').onchange = ev => { setTier({...t, level: ev.target.value}); paint(); onChange(value(), valid()); };
-    tierBox.querySelector('[data-tier-fast]').onchange = ev => { setTier({...t, fast: ev.target.checked}); paint(); onChange(value(), valid()); };
-    tierBox.querySelector('[data-tier-version]').onchange = ev => { setTier({...t, version: ev.target.value}); paint(); onChange(value(), valid()); };
-  };
-  const paint = () => {
-    const harnesses = [...new Set(choices.map(row => row.harness))];
-    const off = settingsOffHarnesses(choices);
-    harness.innerHTML = option('', fields.hasAttribute('data-allow-none') ? fields.getAttribute('data-allow-none') || 'None' : 'Choose harness', !picked.harness)
-      + (picked.harness && picked.harness !== 'tico' && !harnesses.includes(picked.harness) ? option(picked.harness, settingsHarnessName(picked.harness) || picked.harness, true, true) : '')
-      + harnesses.map(id => { const why = block(id);
-        // Short, so a narrow select does not cut it off: "Claude Code (sign in)".
-        return option(id, why ? `${harnessWords(why.runtime)} (${why.short})` : settingsHarnessName(id) || id, id === picked.harness, !!why && id !== picked.harness); }).join('')
-      + (viaTier ? (() => { const why = block('tico');
-        return option('tico', why ? `Tico AI Gateway (${why.short})` : 'Tico AI Gateway', picked.harness === 'tico', !!why && picked.harness !== 'tico'); })() : '')
-      + off.filter(row => row.id !== picked.harness)
-        .map(row => option(row.id, `${harnessWords(row.id)} (off)`, false, true)).join('');
-    harness.title = block(picked.harness === 'tico' ? 'tico' : picked.harness)?.reason || '';
-    // The reason and its Sign in / Move line only in the open bot editor: the table already marks the bot's row,
-    // and every bot on that computer would repeat it.
-    const notes = fields.querySelector('[data-choice-blocks]');
-    if (notes) notes.innerHTML = guard && !readonly && fields.closest('#bot-editor') ? settingsBlockedNote(guard, harnesses) : '';
-    const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
-    modelLabel.hidden = inTier(); tierBox.hidden = !inTier();
-    model.innerHTML = option('', 'Choose model', !picked.model, true)
-      + (picked.model && !inTier() && !models.includes(picked.model) ? option(picked.model, `${settingsModelName(picked.model)} (current)`, true, true) : '')
-      + models.map(id => option(id, settingsModelPickName(id), id === picked.model)).join('');
-    let efforts, current = picked.effort;
-    if (inTier()) { efforts = tierEfforts(shown()).list; paintTier(); }
-    else efforts = choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
-    effort.innerHTML = (!current && efforts.length ? option('', 'Choose effort', true, true) : '')
-      + (!efforts.length ? option(current, settingsEffortName(current) || 'Choose effort', true, true) : '')
-      + (current && efforts.length && !efforts.includes(current) ? option(current, `${settingsEffortName(current)} (current)`, true, true) : '')
-      + efforts.map(id => option(id, id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), id === current)).join('');
-    harness.disabled = readonly;
-    model.disabled = readonly || !picked.harness || !models.length;
-    effort.disabled = readonly || efforts.length <= 1;
-  };
-  const value = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort) : '';
-  const tierValid = () => { const t = settingsTierParse(picked.model);
-    return !!t && (t.version === 'auto' || gw.tiers[t.tier].versions.some(v => v.version === t.version)) && tierEfforts(t).list.includes(picked.effort) && !block('tico'); };
-  const valid = () => (inTier() ? tierValid() : (choices.some(row => row.value === value()) && !block(picked.harness)))
-    || (!picked.harness && fields.hasAttribute('data-allow-none'));
-  // Whether the three fields show something other than what the bot has, finished or not.
-  const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current), now = real();
-    return now.harness !== was.harness || now.model !== was.model || now.effort !== was.effort; };
-  harness.onchange = () => {
-    picked = {harness: harness.value, model: '', effort: ''};
-    if (picked.harness === 'tico') {   // Medium, pinned to the current version
-      legacy = false;
-      setTier({tier: start, level: 'medium', fast: false, version: gw.tiers[start]?.current || '1.0'});
-    }
-    paint(); onChange(value(), valid());
-  };
-  model.onchange = () => {
-    const row = settingsModel(model.value);
-    const efforts = choices.filter(choice => choice.harness === picked.harness && choice.model === model.value).map(choice => choice.effort);
-    picked = {harness: picked.harness, model: model.value,
-      effort: efforts.includes(picked.effort) ? picked.effort : (efforts.includes(row?.default_effort) ? row.default_effort : efforts[0] || '')};
-    paint(); onChange(value(), valid());
-  };
-  effort.onchange = () => { picked.effort = effort.value; onChange(value(), valid()); };
-  paint();
-  return {value, valid, changed};
-}
 // What each picker kind sets on a bot: its own model, its fallback, or the model its tasks run on (task_model,
 // backend/task_models.py; none is the same as the bot).
-const SETTINGS_CHOICE_KINDS = {model: {name: 'Model', of: e => e}, fallback: {name: 'Fallback', of: e => e.fallback, none: true},
+const SETTINGS_CHOICE_KINDS: Record<SettingsChoiceKind, SettingsChoiceKindSpec> = {model: {name: 'Model', of: e => e}, fallback: {name: 'Fallback', of: e => e.fallback, none: true},
   task: {name: 'Task model', of: e => e.task_model, none: 'Same as bot'}};
-function settingsChoiceCombo(e, kind) {
-  const spec = SETTINGS_CHOICE_KINDS[kind], selected = spec.of(e);
-  const current = selected?.model ? settingsChoiceValue(selected.harness || selected.runtime, selected.model,
-    selected.reasoning_effort || selected.effort) : '';
-  const manage = settingsCanManageBot(e);
-  return `<div class="settings-choice" data-bot-choice="${esc(e.id)}" data-kind="${kind}" data-current="${esc(current)}">
-    ${!current && !spec.none ? `<small class="muted">${esc(settingsDefaultLabel(e))}</small>` : ''}
-    ${settingsChoiceFields(current, !manage, spec.none || false, `${spec.name} for ${e.display_name || e.slug}`, kind === 'task')}
-    ${manage ? '<button type="button" class="ghost" data-choice-apply disabled>Apply</button>' : ''}
-  </div>`;
-}
-// In the bots table a model or fallback is one short line; its three pickers open in a popover under it.
-function settingsChoiceCell(e, kind) {
-  const fallback = kind === 'fallback', selected = fallback ? e.fallback : e;
-  const label = selected?.model ? settingsChoiceLabel(selected.harness || selected.runtime, selected.model, selected.reasoning_effort || selected.effort)
-    : fallback ? 'None' : settingsDefaultLabel(e);
-  const text = `<span class="sb-pick-text${selected?.model ? '' : ' muted'}">${esc(label)}</span>`;
-  if (!settingsCanManageBot(e)) return `<span class="sb-pick ro" title="${esc(label)}">${text}</span>`;
-  return `<button type="button" class="sb-pick" data-choice-open="${esc(e.id)}" data-kind="${kind}" aria-haspopup="dialog" aria-expanded="false"
-    aria-label="${fallback ? 'Fallback' : 'Model'} for ${esc(e.display_name || e.slug)}: ${esc(label)}" title="${esc(label)}">${text}<span class="sb-pick-caret" aria-hidden="true"></span></button>`;
-}
 // A bot's task settings (backend/task_models.py `stored`): a task model, a task effort and a task context length, each
 // "Same as bot" until set. The record's model may be '' (its tasks run on the bot's own model).
 const settingsTaskSet = task => !!(task?.model || task?.reasoning_effort || task?.compact_at);
@@ -365,99 +239,6 @@ async function settingsSaveTaskPart(select) {
 // model now (`task_model_warning`, backend/task_models.py `warning`), under the task model in the row and the editor.
 function settingsTaskWarning(e) {
   return e.task_model_warning ? `<p class="sb-task-warning" role="status" data-task-warning>${esc(e.task_model_warning)}</p>` : '';
-}
-function settingsChoicePopover(anchor) {
-  let pop = $('#sb-choice-pop');
-  if (pop?.matches(':popover-open')) { const same = pop.anchor === anchor; pop.hidePopover(); if (same) return; }
-  const e = S.emps.find(row => row.id === anchor.dataset.choiceOpen);
-  if (!e) return;
-  if (!pop) {
-    pop = document.createElement('div');
-    pop.id = 'sb-choice-pop'; pop.className = 'tl-pop sb-choice-pop'; pop.popover = 'auto';
-    pop.setAttribute('role', 'dialog');
-    pop.addEventListener('toggle', ev => {
-      if (ev.newState !== 'closed') return;
-      pop.anchor?.setAttribute('aria-expanded', 'false');
-      if (pop.anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) pop.anchor.focus();
-    });
-    document.body.append(pop);
-  }
-  pop.anchor = anchor;
-  const kind = anchor.dataset.kind;
-  const name = SETTINGS_CHOICE_KINDS[kind].name;
-  pop.setAttribute('aria-label', `${name} for ${e.display_name || e.slug}`);
-  pop.innerHTML = `<div class="sb-choice-head">${name} · ${esc(e.display_name || e.slug)}</div>${settingsChoiceCombo(e, kind)}`;
-  const box = pop.querySelector('[data-bot-choice]');
-  box.querySelector('[data-choice-apply]')?.classList.replace('ghost', 'primary');
-  box.insertAdjacentHTML('beforeend', '<button type="button" class="ghost" data-choice-cancel>Cancel</button>');
-  box.querySelector('[data-choice-cancel]').onclick = () => pop.hidePopover();
-  // Apply closes the popover first: a model change continues in its own dialog.
-  settingsWireCombos(pop, async (target, value) => { pop.hidePopover(); await settingsPickChoice(target, value); });
-  pop.showPopover();
-  anchor.setAttribute('aria-expanded', 'true');
-  tasksMenuPlace(pop, anchor);
-  pop.querySelector('select:not(:disabled)')?.focus();
-}
-function settingsWireCombos(root, onPick = settingsPickChoice) {
-  root.querySelectorAll('[data-bot-choice]').forEach(box => {
-    const button = box.querySelector('[data-choice-apply]');
-    const mount = () => {
-      const fields = box.querySelector('[data-choice-fields]');
-      fields.dataset.current = box.dataset.current || '';
-      const picker = settingsWireChoiceFields(fields, (value, valid) => {
-        if (button) button.disabled = !valid || value === (box.dataset.current || '');
-        box.dispatchEvent(new CustomEvent('tico:choice', {bubbles: true}));   // the bot editor repaints Task effort
-      });
-      box.picker = picker;   // the bot editor's Save reads a pick that was never Applied
-      if (!button) return;
-      button.disabled = true;
-      button.onclick = async () => {
-        if (!picker.valid()) return;
-        const value = picker.value();
-        box.querySelectorAll('select,button').forEach(control => control.disabled = true);
-        try { await onPick(box, value); }
-        finally { if (box.isConnected) mount(); }
-      };
-    };
-    mount();
-  });
-}
-// The /fallback body for a picker value ('' is None); Apply and the bot editor's Save send the same.
-function settingsFallbackBody(value) {
-  const choice = value ? settingsChoiceFromValue(value) : null;
-  return choice ? {harness: choice.harness, model: choice.model, effort: choice.effort} : null;
-}
-async function settingsPickChoice(box, value) {
-  const slug = box.dataset.botChoice, e = S.emps.find(row => row.id === slug);
-  const current = box.dataset.current || '';
-  if (!e || value === current) return;
-  const input = box.querySelector('input[type=search]');
-  if (box.dataset.kind === 'task') {
-    try { await settingsSaveTaskModel(e, {choice: value ? settingsChoiceFromValue(value) : null}, e.revision); }
-    catch (error) { toast(error.message, true); }
-    return;
-  }
-  if (box.dataset.kind === 'fallback') {
-    try {
-      const choice = value ? settingsChoiceFromValue(value) : null;
-      await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(value), expected_revision: e.revision});
-      await loadSettings();
-      toast(choice ? `${e.display_name} fallback is ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}`
-        : `${e.display_name} fallback is none`);
-    } catch (error) {
-      if (input) input.value = input.defaultValue;
-      toast(error.message, true);
-    }
-    return;
-  }
-  const choice = settingsChoiceFromValue(value);
-  if (!choice.model || !choice.effort || !choice.harness) { if (input) input.value = input.defaultValue; return; }
-  if (!await settingsConfirmTransition(e, 'model', settingsChoiceLabel(choice.harness, choice.model, choice.effort))) {
-    if (input) input.value = input.defaultValue;
-    return;
-  }
-  await settingsBeginTransition(box, e, {kind:'model', model:choice.model, effort:choice.effort,
-    harness:choice.harness, expected_generation:e.machine?.generation || 0, expected_revision:e.revision});
 }
 // POST one change to the bot's task settings (settingsTaskBody: the other parts are carried as they are) and say what
 // its tasks now run on. A pick its computer cannot run yet saves all the same, as does a cheaper one on a high-stakes

@@ -164,6 +164,11 @@ interface Employee {
   status?: string;
   template?: string;
   harness?: string;
+  /** The bot's own model choice (an older row says runtime and effort for harness and reasoning_effort). */
+  model?: string;
+  runtime?: string;
+  reasoning_effort?: string;
+  effort?: string;
   team?: string;
   reports_to?: string | null;
   owner_id?: string | null;
