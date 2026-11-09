@@ -52,13 +52,15 @@ def _days():
 
 def _current(c, where, args):
     today, _ = _days()
-    return H._rows(
+    rows = H._rows(
         c.execute(
-            "SELECT * FROM market_edges WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
+            "SELECT * FROM entity_links WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
             f"substr(valid_until_on,1,10)>=?) AND ({where})",
             (today, today, *args),
         )
     )
+    # The API names for a link: the columns are from_entity_id, link_key and to_entity_id.
+    return [MK._edge_row(row) for row in rows]
 
 
 def _end(c, actor, edge, ev):
@@ -80,7 +82,7 @@ def _own(c, actor, name, ev):
         MK.create_entity(
             c,
             actor,
-            type="company",
+            type="organization",
             name=name or "Our company",
             summary=(name or "Our company") + ".",
             evidence_ids=ev,
@@ -108,7 +110,9 @@ def mirror(c, actor, segment_id, status, company=""):
         ev = ev or _evidence(c, actor)
         return ev
 
-    edges = _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, segment_id))
+    edges = _current(
+        c, "link_key='operates_in' AND from_entity_id=? AND to_entity_id=?", (MK.OWN_COMPANY_ID, segment_id)
+    )
     if status == "serving" and not edges:
         today, _ = _days()
         MK.create_edge(
@@ -149,7 +153,7 @@ def follow_merge(c, actor, segment_id, into_id):
     seg = MK.entity(c, segment_id)
     if not seg or not seg["properties"].get("next"):
         return
-    if _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, into_id)):
+    if _current(c, "link_key='operates_in' AND from_entity_id=? AND to_entity_id=?", (MK.OWN_COMPANY_ID, into_id)):
         return
     mirror(c, actor, into_id, "next")
 
@@ -161,14 +165,14 @@ def remove_segment(c, actor, segment_id):
     if segment_id == root:
         raise Problem("tree", "The market's root is not removed here", 422)
     ev = _evidence(c, actor)
-    up = _current(c, "rel='member_of' AND src=?", (segment_id,))
+    up = _current(c, "link_key='member_of' AND from_entity_id=?", (segment_id,))
     parent = up[0]["dst"] if up else root
     today, _ = _days()
-    for edge in _current(c, "rel='member_of' AND dst=?", (segment_id,)):
+    for edge in _current(c, "link_key='member_of' AND to_entity_id=?", (segment_id,)):
         _end(c, actor, edge, ev)
         if parent:
             MK.create_edge(c, actor, src=edge["src"], rel="member_of", dst=parent, since=today, evidence_ids=ev)
-    for edge in _current(c, "src=? OR dst=?", (segment_id, segment_id)):
+    for edge in _current(c, "from_entity_id=? OR to_entity_id=?", (segment_id, segment_id)):
         _end(c, actor, edge, ev)
     props = MK.entity(c, segment_id)["properties"]
     if "next" in props:  # added again later, it is not Next until someone says so
@@ -187,11 +191,13 @@ def _site(entity):
 def competitors(c):
     """[{id, name, url}]: every company or product with a current competes_with edge to the company, by name."""
     ids = set()
-    for edge in _current(c, "rel='competes_with' AND (src=? OR dst=?)", (MK.OWN_COMPANY_ID, MK.OWN_COMPANY_ID)):
+    for edge in _current(
+        c, "link_key='competes_with' AND (from_entity_id=? OR to_entity_id=?)", (MK.OWN_COMPANY_ID, MK.OWN_COMPANY_ID)
+    ):
         ids.add(edge["dst"] if edge["src"] == MK.OWN_COMPANY_ID else edge["src"])
     ids.discard(MK.OWN_COMPANY_ID)
     rows = [MK.entity(c, i) for i in ids]
-    rows = [r for r in rows if r and r["status"] == "active" and r["type"] in ("company", "product")]
+    rows = [r for r in rows if r and r["status"] == "active" and r["type"] in ("organization", "product")]
     rows.sort(key=lambda r: (r["name"].lower(), r["id"]))
     return [{"id": r["id"], "name": r["name"], "url": _site(r)} for r in rows[:COMPETITORS_MAX]]
 
@@ -209,7 +215,7 @@ def add_competitor(c, actor, text, company=""):
     found = [
         r
         for r in MK._resolve_existing(c, name, [], {"domain": host} if host else {})
-        if r["status"] == "active" and r["type"] in ("company", "product") and r["id"] != MK.OWN_COMPANY_ID
+        if r["status"] == "active" and r["type"] in ("organization", "product") and r["id"] != MK.OWN_COMPANY_ID
     ]
     if found:
         entity = found[0]
@@ -224,7 +230,7 @@ def add_competitor(c, actor, text, company=""):
         entity, _ = MK.create_entity(
             c,
             actor,
-            type="company",
+            type="organization",
             name=name,
             external_ids={"domain": host} if host else None,
             evidence_ids=[proof["id"]],
@@ -247,7 +253,7 @@ def add_competitor(c, actor, text, company=""):
 def remove_competitor(c, actor, entity_id):
     edges = _current(
         c,
-        "rel='competes_with' AND ((src=? AND dst=?) OR (src=? AND dst=?))",
+        "link_key='competes_with' AND ((from_entity_id=? AND to_entity_id=?) OR (from_entity_id=? AND to_entity_id=?))",
         (entity_id, MK.OWN_COMPANY_ID, MK.OWN_COMPANY_ID, entity_id),
     )
     if not edges:

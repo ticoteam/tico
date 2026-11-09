@@ -18,7 +18,7 @@ const {chromium} = require('playwright');
       window.post = async () => ({});
       window.toast = () => {};
     });
-    await page.addScriptTag({path: path.join(__dirname, '../app/bot-learnings.js')});
+    await page.addScriptTag({path: path.join(__dirname, '../../build/ui/app/bot-learnings.js')});
     for (const width of [1100, 390]) {
       await page.setViewportSize({width, height: 800});
       for (const file of ['memory/learnings.md', 'memory/decisions.md']) {

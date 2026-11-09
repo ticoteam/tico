@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/task_followers_routes.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 45,
+                    "endColumn": 63,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

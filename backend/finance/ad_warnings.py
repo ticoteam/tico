@@ -1,7 +1,8 @@
 """Ad budget warnings for the spending bot. After each ad spend import pass (ad_import.pass_once, every 15 minutes and
 after every import), each active ad budget (budgeting.budget_platform: its vendor is an ad platform) whose teammate is a
 bot is checked, as its live read stands, against three levels: its warn level (80% by default), its amount, and a
-month-end pace over its amount. A level reached for the first time in the period (budgeting.event_key: a new amount
+month-end pace over its amount, all on the spend the budgets list shows as Spent (an ad budget that does not swap in
+its platform's figure reads its books here too; budgeting.swaps). A level reached for the first time in the period (budgeting.event_key: a new amount
 arms it again) gives that bot one Finance line at the start of its next turn: a keeper note. A bot always reads its
 own budget (handlers.reads_budget), unless its spend takes in private lines the bot lacks the detail of
 (private_scope): then it gets none. Never a person and never the bot's manager; an ad budget with no bot gets none,

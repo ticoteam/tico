@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import threading
 import time
+import uuid
 from urllib.parse import urlparse
 
 import pytest
@@ -538,6 +539,49 @@ def test_a_read_with_tasks_and_bots_asks_for_the_viewers_bot_access_once(api, mo
 
 def _task_views(rows, c, who, visible_sql="1"):
     return [{"id": row["id"]} for row in rows]
+
+
+def test_the_tasks_stream_never_sends_a_members_only_ticket_to_a_non_member(api):
+    # A company-readable ticket on a members-only pipeline (Legal): its changes reach a non-member's stream as
+    # they would for any task, unless the pipeline rule (pipeline_rights.list_sql) is applied to the stream too.
+    tag = uuid.uuid4().hex[:8]
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, "Legal" + tag, [{"name": "Doing", "status": "doing"}])
+        c.execute(
+            "UPDATE task_types SET pipeline_owner_id='human:ana', pipeline_visibility='members' WHERE id=?",
+            (typ["id"],),
+        )
+        task = H.task_create(c, "human:ben", "Contract " + tag, "", "human:ben", type=typ["id"], lint=False)
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (task["id"],))
+    auth, store = api.app.state.auth, api.app.state.store
+    cara = Identity("human:cara", "human", "cara@acme.example")
+    with store.read() as c:
+        cursor = E.latest(c)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET title='Contract renamed " + tag + "' WHERE id=?", (task["id"],))
+    with store.read() as c:
+        sent = E.read(c, auth, cara, cursor, topics=("tasks",), task_views=_task_views)[0]
+    assert task["id"] not in str(sent)
+
+
+def test_a_deleted_members_only_ticket_is_not_reported_gone_to_a_non_member(api):
+    tag = uuid.uuid4().hex[:8]
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, "Legal" + tag, [{"name": "Doing", "status": "doing"}])
+        c.execute(
+            "UPDATE task_types SET pipeline_owner_id='human:ana', pipeline_visibility='members' WHERE id=?",
+            (typ["id"],),
+        )
+        task = H.task_create(c, "human:ben", "Contract " + tag, "", "human:ben", type=typ["id"], lint=False)
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (task["id"],))
+    auth, store = api.app.state.auth, api.app.state.store
+    cara = Identity("human:cara", "human", "cara@acme.example")
+    with store.read() as c:
+        cursor = E.latest(c)
+    post(api, "tasks/" + task["id"] + "/delete", {})
+    with store.read() as c:
+        sent = E.read(c, auth, cara, cursor, topics=("tasks",), task_views=_task_views)[0]
+    assert task["id"] not in str(sent)
 
 
 def test_link_insert_and_delete_events_require_both_resources_for_each_viewer(api):

@@ -1,6 +1,7 @@
 """Finance's ad spend (backend/finance/ad_import.py, store/ads.py): the import reads Google Ads' and Meta's daily spend
-per campaign through fake platforms (never the network), a restated day overwrites, a refused login asks to reconnect,
-and the default key picker takes one whole set of keys.
+per campaign through fake platforms (never the network), a restated day overwrites (a later run reads the last 30 days
+again), one import per ad account (two tools may share a platform, never an account), a refused login asks to
+reconnect, and the default key picker takes one whole set of keys.
 
 Slugs and names echo TIDY's (paid-rental-ads, consumer-google-ad-owner) for realism only; nothing depends on them."""
 
@@ -213,6 +214,133 @@ def test_a_restated_day_overwrites_and_a_gone_campaign_goes(books: Store):
     later = "2026-10-15T17:00:00.000000Z"
     assert AI.run(books, Vault(books), iid, now=later, http_=http(net)).status == "ok"
     assert spends(books) == {("111", "2026-10-10", "c1"): 1240}
+
+
+def meta_login(store: Store, tid: str, seen: dict[str, list[dict[str, Any]]]) -> tuple[str, FakeNet]:
+    """A Meta Ads tool whose login sees the accounts in `seen` ({account id: insight rows}); insights answer only the
+    days asked for (time_range), as Meta does."""
+    tool(store, tid, "meta-ads")
+    key(store, f"k-{tid}", f"{tid} · META_ACCESS_TOKEN", "META_ACCESS_TOKEN", f"token-{tid}", tool_id=tid)
+    iid = setup_import(store, tid, "meta_ads", {"access_token": f"k-{tid}"})
+    net = FakeNet()
+    listed = [{"account_id": a, "name": "Account " + a, "currency": "USD"} for a in seen]
+    net.on("GET", AI.GRAPH + "/me/adaccounts", lambda *_: (200, {"data": listed}))
+
+    def report(_m: str, url: str, _h: dict[str, str], _b: bytes | None) -> tuple[int, Any]:
+        account = url.split("/act_")[1].split("/")[0]
+        asked = json.loads(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["time_range"][0])
+        rows = [r for r in seen[account] if asked["since"] <= r["date_start"] <= asked["until"]]
+        return 200, {"data": rows}
+
+    net.on("GET", AI.GRAPH + "/act_", report)
+    return iid, net
+
+
+def test_a_later_run_rereads_the_trailing_30_days_and_replaces_them(books: Store):
+    """Platforms restate the last ~30 days: a run a month on reads the 30 days back again and replaces those days (a
+    restated day is not added on top); a day before the window stays as it was."""
+    seen = {
+        "111": [
+            {"campaign_id": "c1", "spend": "10", "date_start": "2026-10-02"},
+            {"campaign_id": "c1", "spend": "20", "date_start": "2026-10-20"},
+        ]
+    }
+    iid, net = meta_login(books, "meta-a", seen)
+    assert AI.run(books, Vault(books), iid, now="2026-10-25T12:00:00.000000Z", http_=http(net)).status == "ok"
+    seen["111"] = [
+        {"campaign_id": "c1", "spend": "99", "date_start": "2026-10-02"},  # outside the window: not asked for
+        {"campaign_id": "c1", "spend": "25", "date_start": "2026-10-20"},
+        {"campaign_id": "c1", "spend": "7", "date_start": "2026-11-04"},
+    ]
+    assert AI.run(books, Vault(books), iid, now="2026-11-05T12:00:00.000000Z", http_=http(net)).status == "ok"
+    assert '"since":"2026-10-07"' in urllib.parse.unquote(net.urls("act_111")[-1])
+    assert spends(books) == {
+        ("111", "2026-10-02", "c1"): 1000,
+        ("111", "2026-10-20", "c1"): 2500,
+        ("111", "2026-11-04", "c1"): 700,
+    }
+
+
+def live_total(store: Store) -> tuple[int, int]:
+    """(counting accounts, their spend) over October and November."""
+    with store.read() as c:
+        rows = SA.live_spend(c, "2026-10-01", "2026-11-30")
+    return len(rows), sum(r.amount for r in rows)
+
+
+def test_two_tools_on_one_platform_with_their_own_accounts_both_import_and_add_up(books: Store):
+    a, net_a = meta_login(books, "meta-a", {"111": [{"campaign_id": "c1", "spend": "10", "date_start": "2026-10-02"}]})
+    b, net_b = meta_login(books, "meta-b", {"333": [{"campaign_id": "c3", "spend": "5", "date_start": "2026-10-02"}]})
+    assert AI.run(books, Vault(books), a, now=AT, http_=http(net_a)).accounts == 1
+    assert AI.run(books, Vault(books), b, now=AT, http_=http(net_b)).accounts == 1
+    assert live_total(books) == (2, 1500)
+    assert imp(books, "meta-b").last_error == ""
+
+
+def test_an_account_two_logins_see_is_imported_once(books: Store):
+    """An agency's manager login and the account's own both list act_222: the import that read it first keeps it,
+    the other leaves it (and says so), and its spend is stored and counted once."""
+    day = "2026-10-02"
+    a, net_a = meta_login(
+        books,
+        "meta-a",
+        {
+            "111": [{"campaign_id": "c1", "spend": "10", "date_start": day}],
+            "222": [{"campaign_id": "c2", "spend": "20", "date_start": day}],
+        },
+    )
+    b, net_b = meta_login(
+        books,
+        "meta-agency",
+        {
+            "222": [{"campaign_id": "c2", "spend": "20", "date_start": day}],
+            "333": [{"campaign_id": "c3", "spend": "5", "date_start": day}],
+        },
+    )
+    assert AI.run(books, Vault(books), a, now=AT, http_=http(net_a)).accounts == 2
+    second = AI.run(books, Vault(books), b, now=AT, http_=http(net_b))
+    assert second.status == "ok" and second.accounts == 1
+    after = imp(books, "meta-agency")
+    assert after.status == "ok" and after.last_error == "Account act_222 already imports from meta-a"
+    assert spends(books) == {("111", day, "c1"): 1000, ("222", day, "c2"): 2000, ("333", day, "c3"): 500}
+    assert live_total(books) == (3, 3500)
+
+
+def test_switching_on_a_tool_whose_account_another_import_reads_is_refused(books: Store):
+    from backend.finance import ads
+    from backend.finance.core.errors import CONFLICT, FinanceError
+
+    a, net_a = meta_login(books, "meta-a", {"111": [{"campaign_id": "c1", "spend": "10", "date_start": "2026-10-02"}]})
+    c_, net_c = meta_login(books, "meta-c", {"111": [{"campaign_id": "c1", "spend": "10", "date_start": "2026-10-02"}]})
+    assert AI.run(books, Vault(books), a, now=AT, http_=http(net_a)).accounts == 1
+    with books.transaction() as c:
+        c.execute("UPDATE fin_ad_imports SET enabled=0 WHERE tool_id='meta-a'")
+    # With meta-a off, meta-c reads act_111; switching meta-a back on would count it twice.
+    assert AI.run(books, Vault(books), c_, now=AT, http_=http(net_c)).accounts == 1
+    with books.transaction() as c:
+        with pytest.raises(FinanceError) as refused:
+            ads.configure(c, OWNER, "meta-a", enabled=True, history_from=None, account_id=None, credentials=None, at=AT)
+        assert refused.value.code == CONFLICT
+        assert str(refused.value.message) == "Account act_111 already imports from meta-c"
+        assert ads.view(c, OWNER, "meta-a", AT)["elsewhere"] == {
+            "tool_id": "meta-c",
+            "tool_name": "meta-c",
+            "account": "act_111",
+        }
+    assert live_total(books) == (1, 1000)
+
+
+def test_an_account_two_enabled_imports_hold_counts_once(books: Store):
+    """Older data (before one import per ad account) with the same account active under two enabled imports: the
+    budgets' read counts it once."""
+    for tid in ("meta-a", "meta-b"):
+        tool(books, tid, "meta-ads")
+        setup_import(books, tid, "meta_ads", {})
+    with books.transaction() as c:
+        for tid in ("meta-a", "meta-b"):
+            aid = SA.upsert_account(c, tid, "meta_ads", "111", "Same account", "USD", AT)
+            SA.replace_spend(c, aid, "2026-10-01", "2026-10-31", [SA.SpendRow("2026-10-02", "c1", "", 1000, "USD")], AT)
+    assert live_total(books) == (1, 1000)
 
 
 def test_later_runs_read_the_last_30_days_only():
@@ -643,7 +771,7 @@ def _api_setup(api: Any) -> Store:
     return store
 
 
-def test_the_ad_spend_api_is_for_finance_admins_and_keeps_one_import_per_platform(api):
+def test_the_ad_spend_api_is_for_finance_admins_and_keeps_one_import_per_ad_account(api):
     from backend import openapi_v2
     from backend.tests.test_api import headers
     from backend.tests.test_openapi_v2 import conforms
@@ -683,11 +811,25 @@ def test_the_ad_spend_api_is_for_finance_admins_and_keeps_one_import_per_platfor
         "FinanceAdAccounts",
     )
     assert on["import"]["enabled"] and on["import"]["run_requested"] and on["import"]["every_hours"] == 4
-    # A second Google Ads tool can't import too: the same spend would count twice.
+    # One import per ad account: a second Google Ads tool whose login lists an account the first reads can't import
+    # (the same spend would count twice); with accounts of its own it can.
+    with store.transaction() as c:
+        SA.upsert_account(c, "google-ads", "google_ads", "5550001111", "Consumer", "USD", AT)
+        SA.upsert_account(c, "google-ads-2", "google_ads", "5550001111", "Consumer", "USD", AT)
     twice = api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads-2", "enabled": True}, headers=headers())
-    assert twice.status_code == 409
-    other = api.get("/api/v2/finance/ad-accounts", params={"tool_id": "google-ads-2"}, headers=headers()).json()
-    assert other["elsewhere"] == {"tool_id": "google-ads", "tool_name": "google-ads"}
+    assert twice.status_code == 409 and "Account 555-000-1111 already imports from google-ads" in twice.text
+    other = answer(
+        api.get("/api/v2/finance/ad-accounts", params={"tool_id": "google-ads-2"}, headers=headers()),
+        "FinanceAdAccounts",
+    )
+    assert other["elsewhere"] == {"tool_id": "google-ads", "tool_name": "google-ads", "account": "555-000-1111"}
+    with store.transaction() as c:
+        c.execute("UPDATE fin_ad_accounts SET active=0 WHERE tool_id='google-ads-2'")
+    alone = answer(
+        api.post("/api/v2/finance/ad-imports", json={"tool_id": "google-ads-2", "enabled": True}, headers=headers()),
+        "FinanceAdAccounts",
+    )
+    assert alone["import"]["enabled"] and alone["elsewhere"] is None
     # Not a key the platform can use: refused; clearing a required one and switching on: refused.
     assert (
         api.post(

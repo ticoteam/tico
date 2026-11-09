@@ -1,4 +1,4 @@
-// The sidebar is whole from the first paint (ui/index.html, ui/theme.js): no row appears, goes or moves once the app's
+// The sidebar is whole from the first paint (ui/index.html, ui/theme.ts): no row appears, goes or moves once the app's
 // code runs or its reads answer. Each visit records the rail three times: painted (the page's markup and styles, its
 // scripts held back), ran (the scripts run, every /api read held back) and settled (every read answered); at 1440 px and
 // at 390 px with the phone drawer (More) open, with the bottom bar. Finance shows as the last answer this browser had
@@ -62,10 +62,10 @@ async function visit(context, {phone = false, who = 'ana', finance = 'no', onboa
     if (p === '/api/v2/logout') return r.fulfill({contentType: 'text/html', body: '<!doctype html><title>Signed out</title>'});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
     if (file && fs.existsSync(file)) {
-      // The page's scripts wait (theme.js in the head runs, as it does before the first paint), so the rail is
+      // The page's scripts wait (theme.ts in the head runs, as it does before the first paint), so the rail is
       // recorded as its markup and styles draw it.
-      if (gates.holdScripts && p.endsWith('.js') && !p.endsWith('/theme.js')) await new Promise(go => gates.scripts.push(go));
-      return r.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+      if (gates.holdScripts && /\.(?:js|ts)$/.test(p) && !p.endsWith('/theme.ts')) await new Promise(go => gates.scripts.push(go));
+      return r.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     }
     if (p === '/api/v2/events') return r.abort();
     if (p.startsWith('/api/') && gates.holdReads) await new Promise(go => gates.reads.push(go));

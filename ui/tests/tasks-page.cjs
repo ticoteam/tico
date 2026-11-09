@@ -124,12 +124,12 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json(bots);
@@ -485,7 +485,7 @@ async function typeSelection(browser) {
   await page.keyboard.press('Escape');
   await page.locator('#task-scope').click();
   assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild.textContent])),
-    [['you', 'You'], ['general', 'General'], ['dev-123', 'Dev tickets'], ['marketing', 'Marketing']]);
+    [['you', 'You'], ['general', 'General'], ['dev-123', 'Dev ticket'], ['marketing', 'Marketing']]);
   await page.keyboard.press('Escape');
   await scope(page, 'dev-123');
   assert.deepEqual(await rowKeys(page), ['tdev-123-task']);
@@ -602,7 +602,7 @@ async function peekAndKeys(browser) {
   const list = await page.locator('#tasks-pane').boundingBox(), side = await peek.boundingBox();
   assert.ok(side.x >= list.x + list.width - 1 && side.width >= 380 && list.width >= 600, `list and peek side by side: ${JSON.stringify([list, side])}`);
   assert.equal(await page.locator('[data-task-key="tt-inbox"]').evaluate(r => r.classList.contains('peeked')), true);
-  assert.equal(await peek.locator('.tmodal-head .tstatus').innerText(), 'Waiting');
+  assert.equal(await peek.locator('[data-prop-row="status"] .prop-txt').innerText(), 'Waiting');
   await peek.locator('.task-comments .tcomment').first().waitFor();
   // The focus stays in the list: ↓ / j move the peek with it; k / ↑ back.
   assert.equal(await focusedKey(page), 'tt-inbox');
@@ -695,14 +695,14 @@ async function properties(browser) {
   assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', ''], ['Who can see', 'Public'], ['Due', 'Add due date'], ['Tags', 'checkout'],
     ['Part of', 'Add parent']]);
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
-  // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
-  assert.equal(await peek.locator('.tmodal-head .tstatus').innerText(), 'Waiting');
-  assert.equal(await peek.locator('.tmodal-head .tchip-blocked').innerText(), 'blocked');
+  // The status is named in the properties; the header carries no state (no status pill, no wait tag, no blocked chip).
+  assert.equal(await peek.locator('[data-prop-row="status"] .prop-txt').innerText(), 'Waiting');
+  assert.equal(await peek.locator('.tmodal-head .tstatus, .tmodal-head .tchip-blocked, .tmodal-head .tl-waiting').count(), 0, 'the header has no state');
   assert.equal(await page.locator('[data-task-key="tt-checkout"] > .task-status').count(), 0);
   // Blockers, and every other relation but the parent, are in Related, by kind.
   assert.deepEqual(await peek.locator('.task-related .trel').evaluateAll(gs => gs.map(g => [g.querySelector('.trel-k').textContent,
     [...g.querySelectorAll('.tlink .linkish')].map(b => b.textContent.trim())])), [['Blocked by', ['Doing Add idempotency keys to the payments API']]]);
-  // The header: status · owner · position · age · Done/Close (here Close: a bot owns it) · … · ✕. No unexplained arrows.
+  // The header: position · age · Done/Close (here Close: a bot owns it) · … · ✕. Actions only, and no unexplained arrows.
   assert.equal(await peek.locator('.tmodal-head button:not([data-task-finish])').count(), 2);
   assert.deepEqual(await peek.locator('.tmodal-head [data-task-finish]').evaluateAll(bs => bs.map(b => b.dataset.taskFinish)), ['close']);
   assert.match(await peek.locator('.tmodal-head .peek-pos').innerText(), /^\d+ \/ \d+$/);
@@ -790,7 +790,7 @@ async function properties(browser) {
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Doing/);
   // The "…" menu holds Close and Delete (and Copy link, Snooze).
   await peek.locator('[data-task-more]').click();
-  assert.deepEqual(await menu.locator('.tl-mi').allInnerTexts(), ['Open full', 'Copy link', 'Snooze…', 'Close task', 'Delete task'], 'Add subtask is the rail\'s own field here');
+  assert.deepEqual(await menu.locator('.tl-mi').allInnerTexts(), ['Open full', 'Copy link', 'Snooze…', 'Close', 'Delete task'], 'Add subtask is the rail\'s own field here');
   await menu.locator('.tl-mi', {hasText: 'Copy link'}).click();
   assert.match(await page.evaluate(() => window.copied), /#\/task\/t-checkout$/);
   // The full task: properties at the top of the side column, then Code, then Subtasks.
@@ -811,7 +811,7 @@ async function properties(browser) {
   assert.equal(await layout(), true, 'Properties, Code, Subtasks, beside the details');
   await shot(page, 'modal-dark');
   await modal.locator('[data-task-more]').click();
-  await modal.locator('.prop-pop .tl-mi', {hasText: 'Close task'}).click();
+  await modal.locator('.prop-pop .tl-mi', {hasText: /^Close$/}).click();
   await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="status"]')?.textContent.includes('Closed'));
   assert.deepEqual(taskWrites(posts).at(-1).body, {version: 42, close: true});
   assert.deepEqual(errors, []);
@@ -1614,7 +1614,7 @@ async function recheckFinal(browser) {
   assert.equal(held.length, 1, 'the save\'s reload is on its way');
   await second.page.evaluate(() => refresh(false));                   // the poll starts while the save's reload is on its way
   await second.page.waitForTimeout(300);
-  assert.equal(held.length, 1, 'the poll shares the reload already on its way (ui/app/api.js)');
+  assert.equal(held.length, 1, 'the poll shares the reload already on its way (ui/app/api.ts)');
   holding = false;
   for (const release of held) release();
   await second.page.waitForFunction(() => !document.querySelector('[data-task-key="tt-access"]') && TASKS_ST.peek && TASKS_ST.peek !== 'tt-access', null, {timeout: t(10000)});

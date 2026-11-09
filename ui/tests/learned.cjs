@@ -1,4 +1,4 @@
-// "What it has learned" (ui/app/learned.js): linked from the top of your chat; the owner sees the company layer and their
+// "What it has learned" (ui/app/learned.ts): linked from the top of your chat; the owner sees the company layer and their
 // own, everyone else only their own; edit and delete send exactly that entry's change and redraw without it. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -19,7 +19,7 @@ async function open(browser, me, learned, chat) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);

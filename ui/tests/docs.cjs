@@ -82,7 +82,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       if (url.origin !== 'https://tico-ui.test') return route.fulfill({contentType: 'text/html', body: '<p>an external page</p>'});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(ui, p) : '';
-      if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+      if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
       if (p === '/api/me') return json(me);
       if (p === '/api/employees') return json([{name: 'librarian', display_name: 'Librarian', status: 'active'}]);
       if (p === '/api/issues') return json([]);

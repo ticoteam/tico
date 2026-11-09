@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from . import flight, hook_relay, run_backoff
+from .stranded_resume import RESUMED
 from .store import H
 
 log = logging.getLogger(__name__)
@@ -85,14 +86,18 @@ def lease_overdue(c, ctx):
 
 def task_stuck(c, ctx):
     """A bot's task in progress (`doing`) with no job for it still owed work, and nothing changed on it for the hour.
-    The live-job test is in the query, ahead of LIMIT, so busy old tasks cannot hide a stuck newer one."""
+    A task the resume sweep woke in that hour is in its hand (backend/stranded_resume.py), not counted. The live-job
+    test is in the query, ahead of LIMIT, so busy old tasks cannot hide a stuck newer one."""
+    since = _ago(ctx, minutes=TASK_QUIET_MINUTES)
     rows = c.execute(
         f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner_id LIKE 'bot:%' AND t.updated_at<? "
         f"AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
         f"JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id=substr(t.owner_id, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
-        f"AND {H.MESSAGE_TASK_SQL}=t.id) ORDER BY t.updated_at LIMIT ?",
-        (_ago(ctx, minutes=TASK_QUIET_MINUTES), *LIVE_JOBS, LIMIT),
+        f"AND {H.MESSAGE_TASK_SQL}=t.id) "
+        "AND NOT EXISTS (SELECT 1 FROM history_events h WHERE h.subject_type='task' AND h.subject_id=t.id "
+        "AND h.kind=? AND h.created_at>=?) ORDER BY t.updated_at LIMIT ?",
+        (since, *LIVE_JOBS, RESUMED, since, LIMIT),
     ).fetchall()
     return [row["id"] for row in rows]
 
