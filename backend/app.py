@@ -81,7 +81,14 @@ from . import models as M
 from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, route as error_route
-from .execution import Execution, bot_repository, flag_cut, reset_bot_sessions
+from .execution import (
+    AWAKE_GAP,
+    Execution,
+    bot_repository,
+    bump_bot_session_epoch,
+    flag_cut,
+    reset_bot_sessions,
+)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -2110,7 +2117,7 @@ def create_app(settings=None):
         """Online computers counted by state (backend/runner_versions.py): current, updating, needs_update, ..."""
         counts = {}
         with store.read() as c:
-            cutoff = H.shift(H.now(), seconds=-views.AWAKE_GAP)
+            cutoff = H.shift(H.now(), seconds=-AWAKE_GAP)
             known = runner_versions.load(c)
             for row in c.execute(
                 "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)
