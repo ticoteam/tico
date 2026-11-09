@@ -90,6 +90,10 @@ def _a_person_with_everything(c):
         (jane, now),
     )
     c.execute(
+        "INSERT INTO entity_lookups (id, attempt_id, entity_id, created_at) VALUES ('look_jane', 'att_jane', ?, ?)",
+        (jane, now),
+    )
+    c.execute(
         "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, revision, "
         "synced_at, status) VALUES ('ext_jane', ?, 'conn_close', 'close', 'contact', 'cl_4411', '', '', ?, 'active')",
         (jane, now),

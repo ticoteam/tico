@@ -4213,6 +4213,361 @@ def market_research(api, args):
     return api.post("market/spend/research", {"description": args["description"]}, key=_key(args))
 
 
+# ----------------------------------------------------------------------------- directory
+# The Directory (backend/entities/routes.py): `hub directory`. The one read rule decides what each reader sees; a tool here
+# only names what to ask. Reads are offered to every kind of caller; writes to people and bots, not the Assistant.
+DIRECTORY_VALUE_TYPES = [
+    "text",
+    "number",
+    "currency",
+    "date",
+    "timestamp",
+    "checkbox",
+    "select",
+    "status",
+    "email",
+    "phone",
+    "domain",
+    "url",
+    "personal_name",
+    "rating",
+    "actor",
+]
+DIRECTORY_REF = _s("An entity: its id, an email, a domain, a name or an external id")
+DIRECTORY_MATCH = {
+    "type": "object",
+    "description": "How to find the one entity: one of id, email, domain or name (a name needs a type match)",
+    "additionalProperties": {"type": "string"},
+}
+
+
+def _clean(fields):
+    """A request body without the fields the caller did not give (the server takes its own defaults for them)."""
+    return {k: v for k, v in fields.items() if v is not None}
+
+
+@tool(
+    "hub_directory_self",
+    "Who we are in the Directory: our company, the places we operate in, and the obligations that bind us.",
+    {},
+)
+def directory_self(api, args):
+    return api.get("entities/self")
+
+
+@tool(
+    "hub_directory_types",
+    "The Directory's entity types (person, organization, place ...) and the ones added, each with its description and who added it.",
+    {},
+)
+def directory_types(api, args):
+    return api.get("entities/types")
+
+
+@tool(
+    "hub_directory_describe",
+    "One entity type: its attributes with value type, owner and options, and the link types that may touch it.",
+    {"type": _s("The type key, like organization")},
+    required=("type",),
+)
+def directory_describe(api, args):
+    return api.get("entities/types/" + args["type"])
+
+
+@tool(
+    "hub_directory_find",
+    "Entities of one type that you can see, by name (a prefix), status or a link to us (customer_of). "
+    "A page is 50; pass its next as after for the next page.",
+    {
+        "type": _s("The type key, like organization"),
+        "name": _s("A name prefix"),
+        "status": _s("A status key"),
+        "link": _s("A link to us, like customer_of"),
+        "after": _s("The next the last page gave"),
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    },
+    required=("type",),
+)
+def directory_find(api, args):
+    return api.get(
+        "entities/find/" + args["type"],
+        name=args.get("name"),
+        status=args.get("status"),
+        link=args.get("link"),
+        after=args.get("after"),
+        limit=args.get("limit"),
+    )
+
+
+@tool(
+    "hub_directory_get",
+    "One entity as you see it: its values with source and age, its links, external records and your notes. "
+    "A reference that two entities match returns both, marked ambiguous.",
+    {"ref": DIRECTORY_REF},
+    required=("ref",),
+)
+def directory_get(api, args):
+    return api.get("entities/card", ref=args["ref"])
+
+
+@tool(
+    "hub_directory_rules",
+    "The rules that apply to an entity, each with the path it comes by.",
+    {
+        "ref": DIRECTORY_REF,
+        "action": _s("What you would do, like email"),
+        "as_bot": _s("The bot the rules are for"),
+    },
+    required=("ref",),
+)
+def directory_rules(api, args):
+    return api.get("entities/rules", ref=args["ref"], action=args.get("action"), as_bot=args.get("as_bot"))
+
+
+@tool(
+    "hub_directory_upsert",
+    "Create or update one entity of a type. The match names it; one that matches more than one entity is refused, never guessed. "
+    "Values are set by attribute key, and a value that changes keeps its old one in history.",
+    {
+        "type": _s("The type key, like person"),
+        "match": DIRECTORY_MATCH,
+        "values": {"type": "object", "description": "Attribute key to value"},
+        "name": _s("The entity's name (required to create one unless the match gives it)"),
+        "evidence_id": _s("A market evidence id that supports the values"),
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    required=("type", "match"),
+    writes=True,
+)
+def directory_upsert(api, args):
+    body = _clean(
+        {
+            "type": args["type"],
+            "match": args["match"],
+            "values": args.get("values") or {},
+            "name": args.get("name"),
+            "evidence_id": args.get("evidence_id"),
+            "confidence": args.get("confidence"),
+        }
+    )
+    return api.post("entities", body, key=_key(args))
+
+
+@tool(
+    "hub_directory_link",
+    "A typed, dated link between two entities you can see. The link type says which ends it may join; a link already current is returned, not written twice.",
+    {
+        "from_ref": DIRECTORY_REF,
+        "link_key": _s("The link type, like works_at"),
+        "to_ref": DIRECTORY_REF,
+        "valid_from_on": _s("YYYY-MM-DD the link starts"),
+        "valid_until_on": _s("YYYY-MM-DD the link ends"),
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidence_id": _s("A market evidence id that supports the link"),
+    },
+    required=("from_ref", "link_key", "to_ref"),
+    writes=True,
+)
+def directory_link(api, args):
+    body = _clean(
+        {
+            "from_ref": args["from_ref"],
+            "link_key": args["link_key"],
+            "to_ref": args["to_ref"],
+            "valid_from_on": args.get("valid_from_on"),
+            "valid_until_on": args.get("valid_until_on"),
+            "confidence": args.get("confidence"),
+            "evidence_id": args.get("evidence_id"),
+        }
+    )
+    return api.post("entities/links", body, key=_key(args))
+
+
+@tool(
+    "hub_directory_unlink",
+    "End a link: it stops being current today. Its history stays.",
+    {"link_id": _s("The link's id, from hub_directory_get")},
+    required=("link_id",),
+    writes=True,
+)
+def directory_unlink(api, args):
+    return api.post("entities/unlink", {"link_id": args["link_id"]}, key=_key(args))
+
+
+@tool(
+    "hub_directory_merge",
+    "Merge a duplicate (drop) into the entity it is a copy of (keep): the dropped entity's rows move to the kept one, "
+    "and hub_directory_unmerge reverses it exactly.",
+    {"keep": DIRECTORY_REF, "drop": DIRECTORY_REF},
+    required=("keep", "drop"),
+    writes=True,
+)
+def directory_merge(api, args):
+    return api.post("entities/merge", {"keep": args["keep"], "drop": args["drop"]}, key=_key(args))
+
+
+@tool(
+    "hub_directory_unmerge",
+    "Reverse the last merge of a dropped entity, named by its own id (a merged reference answers with the kept entity).",
+    {"drop": _s("The dropped entity's id")},
+    required=("drop",),
+    writes=True,
+)
+def directory_unmerge(api, args):
+    return api.post("entities/unmerge", {"drop": args["drop"]}, key=_key(args))
+
+
+@tool(
+    "hub_directory_history",
+    "Past values of an entity's fields, newest first. Name an attribute for one field. A page is 50; pass its next as after.",
+    {
+        "ref": DIRECTORY_REF,
+        "attribute": _s("One attribute key, like title"),
+        "after": _s("The next the last page gave"),
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    },
+    required=("ref",),
+)
+def directory_history(api, args):
+    return api.get(
+        "entities/history",
+        ref=args["ref"],
+        attribute=args.get("attribute"),
+        after=args.get("after"),
+        limit=args.get("limit"),
+    )
+
+
+@tool(
+    "hub_directory_note",
+    "A note on an entity. audience me is yours alone; company is shown to everyone who can see the entity.",
+    {
+        "ref": DIRECTORY_REF,
+        "body": _s("The note"),
+        "audience": {"type": "string", "enum": ["me", "company"]},
+        "evidence_id": _s("A market evidence id the note cites"),
+    },
+    required=("ref", "body"),
+    writes=True,
+)
+def directory_note(api, args):
+    body = _clean(
+        {
+            "ref": args["ref"],
+            "body": args["body"],
+            "audience": args.get("audience") or "company",
+            "evidence_id": args.get("evidence_id"),
+        }
+    )
+    return api.post("entities/notes", body, key=_key(args))
+
+
+@tool(
+    "hub_directory_attribute_add",
+    "Add an attribute to an entity type. Its description is required; a select or status needs its options; "
+    "an owner of connection:<id> makes the field that connection's.",
+    {
+        "type": _s("The type key, like organization"),
+        "key": _s("The attribute key, lowercase, like crm_stage"),
+        "name": _s("The label people see"),
+        "value_type": {"type": "string", "enum": DIRECTORY_VALUE_TYPES},
+        "description": _s("What the attribute holds"),
+        "options": {
+            "type": "array",
+            "description": "For a select or status: each option's key and label",
+            "items": {
+                "type": "object",
+                "properties": {"key": _s("The option key"), "label": _s("The option's label")},
+                "required": ["key", "label"],
+                "additionalProperties": False,
+            },
+        },
+        "multiple": {"type": "boolean"},
+        "unique_value": {"type": "boolean"},
+        "required": {"type": "boolean"},
+        "sensitive": {"type": "boolean", "description": "Only Finance's owner and the system read it"},
+        "owner": _s("tico (the default) or connection:<id>"),
+    },
+    required=("type", "key", "name", "value_type", "description"),
+    writes=True,
+)
+def directory_attribute_add(api, args):
+    body = _clean(
+        {
+            "key": args["key"],
+            "name": args["name"],
+            "description": args["description"],
+            "value_type": args["value_type"],
+            "options": args.get("options") or [],
+            "multiple": args.get("multiple"),
+            "unique_value": args.get("unique_value"),
+            "required": args.get("required"),
+            "sensitive": args.get("sensitive"),
+            "owner": args.get("owner"),
+        }
+    )
+    return api.post("entities/types/" + args["type"] + "/attributes", body, key=_key(args))
+
+
+@tool(
+    "hub_directory_type_add",
+    "Add an entity type, with its description. A near-duplicate of a type that exists is refused with that type.",
+    {
+        "key": _s("The type key, lowercase, like vendor"),
+        "name": _s("The name people see"),
+        "description": _s("What the type is for"),
+        "plural_name": _s("Its plural, if not name plus s"),
+        "icon": _s("A short icon name"),
+    },
+    required=("key", "name", "description"),
+    writes=True,
+)
+def directory_type_add(api, args):
+    body = _clean(
+        {
+            "key": args["key"],
+            "name": args["name"],
+            "description": args["description"],
+            "plural_name": args.get("plural_name"),
+            "icon": args.get("icon"),
+        }
+    )
+    return api.post("entities/types", body, key=_key(args))
+
+
+@tool(
+    "hub_directory_link_type_add",
+    "Add a link type, with its description. inherits_rules says a rule toward one end reaches the other (works_at does; "
+    "a competitor does not). symmetric stores the link once, both ways.",
+    {
+        "key": _s("The link key, lowercase, like advises"),
+        "name": _s("The name from the near end"),
+        "inverse_name": _s("The name from the far end"),
+        "description": _s("What the link means"),
+        "from_type": _s("The type the link starts at, if it must"),
+        "to_type": _s("The type the link ends at, if it must"),
+        "inherits_rules": {"type": "boolean"},
+        "symmetric": {"type": "boolean"},
+    },
+    required=("key", "name", "inverse_name", "description"),
+    writes=True,
+)
+def directory_link_type_add(api, args):
+    body = _clean(
+        {
+            "key": args["key"],
+            "name": args["name"],
+            "inverse_name": args["inverse_name"],
+            "description": args["description"],
+            "from_type": args.get("from_type"),
+            "to_type": args.get("to_type"),
+            "inherits_rules": args.get("inherits_rules"),
+            "symmetric": args.get("symmetric"),
+        }
+    )
+    return api.post("entities/link-types", body, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- listening, intake
 @tool(
     "hub_listening_save",
@@ -6570,6 +6925,55 @@ def people_list(api, args):
         {k: p.get(k) for k in ("id", "name", "email", "title", "team", "reports_to", "github")}
         for p in api.get("org")["people"]
     ]
+
+
+@tool(
+    "hub_setup_show",
+    "Where Finish setup stands, for the owner or an admin: whether the welcome wizard is finished (`completed`, "
+    "`needed`), its saved answers and picks, the people the company file from setup names (`company_import.people`: "
+    "`id` is the key `hub_setup_invite` takes, `person` is set once they are on the roster, `invited_at` once Tico "
+    "mailed them), a company file that could not be imported (`company_import_failed`), and the getting-started "
+    "checklist (`getting_started.items`: `done`, `optional`, `skipped`).",
+    {},
+)
+def setup_show(api, args):
+    setup = api.get("setup")
+    started = api.get("getting-started")
+    return {**setup, "getting_started": {k: started.get(k) for k in ("items", "done", "total", "complete")}}
+
+
+@tool(
+    "hub_setup_complete",
+    "Finish the welcome wizard with the answers and picks it has saved (`hub_setup_show`), as the owner: the built-in "
+    "bots are created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. The "
+    "same as the wizard's Create my team. Answers with the setup record. The wizard's choices are saved with "
+    "`hub_api` PUT /api/v2/setup, or come from the company file or sample company the install was given.",
+    {},
+    writes=True,
+)
+def setup_complete(api, args):
+    return api.post("setup/complete", {}, key=_key(args))
+
+
+@tool(
+    "hub_setup_invite",
+    "Invite one person the company file from setup names, as the owner: they go on the roster and the sign-in list "
+    "with this email, the seats that waited with the owner now report to them, and Tico mails the invitation. "
+    "Inviting again sends again. Take `person_key` from `hub_setup_show` (`company_import.people[].id`). Answers with "
+    "the setup record.",
+    {
+        "person_key": _s("The person's id in the company file (`company_import.people[].id` from hub_setup_show)"),
+        "email": _s("Their email address; leave out to use the one they were added with"),
+    },
+    required=("person_key",),
+    writes=True,
+)
+def setup_invite(api, args):
+    return api.post(
+        f"setup/company/people/{quote(str(args['person_key']), safe='')}/invite",
+        {"email": args.get("email") or ""},
+        key=_key(args),
+    )
 
 
 @tool(
@@ -11871,6 +12275,7 @@ FINANCE_REPORTS = [
     "ar_aging",
     "spend_by",
     "campaigns",
+    "subscriptions",
     "close",
     "sales_tax",
     "1099",
@@ -11893,6 +12298,7 @@ FINANCE_METRICS = [
     "unattributed",
     "ad_spend",
     "per_conversion",
+    "subscriptions_monthly",
 ]
 FINANCE_SEARCH = [
     "entry",
@@ -11907,6 +12313,7 @@ FINANCE_SEARCH = [
     "project",
     "vendor",
     "campaign",
+    "subscription",
 ]
 FINANCE_INBOX = [
     "uncategorized",
@@ -12128,18 +12535,18 @@ def _fin_paged(api, path, query, key, budget):
 
 @tool(
     "hub_finance_search",
-    "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-    "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
-    "name, with their ids, for categorize, bill_create and rule_create. campaign finds an ad campaign by name with its "
-    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). Name a kind to page with "
-    "cursor; without one you get the first few of each kind (not accounts, vendors or campaigns: name that kind).",
+    "Search what you may see: entries, bank and card rows, bills, invoices, contacts, rules, cards (each with the "
+    "vendors it is saved on). account: chart lines by code or name, with ids, for categorize, bill_create and "
+    "rule_create. campaign: an ad campaign by name, with owner, spend, clicks and conversions. subscription: a "
+    "recurring charge by vendor name, with status, monthly cost and next charge. Name a kind to page with cursor; "
+    "otherwise the first few of each kind, except accounts, vendors, campaigns and subscriptions (name one of those).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),
         "status": _s("Row, document or card status"),
         "contact_id": _s("Bills/invoices: this vendor or customer"),
-        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
-        "account_id": _s("Entries/rows: this chart-of-accounts line"),
+        "vendor": _s("Cards: saved on this vendor (contact id or name)"),
+        "account_id": _s("Entries/rows: this chart line"),
         "money_account_id": _s("Entries/rows: this bank or card account"),
         "start": FIN_DAY,
         "end": FIN_DAY,
@@ -12147,7 +12554,7 @@ def _fin_paged(api, path, query, key, budget):
         "contact_kind": _s("Contacts: vendor, customer or both", enum=["vendor", "customer", "both"]),
         "active": {"type": "boolean", "description": "Contacts: active or not"},
         "rule_kind": _s("Rules: gate or posting", enum=["gate", "posting"]),
-        "month": _s("Campaigns: the month, YYYY-MM (default this month)"),
+        "month": _s("Campaigns: YYYY-MM (default this month)"),
         "cursor": _s("next_cursor from the last page (needs kind)"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"},
     },
@@ -12201,16 +12608,16 @@ def finance_search(api, args):
 
 @tool(
     "hub_finance_report",
-    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-    "ar_aging, spend_by, campaigns (the ad campaigns with their owner, spend, clicks and conversions), or close (a "
-    "month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
-    "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
+    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, "
+    "campaigns (owner, spend, clicks, conversions), subscriptions (monthly total, renewals in 30 days) or close (a "
+    "month's checklist). Rows past top_n fold into \"Other · n\". sales_tax and 1099 are a year's tax workpapers: "
+    "whole, and only for someone who sees everything.",
     {
         "kind": _s("The report", enum=FINANCE_REPORTS),
         "start": FIN_DAY,
         "end": FIN_DAY,
         "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
-        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
+        "basis": _s("cash or accrual (default: company's)", enum=["cash", "accrual"]),
         "compare": _s("prior adds the window before", enum=["prior"]),
         "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
         "by": _s(
@@ -12236,7 +12643,7 @@ def finance_search(api, args):
             "type": "integer",
             "minimum": 2000,
             "maximum": 2100,
-            "description": "sales_tax, 1099: the calendar year (this year when omitted)",
+            "description": "sales_tax, 1099: the year (default this year)",
         },
     },
     ("kind",),
@@ -12257,10 +12664,10 @@ def finance_report(api, args):
 
 @tool(
     "hub_finance_metric",
-    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, "
-    "spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, "
-    "unattributed, ad_spend (your campaigns' spend over start..end, this month by default), per_conversion (that spend "
-    "over the conversions, null with none).",
+    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, spend, "
+    "budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, "
+    "ad_spend (your campaigns' spend over start..end; default this month), per_conversion (ad spend over conversions, "
+    "null if none), subscriptions_monthly (monthly cost of active subscriptions, with count).",
     {
         "name": _s("The metric", enum=FINANCE_METRICS),
         "budget_id": _s("budget_remaining/budget_pct_used: the budget"),
@@ -12268,7 +12675,7 @@ def finance_report(api, args):
         "end": FIN_DAY,
         "account_id": _s("cash: one money account"),
         "team": _s("spend: one team"),
-        "teammate": _s("spend: one teammate (human:… or bot:…)"),
+        "teammate": _s("spend: one teammate (human:id or bot:id)"),
         "days": {"type": "integer", "minimum": 0, "maximum": 3650, "description": "ap_due/ar_overdue: within n days"},
     },
     ("name",),
@@ -12280,8 +12687,8 @@ def finance_metric(api, args):
 
 @tool(
     "hub_finance_brief",
-    "What changed in Finance for you: a few short lines about the money you may see (your budgets, your team's, "
-    "cash and burn where you see the company), with as_of (when those numbers last moved) and changed_since.",
+    "Finance changes for you: short lines on the money you may see (budgets, your team's, cash and burn where you see "
+    "the company), with as_of (when the numbers last moved) and changed_since.",
     {},
     (),
 )
@@ -12291,9 +12698,8 @@ def finance_brief(api, args):
 
 @tool(
     "hub_finance_act",
-    "Ask for one Finance action: committed, sent for approval, denied or failed. kind=help lists "
-    "every kind; kind=help with payload {\"kind\": k} gives k's fields. dry_run says what would happen. "
-    "Requires operation_id, which is the action's key: a retry never acts twice.",
+    "One Finance action: committed, sent for approval, denied or failed. kind=help lists kinds; kind=help with payload "
+    "{'kind': k} gives k's fields. Requires operation_id, the action's key: a retry never acts twice.",
     {
         "kind": _s("The action kind, or help"),
         "payload": {"type": "object", "description": "The kind's fields"},
@@ -12328,12 +12734,11 @@ def finance_action(api, args):
 
 @tool(
     "hub_finance_inbox",
-    "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-    "invoices, budgets near limit, failed syncs, months ready to close, books not reconciled for over a month "
-    "(unreconciled), emailed bills Finance did not take (bill_email); with counts per kind. Name a kind to page "
-    "through that kind alone, past its first 200.",
+    "Your Finance work queue, with counts per kind: uncategorized rows, bills to enter, receipts, bills due, overdue "
+    "invoices, budgets near limit, failed syncs, months ready to close, unreconciled (not reconciled for over a month), "
+    "bill_email (emailed bills Finance did not take). Name a kind to page through it alone, past its first 200.",
     {
-        "kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
+        "kind": _s("Only this kind, paged with cursor", enum=FINANCE_INBOX),
         "cursor": _s("next_cursor from the last page (same kind)"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Items per page (default 50)"},
     },
@@ -13030,6 +13435,11 @@ AUDIENCE = {
     "hub_message_redact": BOTOPS,
     "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    # Finish setup (backend/onboarding.py): the owner finishes it, and an admin reads it. A person's own agent, handed over
+    # from setup (docs/connect-an-agent.md), uses these with their personal token.
+    "hub_setup_show": ("owner", "admin"),
+    "hub_setup_complete": ("owner",),
+    "hub_setup_invite": ("owner",),
     "hub_skill_submit": PEOPLE + BOTS,  # any person or bot proposes; an admin approves (backend/skills.py)
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),  # a bot needs Create product repositories (server)
@@ -13203,6 +13613,10 @@ COUNSEL_TOOLS = frozenset(
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
 ASSISTANT_HIDDEN = frozenset(
     {
+        # The Directory's schema and field history: a person's Assistant reads entities (get, find, rules, self).
+        "hub_directory_types",
+        "hub_directory_describe",
+        "hub_directory_history",
         "hub_credential_grant",
         "hub_credential_revoke",
         "hub_credential_delete",

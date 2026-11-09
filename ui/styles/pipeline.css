@@ -168,20 +168,33 @@
 .pchip { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 12px; border-radius: 16px;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; scroll-snap-align: start; }
 .pchip::before { content: ""; position: absolute; inset: -6px -2px; }
-.pchip.on { background: var(--surface2); border-color: var(--accent); }
+.pchips .pchip { margin: 0; }  /* the settings' owner chips add a left margin to every .pchip; a stage chip starts at the row's edge */
+.pchip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .pchip-n { color: var(--muted); font-size: 12px; }
+.pchip.on .pchip-n { color: inherit; opacity: .8; }
 .pchip-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
-.pipe-next { display: block; width: 100%; min-height: 44px; margin-top: 8px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.pchip.on .pchip-dot { background: var(--accent-ink); }
+/* A fade on each edge where chips are cut off, and on no edge with nothing beyond it (pipelineChipsEdges, pipeline-rail.ts). */
+.pchips.fade-l { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px); mask-image: linear-gradient(to right, transparent, #000 28px); }
+.pchips.fade-r { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.pchips.fade-l.fade-r { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.pipe-next { display: block; width: 100%; min-height: 44px; margin: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
 .pipe-phone { min-height: 40vh; }
 /* A phone's stage: its name and limit on a quiet line, then the cards full width (ui/app/task-pipelines.js). */
 .pipe-stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.pipe-stage-line { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 6px 16px 0; color: var(--muted); font-size: 13px; }
+.pipe-stage-line { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 6px 16px 0; color: var(--muted); font-size: 13px; }
 .pipe-stage-line .pipe-play-chip { margin-left: auto; }
+.pipe-stage-limit { flex: 1 1 auto; min-width: 0; }
 .pipe-stage-cards { display: flex; flex-direction: column; gap: 8px; padding: 0 16px 6px; }
 .pipe-stage-cards .bcard { width: 100%; box-sizing: border-box; }
 .pipe-stage-cards .empty { padding: 6px 4px; color: var(--muted); font-size: 13px; }
 @media (max-width: 600px) {
+  .tl-play { margin-left: 0; }
   .tl-play .pipe-play-word { display: none; }
+  /* ✎ is the same 30 px icon as ⋯ and +, with a 44 px tap area (the extra reach is not drawn). */
+  .tl-pipeline-edit { color: var(--ink); }
+  .tl-pipeline-edit::before { content: ""; position: absolute; inset: -7px -8px; }
 }
 
 @media (min-width: 601px) and (max-width: 760px) {

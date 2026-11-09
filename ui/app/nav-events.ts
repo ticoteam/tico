@@ -3,18 +3,18 @@
 'use strict';
 
 $('#search-close').onclick = () => $('#search-modal').close();
-$('#search-modal').addEventListener('click', ev => {
+$('#search-modal').addEventListener('click', (ev: MouseEvent) => {
   if (ev.target === $('#search-modal')) return $('#search-modal').close();
-  const li = ev.target.closest('li[data-href]'); if (li) searchGo(li.dataset.href);
+  const li = eventElement(ev)?.closest<HTMLLIElement>('li[data-href]'); if (li) searchGo(li.dataset.href);
 });
 $('#search-input').oninput = () => { SEARCH_SEL = 0; searchRender(); };
-$('#search-input').onkeydown = ev => {
+$('#search-input').onkeydown = (ev: KeyboardEvent) => {
   const n = $('#search-results').querySelectorAll('li[data-href]').length;
   if (ev.key === 'ArrowDown') { ev.preventDefault(); SEARCH_SEL = Math.min(SEARCH_SEL + 1, n - 1); searchRender(); }
   else if (ev.key === 'ArrowUp') { ev.preventDefault(); SEARCH_SEL = Math.max(SEARCH_SEL - 1, 0); searchRender(); }
   else if (ev.key === 'Enter') { ev.preventDefault(); const li = $('#search-results [aria-selected=true]'); searchGo(li?.dataset.href); }
 };
-document.addEventListener('keydown', ev => {
+document.addEventListener('keydown', (ev: KeyboardEvent) => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); searchOpen(); }
 });
 $('#mobile-more').onclick = () => {
@@ -23,6 +23,6 @@ $('#mobile-more').onclick = () => {
 };
 $('.side-close').onclick = () => setDrawer(false, true);
 $('#side-backdrop').onclick = () => setDrawer(false, true);
-$('#side').addEventListener('click', ev => { if (ev.target.closest('a[href^="#/"]')) setDrawer(false); });
-window.addEventListener('keydown', ev => { if (ev.key === 'Escape' && document.body.classList.contains('drawer')) setDrawer(false, true); });
+$('#side').addEventListener('click', (ev: MouseEvent) => { if (eventElement(ev)?.closest('a[href^="#/"]')) setDrawer(false); });
+window.addEventListener('keydown', (ev: KeyboardEvent) => { if (ev.key === 'Escape' && document.body.classList.contains('drawer')) setDrawer(false, true); });
 window.addEventListener('hashchange', () => setDrawer(false));

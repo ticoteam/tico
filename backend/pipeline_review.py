@@ -1659,7 +1659,7 @@ def not_validated(
 
 
 def message_manager(c: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, text: str) -> Row:
-    """Writes to the pipeline's manager bot about this item, with its context."""
+    """Writes to the pipeline's Pipeline Manager about this item, with its context."""
     body = (text or "").strip()
     if not body:
         raise Declined("note_required", "Write the message", 422)

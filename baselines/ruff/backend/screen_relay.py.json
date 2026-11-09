@@ -1,0 +1,5 @@
+{
+  "backend/screen_relay.py": {
+    "BLE001": 1
+  }
+}
