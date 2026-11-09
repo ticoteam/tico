@@ -991,7 +991,7 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     return None
 
 
-# What a goal suggestion card says beside the payload (ui/goals-kpis.js goalPropHtml): the names, the measure an Add a
+# What a goal suggestion card says beside the payload (ui/goals-kpis.ts goalPropHtml): the names, the measure an Add a
 # KPI suggestion adds (new or reused), targets in words, and Now / Proposed for new wording or a new definition.
 CARD_FIELDS = {
     "name": "Name",
@@ -1133,6 +1133,29 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
         _event(conn, goal_id, actor, "proposal", None, kind, row["reason"])
     H.event(conn, actor, "goal.propose", row["id"], {"kind": kind, "goal_id": goal_id, "kpi_id": kpi_id})
     return proposal(conn, row["id"])
+
+
+def subject(payload):
+    """What a suggestion is about, whatever its words: the KPI it links or the measure it names. Two suggestions for
+    different measures on one goal are different subjects."""
+    payload = payload if isinstance(payload, dict) else {}
+    kpi_part = payload.get("kpi")
+    kpi_part = kpi_part if isinstance(kpi_part, dict) else {}
+    return str(payload.get("kpi_id") or kpi_part.get("name") or "").strip().lower()
+
+
+def pending_like(conn, kind, goal_id, kpi_id, payload):
+    """The pending suggestions about the same subject as this one (same kind, goal and KPI), newest first: the cards a
+    "no" to it refers to. Another measure's card on the same goal is not one of them."""
+    want = subject(payload)
+    cards = H._rows(
+        conn.execute(
+            "SELECT * FROM goal_proposals WHERE status='pending' AND kind=? AND coalesce(goal_id,'')=? "
+            "AND coalesce(kpi_id,'')=? ORDER BY proposed_at DESC",
+            (kind, goal_id or "", kpi_id or ""),
+        )
+    )
+    return [_proposal_view(r, conn) for r in cards if subject(H._json(r["payload"], {})) == want]
 
 
 def proposal(conn, proposal_id):

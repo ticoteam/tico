@@ -1092,7 +1092,7 @@ class Gateway:
             # Waiting on a reply means the bot's question is the last thing in the conversation;
             # once the person has answered, `write` links the answer and the bot is not waiting.
             last = c.execute(
-                "SELECT sender_id,kind,body FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1",
+                "SELECT sender_id,body FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1",
                 (threads.get(one["bot"]),),
             ).fetchone()
             recipients.append(
@@ -1100,7 +1100,7 @@ class Gateway:
                     **one,
                     "open_ask": bool(last)
                     and last["sender_id"] == "bot:" + one["bot"]
-                    and (last["kind"] == "ask" or ends_with_question(last["body"])),
+                    and ends_with_question(last["body"]),
                 }
             )
         return {
@@ -2639,26 +2639,34 @@ def conversation_for(c, actor, bot, event, now):
 
 def say_to_bot(c, actor, bot, event, text, refs, now):
     """One person's message into the bot's thread conversation, as the write makes it: a reply to the bot's last line,
-    or the answer to its open question. Returns {message, conversation_id, opened}; a refusal raises H.Refused."""
+    which may answer its open question task. Returns {message, conversation_id, opened}; a refusal raises H.Refused."""
     cid, opened = conversation_for(c, actor, bot, event, now)
-    # A follow-up answers the bot's last line: an unanswered `ask` is closed with an `answer` (what `hub question ask
-    # --wait` polls for); any other bot line is linked.
-    kind, reply_to = "say", None
+    # A follow-up replies to the bot's last line; when the bot asked this person a question task since they last
+    # wrote here, the follow-up answers it (question_tasks.answer_from_reply).
+    reply_to = None
     last = c.execute(
-        "SELECT id,sender_id,kind FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1", (cid,)
+        "SELECT id,sender_id FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1", (cid,)
     ).fetchone()
     if last and last["sender_id"] == "bot:" + bot:
         reply_to = last["id"]
-        if last["kind"] == "ask" and not H.answers_to(c, [last["id"]]):
-            kind = "answer"
     c.execute("SAVEPOINT slack_write")
     try:
-        message = H.say(c, actor, "bot:" + bot, text, conversation_id=cid, kind=kind, refs=refs, in_reply_to=reply_to)
+        message = H.say(c, actor, "bot:" + bot, text, conversation_id=cid, refs=refs, in_reply_to=reply_to)
         c.execute("RELEASE slack_write")
     except H.Refused:
         c.execute("ROLLBACK TO slack_write")
         c.execute("RELEASE slack_write")
         raise
+    if reply_to and H.is_human(actor):
+        from . import question_tasks
+        from .store import Problem
+
+        c.execute("SAVEPOINT slack_answer")
+        try:
+            question_tasks.answer_from_reply(c, actor, "bot:" + bot, cid, message)
+        except (H.Refused, Problem):
+            c.execute("ROLLBACK TO slack_answer")  # the reply stands; the question stays open for Tico
+        c.execute("RELEASE slack_answer")
     c.execute(
         "UPDATE slack_threads SET last_routed_at=? WHERE channel=? AND thread_ts=? AND bot=?",
         (now, event["channel"], event["thread_ts"], bot),

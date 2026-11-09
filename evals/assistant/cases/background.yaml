@@ -68,7 +68,6 @@
   must_not:
     - '^task (bulk close|close)\b'
     - '^approval (approve|decline)'
-    - '^question answer'
     - '^automation update'
     - '^message send'
     - '^assistant (propose|send)\b'

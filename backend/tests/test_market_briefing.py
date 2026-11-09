@@ -15,15 +15,19 @@ WEEK = "2026-W44"
 
 
 def brief(
-    api, items=None, week=WEEK, title="Week 44", body="Northwind changed its pricing.", token="ana-test", expected=200
+    api,
+    items=None,
+    week=WEEK,
+    title="Week 44",
+    body="Northwind changed its pricing.",
+    token="ana-test",
+    expected=200,
+    answers=None,
 ):
-    return post(
-        api,
-        "market/briefings",
-        {"week": week, "title": title, "body": body, "items": items or []},
-        token=token,
-        expected=expected,
-    )
+    payload = {"week": week, "title": title, "body": body, "items": items or []}
+    if answers is not None:
+        payload["answers"] = answers
+    return post(api, "market/briefings", payload, token=token, expected=expected)
 
 
 def item(*entities, text="Northwind raised its price.", kind="change"):
@@ -155,6 +159,33 @@ def test_an_automation_post_without_items_keeps_the_weeks_items_and_bets(seeded,
         MB.post(c, SimpleNamespace(actor="human:ana"), "2026-W45", "Empty", "Body.", None)
     empty = get(seeded, "market/briefings/2026-W45")["briefing"]
     assert (empty["items"], empty["bets"]) == ([], [])
+
+
+def test_answers_are_clipped_kept_by_a_post_without_them_and_a_missing_key_has_no_line(seeded, events):
+    """The Market page shows one line per question: each is folded and cut at a word to 140 characters, an empty or
+    missing one is absent, a post without answers keeps the week's, and an unknown key is refused."""
+    long = "Northwind cut its entry price " + "and bundled the screening add-on " * 6
+    got = brief(seeded, answers={"changed": "  Northwind   cut\nits price.  ", "players": long, "money": "   "})[
+        "briefing"
+    ]
+    answers = got["answers"]
+    assert set(answers) == {"changed", "players"}
+    assert answers["changed"] == "Northwind cut its price."
+    assert len(answers["players"]) <= 140 and answers["players"].endswith("…")
+    assert long.startswith(answers["players"][:-1]) and not answers["players"][:-1].endswith(" ")
+    assert get(seeded, "market/briefings/latest")["briefing"]["answers"] == answers
+    assert brief(seeded, body="Edited.")["briefing"]["answers"] == answers  # no answers: the week's stay
+    assert brief(seeded, answers={"reach": "Through agents."})["briefing"]["answers"] == {"reach": "Through agents."}
+    brief(seeded, answers={"why": "No such question."}, expected=422)
+    assert brief(seeded, week="2026-W45")["briefing"]["answers"] == {}
+
+
+def test_each_item_carries_the_touched_bets_that_watch_its_entities(seeded, events):
+    cited, thesis = publish_bets(seeded)
+    items = brief(seeded, items=[item("company/northwind"), item("company/brightline"), item("company/harborly")])[
+        "briefing"
+    ]["items"]
+    assert [i["bets"] for i in items] == [[cited["id"]], [thesis["id"]], []]
 
 
 def test_market_labels_a_briefing_by_how_often_it_is_posted(seeded):

@@ -700,7 +700,7 @@ mod tests {
             json!({"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5-5"});
         let choices = vec![
             json!({"runtime": "codex", "model": "gpt-6.1-sol"}),
-            json!({"runtime": "pi", "model": "tico-mid-1.0"}),
+            json!({"runtime": "pi", "model": "tico-medium-1.0"}),
         ];
         let ready = |rt: &str| for_runtime(&got, rt).is_some();
         let chosen = crate::fallback::default_choice(&config, &choices, &env, ready).unwrap();

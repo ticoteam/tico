@@ -59,7 +59,7 @@ from finance_books_rehearsal import (
     NO_PROXY,
     OWNER_ACTOR,
     XERO_OTHER_TENANT,
-    XERO_TENANT,  # noqa: E402
+    XERO_TENANT,
     FakeHQ,
     Results,
     http,

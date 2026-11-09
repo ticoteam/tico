@@ -1,8 +1,9 @@
 """Org rules (docs/rules-plan.md §1, §5, §6): one sentence each, internal (between teammates) or external (what someone outside
 requires of us). A rule says who follows it and, for an internal rule, with whom. Due dates live in backend/rule_due.py.
 
-- Records: `rule_sources` (who an external rule is from), `org_rules`, and `org_rule_holds` (the checks Decide runs on
-  outputs fill it; nothing reads it yet).
+- Records: `org_rules` (its From, `source_entity_id`, is an organization entity: a rule source, see
+  backend/entities/store.py), and `org_rule_holds` (the checks Decide runs on outputs fill it; nothing reads it yet).
+  A rule with a `toward_scope` is structured: backend/entities/rules.py checks it in code, and `matching` skips it.
 - Matching: `matching(c, author, recipients)` is the active rules that apply to one write. Groups are read through
   `people.group_chain`, so a nested group counts; `all_bots` covers any bot, including one made later. With is empty
   (any output) or names a recipient.
@@ -36,6 +37,7 @@ from . import rule_due as D
 from . import task_caps
 from . import teammate_access as TA
 from .models import Contract
+from .entities import store as ES
 from .store import Problem
 from . import bot_settings as BS
 
@@ -57,25 +59,23 @@ SETTINGS_TASK_CAPS = 20  # the task limits a bot's settings name; the rest are c
 SCOPE_KEYS = ("everyone", "all_bots", "outside_editions", "groups", "bots", "people", "names")
 
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS rule_sources(id TEXT PRIMARY KEY, name TEXT NOT NULL, "
-    "kind TEXT NOT NULL CHECK (kind IN ('vendor','customer','government','other')), created_by TEXT NOT NULL, "
-    "created_at TEXT NOT NULL)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS rule_sources_name ON rule_sources(lower(name))",
+    # Rule sources are organization entities now (store.rule_sources; migration 20261108044824 moved the rows).
     "CREATE TABLE IF NOT EXISTS org_rules(id TEXT PRIMARY KEY, "
     "kind TEXT NOT NULL CHECK (kind IN ('internal','external')), text TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-    "source_id TEXT, cite TEXT, who TEXT NOT NULL, with_scope TEXT NOT NULL DEFAULT '{}', "
+    "source_entity_id TEXT, cite TEXT, who TEXT NOT NULL, with_scope TEXT NOT NULL DEFAULT '{}', "
     "where_terms TEXT NOT NULL DEFAULT '[]', "
     "if_broken TEXT NOT NULL DEFAULT 'block' CHECK (if_broken IN ('block','escalate','warn')), reviewer TEXT, "
     "status TEXT NOT NULL CHECK (status IN ('suggested','active','retired')), suggested_by TEXT NOT NULL, "
     "decided_by TEXT, decided_at TEXT, via TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, "
-    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+    "document_entity_id TEXT, toward_scope TEXT NOT NULL DEFAULT '[]', applies_when TEXT, "
+    "party_side TEXT CHECK (party_side IN ('our_side', 'their_side')))",
     "CREATE INDEX IF NOT EXISTS org_rules_status ON org_rules(status, kind, created_at)",
-    "CREATE INDEX IF NOT EXISTS org_rules_source ON org_rules(source_id) WHERE source_id IS NOT NULL",
     "CREATE TABLE IF NOT EXISTS org_rule_holds(id TEXT PRIMARY KEY, operation TEXT NOT NULL, payload TEXT NOT NULL, "
     "author TEXT NOT NULL, destinations TEXT NOT NULL DEFAULT '[]', rule_ids TEXT NOT NULL DEFAULT '[]', "
     "verdict TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
     "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created_at TEXT NOT NULL, "
-    "decided_at TEXT, decided_by TEXT)",
+    "decided_at TEXT, decided_by TEXT, check_kind TEXT NOT NULL DEFAULT 'judged')",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_author ON org_rule_holds(author, state)",
 )
 
@@ -185,6 +185,9 @@ def _row(r):
     d["with"] = json.loads(d.pop("with_scope") or "{}")
     d["where"] = json.loads(d.pop("where_terms", None) or "[]")
     d["cite"] = json.loads(d.pop("cite") or "null")
+    # The From is the entity it names; the API keeps calling it source_id.
+    d["source_id"] = d.pop("source_entity_id", None)
+    d["toward_scope"] = json.loads(d.get("toward_scope") or "[]")
     return d
 
 
@@ -306,10 +309,7 @@ def _ctx(c):
         "groups": {gid: g.get("name") or gid for gid, g in (roster.get("org_groups") or {}).items()},
         "bots": {r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id, slug, display_name FROM bots")},
         "bot_slugs": {r["slug"]: r["id"] for r in c.execute("SELECT id, slug FROM bots")},
-        "sources": {
-            r["id"]: {"id": r["id"], "name": r["name"], "kind": r["kind"]}
-            for r in c.execute("SELECT * FROM rule_sources")
-        },
+        "sources": {r["id"]: {"id": r["id"], "name": r["name"], "kind": r["kind"]} for r in ES.rule_sources(c)},
     }
 
 
@@ -513,6 +513,9 @@ def matching(c, author, recipients=(), place=None):
     keys = None
     out = []
     for row in _active(c):
+        # A structured rule (toward_scope) is checked in code by backend/entities/rules.py; the judge never reads it.
+        if row["toward_scope"]:
+            continue
         if not _hits(row["who"], author_key) or not _where_hits(row["where"], place):
             continue
         if _has(row["with"]):
@@ -791,7 +794,6 @@ def settings_for(c, bot, ctx=None):
             "edit": None,
         }
     )
-    out.append({"text": f"Asks go {HD.MAX_ASK_DEPTH} deep at most", "source": "hubdb", "edit": None})
     out.append({"text": f"{HD.CAP_PER_HOUR} bot-to-bot messages an hour in one chat", "source": "hubdb", "edit": None})
     return out
 
@@ -813,12 +815,12 @@ def _reviewer(c, value):
 def _source_named(c, value):
     """A From by id or by name (case-insensitive), for the list filter."""
     text = str(value or "").strip()
-    rows = c.execute("SELECT id FROM rule_sources WHERE id=? OR lower(name)=lower(?)", (text, text)).fetchall()
+    rows = ES.rule_source_named(c, text)
     if len(rows) > 1:
         raise Problem("validation", f"{text} is more than one source: use its id", 422)
     if not rows:
         raise Problem("not_found", f"There is no source {text}", 404)
-    return rows[0]["id"]
+    return str(rows[0]["id"])
 
 
 def _scope_checked(c, auth, who, value):
@@ -831,6 +833,23 @@ def _scope_checked(c, auth, who, value):
     if scope.get("outside_editions") and not auth.bot_admin(who):
         raise Problem("forbidden", "Only the owner and admins make a rule for outside editions", 403)
     return scope
+
+
+def _structured_terms(toward, applies):
+    """A structured rule's toward_scope (its terms, as backend/entities/rules.py reads them) and applies_when (a
+    condition on self). A rule with no toward_scope is judged, so it takes no applies_when."""
+    from .entities import rules as DR
+
+    terms = [str(t).strip() for t in toward or []]
+    try:
+        DR.parse_scope(terms)
+        if applies:
+            DR.parse_condition(applies)
+    except DR.ScopeError as exc:
+        raise Problem("validation", str(exc), 422) from exc
+    if applies and not terms:
+        raise Problem("validation", "A rule with a condition needs a toward scope", 422)
+    return terms, (str(applies).strip() if applies else None)
 
 
 def add_rule(c, auth, who, body):
@@ -868,6 +887,7 @@ def add_rule(c, auth, who, body):
         else {"groups": [], "bots": [], "people": []}
     )
     where = _where_terms(c, body.get("where"))
+    toward, applies = _structured_terms(body.get("toward_scope"), body.get("applies_when"))
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
     # manage the rule, Everyone included, makes it active at once.
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
@@ -882,6 +902,8 @@ def add_rule(c, auth, who, body):
         "who": _json(scope),
         "with_scope": _json(with_scope),
         "where_terms": _json(where),
+        "toward_scope": _json(toward),
+        "applies_when": applies,
         "if_broken": _if_broken(body.get("if_broken") or "block"),
         "reviewer": _reviewer(c, body.get("reviewer")),
         "status": status,
@@ -894,11 +916,11 @@ def add_rule(c, auth, who, body):
         "updated_at": now,
     }
     c.execute(
-        "INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
-        "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
-        "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
-        ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
-        ":via, :version, :created_at, :updated_at)",
+        "INSERT INTO org_rules (id, kind, text, description, source_entity_id, cite, who, with_scope, "
+        "where_terms, toward_scope, applies_when, if_broken, reviewer, status, suggested_by, decided_by, decided_at, "
+        "via, version, created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
+        ":with_scope, :where_terms, :toward_scope, :applies_when, :if_broken, :reviewer, :status, :suggested_by, "
+        ":decided_by, :decided_at, :via, :version, :created_at, :updated_at)",
         row,
     )
     stored = _get(c, row["id"])
@@ -938,7 +960,7 @@ def edit_rule(c, auth, who, rule_id, body):
     if body.get("source_id") is not None:
         if row["kind"] != "external":
             raise Problem("validation", "Only an external rule has a From", 422)
-        changes["source_id"] = _source_named(c, body["source_id"])
+        changes["source_entity_id"] = _source_named(c, body["source_id"])
     if not changes:
         return view(c, auth, who, row, ctx, quote=False)
     before = _core(row)
@@ -1149,19 +1171,11 @@ def add_source(c, who, body):
     kind = body.get("kind")
     if kind not in SOURCE_KINDS:
         raise Problem("validation", "Kind is " + ", ".join(SOURCE_KINDS), 422)
-    found = c.execute("SELECT * FROM rule_sources WHERE lower(name)=lower(?)", (name,)).fetchone()
-    if found:
-        if found["kind"] != kind:
-            raise Problem("conflict", f"{found['name']} is already a source of kind {found['kind']}", 409)
-        return dict(found)
-    row = {"id": H.new_id(), "name": name, "kind": kind, "created_by": who.actor, "created_at": H.now()}
-    c.execute(
-        "INSERT INTO rule_sources (id, name, kind, created_by, created_at) VALUES (:id, :name, :kind, :created_by, "
-        ":created_at)",
-        row,
-    )
-    audit_log.write(c, who.actor, "rule_source:" + row["id"], None, row, _via(who))
-    H.event(c, who.actor, "rule_source.added", "rule_source:" + row["id"], {"kind": kind})
+    known = {r["id"] for r in ES.rule_sources(c)}
+    row = dict(ES.rule_source_add(c, who.actor, name, kind))
+    if row["id"] not in known:
+        audit_log.write(c, who.actor, "rule_source:" + row["id"], None, row, _via(who))
+        H.event(c, who.actor, "rule_source.added", "rule_source:" + row["id"], {"kind": kind})
     return row
 
 
@@ -1171,7 +1185,7 @@ def seed_external(c, who, text, source_name, source_kind):
     source, so a second seed adds nothing. Returns the rule's id."""
     source = add_source(c, who, {"name": source_name, "kind": source_kind})
     found = c.execute(
-        "SELECT id FROM org_rules WHERE kind='external' AND text=? AND source_id=?", (text, source["id"])
+        "SELECT id FROM org_rules WHERE kind='external' AND text=? AND source_entity_id=?", (text, source["id"])
     ).fetchone()
     if found:
         return str(found["id"])
@@ -1199,7 +1213,7 @@ def seed_external(c, who, text, source_name, source_kind):
         "updated_at": now,
     }
     c.execute(
-        "INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
+        "INSERT INTO org_rules (id, kind, text, description, source_entity_id, cite, who, with_scope, "
         "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
         "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
         ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
@@ -1243,7 +1257,7 @@ def _list_rules(c, auth, who, args):
         sql += " AND kind=?"
         params.append(kind)
     if args.get("source"):
-        sql += " AND source_id=?"
+        sql += " AND source_entity_id=?"
         params.append(_source_named(c, args["source"]))
     rows = [_row(r) for r in c.execute(sql + " ORDER BY created_at DESC, id DESC", params)]
     if args.get("who"):
@@ -1467,6 +1481,8 @@ class RuleCreate(Contract):
     if_broken: Literal["block", "escalate", "warn"] | None = None
     reviewer: str | None = Field(default=None, max_length=200)
     where: list[str] = Field(default_factory=list, max_length=WHERE_MAX)
+    toward_scope: list[str] = Field(default_factory=list, max_length=WHERE_MAX)
+    applies_when: str | None = Field(default=None, max_length=200)
 
 
 class RuleEdit(Contract):
@@ -1729,7 +1745,7 @@ def install(app, store, auth, mutate):
         """Where external rules come from (From), by name."""
         auth.domain(request.state.identity)
         with store.read() as c:
-            rows = [dict(r) for r in c.execute("SELECT * FROM rule_sources ORDER BY lower(name), id")]
+            rows = ES.rule_sources(c)
         page, nxt = _page(rows, cursor, _limit(limit))
         return {"sources": page, "next_cursor": nxt}
 

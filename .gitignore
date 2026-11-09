@@ -9,6 +9,8 @@ app/gen/
 node_modules/
 # The UI's compiled TypeScript (npm run build:ui).
 /build/
+# The API types, written by scripts/check_ui_types.sh from backend/openapi_v2.py; never committed.
+/ui/types/api.d.ts
 .venv/
 .tmp-*
 .pytest_cache/
@@ -35,3 +37,8 @@ tools/release-command/target/
 
 # Local type-check environment (scripts/check_types.sh).
 .venv-pyright/
+
+# Generated from baselines/ by scripts/lint_baseline.py and scripts/pyright_baseline.py: the gate's ruff run and
+# basedpyright read these single files, and git tracks the per-file pieces in baselines/ instead.
+/ruff-baseline.toml
+/.basedpyright/baseline.json

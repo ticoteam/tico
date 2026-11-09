@@ -1,7 +1,8 @@
 """Ad spend in budgets (budgeting.py's live read, reads.py): an ad budget reads its platform's daily spend in place of
 every charge and hold at that platform (card, ACH, bill, order) in each month a healthy import covers, closed or open,
-never both, and the books in any other month; nothing comes out without the platform's figure going in; the tight
-descriptors; the month-end pace; an ad budget only warns (no decline, no freeze, no owner notice); each bot sees its
+never both, and the books in any other month; nothing comes out without the platform's figure going in; the swap only
+on the platform's own contact (an agency's or a bare descriptor's budget reports the platform's figure beside its
+books), and in mirrored books the provider's own vendor; the tight descriptors; the month-end pace; an ad budget only warns (no decline, no freeze, no owner notice); each bot sees its
 own ad budget while its manager bot sees its reports'; and the warnings (ad_warnings.py) go to the spending bot alone,
 once per level per period, and pause nothing.
 
@@ -25,7 +26,9 @@ from backend.finance.context import load
 from backend.finance.core import budgets as B
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.finance.store import ads as SA
+from backend.finance.store import ap as SAP
 from backend.finance.store import budgets as SB
+from backend.finance.store import contacts as SC
 from backend.store import Store
 from backend.tests.test_finance_fixtures import (
     AT,
@@ -160,6 +163,7 @@ def test_platform_spend_stands_in_for_the_card_charge_never_both(books: Store):
         assert google["platform"] == "google_ads" and meta["platform"] == "meta_ads" and marketing["platform"] == ""
         # The bot's budget: Google's 76,000 and not the 40,000 charge on top.
         assert gs["actual"] == 76_000 and gs["spent_from"] == "platform" and gs["as_of"] == AT
+        assert gs["reported"] is None and mk["reported"] is None  # swapped: nothing beside it
         assert ms["actual"] == 12_000 and ms["spent_from"] == "platform"
         # The whole line names no platform, so it reads the books: the expense of record, every charge in it.
         assert mk["actual"] == 40_000 + 30_000 + 9_000 + 5_000 and mk["spent_from"] == "books" and mk["as_of"] is None
@@ -175,6 +179,134 @@ def test_platform_spend_stands_in_for_the_card_charge_never_both(books: Store):
         assert m["spent_from"] == "platform" and m["platform"] == "google_ads" and m["platform_as_of"] == AT
         pct = reads.metric(c, OWNER, "budget_pct_used", budget_id=w["marketing"], at=AT)
         assert pct["spent_from"] == "books" and pct["platform"] == ""
+
+
+# ------------------------------------------------------------------------------------------------ one count per dollar
+def _contact(c: sqlite3.Connection, name: str, aliases: tuple[str, ...] = ()) -> str:
+    book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
+    cid = SAP.insert(
+        c,
+        "fin_contacts",
+        {"book_id": book, "name": name, "kind": "vendor", "created_at": AT, "created_by": OWNER, "updated_at": AT},
+    )
+    for alias in aliases:
+        SAP.alias_add(c, book, alias, cid, AT)
+    return cid
+
+
+def _ad_budget(c: sqlite3.Connection, w: dict[str, str], name: str, vendor: str, amount: int) -> str:
+    done = act(
+        c,
+        OWNER,
+        "budget_create",
+        {
+            "name": name,
+            "teammate": "bot:paid-rental-ads",
+            "vendor": vendor,
+            "amount": amount,
+            "account_id": w["adv"],
+            "parent_id": w["marketing"],
+            "at_limit": "warn",
+        },
+        at=AT,
+    )
+    assert done.status == "committed", done
+    return str(done.result["budget_id"])
+
+
+def test_an_agency_budget_reports_the_platforms_figure_beside_its_books_and_never_in_them(books: Store):
+    """Google spend paid through an agency's bill: the budget on the agency (its name reads as Google Ads, so it is an
+    ad budget) is not on Google's own contact, so nothing is swapped. Spent stays the agency's bill, Google's figure
+    comes back as `reported`, and the warnings read Spent: 76% reported would warn, the books' 10% does not."""
+    w = world(books)
+    platform_spend(books, w["google_ads"], [("2026-10-03", 50_000), ("2026-10-14", 26_000)], "2026-10-01", "2026-10-15")
+    with books.transaction() as c:
+        agency = _contact(c, "Acme Agency (Google Ads)")
+        _ad_budget(c, w, "Agency Google", agency, 100_000)
+        spend(c, "6300", 10_000, day="2026-10-10", teammate="bot:paid-rental-ads", vendor=agency)
+        spend(c, "6300", 40_000, day="2026-10-12", teammate="bot:paid-rental-ads", vendor=w["google_ads_vendor"])
+    with books.read() as c:
+        rows = rows_by_name(c, OWNER)
+        agency_row, google = rows["Agency Google"], rows["Rental Google Ad Owner"]
+        a, g = agency_row["state"], google["state"]
+        assert isinstance(a, dict) and isinstance(g, dict)
+        assert agency_row["platform"] == "google_ads"
+        assert a["actual"] == 10_000 and a["reported"] == 76_000 and a["spent_from"] == "books" and a["as_of"] is None
+        # The budget on Google's own contact still swaps: Google's 76,000 in place of its 40,000 charge.
+        assert g["actual"] == 76_000 and g["reported"] is None and g["spent_from"] == "platform"
+    assert warn(books, AT) == []
+
+
+def test_a_bare_descriptor_budget_swaps_only_once_the_name_is_googles_contact(books: Store):
+    """A budget on GOOGLE *ADS as posted, with no contact behind the name: an ad budget, but the lines it would cut
+    are not filed under Google's contact, so it reports and nets nothing. Once the name is an alias of Google's
+    contact, its lines are Google's and the swap happens."""
+    w = world(books)
+    platform_spend(books, w["google_ads"], [("2026-10-03", 50_000), ("2026-10-14", 26_000)], "2026-10-01", "2026-10-15")
+    with books.transaction() as c:
+        _ad_budget(c, w, "Descriptor", "GOOGLE *ADS", 300_000)
+        spend(c, "6300", 30_000, day="2026-10-12", teammate="bot:paid-rental-ads", vendor="GOOGLE *ADS")
+    with books.read() as c:
+        row = rows_by_name(c, OWNER)["Descriptor"]
+        st = row["state"]
+        assert isinstance(st, dict) and row["platform"] == "google_ads"
+        assert st["actual"] == 30_000 and st["reported"] == 76_000 and st["spent_from"] == "books"
+    with books.transaction() as c:
+        book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
+        SAP.alias_add(c, book, "google *ads", w["google_ads_vendor"], AT)
+    with books.read() as c:
+        st = rows_by_name(c, OWNER)["Descriptor"]["state"]
+        assert isinstance(st, dict)
+        assert st["actual"] == 76_000 and st["reported"] is None and st["spent_from"] == "platform"
+
+
+def _mirrored(store: Store, w: dict[str, str]) -> None:
+    """The books become a provider's: Google's and Meta's contacts are the provider's own ("Google", and a Meta one
+    known by its alias "facebook"), not the ones the import makes."""
+    with store.transaction() as c:
+        SC.alias_drop_contact(c, [w["google_ads_vendor"], w["meta_ads_vendor"]])
+        SAP.update(c, "fin_contacts", w["google_ads_vendor"], {"name": "Google"})
+        SAP.update(c, "fin_contacts", w["meta_ads_vendor"], {"name": "Facebook Inc"})
+        book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
+        SAP.alias_add(c, book, "facebook", w["meta_ads_vendor"], AT)
+        c.execute("UPDATE fin_books SET mode='mirror'")
+
+
+def contacts(c: sqlite3.Connection) -> int:
+    return int(c.execute("SELECT count(*) FROM fin_contacts").fetchone()[0])
+
+
+def test_a_mirrored_book_uses_the_providers_own_vendor_and_makes_none(books: Store):
+    w = world(books)
+    platform_spend(books, w["google_ads"], [("2026-10-03", 50_000)], "2026-10-01", "2026-10-15")
+    with books.transaction() as c:
+        spend(c, "6300", 40_000, day="2026-10-12", teammate="bot:paid-rental-ads", vendor=w["google_ads_vendor"])
+    _mirrored(books, w)
+    with books.transaction() as c:
+        before = contacts(c)
+        assert AI.ensure_vendor(c, "google_ads", AT) == w["google_ads_vendor"]  # by name: "Google"
+        assert AI.ensure_vendor(c, "meta_ads", AT) == w["meta_ads_vendor"]  # by alias: "facebook"
+        assert contacts(c) == before
+    g = google_state(books)
+    assert g["actual"] == 50_000 and g["spent_from"] == "platform" and g["reported"] is None
+
+
+def test_a_mirrored_book_with_no_platform_vendor_reports_only(books: Store):
+    w = world(books)
+    platform_spend(books, w["google_ads"], [("2026-10-03", 50_000)], "2026-10-01", "2026-10-15")
+    with books.transaction() as c:
+        _ad_budget(c, w, "Descriptor", "GOOGLE *ADS", 300_000)
+        spend(c, "6300", 30_000, day="2026-10-12", teammate="bot:paid-rental-ads", vendor="GOOGLE *ADS")
+    _mirrored(books, w)
+    with books.transaction() as c:
+        SAP.update(c, "fin_contacts", w["google_ads_vendor"], {"name": "Alphabet Workspace"})
+        before = contacts(c)
+        assert AI.ensure_vendor(c, "google_ads", AT) == ""
+        assert contacts(c) == before  # never made: Tico writes no contact to QuickBooks or Xero
+    with books.read() as c:
+        st = rows_by_name(c, OWNER)["Descriptor"]["state"]
+        assert isinstance(st, dict)
+        assert st["actual"] == 30_000 and st["reported"] == 50_000 and st["spent_from"] == "books"
 
 
 def google_state(store: Store, on: str | None = None) -> dict[str, object]:
@@ -279,12 +411,18 @@ def test_every_hold_at_the_platform_comes_out_card_ach_bill_and_order(books: Sto
     gv = w["google_ads_vendor"]
     with books.transaction() as c:
         book = _money_account(c)
-        other = str(
-            c.execute(
-                "INSERT INTO fin_contacts(id,book_id,name,kind,created_at,created_by,updated_at) "
-                "VALUES('k-bill',?,'Billboard Co','vendor',?,?,?) RETURNING id",
-                (book, AT, OWNER, AT),
-            ).fetchone()[0]
+        other = SAP.insert(
+            c,
+            "fin_contacts",
+            {
+                "id": "k-bill",
+                "book_id": book,
+                "name": "Billboard Co",
+                "kind": "vendor",
+                "created_at": AT,
+                "created_by": OWNER,
+                "updated_at": AT,
+            },
         )
         c.execute(
             "INSERT INTO fin_feed_txns(id,money_account_id,provider_id,txn_date,amount,currency,counterparty,"
@@ -648,7 +786,11 @@ def test_a_google_card_charge_over_an_ad_budget_is_not_declined_and_freezes_no_c
 
 
 def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
+    """The shipped data fix (20261106085449) runs before 20261108203140_finance_fold_in turns the contact tables into
+    views, so it runs here on the contact tables as they were then."""
     import importlib
+
+    from backend.tests.test_finance_fold_in_migration import old_contact_tables
 
     fix = importlib.import_module("backend.migrations.20261106085449_ad_budgets_warn_only")
     w = world(books)
@@ -676,6 +818,7 @@ def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
         )
         assert named.status == "committed", named
         c.execute("UPDATE fin_budgets SET at_limit='decline' WHERE vendor<>''")
+        old_contact_tables(c)
         fix.up(c)
         fix.up(c)
         limits = dict(c.execute("SELECT name, at_limit FROM fin_budgets WHERE account_id=?", (w["adv"],)).fetchall())

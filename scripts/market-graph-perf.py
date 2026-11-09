@@ -7,6 +7,7 @@ Outputs fixtures and measurements under .market-perf/ in this checkout.
 
 import argparse
 from contextlib import nullcontext
+import importlib
 import json
 from pathlib import Path
 import random
@@ -19,19 +20,20 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from fastapi import FastAPI  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from backend import hubdb as H, market as M  # noqa: E402
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from backend import hubdb as H, market as M
 
 
 def fixture(nodes, edges):
     conn = sqlite3.connect(':memory:', check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(H.MARKET_SCHEMA)
-    H.ensure_market_reads(conn)
+    # The Directory names: the market tables become entities, entity_links, entity_identifiers.
+    importlib.import_module('backend.migrations.20261108011017_directory_core').up(conn)
     ids = ['company/self'] + [f'company/node-{i:05}' for i in range(1, nodes)]
     conn.executemany(
-        'INSERT INTO market_entities(id,type,name,summary,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
+        'INSERT INTO entities(id,type,name,summary,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
         [
             (
                 eid,
@@ -54,9 +56,9 @@ def fixture(nodes, edges):
         if a != b:
             pairs.add((a, b))
     conn.executemany(
-        'INSERT INTO market_edges(id,src,rel,dst,created_at,created_by,updated_at) VALUES(?,?,?,?,?,?,?)',
+        'INSERT INTO entity_links(id,from_entity_id,link_key,to_entity_id,confidence,created_by,created_by_type,created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
         [
-            (f'edge-{i:06}', ids[a], 'employs', ids[b], '2026-10-12', 'seed', '2026-10-12')
+            (f'edge-{i:06}', ids[a], 'works_at', ids[b], 0.9, 'seed', 'system', 'seed', '2026-10-12', '2026-10-12')
             for i, (a, b) in enumerate(sorted(pairs))
         ],
     )
@@ -122,8 +124,14 @@ def main():
             api[name] = {'ms': round(statistics.median(times[1:]), 2), 'bytes': len(response.content)}
     data['api'] = api
     (out / 'fixtures.json').write_text(json.dumps(data))
-    before = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:ui/market-page.js'], cwd=ROOT, text=True)
-    (out / 'before.js').write_text(before)
+    # The page's TypeScript at the baseline, compiled the way `npm run build:ui` compiles it (the same esbuild and flags).
+    source = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:ui/market-page.ts'], cwd=ROOT)
+    before = subprocess.check_output(
+        [str(ROOT / 'node_modules' / '.bin' / 'esbuild'), '--loader=ts', '--target=esnext', '--charset=utf8'],
+        cwd=ROOT,
+        input=source,
+    )
+    (out / 'before.js').write_bytes(before)
     result = {
         'entities': args.entities,
         'edges': args.edges,

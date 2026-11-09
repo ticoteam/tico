@@ -1,7 +1,7 @@
 """A bot's start checks are read once for all its open tasks: counts() asks `waiting` only of the tasks a set
 query says might be waiting, and reads each step name once. The numbers match the one-task-at-a-time checks."""
 
-from backend import auto_tasks, hubdb as H
+from backend import auto_tasks, hubdb as H, question_tasks as QT
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_status_reads import setup
 from backend.tests.hold_rows import set_holds
@@ -75,7 +75,7 @@ def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
             "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
             (blocker["id"], t[8], H.now()),
         )
-        H.task_ask(c, "bot:ops", t[9], "Which one?", park=False)
+        QT.ask_plain(c, "bot:ops", "human:ana", "Which one?", parent=H.task(c, t[9]))
         H.task_create(c, "bot:ops", "Child", "Under it.", "human:ben", parent_id=t[10])
     rows = open_tasks(store)
     with store.read_transaction() as c:

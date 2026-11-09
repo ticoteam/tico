@@ -2,7 +2,7 @@
 
 A dream is an ordinary task: the bot owns it, the person who started it is its requester, it carries the label
 `dream` and its body is INSTRUCTIONS. It runs as a task turn on the bot's computer with the bot's own model, and its
-session resumes across the one question it may ask (`hub_task_ask`), so the answer lands in the same context. The
+session resumes across the one question it may ask (`hub_task_question`), so the answer lands in the same context. The
 commits it makes are memory updates like any other: the Learnings history names their run's task, and the panel
 filters them by this task. Nothing is stored here beyond the task.
 
@@ -17,7 +17,6 @@ start it; the question it asks that person goes through the same exemption.
 """
 
 import json
-import weakref
 
 from fastapi import Request
 
@@ -64,7 +63,7 @@ doing now, e.g. "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: re
    instructions about the work disagree, or one broad question that would align you better. Never ask for
    permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
    decide those yourself. If something only {requester} can settle, ask at most 3 such questions in ONE
-   `hub_task_ask` on this task. Number them. Each one makes sense on its own and ends with your suggested answer
+   `hub_task_question` on this task. Number them. Each one makes sense on its own and ends with your suggested answer
    ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is fine. {wait}
 
 5. Apply. Fold the answers in. A broad answer may rewrite whole sections. Fix each fact where it lives, delete what
@@ -241,18 +240,16 @@ def view(c, who, row):
                 m
                 for m in H.task_comments(c, row["id"], actor=privacy.actor(who))
                 if m.get("sender_id") == row["owner_id"] and m.get("kind") not in ("ask", "answer")
-            ]
+            ]  # old rows
             summary = (said[-1].get("body") or "").strip() if said else ""
         summary = summary[:MAX_TEXT] or None
     else:
-        asks = [
-            a for a in H.open_task_asks(c, row, actor=privacy.actor(who)) if a["recipient_id"] == row["requester_id"]
-        ]
-        if asks:
+        ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
+        if ask and ask["recipient_id"] == row["requester_id"]:
+            # Its question task (`hub_task_question` under the dream), answered on the Learnings panel.
             state = "asking"
-            ask = asks[0]
             questions = {
-                "message_id": ask["id"],
+                "task_id": ask["id"],
                 "text": (ask.get("body") or "")[:MAX_TEXT],
                 "mine": ask["recipient_id"] == who.actor,
             }
@@ -277,13 +274,11 @@ def view(c, who, row):
     }
 
 
-# The app's task_create (its closure in backend/app.py) per store, so the nightly run files a dream the same way a
-# person's POST does; install sets it.
-_CREATE = weakref.WeakKeyDictionary()
-
-
 def creator(store):
-    return _CREATE.get(store)
+    """The app's task_create (its closure in backend/app.py), so the nightly run files a dream the same way a person's
+    POST does; install sets it. It lives on the store, not in a table here keyed by it: the closure holds the store, so
+    a weak key never let go and every app built in the process stayed alive."""
+    return getattr(store, "dream_create", None)
 
 
 def start(c, who, owner, task_create, reason=None):
@@ -307,7 +302,7 @@ def start(c, who, owner, task_create, reason=None):
 
 
 def install(app, store, auth, mutate, task_create, cap_before_preflight):
-    _CREATE[store] = task_create
+    store.dream_create = task_create
 
     @app.get("/api/v2/bots/{bot}/dream")
     def dream_get(request: Request, bot: str):

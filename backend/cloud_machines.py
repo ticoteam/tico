@@ -1090,7 +1090,7 @@ def wake_for(current, found):
     if current["always_on"]:
         return "always_on", False
     fresh = (found["activity"] or 0) > (current["woke_at"] or 0)
-    spent = lambda k: covers(current["wake_key"], k) and current["state"] not in DEAD and not fresh  # noqa: E731
+    spent = lambda k: covers(current["wake_key"], k) and current["state"] not in DEAD and not fresh
     want, update = found["want"], found.get("update")
     if want and not spent(want):
         return want, False
@@ -1318,7 +1318,7 @@ class Manager:
         if self.synced is None or at - self.synced >= SYNC:
             try:
                 self.sync(hq, at)  # also how this server learns HQ makes machines at all
-            except Exception as exc:  # noqa: BLE001 - the looks still run; a create waiting on the list says why
+            except Exception as exc:  # the looks still run; a create waiting on the list says why
                 log.exception("Reading HQ's cloud machine list failed")
                 self.list_refused = type(exc).__name__[:60]
                 self.cleanup_deletions(hq, at)
@@ -1336,7 +1336,7 @@ class Manager:
         for key in keys:
             try:
                 self.step(hq, key, at)
-            except Exception as exc:  # noqa: BLE001 - one machine's failure never holds the others
+            except Exception as exc:  # one machine's failure never holds the others
                 log.exception("Cloud machine step failed for %s", key)
                 self.failed(key, exc)
 
@@ -1353,7 +1353,7 @@ class Manager:
                     and current["problem"] != "error:" + code
                 ):
                     save(c, key, problem="error:" + code, problem_at=H.now())
-        except Exception:  # noqa: BLE001 - recording the failure never breaks the loop
+        except Exception:  # recording the failure never breaks the loop
             log.exception("Naming a cloud machine's failure failed for %s", key)
 
     def sync(self, hq, at):
@@ -1456,7 +1456,7 @@ class Manager:
                 c.execute("SAVEPOINT cloud_offered")
                 try:
                     self.on_offered(c)
-                except Exception:  # noqa: BLE001 - the sizes stay; the scheduler's placement sweep still places bots
+                except Exception:  # the sizes stay; the scheduler's placement sweep still places bots
                     c.execute("ROLLBACK TO cloud_offered")
                     log.exception("Placing bots on cloud machines failed")
                 c.execute("RELEASE cloud_offered")
@@ -1501,7 +1501,7 @@ class Manager:
         for intent in pending:
             try:
                 self.reconcile_delete(hq, intent["machine_id"])
-            except Exception:  # noqa: BLE001 - one old id cannot prevent recovery or cleanup of the others
+            except Exception:  # one old id cannot prevent recovery or cleanup of the others
                 log.exception("Reconciling cloud machine deletion failed for %s", intent["machine_id"])
                 with self.store.transaction() as c:
                     deletion_retry(c, intent["machine_id"], Refused("unreachable"))
@@ -1967,7 +1967,7 @@ class Manager:
 
             try:
                 await asyncio.to_thread(SR.pass_of, self.store, "cloud_machines", self.tick)
-            except Exception:  # noqa: BLE001 - the next look tries again
+            except Exception:  # the next look tries again
                 log.exception("Cloud machines look failed")
 
 
@@ -2529,8 +2529,8 @@ def health(c, settings=None):
 
 
 # ----------------------------------------------------------------------------- routes
-from pydantic import BaseModel, ConfigDict, Field  # noqa: E402 - with the routes that use them
-from fastapi import Request  # noqa: E402
+from pydantic import BaseModel, ConfigDict, Field  # with the routes that use them
+from fastapi import Request
 
 
 class Change(BaseModel):

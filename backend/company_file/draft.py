@@ -51,6 +51,7 @@ SECTIONS = tuple(VOCAB["sections"][2:])  # serve, sell, know, not: the strategy'
 METHODS = tuple(VOCAB["methods"])  # how a segment was sized (tico backend/market_spend.py METHODS)
 POST_SOURCES = tuple(VOCAB["post_sources"])
 POST_TAGS = tuple(VOCAB["post_tags"])
+CHANNELS = tuple(VOCAB["channels"])  # the channels a strategy can pick; chart_formula.json has each one's seat
 
 ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -133,6 +134,18 @@ def dept_of(role):
 
 def slugify(text):
     return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", str(text).lower())) or "x"
+
+
+def clean(text: str) -> str:
+    """`text` with each run of ASCII whitespace (space, tab, line feed, carriage return, form feed, vertical tab) as one
+    space, and no space at either end. The one normalization the chart formula and the company file share; the site's
+    JS port does the same (chart_formula.py has the cross-language rules)."""
+    return re.sub(r"[ \t\n\r\f\v]+", " ", text).strip(" ")
+
+
+def fold(text: str) -> str:
+    """The text names are matched by: `clean`, then lower() (not casefold(), so a JS toLowerCase matches it)."""
+    return clean(text).lower()
 
 
 # ---------------------------------------------------------------------------------------------------- the chart
@@ -236,6 +249,26 @@ def _choices(value, field, allowed, limit=None):
     if any(not isinstance(item, str) or item not in allowed for item in value) or len(set(value)) != len(value):
         raise DraftError("%s has an unknown or repeated entry" % field)
     return list(value)
+
+
+def regions(value, field):
+    """Where a company serves (`company.regions`) or a segment does (`strategy.market.segments[].regions`): 0..12
+    places, free text ("Worldwide", "United States", "Texas"). Control characters (a newline, a tab) become one space,
+    then each place is trimmed and must be 1..60 characters; a repeat (whatever its case) is dropped, the order kept.
+    Absent is unknown; an empty list is the same as absent (see `check`)."""
+    rows = _list(value, field, LIMITS["regions"])
+    out, seen = [], set()
+    for i, item in enumerate(rows):
+        if not isinstance(item, str):
+            raise DraftError("%s[%d] must be text" % (field, i))
+        text = re.sub("[\ud800-\udfff]", "", item)  # a lone surrogate from JSON is no text
+        text = re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()  # newlines, tabs and other control characters: a space
+        if not 1 <= len(text) <= LIMITS["region"]:
+            raise DraftError("%s[%d] must be 1 to %d characters" % (field, i, LIMITS["region"]))
+        if text.casefold() not in seen:
+            seen.add(text.casefold())
+            out.append(text)
+    return out
 
 
 def number(value, field):
@@ -404,15 +437,52 @@ def _day(value, field):
     return "" if value in ("", None) else date(value, field)
 
 
+def channel_keys(value, field):
+    """The channels a strategy picks (`strategy.channels`): the vocabulary's channel keys, a repeat dropped, the order
+    kept. A key that is not on the list is refused, as an unknown signal is. The cap of 11 counts the keys after the
+    repeats are dropped, so a list that repeats one key is valid."""
+    if not isinstance(value, list):
+        raise DraftError("%s must be a list" % field)
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or item not in CHANNELS:
+            raise DraftError("%s has an unknown channel" % field)
+        if item not in out:
+            out.append(item)
+    return _list(out, field, LIMITS["channels"])
+
+
+def _trimmed(value, field, limit, drop_long=False):
+    """A bet's short name or segment: the trimmed text, "" when absent or blank. Longer than `limit` is refused, or, with
+    `drop_long`, let go as "" (a segment too long to be any segment's name is dropped, as an unknown one is)."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise DraftError("%s must be text" % field)
+    text = re.sub("[\ud800-\udfff\x00]", "", value).strip()
+    if len(text) > limit:
+        if drop_long:
+            return ""
+        raise DraftError("%s is longer than %d characters" % (field, limit))
+    return text
+
+
 def _bet_row(raw, at):
     field = "strategy.bets[%d]" % at
-    _keys(raw, field, ("id",), ("statement", "why", "rules_out", "wrong_if", "check_by"))
+    _keys(raw, field, ("id",), ("statement", "why", "rules_out", "wrong_if", "check_by", "name", "segment"))
     if not isinstance(raw["id"], str) or not BET_ID.fullmatch(raw["id"]) or int(raw["id"][1:]) > LIMITS["bets"]:
         raise DraftError(field + ".id must be b1 to b%d" % LIMITS["bets"])
     out = {"id": raw["id"], "statement": _text(raw.get("statement", ""), field + ".statement", LIMITS["statement"])}
     for key in ("why", "rules_out", "wrong_if"):
         out[key] = _text(raw.get(key, ""), "%s.%s" % (field, key), LIMITS["bet_text"])
     out["check_by"] = _day(raw.get("check_by", ""), field + ".check_by")
+    # The short name the chart labels the bet's Owner with, and the segment the bet is for (matched in _strategy).
+    name = _trimmed(raw.get("name"), field + ".name", LIMITS["bet_name"])
+    if name:
+        out["name"] = name
+    segment = _trimmed(raw.get("segment"), field + ".segment", LIMITS["bet_segment"], drop_long=True)
+    if segment:
+        out["segment"] = segment
     return out
 
 
@@ -432,7 +502,12 @@ def _usd(value, field):
 
 def _segment(raw, at):
     field = "strategy.market.segments[%d]" % at
-    _keys(raw, field, ("key",), ("name", "parent", "usd", "method", "arithmetic", "evidence", "ours", "next"))
+    _keys(
+        raw,
+        field,
+        ("key",),
+        ("name", "parent", "usd", "method", "arithmetic", "evidence", "ours", "next", "regions"),
+    )
     method = raw.get("method") or "top_down"
     if method not in METHODS:
         raise DraftError(field + ".method is not a sizing method")
@@ -452,6 +527,10 @@ def _segment(raw, at):
     }
     if not out["evidence"]:
         out["usd"] = None  # a size stands only on its evidence: never an invented number
+    if raw.get("regions") is not None:
+        serves = regions(raw["regions"], field + ".regions")
+        if serves:
+            out["regions"] = serves  # this segment's own places; absent when it has none of its own
     return out
 
 
@@ -485,8 +564,9 @@ def _post(raw, at):
 def _strategy(raw):
     """The strategy block (the setup page's Strategy step), every part present: a part not drafted yet is empty. Two
     quiet repairs, like a goal's gone parent: a segment's parent that is not among the segments (or would make a loop)
-    is let go, and so is a player's segment that is gone."""
-    _keys(raw, "strategy", (), ("summary", "vision", "sections", "bets", "market", "listening"))
+    is let go, and so is a player's segment that is gone. A bet's segment that is no segment's name is let go too,
+    matched ignoring case and spacing; one longer than a segment name can be is dropped the same way."""
+    _keys(raw, "strategy", (), ("summary", "vision", "sections", "bets", "market", "listening", "channels"))
     sections = _keys(raw.get("sections") or {}, "strategy.sections", (), SECTIONS)
     market = _keys(raw.get("market") or {}, "strategy.market", (), ("definition", "segments", "players"))
     definition = _keys(market.get("definition") or {}, "strategy.market.definition", (), ("root", "in", "out", "year"))
@@ -526,6 +606,10 @@ def _strategy(raw):
             ],
         },
     }
+    if raw.get("channels") is not None:
+        picked = channel_keys(raw["channels"], "strategy.channels")
+        if picked:
+            out["channels"] = picked  # absent when none is picked
     _unique(out["bets"], "strategy.bets")
     segments = out["market"]["segments"]
     keys = [s["key"] for s in segments]
@@ -539,6 +623,17 @@ def _strategy(raw):
             at = parents[at]
         if segment["parent"] is not None and (segment["parent"] not in parents or at is not None and at in seen):
             segment["parent"] = parents[segment["key"]] = None
+    named: dict[str, str] = {}
+    for segment in segments:
+        if fold(segment["name"]):
+            named.setdefault(fold(segment["name"]), segment["name"])
+    for bet in out["bets"]:
+        if "segment" in bet:
+            if fold(bet["segment"]) in named:
+                # the segment's own name, whatever case or spacing was sent
+                bet["segment"] = named[fold(bet["segment"])]
+            else:
+                del bet["segment"]
     for player in out["market"]["players"]:
         player["segments"] = [s for s in dict.fromkeys(player["segments"]) if s in parents]
     return out
@@ -588,7 +683,7 @@ def check(raw, snapshot=False):
     _keys(raw, "draft", TOP, allowed + OPTIONAL)
     if raw["step"] not in ("company",) + STEPS:
         raise DraftError("draft.step is not a step")
-    company = _keys(raw["company"], "company", ("name", "about", "signals"))
+    company = _keys(raw["company"], "company", ("name", "about", "signals"), ("regions",))
     seq = raw["seq"]
     if isinstance(seq, bool) or not isinstance(seq, int) or not 1 <= seq <= LIMITS["seq"]:
         raise DraftError("draft.seq must be a counter")
@@ -626,6 +721,10 @@ def check(raw, snapshot=False):
         },
         "seq": seq,
     }
+    if company.get("regions") is not None:
+        serves = regions(company["regions"], "company.regions")
+        if serves:
+            draft["company"]["regions"] = serves  # absent when the company says nothing about where it serves
     if raw.get("strategy") is not None:
         draft["strategy"] = _strategy(raw["strategy"])
     for field in ("people", "bots", "goals"):

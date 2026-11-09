@@ -1,4 +1,4 @@
-// BotOps' Confirm cards in the Assistant's chat (ui/assistant.js; BotOps has no DM of its own now), fixtures only.
+// BotOps' Confirm cards in the Assistant's chat (ui/assistant.ts; BotOps has no DM of its own now), fixtures only.
 //  - plain words: the card's title is the server's sentence, never the method and path; a card stored with no readable
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread
@@ -28,8 +28,8 @@ function fixture() {
     diff: [], body: {}, ...extra});
   const actions = {
     act1: card('act1', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories',
-      summary: 'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.',
-      description: 'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.',
+      summary: 'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.',
+      description: 'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.',
       body: {mode: 'chosen', chosen: [{full_name: 'ticoteam/tico', access: 'read'}]},
       diff: [{field: 'mode', new: 'chosen'}, {field: 'chosen', new: [{full_name: 'ticoteam/tico', access: 'read'}]}]}),
     // A card stored before its route had a sentence: the description was the method and path.
@@ -38,7 +38,7 @@ function fixture() {
     // Chris's card from before the plain wording, as action_view sends it now: the title read from the stored body,
     // the old line moved under Details.
     act0: card('act0', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories', summary: '',
-      original_summary: "Set Security Engineer's repository access to chosen. This stops: ticoteam/tico (write), ticoteam/tico-marketing-site (write)",
+      original_summary: "Set Security Engineer's repository access to chosen. This stops: ticoteam/tico (write), ticoteam/tico-site (write)",
       description: 'Security Engineer: read-only on tico, besides its own repository.',
       body: {mode: 'chosen', chosen: [{full_name: 'ticoteam/tico', access: 'read'}]},
       diff: [{field: 'mode', new: 'chosen'}, {field: 'chosen', new: [{full_name: 'ticoteam/tico', access: 'read'}]}]}),
@@ -79,7 +79,7 @@ async function open(browser, state) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(path.join(__dirname, '../vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -125,7 +125,7 @@ async function open(browser, state) {
     // Plain words first; the raw request only behind Details, closed.
     const repo = page.locator('.asst-card[data-action="act1"]');
     assert.equal(await repo.locator('[data-what]').innerText(),
-      'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.', 'repo: the sentence is the title');
+      'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.', 'repo: the sentence is the title');
     const details = repo.locator('details.asst-raw');
     assert.equal(await details.count(), 1, 'repo: one Details');
     assert.equal(await details.evaluate(d => d.open), false, 'repo: Details starts closed');

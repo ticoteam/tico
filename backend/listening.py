@@ -800,7 +800,7 @@ RECENT_TEXT = 240
 
 
 def timeline(conn, who, dests, since):
-    """Market › Listening's chart and list (redesign only): posts first seen each UTC day by source, and the newest
+    """The Market page's What are buyers saying? chart and list: posts first seen each UTC day by source, and the newest
     posts routed to a destination the caller reads, one row per post, its text clipped."""
     days = {}
     for r in conn.execute(

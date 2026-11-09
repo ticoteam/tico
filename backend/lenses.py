@@ -482,11 +482,11 @@ def _market_input(c, the, bets):
     try:
         if ids:
             marks = ",".join("?" * len(ids))
-            out += H._rows(c.execute(f"SELECT id, type, name, summary FROM market_entities WHERE id IN ({marks})", ids))
+            out += H._rows(c.execute(f"SELECT id, type, name, summary FROM entities WHERE id IN ({marks})", ids))
         if the["applies_to"] == "market":
             out += H._rows(
                 c.execute(
-                    "SELECT id, type, name, summary FROM market_entities WHERE type='segment' AND "
+                    "SELECT id, type, name, summary FROM entities WHERE type='segment' AND "
                     "status NOT IN ('retired','merged') ORDER BY name LIMIT 15"
                 )
             )

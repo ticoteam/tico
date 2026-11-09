@@ -1057,9 +1057,9 @@ mod tests {
         let client =
             Client::new(hub.trim_end_matches("/v1/gateway"), "runner-token", 5, 0).unwrap();
         for (config, refused) in [
-            (serde_json::json!({"model": "tico-mid-1.0"}), true),
+            (serde_json::json!({"model": "tico-medium-1.0"}), true),
             (
-                serde_json::json!({"model": "opus-5-5", "fallback": {"model": "tico-mid-1.0"}}),
+                serde_json::json!({"model": "opus-5-5", "fallback": {"model": "tico-medium-1.0"}}),
                 false,
             ),
         ] {
@@ -1100,7 +1100,7 @@ mod tests {
         let (mut env, mut vault) = (Env::new(), Vault::default());
         env.insert("HUB_WORKSPACE".into(), ws.display().to_string());
         env.insert(KEY_ENV.into(), KEY.into()); // from anywhere else: never kept
-        let attempt = serde_json::json!({"id": "att-1", "gateway": true, "config": {"model": "tico-mid-1.0"}});
+        let attempt = serde_json::json!({"id": "att-1", "gateway": true, "config": {"model": "tico-medium-1.0"}});
         hand_to_turn(
             &client,
             &attempt,
@@ -1127,7 +1127,7 @@ mod tests {
         // The turn runs as this runner's user, its pi configuration in its own directory naming the relay.
         assert_eq!(
             vault
-                .for_model(&mut env, Some("tico-mid-1.0"), false)
+                .for_model(&mut env, Some("tico-medium-1.0"), false)
                 .unwrap(),
             None
         );
@@ -1150,7 +1150,7 @@ mod tests {
         // A kept pi's next attempt (hosts/pi.rs Pool::reclaim) resumes the same relay and directory with its key.
         let (mut next_env, mut next) = (Env::new(), Vault::default());
         next.relay = vault.relay.take();
-        let attempt = serde_json::json!({"id": "att-2", "gateway": true, "config": {"model": "tico-mid-1.0"}});
+        let attempt = serde_json::json!({"id": "att-2", "gateway": true, "config": {"model": "tico-medium-1.0"}});
         hand_to_turn(
             &client,
             &attempt,
@@ -1181,11 +1181,11 @@ mod tests {
         vault.relay = Some(start(&gateway, KEY.into(), None).await.unwrap());
         let mut env = Env::new();
         let got = vault
-            .for_model_under(&mut env, Some("tico-mid-1.0"), false, true)
+            .for_model_under(&mut env, Some("tico-medium-1.0"), false, true)
             .unwrap_err();
         assert!(got.ends_with("(not_isolated)"), "{got}");
         assert!(Vault::default()
-            .for_model(&mut env, Some("tico-mid-1.0"), false)
+            .for_model(&mut env, Some("tico-medium-1.0"), false)
             .unwrap_err()
             .ends_with("(not_isolated)"));
     }
@@ -1197,7 +1197,7 @@ mod tests {
         let client =
             Client::new(hub.trim_end_matches("/v1/gateway"), "runner-token", 5, 0).unwrap();
         let (mut env, mut vault) = (Env::new(), Vault::default());
-        let attempt = serde_json::json!({"id": "att-1", "gateway": true, "config": {"model": "tico-mid-1.0"}});
+        let attempt = serde_json::json!({"id": "att-1", "gateway": true, "config": {"model": "tico-medium-1.0"}});
         // execute.rs records this as the turn's error event and reports failed, which the server settles unstarted.
         let got = hand_to_turn(
             &client,
@@ -1277,7 +1277,7 @@ mod tests {
         let (hub, asked) = upstream(b"HTTP/1.1 500 X\r\nContent-Length: 0\r\n\r\n".to_vec()).await;
         let client =
             Client::new(hub.trim_end_matches("/v1/gateway"), "runner-token", 5, 0).unwrap();
-        let config = serde_json::json!({"runtime": "claude", "model": "opus-5-5", "fallback": {"harness": "pi", "model": "tico-mid-1.0"}});
+        let config = serde_json::json!({"runtime": "claude", "model": "opus-5-5", "fallback": {"harness": "pi", "model": "tico-medium-1.0"}});
         let (mut env, mut vault) = (Env::new(), Vault::default());
         hand_to_turn(
             &client,
@@ -1290,13 +1290,13 @@ mod tests {
         .unwrap();
         assert!(vault.relay.is_none() && asked.lock().unwrap().is_empty()); // no Gateway credential fetched
         let hop = crate::fallback::configured(&config);
-        assert_eq!(hop.as_ref().unwrap().model, "tico-mid-1.0");
+        assert_eq!(hop.as_ref().unwrap().model, "tico-medium-1.0");
         assert_eq!(admit(hop, vault.relay.is_some()), None); // no hop: the primary's limit stands
                                                              // The company's default row too; any other fallback still hops, and a Tico one does with a relay.
         let tico = crate::fallback::Hop {
             harness: "pi".into(),
             runtime: "pi".into(),
-            model: "tico-mid-1.0".into(),
+            model: "tico-medium-1.0".into(),
             reasoning_effort: None,
             default: true,
         };
@@ -1622,7 +1622,7 @@ git -C "$1" config credential.helper "!touch $4-credential"; git -C "$1" config 
         assert!(!grant_env.contains_key(KEY_ENV));
         grant_env = canonical;
         assert!(grant_vault
-            .for_model(&mut grant_env, Some("tico-mid-1.0"), false)
+            .for_model(&mut grant_env, Some("tico-medium-1.0"), false)
             .unwrap()
             .is_some());
         let mut user = grant_vault.turn_user.take().unwrap();
@@ -1646,7 +1646,7 @@ git -C "$1" config credential.helper "!touch $4-credential"; git -C "$1" config 
         let mut settings = crate::hosts::Settings {
             identity: Some(user.identity()),
             cwd: workspace.display().to_string(),
-            model: Some("tico-mid-1.0".into()),
+            model: Some("tico-medium-1.0".into()),
             ..Default::default()
         };
         settings.env = grant_env;

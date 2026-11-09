@@ -71,7 +71,7 @@ currently configured AI providers.
 
 The implementation is `backend/onboarding.py` (the record, creating the team), `ui/setup-strategy.js` (What are you
 building and Your bets, over `backend/strategy_setup.py`), `backend/recruit.py` and `backend/recruit_rank.py`
-(the team builder's templates and suggestions), `ui/org-builder.js` (the team chart screen), `ui/first-run.js` (who reports to whom, the review
+(the team builder's templates and suggestions), `ui/org-builder.ts` (the team chart screen), `ui/first-run.ts` (who reports to whom, the review
 and the screen after Create), Tico HQ's `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a repository),
 `runner_support/catalog_job.py` (the bots the computer sets up itself, run by the runner as `python -m runner_support catalog`) and `templates/catalog/` (the templates). The quick start in the
 [README](../README.md) is the same flow with the commands in it.
@@ -340,7 +340,7 @@ The last question's **Start research** calls `POST /api/v2/librarian/setup/marke
 `playbooks/market-setup.md` researches the answers and writes the market pages and graph ([librarian.md](librarian.md)). The page
 then shows "The Librarian is researching your market. This usually takes 5–10 minutes." with a link to the task, until the market
 has content (at least two minutes, at most thirty), kept in the browser, polling the market every 30 seconds. Then the normal
-Market page is drawn. The code is `ui/market-page.js`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
+Market page is drawn. The code is `ui/market-page.ts`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
 market map" from it and the market page opens on the researching notice; the Librarian reads that website from `hub strategy show`
 when the task has none, and the four questions stay for a team that gave no website.
 
@@ -357,7 +357,7 @@ the caller's own choices. Runners and bots get `403`.
 | `POST /api/v2/setup/getting-started/state` | Any human, for themselves |
 | `POST /api/v2/setup/getting-started/market` | Owner |
 
-The code is `backend/getting_started.py` and `ui/getting-started.js`. Tests: `backend/tests/test_getting_started.py`
+The code is `backend/getting_started.py` and `ui/getting-started.ts`. Tests: `backend/tests/test_getting_started.py`
 and `ui/tests/getting-started.cjs`.
 
 ## What finishing creates
@@ -425,6 +425,12 @@ and a computer is enrolled). Its routines start paused: the server arms the dail
 weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
 **Passive** pauses it ([Your Strategy Bot](strategy-bot.md)).
 
+The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built the same way (a required, bootstrap card; a
+team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
+like the others. A team that already hired a bot under the slug `brand` (a Brand Manager)
+keeps that bot as it is and gets no second one. Its monthly brand audit starts off and goes on, once, when it runs
+`hub bot setup-done` at the end of its setup; one a person turned off stays off.
+
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
 Settings > General, and one click on **Turn on** brings the same bot back with its history (or adds it from its
@@ -467,7 +473,7 @@ and creates a planned bot that waits for its setup thread. External services lin
 ### Recruiting a seat
 
 Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a job makes it.
-`backend/recruiting.py` does the work; the pages are `ui/app/recruit.js`.
+`backend/recruiting.py` does the work; the pages are `ui/app/recruit.ts`.
 
 - **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
   and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with
@@ -526,7 +532,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 98 role templates, by group, each with a card. `templates/catalog/` also holds the four built-in bots and three helper bots, 105 cards in all. [Starter bots](starter-bots.md) lists the 98.
+Tico ships 104 role templates, by group, each with a card. `templates/catalog/` holds 114 folders in all: those 104, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), five helper bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`), and one retired template kept for existing installs (`bookkeeping`). [Starter bots](starter-bots.md) lists the 104.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 

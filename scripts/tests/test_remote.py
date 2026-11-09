@@ -1,5 +1,8 @@
 """scripts/remote.py sends a command to a RunsOn VM, which runs it from its own checkout of the repository."""
 
+import json
+from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -143,9 +146,215 @@ def test_wait_keeps_polling_through_a_rate_limit(monkeypatch):
         (False, 'API rate limit exceeded'),  # a one-off call does not wait for the limit
     ],
 )
-def test_other_failures_still_exit(monkeypatch, poll, error):
+def test_other_failures_still_exit(monkeypatch, capsys, poll, error):
     sleeps = fake_clock(monkeypatch)
     fake_gh(monkeypatch, [(1, '', error)])
-    with pytest.raises(SystemExit, match='gh run view failed'):
+    with pytest.raises(SystemExit) as exit:
         remote.gh('run', 'view', '7', poll=poll)
+    assert exit.value.code == remote.EX_NO_RESULT
+    assert 'remote: gh run view failed' in capsys.readouterr().err
     assert sleeps == []
+
+
+def runs(*statuses):
+    """The reply to the workflow's run list: one run per status."""
+    return json.dumps({'workflow_runs': [{'status': status} for status in statuses]})
+
+
+def fake_timeline(monkeypatch):
+    """A clock that moves only when sleep() is called: sleep records how long it was asked to wait and advances time."""
+    now = [0.0]
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(remote.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(remote.time, 'sleep', sleep)
+    return sleeps
+
+
+def test_a_dispatch_under_the_cap_goes_at_once(monkeypatch, capsys):
+    sleeps = fake_timeline(monkeypatch)
+    calls = fake_gh(monkeypatch, [(0, runs('in_progress', 'queued', 'completed', 'success'), '')])
+    assert remote.wait_for_capacity(4)
+    assert sleeps == []
+    assert capsys.readouterr().err == ''
+    assert len(calls) == 1 and '/actions/workflows/remote-run.yml/runs' in calls[0][2]
+
+
+def test_a_dispatch_at_the_cap_waits_for_a_slot_then_goes(monkeypatch, capsys):
+    sleeps = fake_timeline(monkeypatch)
+    fake_gh(
+        monkeypatch,
+        [
+            (0, runs('in_progress', 'queued', 'waiting', 'pending', 'completed'), ''),  # four busy: the cap
+            (0, runs('in_progress', 'queued', 'waiting', 'completed'), ''),  # one has finished
+        ],
+    )
+    assert remote.wait_for_capacity(4)
+    assert len(sleeps) == 1 and 30 <= sleeps[0] <= 60
+    assert capsys.readouterr().err == 'waiting: 4 remote runs busy (cap 4)\n'
+
+
+def test_a_wait_past_twenty_minutes_exits_without_dispatching(monkeypatch, capsys):
+    sleeps = fake_timeline(monkeypatch)
+    fake_gh(
+        monkeypatch, [(0, runs('in_progress', 'in_progress', 'queued', 'queued'), '')] * 50
+    )  # 20 min at 30 s a poll
+    with pytest.raises(SystemExit) as exit:
+        remote.wait_for_capacity(4)
+    assert exit.value.code == remote.EX_NOT_DISPATCHED
+    assert 'after 20 min; not dispatching' in capsys.readouterr().err
+    assert sum(sleeps) == pytest.approx(20 * 60)  # the last wait is clamped to the limit, in floats
+
+
+def test_a_count_that_keeps_failing_for_two_minutes_warns_and_lets_the_dispatch_go(monkeypatch, capsys):
+    sleeps = fake_timeline(monkeypatch)
+    fake_gh(monkeypatch, [(1, '', 'HTTP 502: Bad Gateway')] * 20)
+    assert remote.wait_for_capacity(4) is False
+    assert sum(sleeps) == pytest.approx(2 * 60)
+    assert 'dispatching without the cap' in capsys.readouterr().err
+
+
+def test_a_cap_of_zero_means_no_cap_and_no_count(monkeypatch):
+    fake_gh(monkeypatch, [])  # any count would pop an empty list and fail
+    assert remote.wait_for_capacity(0)
+
+
+@pytest.mark.parametrize('value, cap', [(None, 4), ('0', 0), ('12', 12)])
+def test_remote_max_sets_the_cap(monkeypatch, value, cap):
+    monkeypatch.delenv('TICO_REMOTE_MAX', raising=False)
+    if value is not None:
+        monkeypatch.setenv('TICO_REMOTE_MAX', value)
+    assert remote.remote_cap() == cap
+
+
+def test_remote_max_must_be_a_whole_number(monkeypatch, capsys):
+    monkeypatch.setenv('TICO_REMOTE_MAX', 'many')
+    with pytest.raises(SystemExit) as exit:
+        remote.remote_cap()
+    assert exit.value.code == remote.EX_NOT_DISPATCHED
+    assert 'TICO_REMOTE_MAX must be a whole number' in capsys.readouterr().err
+
+
+SHA = 'a' * 40
+COMMAND = ['--', 'python', '-m', 'pytest', '-q']
+
+
+def reply(out, code=0):
+    return SimpleNamespace(returncode=code, stdout=out, stderr='')
+
+
+def stub_remote(
+    monkeypatch,
+    tmp_path,
+    *,
+    pushed=True,
+    commit=True,
+    dispatch=0,
+    appears=True,
+    busy=0,
+    status='completed',
+    conclusion='failure',
+    artifact=None,
+):
+    """Stands in for git, gh and the log download for one remote.main(). The run list and the run view answer for the
+    run that was dispatched. `artifact` is the exit-code file the VM left in the log, or None when the log never came
+    back. `busy` is how many remote runs the count reports as busy."""
+    monkeypatch.delenv('TICO_REMOTE_MAX', raising=False)
+    monkeypatch.setattr(remote, 'ROOT', tmp_path)
+    fake_timeline(monkeypatch)
+    dispatched = {}
+
+    def git(*args):
+        if args[0] == 'rev-parse':
+            if not commit:
+                raise subprocess.CalledProcessError(128, ['git', *args])
+            return SHA
+        if args[0] == 'branch':
+            return 'origin/chris/topic' if pushed else ''
+        return ''  # git status: nothing uncommitted
+
+    def run(argv, **kwargs):
+        if argv[:3] == ['gh', 'workflow', 'run']:
+            dispatched['id'] = next(arg for arg in argv if arg.startswith('id=')).removeprefix('id=')
+            return SimpleNamespace(returncode=dispatch, stdout='', stderr='refused' if dispatch else '')
+        if argv[:3] == ['gh', 'run', 'list']:
+            found = [{'databaseId': 99, 'displayTitle': f'Remote run {dispatched["id"]}', 'url': 'https://x/99'}]
+            return reply(json.dumps(found if appears else []))
+        if argv[:3] == ['gh', 'run', 'view']:
+            return reply(json.dumps({'status': status, 'conclusion': conclusion}))
+        if argv[:2] == ['gh', 'api']:
+            return reply(json.dumps({'workflow_runs': [{'status': 'in_progress'}] * busy}))
+        if argv[:2] == ['bash', 'scripts/ci/retry.sh']:
+            if artifact is None:
+                return SimpleNamespace(returncode=1, stdout='', stderr='HTTP 404: Not Found')
+            folder = Path(argv[argv.index('-D') + 1])
+            (folder / 'exit-code').write_text(artifact)
+            (folder / 'output.log').write_text('last line\n')
+            return reply('')
+        raise AssertionError(f'unexpected call: {argv}')
+
+    monkeypatch.setattr(remote, 'git', git)
+    monkeypatch.setattr(remote.subprocess, 'run', run)
+
+
+@pytest.mark.parametrize(
+    'options, message',
+    [
+        ({'busy': 4}, 'not dispatching'),  # the cap held it for 20 minutes
+        ({'dispatch': 1}, 'gh workflow run failed: refused'),  # GitHub refused the dispatch
+        ({'pushed': False}, 'is not pushed'),
+        ({'commit': False}, 'cannot resolve'),
+    ],
+)
+def test_a_run_that_is_never_dispatched_exits_75(monkeypatch, tmp_path, capsys, options, message):
+    stub_remote(monkeypatch, tmp_path, **options)
+    with pytest.raises(SystemExit) as exit:
+        remote.main(COMMAND)
+    assert exit.value.code == remote.EX_NOT_DISPATCHED
+    assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('artifact, code', [('0', 0), ('1', 1), ('3', 3), ('124', 124)])
+def test_the_commands_own_exit_code_is_the_exit_code(monkeypatch, tmp_path, artifact, code):
+    stub_remote(monkeypatch, tmp_path, artifact=artifact)
+    assert remote.main(COMMAND) == code
+
+
+@pytest.mark.parametrize(
+    'options, message',
+    [
+        ({'conclusion': 'cancelled'}, 'no result (cancelled)'),  # cancelled before the command ended, so no log
+        ({'conclusion': 'failure'}, 'no result (failure)'),  # the VM was lost before it wrote a log
+        ({'artifact': 'oops'}, 'no exit code in the log'),  # a log without a number is no result
+    ],
+)
+def test_a_run_without_a_result_exits_76(monkeypatch, tmp_path, capsys, options, message):
+    stub_remote(monkeypatch, tmp_path, **options)
+    assert remote.main(COMMAND) == remote.EX_NO_RESULT
+    assert message in capsys.readouterr().err
+
+
+def test_a_run_that_never_shows_up_exits_76(monkeypatch, tmp_path, capsys):
+    stub_remote(monkeypatch, tmp_path, appears=False)
+    with pytest.raises(SystemExit) as exit:
+        remote.main(COMMAND)
+    assert exit.value.code == remote.EX_NO_RESULT
+    assert 'did not appear' in capsys.readouterr().err
+
+
+def test_a_run_still_going_after_two_hours_exits_76(monkeypatch, tmp_path, capsys):
+    stub_remote(monkeypatch, tmp_path, status='in_progress')
+    with pytest.raises(SystemExit) as exit:
+        remote.main(COMMAND)
+    assert exit.value.code == remote.EX_NO_RESULT
+    assert 'still in_progress after 2 hours' in capsys.readouterr().err
+
+
+def test_a_bad_command_line_exits_2():
+    with pytest.raises(SystemExit) as exit:
+        remote.main(['--'])
+    assert exit.value.code == 2

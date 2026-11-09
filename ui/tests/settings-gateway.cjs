@@ -24,11 +24,11 @@ const {unrouted} = require('./support/routes.cjs');
       models: [
         {id: 'opus-5-5', label: 'opus 5.5', runtime: 'claude', provider: 'anthropic',
           efforts: ['low', 'high'], default_effort: 'high', harnesses: ['claude']},
-        tico('tico-general-low-1.0', 'General · Low 1.0', 'Haiku'), tico('tico-general-medium-1.0', 'General · Medium 1.0', 'Sonnet'),
-        tico('tico-general-high-1.0', 'General · High 1.0', 'Opus'),
-        // Another department's tier is the bot's pick to make: the company default does not list it.
-        {...tico('tico-sales-high-1.0', 'Sales · High 1.0', 'Opus'), tier: {department: 'sales', level: 'high', fast: false}},
-        {...tico('tico-mid-1.0', 'Mid 1.0 (old lineup)', 'Sonnet'), deprecated: true, lineup: 'old'},
+        {...tico('tico-low-1.0', 'Low 1.0', 'Haiku'), tier: {level: 'low', fast: false}},
+        {...tico('tico-medium-1.0', 'Medium 1.0', 'Sonnet'), tier: {level: 'medium', fast: false}},
+        {...tico('tico-high-1.0', 'High 1.0', 'Opus'), tier: {level: 'high', fast: false}},
+        // A Fast tier is the bot's pick to make: the company default does not list it.
+        {...tico('tico-high-fast-1.0', 'High · Fast 1.0', 'Opus'), tier: {level: 'high', fast: true}},
       ],
       harnesses: [{id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}, {id: 'pi', label: 'pi', runtime: 'pi'}],
       default: {runtime: 'claude', model: 'opus-5-5'},
@@ -48,7 +48,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.route('**/*', async route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -121,15 +121,16 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(!(await page.content()).includes(KEY), 'the key is nowhere on the page');
     // Connected: the Tico models are offered by their Tico names, saying what runs underneath.
     const tic = (await modelOptions()).filter(o => o.value.startsWith('tico-'));
-    assert.deepEqual(tic.map(o => o.text), ['General · Low 1.0', 'General · Medium 1.0', 'General · High 1.0'], 'General at each level; the old lineup is not offered');
-    // A default saved on the old lineup stays offered, so saving something else never moves it.
-    assert.deepEqual(await page.evaluate(models => providersModels({providers: [], default: {model: 'tico-mid-1.0'}},
+    assert.deepEqual(tic.map(o => o.text), ['Low 1.0', 'Medium 1.0', 'High 1.0'], 'each level, Fast left out');
+    // A Fast default saved stays offered, so saving something else never moves it.
+    assert.deepEqual(await page.evaluate(models => providersModels({providers: [], default: {model: 'tico-high-fast-1.0'}},
       models, ['tico']).map(row => row.label), catalog.models),
-      ['General · Low 1.0', 'General · Medium 1.0', 'General · High 1.0', 'Mid 1.0 (old lineup)']);
-    assert.equal(tic.find(o => o.value === 'tico-general-medium-1.0').title, 'Claude Sonnet 5.5 underneath');
-    assert.equal(await page.evaluate(() => settingsModelPickName('tico-general-medium-1.0')), 'General · Medium 1.0 (Claude Sonnet 5.5 underneath)',
+      ['Low 1.0', 'Medium 1.0', 'High 1.0', 'High · Fast 1.0']);
+    assert.equal(tic.find(o => o.value === 'tico-medium-1.0').title, 'Claude Sonnet 5.5 underneath');
+    assert.equal(await page.evaluate(() => settingsModelPickName('tico-medium-1.0')), 'Medium 1.0 (Claude Sonnet 5.5 underneath)',
       "a bot's model list says what runs underneath");
-    assert.equal(await page.evaluate(() => modelWords('tico-power-1.0')), 'Power 1.0 (old lineup)');
+    assert.equal(await page.evaluate(() => modelWords('tico-xhigh-fast-1.0')), 'X-High · Fast 1.0');
+    assert.equal(await page.evaluate(() => modelWords('tico-xlow')), 'X-Low (auto)');
     // A URL-only save keeps the saved key: no key in the body.
     await card.locator('[data-gateway-url]').fill('https://gateway.example.test/v1/gateway');
     await card.locator('[data-gateway-save]').click();

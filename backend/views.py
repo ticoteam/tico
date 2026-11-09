@@ -1363,9 +1363,14 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
+    from . import company_pause
+
+    company = company_pause.record(c)
     # A drain is either Tico updating itself (the deploy finishes each
     # bot's current run, then holds new ones until it is back) or a person pausing it.
-    if draining and deploy_draining(c, bot):
+    if company is not None:
+        label = "Saved — waiting: " + company_pause.waiting_words(company)
+    elif draining and deploy_draining(c, bot):
         label = "Saved — Tico is updating; this starts when the update finishes"
     elif draining:
         label = "Saved — this bot is paused; this starts when it's resumed"
@@ -1852,7 +1857,7 @@ _NEED_CONNECT = re.compile(
     re.I,
 )
 _NEED_REVIEW = re.compile(r"\b(review|draft|proofread|read over|look over)\b", re.I)
-# The words that open a question asking for a yes or a no (ui/app/decide.js DEC_YES_NO says the same).
+# The words that open a question asking for a yes or a no (ui/app/decide.ts DEC_YES_NO says the same).
 _YES_NO = frozenset(
     "approve can could should shall may do does did is are was were will would ok okay send publish "
     "merge ship go sign confirm proceed accept allow agree have has want renew book buy pay launch post "
@@ -1899,7 +1904,7 @@ def need_of(item):
         return "pay"
     if _NEED_CONNECT.search(words):
         return "connect"
-    if kind in ("question", "ask") or item.get("recommend"):
+    if kind == "question" or item.get("recommend"):
         return "decide"
     if _NEED_REVIEW.search(words):
         return "review"
@@ -1939,65 +1944,6 @@ def recommendation(ask, me):
     }
 
 
-def _whole_card(c, task, asked, me):
-    """Whether `task`, which `me` owns, exists only to put this one ask to them: the bot that asked filed it, nothing
-    else on it asks them, and it is the card the bot filed for its ask (H.ask_card) or says just that question."""
-    if task["requester_id"] != asked["sender_id"]:
-        return False
-    if any(a["id"] != asked["id"] and a["recipient_id"] == me for a in H.open_task_asks(c, task)):
-        return False
-    said = lambda text: " ".join(str(text or "").split()).casefold()  # noqa: E731
-    return H.ask_card(c, task) == me or said(asked.get("body")) in {
-        said(task.get("title")),
-        said(task.get("body")),
-        said(H.person_ask_of_body(task.get("body"), task.get("title"))),
-    }
-
-
-def take_recommendation(c, auth, who, asked, version=None):
-    """ "Do what you recommend": `who` answers the bot's ask with what it said it would do (the option it named, picked as
-    if by hand, or a plain yes). The card leaves their Needs you when the ask was the whole card: a task of theirs
-    that exists only to ask it is done, and a bot's task its open question held stops waiting on them. A task of theirs
-    the ask only came up on stays theirs. With `version`, a task that changed since the card was drawn is refused, not answered unseen. The bot
-    wakes on the answer as on any other."""
-    from . import models as M
-    from .task_review import answer_task
-
-    if asked["recipient_id"] != who.actor:
-        raise Problem("forbidden", "Only the person it asked takes its recommendation", 403)
-    rec = recommendation(asked, who.actor)
-    if not rec:
-        raise Problem("no_recommendation", "This question carries no recommendation to take", 409)
-    if not c.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}", (asked["id"],)).fetchone():
-        raise Problem("answered", "This question was already answered", 409)
-    text, text_refs = H.answer_text(asked, rec["do"], text="Yes, do what you recommend: " + rec["do"])
-    state_text = "Accepted the recommendation." if rec.get("source") else text
-    task_id = H.message_task_id(asked, H.conversation(c, asked["conversation_id"]))
-    task = H.task(c, task_id) if task_id else None
-    if task and version is not None and task["version"] != version:
-        raise Problem("version_conflict", "Task changed; fetch it and retry", 409)
-    finish = bool(task and task["owner_id"] == who.actor and _whole_card(c, task, asked, who.actor))
-    if rec["option"] and task_id:
-        question = asked["refs"]["questions"][0]
-        # A question on a file version is answered through its file and version.
-        target = asked["refs"].get("target") or {"comment": asked["id"]}
-        answer_task(
-            c, auth, who, task_id, M.TaskAnswer(target=target, answers={question["id"]: [rec["option"]]}), wake=True
-        )
-    else:
-        H.answer(c, who.actor, asked["id"], text, comment_refs=text_refs)
-    task = H.task(c, task_id) if task_id else None
-    if task and task["status"] in H.ACTIVE_STATUSES:
-        if finish:
-            H.task_update(c, who.actor, task_id, status="done", note=state_text)
-    return {
-        "did": rec["do"],
-        "task": task_id,
-        "done": finish,
-        **({"source": rec["source"]} if rec.get("source") else {}),
-    }
-
-
 def _quoted(text, n=90):
     return "'" + _clip(text, n) + "'" if str(text or "").strip() else ""
 
@@ -2018,7 +1964,7 @@ def approval_title(kind, payload, task_title=""):
     """What an approval card says it approves, from its payload (title, subject, what or action) or its task's title:
     "Send: 'Rental owner referrals' to Jennie Ooten". "Approve this <kind>" only when neither names anything."""
     p = payload if isinstance(payload, dict) else {}
-    text = lambda key: str(p.get(key) or "").strip() if isinstance(p.get(key), (str, int, float)) else ""  # noqa: E731
+    text = lambda key: str(p.get(key) or "").strip() if isinstance(p.get(key), (str, int, float)) else ""
     named = (
         next((text(k) for k in ("title", "subject", "what", "action") if text(k)), "") or str(task_title or "").strip()
     )
@@ -2069,7 +2015,7 @@ def fold_related(items, c, me):
     card (its parent, grandparent, ...), one the card blocks, and a waiting subtask of such a folded parent. A card is
     the person's own task or one with an ask to them. A wait with no card above or beside it this way, or one that
     would fold into two cards, keeps its own card: siblings under one project are not one blocker."""
-    mine = lambda it: it.get("owner_id") == me or (it.get("ask") or {}).get("recipient_id") == me  # noqa: E731
+    mine = lambda it: it.get("owner_id") == me or (it.get("ask") or {}).get("recipient_id") == me
     waits = {str(it["id"]): it for it in items if it["kind"] == "waiting" and not mine(it)}
     anchors = [it for it in items if it["kind"] in ("task", "question", "waiting") and mine(it)]
     if not waits or not anchors:
@@ -2092,13 +2038,11 @@ def fold_related(items, c, me):
     return [it for it in items if str(it["id"]) not in gone]
 
 
-# Plans on messages_superseded_asks_to: on messages_to_delivered it walked every message to the person (31k on Tico
-# Team, 43 ms warm) to find a few hundred replaced asks.
+# A question task of `me`'s closed this week with no answer: its task ended under it, or it was folded away. On
+# tasks_owner_rank, the person's own tasks only.
 WITHDRAWN_ASKS_SQL = (
-    "SELECT count(*) FROM messages s WHERE s.recipient_id=? AND s.kind='ask' AND s.superseded_at>=? "
-    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.recipient_id=s.recipient_id "
-    "AND m.sender_id=s.sender_id AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
-    f"AND {H.OPEN_ASK_SQL})"
+    "SELECT count(*) FROM tasks WHERE owner_id=? AND questions IS NOT NULL AND answer IS NULL "
+    "AND status='closed' AND closed_at>=?"
 )
 
 
@@ -2112,8 +2056,6 @@ def went_away(c, me, days=7):
         "AND json_extract(detail,'$.to')=?",
         (since, me),
     ).fetchone()[0]
-    # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
-    # again, so only one with no open successor counts.
     withdrawn = (
         c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
         + c.execute(
@@ -2323,7 +2265,11 @@ def approval_files(c, auth, who, payload):
 
 
 # The roadmap steps at which a question that holds up an item comes before the rest in Decide.
-ROADMAP_LIVE_STEPS = ("Approved", "Building")
+ROADMAP_LIVE_STEPS = (
+    "Approved",
+    "Building",
+    "In development",
+)  # the last is the Tico Team name (D64); the others predate it
 SOON_BUSINESS_DAYS = 2
 
 
@@ -2401,7 +2347,7 @@ def holds_up(c, row, readable):
 
 
 def decide_tier(item, now=None, own=None):
-    """Where a card goes in Decide (ui/app/decide.js): 0 when it holds up something due, or it goes ahead on its
+    """Where a card goes in Decide (ui/app/decide.ts): 0 when it holds up something due, or it goes ahead on its
     own, within SOON_BUSINESS_DAYS working days; 1 when it holds up a roadmap item at Approved or Building; else 2,
     newest first. `own` is the card's task as a roadmap item (roadmap_entry) when it is one: the header never names
     it, but it counts here like the item it holds up. How old a card is never moves it up."""
@@ -2559,45 +2505,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 # The Strategy Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs
                 # you.
                 item["merged"] = [t for t in merged[row["id"]] if t in can_see]
-            if ask and ask.get("recipient_id") == who.actor and not ask.get("question_task") and H.ask_older(ask):
-                # Its one-click Clarify (backend/clarify_asks.py) shows on the card. A question task has none: it goes
-                # back to its bot on its date (backend/still_needed.py).
-                ask["stale"] = True
             items.append(item)
-    for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
-        msg["refs"] = H._json(msg.get("refs"), {}) or {}
-        ask = {
-            k: msg[k]
-            for k in (
-                "id",
-                "sender_id",
-                "recipient_id",
-                "body",
-                "created_at",
-                "conversation_id",
-                "refs",
-                "delivered_at",
-                "read_at",
-            )
-        }
-        item = {
-            "kind": "ask",
-            "id": msg["id"],
-            "message_id": msg["id"],
-            "title": _clip(msg["body"], 160),
-            "first_line": (msg["body"] or "").split("\n")[0],
-            "body": msg["body"],
-            "requester_id": msg["sender_id"],
-            "origin_actor": msg["sender_id"],
-            "conversation_id": msg["conversation_id"],
-            "created_at": msg["created_at"],
-            "ask": ask,
-            "from_person": msg["sender_id"] if H.is_human(msg["sender_id"]) else None,
-            "recommend": recommendation(ask, who.actor),
-        }
-        if H.ask_older(msg):
-            ask["stale"] = True
-        items.append(item)
     for row in raw["approvals"]:
         if row["kind"] == "letter":
             try:
@@ -2643,7 +2551,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         if setup:
             items.append(setup)
     if H.is_human(who.actor):
-        # The thread items (backend/thread_attention.py); an ask Needs you already lists as a loose ask is not listed twice.
+        # The thread items (backend/thread_attention.py); a message Needs you already lists is not listed twice.
         from . import thread_attention
 
         listed = {it["message_id"] for it in items if it.get("message_id")}
@@ -2672,7 +2580,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             item["holds_up"] = holds_up(c, row, readable)
             if row.get("id") and row.get("status") not in ("closed", "declined", "done"):
                 own = roadmap_entry(c, row)
-        if item["kind"] in ("question", "ask"):
+        if item["kind"] == "question":
             item["why"] = card_why(item)
         item["tier"] = decide_tier(item, at, own)
     from .files import readable_page_refs
@@ -2746,7 +2654,7 @@ def needs_page(items, version, limit, cursor):
 
 
 def needs_bots(items, me):
-    """How many Needs-you items each bot is behind ({"bot:slug": n}), the way the app groups them (ui/app/state.js
+    """How many Needs-you items each bot is behind ({"bot:slug": n}), the way the app groups them (ui/app/state.ts
     needsMeCounts): a task waiting on me goes with the bot that owns it; another task or question with the bot that
     asked; a question asked outside any task with the bot that asked it. A page carries this for the whole list, so
     the sidebar's numbers do not wait for every page."""
@@ -2777,7 +2685,7 @@ def needs_folded_ids(items):
 def needs_plate_count(items):
     """Everything on the person's plate across boards, counted once; folded tasks count through their card."""
     task_kinds = {"task", "question", "waiting", "declined"}
-    plate_kinds = task_kinds | {"approval", "ask", "stale"}
+    plate_kinds = task_kinds | {"approval", "stale"}
     folded = set(needs_folded_ids(items))
     return len(
         {
@@ -2793,8 +2701,6 @@ def needs_actor(it, me):
     actor = None
     if it.get("kind") == "approval":
         actor = it.get("requested_by_id") or it.get("requester_id")
-    elif it.get("kind") == "ask":
-        actor = it.get("requester_id")
     elif it.get("kind") in ("task", "question", "waiting"):
         ask = it.get("ask") or {}
         on = it.get("waiting_on") if it.get("status") == "waiting" and H.is_human(it.get("waiting_on")) else None
@@ -3317,10 +3223,7 @@ def install_views(app, store, auth, mutate, task_view):
             return str(config.get("template") or "") in helpers
 
         from .chat_goals import readable_active
-        from . import gateway_tiers
-        from .task_manager import Chart
 
-        departments = Chart(c, store.settings)  # the Gateway department a bot's model picker starts from
         for bot in bots:
             slug = bot["id"]
             level = access.get(slug, auth.FULL)
@@ -3425,7 +3328,6 @@ def install_views(app, store, auth, mutate, task_view):
                     "turns_at_once": start_places.bot_limit(config),
                     "task_flow": task_flow[slug],
                     "team": P.team_of(slug, configs, people),
-                    "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                     "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
                     **strategy_bot.chart_hidden_row(slug, hide_strategy),
                     "report_position": places.get("bot:" + slug),
@@ -3868,9 +3770,11 @@ def install_views(app, store, auth, mutate, task_view):
         # One snapshot from the start, so the roster and access rows are read once (read_cache), not again
         # after the first privacy check opens a transaction.
         with store.read_transaction() as c:
-            health = c.execute("SELECT * FROM service_health WHERE service='scheduler'").fetchone()
-            tick = health["last_succeeded_at"] if health else None
-            age = max(0, (H.parse_ts(H.now()) - H.parse_ts(tick)).total_seconds()) if tick else None
+            # The loop is alive by its last beat or pass, whichever is fresher, within one interval and a minute
+            # (backend/heartbeat.py `liveness`): a 60 s beat does not read as stopped between beats.
+            from . import heartbeat
+
+            tick, age, alive = heartbeat.liveness(c)
             active, queued = [], []
             # Canceled and uncertain jobs are not "up next": uncertain work already
             # surfaces as a health issue, canceled work is history.
@@ -3915,7 +3819,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "active": active,
                 "queued": queued,
                 "recent_runs": [],
-                "keeper_alive": age is not None and age < 60,
+                "keeper_alive": alive,
                 "dispatcher_alive": False,
                 "tick_age_s": age,
                 "server_time": H.now(),

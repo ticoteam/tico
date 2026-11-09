@@ -53,6 +53,7 @@ PY_DIRS = (
 PY_FILES = ("conftest.py",)
 JS_GLOBS = (
     "ui/**/*.js",
+    "ui/**/*.ts",
     "ui/**/*.cjs",
     "ui/**/*.mjs",
     "app/shell/**/*.js",
@@ -1872,7 +1873,7 @@ def tracked_files():
 def classify(rel):
     if rel.endswith(".py") and (rel.split("/", 1)[0] in PY_DIRS or rel in PY_FILES):
         return "py"
-    if rel.endswith((".js", ".cjs", ".mjs")) and any(glob_match(rel, g) for g in JS_GLOBS):
+    if rel.endswith((".js", ".ts", ".cjs", ".mjs")) and any(glob_match(rel, g) for g in JS_GLOBS):
         return "js"
     if rel.endswith(".rs") and rel.startswith(tuple(d + "/" for d in RS_DIRS)):
         return "rs"

@@ -121,7 +121,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 - **Write for the bot that reads it.** Present tense, current rules, no dates.
 
 ## Replies between bots
-Ask another bot with `hub question ask`. When a bot's ordinary message asks for a reply, send it with
+Ask another bot with `hub message send <bot> "<question>" --needs-action`. When a bot asks for a reply, send it with
 `hub message send <sender> "<reply>"`, so that bot is not left waiting (`playbooks/commands.md`).
 
 ## Skills

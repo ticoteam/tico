@@ -357,6 +357,13 @@ class Auth:
                 owner_link.place_first(self.settings, self.store)
             except Exception:
                 logging.getLogger("tico.auth").exception("the owner sign-in link could not be put in place")
+        if self.settings.setup_handoff_hash:
+            from . import setup_handoff
+
+            try:
+                setup_handoff.place_first(self.settings, self.store)
+            except Exception:
+                logging.getLogger("tico.auth").exception("the setup handoff could not be put in place")
         try:
             if self.proxy:
                 self.proxy.warm()
@@ -771,7 +778,7 @@ class Auth:
 
     def system_bot(self, slug):
         """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot, the Health Monitor, the Task
-        Manager, the Bookkeeper): they act for the whole company, so only the company owner changes them. Admins
+        Manager, the Bookkeeper, Counsel, the Brand Owner): they act for the whole company, so only the company owner changes them. Admins
         manage every other bot."""
         return slug in (
             self.settings.assistant_bot,
@@ -783,6 +790,7 @@ class Auth:
             "task-manager",
             "bookkeeper",
             H.COUNSEL,
+            H.BRAND_OWNER,
         )
 
     def bot_manager(self, c, who, slug, operator=None):
@@ -1025,9 +1033,11 @@ class Auth:
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
+            # On a person's own Assistant turn, the person's own question tasks too (hubdb.own_question_for_assistant).
+            own = f" OR (questions IS NOT NULL AND owner_id={me})" if H.assistant_turn_person(who) else ""
             audience += (
                 f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}))"
+                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own})"
             )
         from . import counsel
 
@@ -1293,7 +1303,19 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
-        if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
+        from . import pipeline_rights
+
+        # A members-only pipeline's tickets are its owner's, manager's and members' whatever the ticket's own privacy says
+        # (pipeline_rights.may_see). A person's Assistant reads them as the person it acts for.
+        principal = who.task_actor or who.actor
+        # The ticket's own owner and requester read it whatever its pipeline: a bot that owns a ticket on a private pipeline
+        # it is not on still reads its own work.
+        own = principal in (row.get("owner_id"), row.get("requester_id"))
+        if row.get("type_id") and not own and not pipeline_rights.may_see(c, principal, row["type_id"]):
+            raise Problem("not_found", "Task not found", 404)
+        if who.task_actor and not (
+            H.task_private_readable(c, who.task_actor, row) or H.own_question_for_assistant(who, row)
+        ):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (

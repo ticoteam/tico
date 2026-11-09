@@ -36,7 +36,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread pin|unpin <thread>              pin a thread for yourself, or unpin it (even one pinned for everyone)
     hub thread catch-up [--cursor C] [--limit N]   each thread with something new for you, mentions first, with its
                                                new messages; mark one read with hub thread read <thread> --all
-    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
+    hub thread post <thread> "<text>" [--to ACTOR] [--reply-to MESSAGE] [--ref KIND:ID ...]
                                                --reply-to answers that message: yours stays in the thread, quoting it
     hub thread bot-status <thread>             the bots it waits on: working, up next or can't reply, and why
     hub thread reply <thread> <message> "<text>"   a separate side topic in that message's sub-thread (to answer a
@@ -47,7 +47,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
     hub thread task <message-id> --title T --owner O   a task from a message: private unless the thread is company-wide
     hub thread delete <message-id>             delete a message you wrote (a marker stays)
-    hub thread upload <thread> <file> [--text T] [--kind say|ask] [--to ACTOR] [--under MESSAGE]   a file in a message
+    hub thread upload <thread> <file> [--text T] [--to ACTOR] [--under MESSAGE]   a file in a message
     hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
     hub thread read <thread> [--seq N | --all]
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
@@ -59,8 +59,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            checks it; --history also brings the channel's earlier messages; --off
                                            takes it away; with the thread alone, lists its links
     hub thread slack-resume <link-id>          check a suspended or refused Slack link again (admins)
-    hub question ask <bot> [<bot>...] "<question>" --wait 60
-    hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
     hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
                                            run reads it (with --defer, a run starts by then if none came)
     hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
@@ -88,7 +86,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            one starts by the time given (24h when none; --next-run is the old name)
                                            blocked on a person? --owner <person> --parent <your task>
                                            for a person, the body's first paragraph is the ask (as --note below)
-    hub task ask <id> "<question>"
     hub task update <id> --status waiting --on <person> --note "<plain ask>"
                                            ask a person on your task: one small subtask for them, yours stays blocked
     hub task question "<question>" --on <person> [--why "<why it matters>"]
@@ -107,8 +104,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            the time given; never notifies no follower), --goal sets its goal
     hub task comment-edit <id> <comment-id> "<text>"   change a comment you wrote; wakes nobody
     hub task comment-delete <id> <comment-id>          take back a comment you wrote
-    hub task ask-resolve <id> <question-id> [--quote "<their words>"]
-                                                       a question answered elsewhere, quoted; no --quote withdraws yours
     hub task delete <id>                               delete a task made by mistake, to the trash (a person only)
     hub task requesters <id>                           who asked for it (internal contacts, counts; never tokens)
     hub task requester-save <id> [--requester-id R] [--email E] [--organization O] [--important]
@@ -536,7 +531,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
     hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
     hub gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
-    hub gateway image PROMPT --category C [--ref FILE]... [--size WxH] [--count N] --out PATH
+    hub gateway image PROMPT [--model low|high|svg] [--category C] [--quality Q] [--ref FILE]... [--size WxH] [--count N] --out PATH
+    hub gateway video PROMPT [--seconds N] [--resolution R] [--aspect A] [--audio|--no-audio] [--first-frame FILE] [--last-frame FILE]
+    hub gateway video-status ID --out PATH.mp4    check a video job; save it once it is done
                                            make an image (storyboard, photo, character or graphic) and save it;
                                            PATH.json beside it says how it was made
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
@@ -611,6 +608,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            delete a group; its teammates and groups move up to its parent
     hub group access <group> [--see V] [--read V] [--write V]
                                            show or set who sees, reads, writes to a group (a lead or an admin)
+    hub setup show                         where Finish setup stands: the wizard, the company file's people, the checklist
+    hub setup complete                     the owner finishes the welcome wizard with its saved answers (Create my team)
+    hub setup invite <person_key> [--email E]
+                                           the owner invites a person the company file from setup names (docs/onboarding.md)
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
@@ -649,12 +650,20 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
                     [--year YYYY]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
+    hub finance brief                      what changed in the money you may see: a few short lines
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
     hub finance action <action-id>         an action's status and result
     hub finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
-    hub finance card-fill                  fill your card into a checkout (not available yet)
+    hub directory self | types | describe <type>        who we are, the types, one type's attributes and links
+    hub directory find <type> [--name N] [--status S] [--link K] [--after C] [--limit N] [--text]
+    hub directory get <id|email|domain|name> [--text]   one entity: values, links, records, your notes
+    hub directory upsert <type> --match email=x [--set k=v ...] [--name N] [--evidence ID] [--confidence F]
+    hub directory link <a> <link> <b> [--from D] [--until D]; unlink <link-id>; merge <keep> <drop>; unmerge <drop>
+    hub directory history <ref> [--attribute K]; note <ref> <text> [--audience me|company]; rules <ref>
+    hub directory attribute add <type> <key> --name N --value-type T --description D [--option k=label]
+    hub directory type add <key> --name N --description D; hub directory link-type add <key> --name N --inverse N --description D
     hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     hub task-manager on|off                the hourly department report (the owner or an admin)
     hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -677,7 +686,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub external sync --provider dots --file f.json   sync your Grok Bots or Dots into Tico
 
 The commands of the last release keep working for one more release, hidden: each prints a one-line "renamed to"
-notice on stderr and runs the new command (RENAMED below).
+notice on stderr and runs the new command (RENAMED below). A command that is gone (REMOVED below) prints one
+line naming what to use instead and exits 1.
 
 Exit codes: 0 fine, 2 `{"refused": <rule>, "detail": "..."}` or a non-retryable API error,
 1 `{"error": "..."}` (bad arguments, no identity, or the API could not be reached).
@@ -914,6 +924,14 @@ def on_off(word):
     if word not in ("on", "off"):
         raise argparse.ArgumentTypeError("use on or off")
     return word == "on"
+
+
+def _pair(text):
+    """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `hub directory`."""
+    key, sep, value = str(text).partition("=")
+    if not sep or not key.strip():
+        raise argparse.ArgumentTypeError(f"{text} is not KEY=VALUE")
+    return key.strip(), value
 
 
 def _finance_payload(text):
@@ -1434,7 +1452,6 @@ def parser():
     s = thread.add_parser("post", help="post a message to a thread")
     s.add_argument("thread")
     s.add_argument("text")
-    s.add_argument("--kind", choices=["say", "ask"], help="ask: wants an answer from --to")
     s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
     s.add_argument(
         "--reply-to",
@@ -1484,15 +1501,14 @@ def parser():
     s.add_argument("--title", required=True)
     s.add_argument("--owner", required=True, help="a bot slug, a person id, or me")
     s.set_defaults(fn="thread task")
-    s = thread.add_parser("delete", help="delete a message you wrote: a marker stays, and the asks it answered reopen")
+    s = thread.add_parser("delete", help="delete a message you wrote: a marker stays")
     s.add_argument("message_id")
     s.set_defaults(fn="thread delete")
     s = thread.add_parser("upload", help="post a message with a local file to a thread: the file is streamed to Tico")
     s.add_argument("thread")
     s.add_argument("path", help="a local file on this computer")
     s.add_argument("--text", help="the message's text (optional: the file can come alone)")
-    s.add_argument("--kind", choices=["say", "ask"], default="say")
-    s.add_argument("--to", help="the person or bot an ask is for")
+    s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
     s.add_argument(
         "--under", metavar="MESSAGE", help="post the file in that message's sub-thread instead of the thread"
     )
@@ -1577,22 +1593,6 @@ def parser():
     s.add_argument("--history", action="store_true", help="also bring in the channel's earlier messages")
     s.add_argument("--off", action="store_true", help="take the thread's Slack link away")
     s.set_defaults(fn="thread link-slack")
-
-    question = sub.add_parser(
-        "question", help="ask other bots a question and wait; answer one asked of you"
-    ).add_subparsers(dest="sub")
-    s = question.add_parser(
-        "ask", description="Ask a teammate. A system recipient routes to your manager or the company owner."
-    )
-    s.add_argument("words", nargs="*")
-    s.add_argument("--wait", type=float, default=60)
-    s.set_defaults(fn="question ask")
-    s = question.add_parser("answer")
-    s.add_argument("message_id")
-    s.add_argument("text", nargs="?", default="")
-    s.add_argument("--unknown")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="question answer")
 
     note = sub.add_parser(
         "note", help="a deferred message for a bot: no run now, its next run reads it"
@@ -2105,12 +2105,6 @@ def parser():
     s.add_argument("--delete", action="store_true", help="delete an unused type")
     s.set_defaults(fn="task types")
     s = task.add_parser(
-        "ask", description="Ask the requester. A system requester routes to your manager or the company owner."
-    )
-    s.add_argument("id")
-    s.add_argument("text")
-    s.set_defaults(fn="task ask")
-    s = task.add_parser(
         "question", help="put one decision to a person as a task they own: a pick or Yes / No; their answer closes it"
     )
     s.add_argument("question")
@@ -2141,14 +2135,16 @@ def parser():
     s.add_argument(
         "--if-no-answer",
         dest="if_no_answer",
-        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence",
+        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence. Only for a step that "
+        "sends, spends or deletes: a reversible, internal default is refused (ask_default_go_ahead), so just do it and "
+        "note it on your task",
     )
     s.add_argument(
         "--default-kind",
         dest="default_kind",
         choices=["reversible", "send", "spend", "delete"],
-        help="what that step is, required with --if-no-answer; only reversible (internal, undoable) goes "
-        "ahead on its own: a send, spending or a delete waits for an answer",
+        help="what that step is, required with --if-no-answer; a reversible (internal, undoable) step is not asked: "
+        "do it and say so in one line on your task. A send, spending or a delete waits for an answer",
     )
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
     s.add_argument(
@@ -2265,13 +2261,6 @@ def parser():
         metavar="TITLE",
         help="the caption for each --visual, in the same order",
     )
-    choices = s.add_mutually_exclusive_group()
-    choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument(
-        "--choices",
-        help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
-        "person needs the what-happens line)",
-    )
     delivery_flags(s, goal=True)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.add_argument(
@@ -2329,14 +2318,6 @@ def parser():
     s.add_argument("id")
     s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
     s.set_defaults(fn="task comment-delete")
-    s = task.add_parser(
-        "ask-resolve",
-        help="settle an open question the person answered elsewhere (--quote their words), or withdraw one you asked",
-    )
-    s.add_argument("id")
-    s.add_argument("comment_id", help="the question's id (its id in the task's comments)")
-    s.add_argument("--quote", help="the person's answer in their own words")
-    s.set_defaults(fn="task ask-resolve")
     s = task.add_parser("delete", help="delete a task made by mistake: its requester or a mover, never a bot")
     s.add_argument("id")
     s.set_defaults(fn="task delete")
@@ -2476,14 +2457,22 @@ def parser():
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
-    choices = s.add_mutually_exclusive_group()
-    choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument(
-        "--choices",
-        help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
-        "person needs the what-happens line)",
-    )
     s.set_defaults(fn="task attach")
+    # Pipeline requirements (backend/pipeline_requirements.py, backend/requirement_attachments.py): the MCP tools of the
+    # same names (clients/hubtools.py) run through the same commands.
+    s = sub.add_parser("requirements", help="the requirements a pipeline stage sets: kind, reviewer, version")
+    s.add_argument("stage_id", help="the pipeline stage (a task step id)")
+    s.set_defaults(fn="requirements")
+    requirement = sub.add_parser("requirement", help="evidence on a requirement of a ticket").add_subparsers(dest="sub")
+    s = requirement.add_parser("attach", help="attach a company file, an uploaded blob or a link to a requirement")
+    s.add_argument("task_id", help="the ticket, at the requirement's stage")
+    s.add_argument("requirement_id")
+    s.add_argument("--source", required=True, choices=["file", "blob", "link"])
+    s.add_argument("--file-id", help="a company file (source file)")
+    s.add_argument("--file-version", type=int, help="the file version; left out, the current one")
+    s.add_argument("--blob-id", help="an uploaded blob (source blob)")
+    s.add_argument("--url", help="an http or https address (source link)")
+    s.set_defaults(fn="requirement attach")
     s = task.add_parser("answers", help="list the task's structured answers, oldest first")
     s.add_argument("id")
     s.set_defaults(fn="task answers")
@@ -3393,7 +3382,12 @@ def parser():
     s = watch.add_parser("add", help="watch one page of an entity")
     s.add_argument("entity_id")
     s.add_argument("url")
-    s.add_argument("--kind", default="other", choices=["pricing", "careers", "changelog", "docs", "home", "other"])
+    s.add_argument(
+        "--kind",
+        default="other",
+        choices=["pricing", "careers", "changelog", "docs", "home", "other", "release"],
+        help="release: the URL is github:owner/repo or a release feed, read through the Gateway",
+    )
     s.set_defaults(fn="market watch add")
     s = watch.add_parser("list", help="the watched pages and when each was last read")
     s.add_argument("--entity", dest="entity_id")
@@ -3410,6 +3404,11 @@ def parser():
     s.add_argument("--body-file", dest="body_file", required=True, help="the briefing in Markdown; - reads stdin")
     s.add_argument(
         "--items-file", dest="items_file", help="JSON list of {text, kind: change|signal|theme|size, entity_ids}"
+    )
+    s.add_argument(
+        "--answers-file",
+        dest="answers_file",
+        help="JSON object of one-line answers: {changed, money, players, reach, saying}",
     )
     s.set_defaults(fn="market briefing post")
     s = briefing.add_parser("latest", help="the newest briefing, its items and the bets it touches")
@@ -4428,14 +4427,30 @@ def parser():
         "--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)"
     )
     s.set_defaults(fn="gateway fetch")
+    s = gateway.add_parser("digest", help="group many items into one digest through the Gateway (Low prices)")
+    s.add_argument(
+        "--items-file",
+        dest="items_file",
+        required=True,
+        help='a JSON list of items, each {"title", and optionally "id", "text", "url", "source", "at"}, 1 to 300',
+    )
+    s.add_argument("--focus", help="what the reader cares about; it orders the groups")
+    s.add_argument("--style", choices=("brief", "full"), help="brief (the default) or full")
+    s.set_defaults(fn="gateway digest")
     s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
     s.add_argument("prompt")
     s.add_argument(
-        "--category",
-        required=True,
-        choices=("storyboard", "photo", "character", "graphic"),
-        help="storyboard (fast, keeps references), photo, character (keeps people from --ref), graphic (text and layout)",
+        "--model",
+        choices=("low", "high", "svg"),
+        help="low (fast, keeps --ref; the default), high (--category), svg (a vector image, saved as .svg; --quality)",
     )
+    s.add_argument(
+        "--category",
+        choices=("storyboard", "photo", "character", "graphic"),
+        help="for --model high: photo (the default), graphic (text and layout) or character (keeps people from --ref); "
+        "without --model, the older door's choice (storyboard, photo, character or graphic)",
+    )
+    s.add_argument("--quality", choices=("standard", "pro"), help="for --model svg: standard (the default) or pro")
     s.add_argument(
         "--ref",
         dest="refs",
@@ -4453,6 +4468,19 @@ def parser():
         help="the file for the first image; more are saved as name-2.png, name-3.png...",
     )
     s.set_defaults(fn="gateway image")
+    s = gateway.add_parser("video", help="start a video through the Gateway: its job id, checked with video-status")
+    s.add_argument("prompt")
+    s.add_argument("--seconds", type=int, help="3 to 15 seconds (8 by default)")
+    s.add_argument("--resolution", choices=("360p", "720p", "1080p", "4k"), help="720p by default")
+    s.add_argument("--aspect", choices=("16:9", "9:16"), help="16:9 by default")
+    s.add_argument("--audio", action=argparse.BooleanOptionalAction, default=None, help="with sound (the default)")
+    s.add_argument("--first-frame", dest="first_frame", metavar="FILE", help="a PNG or JPEG the video starts from")
+    s.add_argument("--last-frame", dest="last_frame", metavar="FILE", help="a PNG or JPEG the video ends on")
+    s.set_defaults(fn="gateway video")
+    s = gateway.add_parser("video-status", help="check a video job; once done, save its MP4 to --out")
+    s.add_argument("id", help="the job id the video command printed")
+    s.add_argument("--out", metavar="PATH.mp4", help="the new .mp4 file for a finished video")
+    s.set_defaults(fn="gateway video-status")
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(
         dest="sub"
     )
@@ -4905,6 +4933,17 @@ def parser():
     for level in ("see", "read", "write"):
         s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
     s.set_defaults(fn="group access")
+    setup = sub.add_parser("setup", help="Finish setup, the welcome wizard (the owner)").add_subparsers(dest="sub")
+    setup.add_parser(
+        "show", help="where it stands: the wizard, the people the company file names, the checklist"
+    ).set_defaults(fn="setup show")
+    setup.add_parser("complete", help="the owner finishes the wizard with its saved answers").set_defaults(
+        fn="setup complete"
+    )
+    s = setup.add_parser("invite", help="the owner invites a person the company file from setup names")
+    s.add_argument("person_key", help="their id in the company file (hub setup show: company_import.people[].id)")
+    s.add_argument("--email", help="their email; leave out to use the one they were added with")
+    s.set_defaults(fn="setup invite")
     s = sub.add_parser("api", help="BotOps: any v2 route, as the person who asked")
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")
@@ -5106,6 +5145,8 @@ def parser():
         s.add_argument(flag)
     s.add_argument("--days", type=int)
     s.set_defaults(fn="finance metric")
+    s = fin.add_parser("brief", help="what changed in the money you may see: a few short lines")
+    s.set_defaults(fn="finance brief")
     s = fin.add_parser("act", help="ask for one Finance action (help lists kinds)")
     s.add_argument("kind")
     s.add_argument("--payload", type=_finance_payload, help="the kind's fields as JSON, or - to read stdin")
@@ -5136,11 +5177,118 @@ def parser():
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
-    s = fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)")
-    s.add_argument("card_id", nargs="?", help="your card")
-    s.add_argument("--merchant", help="the checkout's domain")
-    s.add_argument("--amount", type=int, help="minor units")
-    s.set_defaults(fn="finance card-fill")
+    # The Directory (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
+    directory = sub.add_parser(
+        "directory",
+        help="the Directory: people, organizations and places, their links, values and notes, as you see them",
+    ).add_subparsers(dest="sub")
+    s = directory.add_parser("self", help="who we are: our company, where we operate, the obligations that bind us")
+    s.add_argument("--text", dest="as_text", action="store_true", help="a short summary, not JSON")
+    s.set_defaults(fn="directory self")
+    directory.add_parser("types", help="the entity types and their descriptions, and who added each").set_defaults(
+        fn="directory types"
+    )
+    s = directory.add_parser(
+        "describe", help="one type: its attributes (owners, options) and the link types that touch it"
+    )
+    s.add_argument("type")
+    s.set_defaults(fn="directory describe")
+    s = directory.add_parser("find", help="entities of one type you can see, by name, status or a link to us")
+    s.add_argument("type")
+    s.add_argument("--name", help="a name prefix")
+    s.add_argument("--status")
+    s.add_argument("--link", help="a link to us, like customer_of")
+    s.add_argument("--after", help="the next the last page gave")
+    s.add_argument("--limit", type=int, help="up to 50")
+    s.add_argument("--text", dest="as_text", action="store_true", help="one line per entity, not JSON")
+    s.set_defaults(fn="directory find")
+    s = directory.add_parser("get", help="one entity as you see it: values with source, links, records and your notes")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("--text", dest="as_text", action="store_true", help="a short card, not JSON")
+    s.set_defaults(fn="directory get")
+    s = directory.add_parser("rules", help="the rules that apply to an entity (none until rules arrive)")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("--as", dest="as_bot", metavar="BOT", help="the bot the rules are for")
+    s.add_argument("--action", help="what you would do, like email")
+    s.set_defaults(fn="directory rules")
+    s = directory.add_parser("upsert", help="create or update one entity: --match names it, --set sets its values")
+    s.add_argument("type")
+    s.add_argument("--match", required=True, type=_pair, metavar="KEY=VALUE", help="email, domain, name or id")
+    s.add_argument(
+        "--set", dest="set_values", action="append", type=_pair, metavar="KEY=VALUE", help="one value, repeatable"
+    )
+    s.add_argument("--name")
+    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
+    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
+    s.set_defaults(fn="directory upsert")
+    s = directory.add_parser("link", help="a typed, dated link between two entities: a works_at b")
+    s.add_argument("from_ref", metavar="a")
+    s.add_argument("link_key", metavar="link")
+    s.add_argument("to_ref", metavar="b")
+    s.add_argument("--from", dest="valid_from_on", metavar="DATE", help="YYYY-MM-DD the link starts")
+    s.add_argument("--until", dest="valid_until_on", metavar="DATE", help="YYYY-MM-DD the link ends")
+    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
+    s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
+    s.set_defaults(fn="directory link")
+    s = directory.add_parser("unlink", help="end a link: it stops being current today; its history stays")
+    s.add_argument("link_id")
+    s.set_defaults(fn="directory unlink")
+    s = directory.add_parser("merge", help="merge a duplicate into the entity it copies; unmerge reverses it")
+    s.add_argument("keep")
+    s.add_argument("drop")
+    s.set_defaults(fn="directory merge")
+    s = directory.add_parser("unmerge", help="reverse the last merge of a dropped entity, named by its own id")
+    s.add_argument("drop")
+    s.set_defaults(fn="directory unmerge")
+    s = directory.add_parser("history", help="past values of an entity's fields, newest first")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("--attribute", help="one field's history")
+    s.add_argument("--after", help="the next the last page gave")
+    s.add_argument("--limit", type=int, help="up to 50")
+    s.set_defaults(fn="directory history")
+    s = directory.add_parser("note", help="a note on an entity; --audience me keeps it to you")
+    s.add_argument("ref", metavar="id|email|domain|name")
+    s.add_argument("body")
+    s.add_argument("--audience", choices=["me", "company"])
+    s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it cites")
+    s.set_defaults(fn="directory note")
+    attribute = directory.add_parser("attribute", help="add an attribute to a type").add_subparsers(dest="subsub")
+    s = attribute.add_parser("add", help="add an attribute: name, value type, description, and options for a select")
+    s.add_argument("type")
+    s.add_argument("key")
+    s.add_argument("--name", required=True)
+    s.add_argument("--value-type", dest="value_type", required=True, help="text, number, date, select, status ...")
+    s.add_argument("--description", required=True, help="what it holds; required")
+    s.add_argument(
+        "--option", dest="options", action="append", type=_pair, metavar="KEY=LABEL", help="a select's option"
+    )
+    s.add_argument("--multiple", action="store_true")
+    s.add_argument("--unique", dest="unique_value", action="store_true")
+    s.add_argument("--required", action="store_true")
+    s.add_argument("--sensitive", action="store_true", help="only Finance's owner and the system read it")
+    s.add_argument("--owner", help="tico (the default) or connection:<id>")
+    s.set_defaults(fn="directory attribute add")
+    kind = directory.add_parser("type", help="add an entity type").add_subparsers(dest="subsub")
+    s = kind.add_parser("add", help="add an entity type, with its description")
+    s.add_argument("key")
+    s.add_argument("--name", required=True)
+    s.add_argument("--description", required=True)
+    s.add_argument("--plural", dest="plural_name")
+    s.add_argument("--icon")
+    s.set_defaults(fn="directory type add")
+    link_type = directory.add_parser("link-type", help="add a link type").add_subparsers(dest="subsub")
+    s = link_type.add_parser("add", help="add a link type: its name both ways, its description, the ends it may join")
+    s.add_argument("key")
+    s.add_argument("--name", required=True)
+    s.add_argument("--inverse", dest="inverse_name", required=True, help="the name from the far end")
+    s.add_argument("--description", required=True)
+    s.add_argument("--from", dest="from_type", help="the type the link starts at")
+    s.add_argument("--to", dest="to_type", help="the type the link ends at")
+    s.add_argument(
+        "--inherits-rules", dest="inherits_rules", action="store_true", help="a rule toward one end reaches the other"
+    )
+    s.add_argument("--symmetric", action="store_true", help="stored once, both ways")
+    s.set_defaults(fn="directory link-type add")
     manager = sub.add_parser(
         "task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)"
     ).add_subparsers(dest="sub")
@@ -5295,8 +5443,6 @@ RENAMED = [
     (("inbox",), ("message", "list"), (), None),
     (("ack",), ("message", "mark-read"), (), None),
     (("history",), ("conversation", "show"), (), None),
-    (("ask",), ("question", "ask"), (), None),
-    (("answer",), ("question", "answer"), (), None),
     (("notes",), ("note", "list"), (), None),
     (("unnote",), ("note", "delete"), (), None),
     (("board",), ("task", "list"), ("--all",), None),
@@ -5351,6 +5497,24 @@ RENAMED = [
     (("gtm", "sources"), ("growth", "source", "list"), (), None),
 ]
 RENAMED.sort(key=lambda rule: -len(rule[0]))
+
+# Commands taken away with asks (Tico 0.5): each prints one line naming what to use instead and exits 1. The longest
+# old spelling that matches wins.
+ASK_INSTEAD = (
+    'ask a person with: hub task question "<question>" --on <person>; '
+    'ask a bot with: hub message send <bot> "<question>" --needs-action'
+)
+ANSWER_INSTEAD = "a question to a person is a question task: answer it in Tico (Needs you); a bot's question is a DM"
+REMOVED = [
+    (("question", "ask"), ASK_INSTEAD),
+    (("question", "answer"), ANSWER_INSTEAD),
+    (("question",), ASK_INSTEAD),
+    (("ask",), ASK_INSTEAD),
+    (("answer",), ANSWER_INSTEAD),
+    (("task", "ask"), ASK_INSTEAD),
+    (("task", "ask-resolve"), ANSWER_INSTEAD),
+]
+REMOVED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)  # the subcommands `hub notice` has now
 
 
@@ -5473,6 +5637,14 @@ def parse(p, argv):
     return args
 
 
+def removed_notice(argv):
+    """The one line for a command that is gone (REMOVED), or None."""
+    for old, instead in REMOVED:
+        if tuple(argv[: len(old)]) == old:
+            return f'hub: "{" ".join(old)}" is gone; {instead}'
+    return None
+
+
 def rename_argv(argv):
     """`argv` for the new spelling of an old command line, and the notice to print (or None when nothing was renamed)."""
     argv = list(argv)
@@ -5532,6 +5704,10 @@ def main(argv):
             if code:
                 return code
         return 0
+    gone = removed_notice(argv)
+    if gone:
+        print(gone, file=sys.stderr)
+        return 1
     argv, renamed = rename_argv(argv)
     if renamed:
         print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)

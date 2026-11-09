@@ -25,10 +25,13 @@ the team named in the schedule setting, else the one active bot built from the `
 With none found the feature is idle for that role and says so (`GET /api/v2/release-schedule`).
 
 A release carries the Dev tickets at the Pending Release step when it is published that have a pull request merged in
-its repository; the rest of the factory's steps stay a person's or bot's to move (docs/software-factory.md).
+its repository, and moves each to the step after Pending Release (Post Release QA), noting "Shipped in vX.Y.Z"; when
+nothing is left at Pending Release the schedule's open Release task closes. The rest of the factory's steps stay a
+person's or bot's to move (docs/software-factory.md).
 """
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 
@@ -43,12 +46,14 @@ MAX_TIMES = 2
 GRACE = timedelta(hours=3)  # a missed hour (server down) still releases within this long; later it is skipped
 KEEP_FIRED = 10
 MAX_LISTED = 60  # tickets named in a task body; the count in the title is the whole number
+PUBLIC_SUMMARY_MAX = 280  # characters of a private ticket's public summary a task body carries
 AT = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 TITLE = "Release: "
 MANAGER, WRITER, QA = "release-notes", "docs-writer", "issue-triage"  # starter templates (templates/catalog)
 PENDING = "pending release"
 QA_CHILD = re.compile(r"^QA\b", re.I)
 EVENT = "release_published"
+log = logging.getLogger(__name__)
 
 
 def zone():
@@ -168,9 +173,9 @@ def _qa_room(c, ticket, qa):
 
 
 # ----------------------------------------------------------------------------- what is waiting for a release
-def pending(c, reader=None):
+def pending(c):
     """The Dev tickets at the Pending Release step, oldest first: dicts of the task row plus `prs` (its pull request
-    links). A private ticket `reader` (an actor) may not read is left out."""
+    links). Every one is listed; a task body names each ticket as `_ticket_line` allows."""
     from .roadmap_flow import ENGINEERING
 
     rows = [
@@ -182,35 +187,56 @@ def pending(c, reader=None):
             (PENDING, ENGINEERING, *H.ACTIVE_STATUSES),
         )
     ]
-    return [
-        {**r, "prs": [l for l in H.task_links(c, r["id"]) if l["kind"] == "pr"]}
-        for r in rows
-        if r and (reader is None or H.task_private_readable(c, reader, r))
-    ]
+    return [{**r, "prs": [l for l in H.task_links(c, r["id"]) if l["kind"] == "pr"]} for r in rows if r]
 
 
-def _name(t):
-    return (f"#{t['number']} " if t.get("number") is not None else "") + str(t["title"]).strip()
+def _name(t, title=None):
+    title = str(t["title"]).strip() if title is None else title
+    return (f"#{t['number']} " if t.get("number") is not None else "") + title
 
 
-def _line(t):
+def _ticket_line(c, t):
+    """How a ticket is named in a team-visible task body, whoever reads it. A ticket that is not private is named as
+    usual. A private ticket is never named by its private title, owner or pull request: it shows its public title and
+    summary when it has a public title, and otherwise is only counted (None)."""
+    if not H.task_private(c, t):
+        return str(t["title"]).strip(), None, False
+    public = str(t.get("public_title") or "").strip()
+    if not public:
+        return None
+    summary = " ".join(str(t.get("public_summary") or "").split())[:PUBLIC_SUMMARY_MAX]
+    return public, summary or None, True
+
+
+def _line(t, name, private):
+    if private:
+        return f"- {name}"
     pr = next((p["url"] for p in t["prs"]), "")
-    return f"- {_name(t)} (owner {t['owner_id']}){' ' + pr if pr else ''}"
+    return f"- {name} (owner {t['owner_id']}){' ' + pr if pr else ''}"
 
 
-def _listing(c, tickets, more_where, *, docs=False):
-    """The ticket lines a team-visible task or routine may carry: a private ticket is counted, never named (its title,
-    owner and pull request stay with its own audience)."""
-    open_ = [t for t in tickets if not H.task_private(c, t)]
-    shown = open_[:MAX_LISTED]
-    lines = [_line(t) for t in shown]
-    if len(open_) > len(shown):
-        lines.append(f"...and {len(open_) - len(shown)} more {more_where}.")
-    if len(tickets) > len(open_):
-        hidden = len(tickets) - len(open_)
+def _listing(c, tickets, more_where):
+    """The ticket lines a team-visible task or routine may carry (`_ticket_line`). A private ticket with no public title is
+    counted only, and the task says to leave it out and never to ask anyone for its name."""
+    named, hidden = [], 0
+    for t in tickets:
+        found = _ticket_line(c, t)
+        if found is None:
+            hidden += 1
+        else:
+            named.append((t, *found))
+    shown = named[:MAX_LISTED]
+    lines = []
+    for t, title, summary, private in shown:
+        lines.append(_line(t, title if private else _name(t, title), private))
+        if summary:
+            lines.append(f"  {summary}")
+    if len(named) > len(shown):
+        lines.append(f"...and {len(named) - len(shown)} more {more_where}.")
+    if hidden:
         lines.append(
-            f"...and {hidden} private ticket{'s' if hidden != 1 else ''}."
-            + (" Skip them: their owners handle any docs." if docs else " Not named here.")
+            f"...and {hidden} private ticket{'s' if hidden != 1 else ''} with no public title. Leave private tickets "
+            "out of the docs and release notes; do not ask anyone for their names."
         )
     return "\n".join(lines)
 
@@ -249,7 +275,7 @@ def request(c, actor, *, source, note=""):
     if not manager:
         return {"sent": False, "reason": "no_release_manager", "task": None, "tickets": 0}
     owner = H.bot_actor(manager)
-    tickets = pending(c, owner)
+    tickets = pending(c)
     if not tickets and not (source == "release_now" and not H.is_bot(actor) and actor != H.KEEPER and note.strip()):
         return {"sent": False, "reason": "nothing_pending", "task": None, "tickets": 0}
     if actor == H.KEEPER:
@@ -357,12 +383,66 @@ def next_at(cfg, at):
 # ----------------------------------------------------------------------------- after a release
 def carried(c, repo):
     """The Dev tickets a release in `repo` carries: at Pending Release with a pull request merged (or shipped) there."""
-    repo = str(repo or "").lower()
+    repo = norm_repo(repo)
     return [
         t
         for t in pending(c)
-        if any(p.get("state") in ("merged", "shipped") and str(p.get("repo") or "").lower() == repo for p in t["prs"])
+        if any(p.get("state") in ("merged", "shipped") and norm_repo(p.get("repo")) == repo for p in t["prs"])
     ]
+
+
+def norm_repo(value):
+    """`owner/repo` in lower case: a github.com url, a `.git` end and stray slashes or spaces do not tell repositories apart."""
+    text = re.sub(r"^(?:https?://)?(?:www\.)?github\.com/", "", str(value or "").strip(), flags=re.I)
+    return re.sub(r"\.git$", "", text.strip("/"), flags=re.I).lower()
+
+
+def _move_on(c, ticket, tag):
+    """Move a ticket a release carried from Pending Release to the step after it (Post Release QA when the type has
+    it, else the next step), as Tico, through the normal move so the step's own rules run. A ticket that is no longer
+    at Pending Release is left alone. Returns the step's name, or None when nothing moved."""
+    from . import step_flow as F
+
+    row = H.task(c, ticket["id"])
+    if row is None:
+        return None
+    here = F.step(c, row.get("step_id"))
+    if not here or here["name"].strip().lower() != PENDING:
+        return None
+    after = next((s for s in F.steps(c, here["type_id"]) if s["position"] > here["position"]), None)
+    if not after:
+        return None
+    c.execute("SAVEPOINT release_move")
+    try:
+        H.task_update(c, H.KEEPER, row["id"], step=after["id"], note=f"Shipped in {tag}", strict=False)
+    except Exception:  # a release's follow-up is never lost to one ticket that will not move
+        c.execute("ROLLBACK TO release_move")
+        c.execute("RELEASE release_move")
+        log.exception("release %s could not move %s to %s", tag, row["id"], after["name"])
+        return None
+    c.execute("RELEASE release_move")
+    return after["name"]
+
+
+def _close_release_tasks(c, tag):
+    """Nothing is at Pending Release any more: close the Release task(s) the schedule filed for the Release Manager,
+    naming the version. A task the manager made itself is none of ours. Returns the closed ids."""
+    manager = release_manager(c)
+    if not manager or pending(c):
+        return []
+    owner = H.bot_actor(manager)
+    ids = [
+        r[0]
+        for r in c.execute(
+            "SELECT id FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE 'Release: %' AND status IN ("
+            + ",".join("?" * len(H.ACTIVE_STATUSES))
+            + ")",
+            (owner, H.KEEPER, *H.ACTIVE_STATUSES),
+        )
+    ]
+    for tid in ids:
+        H.task_close(c, H.KEEPER, tid, note=f"{tag} is published; nothing is left at Pending Release.", strict=False)
+    return ids
 
 
 def _docs_task(c, writer, tag, tickets, url):
@@ -377,7 +457,7 @@ def _docs_task(c, writer, tag, tickets, url):
     body = (
         f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
         "each with its pull request; skip what nobody sees. The version's CHANGELOG section comes on its release "
-        "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}", docs=True)
+        "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}")
     )
     return H.task_create(
         c, H.KEEPER, title, body, owner, deduplicate=False, trigger=EVENT, trigger_source=tag, wake_refs={"wake": EVENT}
@@ -393,7 +473,8 @@ def published(c, target, url="", release_repo=""):
     repo, _, tag = target.partition("@")
     # Asks for this release or an older one in its channel are stale now, in any connected repository.
     supersede(c, repo, tag)
-    if release_repo and repo.lower() != str(release_repo).lower():
+    if norm_repo(release_repo) and norm_repo(repo) != norm_repo(release_repo):
+        log.info("release %s skipped: it is not in this server's release repository %s", target, release_repo)
         return []
     if "-" in tag:
         return []
@@ -427,8 +508,14 @@ def published(c, target, url="", release_repo=""):
                 source=target,
             )
     docs = _docs_task(c, writer, tag, tickets, url) if writer and tickets else None
+    moved = {t["id"]: name for t in tickets if (name := _move_on(c, t, tag))}
+    closed = _close_release_tasks(c, tag) if tickets else []
     H.event(
-        c, H.KEEPER, "release.published", target, {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs}
+        c,
+        H.KEEPER,
+        "release.published",
+        target,
+        {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs, "moved": moved, "closed": closed},
     )
     H.hook(
         c,

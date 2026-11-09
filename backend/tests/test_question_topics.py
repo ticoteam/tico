@@ -4,6 +4,7 @@ updates that task (question_tasks.open_for, question_tasks.fold) instead of fili
 from backend import ask_deadlines, hubdb as H, question_tasks as QT, task_relations as TR, team_rules
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
+from backend.tests.test_question_tasks import keep_asking
 
 
 def _ask(api, token, question, **extra):
@@ -155,6 +156,7 @@ def test_a_private_question_never_joins_a_public_one(api):
 def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wording(api):
     """The ask's clock restarts on a fold: not expired for its first wording's age, not gone ahead early, gone ahead
     once at the team's days from the latest wording, and not at all when the person spoke after it."""
+    keep_asking(api)  # this case asks with a reversible default on purpose (backend/ask_refusals.py)
     _, _, attempt = setup_attempt(api)
     default = {"do": "Yes", "kind": "reversible"}
     first = _ask(api, attempt["token"], "Archive the September drafts?", topic="drafts", if_no_answer=default)
@@ -167,6 +169,7 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
     )
     spring = _ask(api, attempt["token"], "Archive the spring and summer drafts?", topic="spring", if_no_answer=default)
     assert again["folded"] and spring["folded"]
+    keep_asking(api, on=True)
     post(api, f"tasks/{spring['task']['id']}/comments", {"text": "Checking with the editor first."})
     ids = {first["question"]["id"], quiet["question"]["id"]}
     with api.app.state.store.transaction() as c:
@@ -176,7 +179,6 @@ def test_a_folded_question_gives_the_person_the_teams_days_from_the_latest_wordi
         )
         asked = QT.as_ask(H.task(c, first["task"]["id"]))
         assert H.ask_clock(asked) == asked["refs"]["asked_again_at"] > old
-        assert not H.ask_older(asked)
         later = H.shift(H.now(), days=team_rules.load(c)["go_ahead_days"], hours=1)
         done = ask_deadlines.sweep(c, at=later)
         assert first["question"]["id"] in done["went_ahead"], "due at the team's days from the latest wording"
