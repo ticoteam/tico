@@ -465,7 +465,6 @@ async function tasksRead(state: TasksPageState, opts: {poll?: boolean} = {}): Pr
       if (TASKS_ST !== state || state.loadSeq !== seq) return;
       if (detail?.task) state.tasks = mergeTaskRows(state.tasks, [detail.task]);
     }
-    // @ts-expect-error taskModalOpen's second parameter (d) is never passed here, as before.
     taskModalOpen('t' + id);
   }
 
