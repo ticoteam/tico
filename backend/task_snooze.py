@@ -92,7 +92,8 @@ def _check(conn, actor, task_id, mover, what):
             conn, actor, "identity", "Only the requester, owner, their managers, a role holder or a mover snoozes it"
         )
     from .strategy_acts import TASK, person_task
-    person_task(conn, actor, row, f"{what} {TASK}")      # a person's task stays theirs (backend/strategy_acts.py)
+
+    person_task(conn, actor, row, f"{what} {TASK}")  # a person's task stays theirs (backend/strategy_acts.py)
     return row
 
 

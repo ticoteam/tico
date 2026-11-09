@@ -444,16 +444,25 @@ def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_
 
     def approved(changes):
         preview = post(api, f"tasks/{mine}/publication-preview", changes, token=strategy_token)
-        made = post(api, "approvals", {"kind": "publish", "task_id": mine, "payload": preview["payload"]}, token=strategy_token)
+        made = post(
+            api, "approvals", {"kind": "publish", "task_id": mine, "payload": preview["payload"]}, token=strategy_token
+        )
         post(api, "approvals/" + made["id"], {"decision": "approved"})
         return made["id"]
 
     def publish(changes, approval_id=None):
-        return api.post(f"/api/v2/tasks/{mine}", headers=headers(strategy_token), json={
-            **changes, "version": task(api, mine)["version"], **({"approval_id": approval_id} if approval_id else {})})
+        return api.post(
+            f"/api/v2/tasks/{mine}",
+            headers=headers(strategy_token),
+            json={
+                **changes,
+                "version": task(api, mine)["version"],
+                **({"approval_id": approval_id} if approval_id else {}),
+            },
+        )
 
     public = {"visibility": "public", "public_title": "Onboarding"}
-    assert publish(public).status_code == 409                                      # no approval: the owner's proposal
+    assert publish(public).status_code == 409  # no approval: the owner's proposal
     for approval_id in ("not-an-approval", approved({**public, "public_title": "Something else"})):
         r = publish(public, approval_id)
         assert r.status_code == 422 and "approval" in r.text, r.text
@@ -462,18 +471,22 @@ def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_
     assert publish(public, exact).status_code == 200 and task(api, mine)["public_title"] == "Onboarding"
     again = approved({"public_title": "Onboarding 2"})
     assert publish({"public_title": "Onboarding 2"}, again).status_code == 200
-    post(api, f"tasks/{mine}", {"public_title": "Onboarding", "version": task(api, mine)["version"]})   # the owner
-    r = publish({"public_title": "Onboarding 2"}, again)                            # the same words, its id spent
+    post(api, f"tasks/{mine}", {"public_title": "Onboarding", "version": task(api, mine)["version"]})  # the owner
+    r = publish({"public_title": "Onboarding 2"}, again)  # the same words, its id spent
     assert r.status_code == 422 and task(api, mine)["public_title"] == "Onboarding", r.text
 
     def comment(text, approval_id=None):
-        return api.post(f"/api/v2/tasks/{mine}/comments", headers=headers(strategy_token), json={
-            "text": text, "public": True, **({"approval_id": approval_id} if approval_id else {})})
+        return api.post(
+            f"/api/v2/tasks/{mine}/comments",
+            headers=headers(strategy_token),
+            json={"text": text, "public": True, **({"approval_id": approval_id} if approval_id else {})},
+        )
 
     def public_comments():
         with api.app.state.store.read() as c:
-            return c.execute("SELECT COUNT(*) FROM messages WHERE json_extract(refs,'$.task')=? AND public=1",
-                             (mine,)).fetchone()[0]
+            return c.execute(
+                "SELECT COUNT(*) FROM messages WHERE json_extract(refs,'$.task')=? AND public=1", (mine,)
+            ).fetchone()[0]
 
     assert comment("Now available").status_code == 409
     for approval_id in ("not-an-approval", approved({"comment": "Something else"})):
@@ -494,31 +507,36 @@ def test_the_strategy_bot_never_changes_a_persons_task_at_any_level(api):
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     with api.app.state.store.transaction() as c:
-        theirs = H.task_create(c, STRATEGY_BOT, "Call the bank about the loan", "Ask for the new rate.", OWNER,
-                               lint=False)["id"]
+        theirs = H.task_create(
+            c, STRATEGY_BOT, "Call the bank about the loan", "Ask for the new rate.", OWNER, lint=False
+        )["id"]
         memo = H.task_create(c, STRATEGY_BOT, "Draft the loan memo", "Work it.", "bot:ops", lint=False)["id"]
-        unseen = H.task_create(c, "human:ben", "Fire the vendor quietly", "Secret body", "human:ben", private=True,
-                               lint=False)["id"]
+        unseen = H.task_create(
+            c, "human:ben", "Fire the vendor quietly", "Secret body", "human:ben", private=True, lint=False
+        )["id"]
     from backend.roadmaps import add_requester
+
     with api.app.state.store.transaction() as c:
         H.task_link(c, OWNER, theirs, "https://example.com/rate-sheet", "Rate sheet")
         link = c.execute("SELECT id FROM task_links WHERE task_id=?", (theirs,)).fetchone()[0]
         asker = add_requester(c, theirs, {"name": "Sam"})["id"]
     start = task(api, theirs)
     soon = H.shift(H.now(), days=3)[:10]
-    tries = [("", {"title": "Call the bank today", "body": "Take the old rate.", "due": "2099-01-01T00:00:00+00:00"}),
-             ("", {"rank": -100}),
-             ("", {"owner": "bot:ops"}),
-             ("", {"status": "doing", "note": "On it"}),
-             ("", {"close": True, "note": "Not needed"}),
-             ("/snooze", {"until": soon}),
-             ("/relations", {"task": memo, "kind": "parent"}),
-             ("/relations", {"task": memo, "kind": "blocked_by"}),
-             ("/links", {"url": "https://example.com/other-sheet"}),
-             ("/links", {"remove": link}),
-             ("/requesters", {"name": "Lee"}),
-             (f"/requesters/{asker}", {"name": "Sam Renamed"}),
-             (f"/requesters/{asker}/delete", {})]
+    tries = [
+        ("", {"title": "Call the bank today", "body": "Take the old rate.", "due": "2099-01-01T00:00:00+00:00"}),
+        ("", {"rank": -100}),
+        ("", {"owner": "bot:ops"}),
+        ("", {"status": "doing", "note": "On it"}),
+        ("", {"close": True, "note": "Not needed"}),
+        ("/snooze", {"until": soon}),
+        ("/relations", {"task": memo, "kind": "parent"}),
+        ("/relations", {"task": memo, "kind": "blocked_by"}),
+        ("/links", {"url": "https://example.com/other-sheet"}),
+        ("/links", {"remove": link}),
+        ("/requesters", {"name": "Lee"}),
+        (f"/requesters/{asker}", {"name": "Sam Renamed"}),
+        (f"/requesters/{asker}/delete", {}),
+    ]
     for n in (1, 2, 3):
         level(api, n)
         for path, body in tries:
@@ -527,7 +545,18 @@ def test_the_strategy_bot_never_changes_a_persons_task_at_any_level(api):
             r = api.post(f"/api/v2/tasks/{theirs}{path}", json=body, headers=headers(strategy_token))
             assert r.status_code == 409 and "proposal" in r.text, (n, path, body, r.text)
     now = task(api, theirs)
-    for field in ("title", "body", "due_at", "rank", "owner_id", "status", "note", "closed_at", "snoozed_until", "version"):
+    for field in (
+        "title",
+        "body",
+        "due_at",
+        "rank",
+        "owner_id",
+        "status",
+        "note",
+        "closed_at",
+        "snoozed_until",
+        "version",
+    ):
         assert now[field] == start[field], field
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM task_relations WHERE ? IN (from_task, to_task)", (theirs,)).fetchone()
@@ -538,11 +567,14 @@ def test_the_strategy_bot_never_changes_a_persons_task_at_any_level(api):
     log = get(api, "strategy-bot/log")["items"]
     assert len(log) == 3 * len(tries), log
     assert all((x["kind"], x["state"]) == ("person_task", "proposed") for x in log)
-    assert all('"Call the bank about the loan"' in x["left"][0]["text"] for x in log)   # the owner may open it
+    assert all('"Call the bank about the loan"' in x["left"][0]["text"] for x in log)  # the owner may open it
 
     # A person's task the Strategy Bot may not write is refused as before: nothing about it is logged or proposed.
-    r = api.post(f"/api/v2/tasks/{unseen}", json={"title": "Keep the vendor", "version": task(api, unseen)["version"]},
-                 headers=headers(strategy_token))
+    r = api.post(
+        f"/api/v2/tasks/{unseen}",
+        json={"title": "Keep the vendor", "version": task(api, unseen)["version"]},
+        headers=headers(strategy_token),
+    )
     assert r.status_code in (403, 404) and "Fire the vendor" not in r.text, r.text
     assert len(get(api, "strategy-bot/log")["items"]) == len(log)
     assert "Fire the vendor" not in str(proposals(api))
@@ -550,8 +582,12 @@ def test_the_strategy_bot_never_changes_a_persons_task_at_any_level(api):
     # The Strategy Bot still moves a bot's task it asked for, and the owner's own word through its chat still edits theirs.
     post(api, f"tasks/{memo}", {"rank": -100, "version": task(api, memo)["version"]}, token=strategy_token)
     assert task(api, memo)["rank"] == -100
-    post(api, f"tasks/{theirs}", {"title": "Call the bank today", "version": task(api, theirs)["version"]},
-         token=via_assistant(api, confirmed=True))
+    post(
+        api,
+        f"tasks/{theirs}",
+        {"title": "Call the bank today", "version": task(api, theirs)["version"]},
+        token=via_assistant(api, confirmed=True),
+    )
     assert task(api, theirs)["title"] == "Call the bank today"
 
 

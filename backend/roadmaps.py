@@ -467,7 +467,8 @@ def install_internal(app, store, auth, mutate, mover):
             if actor != who.actor:
                 task(c, who, tid, True)
             from .strategy_acts import TASK, person_task
-            person_task(c, who.actor, row, f"add a requester to {TASK}")      # a person's task stays theirs
+
+            person_task(c, who.actor, row, f"add a requester to {TASK}")  # a person's task stays theirs
             return add_requester(c, row['id'], body.model_dump(), actor)
 
         return mutate(request, body, work)
@@ -492,7 +493,8 @@ def install_internal(app, store, auth, mutate, mover):
             if not own:
                 task(c, who, tid, True)
             from .strategy_acts import TASK, person_task
-            person_task(c, who.actor, row, f"remove a requester from {TASK}")      # a person's task stays theirs
+
+            person_task(c, who.actor, row, f"remove a requester from {TASK}")  # a person's task stays theirs
             return remove_requester(c, row['id'], ident=rid, actor=who.actor)
 
         return mutate(request, body, work)
@@ -503,7 +505,8 @@ def install_internal(app, store, auth, mutate, mover):
             who = request.state.identity
             row = task(c, who, tid, True)
             from .strategy_acts import TASK, person_task
-            person_task(c, who.actor, row, f"change a requester on {TASK}")      # a person's task stays theirs
+
+            person_task(c, who.actor, row, f"change a requester on {TASK}")  # a person's task stays theirs
             if who.via == 'botops' and not who.confirmed:
                 return request.app.state.botops_propose(
                     c,
