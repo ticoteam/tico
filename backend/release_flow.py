@@ -20,8 +20,9 @@ Three things, all in plain code, none asked of a model:
   exist yet when this runs, and writing into it would race.
 
 The Release Manager, the Technical Writer and a ticket's QA owner are found, never configured per ticket: the bot
-the team named in the schedule setting, else the one active bot built from the `release-notes` template (writer:
-`docs-writer`; QA: the owner of the ticket's `QA:` subtask, else its `qa` role, else the one `issue-triage` bot).
+the team named in the schedule setting, else the first active bot built from the `release-owner` template, else the
+first from `release-notes` (writer: `docs-writer`; QA: the owner of the ticket's `QA:` subtask, else its `qa` role,
+else the one `qa-owner` bot, else the one `issue-triage` bot).
 With none found the feature is idle for that role and says so (`GET /api/v2/release-schedule`).
 
 A release carries the Dev tickets at the Pending Release step when it is published that have a pull request merged in
@@ -49,7 +50,10 @@ MAX_LISTED = 60  # tickets named in a task body; the count in the title is the w
 PUBLIC_SUMMARY_MAX = 280  # characters of a private ticket's public summary a task body carries
 AT = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 TITLE = "Release: "
-MANAGER, WRITER, QA = "release-notes", "docs-writer", "issue-triage"  # starter templates (templates/catalog)
+# Starter templates (templates/catalog). A new company's bots come from release-owner and qa-owner; the older
+# release-notes and issue-triage bots still do the job where a team has them.
+RELEASE_OWNER, QA_OWNER = "release-owner", "qa-owner"
+MANAGER, WRITER, QA = "release-notes", "docs-writer", "issue-triage"
 PENDING = "pending release"
 QA_CHILD = re.compile(r"^QA\b", re.I)
 EVENT = "release_published"
@@ -108,6 +112,7 @@ def save(c, actor, changes):
 
 
 def _with_template(c, template):
+    """The ids of the active bots built from `template`, by slug."""
     return [
         r[0]
         for r in c.execute(
@@ -118,26 +123,33 @@ def _with_template(c, template):
     ]
 
 
-def _named(c, slug, template):
+def _named(c, slug, templates):
+    """The bot the setting names (by id or slug, if active), else the first active bot of the first template in
+    `templates` that has one. None when neither finds a bot."""
     if slug:  # the setting may name the bot by id or slug; the bot is its id
         found = H.resolve_bot(c, slug) or {}
         return found["id"] if found.get("state") == "active" else None
-    found = _with_template(c, template)
-    return found[0] if found else None
+    for template in templates:
+        found = _with_template(c, template)
+        if found:
+            return found[0]
+    return None
 
 
 def release_manager(c, cfg=None):
-    """The bot that cuts releases: the one the setting names, else the first active `release-notes` bot; None when neither."""
-    return _named(c, (cfg or load(c))["bot"], MANAGER)
+    """The bot that cuts releases: the one the setting names, else the first active `release-owner` bot, else the
+    first active `release-notes` bot; None when none of them is found."""
+    return _named(c, (cfg or load(c))["bot"], (RELEASE_OWNER, MANAGER))
 
 
 def technical_writer(c, cfg=None):
-    return _named(c, (cfg or load(c))["writer"], WRITER)
+    return _named(c, (cfg or load(c))["writer"], (WRITER,))
 
 
 def qa_owner(c, ticket):
     """Who runs a ticket's tests: the owner of its newest `QA:` subtask, else a bot on it in the `qa` role, else the
-    team's one `issue-triage` bot. A bot slug or None."""
+    team's one `qa-owner` bot, else its one `issue-triage` bot (a template counts only when exactly one active bot
+    has it). A bot id or None."""
     from . import task_relations as TR
 
     kids = [H.task(c, i) for i in TR.child_ids(c, ticket["id"])]
@@ -152,8 +164,11 @@ def qa_owner(c, ticket):
     ):
         if H.is_bot(actor) and (H.bot(c, H.actor_id(actor)) or {}).get("state") == "active":
             return H.actor_id(actor)
-    found = _with_template(c, QA)
-    return found[0] if len(found) == 1 else None
+    for template in (QA_OWNER, QA):
+        found = _with_template(c, template)
+        if len(found) == 1:
+            return found[0]
+    return None
 
 
 def _qa_room(c, ticket, qa):
@@ -456,8 +471,8 @@ def _docs_task(c, writer, tag, tickets, url):
     title = f"{prefix} {len(tickets)} ticket{'s' if len(tickets) != 1 else ''}"
     body = (
         f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
-        "each with its pull request; skip what nobody sees. The version's CHANGELOG section comes on its release "
-        "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}")
+        "each with its pull request; skip what nobody sees. Release notes are on each release's approval issue "
+        "(label release-approval).\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}")
     )
     return H.task_create(
         c, H.KEEPER, title, body, owner, deduplicate=False, trigger=EVENT, trigger_source=tag, wake_refs={"wake": EVENT}

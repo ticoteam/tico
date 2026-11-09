@@ -4,6 +4,9 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from backend.config import Settings
+from backend.store import Store
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,3 +46,13 @@ def copy_of(booted, path):
     with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
         source.backup(target)
     return path
+
+
+def _boot(path):
+    conn = sqlite3.connect(path)
+    conn.executescript(FIXTURE.read_text())
+    conn.close()
+    conn = sqlite3.connect(path)  # a new connection reads the FTS tables' schema rows the dump writes
+    conn.executescript(SAMPLE)
+    conn.close()
+    Store(Settings(db_path=path)).initialize(seed_market=False)

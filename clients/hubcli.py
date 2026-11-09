@@ -498,7 +498,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub update mark-read [ids...] [--all] [--unread]
     hub update reply <id> "<text>"
     hub update settings <bot> [--daily on|off] [--weekly on|off]
-    hub changelog list [--unread] [--since-version V] [--q TEXT] [--kind product|activity|all]
+    hub changelog list [--unread] [--q TEXT] [--kind product|activity|all]
     hub changelog mark-read <entry-id> [entry-id ...]   acknowledge changes shown to you
     hub brief [--since ISO]                alerts, who needs the person, what bots said since --since
     hub mcp stats [--days N] [--via LABEL] per-tool timing and answer size of assistants' calls
@@ -802,8 +802,8 @@ def task_problems(actor, owner, title, body, type=None):
     title, body = str(title or "").strip(), str(body or "")
     general = str(type or "").strip().lower() in ("", H.GENERAL_TYPE)
     target = owner_from_registry(owner)
-    if not target:
-        problems.append(f"{owner} is not in registry/employees.yaml or registry/people.yaml")
+    # Not in the registry is no refusal here: a template name (`--owner marketing-lead`) still reaches the one live bot
+    # built from that template on the server, which this client cannot see. cmd_task_dry_run says so.
     if not title:
         problems.append("give it a title that says what you are asking for")
     elif H.is_human(target) and general and H.STYLE_LINT != "off":
@@ -844,6 +844,12 @@ def cmd_task_dry_run(args, who):
         return 1
     for w in warnings:
         print(f"- {w} (warning: the create is accepted)")
+    if not owner:
+        print(
+            f"ok: {args.owner} is not in registry/employees.yaml or registry/people.yaml; the server decides at the create "
+            "(a template name reaches the one live bot built from that template)"
+        )
+        return 0
     print(
         f'ok: would create "{args.title.strip()}" for {owner} '
         f'({words_outside_quotes(body)} words outside quoted drafts)'
@@ -1732,6 +1738,11 @@ def parser():
     s.add_argument("--replaces", help="the id of an older page this one takes the place of")
     s.add_argument("--scope", choices=["task", "bot"])
     s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
+    s.add_argument(
+        "--spec",
+        action="store_true",
+        help="a visual spec for the Product roadmap card named by --task; styles are inlined, tickets under it get its text",
+    )
     s.set_defaults(fn="page publish")
     s = page.add_parser("list", help="pages you may read, newest first")
     s.add_argument("--bot")
@@ -2443,6 +2454,12 @@ def parser():
         action="append",
         choices=list(TASK_STATUSES),
         help="only tasks with this status; repeat for more",
+    )
+    s.add_argument(
+        "--where-not-owner",
+        dest="where_not_owner",
+        metavar="OWNER",
+        help="only tasks owned by anyone else: a bot slug, a human id or me (the rest of the filter still applies)",
     )
     s.add_argument("--where-lane", dest="where_lane", choices=["company", "product"])
     s.add_argument("--where-number", dest="where_number", type=int, help="only this task number")
@@ -4275,7 +4292,6 @@ def parser():
     s = changelog.add_parser("list", help="what changed; --unread catches up since your last look")
     s.add_argument("--kind", choices=["product", "activity", "all"], default="product")
     s.add_argument("--unread", action="store_true")
-    s.add_argument("--since-version", dest="since_version")
     s.add_argument("--q", help="search change titles and bullets")
     s.add_argument("--offset", type=int)
     s.add_argument("--limit", type=int)

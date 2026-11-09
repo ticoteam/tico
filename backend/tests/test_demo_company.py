@@ -71,19 +71,26 @@ def real_clock_at(patch, moment):
 
 
 @pytest.fixture(scope="module")
-def built(tmp_path_factory):
+def dialed():
+    """The outbound connections the builds below tried (and were refused), in order."""
+    return []
+
+
+@pytest.fixture(scope="module")
+def built(tmp_path_factory, dialed):
     """Two builds of the same date, back to back, read before any app has opened either database. The machine's clock
     crosses 07:00 UTC (a usage-limit window edge) between them: the first build runs just after it, the second just
-    before."""
-    with pytest.MonkeyPatch.context() as patch:
-        # The build asks no model. Without this, a person's message check dials the Gateway the demo saved a key for,
-        # and the answer ("auth" or "unavailable") depends on timing, so the two builds' judge rows differ.
+    before. Like `tico demo` (demo.main), they build with the network blocked. The build asks no model: without this, a
+    person's message check dials the Gateway the demo saved a key for, and the answer depends on timing."""
+    with pytest.MonkeyPatch.context() as patch, demo.network_blocked() as attempts:
+        tried = len(attempts)
         patch.setattr(judge, "server_engine", lambda *args, **kwargs: None)
         real_clock_at(patch, datetime(2026, 11, 6, 7, 0, 1, tzinfo=timezone.utc))
         first = demo.build(tmp_path_factory.mktemp("company"), now=NOW)
         rows = stored(first.db_path)
         real_clock_at(patch, datetime(2026, 11, 6, 6, 59, 59, tzinfo=timezone.utc))
         second = demo.build(tmp_path_factory.mktemp("company-again"), now=NOW)
+        dialed.extend(attempts[tried:])
         return first, rows, stored(second.db_path)
 
 
@@ -323,15 +330,15 @@ def test_the_same_date_builds_the_same_company(built):
     left = {**again, "events": unclocked(again["events"])}
     right = {**rows, "events": unclocked(rows["events"])}
     if left != right:
-        # Say which tables and which event row differ: a CI log cuts a pytest diff short.
-        first = next(
+        # Say which tables and which event row differ: a CI log cuts a pytest diff short. `first` is the build.
+        mismatch = next(
             ((n, a, b) for n, (a, b) in enumerate(zip(left["events"], right["events"])) if a != b),
             None,
         )
         differing = sorted(name for name in set(left) | set(right) if left.get(name) != right.get(name))
         raise AssertionError(
             f"builds differ in {differing}; events {len(left['events'])} vs {len(right['events'])}; "
-            f"first differing event row {str(first)[:600]}"
+            f"first differing event row {str(mismatch)[:600]}"
         )
     with closing(sqlite3.connect(first.db_path)) as db:
         columns = [column[1] for column in db.execute("PRAGMA table_info(idempotency)")]
@@ -342,6 +349,21 @@ def test_the_same_date_builds_the_same_company(built):
         if row[operation].startswith("/api/v2/usage/")
     ]
     assert any(hours), "the windows hold spend, so the hour is really compared"
+
+
+def test_the_build_asks_no_model_and_dials_nothing(built, dialed):
+    """The seed saves made-up provider keys, so a decision call during the build is a refused key or a timeout, whichever
+    the network gives: run to run, the same date stored a different company (`"error": "auth"` in one build's rule
+    check, `"unavailable"` in its twin's). The build asks no model, so it reaches no one and no call can fail."""
+    first, rows, _again = built
+    assert dialed == []
+    with closing(sqlite3.connect(first.db_path)) as db:
+        columns = [column[1] for column in db.execute("PRAGMA table_info(events)")]
+    action, detail = columns.index("action"), columns.index("detail")
+    failed = [
+        row for row in rows["events"] if row[action] == "judge.call" and "error" in json.loads(row[detail] or "{}")
+    ]
+    assert failed == []
 
 
 def test_the_build_asks_no_model_for_a_person(built):
@@ -368,6 +390,8 @@ def test_every_department_has_its_lead_and_answers_to_a_person(ana):
         assert (kind + ":" + names.get(key, key)) == lead, f"{gid} is led by {lead}"
         assert set(members) <= set(groups[gid]["bot_slugs"]), f"{gid} holds {members}"
     for group in groups.values():
+        if group["id"] == "built-in":  # Tico's own upkeep, not a department: it has no lead and is not checked here
+            continue
         for slug in group["bot_slugs"]:
             seen, at = set(), slug  # a bot's reports_to is a bot's slug or "human:<id>"
             while at in by_slug and at not in seen:

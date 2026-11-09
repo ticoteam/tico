@@ -201,7 +201,7 @@ def test_runs_are_paged_newest_first_by_run_id(api):
 
 
 def test_the_answers_match_the_published_contract(api):
-    """Each automation read and write against its docs/openapi/v2.json shape."""
+    """Each automation read and write against its v2 spec shape."""
     from backend.tests.helpers.openapi_v2 import conforms
 
     document = api.get("/api/v2/openapi.json", headers=headers()).json()

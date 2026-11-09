@@ -228,7 +228,9 @@ def test_an_open_tasks_deferred_comment_still_fires(api):
 
 
 @pytest.mark.parametrize("state", ("queued", "running"))
-def test_closing_a_task_cancels_only_its_spent_deadline_runs(api, state):
+def test_closing_a_task_cancels_its_queued_runs_but_not_a_shared_deadline_run(api, state):
+    """Closing a task stops the bot work on it (docs/tasks.md): its queued runs are canceled, its own deferred run
+    included. A deadline run shared with another open task stays queued until that task closes too."""
     setup(api)
     first, second = [
         post(
@@ -253,7 +255,7 @@ def test_closing_a_task_cancels_only_its_spent_deadline_runs(api, state):
         H.task_close(c, "human:ana", first["id"], quiet=True)
     assert rows(api, item=held["id"])[0]["how"] == "moot"
     assert job_of(api, held["id"])[1] == ("canceled" if state == "queued" else state)
-    assert job_of(api, ordinary["id"])[1] == "queued"
+    assert job_of(api, ordinary["id"])[1] == "canceled"
     assert job_of(api, shared)[1] == "queued"
     assert rows(api, item=second["id"])[0]["settled_at"] is None
     with api.app.state.store.transaction() as c:

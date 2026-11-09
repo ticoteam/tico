@@ -1,6 +1,7 @@
 """No Python file imports a test module: each form of the import is caught, a helpers/ import is not, the allowlist
 keeps the deliberate ones, and the message names the helper module to import from."""
 
+import subprocess
 from pathlib import Path
 
 from scripts import check_test_imports as guard
@@ -69,6 +70,30 @@ def test_the_allowlist_keeps_a_pair_or_every_importer_of_a_module(tmp_path):
         allowed,
     )
     assert [p.split(" ")[0] for p in problems] == ["backend/tests/test_c.py:1"]
+
+
+def git(root, *args):
+    return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_base_reports_only_the_python_files_the_change_touches(tmp_path, capsys):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.com")
+    git(tmp_path, "config", "user.name", "test")
+    tree(tmp_path, {"backend/tests/test_a.py": "from backend.tests.test_b import x\n"})
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "base: a violation already on main")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    tree(tmp_path, {"backend/tests/test_c.py": "from backend.tests.test_b import y\n"})
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "change: a new violation")
+
+    assert guard.main(["--base", base], root=tmp_path) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("backend/tests/test_c.py:1 ")
+    assert "test_a.py" not in out
+
+    assert guard.main(["--base", "HEAD"], root=tmp_path) == 0
 
 
 def test_the_repository_imports_no_test_module_outside_the_allowlist():

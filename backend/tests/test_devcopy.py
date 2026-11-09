@@ -21,9 +21,23 @@ from backend.store import H, Problem, Store
 OLD = "2020-01-01T00:00:00.000000Z"
 
 
-def source_db(tmp_path):
-    store = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
-    store.initialize(seed_market=False)
+@pytest.fixture(scope="module")
+def booted(tmp_path_factory) -> Path:
+    """One initialized hub for the module: Store.initialize is the slow part, so each test copies this file."""
+    path = tmp_path_factory.mktemp("devcopy") / "booted.sqlite"
+    Store(Settings(db_path=path)).initialize(seed_market=False)
+    return path
+
+
+def _copy(booted: Path, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    return path
+
+
+def source_db(tmp_path, booted):
+    store = Store(Settings(db_path=_copy(booted, tmp_path / "live" / "hub.sqlite")))
     now = H.now()
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
@@ -112,8 +126,8 @@ def source_db(tmp_path):
     return store.settings.db_path
 
 
-def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path):
-    source = source_db(tmp_path)
+def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path, booted):
+    source = source_db(tmp_path, booted)
     before = source.read_bytes()
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30)
@@ -182,10 +196,9 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert refused.value.code == "rehearsal"
 
 
-def test_every_table_is_classified(tmp_path):
+def test_every_table_is_classified(tmp_path, booted):
     """A new table fails here until someone decides whether a dev copy keeps it, cuts it to --days or empties it."""
-    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
-    store.initialize(seed_market=False)
+    store = Store(Settings(db_path=_copy(booted, tmp_path / "hub.sqlite")))
     with closing(sqlite3.connect(store.settings.db_path)) as c:
         names = devcopy.data_tables(c)
         virtual = {t for t in devcopy.tables(c) if t not in names}
@@ -201,15 +214,14 @@ def test_every_table_is_classified(tmp_path):
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
 
 
-def test_devcopy_names_no_finance_table_as_one_it_empties(tmp_path):
+def test_devcopy_names_no_finance_table_as_one_it_empties(tmp_path, booted):
     """Finance empties its own tables (finance.DEV_COPY_EMPTIED, in its scrub), so devcopy's emptied list has none."""
-    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
-    store.initialize(seed_market=False)
+    store = Store(Settings(db_path=_copy(booted, tmp_path / "hub.sqlite")))
     with closing(sqlite3.connect(store.settings.db_path)) as c:
         assert [t for t in devcopy.emptied(c) if t.startswith("fin_")] == []
 
 
-def test_server_env_sources_whole_with_spaces(tmp_path):
+def test_server_env_sources_whole_with_spaces(tmp_path, booted):
     import subprocess
 
     dest = tmp_path / "my copies" / "dev.sqlite"
@@ -224,13 +236,12 @@ def test_server_env_sources_whole_with_spaces(tmp_path):
     assert out.stdout == str(dest)
 
 
-def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secret(tmp_path):
+def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secret(tmp_path, booted):
     import json
     from backend import roadmaps
     from backend.task_delete import delete_tasks
 
-    store = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
-    store.initialize(seed_market=False)
+    store = Store(Settings(db_path=_copy(booted, tmp_path / "live" / "hub.sqlite")))
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
         task = H.task_create(c, "human:morgan", "Faster exports", "Customer asks", "human:morgan")
@@ -253,10 +264,10 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
         assert copied != secret and len(json.loads(copied)) == 64
 
 
-def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets(tmp_path):
+def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets(tmp_path, booted):
     """`--keep-automations` (the redesign converter's rehearsal): routines, task rules, triggers, webhooks and
     automations stay; their occurrences, deliveries and runs go; no trigger URL or webhook signature still works."""
-    source = source_db(tmp_path)
+    source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c, c:
         now = H.now()
         c.execute("INSERT INTO schedule_occurrences(schedule_id,occurrence,outcome) VALUES('s1',?,'opened')", (now,))
@@ -307,8 +318,8 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
     assert plain["schedules"] == 1 and plain["triggers"] == 1 and plain["automations"] == 1
 
 
-def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_path):
-    source = source_db(tmp_path)
+def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_path, booted):
+    source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c:
         c.executemany(
             "INSERT INTO audit_log(id,created_at,actor,object,before,after,via) VALUES(?,?,?,?,?,?,?)",
@@ -327,9 +338,9 @@ def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_
         assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers
 
 
-def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_moves(tmp_path):
+def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_moves(tmp_path, booted):
     """devcopy prunes before the copy is migrated: the tables 0053 and 0054 move from keep their rows."""
-    source = source_db(tmp_path)
+    source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c:
         c.execute("CREATE TABLE turn_usage_segments (turn_id TEXT, position INTEGER, est_cost_usd REAL)")
         c.execute("CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL)")
@@ -348,14 +359,14 @@ def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_m
         ] == [1, 1, 1]
 
 
-def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs_for_the_move(tmp_path):
+def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs_for_the_move(tmp_path, booted):
     """devcopy prunes before the copy is migrated: the five change logs migration 0064 moves are kept whole (their rows,
     and a deleted task's trash snapshot of them), so the move still has every row to copy into history_events."""
     import json
     from backend.tests.helpers.history_events import OLD, migration
 
     stamp = "2020-01-01T00:00:00.000000Z"
-    source = source_db(tmp_path)
+    source = source_db(tmp_path, booted)
     snapshot = json.dumps(
         {
             "rows": {
@@ -417,10 +428,10 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
         assert not {"task_events", "goal_events"} & {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
 
 
-def test_a_lease_less_run_is_kept_only_once_settled(tmp_path):
+def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
     """A run with no job (a chat run, or a turn migration 0072 made into an attempts row) has no lease: it is open until
     settled_at. A copy keeps the settled ones and removes the open ones, as it removes a job-backed attempt still running."""
-    source = source_db(tmp_path)
+    source = source_db(tmp_path, booted)
     now = H.now()
     with closing(sqlite3.connect(source)) as c:
         c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('chat-done','sales',?,?)", (now, now))
@@ -434,10 +445,10 @@ def test_a_lease_less_run_is_kept_only_once_settled(tmp_path):
     assert removed["attempts"] == 3  # the running job, the old one and chat-open
 
 
-def test_a_copy_keeps_no_turn_whose_attempt_the_cut_removed(tmp_path):
+def test_a_copy_keeps_no_turn_whose_attempt_the_cut_removed(tmp_path, booted):
     """A copy from before migration 0072 keeps turns whole. A turn whose attempts row the cut removed goes with it, so
     migration 0072 does not bring the pruned run back as a lease-less one."""
-    source = source_db(tmp_path)
+    source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c:
         c.execute("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, started_at TEXT)")
         c.executemany("INSERT INTO turns VALUES(?,?,?)", [("done", "sales", H.now()), ("gone", "sales", OLD)])

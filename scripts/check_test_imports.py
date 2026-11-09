@@ -2,6 +2,10 @@
 (scripts/pr_checks.py) does not run one test file because another one changed.
 
     python scripts/check_test_imports.py
+    python scripts/check_test_imports.py --base REF   only the Python files changed since REF (git diff REF...HEAD)
+
+The --base form is for the merge queue and PR checks: a violation already on REF is not this change's to fix, so the
+gate reports only what the change touches. Without it, every tracked file is checked.
 
 Names that tests share live in the helpers/ package beside them: backend/tests/helpers/, setup/tests/helpers/,
 runner_support/tests/helpers/. `from backend.tests.test_foo import x` becomes `from backend.tests.helpers.foo import x`,
@@ -10,6 +14,7 @@ with x moved there. The imports that stay on purpose are listed in scripts/test-
 1 with each import listed.
 """
 
+import argparse
 import ast
 import subprocess
 import sys
@@ -72,6 +77,18 @@ def allowed(root=ROOT):
     return pairs
 
 
+def changed_since(base, root=ROOT):
+    """The Python files the diff from BASE to HEAD touches (committed work, as the merge queue's merge commit does)."""
+    out = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=d", f"{base}...HEAD", "--", "*.py"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return out.split()
+
+
 def problems(root=ROOT, files=None):
     root = Path(root)
     if files is None:
@@ -95,8 +112,24 @@ def problems(root=ROOT, files=None):
     return out
 
 
-def main():
-    found = problems()
+def main(argv=None, root=ROOT):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument(
+        "--base", metavar="REF", help="check only the Python files changed since REF (e.g. origin/main)"
+    )
+    args = parser.parse_args(argv)
+    files = None
+    if args.base:
+        exists = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{args.base}^{{commit}}"],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+        if exists.returncode != 0:
+            sys.exit(f"--base {args.base}: no such commit in this checkout (fetch it first)")
+        files = changed_since(args.base, root)
+    found = problems(root, files)
     for line in found:
         print(line)
     if found:

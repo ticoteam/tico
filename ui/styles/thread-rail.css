@@ -45,6 +45,17 @@
 .tr-list{list-style:none;margin:0;padding:0}
 .tr-row{display:flex;align-items:center;gap:8px;min-width:0;height:28px;padding:0 10px;border-radius:var(--r-ctl);color:var(--g7);text-decoration:none}
 .tr-row:hover{background:var(--surface2);color:var(--ink);text-decoration:none}
+/* Archive is a row action: a desktop shows it on hover or keyboard focus, a touch screen always. */
+.tr-item{display:flex;align-items:center;gap:2px;min-width:0}
+.tr-item>.tr-row{flex:1 1 auto}
+.tr-arch,.thv-arch,.thv-del{flex:none;display:inline-grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.tr-arch{opacity:0}
+.tr-arch .nav-icon,.thv-arch .nav-icon{font-size:18px;color:inherit}
+.tr-item:hover .tr-arch,.tr-arch:focus-visible{opacity:1}
+.tr-arch:hover,.thv-arch:hover,.thv-del:hover{background:var(--surface2);color:var(--ink)}
+.tr-browse-tabs{display:flex;gap:6px;margin-bottom:8px}
+.tr-browse-tabs .on{font-weight:600}
+@media (hover:none){.tr-arch{opacity:1}}
 .tr-row.unread{color:var(--ink);font-weight:600}
 .tr-row.cur{background:var(--hover);color:var(--ink);font-weight:500}
 .tr-row.cur.unread{font-weight:600}
@@ -198,11 +209,12 @@ legend.nt-lbl{margin-bottom:6px}
   .tr-catch{order:-1;height:48px;margin:0 0 4px;font-size:var(--t-md)}
   .tr-top{order:-2}
   .tr-row{height:44px;font-size:var(--t-md)}
+  .tr-arch{width:44px;height:44px;opacity:1}
   .tr-browse,.tr-more{height:44px}
   .tr-pane{padding:max(var(--s2),env(safe-area-inset-top)) 12px 0}
   .tr-pane .thv-head{margin:0 -12px var(--s1);padding:2px 12px 6px;min-height:48px}
   .thv-back-rail{display:inline-grid;place-items:center;width:44px;height:44px;margin-left:-10px;font-size:26px}
-  .thv-pin{width:44px;height:44px}
+  .thv-pin,.thv-arch{width:44px;height:44px}
   .thv-people{min-height:44px}
   /* One line: the title gives way (ellipsis) to back, pin, call, faces and ⋯. */
   .tr-pane .thv-titleline{flex-wrap:nowrap;gap:2px}

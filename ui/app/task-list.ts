@@ -559,7 +559,8 @@ function tasksRowStatusMenu(state, anchor) {
     ? (it.value === cur.step_id ? null : {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})})
     : (it.value === cur.status ? null : {status: it.value}))});
 }
-// One update with the task's version; a 409 reads it again and tries once more; a refusal is named.
+// One update with the task's version; a 409 reads it again and tries once more; a refusal is named, and a move over a
+// stage's cap is said (taskOverCapWarn).
 async function tasksRowStatusSave(state, id, bodyFor) {
   let t = tasksById(state).get(id);
   for (let attempt = 0; t && attempt < 2; attempt++) {
@@ -567,7 +568,7 @@ async function tasksRowStatusSave(state, id, bodyFor) {
     if (!body) return;
     if (attempt === 0 && body.status === 'done') taskDoneMotion('t' + id);   // its check draws while the list catches up
     state.refused?.delete(id);
-    try { await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body}); break; }
+    try { taskOverCapWarn(t, body, await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body})); break; }
     catch (e) {
       if (e.status === 409 && attempt === 0) { t = (await v2Get(`/v2/tasks/${encodeURIComponent(id)}`))?.task; continue; }
       taskRefusedSet(state, t, `Not changed: ${e.message || 'not saved'}`);
@@ -1017,14 +1018,17 @@ async function tasksBulkApply(state, describe, bodyFor, action) {
   tasksMenuClose();
   state.bulkBusy = true; state.bulkFail = new Map(); state.bulkUndo = null; state.bulkMsg = `Updating ${tasks.length}…`;
   tasksBulkBar(state);
-  const failed = new Map(), closed = [];
+  const failed = new Map(), closed = [], overCap = new Map();
   let changed = 0, already = 0;
   for (let t of tasks) {
     let body = bodyFor(t);
     if (body === null) { already++; continue; }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
+        const data = await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
+        // One line per stage, as one move says: the stage the card landed in (a Status move names none of its own).
+        const landed = data?.task?.step_id || body.step || '';
+        if (data?.over_cap) overCap.set(landed, [t, {...body, step: landed}, data]);
         changed++;
         if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general',
           told: !!actorSlug(taskRequester(t))});
@@ -1043,6 +1047,7 @@ async function tasksBulkApply(state, describe, bodyFor, action) {
       }
     }
   }
+  for (const [t, body, data] of overCap.values()) taskOverCapWarn(t, body, data);
   if (TASKS_ST !== state) return;
   state.bulkBusy = false;
   state.bulkFail = failed;

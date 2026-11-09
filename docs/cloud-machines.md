@@ -52,6 +52,13 @@ cloud machine" under Computer).
   prefers the plan on the shared machine, then one on another cloud machine, then the plan with the lowest known usage.
   Nothing is stopped or reset. A member's moves, and any other assignment, never give a plan. When no plan fits, nothing
   changes and the bot keeps its current message and its Gateway path.
+- When a person picks a cloud machine for a bot and the move is refused, the change is not saved. The server answers 409 with
+  `repository_unpublished`. That happens when the bot's history exists only on its current computer, GitHub does not have it,
+  and the new machine has no copy. If no cloud machine exists yet, the refusal comes before one is made, so nothing is billed.
+  The message says what to do: create the bot's repository on GitHub, and the computer then publishes its history.
+  The bot editor puts the machine back and shows the message in a toast.
+- A move waits, with no error, while a run is still going on the bot's old computer. The change is saved, and the bot moves
+  once that run ends.
 - Bots on one machine share its disk and `sudo`: they are one trust group, like bots sharing a computer today. Put a
   bot that must not see the others' files on its own machine.
 - Tico models run on a cloud machine even though its bots don't run as their own user: the runner keeps the company's
@@ -179,8 +186,7 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
    every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
    the bot to it. For the shared machine it names it "Shared cloud machine", opens it to member bots and assigns
-   every bot on it. A computer a person renamed keeps that name when its machine is made again (PR 2481,
-   `backend/cloud_machines.py`).
+   every bot on it. A computer a person renamed keeps that name when its machine is made again.
 5. Later boots (a resume after an idle stop) find `~/.config/tico/runner.json` and only start the units.
 
 A retried enroll with the same code returns the same runner, so a boot that lost the server's answer just tries
@@ -204,6 +210,8 @@ printed lines have it masked; the runner's own commands start with a clean envir
 enrolled, every line that sets `TICO_ENROLL_TOKEN` is taken out of `/etc/environment`, `~/.bashrc`, `~/.profile` and
 the file `TICO_BOOT_ENV_FILE` names, at every boot. A code that survives somewhere still enrolls nothing: it is used
 and expires in 15 minutes.
+
+Saving the same mode and placement again keeps the machine's problem and any retry wait. A real change of mode or placement clears the problem, except for a machine that never connected: that one waits until it connects or a person chooses **Replace machine**. A retry wait already running still has to end.
 
 ## The runner on the machine
 

@@ -2020,6 +2020,34 @@ def test_a_waiting_task_held_only_by_bots_is_listed_on_its_blocker_bots_list_not
         assert task_roundup.run(c, DAY)["woke"] == [], "listed once per update of the task"
 
 
+def test_a_blocker_on_ice_puts_the_card_it_holds_on_no_bots_list(api):
+    """A waiting card whose blocker a person parked On ice (D69) is on no bot's list: the blocker waits on that person,
+    so its owner is not asked about it. Once the stage opens, the blocker's bot is listed again."""
+    from backend.tests.helpers.pipeline_foundation import step_id
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        stages = [{"name": "On ice", "status": "open"}, {"name": "Doing", "status": "doing"}]
+        typ = H.type_create(c, H.KEEPER, "Ice blockers", stages)["id"]
+        ice = step_id(c, typ, "On ice")
+        c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (ice,))
+        blocker = H.task_create(c, H.human_actor("ana"), "Finish the menu", "Ops finishes it.", H.bot_actor("ops"))[
+            "id"
+        ]
+        mine = task(c, "Print the menu")["id"]
+        settle(c, mine, "finance", ago(days=1))
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (mine,))
+        blocks(c, blocker, mine, ago(days=1))
+        complete_jobs(c)
+        complete_jobs(c, "ops")
+        c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (typ, ice, blocker))
+        assert task_roundup.run(c, DAY)["woke"] == []
+        assert lists(c, "ops") == [] and lists(c) == []
+        c.execute("UPDATE task_steps SET card_cap=NULL WHERE id=?", (ice,))  # the control: the stage opens
+        assert task_roundup.run(c, NOON)["woke"] == ["ops"]
+        assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
+
+
 @pytest.mark.parametrize("state", ["running", "queued"])
 def test_a_waiting_task_is_not_listed_to_a_bot_already_working_the_task_that_holds_it(api, state):
     """PR #3092 factory sim (architect): Find stuck ran while the architect was mid-turn on Plan: Ticket 4 and told it

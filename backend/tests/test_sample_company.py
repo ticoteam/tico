@@ -2,27 +2,38 @@
 tasks, from the welcome's button or TICO_SAMPLE_COMPANY=on, on the shipped templates."""
 
 import re
+import shutil
+import uuid
+from pathlib import Path
 
 import pytest
+import yaml
+from fastapi.testclient import TestClient
 
 from backend import onboarding as O
 from backend import sample_company
+from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import from_yaml
 from backend.config import Settings
+from backend.store import H, encode
 from backend import bot_settings as BS
-from backend.tests.helpers.sample_company import environment, machine, rows, signed_in
 
-ROLE_BOTS = {"head-of-product": "claude", "builder": "codex", "support-agent": "codex", "content-marketer": "codex"}
-
-
-def start(api):
-    return api.post("/api/v2/setup/sample", json={}, headers=signed_in())
-
-
-def bot_ids(api):
-    """Bot slug to bot id: a bot the sample makes has a generated id, and the tables name bots by it."""
-    return {row["slug"]: row["id"] for row in rows(api, "SELECT id,slug FROM bots")}
+from backend.tests.helpers.sample_company import (
+    OWNER_EMAIL,
+    PEOPLE,
+    ROLE_BOTS,
+    SEED,
+    TOKEN,
+    booted,
+    environment,
+    machine,
+    rows,
+    settings_for,
+    signed_in,
+    start,
+    bot_ids,
+)  # noqa: F401
 
 
 # ---------------------------------------------------------------------------------------------- the file

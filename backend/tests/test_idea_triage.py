@@ -298,3 +298,10 @@ def test_a_refused_suggestion_costs_no_call_and_gives_back_its_action_and_place(
             _a_suggestion_refused_while_another_waits_on_triage_costs_no_call(_fresh(api, item), last)
     with subtests.test("a_suggestion_refused_after_triage_gives_back_the_visitors_action_and_its_place"):
         _a_suggestion_refused_after_triage_gives_back_the_visitors_action_and_its_place(_fresh(api, item))
+
+
+def test_engineering_bot_is_a_new_org_engineering_team_manager_when_no_engineering_lead(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug='ops'")
+        BS.update(c, 'ops', {'template': 'engineering-team-manager'})
+        assert I.engineering_bot(c) == 'ops'

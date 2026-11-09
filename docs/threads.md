@@ -126,6 +126,15 @@ themselves, as many as the thread's hour has room for. Unread threads come next,
 row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
 
+## Update requests
+
+A bot's daily update request is a notice from the keeper. In a thread, the request and the bot's replies to it read
+as one line, **› Update generated**. Tapping the line shows or hides them. The group holds the request, the bot's first reply to
+it, and the bot's other messages from that same run. It ends at the first message that is not one of those: a person's,
+another bot's, the keeper's, a message from another run, or a deleted or hidden one. The line stays shut until tapped. A
+quote or a search hit opens the group it sits in. The posted update keeps its own row and is never in the group. If the
+request is deleted, its messages read as ordinary messages again.
+
 ## Bots in threads
 
 - A bot keeps **one progress message per task**. It posts it once and edits it as the work moves
@@ -206,6 +215,8 @@ when no person or bot did; it is not shown as a name.
 | A built-in: Follow-up timer, Earlier messages, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
 | One of your automations | A small gray line; the name opens the automation. |
 | System (an update, a backup, a migration), or any other keeper line | A small gray line with no sender. |
+
+A gray line is always one line. Text that does not fit ends in "…"; hover over a long line to read its text.
 
 Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
 unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), not "keeper". Task
@@ -294,10 +305,11 @@ thread yet and sends no event ([Webhooks](webhooks.md)).
 ## Older conversations
 
 `hub conversation show` and `/api/v2/conversations/*` keep working as aliases for one release. Older conversations
-map onto threads as follows: a bot's main chat becomes its Home, and a personal chat with a bot moves into that bot's
-Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's chats stay
-with their owner. A bot's shared chat becomes a thread for its members, a task's discussion stays with the task, and a
-direct conversation becomes a thread among its participants.
+map onto threads as follows: a bot's main chat becomes its Home, and a person's personal chat with a bot moves into
+that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's
+chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are. A
+bot's shared chat becomes a thread for its members, a task's discussion stays with the task, and a direct conversation
+becomes a thread among its participants.
 
 A thread with six or more prompts shows an **Outline** pill. It lists the prompts people sent, across every page, and
 choosing one loads older pages until that message is on screen. Each row passes the same checks a page does

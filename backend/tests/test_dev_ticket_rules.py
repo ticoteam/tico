@@ -52,7 +52,7 @@ def test_a_dev_tickets_type_is_seeded_once_and_a_deleted_row_stays_deleted(api):
     with api.app.state.store.transaction() as c:
         typ = dev_type(c)
         rows = seeded(c, typ["id"])
-        assert [(w, o) for _, w, o in rows] == [(w, o) for _, w, o in R.DEV_ROWS]
+        assert [(w, o) for _, w, o in rows] == [(w, o) for _, w, o in R.DEV_ROWS_QA]
         # Moved in the same write: nothing is left in the table, everything is in the type's What wakes automation.
         assert not c.execute("SELECT 1 FROM rules WHERE scope_id=?", (typ["id"],)).fetchone()
         aid, flow = wakes(c, typ["id"])
@@ -71,6 +71,22 @@ def test_a_dev_tickets_type_is_seeded_once_and_a_deleted_row_stays_deleted(api):
         c.execute("DELETE FROM events WHERE action=? AND target=?", (R.SEEDED, typ["id"]))
         R.seed_dev(c)
         assert len(seeded(c, typ["id"])) == 3
+
+
+def test_a_board_without_qa_steps_is_given_only_the_release_note(api):
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(
+            c,
+            H.KEEPER,
+            "Dev tickets",
+            [
+                {"name": "In Progress", "status": "doing"},
+                {"name": "Pending Release", "status": "review"},
+                {"name": "Done", "status": "done"},
+            ],
+            bots="work",
+        )
+        assert seeded(c, typ["id"]) == list(R.DEV_ROWS), "no QA hand-off on a board with no QA step"
 
 
 def test_renaming_a_step_moves_its_rows_in_the_what_wakes_automation_to_the_new_name(api):

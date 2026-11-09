@@ -45,7 +45,8 @@ async function openReview(browser, {width, height, theme, refuseApprove = false,
         // The two Message buttons share one row; Mark met is a quiet text button under Approve, outside that row.
         const toAssignee = await page.locator('[data-review-send="assignee"]').boundingBox();
         const toManager = await page.locator('[data-review-send="manager"]').boundingBox();
-        assert.ok(Math.abs(toAssignee.y - toManager.y) < 2 && toAssignee.height <= 44, label + ': the Message buttons share one row');
+        // A name that wraps (the manager's, at 390 px) makes the row two lines tall; the row stays one row.
+        assert.ok(Math.abs(toAssignee.y - toManager.y) < 2 && toAssignee.height <= 52, label + ': the Message buttons share one row');
         assert.equal(await page.locator('.pipe-review-sendback [data-review-send="met"]').count(), 0, label + ': Mark met is not in the row');
         const approveBox = await page.locator('.pipe-review-approve').boundingBox();
         const metBox = await page.locator('.pipe-review-met').boundingBox();
