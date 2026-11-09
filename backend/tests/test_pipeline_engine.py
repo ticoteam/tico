@@ -1,6 +1,8 @@
 """The pipeline engine (Track A): requirement states, the work version, the move gate with its override and the move-back
 rule, visits, the counting rule for earlier stages, set-based dots, and the off switch."""
 
+import sqlite3
+
 import pytest
 
 from backend import hubdb as H
@@ -12,9 +14,26 @@ CHRIS = "human:chris"
 T0 = "2026-11-07T09:00:00.000000Z"
 
 
+_BOOTED = []
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _booted(tmp_path_factory):
+    """One booted hub database per module on each worker (Store.initialize is ~3 s); every test's pipeline() starts
+    from its own copy of it, so each test still gets a fresh database."""
+    path = tmp_path_factory.mktemp("pipeline-engine") / "hub.sqlite"
+    boot(path)
+    _BOOTED[:] = [path]
+    yield
+    _BOOTED.clear()
+
+
 def pipeline(tmp_path):
     path = tmp_path / "hub.sqlite"
-    boot(path)
+    with sqlite3.connect(_BOOTED[0]) as source, sqlite3.connect(path) as copy:
+        source.backup(copy)
+    source.close()
+    copy.close()
     c = hub(path)
     board = H.type_create(
         c,
