@@ -43,6 +43,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     tasks.push({...tasks[0], id: 'general-task', title: 'General task', type_id: 'general', step_id: 'general-open',
       type: {id: 'general', name: 'General'}, step: types[0].steps[0]});
     Object.assign(tasks[1], {labels: [tag.key], tags: [tag]});
+    // A Part of set by hand has no hand-off record: it keeps its label and gets no From row.
+    tasks[2].relations = {parent: [{id: 'task-0', title: 'Write the campaign', direction: 'out'}]};
     // Waiting is a tag on a task that stays in its step.
     tasks[0].status = 'waiting';
     // A Dev ticket at a working step carries when it got there; past four hours its card says so in amber.
@@ -532,6 +534,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('.task-type-editor [data-delete-type]').click();
     await page.waitForFunction(() => !document.querySelector('#set-types [data-edit-type=new-type]'));
     assert(posted.some(item => item.path.endsWith('/new-type/delete')));
+    await page.evaluate(async () => { await tasksLoad(TASKS_ST); taskModalShow(TASKS_ST.tasks.find(item => item.id === 'task-2')); });
+    const modal = page.locator('#task-modal');
+    await modal.locator('[data-prop-row="parent"]').waitFor();
+    assert.match(await modal.locator('[data-prop-row="parent"]').innerText(), /Write the campaign/);
+    assert.equal(await modal.locator('[data-prop-row="from"]').count(), 0, 'a Part of set by hand is not a hand-off');
     assert.deepEqual(errors, []);
     console.log('PASS: pipeline columns, status fallback, saved type, modal step mapping, General control, Types CRUD.');
   } finally { await browser.close(); }
