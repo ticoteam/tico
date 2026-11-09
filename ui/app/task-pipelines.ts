@@ -91,7 +91,7 @@ function taskPipelineScopeTypes() {
     ...(dev ? [{id: dev.id, label: dev.name}] : []),
     ...other.map(type => ({id: type.id, label: type.name, other: true}))];
 }
-const taskPipelineLabel = (id: string) => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
+const taskPipelineLabel = (id: string | undefined) => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
 function taskPipelineTools(state: PipelineTypeChoice) {
   $('#task-q')?.setAttribute('aria-label', `Search ${pipelineSelectedType(state)?.name || 'General'} tasks`);
 }

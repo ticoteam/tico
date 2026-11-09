@@ -154,7 +154,7 @@ const taAudience = (d: ToolApiData | null): ToolApiAudience => {
   const a: ToolApiAudienceIn = d?.audience || {};
   return {everyone: false, people: [...(a.people || [])], teams: [...(a.teams || [])], bots: [...(a.bots || [])]};
 };
-const taSaveAudience = (audience: ToolApiAudience | null) => patch(taPath(TA?.id || ''), {audience: audience && !audience.everyone ? audience : null});
+const taSaveAudience = (audience: import('../types/api').AccessAudience | null) => patch(taPath(TA?.id || ''), {audience: audience && !audience.everyone ? audience : null});
 async function taSeeAdd(): Promise<void> {
   const state = TA;
   if (!state) return;

@@ -8,7 +8,7 @@ type MarketAt = {kind: 'page'; section: string; dimension?: string} | {kind: 'ma
 /** What a mount gives back: the page (ui/app/redesign-market.ts), the map, or the empty state. */
 interface MarketMounted {
   shell: HTMLElement;
-  open(at: string | MarketAt): Promise<unknown>;
+  open(at: string | MarketAt | RdqOpenAt): Promise<unknown>;   // RdqOpenAt: the page's own open (redesign-market.ts)
   stop(): void;
 }
 

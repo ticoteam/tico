@@ -458,32 +458,7 @@ interface PillState {
   [key: string]: unknown;
 }
 
-/** One field of a task's live draft: the copy the edit was made on (`version`) and its value (task-live.ts). */
-interface TaskFieldBase {
-  value: unknown;
-  version?: number;
-}
-
-/** A task's live draft (task-live.ts sharedDraft): the unsaved edits and the copies they were made on. */
-interface TaskLiveDraft {
-  patch: Record<string, unknown>;
-  dirty: Record<string, unknown>;
-  bases: Record<string, TaskFieldBase>;
-  error: string;
-  [key: string]: unknown;
-}
-
-/** A task open in its dialog, live (`dialog.taskLive`, task-live.ts). */
-interface TaskLiveState {
-  id: string;
-  identity: string;
-  owner: string;
-  draft: TaskLiveDraft;
-  nodes: Record<string, unknown>;
-  fields: Record<string, TaskFieldBase>;
-  revoked?: boolean;
-}
-
+/** A task open in its dialog, live (`dialog.taskLive`; TaskLive is task-live.ts's). */
 interface HTMLDialogElement {
-  taskLive?: TaskLiveState | null;
+  taskLive?: TaskLive | null;
 }

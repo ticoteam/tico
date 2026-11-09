@@ -415,7 +415,7 @@ function taskBoardOwnerMenu(state: TbState, button: HTMLElement) {
 }
 // A card as the board draws it: with its move while the server has not said otherwise (a copy no newer than the one
 // it was moved from), else as loaded.
-function taskBoardLive(state: TbState, item: TbLive): TbLive {
+function taskBoardLive<T extends TbLive>(state: TbState, item: T): T {
   const id = String(item.task?.id ?? ''), moves = state.boardMoves, move = moves?.get(id);
   if (!moves || !move) return item;
   if (Number(item.task.version) > move.version) {

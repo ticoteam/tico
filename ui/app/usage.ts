@@ -563,7 +563,7 @@ function useDialog<R>(label: string, body: string, save: (form: HTMLFormElement)
   form.querySelector('input')?.focus();
   return dialog;
 }
-function useLimitDialog(slug: string, name: string | undefined, limit: UseLimit | null | undefined, company: UseLimit | null | undefined, done: () => void): void {
+function useLimitDialog(slug: string, name: string | undefined, limit: UseLimit | null | undefined, company: UseLimit | UseDefault | null | undefined, done: () => void): void {
   const hint = (key: string): string => { const c = useNum(company?.[key]); return c ? useCap(c) : '—'; };
   const held = limit?.blocked_by && limit.blocked_by.scope !== 'bot' ? `<p class="muted">${esc(useHeldBy(limit))}; raising this bot's own limit does not lift it.</p>` : '';
   const periods = USE_PERIODS.filter(([key]) => key !== 'hourly_usd' || limit?.own_hourly_usd != null);

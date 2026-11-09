@@ -24,7 +24,7 @@ type SaMailSettings = {set?: boolean | undefined; outbound_send?: boolean | unde
 type SaMailStage = (run: SaRun, m: SaMailSettings) => void;
 type SaOwnersStage = (run: SaRun, people: SettingsPerson[]) => void;
 type SaOptions = {
-  path: string; name: string | undefined; levels?: SaLevel[] | undefined; presets?: SaPreset[] | undefined;
+  path?: string | undefined; name: string | undefined; levels?: SaLevel[] | undefined; presets?: SaPreset[] | undefined;
   skipBot?: string | undefined; skipPerson?: string | undefined; stage?: SaStage | undefined; panel?: boolean | undefined;
   after?: ((saved: SaSaved) => unknown) | undefined; initialData?: SaData | undefined; singleAudience?: boolean | undefined;
   save?: ((read: SaAudience) => Promise<unknown>) | undefined;

@@ -124,7 +124,7 @@ async function needsRecommend(button: HTMLButtonElement, ask: string | undefined
 // The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
 const THREAD_NEED_KINDS: Record<string, string> = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
                            thread_held: 'Held', thread_capped: 'Paused'};
-function needRowHTML(it: NeedItem, ctx: {select?: boolean; [key: string]: unknown} = {}) {
+function needRowHTML(it: NeedItem, ctx: {select?: boolean; by?: string} = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester_id || '';
   const name = stale ? KEEPER_LABEL : actorLabel(from) || KEEPER_LABEL;

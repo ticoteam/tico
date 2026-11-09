@@ -22,7 +22,7 @@ interface RecruitState {
 }
 // A catalog card from GET /v2/templates, as Add bot reads it.
 interface RecruitCard {
-  slug: string; template: string; name: string; summary?: string; owns?: string[]; required?: boolean;
+  slug: string; template?: string; name?: string; summary?: string; owns?: string[]; required?: boolean;
   instructions?: string; model?: string; reasoning_effort?: string;
 }
 // An option row: the value and its label.
@@ -115,6 +115,7 @@ async function settingsRecruitFlow(seed: RecruitSeed = {}) {
       const card=cards.find(c=>c.slug===b.dataset.recruitCreate);if(!card)return;
       creating=true;results.querySelectorAll<HTMLButtonElement>('[data-recruit-create]').forEach(x=>x.disabled=true);status.textContent='Creating a bot that waits for setup…';
       const title=draft.title.trim()||card.name;
+      if(title===undefined)return; // a card with no name and no title typed: the old code threw on title.toLowerCase()
       const slugBase=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,55)||card.slug;
       let slug=slugBase;for(let n=2;S.emps.some(x=>x.slug===slug);n++)slug=slugBase+'-'+n;
       const brief='\n\n## Role brief\n'+(draft.brief.trim()||'Not set')+'\nTools and sources: '+String(data.get('tools')||'Not set')+'\nReviewer: '+String(data.get('reviewer')||'Ask the owner during setup');

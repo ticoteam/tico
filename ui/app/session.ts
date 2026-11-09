@@ -242,7 +242,11 @@ function sessionReturn() {
         if (live && field && saved.base && Number.isFinite(saved.base.version) && (typeof saved.base.value === 'string' || field === 'size' && (saved.base.value === null || Number.isFinite(saved.base.value)))) live.fields[field] = saved.base;
         if (el.hasAttribute('contenteditable')) el.textContent = saved.value; else el.value = saved.value;
         el.dispatchEvent(new Event('input', {bubbles: true}));
-        if (field) taskLiveSchedule(el.closest('dialog'), live);
+        if (field) {
+          // live came from this box's dialog; without it the old call threw on live.draft (taskLiveSchedule)
+          if (!live) throw new TypeError('This task field has no live task');
+          taskLiveSchedule(el.closest<TaskDialog>('dialog')!, live);
+        }
       }
       kept.fields.splice(i, 1); put = true;
     }

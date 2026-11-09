@@ -5,7 +5,7 @@
 // What this file reads from the server and keeps in SETTINGS_DATA. The other settings files read these through the
 // globals declared here, so each type names the fields its readers use; a field nobody reads is left out.
 type SettingsPerson = import('../types/api').Person & {hidden?: boolean; owner?: boolean; role?: string};
-type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: boolean; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness};
+type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: boolean; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness & DetailReadiness};
 // A catalog row (backend/providers.py MODEL_CATALOG): every row has an id, a provider and a label.
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
   efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null};
@@ -24,7 +24,7 @@ type SettingsTierVersion = {version: string; model: string; context?: number | n
 type SettingsTier = {name: string; level: string; fast: boolean; current: string; versions: SettingsTierVersion[]};
 type SettingsGatewayTiers = {tiers: Record<string, SettingsTier>; levels: {id: string; name: string}[]};
 // GET /v2/usage/limits: each bot's use limit and the company's default (ui/app/usage.ts draws them).
-type SettingsLimits = {bots?: Record<string, unknown>; default?: unknown};
+type SettingsLimits = {bots?: Record<string, UseLimit>; default?: UseDefault};
 // GET /v2/operations: the computers, services and issues that the Computers and Health views draw.
 type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: unknown; scheduler_enabled?: boolean};
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
