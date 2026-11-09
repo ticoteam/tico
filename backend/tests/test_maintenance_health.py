@@ -1773,7 +1773,7 @@ def _part_github(api, runner, monkeypatch, hq=None, comments=None, clock=None):
 
     def view(c, who, settings, auth_, github, config):
         seen["github"] = github
-        return {"checks": [health._github(c, github)]}
+        return {"checks": [health._github(c, github, settings)]}
 
     monkeypatch.setattr(health, "view", view)
     run(api)
@@ -1940,6 +1940,34 @@ def test_a_tico_bug_reaches_hq_ticket_repeat_comment_support_off_and_daily_caps(
         hq=hq,
         clock=clock,
     )
+
+
+def test_a_copy_run_from_source_files_no_automatic_report_until_it_names_an_hq(
+    environment, code_findings, hq, monkeypatch
+):
+    # The factory simulation ("Tico: dev", the same seeded install id every run) filed a ticket to production HQ each run.
+    monkeypatch.setenv("TICO_VERSION", "dev")
+    api, _ = built(environment)
+    app, store, sig = api.app, api.app.state.store, MH.signature("push_stuck")
+    code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
+    assert file_due(api, run(api))[sig] == {"signature": sig, "deferred": "source_copy"}
+    assert hq.seen == [] and open_approvals(api, "support") == []
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
+        (why,) = c.execute("SELECT target, detail FROM events WHERE action='health_monitor.not_reported'").fetchall()
+    assert why["target"] == "source_copy" and json.loads(why["detail"])["signatures"] == [sig]
+    # BotOps asking for the report directly is refused the same way; the owner's own click still reports.
+    with pytest.raises(Problem) as refused:
+        MH.report(store, app.state.support, app.state.auth, store.settings, SimpleNamespace(actor="bot:botops"), sig)
+    assert refused.value.code == "source_copy" and hq.seen == []
+    owner = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in())
+    assert owner.status_code == 200 and owner.json()["ticket"] and len(hq.tickets) == 1
+    # TICO_HQ_URL set on purpose sends as a release does.
+    monkeypatch.setenv("TICO_HQ_URL", "https://updates.tico.team")
+    with store.transaction() as c:
+        c.execute("DELETE FROM health_reports")
+        c.execute("DELETE FROM support_tickets")
+    assert file_due(api, run(api))[sig]["ticket"] and len(hq.tickets) == 2
 
 
 def test_with_the_team_rule_off_approval_decline_approve_and_send_as_the_requester(environment, monkeypatch, hq, clock):

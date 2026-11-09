@@ -20,6 +20,8 @@ from pydantic import (
     model_validator,
 )
 
+from .company_file import draft as company_draft
+
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
 Slug = Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)]
@@ -326,6 +328,9 @@ class TaskUpdate(Contract):
     step: str | None = Field(default=None, max_length=200)  # "" clears the step
     step_rank: float | None = Field(default=None, allow_inf_nan=False)  # its place within its step
     number: TaskNumber | None = None  # a mover's, for a task that has none
+    # A rule editor's override of a stage's unmet requirements, logged (backend/pipeline_engine.py check_move). The
+    # reason it is logged with is this update's note.
+    override_requirements: bool = False
     # A review or QA subtask's verdict and the pull request head it judged; its parent's owner is woken with both.
     verdict: Literal["approve", "changes", "pass", "fail"] | None = None
     verdict_head: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{7,40}$")
@@ -437,7 +442,7 @@ class TaskTypeUpdate(Contract):
     steps_only: bool | None = None
 
 
-# What a pick says on a person's card (ui/app/question-card.js): `then` is its "what happens" line, under its button;
+# What a pick says on a person's card (ui/app/question-card.ts): `then` is its "what happens" line, under its button;
 # `recommended` pre-ticks it among several picks. A bot's pick to a person needs `then` (hubdb.lint_question).
 OptionThen = Annotated[StrictStr, Field(max_length=120)]
 
@@ -937,7 +942,7 @@ class MarketEvidenceCreate(Contract):
 
 class MarketEntityCreate(Contract):
     id: str | None = Field(default=None, max_length=200)
-    type: Literal["company", "product", "person", "segment", "channel", "geography", "regulation", "event"]
+    type: Literal["organization", "product", "person", "segment", "channel", "place", "document", "event"]
     name: str = Field(min_length=1, max_length=300)
     aliases: list[str] = Field(default_factory=list, max_length=50)
     external_ids: dict = Field(default_factory=dict)
@@ -2283,7 +2288,7 @@ class BotTaskCondition(Contract):
 
 
 class BotTaskTab(Contract):
-    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done Recently, or a
+    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done recently, or a
     custom filter of rows that a task must all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's
     filter, still accepted and stored as rows."""
 
@@ -2390,12 +2395,54 @@ class GatewayFetch(Contract):
     max_tokens: int = Field(default=10000, ge=1000, le=50000)
 
 
+class GatewayDigest(Contract):
+    items: list[dict] = Field(
+        min_length=1, max_length=300
+    )  # {id, title, text, url, source, at}, checked by the Gateway
+    focus: str | None = Field(default=None, max_length=500)
+    style: Literal["brief", "full"] = "brief"
+
+
 class GatewayImage(Contract):
+    # tico-images-1.0 (the default, and what an install that has not updated sends) takes a category; the lineup 3 ids
+    # take one choice each: tico-images-low none, tico-images-high a category, tico-svg a quality. HQ checks the rest.
+    model: Literal["tico-images-1.0", "tico-images-low", "tico-images-high", "tico-svg"] = "tico-images-1.0"
     prompt: str = Field(min_length=1, max_length=4000)
-    category: Literal["storyboard", "photo", "character", "graphic"]
+    category: Literal["storyboard", "photo", "character", "graphic"] | None = None
+    quality: Literal["standard", "pro"] | None = None
     images: list[str] = Field(default_factory=list, max_length=4)  # base64 data URLs, checked by the Gateway
     size: str | None = Field(default=None, max_length=20)
     count: int = Field(default=1, ge=1, le=4)
+
+    @model_validator(mode="after")
+    def one_choice_for_the_model(self):
+        chosen = {"category": self.category, "quality": self.quality}
+        if self.model == "tico-images-1.0" and (self.category is None or self.quality is not None):
+            raise ValueError("tico-images-1.0 takes a category")
+        if self.model == "tico-images-low" and any(chosen.values()):
+            raise ValueError("tico-images-low takes no category or quality")
+        if self.model == "tico-images-high" and (self.quality is not None or self.category == "storyboard"):
+            raise ValueError("tico-images-high takes a photo, graphic or character")
+        if self.model == "tico-svg" and (self.category is not None or self.images or self.size):
+            raise ValueError("tico-svg takes a quality, no references or size")
+        return self
+
+
+class GatewayVideo(Contract):
+    prompt: str = Field(min_length=1, max_length=4000)
+    seconds: int = Field(default=8, ge=3, le=15)
+    resolution: Literal["360p", "720p", "1080p", "4k"] = "720p"
+    aspect: Literal["16:9", "9:16"] = "16:9"
+    audio: bool = True
+    first_frame: str | None = Field(default=None, max_length=3_000_000)  # a base64 data URL, checked by the Gateway
+    last_frame: str | None = Field(default=None, max_length=3_000_000)
+
+    @model_validator(mode="after")
+    def frames_are_pictures(self):
+        for frame in (self.first_frame, self.last_frame):
+            if frame is not None and not frame.startswith(("data:image/png;base64,", "data:image/jpeg;base64,")):
+                raise ValueError("a frame is a PNG or JPEG data URL")
+        return self
 
 
 class SystemUpdate(Contract):
@@ -2556,6 +2603,12 @@ class OnboardingNames(Contract):
     website: str = Field(default="", max_length=300)
 
 
+def _places_rule(places):
+    """Where the company serves, held to the company file's rule (draft.regions), so a place reads the same in a file,
+    on the setup page and here."""
+    return company_draft.regions(places, "regions")
+
+
 class OnboardingAnswers(Contract):
     """The interview behind the recommendations. Free text is shown to a person, never parsed."""
 
@@ -2579,6 +2632,8 @@ class OnboardingAnswers(Contract):
     # The org builder: the departments chosen, in order, and the one-line answer to each department's question.
     departments: list[Department] = Field(default_factory=list, max_length=9)
     briefings: dict[Department, Annotated[str, Field(max_length=500)]] = Field(default_factory=dict, max_length=9)
+    # Where the company serves (a company file's company.regions): free text, 0..12 places, each 1..60 characters.
+    regions: Annotated[list[str], AfterValidator(_places_rule)] = Field(default_factory=list, max_length=12)
 
 
 class OnboardingSelection(Contract):
@@ -2939,6 +2994,7 @@ class MaintenanceUpdate(Contract):
     schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
     paused: bool | None = None
     monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
+    rules_monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
     steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
 
 
@@ -2994,6 +3050,10 @@ class LimitRetry(Contract):
     pass
 
 
+class CompanyPause(Contract):
+    """Pause or resume every bot on the team. No fields: the one company pause on record is the whole state."""
+
+
 class StopTurn(Contract):
     run_id: ID | None = None  # the run the person saw; a newer one is not stopped by mistake
     redirect: ID | None = None  # the caller's queued message the next turn starts with (Stop and redirect)
@@ -3008,7 +3068,7 @@ class AssistantMessage(Contract):
     text: Annotated[str, Field(min_length=1, max_length=8000)]
     # place "updates" hands the turn the updates the person may read (backend/updates_chat.py).
     place: Literal["updates"] | None = None
-    # Sent from the Ask panel (ui/app/ask-panel.js): the page the person is looking at, handed to the turn as a hint.
+    # Sent from the Ask panel (ui/app/ask-panel.ts): the page the person is looking at, handed to the turn as a hint.
     page: AssistantPage | None = None
 
 
@@ -3297,6 +3357,13 @@ class PersonalTokenCreate(Contract):
     expires_in_days: int = Field(default=90, ge=1, le=365)
 
 
+class SetupHandoff(Contract):
+    """The one-time secret of the setup handoff (backend/setup_handoff.py). It is checked against the pattern a secret
+    has in the handler, so a wrong one is refused like a spent one, and no validation message repeats it."""
+
+    secret: str = Field(default="", max_length=512, repr=False)
+
+
 class ServiceKeyCreate(Contract):
     """A service key (backend/service_keys.py): the label names the system that holds it, on every
     task it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."""
@@ -3550,3 +3617,7 @@ class MailboxAccessCreate(Contract):
 
 class MailboxAccessUpdate(Contract):
     level: MailboxLevel
+
+
+class MailboxDirectoryUpdate(Contract):
+    on: StrictBool

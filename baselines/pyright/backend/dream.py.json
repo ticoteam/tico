@@ -1,0 +1,46 @@
+{
+    "files": {
+        "./backend/dream.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 46,
+                    "endColumn": 49,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 65,
+                    "endColumn": 68,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 43,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 59,
+                    "endColumn": 62,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

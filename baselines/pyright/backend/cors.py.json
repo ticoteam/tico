@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/cors.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 17,
+                    "lineCount": 8
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 58,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

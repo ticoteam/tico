@@ -1,4 +1,4 @@
-// Maintenance on the Automations page (ui/app/automations-maintenance.js) against the fake hub's maintenance routes
+// Maintenance on the Automations page (ui/app/automations-maintenance.ts) against the fake hub's maintenance routes
 // (support/automations-fake.cjs, `maintenance: true`). Maintenance leads the list as a built-in system row, and the
 // mirrors of the jobs it replaced are gone from it. Its screen lists the eight steps in run order with their switches
 // (Collect is always on), beta and consent pills; a row opens How often and, for Find stuck and Dream, the

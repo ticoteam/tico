@@ -1,4 +1,4 @@
-// Tools › Keys (ui/app/redesign-library.js) against fixtures/redesign-tools.json (the Acme example, shaped as GET
+// Tools › Keys (ui/app/redesign-library.ts) against fixtures/redesign-tools.json (the Acme example, shaped as GET
 // /api/v2/tools, /api/v2/tools/{service}, /api/v2/credentials and /api/v2/groups answer): one row per tool with its
 // kind, a red dot when it has an issue and how many teammates have it, grouped In use / Available / Credentials /
 // Removed; search, who has access (a bot, a person, or a team with the teams under it) and Issues narrow the list and
@@ -34,7 +34,7 @@ async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools =
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events' || p.endsWith('/watch')) return;
     if (method !== 'GET') seen.writes.push({method, path: p, body: req.postData() || ''});
     if (p === '/api/v2/config') return json(config);

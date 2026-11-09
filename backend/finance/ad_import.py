@@ -12,7 +12,8 @@ Meta's error 190) sets the import to "reconnect"; any other failure (unreachable
 what went wrong, and the next pass tries again. Either way the spend already imported stays.
 
 A run reads the accounts the login sees, upserts them (a new one is not assigned to a bot until a finance admin picks
-one), then each account's spend from `history_from` on the first run (or after `history_from` moves earlier) and the
+one) except those another enabled import already reads (one import per ad account: an agency's manager login and the
+account's own can both list it; the run's note names each), then each account's spend from `history_from` on the first run (or after `history_from` moves earlier) and the
 last 30 days after that. A complete fetch replaces the window's rows per account, so a day the platform restates
 overwrites. Rate limits back off and retry a few times. The worker sweeps every 15 minutes, runs what is due (4 hours
 since the last run, or asked for), then gives bots their budget warnings (ad_warnings.py). A rehearsal copy calls no
@@ -37,6 +38,7 @@ from typing import Any, cast
 from . import ad_warnings
 from .core import ledger as L
 from .core.org import SYSTEM
+from .context import load
 from .gateway_sync import Bell
 from .mercury import Opener
 from .store import ads as SA
@@ -320,6 +322,40 @@ def _cents(units: object) -> int:
         return 0
 
 
+def _int(value: object) -> int:
+    """A platform's whole count (Google sends int64s as strings) as an int; 0 when none."""
+    try:
+        return int(str(value))
+    except ValueError:
+        return 0
+
+
+def _float(value: object) -> float:
+    try:
+        return float(str(value))
+    except ValueError:
+        return 0.0
+
+
+# The action types Meta counts as conversions: the website's and the app's (offsite and onsite conversions).
+META_CONVERSIONS = ("offsite_conversion.", "onsite_conversion.")
+
+
+def _meta_conversions(row: Mapping[str, Any]) -> float:
+    """A campaign-day's conversions on Meta: the `conversions` list (one value per action type the account counts) when
+    Meta sends one, else the `actions` list; either summed over the action types that are website or app conversions
+    (META_CONVERSIONS). A `conversions` given as one number is that number."""
+    raw = row.get("conversions")
+    if isinstance(raw, (int, float, str)) and str(raw).strip():
+        return _float(raw)
+    items = _list(raw) or _list(row.get("actions"))
+    return sum(
+        _float(_dict(a).get("value"))
+        for a in items
+        if str(_dict(a).get("action_type") or "").startswith(META_CONVERSIONS)
+    )
+
+
 def _micros_cents(micros: object) -> int:
     """Google's cost in micros (millionths of the currency) as cents, half up."""
     try:
@@ -490,8 +526,8 @@ def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) 
     if not found and roots:
         raise Failed("Google Ads: this login sees no ad accounts")
     query = (
-        "SELECT campaign.id, campaign.name, segments.date, metrics.cost_micros FROM campaign "
-        f"WHERE segments.date BETWEEN '{start}' AND '{end}' AND metrics.cost_micros > 0"
+        "SELECT campaign.id, campaign.name, segments.date, metrics.cost_micros, metrics.clicks, metrics.conversions "
+        f"FROM campaign WHERE segments.date BETWEEN '{start}' AND '{end}'"
     )
     out = Fetched(accounts=list(found.values()))
     for acct in out.accounts:
@@ -499,6 +535,8 @@ def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) 
         for row in api.stream(acct.external_id, acct.via, query):
             campaign, seg, metrics = _dict(row.get("campaign")), _dict(row.get("segments")), _dict(row.get("metrics"))
             day = str(seg.get("date") or "")
+            cost = _micros_cents(metrics.get("costMicros") or 0)
+            clicks, conversions = _int(metrics.get("clicks")), _float(metrics.get("conversions"))
             if not day:
                 continue
             rows.append(
@@ -506,8 +544,10 @@ def fetch_google(http_: Http, secrets: Mapping[str, str], start: str, end: str) 
                     day,
                     str(campaign.get("id") or ""),
                     str(campaign.get("name") or ""),
-                    _micros_cents(metrics.get("costMicros") or 0),
+                    cost,
                     acct.currency,
+                    clicks,
+                    conversions,
                 )
             )
         out.spend[acct.external_id] = rows
@@ -579,7 +619,7 @@ def fetch_meta(http_: Http, secrets: Mapping[str, str], start: str, end: str) ->
                     "level": "campaign",
                     "time_increment": "1",
                     "limit": "500",
-                    "fields": "campaign_id,campaign_name,spend,date_start",
+                    "fields": "campaign_id,campaign_name,spend,clicks,actions,conversions,date_start",
                     "time_range": json.dumps({"since": a, "until": z}, separators=(",", ":")),
                 },
             ):
@@ -592,6 +632,8 @@ def fetch_meta(http_: Http, secrets: Mapping[str, str], start: str, end: str) ->
                             str(r.get("campaign_name") or ""),
                             _cents(r.get("spend") or "0"),
                             acct.currency,
+                            _int(r.get("clicks")),
+                            _meta_conversions(r),
                         )
                     )
         out.spend[acct.external_id] = rows
@@ -632,23 +674,18 @@ def due(imp: SA.AdImport, now: str) -> bool:
 
 
 def ensure_vendor(c: Any, platform: str, at: str) -> str:
-    """The platform's vendor contact ("Google Ads", "Meta"), made if no contact goes by the name. "" in mirrored books
-    (their contacts come from the accounting provider) or with no book."""
+    """The platform's vendor contact (store/ads.platform_contact): in native books "Google Ads" or "Meta", made if no
+    contact goes by the name; in mirrored books (QuickBooks, Xero) the provider's own vendor found by name or alias
+    ("Google", "Facebook", "Meta Platforms", ...), never made, since Tico never writes contacts there. "" when a
+    mirrored book has none, or with no book: budgets then report the platform's spend beside the books', never in it."""
     book = SL.book(c)
-    if book is None or book.mode == "mirror":
+    if book is None:
         return ""
+    found = SA.platform_contact(c, book.id, platform, mirror=book.mode == "mirror")
+    if found or book.mode == "mirror":
+        return found
     name = VENDOR[platform]
     nk = L.name_key(name)
-    owner = SAP.alias_of(c, book.id, nk)
-    if owner:
-        return owner
-    row = c.execute(
-        "SELECT id FROM fin_contacts WHERE book_id=? AND kind IN ('vendor','both') AND lower(name)=? "
-        "ORDER BY created_at LIMIT 1",
-        (book.id, nk),
-    ).fetchone()
-    if row is not None:
-        return str(row[0])
     cid = SAP.insert(
         c,
         "fin_contacts",
@@ -701,15 +738,33 @@ def run(store: Any, vault: object, import_id: str, *, now: str | None = None, ht
         current = SA.import_for(c, imp.tool_id)
         if current is None or current.id != imp.id:
             return Outcome("failed", error="the import was removed")
-        for acct in fetched.accounts:
+        # One import per ad account: one another enabled import already reads (an agency's manager login and the
+        # account's own both list it) is left to that one, so its spend is stored and counted once.
+        taken = SA.claimed(c, imp.tool_id, imp.platform, [a.external_id for a in fetched.accounts])
+        mine = [a for a in fetched.accounts if a.external_id not in taken]
+        for acct in mine:
             aid = SA.upsert_account(c, imp.tool_id, imp.platform, acct.external_id, acct.name, acct.currency, at)
-            stored += SA.replace_spend(c, aid, start, end, fetched.spend.get(acct.external_id, []), at)
-        SA.deactivate_missing(c, imp.tool_id, [a.external_id for a in fetched.accounts], at)
+            day_rows = fetched.spend.get(acct.external_id, [])
+            stored += SA.replace_spend(c, aid, start, end, day_rows, at)
+            # Each campaign the platform reported gets its record once (its owner stays); its name follows the platform.
+            seen: dict[str, tuple[str, str, str]] = {}
+            for r in day_rows:
+                first, last, name = seen.get(r.campaign_id, (r.day, r.day, ""))
+                seen[r.campaign_id] = (min(first, r.day), max(last, r.day), r.campaign_name or name)
+            for ext, (first, last, name) in seen.items():
+                SA.upsert_campaign(c, aid, ext, name, first, last, at)
+        SA.deactivate_missing(c, imp.tool_id, [a.external_id for a in mine], at)
         ensure_vendor(c, imp.platform, at)
+        if mine and SL.book(c) is not None:
+            # The days just replaced move the platform's shares on the charges whose windows they fall in (attribution).
+            from .attribution import refresh_platform  # lazy: attribution imports the posting path
+
+            refresh_platform(load(c, at), SYSTEM, imp.platform, start, end)
         # A history_from moved earlier while this ran wants a full read again: keep last_import_at empty then.
         full_again = current.history_from < imp.history_from
-        SA.finish(c, imp.id, "ok", "", at, imported=not full_again)
-    return Outcome("ok", accounts=len(fetched.accounts), rows=stored)
+        note = "; ".join(t.text for t in sorted(taken.values(), key=lambda t: t.external_id))
+        SA.finish(c, imp.id, "ok", note, at, imported=not full_again)
+    return Outcome("ok", accounts=len(mine), rows=stored)
 
 
 def pass_once(store: Any, vault: object, *, now: str | None = None, http_: Http | None = None) -> dict[str, Outcome]:

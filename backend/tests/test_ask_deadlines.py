@@ -139,6 +139,8 @@ def test_a_bot_puts_its_default_on_a_question_and_a_past_or_far_deadline_is_refu
     from backend.tests.test_mcp import call
 
     _, _, attempt = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        team_rules.save(c, "human:ana", {"bots_go_ahead": False})  # on, a reversible default is not asked at all
     pacific = timezone(timedelta(hours=-8))
     by = (datetime.now(pacific) + timedelta(days=5)).replace(hour=9, minute=0, second=0, microsecond=0)
     err, out = call(

@@ -15,12 +15,28 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from .. import hubdb as tico_db
-from . import banking, budgeting, cards, catalog, documents, gateway_sync, gating, handlers, jobs, mirror, payments
+from . import (
+    attribution,
+    banking,
+    budgeting,
+    campaigns,
+    cards,
+    catalog,
+    documents,
+    gateway_sync,
+    gating,
+    handlers,
+    jobs,
+    mirror,
+    payments,
+    subscriptions,
+)
 from . import prepaids, purchasing, topups
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import books_link, books_sync, delivery, rights, sync, tax, usage
+from . import vendors
 from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
@@ -125,6 +141,10 @@ PLANNERS: dict[str, handlers.Planner] = {
     **purchasing.PLANNERS,
     **prepaids.PLANNERS,
     **topups.PLANNERS,
+    **attribution.PLANNERS,
+    **campaigns.PLANNERS,
+    **subscriptions.PLANNERS,
+    **vendors.PLANNERS,
 }
 assert set(PLANNERS) == set(K.LIVE)
 
@@ -940,6 +960,7 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 amortize_prepaids = jobs.amortize
 watch_documents = jobs.watch
+detect_subscriptions = subscriptions.detect  # the daily look (scheduler finance_tick)
 grant_defaults = rights.grant_defaults
 RIGHT_RULES = R.RULES  # the one right an install from before RIGHTS_VERSION 2 is granted (bookkeeper)
 
@@ -1108,8 +1129,12 @@ DEV_COPY_KEPT = (
     "fin_prepaid_postings",
     "fin_invoice_reminders",
     "fin_ad_accounts",
+    "fin_ad_campaigns",
     "fin_ad_spends",
     "fin_ad_warnings",
+    "fin_attributions",
+    "fin_attribution_rules",
+    "fin_subscriptions",
 )
 # Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
 # inbox, cards and their authorizations, payees and payments, the ad spend imports) and spend holds. In the order they
@@ -1128,6 +1153,7 @@ DEV_COPY_EMPTIED = (
     "fin_holds",
     "fin_connections",
     "fin_ad_imports",
+    "fin_briefs",
 )
 
 

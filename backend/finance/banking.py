@@ -29,6 +29,7 @@ from .core import feeds as F
 from .core import kinds as K
 from .core import ledger as L
 from .core import validate as V
+from .core.merchant import merchant_key
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
@@ -90,6 +91,12 @@ def sync_failed(ctx: Ctx, cid: str, prior: str, why: str) -> None:
 
 def by_code(ctx: Ctx, code: str) -> L.Account | None:
     return next((a for a in ctx.accounts.values() if a.code == code), None)
+
+
+def cards_gl(ctx: Ctx) -> L.Account | None:
+    """The credit card line at CARDS. A book whose sales tax line took 2100 (before tax had its own range) has none."""
+    found = by_code(ctx, CARDS)
+    return found if found is not None and found.subtype == "credit_card" else None
 
 
 def gl_account(ctx: Ctx, money: Any) -> L.Account:
@@ -218,7 +225,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 gl = new_account(ctx, BANK, f"{a.get('name') or 'Mercury'} debit card", "asset", "bank", who)
                 mapped.append(new_money(ctx, cid, a, "card_program", "debit", gl, who))
                 continue
-            cards = by_code(ctx, CARDS)
+            cards = cards_gl(ctx)
             gl = (
                 cards
                 if cards is not None
@@ -615,6 +622,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
         "txn_date": t.txn_date,
         "amount": t.amount,
         "counterparty": t.counterparty,
+        "vendor_key": merchant_key(t.counterparty),
         "description": t.description,
         "pending": 1 if t.pending else 0,
         "provider_status": t.status,
@@ -1211,18 +1219,37 @@ def provider_fee_line(ctx: Ctx, row: Any, money: Any) -> dict[str, object] | Non
     return fee_line(ctx, row) if str(money["provider"]) == "stripe" else None
 
 
-def vendor_lines(ctx: Ctx, lines: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+def vendor_lines(
+    ctx: Ctx, lines: Sequence[dict[str, object]], merchant: bool = False, day: str = ""
+) -> list[dict[str, object]]:
     """A feed row's lines with each vendor as its one key: a counterparty that names a vendor contact (any case) is
     that contact's id, so its card rows and its bills count under one vendor (store/ap.vendor_key); a merchant with
-    no contact keeps its name (posting.post keys it folded and keeps the text as its label)."""
+    no contact keeps its name (posting.post keys it folded and keeps the text as its label). `merchant` (the bank and
+    card feed) keys a merchant with no contact by its merchant key instead, the text as its label on `day` (_bank_vendor)."""
     keys: dict[str, str] = {}
     out: list[dict[str, object]] = []
     for line in lines:
         key = str(line.get("contact_id") or "")
         if key and key not in keys:
-            keys[key] = SAP.vendor_key(ctx.c, ctx.book.id, key)
+            keys[key] = _bank_vendor(ctx, key, day) if merchant else SAP.vendor_key(ctx.c, ctx.book.id, key)
         out.append({**line, "contact_id": keys[key]} if key else dict(line))
     return out
+
+
+def _bank_vendor(ctx: Ctx, raw: str, day: str) -> str:
+    """The vendor key a bank or card row's counterparty posts under: an active vendor contact's id when an alias on the
+    text's name key or on its merchant key names one (in that order); else the merchant key, with the text recorded as
+    its label on `day` (a strong label, so posting.post's weak label leaves it)."""
+    text = raw.strip()
+    if not text or SAP.is_contact(ctx.c, text):
+        return raw
+    mk = merchant_key(text)
+    for k in dict.fromkeys([L.name_key(text), mk]):
+        vendor = SAP.active_vendor_alias(ctx.c, ctx.book.id, k)
+        if vendor:
+            return vendor
+    SL.label_vendor(ctx.c, ctx.book.id, mk, text, day or ctx.at[:10])
+    return mk
 
 
 def post_row(
@@ -1252,7 +1279,7 @@ def post_row(
             "source": source,
             "source_id": fresh_source(ctx, source, fid),
             "memo": memo,
-            "lines": [*vendor_lines(ctx, lines), feed_line(gl_id, t.amount)],
+            "lines": [*vendor_lines(ctx, lines, merchant=True, day=when), feed_line(gl_id, t.amount)],
         },
         hold_ids=holds,
         at=ctx.at,

@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -57,8 +58,9 @@ def test_a_replaced_database_file_drops_the_pool(tmp_path):
     with s.read() as first:
         assert schema_columns(first, s.settings.db_path).get("t") == ("x",)
     copy = tmp_path / "copy.sqlite"
-    with sqlite3.connect(copy) as replacement:
+    with closing(sqlite3.connect(copy)) as replacement:
         replacement.execute("CREATE TABLE t(y)")  # same schema version, different file/columns
+        replacement.commit()
     os.replace(copy, s.settings.db_path)
     with s.read() as second:
         assert second is not first
@@ -236,8 +238,10 @@ def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, mon
     assert sync(hub) == 0
     hub.close()
     monkeypatch.delenv("TICO_SQLITE_SYNC")
-    with Store(Settings(db_path=tmp_path / "hub.sqlite")).transaction() as c:
+    other = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    with other.transaction() as c:
         assert sync(c) == 1
+    other.close()
     hub = H.connect(tmp_path / "hub.db")
     assert sync(hub) == 1
     hub.close()
@@ -447,9 +451,64 @@ def test_hub_connections_cap_the_wal_file_after_a_checkpoint(tmp_path):
     from backend.store import H
 
     s = store(tmp_path)
-    assert s.connect().execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024 * 1024
+    with closing(s.connect()) as c:
+        assert c.execute("PRAGMA journal_size_limit").fetchone()[0] == 64 * 1024 * 1024
     conn = hubdb.connect(str(tmp_path / "hub-open.sqlite"))
     try:
         assert conn.execute("PRAGMA journal_size_limit").fetchone()[0] == H.WAL_SIZE_LIMIT == 64 * 1024 * 1024
     finally:
         conn.close()
+
+
+def test_closing_a_store_closes_its_idle_connections_and_a_later_read_does_not_pool_one(tmp_path):
+    s = store(tmp_path)
+    with s.read() as idle:
+        pass
+    assert idle in s.pool
+    s.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        idle.execute("SELECT 1")
+    with s.read() as later:
+        assert later.execute("SELECT x FROM t").fetchone()["x"] == 1
+    assert later not in s.pool
+    with pytest.raises(sqlite3.ProgrammingError):
+        later.execute("SELECT 1")
+
+
+def test_app_shutdown_closes_the_store_pool(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+    from backend.tests.test_api import api_settings
+
+    app = create_app(api_settings(tmp_path))
+    with TestClient(app):
+        store_ = app.state.store
+        with store_.read() as c:
+            c.execute("SELECT 1").fetchone()
+        idle = list(store_.pool)
+        assert idle
+    for c in idle:
+        with pytest.raises(sqlite3.ProgrammingError):
+            c.execute("SELECT 1")
+
+
+def test_a_pooled_connection_whose_setup_fails_is_closed_before_the_error_reaches_the_caller(tmp_path):
+    opened = []
+
+    class FailsOnSetup(sqlite3.Connection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            opened.append(self)
+
+        def execute(self, statement, *args):
+            if statement.startswith("PRAGMA journal_size_limit"):
+                raise sqlite3.OperationalError("injected setup failure")
+            return super().execute(statement, *args)
+
+    s = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    with pytest.raises(sqlite3.OperationalError, match="injected setup failure"):
+        s.connect(factory=FailsOnSetup)
+    (c,) = opened
+    with pytest.raises(sqlite3.ProgrammingError):  # a closed connection refuses every operation
+        c.total_changes

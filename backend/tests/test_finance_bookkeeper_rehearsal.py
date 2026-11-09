@@ -110,7 +110,7 @@ def _c1_no_delete_route_for_the_bot(api, token):
 def _c2_the_bot_is_offered_the_six_server_finance_tools(api, token):
     names = _names(api, token)
     assert set(SPEC_TOOLS) <= names, sorted(set(SPEC_TOOLS) - names)
-    assert "hub_finance_card_fill" not in names  # local to the computer; not offered by the server yet
+    assert "hub_finance_card_fill" not in names  # unlisted: no bot is offered card fill
 
 
 def _c2_the_bot_is_not_offered_approvals_group_edits_or_archive(api, token):

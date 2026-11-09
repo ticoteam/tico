@@ -1,4 +1,4 @@
-// Offline browser regression: the inbox kinds under Tools (ui/app/inboxes.js and its kind files) over fakes of every
+// Offline browser regression: the inbox kinds under Tools (ui/app/inboxes.ts and its kind files) over fakes of every
 // kind's routes (ui/tests/support/mailboxes-fake.cjs). The old Settings > Inboxes, Mailboxes, Email & Phone, Mail and
 // Google addresses open their Tools pages. Tools › Settings has a section a channel with every setting, and Coming soon
 // where another change fills it; What Tico may do never loses a pending save to an older read. Add tool > Email (Google)

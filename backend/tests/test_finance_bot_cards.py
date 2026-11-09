@@ -816,6 +816,20 @@ def test_no_card_number_is_taken_stored_or_read_back(books):
     assert refused.value.code == "not_available"
 
 
+def test_card_fill_is_offered_to_no_one_and_still_runs_by_name():
+    """Card fill is a placeholder: no list shows it, on the server or a computer, to any caller; a call by name still
+    reaches it and is answered "not available"."""
+    for local in (False, True):
+        for kind in (None, *hubtools.KINDS):
+            assert "hub_finance_card_fill" not in {t["name"] for t in hubtools.listing(local, kind)}
+    assert "hub_finance_inbox" in {t["name"] for t in hubtools.listing(True, "bot")}
+    with pytest.raises(APIError) as refused:
+        hubtools.BY_NAME["hub_finance_card_fill"]["fn"](
+            None, {"card_id": "crd_1", "merchant": "x.example", "amount": 1}
+        )
+    assert refused.value.code == "not_available"
+
+
 def test_an_id_is_never_read_as_a_card_number():
     """Ids are random hex: a Luhn-valid run of digits inside one must not refuse the action that carries it."""
     assert not V.has_card_number({"budget_id": "ab4222222222222cd"})
