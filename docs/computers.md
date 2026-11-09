@@ -54,7 +54,7 @@ turns on other providers. See [the Gateway boundary](ai-gateway.md#pick-a-tico-m
 
 ## Turn counts
 
-The computers list, each computer's pop-up and **Settings → Health** show four counts:
+The computers list, each computer's pop-up and **Settings → General → Health → Details** show four counts:
 
 | Count | What it means |
 |---|---|
@@ -134,7 +134,7 @@ a healthy wait keeps its place. The task and its history stay, and the task gets
 will retry.** A dead turn that may have pushed, sent or paid is not retried blindly: one that only read runs again,
 and any other is held for BotOps with the tools it used.
 
-When the company reaches its warning level, **Settings → Health** shows one **Company turns** finding for the
+When the company reaches its warning level, **Settings → General → Health → Details** shows one **Company turns** finding for the
 incident: the counts by wait reason, the oldest waits, the last progress of each running turn, each computer's CPU
 and memory, and the likely bottleneck in one sentence. Later runs update the same finding, and when the count drops
 below the warning level it says when the incident resolved. If the incident is still open after 5 minutes, BotOps
@@ -153,7 +153,7 @@ This counts people with sign-in access, not the number currently online or the A
 
 | Level | Default per person | What happens at or above it |
 |---|---|---|
-| **Warning** | **40** | New turns can still start. **Settings → Health → Company turns** records the crossing as an incident. Tico sends no “no more slots” alert to a bot. |
+| **Warning** | **40** | New turns can still start. The Health page (**Settings → General → Health → Details**) records the crossing as an incident under **Company turns**. Tico sends no “no more slots” alert to a bot. |
 | **Stop** | **100** | New turns wait with “Your company is at its limit; Tico is fixing what's stuck.” Running turns continue. |
 
 For example, four people who can sign in, plus one guest, give a warning at **160** and a stop at **400**.
@@ -189,7 +189,7 @@ To restore the defaults, enter **40** and **100** and click **Save** again.
 
 If saving fails, read the error beside the button and correct the values before trying again.
 If the card is missing, ask an owner or admin to change the levels.
-Check **Settings → Health** for the company count and **Settings → Computers** for individual wait reasons.
+Check **Settings → General → Health → Details** for the company count and **Settings → Computers** for individual wait reasons.
 Changing the levels does not add computer capacity or clear a login, quota or overload wait.
 
 ## Connections
@@ -491,7 +491,7 @@ computer home.
 Custom auth-folder overrides never select a folder for this ownership repair.
 
 A new computer whose team signs in with a plan needs its own sign-in: a plan login cannot be copied between computers.
-Settings > Health shows "*computer name*: sign in to Codex" (or Claude Code) until it is done.
+Settings > General > Health > Details shows "*computer name*: sign in to Codex" (or Claude Code) until it is done.
 
 ## Change or clear a login
 
@@ -677,7 +677,7 @@ The rest of this page is for administrators and integrators: where readings come
 
 Weekly reports are scoped to a Computer, profile and runtime. Codex reports its seven-day window when its running host emits one. Claude Code may report the seven-day reset and limit state without a percentage; that percentage stays unknown. No API calls or token-to-percentage estimates are used to invent a provider balance. Usage elsewhere on the same provider account counts toward that allowance.
 
-The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → Health** says it is out of quota ([Check health](health-monitor.md), `default_login_limited`).
+The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → General → Health → Details** says it is out of quota ([Check health](health-monitor.md), `default_login_limited`).
 
 Computers report the account each login is signed in to: email, plan and organization from `claude auth status --json`, and email and plan from Codex app-server's `account/read`, always requested with `refreshToken: false`. A Codex turn's or refresh's `planType` keeps the plan current. This deliberately reverses the earlier rule that Tico kept no account records: it is the first stored account identity, so the page can show which account each Computer and profile uses (`signed in as <email> · <plan>`). Credential files and `codex login status` output are never read for it, only allow-listed fields are kept, and a value that looks like a key or token is dropped on the computer and refused by the server, without affecting the sign-in state. The account is read alongside the existing one-minute sign-in probe; Codex's app-server read runs in the background at most every ten minutes. A signed-out login shows no account. An account stays one login's report: two profiles that show the same email are not merged.
 

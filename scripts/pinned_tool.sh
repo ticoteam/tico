@@ -72,8 +72,12 @@ binary() {  # <tool>: the verified binary's path, downloaded and checked on firs
   if [ -x "$bin" ]; then echo "$bin"; return 0; fi
   want="$(sha_for "$tool" "$plat")"
   echo "pinned_tool: downloading $tool $version for $plat" >&2
-  # GitHub release downloads return 504 now and then: retry for about a minute.
-  curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o "$TMP/$archive" "$url"
+  # Retries cover the transient 5xx answers GitHub gives during a release-asset blip (a 504 run lasted about 7 s, past
+  # the old 3 quick retries). A failed download stops here with a message, rather than hashing a missing file.
+  if ! curl -fsSL --retry 5 --retry-delay 10 --retry-max-time 240 -o "$TMP/$archive" "$url"; then
+    echo "pinned_tool: download of $archive failed after retries: $url" >&2
+    return 1
+  fi
   got="$(sha256_of "$TMP/$archive")"
   if [ "$got" != "$want" ]; then
     echo "pinned_tool: $archive has SHA-256 $got, not the pinned $want" >&2

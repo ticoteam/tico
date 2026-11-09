@@ -12,8 +12,10 @@ An install that had routines moved them once, on the upgrade to Automations; see
 
 - **The site.** **Automations** in the sidebar → **New automation**. Pick the trigger, add a Bot turn step, and save.
   An automation's page shows its **Runs** and **Versions**. On **Runs**, click a run to see its steps. A failed step
-  shows its reason after the word failed: the first line of its error, or the detail of its first failed action,
-  cut at 80 characters.
+  shows its reason after the word failed, when it has one: the first line of its error, cut at 80 characters. With no
+  error, a **Filter** step, or an **LLM** step that chooses a destination, shows the detail of its first failed action,
+  cut the same way. When a step has both an error and a failed action, the error is shown first. A refused **Action**
+  step shows no reason. An **Action** step that stops with an error shows the error, as above.
 - **The `hub` CLI, from a person or a bot.** `hub automation guide` prints the flow format and every trigger, step and
   action. Write the flow as JSON and pass it with `--file` (`-` reads stdin):
 

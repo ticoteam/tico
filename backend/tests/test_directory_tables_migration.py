@@ -8,6 +8,7 @@ only ones the triggers replace. Running the migration again changes nothing."""
 
 import importlib.util
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from backend.config import Settings
@@ -59,6 +60,15 @@ def _boot(path):
     Store(Settings(db_path=path)).initialize(seed_market=False)
 
 
+def copy_of(booted, path):
+    """A private copy of a booted hub (sqlite's backup: every page, the WAL's included), so each check starts from the
+    same boot without paying for its own."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    return path
+
+
 def _counts(conn):
     return tuple(
         conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
@@ -66,9 +76,21 @@ def _counts(conn):
     )
 
 
-def test_the_graph_moves_to_directory_types_with_the_seeds_and_the_kind(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    _boot(path)
+def test_one_boot_moves_the_graph_and_each_check_reads_its_own_copy(tmp_path, subtests):
+    """The hub boots once (about a minute on CI); each check below gets its own copy of the booted file, so none sees
+    another's writes."""
+    booted = tmp_path / "booted.sqlite"
+    _boot(booted)
+    for check in (
+        _the_graph_moves_to_directory_types_with_the_seeds_and_the_kind,
+        _a_store_written_identifier_survives_a_name_change_and_derived_ones_follow_it,
+        _running_the_migration_again_changes_nothing,
+    ):
+        with subtests.test(check.__name__):
+            check(copy_of(booted, tmp_path / check.__name__ / "hub.sqlite"))
+
+
+def _the_graph_moves_to_directory_types_with_the_seeds_and_the_kind(path):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
@@ -119,9 +141,7 @@ def test_the_graph_moves_to_directory_types_with_the_seeds_and_the_kind(tmp_path
         conn.close()
 
 
-def test_a_store_written_identifier_survives_a_name_change_and_derived_ones_follow_it(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    _boot(path)
+def _a_store_written_identifier_survives_a_name_change_and_derived_ones_follow_it(path):
     conn = sqlite3.connect(path)
     try:
         assert conn.execute("SELECT count(*) FROM entity_identifiers WHERE derived = 0").fetchone()[0] == 0
@@ -147,9 +167,7 @@ def test_a_store_written_identifier_survives_a_name_change_and_derived_ones_foll
         conn.close()
 
 
-def test_running_the_migration_again_changes_nothing(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    _boot(path)
+def _running_the_migration_again_changes_nothing(path):
     conn = sqlite3.connect(path)
     try:
         before = _counts(conn)
