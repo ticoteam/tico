@@ -22,12 +22,12 @@ TEAM_ADD_MENU.innerHTML = `<button type="button" role="menuitem" data-team-add="
   <button type="button" role="menuitem" data-team-add="human">Add human</button>`;
 document.body.append(TEAM_ADD_MENU);
 
-function teamAddAllowed(group = null) {
+function teamAddAllowed(group: string | null = null) {
   const bot = teamAddCanBot();
   return {bot, build: bot && typeof window.teamBuildOpen === 'function', cloud: bot && typeof window.cloudAgentsOpen === 'function',
     scratch: bot, existing: teamAddCanExisting(), section: orgCanGroups(), human: group === null && teamAddCanHuman()};
 }
-function teamAddAny(group = null) { return Object.values(teamAddAllowed(group)).some(Boolean); }
+function teamAddAny(group: string | null = null) { return Object.values(teamAddAllowed(group)).some(Boolean); }
 function teamAddOpenFor(group) { return !TEAM_ADD_MENU.hidden && TEAM_ADD_GROUP === group; }
 const teamAddAnchor = () => TEAM_ADD_GROUP === null ? $('#org-add-group')
   : document.querySelector(`#tree [data-group-plus="${CSS.escape(TEAM_ADD_GROUP)}"]`);

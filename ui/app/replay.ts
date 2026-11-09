@@ -3,22 +3,41 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The replay on the page (REPLAY): its range and span, who it is for, the speed, and the data and player once loaded.
+interface ReplayState {
+  range: string;
+  from: string;
+  to: string;
+  scope: string;
+  speed: number;
+  data: ReplayAnswer | null;
+  player: ReplayPlayer | null;
+  load: number;
+  presenting: boolean;
+  onKey?: ((ev: KeyboardEvent) => void) | undefined;
+}
+// GET /api/v2/replay (ReplayData, ui/replay-player.ts) plus the page's own flags: when the answer was cut short, `next` is where it stopped.
+interface ReplayAnswer extends ReplayData {
+  truncated?: boolean | undefined;
+  next?: string | undefined;
+}
+
 // ----------------------------------------------------------------- replay
 // The query rides in the hash (#/replay?from=..&to=..&speed=60&bot=..), so the link reopens the same replay. Nothing
 // is stored: whoever opens a link sees only what they may see.
 const REPLAY_RANGES = [['today', 'Today'], ['yesterday', 'Yesterday'], ['7d', '7 days'], ['custom', 'Custom']];
-let REPLAY = null;
+let REPLAY: ReplayState | null = null;
 const replayDay = (offset = 0) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + offset); return d; };
-function replaySpan(range) {
+function replaySpan(range: string) {
   if (range === 'yesterday') return {from: replayDay(-1), to: replayDay(0)};
   if (range === '7d') return {from: new Date(Date.now() - 7 * 864e5), to: new Date()};
   return {from: replayDay(0), to: new Date()};
 }
 // <input type=datetime-local> speaks local wall time without a zone.
-const replayLocal = iso => { const d = new Date(iso); return isNaN(d) ? '' : new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
-const replayIso = local => { const d = new Date(local); return isNaN(d) ? '' : d.toISOString(); };
-function replayScopeOptions(selected) {
-  const opt = (value, label) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
+const replayLocal = (iso: string) => { const d = new Date(iso); return isNaN(+d) ? '' : new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
+const replayIso = (local: string) => { const d = new Date(local); return isNaN(+d) ? '' : d.toISOString(); };
+function replayScopeOptions(selected: string) {
+  const opt = (value: string, label: string) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
   const groups = (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   const bots = (S.emps || []).filter(e => e.status !== 'planned' && e.status !== 'archived').sort((a, b) => botDisplayName(a.id).localeCompare(botDisplayName(b.id)));
   const people = (S.people || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
@@ -30,16 +49,17 @@ function replayScopeOptions(selected) {
 function replayStop() {
   if (!REPLAY) return;
   REPLAY.player?.destroy();
-  document.removeEventListener('keydown', REPLAY.onKey);
+  // onKey is set in the same call that makes REPLAY (pageReplay), before anything else can stop it.
+  document.removeEventListener('keydown', REPLAY.onKey!);
   document.body.classList.remove('rp-presenting');
   REPLAY = null;
 }
-const replayQuery = state => {
+const replayQuery = (state: ReplayState) => {
   const q = new URLSearchParams({from: state.from, to: state.to});
-  if (state.scope) { const [kind, id] = state.scope.split(/:(.*)/); q.set(kind === 'human' ? 'person' : kind, id); }
+  if (state.scope) { const [kind, id] = state.scope.split(/:(.*)/); q.set(kind === 'human' ? 'person' : String(kind), String(id)); }
   return q;
 };
-function replaySync(state) {
+function replaySync(state: ReplayState) {
   const q = replayQuery(state); q.set('speed', String(state.speed));
   const hash = '#/replay?' + q.toString();
   if (location.hash !== hash) history.replaceState(null, '', hash);
@@ -51,8 +71,8 @@ function pageReplay() {
   const q = new URLSearchParams(S.route.split('?')[1] || '');
   const scope = q.get('bot') ? 'bot:' + q.get('bot') : q.get('person') ? 'human:' + q.get('person') : q.get('team') ? 'team:' + q.get('team') : '';
   const given = q.get('from') && q.get('to'), span = replaySpan('today');
-  const state = REPLAY = {range: given ? 'custom' : 'today', from: given ? q.get('from') : span.from.toISOString(),
-                          to: given ? q.get('to') : span.to.toISOString(), scope, speed: +q.get('speed') || 60,
+  const state: ReplayState = REPLAY = {range: given ? 'custom' : 'today', from: given ? String(q.get('from')) : span.from.toISOString(),
+                          to: given ? String(q.get('to')) : span.to.toISOString(), scope, speed: +(q.get('speed') ?? '') || 60,
                           data: null, player: null, load: 0, presenting: false};
   $('#main').innerHTML = `<div class="rp-page">
     <div class="rp-head">
@@ -72,9 +92,9 @@ function pageReplay() {
   </div>`;
   const main = $('#main');
   main.classList.add('replay-layout');
-  main.querySelector('.use-seg').onclick = ev => {
-    const b = ev.target.closest('[data-rp-range]'); if (!b) return;
-    state.range = b.dataset.rpRange;
+  main.querySelector('.use-seg').onclick = (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLElement>('[data-rp-range]'); if (!b) return;
+    state.range = b.dataset.rpRange!;
     if (state.range !== 'custom') { const s = replaySpan(state.range); state.from = s.from.toISOString(); state.to = s.to.toISOString(); }
     replayLoad(state);
   };
@@ -82,22 +102,22 @@ function pageReplay() {
     const f = replayIso($('#rp-from').value), t = replayIso($('#rp-to').value);
     if (f && t && f < t) { state.from = f; state.to = t; replayLoad(state); }
   };
-  $('#rp-scope').onchange = ev => { state.scope = ev.target.value; replayLoad(state); };
+  $('#rp-scope').onchange = (ev: Event) => { state.scope = (ev.target as HTMLSelectElement).value; replayLoad(state); };
   $('#rp-link').onclick = async () => {
     replaySync(state);
-    try { await copyText(location.href); toast('Link copied'); } catch (e) { toast(e.message, true); }
+    try { await copyText(location.href); toast('Link copied'); } catch (e) { toast(errorMessage(e, 'Could not copy the link.'), true); }
   };
   $('#rp-present').onclick = () => replayPresent(state, !state.presenting);
   state.onKey = ev => {
     if (ev.key === 'Escape' && state.presenting) replayPresent(state, false);
-    else if ((ev.key === 'p' || ev.key === 'P') && !ev.metaKey && !ev.ctrlKey && !/^(INPUT|SELECT|TEXTAREA)$/.test(ev.target?.tagName || '')) replayPresent(state, !state.presenting);
+    else if ((ev.key === 'p' || ev.key === 'P') && !ev.metaKey && !ev.ctrlKey && !/^(INPUT|SELECT|TEXTAREA)$/.test(eventElement(ev)?.tagName || '')) replayPresent(state, !state.presenting);
   };
   document.addEventListener('keydown', state.onKey);
   replayLoad(state);
 }
 
 // Presenting hides the page's bar, so its button moves into the player's transport bar and fades with it.
-function replayPresent(state, on) {
+function replayPresent(state: ReplayState, on: boolean) {
   state.presenting = on;
   document.body.classList.toggle('rp-presenting', on);
   const button = $('#rp-present'); if (!button) return;
@@ -107,7 +127,7 @@ function replayPresent(state, on) {
   if (on && bar) bar.appendChild(button); else $('#main .rp-actions')?.appendChild(button);
 }
 
-async function replayLoad(state) {
+async function replayLoad(state: ReplayState) {
   const mine = ++state.load;
   for (const b of $('#main').querySelectorAll('[data-rp-range]')) b.setAttribute('aria-selected', String(b.dataset.rpRange === state.range));
   $('#main').querySelector('.rp-custom').hidden = state.range !== 'custom';
@@ -116,9 +136,9 @@ async function replayLoad(state) {
   replaySync(state);
   state.player?.destroy(); state.player = null; state.data = null;
   $('#rp-player').innerHTML = skelRows(4, {card: true});
-  let data;
+  let data: ReplayAnswer;
   try { data = await get('/v2/replay?' + replayQuery(state).toString()); }
-  catch (e) { if (REPLAY === state && mine === state.load) $('#rp-player').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  catch (e) { if (REPLAY === state && mine === state.load) $('#rp-player').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (REPLAY !== state || mine !== state.load) return;
   state.data = data;
   const note = $('#rp-note');
@@ -136,15 +156,15 @@ async function replayLoad(state) {
 }
 
 // Real names throughout, the viewer's own too: a replay is watched and recorded, so "You" would read wrong.
-const replayName = data => a => {
+const replayName = (data: { names?: Record<string, string> | undefined }) => (a: ReplayActor): string => {
   const slug = actorSlug(a), pid = actorPerson(a);
   if (slug) return botDisplayName(slug);
-  if (pid) return data.names?.[a] || (S.people || []).find(p => p.id === pid)?.name || personDisplay(pid);
+  if (pid) return data.names?.[String(a)] || (S.people || []).find(p => p.id === pid)?.name || personDisplay(pid);
   return a === 'keeper' ? KEEPER_LABEL : String(a || '');     // the server itself, never the Assistant or the app
 };
 
 // The app's own faces: a bot's blob in the replayed state (never the live one), a person's photo or initials.
-function replayFace(actor, size, state) {
+function replayFace(actor: ReplayActor, size: number, state?: string) {
   const slug = actorSlug(actor), pid = actorPerson(actor);
   if (slug) {
     const html = botAvatar(slug, size, state === 'running' ? 'running' : '');

@@ -485,7 +485,7 @@ async function typeSelection(browser) {
   await page.keyboard.press('Escape');
   await page.locator('#task-scope').click();
   assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').evaluateAll(bs => bs.map(b => [b.dataset.scope || b.dataset.taskType, b.firstChild.textContent])),
-    [['you', 'You'], ['general', 'General'], ['dev-123', 'Dev tickets'], ['marketing', 'Marketing']]);
+    [['you', 'You'], ['general', 'General'], ['dev-123', 'Dev ticket'], ['marketing', 'Marketing']]);
   await page.keyboard.press('Escape');
   await scope(page, 'dev-123');
   assert.deepEqual(await rowKeys(page), ['tdev-123-task']);

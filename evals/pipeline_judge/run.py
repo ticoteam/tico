@@ -8,8 +8,9 @@ draft, a placeholder page, a self-review. No customer data belongs in cases.json
 
 Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.8 or more,
 not_met at 0.2 or less, and unsure between (the engine's rule: unsure passes the call up to a person and never passes the
-work). Per model the report gives accuracy, false "met" count (a met verdict where the label says not_met or unsure: it must be
-0 to pass), the unsure rate, cost, p50 and p95 latency; it is written as JSON and a markdown table into --out
+work). A call that raises is retried once after RETRY_WAIT_S seconds; a call that fails twice is an error and fails the bar. Per
+model the report gives accuracy, false "met" count (a met verdict where the label says not_met or unsure: it must be 0 to
+pass), the unsure rate, the retries, cost, p50 and p95 latency; it is written as JSON and a markdown table into --out
 (evals/pipeline_judge/results by default).
 
 This makes real model calls, so it is NOT a pytest and never runs in CI. --dry-run sends nothing: it checks the cases and runs
@@ -37,6 +38,7 @@ MET_AT, NOT_MET_AT = 0.8, 0.2
 ACCURACY_BAR = 0.9
 UNSURE_SLACK = 0.10
 P95_BAR_MS = 30_000
+RETRY_WAIT_S = 5  # one retry of a call that raised, after this wait
 NO_ENGINE = (
     "No model has a key. See evals/pipeline_judge/adapter.py. Nothing was sent. Try --dry-run to check the harness."
 )
@@ -88,15 +90,30 @@ def percentile(values, q):
     return ordered[min(len(ordered) - 1, round(q * (len(ordered) - 1)))]
 
 
-def score(name, judge, cases):
-    """Every case through `judge(case) -> (p, cost_usd, ms)`: one model's row and its mistakes."""
+def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
+    """Every case through `judge(case) -> (p, cost_usd, ms)`: one model's row and its mistakes. A call that raises is tried
+    once more after RETRY_WAIT_S (`pause` is the wait, injectable); a second failure is an error. A retried case's time is
+    the whole wait for its answer: the failed call (timed by `clock`), the RETRY_WAIT_S pause and the retry (both calls
+    and the pause when the retry fails too), so a retry cannot hide a case from the p95 bar."""
     rows, mistakes, errors = [], [], []
     for case in cases:
+        retries = 0
+        started = clock()
         try:
             p, cost, ms = judge(case)
-        except J.JudgeError as exc:
-            errors.append(f"{case['id']}: {exc.code}")
-            p, cost, ms = 0.5, 0.0, 0  # a failed call is unsure: it goes to a person and never passes the work
+        except J.JudgeError:
+            retries = 1
+            spent = round((clock() - started) * 1000) + RETRY_WAIT_S * 1000  # the failed call and the pause
+            pause(RETRY_WAIT_S)
+            retried = clock()
+            try:
+                p, cost, ms = judge(case)
+                ms = spent + ms
+            except J.JudgeError as exc:
+                errors.append(f"{case['id']}: {exc.code}")
+                # A failed call is unsure: it goes to a person and never passes the work. Its time is both calls and the
+                # pause, so a case that timed out twice still counts in the p95.
+                p, cost, ms = 0.5, 0.0, spent + round((clock() - retried) * 1000)
         got = verdict(p)
         rows.append(
             {
@@ -107,6 +124,7 @@ def score(name, judge, cases):
                 "p": p,
                 "cost": cost,
                 "ms": ms,
+                "retries": retries,
                 "trap": case.get("trap"),
             }
         )
@@ -149,6 +167,7 @@ def score(name, judge, cases):
         "false_met_cases": false_met,
         "missed_met": sum(r["got"] != "met" and r["expected"] == "met" for r in rows),
         "unsure_rate": unsure_rate,
+        "retries": sum(r["retries"] for r in rows),
         "errors": errors,
         "cost_usd": round(sum(r["cost"] for r in rows), 5),
         "p50_ms": round(statistics.median(times)) if times else 0,
@@ -161,10 +180,13 @@ def score(name, judge, cases):
 
 
 def table(results):
-    head = "| Model | Accuracy | Dev | Marketing | False met | Unsure | Cost | p50 | p95 | Bar |\n|---|---|---|---|---|---|---|---|---|---|\n"
+    head = (
+        "| Model | Accuracy | Dev | Marketing | False met | Unsure | Retries | Cost | p50 | p95 | Bar |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|\n"
+    )
     return head + "".join(
         f"| {r['model']} | {r['accuracy']:.0%} | {r['accuracy_by_domain']['dev']:.0%} | {r['accuracy_by_domain']['marketing']:.0%} "
-        f"| {r['false_met']} | {r['unsure_rate']:.0%} | ${r['cost_usd']:.3f} | {r['p50_ms']} ms | {r['p95_ms']} ms "
+        f"| {r['false_met']} | {r['unsure_rate']:.0%} | {r['retries']} | ${r['cost_usd']:.3f} | {r['p50_ms']} ms | {r['p95_ms']} ms "
         f"| {'pass' if r['passes_bar'] else 'FAIL'} |\n"
         for r in results
     )

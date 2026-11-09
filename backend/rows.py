@@ -1317,6 +1317,7 @@ class StageDecisionRow(TypedDict):
     undone_at: str | None
     undone_by: str | None
     created_at: str
+    work_digest: str | None
 
 
 class StageRequirementVersionRow(TypedDict):
@@ -1428,6 +1429,13 @@ class EntityExternalRefRow(TypedDict):
     revision: str
     synced_at: str | None
     status: str
+
+
+class EntityLookupRow(TypedDict):
+    id: str
+    attempt_id: str
+    entity_id: str
+    created_at: str
 
 
 class EntityMentionRow(TypedDict):
@@ -1564,3 +1572,12 @@ class LinkTypeRow(TypedDict):
     created_by_id: str
     created_at: str
     archived_at: str | None
+
+
+class SetupHandoffRow(TypedDict):
+    token_hash: str
+    created_at: str
+    expires_at: str
+    used_at: str | None
+    revoked_at: str | None
+    human_token_id: str | None

@@ -65,10 +65,10 @@ interface GkGoal {
 }
 /** What a panel is showing (opened by goalPanelOpen); ui/app/goals.ts keeps the state it sits in. */
 interface GkPanel {
-  owner: string; goal: string; kpiAdd: string; kpi: string; standing: boolean; tapped: string; history: boolean;
-  historyKpis: GkKpi[] | null; historyLoading: boolean; historyError: boolean; why: string; whyFrom: string;
-  whyDraft: string | null; update: string; updateDraft: {body: string; signal: string} | null; updateError: string;
-  updateFocus: boolean; updatePending: {goal: string} | null; whySaving?: boolean;
+  owner: string; goal: string; kpiAdd: string; kpi?: string | undefined; standing?: boolean | undefined; tapped?: string | undefined; history?: boolean | undefined;
+  historyKpis?: GkKpi[] | null | undefined; historyLoading?: boolean | undefined; historyError?: boolean | undefined; why?: string | undefined; whyFrom?: string | undefined;
+  whyDraft?: string | null | undefined; update?: string | undefined; updateDraft?: {body: string; signal: string} | null | undefined; updateError?: string | undefined;
+  updateFocus?: boolean | undefined; updatePending?: {goal: string} | null | undefined; whySaving?: boolean | undefined;
 }
 interface GkKpiDetail {
   kpi: GkKpi; links: GkKpiLink[]; readings: GkReading[]; checkins: GkCheckin[]; proposals: GkProposal[]; may_log: boolean; may_edit: boolean;

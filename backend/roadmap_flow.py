@@ -90,8 +90,8 @@ def claim(c):
 
 
 def ensure(c):
-    """Create the two role types when they are missing. An existing type keeps the manager it has; one with
-    none gets the default."""
+    """Create the two role types when they are missing. An existing type keeps the manager it has, or none: a type
+    with no manager stays without one. The legacy manager names fill only a type this creates."""
     from . import hubdb as H
 
     for ident, name, manager, steps in (
@@ -134,7 +134,7 @@ def ensure(c):
             ).fetchone()
             existing = row[0] if row else None
         if existing:
-            c.execute('UPDATE task_types SET role=?,manager=coalesce(manager,?) WHERE id=?', (ident, manager, existing))
+            c.execute('UPDATE task_types SET role=? WHERE id=?', (ident, existing))
             continue
         c.execute(
             'INSERT INTO task_types(id,name,bots,manager,role,steps_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',

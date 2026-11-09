@@ -1213,6 +1213,15 @@ class Store:
             factory=factory or self.factory,
             check_same_thread=check_same_thread,
         )
+        try:
+            self._configure(c)
+        except BaseException:
+            # The caller never receives the connection, so nothing else would close it.
+            c.close()
+            raise
+        return c
+
+    def _configure(self, c):
         H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
@@ -1230,7 +1239,6 @@ class Store:
         c.execute("PRAGMA mmap_size=268435456")
         # The WAL file is cut back to this size after a checkpoint; a large write (a migration) otherwise keeps its peak.
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
-        return c
 
     @SRC.scoped("system:migration")
     def migrate(self):
@@ -2789,14 +2797,17 @@ class Store:
             raise refusal
         return result
 
-    def write(self, identity, fn):
+    def write(self, identity, fn, *, validate=True):
         """`mutate` without an idempotency record, for a route whose request is its own: the same
-        identity check under the write lock, and the same all-or-nothing refusal."""
+        identity check under the write lock, and the same all-or-nothing refusal. `validate=False` is for a write the
+        server makes for itself on a bot's behalf (backend/files.py, a review page): it has no credential to check, and
+        `fn` checks the records it writes."""
         refusal = logged = None
         with self.transaction() as c:
-            from .auth import validate_identity
+            if validate:
+                from .auth import validate_identity
 
-            validate_identity(c, identity)
+                validate_identity(c, identity)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
 
