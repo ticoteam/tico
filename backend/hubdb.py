@@ -72,7 +72,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, NoReturn
 
 from .batch_work import isolated
 from . import delivery
@@ -1541,60 +1541,6 @@ def _refuse_foreign(conn):
         )
 
 
-def ensure_market_reads(conn):
-    """Additive indexes and exact resolution keys, shared by local and cloud boot."""
-    conn.execute("SAVEPOINT market_read_indexes")
-    try:
-        for name, spec in (
-            ("market_entities_name", "market_entities(name, id)"),
-            ("market_entities_status_name", "market_entities(status, name, id)"),
-            ("market_entities_type_name", "market_entities(type, name, id)"),
-            ("market_edges_rel_pair", "market_edges(rel, src, dst)"),
-        ):
-            conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
-        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='market_entity_keys'").fetchone()
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS market_entity_keys (key TEXT NOT NULL, entity_id TEXT NOT NULL, "
-            "PRIMARY KEY(key, entity_id)) WITHOUT ROWID"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS market_entity_keys_entity ON market_entity_keys(entity_id)")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS market_entity_keys_unicode ON market_entity_keys(entity_id) "
-            "WHERE key GLOB '*[^ -~]*'"
-        )
-
-        def keys(ref):
-            return f"""SELECT lower(trim({ref}.name)) AS key
-                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid({ref}.external_ids) THEN {ref}.external_ids ELSE '{{}}' END, '$.domain')))
-                UNION SELECT lower(trim(value)) FROM json_each(CASE WHEN json_valid({ref}.aliases) THEN {ref}.aliases ELSE '[]' END)"""
-
-        if not exists:
-            conn.execute("""INSERT OR IGNORE INTO market_entity_keys
-                SELECT lower(trim(name)), id FROM market_entities WHERE trim(name)<>''
-                UNION SELECT lower(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain'))), id
-                    FROM market_entities WHERE coalesce(trim(json_extract(CASE WHEN json_valid(external_ids) THEN external_ids ELSE '{}' END,'$.domain')),'')<>''
-                UNION SELECT lower(trim(j.value)), e.id FROM market_entities e, json_each(CASE WHEN json_valid(e.aliases) THEN e.aliases ELSE '[]' END) j
-                    WHERE trim(j.value)<>''""")
-        for event, before in (
-            ("INSERT", ""),
-            ("UPDATE OF name, aliases, external_ids", "DELETE FROM market_entity_keys WHERE entity_id=old.id;"),
-        ):
-            suffix = "insert" if event == "INSERT" else "update"
-            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS market_keys_{suffix} AFTER {event} ON market_entities BEGIN
-                {before}
-                INSERT OR IGNORE INTO market_entity_keys SELECT key, new.id FROM ({keys('new')})
-                    WHERE key IS NOT NULL AND key<>'';
-            END""")
-        conn.execute("""CREATE TRIGGER IF NOT EXISTS market_keys_delete AFTER DELETE ON market_entities BEGIN
-            DELETE FROM market_entity_keys WHERE entity_id=old.id;
-        END""")
-    except Exception:
-        conn.execute("ROLLBACK TO market_read_indexes")
-        raise
-    finally:
-        conn.execute("RELEASE market_read_indexes")
-
-
 def _holds_table(conn):
     """task_holds, empty, before any step runs: task reads join it (TASKS), and the numbered steps below and the code
     after the migration files read tasks on a file migration 0075 has not reached yet. The legacy hold columns still
@@ -1657,7 +1603,6 @@ def migrate(conn, adopt_legacy=False):
     from . import migrations
 
     migrations.apply(conn)
-    ensure_market_reads(conn)
     # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0047's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
     from .task_delete import ensure as ensure_task_trash
@@ -1784,9 +1729,17 @@ def migrate(conn, adopt_legacy=False):
     task_blocked.ensure(conn)
     blocker_asks.ensure(conn)
     migrate_roadmap_roles(conn)
+
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
         ensure_roadmap_types(conn)
+    elif (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='first_start_seeds'").fetchone()
+        and conn.execute("SELECT 1 FROM first_start_seeds WHERE name='roadmap_types'").fetchone()
+    ):
+        # Migration 20261108011313 (manager_since) added `manager` before this step ran and left this note in its place.
+        ensure_roadmap_types(conn)
+        conn.execute("DELETE FROM first_start_seeds WHERE name='roadmap_types'")
     from .roadmaps import migrate as migrate_roadmaps
 
     migrate_roadmaps(conn)
@@ -2118,7 +2071,7 @@ def writing_refusal(rule, detail):
     )
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None):
+def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by."""
@@ -4379,6 +4332,16 @@ def _type_steps(conn, actor, type_id, steps):
                 "UPDATE task_steps SET flow=? WHERE id=?",
                 (json.dumps(row["flow"], sort_keys=True) if row["flow"] else None, row["id"]),
             )
+            # One stored Late threshold: a late_hours this save changes becomes the stage's Warn after (limit_minutes),
+            # which the Late clock reads (step_age, pipeline_manager.late_tickets).
+            late = (row["flow"] or {}).get("late_hours")
+            was = step_flow.of(existing.get(row["id"])).get("late_hours")
+            if (
+                late is not None
+                and late != was
+                and "limit_minutes" in {r[1] for r in conn.execute("PRAGMA table_info(task_steps)")}
+            ):
+                conn.execute("UPDATE task_steps SET limit_minutes=? WHERE id=?", (round(float(late) * 60), row["id"]))
     renamed = {
         existing[r["id"]]["name"]: r["name"]
         for r in clean
@@ -4408,8 +4371,9 @@ def type_create(
     from .roadmap_flow import claim as claim_roles
 
     claim_roles(conn)
-    from . import step_flow
+    from . import pipeline_engine, step_flow
 
+    pipeline_engine.seed_type(conn, ident)  # the default Warn after, now that the type has its role
     step_flow.seed(conn)  # a new Dev tickets type starts with the Dev board's flow
     row = type_get(conn, ident)
     event(conn, actor, "task_type.create", ident, row)
@@ -4708,6 +4672,30 @@ def declared_hold(conn, actor, row, step, step_id):
     return is_human(actor)
 
 
+def try_auto_move(conn, actor, row, *, kind="auto_move_refused", **kw):
+    """An automatic step or status write (roadmap sync, a hold clearing, an auto start) run in a savepoint. A move the
+    rules refuse (a stage requirement, or a subtask the rules won't file) is undone alone: the card gets a history event
+    `kind` with the reason, and the caller's other changes stand. Returns True when the write landed, False when refused."""
+    from .store import Problem
+
+    conn.execute("SAVEPOINT auto_move")
+    try:
+        _set_status(conn, actor, row, **kw)
+    except (Refused, Problem) as exc:
+        conn.execute("ROLLBACK TO auto_move")
+        conn.execute("RELEASE auto_move")
+        if isinstance(exc, Problem) and not isinstance(exc, Refused) and exc.code != "spawn_refused":
+            raise
+        history_event(conn, "task", row["id"], actor, kind, note=exc.detail or str(exc))
+        return False
+    except BaseException:
+        conn.execute("ROLLBACK TO auto_move")
+        conn.execute("RELEASE auto_move")
+        raise
+    conn.execute("RELEASE auto_move")
+    return True
+
+
 def _set_status(
     conn,
     actor,
@@ -4727,6 +4715,21 @@ def _set_status(
 
     row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
+    from . import pipeline_engine
+
+    # Every forward stage move is held to the stage's requirements, not only task_update's (pipeline_engine). Cancelling
+    # (a close or a decline) is not forward progress: it is never held to exit requirements.
+    cancelling = pipeline_engine.is_cancellation(effective, explicit_step=step is not None)
+    held_to = (
+        pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
+        if row is not None
+        else None
+    )
+    if row is not None and held_to and held_to != row.get("step_id"):
+        pipeline_engine.check_forward(conn, actor, row, type_id, held_to)
+    elif row is not None and pipeline_engine.is_completion(row, effective):
+        # Marked done where it stands (already in its Done stage, or a pipeline with none): held all the same.
+        pipeline_engine.check_completion(conn, actor, row)
     # Direct internal writers (roadmap sync, hold restoration) have the automatic finish contract.
     # task_update/task_close preflight explicit finishes before any write and handle their own cascade.
     finishing = cascade and effective in ("done", "closed") and row.get("status") != effective
@@ -4761,6 +4764,11 @@ def _set_status(
             (_step_end(conn, step_id, row["id"]) if step_id else None, row["id"]),
         )
         _task_event(conn, row["id"], actor, "step", row.get("step_id"), step_id, note)
+        from . import pipeline_engine
+
+        if row:
+            # A Close or a Decline cancels the ticket (pipeline_engine.is_cancellation); a move onto a stage does not.
+            pipeline_engine.on_step_change(conn, actor, row, type_id, step_id, ts, closing=cancelling)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
         if row.get("occurrence"):
@@ -5317,7 +5325,7 @@ def _answered(conn, actor, task_id, card, told=None):
             task_blocked.reconcile(conn, row["id"])
             row = task(conn, row["id"])
         if row["status"] == "waiting":
-            _set_status(conn, KEEPER, row, "open", note=note)
+            try_auto_move(conn, KEEPER, row, status="open", note=note)  # a refused reopen leaves the hold in place
     conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, row["id"]))
     _task_event(conn, row["id"], KEEPER, "note", row.get("note"), note, "")
     if row["owner_id"] != told or TR.parent_of(conn, card["id"]) != row["id"]:
@@ -5908,9 +5916,31 @@ def pr_state(links):
     )
 
 
+def ticket_refs(conn, ids):
+    """Each task's ticket label (its type's prefix and number, D41) and its stage's name, for many ids in one query:
+    {id: {"label": str|None, "step": str|None}}. A task with no number, no prefix or no stage has None for that."""
+    ids = list(ids)
+    refs: dict[str, dict[str, str | None]] = {ident: {"label": None, "step": None} for ident in ids}
+    if not ids:
+        return refs
+    marks = ",".join("?" * len(ids))
+    for row in _rows(
+        conn.execute(
+            "SELECT k.id, k.number, t.prefix, s.name AS step FROM tasks k "
+            "LEFT JOIN task_types t ON t.id = k.type_id LEFT JOIN task_steps s ON s.id = k.step_id "
+            f"WHERE k.id IN ({marks})",
+            ids,
+        )
+    ):
+        if row["prefix"] and row["number"]:
+            refs[row["id"]]["label"] = f"{row['prefix']}{row['number']}"
+        refs[row["id"]]["step"] = row["step"]
+    return refs
+
+
 def task_tree(conn, task_id, visible_ids=None):
     rows = descendants(conn, task_id)
-    # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.js).
+    # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.ts).
     nodes = {
         r["id"]: {
             **{k: r[k] for k in ("id", "title", "status", "owner_id")},
@@ -5929,9 +5959,10 @@ def task_tree(conn, task_id, visible_ids=None):
             )
         ):
             links.setdefault(link["task_id"], []).append(link)
+    refs = ticket_refs(conn, nodes)
     for row in rows:
         node = nodes[row["id"]]
-        node.update(pr_state=pr_state(links.get(row["id"], [])), children=[])
+        node.update(pr_state=pr_state(links.get(row["id"], [])), children=[], **refs[row["id"]])
     roots = []
     for row in rows:
         (nodes[row["parent_id"]]["children"] if row["parent_id"] in nodes else roots).append(nodes[row["id"]])
@@ -7129,7 +7160,7 @@ def task_create(
         if value:  # written public text leaves a record, as a later publication's does
             _task_event(conn, row['id'], actor, field, None, value, '')
     if step is not None:
-        task_update(conn, actor, row["id"], step=step)
+        task_update(conn, actor, row["id"], step=step, enter_gate=is_bot(actor))
     if top:
         placed = task(conn, row["id"])
         if placed["step_id"]:
@@ -7379,6 +7410,8 @@ def task_update(
     *,
     strict=True,
     heard=(),
+    override_requirements=False,
+    enter_gate=True,
 ):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
@@ -7396,6 +7429,7 @@ def task_update(
     `verdict` and `verdict_head` record a review or QA subtask's verdict and the head it judged (record_verdict).
     Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
     Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
+    `enter_gate` holds a card that enters a pipeline to its earlier stages' requirements; a create holds only a bot's.
     `heard` names bots that already have the news (a person's chat reply that closed their question task): they get
     no notice of it as well.
     """
@@ -7627,7 +7661,31 @@ def task_update(
                     exc.task_hold = {"task": task_id, "reason": exc.detail, "kind": "worktree"}
                     raise
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
-        from . import step_flow
+        from . import pipeline_engine, step_flow
+
+        # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
+        # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
+        # closed stage such as Engineering's Done is progress, so it is held (pipeline_engine.is_cancellation).
+        # A status done with no step is held as a move into the completion stage (pipeline_engine.completion_target).
+        if step == "" and row and row.get("step_id"):
+            pipeline_engine.check_clear(conn, actor, row)
+        held_to = (
+            pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
+            if row
+            else None
+        )
+        if held_to and row and held_to != row.get("step_id"):
+            pipeline_engine.check_move(
+                conn,
+                actor,
+                {**row, "type_id": type_id},
+                held_to,
+                override_requirements,
+                override_note=note,
+                entering=enter_gate,
+            )
+        elif row and pipeline_engine.is_completion(row, effective):
+            pipeline_engine.check_completion(conn, actor, row, override_requirements, override_note=note)
 
         if target_step and step_flow.gated(conn, step_id) and step_id != row.get("step_id"):
             from . import review_gate
@@ -7949,6 +8007,14 @@ def task_update(
         and not verdict_set
         and all(v is None for v in (visibility, public_title, public_summary, size, check_back_at, check_back_note))
     ):
+        # Nothing to write, but a waiting task's Blocked reason still follows its holds: clearing the wait on nothing
+        # tracked (waiting_on "") recomputes it here, in this same write, and a bot's task goes back to open
+        # (task_holds.refresh). An early return skipped that before.
+        if row and row.get("status") == "waiting":
+            from . import task_holds
+
+            task_holds.refresh(conn, task_id, task_holds.WAIT_CLEARED if waiting_on == "" else None)
+            return task(conn, task_id) or row
         return row
     # A person finishing it is news for every bot on it; the bots that asked them open questions are read
     # before the status write supersedes those questions.
@@ -7992,6 +8058,12 @@ def task_update(
     args["updated_at"] = ts
     if sets:
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated_at=:updated_at WHERE id=:id", args)
+    if (body is not None and body != (row or {}).get("body")) or any(v is not None for v in (due, owner, labels)):
+        from . import pipeline_github_checks
+
+        # A new body is new work (the tasks_body_work_revision trigger), and the due date, owner and labels are facts field
+        # requirements read: either way the checks follow the new standing in this same write (none for a ticket without a PR).
+        pipeline_github_checks.publish_affected(conn, task_id)
     if args.get("private"):
         # Made private: a reconnect card's person may not read it now (backend/reconnects.py).
         from .reconnects import access_changed as reconnects_access_changed
@@ -8170,7 +8242,7 @@ def task_update(
                 else f"{'Finished' if status == 'done' else 'Declined'}: {after['title']}"
             )
             + (f"\n{note}" if note and not quiet else "")
-            + _children_said(ended),
+            + _children_said(conn, ended, after["requester_id"] if after else None),
             refs={
                 **(refs or {}),
                 "news": "task_done" if status == "done" else "task_declined",
@@ -8208,7 +8280,7 @@ def task_update(
                 who,
                 _marked_done(conn, actor, after["title"])
                 + (f"\n{note}" if note and not quiet else "")
-                + _children_said(ended),
+                + _children_said(conn, ended, who),
                 {"news": "task_done"},
                 quiet_bots=True,
                 quiet=idle,
@@ -8611,9 +8683,15 @@ def _check_task_close(conn, actor, row, note, mover=None, step=None, type=None, 
         CLOSE_PROBE.reset(token)
 
 
-def _child_name(conn, kid):
-    """A parent's readers need not be readers of its private descendants."""
-    return "a private subtask" if task_private(conn, kid) else kid["title"]
+def _child_for(conn, who, tid):
+    """A subtask's title for `who` (a person or a bot): shown only where `who` may open it, else "a subtask". A parent's
+    readers need not be readers of its descendants, and a deleted one has no title to show."""
+    from .auth import actor_reads_task
+
+    row = task(conn, tid)
+    if row and actor_reads_task(conn, who, row):
+        return row["title"]
+    return "a subtask"
 
 
 def _closed_with_note(parent):
@@ -8642,8 +8720,9 @@ def _check_finish_children(conn, actor, parent, mover, *, strict=True):
                 continue
             if not isinstance(exc, Refused):
                 raise
-            shown = kid["title"] if task_private_readable(conn, actor, kid) else "a private subtask"
-            why = "" if task_private(conn, kid) else f" ({exc.detail})"
+            # Named, with the reason, only to an actor who may open it (the members-only rule too): else "a subtask".
+            shown = _child_for(conn, actor, kid["id"])
+            why = f" ({exc.detail})" if shown != "a subtask" else ""
             raise Refused(
                 exc.rule,
                 f"The open subtask {shown} is not yours to close{why}. "
@@ -8657,7 +8736,8 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
     """Close every open descendant through task_close, leaving finished tasks and parent links untouched."""
     from . import task_trigger_rules
 
-    changed = {"closed": []}
+    # The summary keeps ids only: each reader's text names what that reader may open (_children_said, task_reads).
+    changed = {"closed": [], "open": []}
     kids = descendants(conn, parent["id"])
     # A dependent inside this cascade needs no new run just before it closes. Keep removing its blocker links.
     closing_tasks = {parent["id"]} | {
@@ -8697,27 +8777,31 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
                         "Automatic descendant close failed for %s", kid["id"], exc_info=True
                     )
         if not closed:
-            changed.setdefault("open", []).append(_child_name(conn, kid))
+            changed["open"].append(kid["id"])
             _wake(
                 conn,
                 kid,
                 kid["requester_id"],
-                f"Still open: {kid['title']}\nIts parent finished; please close this subtask when ready.",
+                f"Still open: {_child_for(conn, kid['requester_id'], kid['id'])}\n"
+                "Its parent finished; please close this subtask when ready.",
                 refs={"finish_left_open": parent["id"], "needs_action": True},
             )
         else:
-            changed["closed"].append(_child_name(conn, kid))
+            changed["closed"].append(kid["id"])
+    # The event names no subtask: a reader who may not open one sees "a subtask" (task_reads.children_text).
     if changed["closed"]:
-        _task_event(conn, parent["id"], KEEPER, "children", None, "Closed with it: " + "; ".join(changed["closed"]), "")
-    if changed.get("open"):
-        _task_event(conn, parent["id"], KEEPER, "children", None, "Still open: " + "; ".join(changed["open"]), "")
+        _task_event(
+            conn, parent["id"], KEEPER, "children", None, "Closed with it", "", data={"closed": changed["closed"]}
+        )
+    if changed["open"]:
+        _task_event(conn, parent["id"], KEEPER, "children", None, "Still open", "", data={"open": changed["open"]})
     return changed
 
 
-def _children_said(changed):
-    """Name closed and left-open subtasks once in the parent's completion notice."""
+def _children_said(conn, changed, who):
+    """Name closed and left-open subtasks once in a parent's completion notice, as `who` may see them."""
     return "".join(
-        "\n" + label + ": " + "; ".join(changed[key])
+        "\n" + label + ": " + "; ".join(_child_for(conn, who, tid) for tid in changed[key])
         for key, label in (("closed", "Closed with it"), ("open", "Still open"))
         if changed and changed.get(key)
     )
@@ -8727,7 +8811,7 @@ def _children_kept_closed(conn, task_id):
     """A reopened task leaves the subtasks that closed with it closed; its record names those still closed, so whoever
     reopened it sees what to reopen by hand."""
     kept = [
-        _child_name(conn, kid)
+        kid["id"]
         for kid in descendants(conn, task_id)
         if kid["status"] == "closed"
         and _one(
@@ -8738,7 +8822,9 @@ def _children_kept_closed(conn, task_id):
         )
     ]
     if kept:
-        _task_event(conn, task_id, KEEPER, "children", None, "Still closed from when it closed: " + "; ".join(kept), "")
+        _task_event(
+            conn, task_id, KEEPER, "children", None, "Still closed from when it closed", "", data={"kept": kept}
+        )
 
 
 @private_task_write
@@ -8807,7 +8893,7 @@ def task_close(
             **({"with_parent": with_parent} if with_parent else {}),
         },
     )
-    after = task(conn, task_id)
+    after = task(conn, task_id) or {}  # the task just closed: a row
     # A person closing a subtask under a bot's task: the bot hears it once, on the parent.
     subtask_told = None if with_parent else _subtask_wake(conn, actor, after, row["status"], note, quiet)
     # Closing an open ask card (_ask_in_subtask) settles the ask like a decline: each task blocked on it opens again.
@@ -8821,7 +8907,7 @@ def task_close(
     if subtask_told:
         answered.add(TR.parent_of(conn, task_id))
     _unblock(conn, after, told=answered | set(closing_tasks))
-    said = f"Closed: {after['title']}" + (f"\n{note}" if note else "") + _children_said(changed)
+    said_head = f"Closed: {after['title']}" + (f"\n{note}" if note else "")
     # Closing work that was already done, with nothing said, is acceptance: news, not work. It
     # goes to the bot's inbox without a run. Hundreds of runs were a bot
     # waking to read "Closed:" and saying "acknowledged", hours of agent time. The keeper's
@@ -8857,7 +8943,7 @@ def task_close(
             conn,
             after,
             who,
-            said,
+            said_head + _children_said(conn, changed, who),
             {"news": "task_done", **({"wake_batch": "completion"} if batch else {})},
             quiet_bots=True,
             quiet=accepted or bool(finished and who == after["owner_id"] and not new_note),
@@ -11528,7 +11614,7 @@ def unanswered_ask(conn, task_row, *, actor=None):
     return None
 
 
-# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.js holds the same
+# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.ts holds the same
 # number: change both together).
 DECLINED_NEEDS_HOURS = 24
 

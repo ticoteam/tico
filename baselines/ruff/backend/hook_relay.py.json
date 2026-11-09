@@ -1,0 +1,7 @@
+{
+  "backend/hook_relay.py": {
+    "B018": 1,
+    "BLE001": 2,
+    "S110": 1
+  }
+}

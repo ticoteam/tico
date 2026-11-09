@@ -1,6 +1,9 @@
 """The factory sim's groups (evals/factory/run.py): each VM of a remote run, or each shard of a CI matrix, gets its
 share, and together they run every (scenario, seed) pair exactly once."""
 
+import subprocess
+import sys
+
 from evals.factory import run
 
 
@@ -26,3 +29,18 @@ def test_shard_flags_cover_the_whole_run(monkeypatch, capsys):
 
 def test_a_scenario_with_no_timing_still_runs():
     assert run.pack([("new", 1), ("old", 1)], 2, {"old": 50}) == [[("new", 1)], [("old", 1)]]
+
+
+def test_every_scenario_is_listed_whichever_module_is_imported_first():
+    # A test that imported a case module (evals/factory/cases/) before scenarios.py once left scenarios.SCENARIOS
+    # without any of the cases, failing a merge queue shard that collected that test first. Each order gets a fresh
+    # interpreter, since this one has the modules loaded already.
+    def listed(first):
+        code = f"import {first}\nfrom evals.factory.scenarios import SCENARIOS\nprint(*[s.name for s in SCENARIOS])"
+        done = subprocess.run([sys.executable, "-c", code], cwd=run.REPO, capture_output=True, text=True, check=True)
+        return done.stdout.split()
+
+    names = listed("evals.factory.scenarios")
+    assert {"happy_path", "freeze_combined", "github_read_outage"} <= set(names) and len(set(names)) == len(names)
+    for first in ("evals.factory.cases", "evals.factory.cases.freezes", "evals.factory.cases.source_outages"):
+        assert listed(first) == names, first

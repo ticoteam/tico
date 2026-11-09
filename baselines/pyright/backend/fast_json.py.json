@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/fast_json.py": [
+            {
+                "code": "reportRedeclaration",
+                "range": {
+                    "startColumn": 18,
+                    "endColumn": 21,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

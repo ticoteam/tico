@@ -393,7 +393,7 @@ def _tools_checked(c, settings):
 
 
 def _pages_watched(c, settings):
-    return _row_exists(c, "SELECT 1 FROM market_watches WHERE active=1 LIMIT 1")
+    return _row_exists(c, "SELECT 1 FROM entity_watches WHERE active=1 LIMIT 1")
 
 
 def _strategy_bot(c, settings):

@@ -1,4 +1,4 @@
-// Library › Skills (ui/app/skills.js) over a fake API in backend/skills.py's and backend/skill_usage.py's shapes.
+// Library › Skills (ui/app/skills.ts) over a fake API in backend/skills.py's and backend/skill_usage.py's shapes.
 // Covers: the three tabs (Directory, Proposals, Installed); a proposal rated high risk needs "I've read this" before
 // Approve (and the server's 422 is mirrored when the tick is missing); Decline with a reason; Re-run for an
 // unscreened proposal; one skill's usage, coverage, files and Install for a team; Remove; the Claude Code command;

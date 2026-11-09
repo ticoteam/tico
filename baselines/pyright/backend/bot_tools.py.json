@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/bot_tools.py": [
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 45,
+                    "endColumn": 65,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 61,
+                    "endColumn": 115,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

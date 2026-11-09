@@ -1,4 +1,4 @@
-// The flow board (ui/app/automations-flow.js auBoardHTML) against the fake hub: an inbox with destinations shows its
+// The flow board (ui/app/automations-flow.ts auBoardHTML) against the fake hub: an inbox with destinations shows its
 // rules, questions, LLM and destinations, a flow without them keeps the step list; a rule's pop-up adds an action and
 // saves both (with the destinations unchanged), a rule moved on saves next "rule"; a proposal's diff shows destination,
 // `to` and move-on changes (by id when two destinations share a name); a webhook board offers Sort only and no mail

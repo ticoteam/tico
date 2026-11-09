@@ -1,0 +1,6 @@
+{
+  "setup/visual_config.py": {
+    "BLE001": 2,
+    "F401": 1
+  }
+}

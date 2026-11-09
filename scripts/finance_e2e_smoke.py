@@ -919,7 +919,7 @@ def dark_and_light(browser, run: Run, base: str, shots: str) -> None:
             )
             pg.on("pageerror", lambda e, errors=errors: errors.append(f"pageerror: {e}"))
             go(pg, base, "")
-            # The theme is dark unless this browser saved another choice (ui/theme.js), so set it explicitly.
+            # The theme is dark unless this browser saved another choice (ui/theme.ts), so set it explicitly.
             pg.evaluate(f"() => window.ticoTheme.set('{scheme}')")
             go(pg, base, "#/finance/pnl")
             applied = pg.evaluate("() => document.documentElement.dataset.theme")

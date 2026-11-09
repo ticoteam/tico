@@ -81,7 +81,7 @@ which and roughly how much on the estimate: `--overlaps "..."`. Do not net it ou
 
 For the main players in each segment, dated and labelled:
 
-    hub market figure add --entity company/name --segment segment/name --metric arr --value 12000000 \
+    hub market figure add --entity organization/name --segment segment/name --metric arr --value 12000000 \
       --kind claimed --as-of 2026-03 --evidence-url https://... --quote "..."
 
 - `kind`: `reported` (a filing or the company's own statement of results), `estimated` (a third party's
