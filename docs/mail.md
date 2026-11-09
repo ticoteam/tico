@@ -302,7 +302,7 @@ $HUB_DIR/scripts/mail.sh schedule --thread 18f2... --slot 2026-09-08T13:00:00-07
 instead of making a duplicate. It accepts any attendee address by default. Set `TICO_BLOCK_EXTERNAL_INVITES=1` to allow only roster attendees;
 this opt-in rule also applies to the `schedule` flow.
 In Docker, set it in the server install's `.env` and run `docker compose up -d`.
-**Settings > Health > Outside calendar invites** shows whether this calendar Tool setting is active.
+**Settings > General > Health > Details** shows an **Outside calendar invites** check that says whether this calendar Tool setting is active.
 A mail-local calendar command on a computer needs the setting in that computer's environment too.
 
 `slots` reads **every** calendar the mailbox can see, treats all of them as busy, keeps a
@@ -546,7 +546,7 @@ This is what lets a team sign in on one domain and keep its Google Workspace on 
 
 If the key cannot act for a mailbox's domain (Google answers `unauthorized_client`: no domain-wide delegation there), the job
 does not fail on every cycle. It says so once in the runner's log, skips every mailbox on that domain, tries the domain again
-after an hour, and shows one issue in Settings > Health that names the mailbox and the domain, for example
+after an hour, and shows one issue in Settings > General > Health > Details that names the mailbox and the domain, for example
 `Mail can't refresh for ana@acme-signin.example: the Google service account has no domain-wide delegation for the domain acme-signin.example`.
 Fix it by adding the delegation for that domain in the Google Workspace admin console, or by giving the message bot a mailbox on
 a domain the key covers. The issue goes away on its own once the mailbox syncs.
@@ -596,7 +596,7 @@ A canceled consent reads as "not approved", and a problem with Tico's own Google
 
 Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
-  later, the next sync fails and Settings > Health says to reconnect (or names the admin policy). Tico never falls back
+  later, the next sync fails and Settings > General > Health > Details says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
 - **Disconnect** in Tools > Settings > Email revokes the grant at Google and deletes it from the computer that holds it.
   A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
@@ -649,7 +649,7 @@ be reached. If Google does not confirm the revocation, the command says so; the 
 remove Tico at myaccount.google.com/permissions. The command ends without an error either way, so read its message.
 
 Grants still end for Google's other reasons: the person removes the app or changes their password, six months without
-use, a newer grant past Google's per-account limit, or an admin's policy. Settings > Health then says to reconnect.
+use, a newer grant past Google's per-account limit, or an admin's policy. Settings > General > Health > Details then says to reconnect.
 
 Neither way gets past a Workspace's own controls. An administrator who blocks third-party apps, or who marks Gmail or
 Calendar as restricted, blocks an unverified or untrusted app; Tico names that block as the admin's. An **Internal**
