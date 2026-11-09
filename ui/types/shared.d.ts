@@ -236,6 +236,8 @@ interface Employee {
   team?: string;
   reports_to?: string | null;
   owner_id?: string | null;
+  /** The bot a branch follows (a slug); absent on a bot that is not a branch. */
+  shared_from?: string | null;
   is_branch?: boolean;
   can_chat?: boolean;
   my_access?: AccessLevel;

@@ -11,19 +11,14 @@ interface SlashCommand { name: string; args?: string | undefined; help?: string 
 interface SlashRow { fill: string; label: string; args: string; help: string; kind: string | undefined }
 // The menu's state on its composer (P.slash): the rows drawn, the highlighted one, and the text Esc kept it shut for.
 interface SlashState { rows: SlashRow[]; pick: number; closedFor: string | null }
-// The goal state the menu reads: the old chat's (V2C) or a thread's composer goals.
-interface SlashGoals { commands?: SlashCommand[] | null | undefined; goalSupported?: boolean | undefined }
-// The composer a "/" menu sits on: the old chat's pill, or a bot's Home or DM thread (its slug is null for a thread with no bot).
-interface SlashHost {
-  slug: string | null;
-  el?: Element | null | undefined;
-  mode?: string | undefined;
+// The composer a "/" menu sits on: the old chat's pill, or a bot's Home or DM thread (its slug is null for a thread
+// with no bot). Its goal state (goalsOf) is the thread's; the old chat's is V2C.
+interface SlashHost extends GoalComposer {
   thread?: unknown;
   newChat?: (() => unknown) | null | undefined;
   clear?: (() => void) | undefined;
   command?: ((text: string) => unknown) | undefined;
   task?: ((text: string) => unknown) | undefined;
-  goalsOf?: (() => SlashGoals | null | undefined) | undefined;
   slash?: SlashState | null | undefined;
   slashUpdate?: (() => void) | undefined;
 }
@@ -45,10 +40,11 @@ function slashBranchAllowed(slug: string | null) {
     && !(S.emps || []).some(e => e.shared_from === original && e.owner_id === S.me?.id);
 }
 // The chat's goal state: the composer's own (a thread's), else the old chat's when it is this bot's.
-const slashGoals = (slug: string | null, P: SlashHost | null): SlashGoals | null | undefined => P?.goalsOf ? P.goalsOf() : V2C?.slug === slug ? V2C : null;
+const slashGoals = (slug: string | null, P: SlashHost | null): ChatGoalState | null | undefined => P?.goalsOf ? P.goalsOf() : V2C?.slug === slug ? V2C : null;
 function slashCommands(slug: string | null, P: SlashHost | null = null): SlashCommand[] {
   const state = slashGoals(slug, P);
-  const list = state?.commands || SLASH_TICO;
+  // The server lists its commands as loose rows (ChatGoalResult.commands); each has the SlashCommand fields.
+  const list = (state?.commands as SlashCommand[] | null | undefined) || SLASH_TICO;
   return list.filter(c => c && c.name
     && (c.name !== 'goal' || state?.goalSupported)
     && (c.name !== 'branch' || slashBranchAllowed(slug))
@@ -70,7 +66,8 @@ function slashEntries(slug: string | null, typed: string, P: SlashHost | null = 
 }
 
 // Attach the menu to a composer. It sits just above the box; keys it takes never reach the composer's own.
-function slashAttach(P: SlashHost) {
+// Only a thread composer (thread-view.ts) attaches one, and its element is always an HTMLElement.
+function slashAttach(P: Omit<SlashHost, 'el'> & {el: HTMLElement}) {
   const box = pq(P, '.p-text'), menu = document.createElement('div');
   menu.className = 'slash-menu'; menu.hidden = true;
   menu.setAttribute('role', 'listbox'); menu.setAttribute('aria-label', 'Commands');
@@ -136,7 +133,7 @@ function slashRun(P: SlashHost, text: string): boolean | 'plain' {
     return true;
   };
   if (cmd?.kind === 'harness') {
-    void (P.command ? P.command(text) : v2ChatSend(P, text, P.slug, {}, {command: true}));
+    void (P.command ? P.command(text) : v2ChatSend(P as ChatComposer, text, P.slug, {}, {command: true}));
     return true;
   }
   if (name === 'goal' && cmd) {
