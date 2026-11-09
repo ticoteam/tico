@@ -358,6 +358,8 @@ def _relay(c: "sqlite3.Connection", at: str, done: dict[str, list[str]]) -> None
         manager = PM.manager_bot(c, dict(pipeline)) if pipeline else None
         if not card or card["status"] not in H.ACTIVE_STATUSES or not manager:
             continue
+        if hears_on_sweep(c, manager):
+            continue  # the answer is on the question task, and the Head of Engineering reads it on its sweep
         answer: Row = (QT.fields(question).get("answer") or {}) if question else {}
         said = str(answer.get("text") or (question or {}).get("note") or "").strip()
         name = H.person_name(c, H.actor_id(spell["person_id"])) if spell.get("person_id") else "The person"

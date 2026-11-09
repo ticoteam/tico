@@ -161,6 +161,20 @@ def test_still_stuck_at_a_day_asks_the_pipeline_owner_once_and_the_manager_hears
         assert len(questions(c, row["id"])) == 1
 
 
+def test_the_head_of_engineering_is_not_woken_when_a_stuck_question_is_answered(api):
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"template": "engineering-lead"})
+        pid = pipeline(c, "Dev", manager="ops")
+        row = card(c, pid)
+        assert stuck_cards.sweep(c, later(5))["woken"] == []
+        assert stuck_cards.sweep(c, later(25))["asked"] == [row["id"]]
+        [question] = questions(c, row["id"])
+        H.task_update(c, ANA, question["id"], status="done", note="Give it to Ben.")
+        assert stuck_cards.sweep(c, later(31))["relayed"] == []
+        assert wakes(c, row["id"], "bot:ops") == []
+        assert stuck_cards.sweep(c, later(32))["relayed"] == []
+
+
 def test_pipeline_settings_set_the_hours_and_unset_ones_use_the_defaults(api):
     with api.app.state.store.transaction() as c:
         quick = pipeline(c, "Support", stuck_after_hours=1, ask_person_after_hours=2)
