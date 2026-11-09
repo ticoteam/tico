@@ -95,7 +95,7 @@ const PAGES = [
       await page.waitForTimeout(300);
     }},
   {name: 'tour', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
-    ui: ['ui/app/welcome.js', 'ui/getting-started.ts', 'ui/styles/getting-started.css', 'ui/app/settings-devices.ts', ...SETTINGS_UI],
+    ui: ['ui/app/welcome.ts', 'ui/getting-started.ts', 'ui/styles/getting-started.css', 'ui/app/settings-devices.ts', ...SETTINGS_UI],
     steps: async page => {
       // On a phone the account menu is in the drawer, which stays closed (and inert) until More opens it.
       if (await page.locator('#mobile-more').isVisible()) await page.click('#mobile-more');

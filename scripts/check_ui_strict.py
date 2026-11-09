@@ -67,7 +67,6 @@ KEPT_JS = {
     "ui/app/automations.js": "the global AU: as .ts it is implicit any where the automations files read it",
     "ui/app/automations-editors.js": "auAnswer: strict .ts files call it with its JSDoc signature, and its arguments become required",
     "ui/app/bot-page.js": "the global BOT: as .ts it is implicit any where a strict .ts file reads it",
-    "ui/app/welcome.js": "the global ONB: as .ts it is implicit any where a strict .ts file reads it",
     "ui/app/settings-webhooks.js": "the global WH_TRIGGERS: as .ts it is implicit any where a strict .ts file reads it",
     "ui/app/hub-v2.js": "v2Get: a strict .ts file calls it with its JSDoc signature, and its arguments become required",
     "ui/app/avatars.js": "avatar: a strict .ts file calls it with its JSDoc signature, and its arguments become required",

@@ -2,13 +2,13 @@
    The org chart itself is built in ui/org-builder.ts; this turns what is checked there into `selected` (the order to set
    the bots up in, each with its reports-to), says what is wrong before Create, and shows the rest. Nothing is created
    until "Create my team". It shares the wizard's state (`ONB`) and the catalog cards' state (`catalogState`) with
-   ui/app/welcome.js and ui/app/catalog.ts. */
+   ui/app/welcome.ts and ui/app/catalog.ts. */
 'use strict';
 
-// The wizard's state (ui/app/welcome.js: ONB) as this screen reads it. The catalog is ui/app/catalog.ts's catalogState.
+// The wizard's state (ui/app/welcome.ts: ONB) as this screen reads it. The catalog is ui/app/catalog.ts's catalogState.
 interface FrOrg { chosen: string[]; loaded?: boolean }
 interface FrProviders { preset?: string; enabled?: string[]; providers?: {id: string; label?: string}[] }
-interface FrRecord { home?: string; bots?: FrBot[]; machine?: {runners?: unknown[]} | null; completed?: boolean }
+interface FrRecord { home?: string; bots?: FrBot[]; machine?: {runners?: OnbRunner[]} | null; completed?: string | null }
 interface FrState { catalog: CatalogState; org: FrOrg; record: FrRecord; providers: FrProviders | null }
 /** A bot row as the setup screen reads it: the record's bots and the roster rows the chart uses. */
 interface FrBot extends Employee {
