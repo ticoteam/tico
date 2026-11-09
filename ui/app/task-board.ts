@@ -111,6 +111,7 @@ const taskOwnerHit = (actor: string) => (v: string) => resolveMe(v) === actor ||
 function taskBoardHead(items: TaskItem[], state: TbState) {
   const me = myActor(), chosen = taskOwnerFilter(state);
   // Counted without the Owner filter, so a face stays to be turned off again.
+  // @ts-expect-error memo null skips the cache (taskItems reads it with ?.); tasks.ts (open PR) types it Map, not Map | null
   const all = chosen.length ? taskItems({...state, filters: {...state.filters, owner: []}, memo: null}, 'board') : items;
   const counts = new Map<string, number>();
   for (const it of all) if (it.actor) counts.set(it.actor, (counts.get(it.actor) || 0) + 1);
@@ -140,7 +141,7 @@ function taskBoardKeys(state: TbState, ev: KeyboardEvent) {
   const key = ev.key.toLowerCase(), chosen = taskOwnerFilter(state);
   if (key === 'q') {
     ev.preventDefault();
-    const mine = chosen.length === 1 && resolveMe(chosen[0]) === myActor();
+    const mine = chosen.length === 1 && resolveMe(chosen[0]!) === myActor();
     state.filters.owner = mine ? [] : ['me'];
     tasksFiltersChanged(state);
   } else if (key === 'x' && (chosen.length || state.boardFocus)) {

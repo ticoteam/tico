@@ -503,7 +503,7 @@ async function settingsCatalogPicker() {
       }
       dialog.close(); await refresh(true);
       if (S.route === SETTINGS) { await loadSettings(); settingsShow('bots'); }
-      toast(hints.length ? hints.join('; ') : chosen.length === 1 ? `Added ${catalogName(state, chosen[0])}` : `Added ${chosen.length} bots`);
+      toast(hints.length ? hints.join('; ') : chosen.length === 1 ? `Added ${catalogName(state, chosen[0]!)}` : `Added ${chosen.length} bots`);
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`;
       if (String(errorMessage(error, '')).includes('Team default')) {
