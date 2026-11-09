@@ -4,21 +4,21 @@
 
 // The page's state: the shared TaskState (tasks.ts) plus the fields this file sets and reads on it.
 interface TasksPageState extends TaskState {
-  urlView?: string; urlType?: string; typeChosen?: boolean; migrate?: boolean; migrated?: boolean;
-  tags?: string[]; filtered?: unknown; kept?: boolean; activeComplete?: boolean; read?: boolean; typesLoaded?: boolean;
+  typeChosen?: boolean; migrate?: boolean; migrated?: boolean;
+  filtered?: unknown; kept?: boolean; read?: boolean; typesLoaded?: boolean;
   searchTimer?: ReturnType<typeof setTimeout>; saveTimer?: ReturnType<typeof setTimeout>; doneDrain?: boolean;
-  menuAnchor?: HTMLElement | null; back?: string; layout?: string; selectMode?: boolean; loadAfter?: Promise<unknown> | null;
-  pendingFinish?: {key: string; at: unknown; after: number} | null;
+  back?: string; loadAfter?: Promise<unknown> | null;
+  pendingFinish?: {key: string; at: number; after: number} | null;
 }
 // The kept list of the last visit (S.lastRead.tasks) and the saved view preference (S.lastRead.tasksPref).
-interface KeptTasksRead { key: string; tasks: TaskRow[]; labels: string[]; tags: string[]; filtered?: unknown; since?: string | null; fullAt?: number; }
-interface TasksPref { type?: unknown; view?: unknown; views?: unknown; }
+interface KeptTasksRead { key: string; tasks: TaskRow[]; labels: string[]; tags: import('../types/api').Tag[]; filtered?: unknown; since?: string | null; fullAt?: number; }
+type TasksPref = { type?: unknown; view?: unknown; views?: unknown; };
 // The new-task form's named controls. The form's own title is an HTMLElement attribute, so the form type intersects it.
 interface TaskCreateForm {
   title: HTMLInputElement; owner: HTMLSelectElement; body: HTMLTextAreaElement; labels: HTMLInputElement;
   top: HTMLInputElement; link: HTMLInputElement; goal?: HTMLSelectElement; elements: TaskCreateControls;
 }
-interface TaskCreateControls extends HTMLFormControlsCollection { private: HTMLInputElement; follow: HTMLInputElement; files?: HTMLInputElement; }
+interface TaskCreateControls extends PipelineCreateElements { private: HTMLInputElement; follow: HTMLInputElement; files?: HTMLInputElement; }
 type TaskCreatePayload = {title: string; body: string; owner: string; private?: boolean; labels?: string[]; top?: boolean;
   follow?: boolean; links?: string[]; relations?: {task: string; kind: string}[]; goal_id?: string};
 // The ask of a task or of a need item (companyNeedActor reads the sender, which the need item carries too).
@@ -106,17 +106,19 @@ function pageTasks(forced?: string, openId = '') {
     // A narrower row folds the search to its icon; measured on the next frame, outside the observer's own delivery.
     new ResizeObserver(() => requestAnimationFrame(() => tasksHeadFit(state))).observe($('#tasks-pane .tl-head'));
   }
-  $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, ev.currentTarget);
+  // The button a menu opens from: the handler's own element (each onclick below sits on one).
+  const tasksAnchor = (ev: Event) => ev.currentTarget as HTMLElement;
+  $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, tasksAnchor(ev));
   $('#task-layout').onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-layout]'); if (b && b.dataset.layout !== state.view) tasksSetView(state, b.dataset.layout ?? ''); };
   $('#task-archive').onclick = () => tasksArchiveToggle(state);
   $('#tasks-pane').addEventListener('click', (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('#task-finished [data-view]');
     if (b && b.dataset.view !== state.view) { tasksSetView(state, b.dataset.view ?? ''); $(`#task-finished [data-view="${b.dataset.view}"]`)?.focus(); }
   });
-  $('#task-more').onclick = (ev: MouseEvent) => tasksMoreMenu(state, ev.currentTarget);
+  $('#task-more').onclick = (ev: MouseEvent) => tasksMoreMenu(state, tasksAnchor(ev));
   // Catch up: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll<HTMLElement>('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
-  $('#task-new').onclick = () => { const p: {owner_id?: string; labels?: string[]} = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
+  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
     state.q = search.value;
@@ -135,7 +137,7 @@ function pageTasks(forced?: string, openId = '') {
     clearTimeout(state.searchTimer);
     tasksRender(state);
   };
-  $('#task-filter').onclick = (ev: MouseEvent) => tasksFieldMenu(state, ev.currentTarget);
+  $('#task-filter').onclick = (ev: MouseEvent) => tasksFieldMenu(state, tasksAnchor(ev));
   $('#task-chips').onclick = (ev: MouseEvent) => {
     const drop = eventElement(ev)?.closest<HTMLElement>('[data-chip-drop]');
     if (drop) {
@@ -146,7 +148,7 @@ function pageTasks(forced?: string, openId = '') {
       return;
     }
     const edit = eventElement(ev)?.closest<HTMLElement>('[data-chip-edit]');
-    if (edit) tasksFilterMenu(state, edit.dataset.chipEdit, edit);
+    if (edit) tasksFilterMenu(state, edit.dataset.chipEdit!, edit);   // the closest [data-chip-edit] has it
   };
   $('#task-filter-clear').onclick = () => {
     state.filters = tasksEmptyFilters();
@@ -156,7 +158,7 @@ function pageTasks(forced?: string, openId = '') {
   $('#task-who-wrap').onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('#task-who'); if (b) tasksWhoMenu(state, b); };
   $('#task-bulk').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-bulk]'); if (!b) return;
-    tasksBulkMenu(state, b.dataset.bulk, b);
+    tasksBulkMenu(state, b.dataset.bulk!, b);   // the closest [data-bulk] has it
   };
   const pop = $('#task-filter-pop');
   pop.addEventListener('keydown', tasksMenuKeys);
@@ -303,7 +305,7 @@ function taskFormFiles(form: HTMLFormElement) {
   fileDropTarget(form, add);
   pasteImages(form, add);
 }
-function openTaskCreate(owner = '', opts: {parent?: TaskRow | null | undefined; labels?: string[] | undefined; type?: string | null | undefined} = {}) {
+function openTaskCreate(owner = '', opts: {parent?: TaskRow | null | undefined; labels?: unknown[] | undefined; type?: string | null | undefined} = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
   d.innerHTML = `<div class="tmodal-head"><h2 class="tmodal-title" style="margin:0">${parent ? 'New subtask' : 'New task'}</h2>
@@ -419,7 +421,7 @@ async function tasksRead(state: TasksPageState, opts: {poll?: boolean} = {}): Pr
     ...(state.read && !opts.poll ? [v2NeedsRead()] : [])];
   let changed: {gone?: unknown[]; tasks?: TaskRow[]; cursor: string | null; reset?: boolean} | null = null,
     active: {tasks?: TaskRow[]; cursor?: string | null; next_offset?: number | null} | null = null,
-    lab: {labels?: string[]; tags?: string[]} | null | undefined, held: Set<string> | null = null;
+    lab: {labels?: string[]; tags?: import('../types/api').Tag[]} | null | undefined, held: Set<string> | null = null;
   const seen = new Set<string>(), isFinished = (t: TaskRow) => ['done', 'closed'].includes(String(t.status));
   if (cursor) {
     [changed, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);

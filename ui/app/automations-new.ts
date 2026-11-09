@@ -11,21 +11,7 @@ type AuNewTemplate = import('../types/api').AutomationTemplates['templates'][num
 /** An automation as the page reads it: the API's type, plus the owner string the list rows carry. */
 type AuNewAuto = import('../types/api').Automation & { owner?: string; readonly?: boolean };
 /** A template filled for an owner and an inbox (GET /v2/automations/templates/<id>). */
-type AuNewFilled = import('../types/api').AutomationTemplate & { group?: string };
-/** A flow step as the board reads it: the fields it looks at, and every other field the step keeps. */
-interface AuNewStep { id?: string; enabled?: boolean; out?: string; choose?: unknown; [field: string]: unknown }
-/** The LLM part of a board (automations-flow.ts auBoardShape). */
-interface AuNewLlm { mode: string; prompt: unknown; to: string[]; default: string; as?: string }
-/** A board (automations-flow.ts auBoardShape): its rules and questions, its LLM part, and the steps it came from. */
-interface AuNewBoard {
-  rules: unknown[];
-  questions: unknown[];
-  llm: AuNewLlm | null;
-  src: { rules?: AuNewStep; qd?: AuNewStep; qf?: AuNewStep; sd?: AuNewStep; sf?: AuNewStep; sq?: string; ls?: AuNewStep };
-  mail: boolean;
-}
-/** A destination of a filled flow, as the Apply dialog lists it. */
-interface AuNewDest { id: string; name?: string; then?: unknown[] }
+type AuNewFilled = AuFlow & { group?: string };
 /** The owner kind's list and the value picked in it (Whose inbox). */
 type AuNewPick = [string[][], string];
 /** The New inbox dialog's state. */
@@ -52,14 +38,14 @@ const auApplies = (a: AuNewAuto | null | undefined): a is AuNewAuto => !!a?.can_
    question's instructions may be (clients/judge.py MAX_INSTRUCTIONS) is refused, never cut. */
 const AU_MAX_INSTRUCTIONS = 8000;
 function auApplyFlow(a: AuNewAuto, filled: AuNewFilled) {
-  const b: AuNewBoard | null = auBoardShape({...filled, trigger: a.trigger});
+  const b: AuBoard | null = auBoardShape({...filled, trigger: a.trigger});
   if (!b) return null;
-  const old: AuNewStep = JSON.parse(JSON.stringify(a.steps?.[0])), as = auOwnerAs(a), L = b.llm;
+  const old: AuStep = JSON.parse(JSON.stringify(a.steps?.[0])), as = auOwnerAs(a), L = b.llm;
   if (!L) return null;
   const prompt = String(old.prompt || '').trim() ? old.prompt : L.prompt;
   if (as) {
     // Only the rules and the questions stay beside the old step; a Sort it replaces goes.
-    const kept = [b.rules.length && b.src.rules, b.questions.length && b.src.qd, b.questions.length && b.src.qf].filter((s): s is AuNewStep => !!s);
+    const kept = [b.rules.length && b.src.rules, b.questions.length && b.src.qd, b.questions.length && b.src.qf].filter((s): s is AuStep => !!s);
     if (kept.some(s => s.id === old.id)) old.id = auNewId();
     if (kept.some(s => s.out && s.out === old.out)) delete old.out;
     delete old.choose;
@@ -213,7 +199,7 @@ function auApplyTemplate(): void {
       const flow = auApplyFlow(a, f);
       if (!flow) throw new Error('This template doesn’t fit this inbox');
       t.filled = flow;
-      const dests: AuNewDest[] = flow.destinations;
+      const dests: AuDest[] = flow.destinations;
       box.innerHTML = `<span class="au-lb">Destinations</span><ul class="au-nd-dests">${dests.map((d, i) =>
         `<li style="--c:${auDestColor(d, i)}"><i aria-hidden="true"></i><b>${esc(d.name || d.id)}</b><span>${esc(auActLine((d.then || [])[0]))}</span></li>`).join('')}</ul>`;
       box.hidden = false; go.disabled = false;

@@ -7,13 +7,6 @@
 
 // What the list reads of an automation (GET /api/v2/automations): its trigger as the filters group it, its state and its
 // last run. Only the fields this page reads are here.
-interface AuTrigger {
-  type?: string | null;
-  inbox?: string | null;
-  to?: string | null;
-  cron?: string | null;
-  [key: string]: unknown;
-}
 interface AuLastRun {
   status?: string | null;
   started_at?: string | null;
