@@ -189,7 +189,7 @@ let ROADMAP_RANKING: RoadmapRankingState | null = null;
 function roadmapRankingRefresh() { if (S.route === '#/roadmap' && ROADMAP_RANKING) void roadmapRankingLoad(ROADMAP_RANKING); }
 function pageRoadmap() {
   const state: RoadmapRankingState = ROADMAP_RANKING = {sort: 'requester_count', direction: 'desc', offset: 0, previous: [], next: null, seq: 0};
-  $('#main').innerHTML = `<div class="roadmap-page"><header class="meeting-head"><h1>Roadmap</h1><button class="primary" type="button" data-roadmap-new>New task</button></header>
+  $('#main').innerHTML = `<div class="roadmap-page"><header class="meeting-head"><h1 data-roadmap-title></h1><button class="primary" type="button" data-roadmap-new>New task</button></header>
     <div class="roadmap-sort"><button type="button" class="tl-chip tl-chip-main tl-groupchip" data-roadmap-sort aria-haspopup="menu"><span class="k">Sort</span><span data-sort-word>Requests</span>${TL_ICON.caret}</button><button class="ghost" type="button" data-roadmap-direction aria-label="Sort ascending">↓</button></div>
     <div data-roadmap-table></div><div class="row roadmap-pager"><button class="ghost" type="button" data-roadmap-back disabled>Previous</button><button class="ghost" type="button" data-roadmap-next disabled>Next</button><span class="err" role="status" data-roadmap-error></span></div></div><div id="task-filter-pop" class="tl-pop" popover></div>`;
   $('#task-filter-pop').onkeydown = tasksMenuKeys;
@@ -199,6 +199,7 @@ function pageRoadmap() {
   $('[data-roadmap-back]').onclick = () => { state.offset = state.previous.pop() || 0; void roadmapRankingLoad(state); };
   $('[data-roadmap-next]').onclick = () => { if (state.next != null) { state.previous.push(state.offset); state.offset = state.next; void roadmapRankingLoad(state); } };
   void roadmapRankingLoad(state);
+  void taskTypesLoad({cached: true}).then(() => { const title = $('[data-roadmap-title]'); if (title) title.textContent = pipelineProductType()?.name || ''; });
 }
 async function roadmapRankingLoad(state: RoadmapRankingState) {
   const seq = ++state.seq;

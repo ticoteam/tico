@@ -72,20 +72,18 @@ CREATE TABLE IF NOT EXISTS fin_rollups (
   amount BIGINT NOT NULL DEFAULT 0, line_count BIGINT NOT NULL DEFAULT 0,
   PRIMARY KEY (book_id, day, account_id, tagset));
 
-CREATE TABLE IF NOT EXISTS fin_contacts (
-  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'vendor' CHECK (kind IN ('vendor','customer','both')), emails TEXT NOT NULL DEFAULT '[]',
-  default_account_id TEXT REFERENCES fin_accounts(id), is_1099 INTEGER NOT NULL DEFAULT 0, tax_id_ref TEXT,
-  payment_ref TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-  updated_at TEXT);
-
--- Every name a vendor contact has gone by (spec §3: one key per vendor), as L.name_key: a bank or card row under one
--- posts under the contact's id, and lines posted under one before count for it. A name maps to one contact. Rows are
--- removed only by vendor_unmerge, for the aliases a vendor_merge added (merged_from set; see backend/finance/vendors.py).
-CREATE TABLE IF NOT EXISTS fin_vendor_aliases (
-  book_id TEXT NOT NULL REFERENCES fin_books(id), name_key TEXT NOT NULL,
-  contact_id TEXT NOT NULL REFERENCES fin_contacts(id), created_at TEXT NOT NULL,
-  PRIMARY KEY (book_id, name_key));
+-- A contact's book side (spec §3 "Fold in"): the contact itself is an organization entity (backend/entities), and this
+-- row is what one book keeps about it. The fin_contacts view (VIEWS) reads it as a contact under `id`, the id Finance's
+-- documents and lines carry. `id` is an entity id too: the entity itself, or (when the entity is in another book first
+-- or came from the Directory) a merged entity that redirects to `entity_id`. An entity_sources finance_book source names
+-- it; a contact folded in from the old table keeps its id here. Vendor aliases are entity_identifiers of kind name scoped to the book (store/contacts.py).
+-- book_id and default_account_id carry no foreign key: the old contacts' values move here as they are, dangling or not.
+CREATE TABLE IF NOT EXISTS fin_book_entities (
+  id TEXT PRIMARY KEY REFERENCES entities(id), book_id TEXT NOT NULL, entity_id TEXT NOT NULL REFERENCES entities(id),
+  name TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'vendor' CHECK (kind IN ('vendor','customer','both')), emails TEXT NOT NULL DEFAULT '[]',
+  default_account_id TEXT, is_1099 INTEGER NOT NULL DEFAULT 0, tax_id_ref TEXT,
+  tax_id_last4 TEXT, payment_ref TEXT, active INTEGER NOT NULL DEFAULT 1, seats INTEGER, renewal_on TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, UNIQUE (entity_id, book_id));
 
 -- How a vendor name key with no contact reads: the text it was last posted under (a bank or card row's counterparty,
 -- a payee's name, an entry's vendor), the newest entry date winning. Display only; nothing counts by it.
@@ -94,7 +92,7 @@ CREATE TABLE IF NOT EXISTS fin_vendor_labels (
   seen_on TEXT NOT NULL, PRIMARY KEY (book_id, name_key));
 
 CREATE TABLE IF NOT EXISTS fin_bills (
-  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT REFERENCES fin_contacts(id),
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT REFERENCES entities(id),
   number TEXT NOT NULL DEFAULT '', bill_date TEXT NOT NULL, due_date TEXT,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','open','scheduled','paid','void')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, commitment_id TEXT, entry_id TEXT REFERENCES fin_entries(id),
@@ -106,7 +104,7 @@ CREATE TABLE IF NOT EXISTS fin_bill_lines (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_invoices (
-  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), customer_id TEXT REFERENCES fin_contacts(id),
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), customer_id TEXT REFERENCES entities(id),
   number TEXT NOT NULL DEFAULT '', invoice_date TEXT NOT NULL, due_date TEXT,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','partial','paid','void')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, amount_paid BIGINT NOT NULL DEFAULT 0, payment_link TEXT,
@@ -442,12 +440,46 @@ CREATE INDEX IF NOT EXISTS fin_bill_lines_bill ON fin_bill_lines(bill_id);
 CREATE INDEX IF NOT EXISTS fin_invoices_status ON fin_invoices(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_invoices_list ON fin_invoices(book_id, invoice_date, id);
 CREATE INDEX IF NOT EXISTS fin_invoice_lines_invoice ON fin_invoice_lines(invoice_id);
-CREATE INDEX IF NOT EXISTS fin_contacts_name ON fin_contacts(book_id, name);
-CREATE INDEX IF NOT EXISTS fin_vendor_aliases_contact ON fin_vendor_aliases(contact_id);
+CREATE INDEX IF NOT EXISTS fin_book_entities_book ON fin_book_entities(book_id);
 CREATE INDEX IF NOT EXISTS fin_rules_kind ON fin_rules(kind, active, priority);
 CREATE INDEX IF NOT EXISTS fin_external_refs_local ON fin_external_refs(connection_id, local_table, local_id);
 CREATE INDEX IF NOT EXISTS fin_restatements_period ON fin_restatements(period_id);
 """
+
+# The contact tables as Finance reads them (spec §3 "Fold in"): read-only views over the Directory. fin_contacts is a
+# book's contacts with the old table's columns, under each book row's id; fin_vendor_aliases is a book's vendor names
+# (entity_identifiers of kind name scoped to the book; the migration makes their per-book unique index). Writes go
+# through store/contacts.py. Made only once the Directory tables exist and the old tables are gone (migration
+# 20261108203140_finance_fold_in moves them), so an install upgrading from before the Directory never holds a view over a
+# table it does not have yet.
+VIEWS = """
+CREATE VIEW IF NOT EXISTS fin_contacts AS
+SELECT b.id AS id, b.book_id AS book_id, COALESCE(NULLIF(b.name, ''), e.name) AS name, b.kind AS kind,
+  b.emails AS emails,
+  b.default_account_id AS default_account_id, b.is_1099 AS is_1099, b.tax_id_ref AS tax_id_ref,
+  b.payment_ref AS payment_ref, b.active AS active, b.created_at AS created_at, b.created_by AS created_by,
+  b.updated_at AS updated_at, b.tax_id_last4 AS tax_id_last4, b.seats AS seats, b.renewal_on AS renewal_on
+FROM fin_book_entities b JOIN entities e ON e.id = b.entity_id;
+
+CREATE VIEW IF NOT EXISTS fin_vendor_aliases AS
+SELECT i.scope_id AS book_id, i.normalized_value AS name_key, i.entity_id AS contact_id, i.valid_from_on AS created_at,
+  CASE WHEN i.source_type = 'finance_merge' THEN COALESCE(i.source_id, '') END AS merged_from
+FROM entity_identifiers i WHERE i.scope_type = 'finance_book' AND i.kind = 'name';
+"""
+
+
+def views(c: sqlite3.Connection) -> None:
+    """The contact views, when the Directory's tables exist and the old contact tables are gone; else nothing."""
+    kinds = {
+        str(r[0]): str(r[1]) for r in c.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view')")
+    }
+    if kinds.get("entities") != "table" or kinds.get("entity_identifiers") != "table":
+        return
+    if kinds.get("fin_contacts") == "table" or kinds.get("fin_vendor_aliases") == "table":
+        return
+    for statement in statements(VIEWS):
+        c.execute(statement)
+
 
 # Invariants 2 and 3 again in the database, so no statement (Finance's or anyone's) can break them. SQLite syntax: a
 # Postgres store writes the same rules as plpgsql trigger functions.
@@ -548,7 +580,6 @@ ADDED = (
     ("fin_invoices", "sent_at", "TEXT"),
     ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
-    ("fin_contacts", "tax_id_last4", "TEXT"),
     ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
     # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
     ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"),
@@ -559,9 +590,6 @@ ADDED = (
     ("fin_external_refs", "seen_gen", "INTEGER"),
     # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
     ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
-    # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
-    ("fin_contacts", "seats", "INTEGER"),
-    ("fin_contacts", "renewal_on", "TEXT"),
     # the books gaps (migration 73): fin_transfers' columns added since it was first written
     ("fin_transfers", "from_feed_id", "TEXT"),
     ("fin_transfers", "to_feed_id", "TEXT"),
@@ -585,9 +613,8 @@ ADDED = (
     # the vendor key a bank or card row is found by: core/merchant.merchant_key of its counterparty (the contact or alias
     # it resolves to is read on each read, so a merge takes effect without rewriting rows). Migration 20261106235900.
     ("fin_feed_txns", "vendor_key", "TEXT NOT NULL DEFAULT ''"),
-    # set on an alias a vendor_merge added: '' for a name nobody had, the contact id it moved from otherwise (the
-    # contact's id itself for the alias that routes that contact's lines to the vendor). NULL for every other alias.
-    ("fin_vendor_aliases", "merged_from", "TEXT"),
+    # the contact a payee pays (spec §3: fin_recipients stays, keyed to the Directory). Migration 20261108203140_finance_fold_in.
+    ("fin_recipients", "entity_id", "TEXT"),
 )
 
 
@@ -609,7 +636,7 @@ CREATE TABLE IF NOT EXISTS fin_tax_seeds (
 # revision no longer names in fin_bill_retained.
 PURCHASING = """
 CREATE TABLE IF NOT EXISTS fin_purchase_orders (
-  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT NOT NULL REFERENCES fin_contacts(id),
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT NOT NULL REFERENCES entities(id),
   number TEXT NOT NULL DEFAULT '', po_date TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','approved','closed','void')),
   closed_by TEXT NOT NULL DEFAULT '' CHECK (closed_by IN ('','bills','hand')),
@@ -624,7 +651,7 @@ CREATE TABLE IF NOT EXISTS fin_po_lines (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (po_id, line_no));
 
 CREATE TABLE IF NOT EXISTS fin_estimates (
-  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), customer_id TEXT NOT NULL REFERENCES fin_contacts(id),
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), customer_id TEXT NOT NULL REFERENCES entities(id),
   number TEXT NOT NULL DEFAULT '', estimate_date TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','accepted','declined')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, memo TEXT NOT NULL DEFAULT '',
@@ -703,6 +730,7 @@ def create(c: sqlite3.Connection) -> None:
     for script in (INDEXES, TRIGGERS):
         for statement in statements(script):
             c.execute(statement)
+    views(c)
     from . import tico
 
     tico.watch_org(c)
@@ -812,9 +840,13 @@ def vendor_keys_folded(c: sqlite3.Connection) -> None:
     """Phase 2 keys a plain vendor name folded (core/ledger.name_key); phase 1 posted it as written. Each vendor value
     lines carry that is no contact's id labels its key (its newest entry date's text); a budget's vendor name is keyed.
     Idempotent."""
+    # A contact's id is its fin_book_entities row's; before the fold-in (or before the Directory's tables, when the
+    # contact views wait for them) the old fin_contacts table holds them.
+    folded = c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_contacts'").fetchone() is None
+    contacts = "fin_book_entities" if folded else "fin_contacts"
     rows = c.execute(
         "SELECT l.book_id, l.contact_id, MAX(l.entry_date) FROM fin_lines l WHERE l.contact_id<>'' AND "
-        "NOT EXISTS (SELECT 1 FROM fin_contacts k WHERE k.id=l.contact_id) "
+        f"NOT EXISTS (SELECT 1 FROM {contacts} k WHERE k.id=l.contact_id) "
         "GROUP BY l.book_id, l.contact_id"
     ).fetchall()
     for book_id, raw, day in rows:
@@ -827,7 +859,7 @@ def vendor_keys_folded(c: sqlite3.Connection) -> None:
         )
     for bid, vendor in c.execute(
         "SELECT b.id, b.vendor FROM fin_budgets b WHERE b.vendor<>'' AND NOT EXISTS "
-        "(SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor)"
+        f"(SELECT 1 FROM {contacts} k WHERE k.id=b.vendor)"
     ).fetchall():
         if name_key(str(vendor)) != vendor:
             c.execute("UPDATE fin_budgets SET vendor=? WHERE id=?", (name_key(str(vendor)), bid))

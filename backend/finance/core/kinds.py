@@ -115,6 +115,10 @@ ALL = (
     # vendor identity: one vendor per merchant (backend/finance/vendors.py)
     "vendor_merge",
     "vendor_unmerge",
+    # receipts: a Library file read and matched to a bank or card row (backend/finance/receipts.py)
+    "receipt_read",
+    "receipt_match",
+    "receipt_match_undo",
 )
 # The kinds not yet carried out: listed (act help says so) and refused with not_available. Every kind is live today.
 NOT_LIVE: frozenset[str] = frozenset()
@@ -659,6 +663,18 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("teammate?", "str", "or the teammate (a bot or a person); neither: back to the account's bot"),
     ),
     "campaign_owner_undo": (("campaign_id", "str", "the owner before the latest change is put back"),),
+    "receipt_read": (
+        ("receipt_id", "str", "a receipt the asker may see"),
+        ("amount", "minor", "the total on the receipt"),
+        ("date", "day", "the date on the receipt"),
+        ("vendor?", "str", "the vendor as the receipt names it"),
+    ),
+    "receipt_match": (
+        ("receipt_id", "str", "the receipt to decide"),
+        ("decision", "accept | reject", "accept attaches the file to the suggested row; reject refuses the suggestion"),
+        ("feed_id?", "str", "or another bank or card row to attach it to (accept)"),
+    ),
+    "receipt_match_undo": (("receipt_id", "str", "the receipt whose latest accept is put back"),),
     "subscription_confirm": (
         ("subscription_id", "str", "a subscription the daily look suggested, or one already confirmed"),
         ("status", "active|ignored|cancelled", "active: it is one; ignored: it is not; cancelled: it has ended"),
@@ -906,6 +922,9 @@ WORDS: dict[str, str] = {
     "attribution_map": "Map classes, departments or projects to teams or teammates, one rule each.",
     "campaign_owner_set": "Give an ad campaign's spend to a teammate or team (neither: the account's bot).",
     "campaign_owner_undo": "Put back the owner an ad campaign had before its latest change.",
+    "receipt_read": "Set a receipt's amount, date and vendor as read from its file.",
+    "receipt_match": "Accept a receipt's suggested bank or card row (attaches the file), or refuse the suggestion.",
+    "receipt_match_undo": "Put back a receipt's match: detach the file and restore the suggestion it had.",
     "subscription_confirm": "Confirm a recurring charge as a subscription, ignore it, or mark it cancelled.",
     "subscription_undo": "Put back a subscription's fields from before its latest confirmation.",
     "vendor_merge": "Fold names and vendor contacts into one vendor: their rows, bills and budgets count as it.",

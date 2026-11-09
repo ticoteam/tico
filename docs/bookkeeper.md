@@ -38,7 +38,10 @@ rules; it never approves its own action. The owner approves a month's close and 
 [System routines](system-routines.md). With nothing new it is a quiet run: no task and no model call. An item listed
 in the last day is not news unless its facts changed. A still-open Books check task takes the next check's list
 instead of a second task opening. The task is private to the Bookkeeper. It opens nothing while the Bookkeeper is
-paused.
+paused. From that private task it may only categorize rows and attach receipts (its Finance writes). It may not
+ignore a row: ignoring takes the row out of the books (in books mode it reverses the row's entry). A bill approval, a
+payment, a card or a close is refused there too, and the task stays private. A write Finance refuses is one plain
+sentence on the task; its row stays for the next check, and no person is asked to reissue or publish it.
 
 **Watch** (system routine `bookkeeper_watch`) runs daily and **Rules digest** (`bookkeeper_rules_digest`) weekly, each on its own schedule. Neither is a switch in [System routines](system-routines.md), and the Bookkeeper's pause stops both from opening tasks. Watch reads runway under six months of average burn, a month at least twice the median of the three before it (and $100 more), two charges of one amount to one payee within three days, and a recurring charge that rose 10% (and $10 more). An unused subscription is a monthly charge seen three months running (the three calendar months before this one) on a card whose bot is archived or ran no turn in 30 days. Nothing new is a quiet run. A Watch finding is news once: a reviewed one is not listed again after a day, and comes back only when its facts change. The Watch task is private to the Bookkeeper. The digest task is private too: its readers are the company owner and the Bookkeeper, so teammates who are not the owner do not see the rule names it lists.
 

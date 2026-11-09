@@ -139,6 +139,7 @@ const PAGES = [
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
   {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css']},
+  {name: 'directory', route: '#/library/directory', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
   {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/app/automations*.ts', 'ui/styles/automations.css']},
   {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
     ui: ['ui/app/learnings.ts', 'ui/app/learned.ts', 'ui/app/bot-learnings.ts', 'ui/styles/learnings.css', 'ui/styles/bot-learnings.css']},

@@ -58,7 +58,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
-from . import lifecycle
+from . import company_pause, lifecycle
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
@@ -407,6 +407,22 @@ def bump_bot_session_epoch(c, bot):
         "epoch=epoch+1,updated_at=excluded.updated_at",
         (bot, H.now()),
     )
+
+
+def reset_bot_sessions(c, bot):
+    """Keep durable history while fencing local provider sessions for one bot."""
+    bump_bot_session_epoch(c, bot)
+    reset = 0
+    for conversation in c.execute("SELECT id,participants FROM conversations").fetchall():
+        if "bot:" + bot not in json.loads(conversation["participants"]):
+            continue
+        c.execute(
+            "INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+            "epoch=epoch+1,updated_at=excluded.updated_at",
+            (conversation["id"], H.now()),
+        )
+        reset += 1
+    return reset
 
 
 def model_changed_since(c, bot, since):
@@ -2405,6 +2421,10 @@ def _claim_refusal(
         caps = capability_set(runner["capabilities"])
     if draining:
         return "draining", None
+    company = loads.company if loads is not None else company_pause.record(c)
+    if company is not None:
+        # The company pause: nothing new starts until someone resumes (backend/company_pause.py).
+        return "company_paused", None
     if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
     if bot in held_bots:
