@@ -70,28 +70,28 @@ def run_hub(*argv):
 
 
 def test_hub_pipeline_manager_sets_the_bot_on_the_pipeline_named():
-    calls = run_hub("pipeline", "manager", "Product", "cpo")
+    calls = run_hub("pipeline-manager", "Product", "cpo")
     assert calls[-1] == ("PATCH", "pipelines/product-roadmap/settings", {"manager_id": "cpo"})
 
 
 def test_hub_pipeline_manager_clear_sends_an_empty_manager():
-    calls = run_hub("pipeline", "manager", "product-roadmap", "--clear")
+    calls = run_hub("pipeline-manager", "product-roadmap", "--clear")
     assert calls[-1] == ("PATCH", "pipelines/product-roadmap/settings", {"manager_id": ""})
 
 
 def test_hub_pipeline_manager_names_a_bot_or_clears_never_both_nor_neither():
     with pytest.raises(ValueError):
-        run_hub("pipeline", "manager", "Product")
+        run_hub("pipeline-manager", "Product")
     with pytest.raises(ValueError):
-        run_hub("pipeline", "manager", "Product", "cpo", "--clear")
+        run_hub("pipeline-manager", "Product", "cpo", "--clear")
 
 
 def test_hub_pipeline_manager_refuses_a_pipeline_it_cannot_name():
     with pytest.raises(ValueError, match="No pipeline named"):
-        run_hub("pipeline", "manager", "Nowhere", "cpo")
+        run_hub("pipeline-manager", "Nowhere", "cpo")
 
 
 def test_hub_pipeline_still_reads_the_pipeline_report():
     args = hubcli.parser().parse_args(["pipeline", "--type", "Ops"])
     assert args.fn == "pipeline" and args.type == "Ops"
-    assert hubcli.parser().parse_args(["pipeline", "manager", "Product", "--clear"]).fn == "pipeline manager"
+    assert hubcli.parser().parse_args(["pipeline-manager", "Product", "--clear"]).fn == "pipeline-manager"
