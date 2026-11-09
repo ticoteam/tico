@@ -7,6 +7,7 @@ from fastapi import Request
 from pydantic import ValidationError
 from . import ask_ingest
 from . import pipeline_rights
+from . import task_relations as TR
 import json
 from . import org_rule_check
 from . import task_privacy as privacy
@@ -139,7 +140,9 @@ def register(
     def task_bulk(request: Request, body: M.TaskBulk):
         """One change to every task a filter selects (the filters of `GET /api/v2/tasks`), each made as its single
         update would be: a task the caller may not change is skipped with the reason, the rest still change. A dry
-        run makes every change and rolls all of them back, so its counts are the real ones."""
+        run makes every change and rolls all of them back, so its counts are the real ones, with one exception: it
+        does not run the org rule check (a judge call per task, whose spend a rollback cannot take back). A task a rule
+        would hold therefore counts as changed in a dry run and as held in the real run."""
         caller = request.state.identity
         auth.domain(caller)
         with store.read() as c:
@@ -213,10 +216,12 @@ def register(
             # Chosen again under the write lock, so each task is judged as it is now.
             ids = bulk_select(c, caller, body.filter)
             changed, unchanged, skipped, judged = [], [], [], {}
-            # A close (or any finish: done, a done or closed step) takes a task's open subtasks with it. One the change
-            # leaves out (or the caller cannot read) would be ended anyway, so its parent is skipped; a subtask the change
-            # closes through its parent counts as changed.
-            selected = set(ids)
+            # A close (or any finish: done, a done or closed step) takes a task's open subtasks with it. Each subtask the
+            # change does not close is still open when its parent is reached, and the parent's cascade would end it too,
+            # so the parent is skipped. Subtasks are judged first (deepest first), so that check reads what the loop
+            # actually did with each one: left out, held by its rule check, refused or invalid.
+            position = {tid: i for i, tid in enumerate(ids)}
+            order = sorted(ids, key=lambda tid: -len(TR.ancestors(c, tid)))
             opened = (
                 {tid for tid in ids if (H.task(c, tid) or {}).get("status") != "closed"}
                 if body.action == "close"
@@ -226,7 +231,7 @@ def register(
             queued = len(c.after_commit)
             if body.dry_run:
                 c.execute("SAVEPOINT bulk_dry_run")
-            for tid in ids:
+            for tid in order:
                 row = H.task(c, tid)
                 try:
                     change = bulk_change(c, row, body)
@@ -237,18 +242,16 @@ def register(
                     (changed if tid in opened else unchanged).append(tid)
                     continue
                 if bulk_finishes(c, row, body):
-                    left = [
-                        k["id"]
-                        for k in H.descendants(c, tid)
-                        if k["status"] in H.ACTIVE_STATUSES and k["id"] not in selected
-                    ]
+                    # Open here means the change did not close it: not selected (filter or readability), held by its
+                    # rule check, refused or invalid. Finishing this task would end each of them through the cascade.
+                    left = [k["id"] for k in H.descendants(c, tid) if k["status"] in H.ACTIVE_STATUSES]
                     if left:
                         skipped.append(
                             (
                                 tid,
                                 "subtasks_left_out",
-                                "Its open subtasks are not in this change, so finishing it would end them too. "
-                                "Close them first, or take this task out of the change",
+                                "Some of its open subtasks did not close in this change (left out, held or refused), "
+                                "so finishing it would end them too. Close them first, or take this task out of the change",
                             )
                         )
                         continue
@@ -293,6 +296,9 @@ def register(
                     changed.append(tid)
                     if done.get("ingest"):
                         judged[tid] = done["ingest"]  # what ask ingest did with this handoff, and why
+            # Named in the order the caller gave them, whatever order they were judged in.
+            changed.sort(key=position.__getitem__)
+            skipped.sort(key=lambda entry: position[entry[0]])
             # A handoff judged for a task this change did not land names its call: refused, or unchanged.
             held_tids, refused_tids = {t for t, code, *_ in skipped if code == "held"}, {t for t, *_ in skipped}
             for tid, verdict in ingests.items():

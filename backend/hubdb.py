@@ -8833,10 +8833,10 @@ def _check_finish_children(conn, actor, parent, mover, *, strict=True, done=Fals
             # Named, with the reason, only to an actor who may open it (the members-only rule too): else "a subtask".
             shown = _child_for(conn, actor, kid["id"])
             why = f" ({exc.detail})" if shown != "a subtask" else ""
+            who_it_is = f"The open subtask {shown}" if shown != "a subtask" else "An open subtask under it"
             raise Refused(
                 exc.rule,
-                f"The open subtask {shown} is not yours to close{why}. "
-                "Finish it first or ask whoever requested it to close it",
+                f"{who_it_is} is not yours to close{why}. Finish it first, or ask whoever requested it to close it",
                 exc.severity,
             ) from exc
     return left_open
