@@ -49,7 +49,7 @@ them an owner (`playbooks/build-me-a-bot.md`); for a task with no human behind i
 it already.
 Read what it produced before you change anything: the template is a starting point, not the
 answer. Use `hub bot branch <bot>` for shared instructions and lessons on your own computer; `hub bot copy <bot>` starts an independent bot from the original repository's contents.
-From here on a routine is changed in Tico with `hub automation update <id>` (its id is in `hub automation list --owner bot:<slug>`), not by editing the file.
+From here on a routine is changed in Tico with `hub automation update <id>` (its id is in `hub automation list`), not by editing the file.
 
 ## 3. Put the real instructions in
 

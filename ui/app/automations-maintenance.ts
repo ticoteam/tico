@@ -7,36 +7,142 @@
    Anyone signed in reads it; `can_change` (an owner or an admin) decides whether the controls work. */
 'use strict';
 
+/** One step of Maintenance as GET /v2/maintenance lists it. */
+interface MaintStep {
+  key: string;
+  name: string;
+  enabled: boolean;
+  /** Only `suggest` carries it: false until the person gives Privacy consent. */
+  consent?: boolean;
+  /** The step runs on every run, so its "How often" is not a choice. */
+  fixed?: boolean;
+  frequency: string;
+  custom_every?: number | null;
+  custom_unit?: string | null;
+  max_bots?: number | null;
+  last_ran_at?: string | null;
+  stats?: MaintStats | null;
+}
+
+/** Learn's beta numbers over the last few days (backend/learnings.py beta_stats). */
+interface MaintStats {
+  days?: number;
+  runs?: number;
+  items_read?: number;
+  items_sent?: Record<string, number>;
+  saved?: number;
+  dropped?: number;
+  cost_usd?: number | string | null;
+}
+
+/** The schedule, pause and monthly caps (settings in GET/PATCH /v2/maintenance). */
+interface MaintSettings {
+  paused?: boolean;
+  schedule: string;
+  monthly_cap_usd?: number | null;
+  monthly_cap_usd_in_effect?: number | null;
+}
+
+/** One step's line in a run's history. */
+interface MaintRunStep {
+  step: string;
+  status: string;
+  reason?: string | null;
+  checked?: number | null;
+  found?: number | null;
+  woke?: number | null;
+  cost_usd?: number | string | null;
+}
+
+/** One Maintenance run (GET /v2/maintenance/runs, and last_run). */
+interface MaintRun {
+  id: string;
+  started_at: string;
+  finished_at?: string | null;
+  ok?: boolean;
+  result?: string | null;
+  trigger?: string;
+  step?: string | null;
+  cost_usd?: number | string | null;
+  steps?: MaintRunStep[];
+}
+
+/** The whole of GET /v2/maintenance. `steps` and `settings` are checked at runtime (auMaintOk): an older hub lacks them. */
+interface MaintView {
+  steps: MaintStep[];
+  settings: MaintSettings;
+  can_change?: boolean;
+  live_run_id?: string | null;
+  last_run?: MaintRun | null;
+  next_run_at?: string | null;
+}
+
+/** One page of GET /v2/maintenance/runs. */
+interface MaintRunsPage {
+  runs?: MaintRun[];
+  next?: string | null;
+}
+
+/** The Maintenance runs list: the shared run list, plus how many older pages the seek has read. */
+interface MaintRunList extends AuRunList<MaintRun> {
+  seek?: number;
+}
+
+/** One step's change as PATCH /v2/maintenance takes it. */
+interface MaintStepPatch {
+  key: string;
+  enabled?: boolean;
+  frequency?: string;
+  custom_every?: number | undefined;
+  custom_unit?: string | undefined;
+  max_bots?: number;
+}
+
+/** A PATCH to /v2/maintenance: the settings and any step changes. */
+interface MaintPatch {
+  paused?: boolean;
+  schedule?: string;
+  monthly_cap_usd?: number;
+  steps?: MaintStepPatch[];
+}
+
+/** The option list a select is drawn from: [value, label] pairs, and the value the select has now. */
+type MaintOpts = (pairs: ReadonlyArray<readonly [string | number, string]>, cur: unknown) => string;
+
 const AU_MAINT = 'maintenance';
 const AU_MAINT_OWNER = 'tico';   // the list's Owner: Tico itself runs it
-const AU_MAINT_SCHEDULES = [['hourly', 'Every hour'], ['2h', 'Every 2 hours'], ['3h', 'Every 3 hours'], ['6h', 'Every 6 hours'],
+const AU_MAINT_SCHEDULES: Array<[string, string]> = [['hourly', 'Every hour'], ['2h', 'Every 2 hours'], ['3h', 'Every 3 hours'], ['6h', 'Every 6 hours'],
   ['12h', 'Every 12 hours'], ['daily', 'Once a day']];
-const AU_MAINT_OFTEN = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
+const AU_MAINT_OFTEN: Array<[string, string]> = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
 const AU_MAINT_CAPS = [0, 10, 25, 50, 100, 250, 500];
-const AU_MAINT_WHAT = {collect: 'What changed since the last run', clean_up: 'Old data past retention',
+const AU_MAINT_WHAT: Record<string, string> = {collect: 'What changed since the last run', clean_up: 'Old data past retention',
   check_health: 'Setup problems to BotOps', find_stuck: 'Wakes bots on work that stalled', learn: 'Passes on what people said',
   suggest: 'Ideas from Tico Playbooks', update: 'Each bot that worked writes its update', dream: 'Bots tidy their memory'};
-const AU_MAINT_BOTS = {find_stuck: 'Most bots woken per run', dream: 'Most bots per run'};
+const AU_MAINT_BOTS: Record<string, string> = {find_stuck: 'Most bots woken per run', dream: 'Most bots per run'};
 const AU_MAINT_BETA = new Set(['learn']);
 const AU_MAINT_PRIVACY = '#/settings/general/settings-privacy';
 const AU_MAINT_RUNS_PAGE = 25;
 
 const AU_SYSJOBS = 'system-jobs';
 const AU_BUILTIN_PILL = '<span class="pill">Built-in</span>';
-const auMaintOk = m => !!m && Array.isArray(m.steps) && !!m.settings;
-const auMaintStep = key => (AU?.maint?.steps || []).find(s => s.key === key);
-const auMaintSchedule = s => (AU_MAINT_SCHEDULES.find(([k]) => k === s) || [, 'Every hour'])[1];
-function auMaintOften(s) {
+const auMaintOk = (m: MaintView | null | undefined): m is MaintView => !!m && Array.isArray(m.steps) && !!m.settings;
+const auMaintStep = (key: string): MaintStep | undefined => {
+  const steps: MaintStep[] = automationsState()?.maint?.steps || [];
+  return steps.find(s => s.key === key);
+};
+const auMaintSchedule = (s: string) => (AU_MAINT_SCHEDULES.find(([k]) => k === s) || [, 'Every hour'])[1];
+function auMaintOften(s: MaintStep): string {
   if (s.frequency === 'custom' && s.custom_every) {
     const unit = s.custom_unit === 'days' ? 'day' : 'hour';
     return `Every ${s.custom_every} ${unit}${s.custom_every === 1 ? '' : 's'}`;
   }
-  return {run: 'Every run', day: 'Once a day', week: 'Once a week'}[s.frequency] || 'Every run';
+  const word: Record<string, string> = {run: 'Every run', day: 'Once a day', week: 'Once a week'};
+  return word[s.frequency] || 'Every run';
 }
-const auMaintRunStatus = r => !r ? '' : !r.finished_at ? 'running' : r.ok ? 'ok' : 'failed';
+const auMaintRunStatus = (r: MaintRun | null | undefined): string => !r ? '' : !r.finished_at ? 'running' : r.ok ? 'ok' : 'failed';
 
 // The list row: a read-only built-in of kind system, Tico's own, on while not paused.
-function auMaintRow(m) {
+function auMaintRow(m: MaintView) {
   const s = m.settings, last = m.last_run;
   return {id: AU_MAINT, name: 'Maintenance', kind: 'system', builtin: true, readonly: true, owner_id: AU_MAINT_OWNER,
     enabled: !s.paused, paused: !!s.paused, schedule: auMaintSchedule(s.schedule), trigger: {type: 'schedule'}, steps: [],
@@ -45,14 +151,15 @@ function auMaintRow(m) {
     next_run: m.next_run_at || null};
 }
 // The list with Maintenance and System jobs beside it first; an older hub (no steps) leaves it as it is.
-function auMaintList(list, m) {
+// Generic, as auHeartList is: a list comes back as the type it went in (automations.js passes one it has not typed).
+function auMaintList<T extends Array<import('../types/api').Automation>>(list: T, m: MaintView): T {
   if (!auMaintOk(m)) return list;
-  return [auMaintRow(m), auSysJobsRow(), ...list.filter(a => a.id !== AU_MAINT && a.id !== AU_SYSJOBS)];
+  return [auMaintRow(m), auSysJobsRow(), ...list.filter(a => a.id !== AU_MAINT && a.id !== AU_SYSJOBS)] as T;
 }
 // A fresh listing (a save, Run now's follow): kept, the list row matched, and what is shown drawn again. A follow's
 // refresh leaves Settings as it is while a field there is being edited, so a value not yet saved is not lost.
-function auMaintAdopt(state, m, {keepEdits = false} = {}) {
-  if (!auMaintOk(m) || AU !== state) return;
+function auMaintAdopt(state: AutomationsState, m: MaintView, {keepEdits = false}: {keepEdits?: boolean} = {}): void {
+  if (!auMaintOk(m) || automationsState() !== state) return;
   state.maint = m;
   if (state.list) state.list = auMaintList(state.list, m);
   if (m.live_run_id && !state.mtFollow) auMaintFollow(state);
@@ -61,54 +168,55 @@ function auMaintAdopt(state, m, {keepEdits = false} = {}) {
   const f = document.activeElement;
   if (!(keepEdits && f?.matches?.('input:not([role="switch"]),select') && state.root?.querySelector('.au-pane')?.contains(f))) auDrawPane();
 }
-async function auMaintLoad(state, opts?) {
+async function auMaintLoad(state: AutomationsState, opts?: {keepEdits?: boolean}): Promise<void> {
   const gen = state.mtGen;
   try {
-    const m = await get('/v2/maintenance');
-    if (AU !== state || state.mtGen !== gen) return;
+    const m: MaintView = await get<MaintView>('/v2/maintenance');
+    if (automationsState() !== state || state.mtGen !== gen) return;
     state.maintError = auMaintOk(m) ? '' : 'Maintenance needs a newer hub';
     if (auMaintOk(m)) auMaintAdopt(state, m, opts);
-  } catch (e) { if (AU === state && state.mtGen === gen) state.maintError = [403, 404].includes(e.status) ? 'Maintenance needs a newer hub' : e.message; }
+  } catch (e) { if (automationsState() === state && state.mtGen === gen) state.maintError = [403, 404].some(code => code === errorStatus(e)) ? 'Maintenance needs a newer hub' : errorMessage(e, ''); }
 }
 
 // -------------------------------------------------------------------------------------------- drawing
-const auMaintSw = (on, label, attrs, off) =>
+const auMaintSw = (on: boolean, label: string, attrs: string, off?: boolean) =>
   `<input type="checkbox" role="switch" class="people-switch" aria-label="${esc(label)}"${on ? ' checked' : ''}${off ? ' disabled' : ''} ${attrs}>`;
 
-function auMaintHead(hd) {
-  const m = AU.maint;
+function auMaintHead(hd: HTMLElement): void {
+  const au = automationsState(), m = au?.maint;
   if (!m) { hd.innerHTML = '<h2 class="au-name">Maintenance</h2>'; return; }
   const s = m.settings, can = !!m.can_change, live = !!m.live_run_id, last = m.last_run;
   const meta = [live ? 'Running…' : last ? 'Last run ' + auRunTime(last.started_at) : 'Not run yet',
     s.paused ? 'paused' : m.next_run_at ? 'next ' + auRunTime(m.next_run_at) : ''].filter(Boolean).join(' · ');
-  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU_MAINT, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Settings' : 'Runs'}</a>`).join('');
+  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU_MAINT, v)}" aria-selected="${au?.view === v}">${v === 'flow' ? 'Settings' : 'Runs'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">Maintenance</h2>
-    ${can ? auMaintSw(!s.paused, 'Maintenance on', 'data-mt-pause', AU.mtBusy) : s.paused ? '<span class="pill waiting">Paused</span>' : ''}
+    ${can ? auMaintSw(!s.paused, 'Maintenance on', 'data-mt-pause', au?.mtBusy) : s.paused ? '<span class="pill waiting">Paused</span>' : ''}
     <span class="mt-meta muted" data-mt-meta>${esc(meta)}</span>
     <span class="au-sp"></span>
     <div class="au-hd2">
       <span class="au-sp au-sp-phone"></span>
       <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
-      ${can ? `<button class="primary mt-now" type="button" data-mt-now${live || AU.mtStarting ? ' disabled' : ''}>${live || AU.mtStarting ? 'Running…' : 'Run now'}</button>` : ''}
+      ${can ? `<button class="primary mt-now" type="button" data-mt-now${live || au?.mtStarting ? ' disabled' : ''}>${live || au?.mtStarting ? 'Running…' : 'Run now'}</button>` : ''}
     </div>`;
 }
 
-function auMaintPane(pane) {
-  const m = AU.maint;
-  if (!m) { pane.innerHTML = AU.maintError ? `<p class="err au-pad">${esc(AU.maintError)}</p>` : '<p class="muted au-pad">Loading…</p>'; return; }
+function auMaintPane(pane: HTMLElement): void {
+  const au = automationsState(), m = au?.maint;
+  if (!au || !m) { pane.innerHTML = au?.maintError ? `<p class="err au-pad">${esc(au.maintError)}</p>` : '<p class="muted au-pad">Loading…</p>'; return; }
   // A redraw keeps the place; Settings and Runs each open at the top.
-  const top = AU.mtPaneView === AU.view ? pane.scrollTop : 0;
-  AU.mtPaneView = AU.view;
-  pane.innerHTML = AU.view === 'runs' ? auMaintRunsHTML() : auMaintSettingsHTML(m);
+  const top = au.mtPaneView === au.view ? pane.scrollTop : 0;
+  au.mtPaneView = au.view;
+  pane.innerHTML = au.view === 'runs' ? auMaintRunsHTML() : auMaintSettingsHTML(m);
   pane.scrollTop = top;
 }
 
-function auMaintSettingsHTML(m) {
-  const s = m.settings, off = !m.can_change || AU.mtBusy, open = AU.mtOpen || new Set();
-  const opts = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(l)}</option>`).join('');
+function auMaintSettingsHTML(m: MaintView): string {
+  const au = automationsState();
+  const s = m.settings, off = !m.can_change || au?.mtBusy, open = au?.mtOpen || new Set<string>();
+  const opts: MaintOpts = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(l)}</option>`).join('');
   const cap = s.monthly_cap_usd ?? s.monthly_cap_usd_in_effect ?? 0;
-  const capPairs = (list: number[], cur: unknown) => [...new Set([...list, Number(cur) || 0])].sort((x, y) => x - y)
-    .map(v => [v, v ? '$' + (Number.isInteger(v) ? v : v.toFixed(2)) + ' a month' : 'No cap']);
+  const capPairs = (list: number[], cur: unknown): Array<[number, string]> => [...new Set([...list, Number(cur) || 0])].sort((x, y) => x - y)
+    .map((v): [number, string] => [v, v ? '$' + (Number.isInteger(v) ? v : v.toFixed(2)) + ' a month' : 'No cap']);
   const caps = capPairs(AU_MAINT_CAPS, cap);
   const rows = m.steps.map((st, i) => {
     const on = st.enabled, isOpen = open.has(st.key), always = st.key === 'collect';
@@ -137,7 +245,7 @@ function auMaintSettingsHTML(m) {
   </div>`;
 }
 
-function auMaintDetailHTML(st, off, opts) {
+function auMaintDetailHTML(st: MaintStep, off: boolean | undefined, opts: MaintOpts): string {
   const k = esc(st.key), custom = st.frequency === 'custom';
   const often = st.fixed ? '<span>Every run</span>'
     : `<select data-mt-often="${k}" aria-label="${esc(st.name)} how often"${off ? ' disabled' : ''}>${opts(AU_MAINT_OFTEN, st.frequency)}</select>
@@ -154,7 +262,7 @@ function auMaintDetailHTML(st, off, opts) {
 }
 
 // Learn's beta numbers (backend/learnings.py beta_stats): what it read, sent, kept and dropped.
-function auMaintStatsHTML(x) {
+function auMaintStatsHTML(x: MaintStats): string {
   const sent = Object.values(x.items_sent || {}).reduce((t, n) => t + (Number(n) || 0), 0);
   const cells = [['Runs', x.runs], ['Read', x.items_read], ['Sent', sent], ['Saved', x.saved], ['Dropped', x.dropped]]
     .map(([l, v]) => `<div class="mt-stat"><b>${esc(Number(v || 0).toLocaleString())}</b><span class="muted">${l}</span></div>`).join('');
@@ -162,14 +270,14 @@ function auMaintStatsHTML(x) {
     <div class="mt-stats">${cells}<div class="mt-stat"><b>${esc(auMoney(x.cost_usd))}</b><span class="muted">Cost</span></div></div></div>`;
 }
 
-const AU_MAINT_STEP_WORDS = {ran: 'ran', skipped: 'skipped', failed: 'failed', pending: 'pending', off: 'off'};
-function auMaintRunsHTML() {
-  const r = AU.mtRuns;
+const AU_MAINT_STEP_WORDS: Record<string, string> = {ran: 'ran', skipped: 'skipped', failed: 'failed', pending: 'pending', off: 'off'};
+function auMaintRunsHTML(): string {
+  const r = automationsState()?.mtRuns;
   if (!r || (r.loading && !r.rows.length)) return '<p class="muted au-pad">Loading…</p>';
   if (r.error && !r.rows.length) return `<p class="err au-pad">${esc(r.error)}</p>`;
   if (!r.rows.length) return '<p class="muted au-pad">No runs yet</p>';
-  const name = k => auMaintStep(k)?.name || auCap(String(k || '').replace(/_/g, ' '));
-  const counts = x => [[x.checked, 'checked'], [x.found, 'found'], [x.woke, 'woken']].filter(([n]) => n != null).map(([n, l]) => `${n} ${l}`).join(' · ');
+  const name = (k: string) => auMaintStep(k)?.name || auCap(String(k || '').replace(/_/g, ' '));
+  const counts = (x: MaintRunStep) => [[x.checked, 'checked'], [x.found, 'found'], [x.woke, 'woken']].filter(([n]) => n != null).map(([n, l]) => `${n} ${l}`).join(' · ');
   return `<table class="au-runs mt-runs"><thead><tr><th>Time</th><th><span class="au-vh">Result</span></th><th>Outcome</th><th class="mt-by">Started by</th><th class="au-n">Cost</th></tr></thead><tbody>
     ${r.rows.map(run => {
       const open = r.open.has(run.id), st = auMaintRunStatus(run), dot = st === 'ok' ? 'ok' : st === 'failed' ? 'fail' : 'wait';
@@ -188,25 +296,25 @@ function auMaintRunsHTML() {
     ${r.error ? `<p class="err au-pad">${esc(r.error)}</p>` : ''}`;
 }
 
-async function auMaintRunsLoad(state, more = false) {
-  const r = state.mtRuns ||= {rows: [], next: null, open: new Set(), loading: false, error: ''};
+async function auMaintRunsLoad(state: AutomationsState, more = false): Promise<void> {
+  const r: MaintRunList = state.mtRuns ||= {rows: [], next: null, open: new Set<string>(), loading: false, error: ''};
   // A run tapped on the overview's Runs tab opens here (automations-overview.js sets mtOpenRun).
   if (state.mtOpenRun) { r.open.add(state.mtOpenRun); state.mtOpenRun = null; }
   if (r.loading || (more && !r.next)) return;
   r.loading = true; r.error = '';
-  if (AU === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
+  if (automationsState() === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
   try {
-    const page = await get(`/v2/maintenance/runs?limit=${AU_MAINT_RUNS_PAGE}${more ? '&before=' + encodeURIComponent(r.next) : ''}`);
+    const page = await get<MaintRunsPage>(`/v2/maintenance/runs?limit=${AU_MAINT_RUNS_PAGE}${more ? '&before=' + encodeURIComponent(r.next ?? '') : ''}`);
     if (state.mtRuns !== r) return;
     const rows = page.runs || [];
     if (!more && r.rows.length) {
-      const fresh = new Map(rows.map(x => [x.id, x]));
+      const fresh = new Map(rows.map((x): [string, MaintRun] => [x.id, x]));
       r.rows = [...rows.filter(x => !r.rows.some(y => y.id === x.id)), ...r.rows.map(x => fresh.get(x.id) || x)];
     } else {
       r.rows = more ? r.rows.concat(rows) : rows;
       r.next = page.next || null;
     }
-  } catch (e) { r.error = e.message; }
+  } catch (e) { r.error = errorMessage(e, ''); }
   r.loading = false;
   // A run tapped on the overview that is older than the page loaded: the pages before it are read too, a few at most.
   if (!r.error && r.next && [...r.open].some(id => !r.rows.some(x => x.id === id)) && (r.seek = (r.seek || 0) + 1) <= 10) {
@@ -214,97 +322,99 @@ async function auMaintRunsLoad(state, more = false) {
     return;
   }
   r.seek = 0;
-  if (AU === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
+  if (automationsState() === state && state.id === AU_MAINT && state.view === 'runs') auDrawPane();
 }
 
 // -------------------------------------------------------------------------------------------- writes
 // One PATCH; the answer is the whole listing. A refusal says why and draws the saved values back.
-async function auMaintSave(body) {
-  const state = AU;
-  if (state.mtBusy) return;
+async function auMaintSave(body: MaintPatch): Promise<void> {
+  const state = automationsState();
+  if (!state || state.mtBusy) return;
   state.mtBusy = true; state.mtGen++;
   auDrawHead(); auDrawPane();
   try {
-    const m = await patch('/v2/maintenance', body);
+    const m: MaintView = await patch('/v2/maintenance', body);
     state.mtBusy = false; state.mtGen++;   // a read that started during the save holds the old values
     auMaintAdopt(state, m);
   } catch (e) {
     state.mtBusy = false; state.mtGen++;
-    toast(e.message, true);
-    if (AU === state && state.id === AU_MAINT) { auDrawHead(); auDrawPane(); }
+    toast(errorMessage(e, ''), true);
+    if (automationsState() === state && state.id === AU_MAINT) { auDrawHead(); auDrawPane(); }
   }
 }
-const auMaintStepSave = (key, change) => auMaintSave({steps: [{key, ...change}]});
+const auMaintStepSave = (key: string, change: Omit<MaintStepPatch, 'key'>) => auMaintSave({steps: [{key, ...change}]});
 
 // Run now: the same claim and due rules as the schedule (a live run is returned, not a second one), then the screen
 // follows it until it ends.
-async function auMaintRunNow() {
-  const state = AU;
-  if (state.mtStarting || state.maint?.live_run_id) return;
+async function auMaintRunNow(): Promise<void> {
+  const state = automationsState();
+  if (!state || state.mtStarting || state.maint?.live_run_id) return;
   state.mtStarting = true; state.mtGen++; auDrawHead();
   try {
-    const out = await post('/v2/maintenance/run', {});
+    const out: {started?: boolean; run?: MaintRun} = await post('/v2/maintenance/run', {});
     toast(out.started === false ? 'Already running' : 'Running');
-    if (AU !== state) return;
+    if (automationsState() !== state) return;
     state.mtStarting = false;
     if (state.maint && out.run && !out.run.finished_at) state.maint = {...state.maint, live_run_id: out.run.id};
     if (state.id === AU_MAINT) { auDrawHead(); if (state.view === 'runs') void auMaintRunsLoad(state); }
     auMaintFollow(state);
-  } catch (e) { toast(e.message, true); if (AU === state) { state.mtStarting = false; auDrawHead(); } }
+  } catch (e) { toast(errorMessage(e, ''), true); if (automationsState() === state) { state.mtStarting = false; auDrawHead(); } }
 }
 // Every 3 s for the first two minutes, then every 15 s for as long as the run is live.
-function auMaintFollow(state, tries = 0) {
-  clearTimeout(state.mtFollow);
+function auMaintFollow(state: AutomationsState, tries = 0): void {
+  clearTimeout(state.mtFollow ?? undefined);
   state.mtFollow = null;
-  if (AU !== state) return;
+  if (automationsState() !== state) return;
   state.mtFollow = setTimeout(async () => {
-    if (AU !== state) return;
+    if (automationsState() !== state) return;
     await auMaintLoad(state, {keepEdits: true});
     state.mtFollow = null;
-    if (AU !== state) return;
+    if (automationsState() !== state) return;
     if (state.id === AU_MAINT && state.view === 'runs') void auMaintRunsLoad(state);
     if (state.maint?.live_run_id) auMaintFollow(state, tries + 1);
   }, tries < 40 ? 3000 : 15000);
 }
 
 // -------------------------------------------------------------------------------------------- events
-function auMaintClick(t) {
-  if (AU.id !== AU_MAINT) return false;
+function auMaintClick(t: Element): boolean {
+  const au = automationsState();
+  if (au?.id !== AU_MAINT) return false;
   if (t.closest('a[href]')) return false;   // Needs Privacy consent and the tabs are links
-  let m;
-  if ((m = t.closest('[data-mt-now]'))) { if (!m.disabled) void auMaintRunNow(); return true; }
-  if ((m = t.closest('[data-mt-open]'))) {
-    const k = m.dataset.mtOpen, open = AU.mtOpen ||= new Set();
+  let m: HTMLElement | null;
+  if ((m = t.closest<HTMLElement>('[data-mt-now]'))) { if (m instanceof HTMLButtonElement && !m.disabled) void auMaintRunNow(); return true; }
+  if ((m = t.closest<HTMLElement>('[data-mt-open]'))) {
+    const k = m.dataset.mtOpen ?? '', open = au.mtOpen ||= new Set<string>();
     if (open.has(k)) open.delete(k); else open.add(k);
     auDrawPane();
     return true;
   }
-  if ((m = t.closest('tr[data-mt-run]'))) {
-    const r = AU.mtRuns, id = m.dataset.mtRun;
+  if ((m = t.closest<HTMLElement>('tr[data-mt-run]'))) {
+    const r = au.mtRuns, id = m.dataset.mtRun ?? '';
     if (r) { if (r.open.has(id)) r.open.delete(id); else r.open.add(id); auDrawPane(); }
     return true;
   }
-  if ((m = t.closest('[data-mt-more]'))) { void auMaintRunsLoad(AU, true); return true; }
+  if ((m = t.closest<HTMLElement>('[data-mt-more]'))) { void auMaintRunsLoad(au, true); return true; }
   return false;
 }
-function auMaintChange(e) {
+function auMaintChange(e: Event): void {
   const t = e.target;
-  if (!AU || AU.id !== AU_MAINT || !t.closest?.('.au-hd,.au-pane')) return;
-  if (AU.mtBusy) { auDrawHead(); auDrawPane(); return; }
-  const d = t.dataset, step = k => auMaintStep(k) || {};
-  if ('mtPause' in d) {
+  const au = automationsState();
+  if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement) || !au || au.id !== AU_MAINT || !t.closest('.au-hd,.au-pane')) return;
+  if (au.mtBusy) { auDrawHead(); auDrawPane(); return; }
+  const d = t.dataset, step = (k: string): Partial<MaintStep> => auMaintStep(k) || {};
+  if (t instanceof HTMLInputElement && 'mtPause' in d) {
     if (!t.checked && !confirm('Pause Maintenance? No step runs until it is back on.')) { t.checked = true; return; }
     void auMaintSave({paused: !t.checked});
   } else if ('mtSchedule' in d) void auMaintSave({schedule: t.value});
   else if ('mtCap' in d) void auMaintSave({monthly_cap_usd: Number(t.value)});
-  else if (d.mtOn) void auMaintStepSave(d.mtOn, {enabled: t.checked});
+  else if (d.mtOn && t instanceof HTMLInputElement) void auMaintStepSave(d.mtOn, {enabled: t.checked});
   else if (d.mtOften) {
     const s = step(d.mtOften);
     void auMaintStepSave(d.mtOften, t.value === 'custom'
       ? {frequency: 'custom', custom_every: s.custom_every || 2, custom_unit: s.custom_unit || 'hours'} : {frequency: t.value});
   } else if (d.mtEvery || d.mtUnit) {
-    const k = d.mtEvery || d.mtUnit, row = t.closest('.mt-detail');
-    const every = Math.round(Number(row.querySelector('[data-mt-every]').value)), unit = row.querySelector('[data-mt-unit]').value;
+    const k = d.mtEvery || d.mtUnit || '', row = t.closest('.mt-detail');
+    const every = Math.round(Number(row?.querySelector<HTMLInputElement>('[data-mt-every]')?.value)), unit = row?.querySelector<HTMLSelectElement>('[data-mt-unit]')?.value;
     if (!(every >= 1 && every <= 999)) { toast('Every 1 to 999', true); auDrawPane(); return; }
     void auMaintStepSave(k, {frequency: 'custom', custom_every: every, custom_unit: unit});
   } else if (d.mtBots) {
@@ -322,11 +432,11 @@ function auSysJobsRow() {
   return {id: AU_SYSJOBS, name: 'System jobs', kind: 'system', builtin: true, readonly: true, owner_id: AU_MAINT_OWNER,
     enabled: true, trigger: {type: 'system'}, steps: [], description: 'What Tico runs on its own', can_edit: false, can_pause: false};
 }
-function auSysJobsHead(hd) {
+function auSysJobsHead(hd: HTMLElement): void {
   hd.innerHTML = `<h2 class="au-name">System jobs</h2>${AU_BUILTIN_PILL}`;
 }
 // A redraw of the screen keeps the list (and a half-typed time in it); renderSystemRoutines reads it again at most once a minute.
-function auSysJobsPane(pane) {
+function auSysJobsPane(pane: HTMLElement): void {
   if (!pane.querySelector('#set-system-routines')) pane.innerHTML = `<div class="sysr-au" id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div>`;
   void renderSystemRoutines();
 }

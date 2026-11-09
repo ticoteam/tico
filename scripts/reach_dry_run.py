@@ -83,12 +83,16 @@ def task_writes(c, since):
         "WHERE s.sender LIKE 'bot:%' AND s.sent_at>=? ORDER BY s.sent_at",
         (since,),
     ):
-        # Made by this bot when its creation and this send are the same write: within a couple of seconds, not the
-        # same second (the clock can tick between the task row and its send log).
+        # Made by this bot when its creation and this send are the same write. A new task's send carries the task's
+        # own `created_at` (backend/task_caps.py `record`), however long the write took; a send logged before it did
+        # carries the clock at the end of the write, read as made within a couple of seconds.
         made = (
             r["requester_id"] == r["sender"]
             and bool(r["created_at"])
-            and abs((H.parse_ts(r["sent_at"]) - H.parse_ts(r["created_at"])).total_seconds()) < 2
+            and (
+                r["sent_at"] == r["created_at"]
+                or abs((H.parse_ts(r["sent_at"]) - H.parse_ts(r["created_at"])).total_seconds()) < 2
+            )
         )
         # A new task is checked against its parent (what the route does); a hand-off against the task itself.
         out.append(

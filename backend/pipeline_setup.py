@@ -177,7 +177,212 @@ PRESETS: dict[str, dict[str, Any]] = {
         "links": [
             {"from": "Product", "stage": "Review", "to": "Engineering", "mode": "spawn"},
         ],
-    }
+    },
+    "company_default": {
+        "factories": [
+            {"name": "Product", "goal": "Turn what customers need into shipped, working software"},
+            {"name": "Growth", "goal": "Find leads and turn them into customers"},
+            {"name": "Success", "goal": "Customers reach their goals and refer others"},
+        ],
+        "pipelines": [
+            {
+                "name": "Product",
+                "role": "product-roadmap",
+                "aliases": ["Product roadmap"],
+                "factory": "Product",
+                "prefix": "P",
+                "goal": "Discerning, high-quality specs for engineering",
+                "stages": _stages(
+                    ("On ice", "open"),
+                    ("Ideas", "open"),
+                    ("Specifying", "doing"),
+                    ("Review", "review"),
+                    ("In development", "doing"),
+                    ("Validate", "review"),
+                    ("Done", "done"),
+                    ("Declined", "closed"),
+                ),
+                "caps": {"On ice": 0, "Specifying": 3, "In development": 3},
+                # The boot seed (roadmap_flow.ensure) takes these names in place; Approved goes into In development.
+                "adopt": {
+                    "renamed": {
+                        "Suggested": "Ideas",
+                        "Exploring": "Specifying",
+                        "Spec": "Review",
+                        "Building": "In development",
+                        "Shipped": "Done",
+                    },
+                    "retired": {"Approved": "In development"},
+                },
+                "restage_empty_roles": True,
+                "requirements": [
+                    {
+                        "stage": "Specifying",
+                        "name": "Spec page",
+                        "kind": "attachment",
+                        "needs": {"formats": ["page"]},
+                        "reviewed_by": "bot_then_person",
+                        "rubric": "The page says what we're building, how we'll know it worked, and how it gets validated.",
+                    },
+                    {"stage": "Review", "name": "Spec approved", "kind": "approval", "reviewed_by": "person"},
+                    {
+                        "stage": "In development",
+                        "name": "Engineering shipped",
+                        "kind": "run",
+                        "needs": {"source": "subtasks"},
+                        "into": "Engineering",
+                        "reviewed_by": "nobody",
+                    },
+                    {
+                        "stage": "Validate",
+                        "name": "Validated",
+                        "kind": "attachment",
+                        "needs": {"formats": ["page", "link"]},
+                        "reviewed_by": "bot_then_person",
+                        "rubric": "The page says whether the spec's 'how we'll know' measures held, each with its number.",
+                    },
+                ],
+                # New companies skip the name match: a manager is bound by seat or bot (pipeline_setup bindings).
+                "manager": [],
+            },
+            {
+                "name": "Engineering",
+                "role": "engineering",
+                "aliases": ["Dev tickets"],
+                "factory": "Product",
+                "prefix": "D",
+                "goal": "Implement specs safely and efficiently; into production and validated",
+                # #2963's recommended no-QA board, so the review checks attach by stage name.
+                "stages": _stages(
+                    ("On Deck", "open"),
+                    ("In Progress", "doing"),
+                    ("Review 1", "review"),
+                    ("Review 1 Fixes", "doing"),
+                    ("Review 2", "review"),
+                    ("Review 2 Fixes", "doing"),
+                    ("Pending Release", "review"),
+                    ("Done", "done"),
+                    ("Closed", "closed"),
+                ),
+                "adopt": {
+                    "renamed": {
+                        "Todo": "On Deck",
+                        "Doing": "In Progress",
+                        "In review": "Review 1",
+                        "Ready to ship": "Pending Release",
+                    }
+                },
+                "restage_empty_roles": True,
+                "manager": [],
+            },
+            {
+                "name": "Growth Experiments",
+                "factory": "Growth",
+                "prefix": "GX",
+                "goal": "Test growth ideas, keep what works, drop the rest",
+                "stages": _stages(
+                    ("Ideas", "open"),
+                    ("Running", "doing"),
+                    ("Measuring", "review"),
+                    ("Kept", "done"),
+                    ("Dropped", "closed"),
+                ),
+                "manager": [],
+            },
+            {
+                "name": "Lead",
+                "factory": "Growth",
+                "prefix": "L",
+                "goal": "Find leads and bring the qualified ones to Opportunity",
+                "stages": _stages(
+                    ("Targets", "open"),
+                    ("Outreach", "doing"),
+                    ("Replies", "review"),
+                    ("Qualified", "done"),
+                    ("Closed", "closed"),
+                ),
+                "manager": [],
+            },
+            {
+                "name": "Opportunity",
+                "factory": "Growth",
+                "prefix": "O",
+                "goal": "Turn leads into customers",
+                "stages": _stages(
+                    ("Lead", "open"),
+                    ("Talking", "doing"),
+                    ("Proposal", "doing"),
+                    ("Closing", "review"),
+                    ("Won", "done"),
+                    ("Lost", "closed"),
+                ),
+                "manager": [],
+            },
+            {
+                "name": "Customer",
+                "factory": "Success",
+                "prefix": "C",
+                "goal": "Customers reach their goals; referrals are the main result",
+                "stages": _stages(
+                    ("Onboarding", "open"),
+                    ("Active", "doing"),
+                    ("Referral asked", "review"),
+                    ("Referred", "done"),
+                    ("Closed", "closed"),
+                ),
+                "manager": [],
+            },
+            {
+                "name": "Success Experiments",
+                "factory": "Success",
+                "prefix": "SX",
+                "goal": "Test customer success playbooks, keep what works, drop the rest",
+                "stages": _stages(
+                    ("Ideas", "open"),
+                    ("Running", "doing"),
+                    ("Measuring", "review"),
+                    ("Kept", "done"),
+                    ("Dropped", "closed"),
+                ),
+                "manager": [],
+            },
+            {
+                "name": "Legal",
+                "factory": None,
+                "prefix": "LG",
+                "private": True,
+                "goal": "Contracts and compliance questions answered before they hold up the business",
+                "stages": _stages(
+                    ("Intake", "open"),
+                    ("Review", "doing"),
+                    ("Rules check", "review"),
+                    ("Done", "done"),
+                    ("Closed", "closed"),
+                ),
+                "manager": [],
+            },
+            {
+                "name": "Finance",
+                "factory": None,
+                "prefix": "F",
+                "private": True,
+                "goal": "Money in, money out, and the books that show both",
+                "stages": _stages(
+                    ("Intake", "open"),
+                    ("Doing", "doing"),
+                    ("Review", "review"),
+                    ("Done", "done"),
+                    ("Closed", "closed"),
+                ),
+                "manager": [],
+            },
+        ],
+        "links": [
+            {"from": "Product", "stage": "Review", "to": "Engineering", "mode": "spawn"},
+            # A Lead card entering Qualified files one Opportunity (once per card; pipeline_engine._enter_spawn_stage).
+            {"from": "Lead", "stage": "Qualified", "to": "Opportunity", "mode": "spawn", "fires": "enter"},
+        ],
+    },
 }
 
 
@@ -262,7 +467,8 @@ def _restage(conn: sqlite3.Connection, actor: str, row: Row, stages: list[dict[s
     """replace=True on a type with no role: its stages become `stages` (from _pipeline_stages, the list it was made with),
     in that order. A stage the list keeps (same name) keeps its id, and its cards stay where they are with their status.
     Only cards on a removed stage move: an open one to the first stage, a done or closed one to Closed, its status kept.
-    Each move is a step event. Writes nothing when the stages already match. Never done to a type that holds a role."""
+    Each move is a step event. Writes nothing when the stages already match. A role type is restaged only when it is
+    empty (the preset's restage_empty_roles), so no card moves off a board a company is using."""
     from . import pipeline_engine
 
     want = [dict(s) for s in stages]
@@ -493,6 +699,89 @@ def _public_names(conn: sqlite3.Connection, ident: str, name: str, made: list[st
     made.append(f"public names of {name} follow its stages")
 
 
+def _open_seat(conn: sqlite3.Connection, seat_id: object) -> bool:
+    """Whether a seat exists and is still open (not filled, not closed)."""
+    return (
+        bool(seat_id)
+        and _one(conn, "SELECT id FROM seats WHERE id = ? AND closed_at IS NULL", (str(seat_id),)) is not None
+    )
+
+
+def _seat_filler(conn: sqlite3.Connection, seat_id: object) -> str | None:
+    """The bot that filled a closed seat, as a bare id, when that bot is active or planned. A seat filled before setup
+    still names its bot here, so the pipeline it is bound to keeps that bot (seat_filled only runs at the hire)."""
+    row = _one(conn, "SELECT filled_by FROM seats WHERE id = ? AND closed_at IS NOT NULL", (str(seat_id),))
+    if not row or not row.get("filled_by"):
+        return None
+    bot = H.resolve_bot(conn, str(row["filled_by"]))
+    if bot is not None and str(bot.get("state") or "active") in ("active", "planned"):
+        return str(bot["id"])
+    return None
+
+
+def _has_cards(conn: sqlite3.Connection, type_id: str) -> bool:
+    return _one(conn, "SELECT 1 FROM tasks WHERE type_id = ? LIMIT 1", (type_id,)) is not None
+
+
+def _manager_updates(conn: sqlite3.Connection, spec: Row, current: Row, binding: Row, unresolved: list[str]) -> Row:
+    """Who runs a pipeline. An active manager is never replaced, by a binding or by a name. Otherwise, in order: the bot
+    the binding names (an active bot, or a planned one setup is making, by id or slug, written as its bare id), the open
+    seat the binding names (its hire sets the manager; see seat_filled), the bot that already filled the binding's seat
+    (_seat_filler), a seat already set that is still open, the name match. A pipeline with none of those is named under
+    unresolved."""
+    if _active_manager(conn, current.get("manager")):
+        return {}
+    if binding.get("bot"):
+        bot = H.resolve_bot(conn, str(binding["bot"]))
+        # Setup binds the live seats' bots while BotOps is still setting them up, so a planned bot is taken too.
+        if bot is not None and str(bot.get("state") or "active") in ("active", "planned"):
+            return {"manager": str(bot["id"])}
+    if binding.get("seat") and _open_seat(conn, binding["seat"]):
+        return {"manager": None, "manager_seat": str(binding["seat"])}
+    filler = _seat_filler(conn, binding["seat"]) if binding.get("seat") else None
+    if filler:
+        return {"manager": filler, "manager_seat": str(binding["seat"])}
+    if _open_seat(conn, current.get("manager_seat")):
+        return {}
+    manager = _manager(conn, spec.get("manager") or [])
+    if manager:
+        return {"manager": manager}
+    hint = (spec.get("manager") or [f"{spec['name']} Pipeline Manager"])[0]
+    unresolved.append(f"{spec['name']} has no active manager: name a bot {hint}")
+    return {}
+
+
+def seat_filled(conn: sqlite3.Connection, actor: str, seat_id: str, bot: str) -> None:
+    """A seat's bot is hired (lifecycle.fill_seat, recruiting.hire). Each pipeline bound to the seat whose manager is not
+    an active bot takes the bot as its manager, and the change is logged. An active manager is never replaced."""
+    found = H.resolve_bot(conn, bot)
+    bot_id = str(found["id"]) if found is not None else bot
+    for row in _rows(conn, "SELECT id, manager FROM task_types WHERE manager_seat = ?", (seat_id,)):
+        if _active_manager(conn, row["manager"]):
+            continue
+        conn.execute("UPDATE task_types SET manager = ?, updated_at = ? WHERE id = ?", (bot_id, H.now(), row["id"]))
+        H.event(conn, actor, "pipeline.manager_seated", str(row["id"]), {"seat": seat_id, "bot": bot_id})
+    # A pr-reviewer hired into its seat (reviewer-1, reviewer-2) joins the Engineering pipeline's review pools.
+    from . import check_pools
+
+    pools: Any = check_pools
+    pools.join_reviewers(conn)
+
+
+def _seed_dev_boards(conn: sqlite3.Connection) -> None:
+    """The Dev board's flow, hand-off rows and reviewer pools on each Dev board (roadmap_flow.dev_board), each given once.
+    Setup runs this after it lays out the stages: the boot seeds ran while the Engineering pipeline still had the booted
+    stages (Todo, Doing, ...), which match none of the board's. A Dev tickets type seeded before keeps what it has."""
+    from . import check_pools, rules, step_flow
+
+    flows: Any = step_flow
+    wakes: Any = rules
+    pools: Any = check_pools
+    flows.seed(conn)
+    wakes.seed_dev(conn)
+    pools.seed(conn)
+
+
 def _pipeline(
     conn: sqlite3.Connection,
     actor: str,
@@ -501,11 +790,16 @@ def _pipeline(
     replace: bool,
     made: list[str],
     unresolved: list[str],
+    binding: Row | None = None,
 ) -> str:
     existing = _existing(conn, spec)
+    binding = binding or {}
     if existing is None:
         row = H.type_create(conn, actor, spec["name"], _pipeline_stages(spec), mover=True, numbered=True)
         made.append(f"pipeline {spec['name']}")
+        # A role pipeline made here (no type held its role) takes the role, so its flows find it by role, not by name.
+        if spec.get("role") and _one(conn, "SELECT id FROM task_types WHERE role = ?", (spec["role"],)) is None:
+            conn.execute("UPDATE task_types SET role = ? WHERE id = ?", (spec["role"], row["id"]))
     else:
         row = existing
         if replace and not existing.get("role"):
@@ -517,13 +811,16 @@ def _pipeline(
             H.type_update(conn, actor, row["id"], numbered=True, mover=True)
     if existing is not None and spec.get("adopt"):
         _adopt(conn, actor, row, spec, made, unresolved)
+    # A role board nobody has used yet takes the preset's stages in full (its boot stages keep their ids by name).
+    if existing is not None and spec.get("restage_empty_roles") and not _has_cards(conn, str(row["id"])):
+        _restage(conn, actor, row, _pipeline_stages(spec), made)
     _seed_caps(conn, str(row["id"]), spec)
     ident = str(row["id"])
     _public_names(conn, ident, spec["name"], made)
     current = (
         _one(
             conn,
-            "SELECT goal, prefix, factory_id, manager, pipeline_owner_id, pipeline_visibility FROM task_types WHERE id = ?",
+            "SELECT goal, prefix, factory_id, manager, manager_seat, pipeline_owner_id, pipeline_visibility FROM task_types WHERE id = ?",
             (ident,),
         )
         or {}
@@ -540,14 +837,7 @@ def _pipeline(
         updates["factory_id"] = factories[spec["factory"]]
     if not current.get("pipeline_owner_id"):
         updates["pipeline_owner_id"] = actor
-    # An active manager is never replaced. Any other manager (archived, paused, missing, or none at all) counts as none:
-    # the matching bot takes its place, or the pipeline is reported under unresolved. A NULL manager is no exception.
-    if not _active_manager(conn, current.get("manager")):
-        manager = _manager(conn, spec["manager"])
-        if manager:
-            updates["manager"] = manager
-        else:
-            unresolved.append(f"{spec['name']} has no active manager: name a bot {spec['manager'][0]}")
+    updates.update(_manager_updates(conn, spec, current, binding, unresolved))
     if spec.get("private"):
         updates["pipeline_visibility"] = "members"
     changed = {k: v for k, v in updates.items() if current.get(k) != v}
@@ -574,7 +864,9 @@ def _link(conn: sqlite3.Connection, actor: str, spec: Row, pipelines: dict[str, 
         return f"{spec['from']} {spec['stage']} to {spec['to']}"
     if pipeline_links.link_for_stage(conn, str(stage["id"])) is not None:
         return None
-    pipeline_links.create_link(conn, actor, str(stage["id"]), pipelines[spec["to"]], spec["mode"])
+    pipeline_links.create_link(
+        conn, actor, str(stage["id"]), pipelines[spec["to"]], spec["mode"], fires=str(spec.get("fires", "leave"))
+    )
     made.append(f"link {spec['from']} {spec['stage']} to {spec['to']}")
     return None
 
@@ -621,7 +913,11 @@ def completion_stage(c: sqlite3.Connection, pipeline_id: str) -> str | None:
 
 
 def apply_factory_setup(
-    c: sqlite3.Connection, actor: str, preset: str = "tico_default", replace: bool = False
+    c: sqlite3.Connection,
+    actor: str,
+    preset: str = "tico_default",
+    replace: bool = False,
+    bindings: dict[str, Row] | None = None,
 ) -> dict[str, Any]:
     """Make the preset's factories, pipelines, stages, links and goals. Idempotent: what exists is adopted (and given a
     goal, prefix, factory or manager only where it has none), never duplicated or overwritten. A manager bot is set when
@@ -630,6 +926,11 @@ def apply_factory_setup(
     `unresolved`, as are the links left out. `replace=True` also closes the open cards of an existing, role-less pipeline
     and makes its stages the preset's. A link whose stage cannot be made is refused (422, nothing is written) with
     replace; without it the link is left out and named under `unresolved`. Every stage's public name follows its name.
+
+    `bindings` ({pipeline name: {"bot": ref}} or {pipeline name: {"seat": seat id}}) names who runs a pipeline that has no
+    active manager: an active bot (by id or slug, written as its bare id), or an open seat whose hire sets the manager
+    (seat_filled). A binding replaces the name match for its pipeline, and an active manager is never replaced. A binding
+    that names nothing usable falls back to the name match; a binding for a pipeline the preset does not make is reported.
 
     {"preset", "factories": {name: id}, "pipelines": {name: id}, "changes": [what was made or changed],
     "unresolved": [what could not be resolved]}."""
@@ -643,7 +944,15 @@ def apply_factory_setup(
     c.execute("SAVEPOINT pipeline_setup")
     try:
         factories = {f["name"]: _factory(c, actor, f, i, made) for i, f in enumerate(spec["factories"])}
-        pipelines = {p["name"]: _pipeline(c, actor, p, factories, replace, made, unresolved) for p in spec["pipelines"]}
+        names = {str(p["name"]) for p in spec["pipelines"]}
+        for name in bindings or {}:
+            if name not in names:
+                unresolved.append(f"{name} is not a pipeline of {preset}: its binding is ignored")
+        pipelines = {
+            p["name"]: _pipeline(c, actor, p, factories, replace, made, unresolved, (bindings or {}).get(p["name"]))
+            for p in spec["pipelines"]
+        }
+        _seed_dev_boards(c)
         missing_links: list[str] = []
         for link in spec["links"]:
             missing = _link(c, actor, link, pipelines, made)

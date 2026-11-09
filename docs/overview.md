@@ -81,7 +81,7 @@ list|add|update|remove` and `hub pin add|update|remove`, the `hub_card_*` and `h
 `PATCH|DELETE /api/v2/pins/{id}`, `GET|POST /api/v2/cards`, `PATCH|DELETE /api/v2/cards/{id}` and
 `GET /api/v2/cards/choices`. `GET /api/v2/places/growth?month=YYYY-MM` reads the Growth page for one month and answers
 `month` and `months` for its picker; `GET /api/v2/cards/choices?place=growth` adds the growth templates, the metrics and
-the live channels. Tests: `backend/tests/test_cards.py`, `backend/tests/test_growth_cards.py`, `ui/tests/dashboard.cjs`.
+the live channels. Tests: `backend/tests/test_cards.py`, `backend/tests/test_growth_cards.py`, `ui/tests/dashboard.cts`.
 
 ## Campus
 
@@ -124,7 +124,7 @@ pinch to zoom around the pointer, double-click or double-tap to zoom in, and **�
 and `0`). It opens fitted, and the selected teammate is kept in view beside the panel. A manager with more than three
 reports and none below them lists them in a column (two past eight), so a team of 60 bots stays narrow. On a phone the
 chart is the same, the page never scrolls sideways, and the panel is a bottom sheet. The browser test
-`ui/tests/overview-graph.cjs` covers both modes, the panel and its actions, an older server, zoom with 64 bots, the
+`ui/tests/overview-graph.cts` covers both modes, the panel and its actions, an older server, zoom with 64 bots, the
 keyboard and a phone.
 
 ## Bot hours vs human hours
@@ -149,7 +149,7 @@ What you see before there is enough data:
 - **No people on the org chart:** bot hours for the last 7 days with no ratio, and "Add people to the org chart to compare".
 - **Less than 7 days of runs:** the headline for the days so far and "Chart fills in as weeks pass".
 
-The numbers come from `GET /api/v2/overview/bot-hours` (`backend/bot_hours.py`), which reads the runs Tico already records; nothing new is stored. The answer is kept for a minute, and the card asks again at most every 5 minutes while Campus is open. `backend/tests/test_bot_hours.py` checks the counting with sample runs, and the browser test `ui/tests/overview-hours.cjs` checks the card, the hover, the table and a phone-sized screen.
+The numbers come from `GET /api/v2/overview/bot-hours` (`backend/bot_hours.py`), which reads the runs Tico already records; nothing new is stored. The answer is kept for a minute, and the card asks again at most every 5 minutes while Campus is open. `backend/tests/test_bot_hours.py` checks the counting with sample runs, and the browser test `ui/tests/overview-hours.cts` checks the card, the hover, the table and a phone-sized screen.
 
 ## Replay the last 24 hours
 
@@ -157,4 +157,4 @@ The numbers come from `GET /api/v2/overview/bot-hours` (`backend/bot_hours.py`),
 
 While it plays, each readable bot's desk shows its state at the replay time: working, needs a person (waiting on a human, blocked, crashed or held for review: an amber light) or idle. A bot without Read access stays restricted. A message between two teammates, or a task handed from one to another, draws an arc from one desk to the other with a light travelling along it; a person who sits in several buildings is linked from the nearest seat. Captions list the last few events. Play/pause, 60×, 600× and 3600× speeds and a scrubber with the time control it; quiet stretches are shortened so the day keeps moving. Scrubbing replays states without drawing old arcs. Live status changes that arrive meanwhile wait: the desks keep their replayed states. **Back to live**, or the replay playing to its end on its own, restores the current status; scrubbing to the end keeps the replay open. With reduced motion the arcs appear whole, without the travelling light or hops.
 
-The browser test `ui/tests/overview-live.cjs` checks that a live status event moves a desk without another status read. `ui/tests/overview-replay.cjs` checks the 24-hour request, the bot-to-bot link, the replayed desks, that private text stays out of the campus and the return to live, with a recording stand-in for the 3D renderer. The campus's own WebGL scripts timed out under release load and were removed. Run `python -m backend.demo --port 18766` for visual review at `http://localhost:18766/#/overview`; the demo uses fictional sample data.
+The browser test `ui/tests/overview-live.cjs` checks that a live status event moves a desk without another status read. `ui/tests/overview-replay.cts` checks the 24-hour request, the bot-to-bot link, the replayed desks, that private text stays out of the campus and the return to live, with a recording stand-in for the 3D renderer. The campus's own WebGL scripts timed out under release load and were removed. Run `python -m backend.demo --port 18766` for visual review at `http://localhost:18766/#/overview`; the demo uses fictional sample data.

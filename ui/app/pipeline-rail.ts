@@ -524,7 +524,7 @@ document.addEventListener('click', (event: MouseEvent) => {
   const task = target.closest<HTMLElement>('[data-rail-task]');
   if (task?.dataset.railTask) {
     if (pipelinePhone()) pipelineRailSheet(false);
-    taskPeekOpen(TASKS_ST, 't' + task.dataset.railTask);
+    if (TASKS_ST) taskPeekOpen(TASKS_ST, 't' + task.dataset.railTask);
   }
 });
 document.addEventListener('keydown', (event: KeyboardEvent) => {

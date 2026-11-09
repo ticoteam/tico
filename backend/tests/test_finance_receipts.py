@@ -4,7 +4,7 @@ good, or read by a bot that looked at a file with no text. Covers the parser (a 
 rules (one good candidate is a suggestion, two equal ones are not, a row that syncs later is matched, nothing attaches
 while auto-attach is off, and a match at the setting attaches), the actions (accept on the row or another one, undo,
 reject), the Watch findings they move, the rights (a bot accepts on its own card and another bot sees nothing), the reads,
-and the briefing line. The browser side is ui/tests/finance-receipts.cjs."""
+and the briefing line. The browser side is ui/tests/finance-receipts.cts."""
 
 import json
 

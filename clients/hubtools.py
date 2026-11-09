@@ -1754,7 +1754,11 @@ def task_bulk(api, args):
         if args.get("where_" + name) not in (None, []):
             where[name] = args["where_" + name]
     if "not_owner" in where:
-        where["exclude_owner"] = where.pop("not_owner")
+        # The alias names the same filter as exclude_owner: two different owners would not say which one leaves out.
+        alias = where.pop("not_owner")
+        if where.get("exclude_owner") not in (None, "", alias):
+            raise ValueError("not_owner and exclude_owner name the same filter: give one owner to leave out")
+        where["exclude_owner"] = alias
     for name in ("owner", "exclude_owner", "requester", "member"):
         if where.get(name):
             where[name] = _target(api, where[name])

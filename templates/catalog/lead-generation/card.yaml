@@ -3,6 +3,7 @@ slug: lead-generation
 name: Lead Generation Owner
 required: false
 bootstrap: false
+retired: true
 group: sales
 pack: sales
 icon: person

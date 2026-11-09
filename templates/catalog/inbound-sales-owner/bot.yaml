@@ -1,0 +1,47 @@
+name: inbound-sales-owner                     # the slug: it matches the repository bot-inbound-sales-owner and the label owner:inbound-sales-owner
+display_name: "Inbound Sales Owner"
+labels: [owner:inbound-sales-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# Declared off. Setup switches on only the first routine (the inbound sweep); the onboarding playbook (step 6)
+# switches on the weekly read-out with `hub automation update <id> --enable`. `hub bot create` seeds them once;
+# from then on Tico's automations are the routines (docs/routines.md).
+routines:
+  - id: inbound-sweep
+    title: Inbound sweep
+    cron: "0 9,11,13,15,17 * * 1-5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/inbound-sweep.md
+    labels: [priority:p2]
+    enabled: false
+  - id: weekly-inbound-readout
+    title: Weekly inbound read-out
+    cron: "0 8 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-inbound-readout.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools:
+  - service: public-web
+    identity: "Unauthenticated public sources"
+    can: [read]
+    note: "lead sites, news and public profiles of the lead's company; no forms, no messages, no accounts"
+# Optional, uncomment when connected. Neither entry may ever carry write or send.
+#   - service: close-crm
+#     identity: "the team's CRM account"
+#     can: [read]
+#     env: CLOSE_API_KEY
+#     note: "new leads, sources and stages; read only, never a write"
+#   - service: gmail
+#     identity: "sales@example.com"
+#     can: [read, draft]          # never send: drafts only
+#     env: GOOGLE_SA_KEY
+#     note: "reads the sales inbox and leaves reply drafts; never files or sends"

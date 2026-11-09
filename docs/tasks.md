@@ -6,7 +6,7 @@ chooses the status each step means. Types belong to the whole team. General keep
 each standard status except waiting and declined (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
-dropdown; General shows **Status**. The Tasks header is one row: **Tasks**, the scope menu (**You** with its count, or
+dropdown; General shows **Status**. Wider than 760 px, the Tasks header is one row: **Tasks**, the scope menu (**You** with its count, or
 the type in view, such as **General**), then search, the filter icon, the **List** and **Board** layout icons, the
 archive icon (**Finished**), **Catch up** when it shows, **⋯** and **+**. The scope menu lists **You**, then the types:
 **General**, **Roadmap**, **Engineering** (or **Dev tickets**) and the team's other types. Picking a type shows its
@@ -19,7 +19,7 @@ finished tasks, with **Done**, **Closed** and **Snoozed** (while something is sn
 goes back. The filter icon's menu starts with **Group** (on a list) and then the fields to filter by; a number on the
 icon counts the filters on, and while any is on their chips show in a row under the header, with **Clear**. **⋯**
 holds **Select tasks**, **Stats** and **Pin to sidebar**. When the header has no room, the search folds to its icon
-first; on a phone it is always an icon. Old addresses keep working: `?view=foryou` is You, `?view=list` and
+first. On a phone it is an icon until you tap it. Old addresses keep working: `?view=foryou` is You, `?view=list` and
 `?view=board` that layout, `?view=done|closed|snoozed` the finished tasks, and `?type=` the type. On a desktop, drag a card to another column or to a new place
 in its column: it saves the step and `step_rank` at once, and a card dropped on a folded strip goes to
 the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
@@ -124,6 +124,30 @@ one leaves only that window's session, and sessions expire after 30 seconds. Tas
 task read permissions. Losing access closes the task window within 60 seconds, including bot-access revocation.
 The open task refetches on invalidations, with a three-minute safety refresh.
 
+## Tasks on a phone
+
+At 760 px wide or narrower, the Tasks header takes two rows. The first row holds the scope menu, **⋯**, the
+**✎** pencil (Edit pipeline), the ▶ button and **+**. The second row holds the view tools: the faces, search, the
+filter icon, the layout icons and the archive icon (**Finished**). The **Tasks** title is hidden, because the bottom
+bar already names the page.
+
+The **✎** shows only when you may change that type's rules, and never on **You**. The ▶ button shows on a board only
+when tasks there wait on you.
+
+From 601 to 760 px, the board keeps its columns and scrolls sideways. Folding works as on a desktop there.
+
+At 600 px wide or narrower, the board shows one step at a time. Each step is a chip in a row at the top, with its task
+count. A chip has a dot when tasks in that step wait on you. The board opens on the first step with tasks.
+
+Tap a chip to show its step. Or swipe across the cards: left for the next step, right for the previous one. A swipe
+counts when it moves more than 60 px sideways and twice as far sideways as up or down. Under the last card, a button
+reads **Swipe for** and the next step's name, and it goes to that step. It shows only on a step with cards, so the
+last step has none.
+
+Nothing folds on a phone. Backlog, finished and other steps each get a chip. A step's line above its cards shows its
+**warn after** limit, its ▶ button when tasks wait on you, and a select-all button. An empty step says **Nothing
+here**. General works the same way, with its steps as chips.
+
 ## Managers acting on tasks
 
 A bot or person above a task's owner or requester on the org chart inherits that
@@ -154,7 +178,7 @@ A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Post Relea
 
 ### Check pools: who takes a ticket's check
 
-Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; on a board with QA steps, In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse` and Post Release QA `qa-engineer-copy`.
+Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; on a board with QA steps, In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse` and Post Release QA `qa-engineer-copy`. A new company's Engineering pipeline (found by its `engineering` role once setup lays it out as the Dev board, with the Dev board's flow and hand-off rows) instead takes every `pr-reviewer` bot into Review 1 and Review 2, each once: a reviewer hired later joins when its seat is filled, and one a person takes out stays out. Until the first reviewer is hired those steps have no pool.
 
 When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Post Release QA: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. The model company is the Builder's company as its runs on the ticket actually ran (the Builder's configured company only while none of them is known), and a bot's company is the one a check given to it runs on: its task model's when it has one that can run now, else its configured model's, or what its last few such runs ran on. Each check step has an **Another model company** setting (`other_company` in its flow, see Step flow), `prefer` by default, and it decides what a bot of the Builder's company may do. With `prefer`, that bot takes the check only when no other pool bot is free, rather than the check waiting, for a review and a QA check alike, and a bot whose company Tico can't name comes after one of another company it can. With `require`, a bot of the Builder's company is never given the check, not even when it is the only free one: the check waits when every free bot runs on that company (the reason says so), and a bot of the Builder's company that finishes its own check does not take it. Require also never gives the check to a bot whose company Tico can't name (a model it doesn't know or a reseller picks, such as Cursor's auto, or part of a recent run on one), and while any part of the Builder's runs on the ticket is of unknown company the check waits for every bot. The bot is woken at once.
 
@@ -1121,6 +1145,9 @@ hub task show '#18945'
 hub task update '#18945' --step "On deck" --step-rank 2.5
 hub task list --type "Dev ticket" --sort step
 ```
+
+A bare template name is an address too: `--owner marketing-lead` reaches the one live bot built from that template when
+no bot or person has that name and no open seat has that template.
 
 `hub_task_types` lists types and ordered steps. `hub_task_create` and `hub_task_update` accept
 `type` and `step`, as ids or names, and `number`; `hub_task_update` also takes `step_rank` and `title`, and

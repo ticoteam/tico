@@ -73,6 +73,12 @@
 .dir-set-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0}
 .dir-set-row+.dir-set-row{border-top:1px solid var(--line)}
 [data-dirs-fields] header{display:flex;align-items:center;gap:10px}
+.dir-operate .dir-set-row{padding:4px 0}
+.dir-operate a{color:var(--ink)}
+.dir-operate-add{margin-top:8px}
+.dir-operate-found{margin-top:4px}
+.dir-operate-found li{padding:2px 0}
+.dir-operate-found button{width:100%;justify-content:flex-start;text-align:left}
 [data-dirs-fields] header select{margin-left:auto;width:auto;max-width:220px}
 
 @media (max-width:760px){

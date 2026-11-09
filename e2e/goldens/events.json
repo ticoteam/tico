@@ -556,6 +556,7 @@
           "pinned_for_everyone": false,
           "retention_days": null,
           "root_id": "<id12>",
+          "task_hidden": true,
           "task_id": "<task>",
           "title": "Draft the launch plan"
         },

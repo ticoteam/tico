@@ -95,9 +95,11 @@ def by_code(ctx: Ctx, code: str) -> L.Account | None:
 
 
 def cards_gl(ctx: Ctx) -> L.Account | None:
-    """The credit card line at CARDS. A book whose sales tax line took 2100 (before tax had its own range) has none."""
-    found = by_code(ctx, CARDS)
-    return found if found is not None and found.subtype == "credit_card" else None
+    """The book's credit card line, found by subtype on the lowest code. Not by CARDS (2100): on a book set up with the CI
+    chart 2100 is Accrued expenses (backend/finance/setup.py), and the card line sits on the next free code from CARDS.
+    None when the book has no card line yet."""
+    lines = sorted((a for a in ctx.accounts.values() if a.subtype == "credit_card"), key=lambda a: a.code)
+    return lines[0] if lines else None
 
 
 def gl_account(ctx: Ctx, money: Any) -> L.Account:
