@@ -890,7 +890,8 @@ async function settingsCatalogPicker() {
     const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let shown = 0;
     grid.querySelectorAll('[data-cat-card]').forEach(node => {
-      const card = catalogCard(state, node.dataset.catCard);
+      const card = catalogCard(state, String(node.dataset.catCard));
+      if (!card) throw new Error('Catalog card missing');
       const text = [card.name, card.slug, card.summary, card.when, ...(card.owns || []), catalogName(state, card)].join(' ').toLowerCase();
       node.hidden = !words.every(word => text.includes(word));
       if (!node.hidden) shown++;
