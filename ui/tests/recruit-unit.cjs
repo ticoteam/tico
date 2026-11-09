@@ -23,6 +23,8 @@ const path = require('node:path');
     get:()=>new Promise(resolve=>{resolveCatalog=resolve;}),
     post:async(url,body)=>{created.push({url,body});return url==='/v2/seats'?{id:'seat-1'}:{};},refresh:async()=>{},loadSettings:async()=>{},toast(){},settingsEditBot(){}
   });
+  // recruit.ts calls the shared helpers errorMessage (errors.ts) and eventElement (dom.ts); load them first, as index.html does.
+  for (const helper of ['errors.js','dom.js']) vm.runInContext(fs.readFileSync(path.join(__dirname,'../../build/ui/app',helper),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../build/ui/app/recruit.js'),'utf8'),context);
   context.recruitSeat=async id=>{opened.push(id);};
   const opening = context.settingsRecruitFlow({title:values.title,brief:values.brief,template:'support'});
