@@ -134,7 +134,8 @@ A window validates a head in one of two ways. A **full** validation is the whole
   main's head in full as it does today. Once that run is a day old, the window may dispatch a full validation again on
   its own. Until then a release can wait up to a day, so a person who needs it sooner runs it by hand.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
-  merge queue's rules, never the full suite), the browser smoke set, the factory part when its inputs changed, the
+  merge queue's rules before its light plan's two-level cut, never the full suite; so it runs the tests a queue group
+  left out), the browser smoke set, the factory part when its inputs changed, the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
   anchor's, and the tests that failed in the open red runs (below). A failed file that marks slow tests also runs in the
   contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
@@ -474,8 +475,11 @@ GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue;
 
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
 failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
-the pull request's own run first, because a ready pull request runs its selected tests. After a queue failure, fix it and get
-green PR checks before enqueuing again.
+the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
+that import, name or read a changed file, the smoke set, at most four VMs), and its queue group goes one level further (at
+most eight VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
+closure over every change since the last full validation, so a test a queue group left out still runs before a release. After a queue failure, fix it and get green PR
+checks before enqueuing again.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
