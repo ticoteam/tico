@@ -2,8 +2,9 @@ import json
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt, expire
-from backend.tests.test_member_bots import botops, turn, finish
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt, expire
+from backend.tests.test_api import api
+from backend.tests.helpers.member_bots import botops, turn, finish
 from backend import bot_settings as BS
 
 
@@ -46,7 +47,7 @@ def test_plain_message_from_another_conversation_does_not_interrupt_running_turn
 
 
 def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the_task(api, botops):
-    from backend.tests.test_botops_parity import act
+    from backend.tests.helpers.botops_parity import act
 
     active = turn(api, botops, person="ana-test", text="Review ops and keep working until done")
     with api.app.state.store.read() as c:
@@ -139,10 +140,10 @@ def ask_ops(api, r, task_id, text):
 def test_deferred_input_moves_to_the_next_run_and_the_first_run_keeps_its_task(api):
     from backend import task_privacy
     from backend.store import H
-    from backend.tests.test_task_privacy_reads import sql
+    from backend.tests.helpers.task_privacy_reads import sql
 
     r = two_bots(api)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -193,7 +194,7 @@ def test_a_deferred_input_moves_to_the_next_run_after_the_history_sweep_indexed_
     sweep has indexed that run, the second run must still get the input instead of an error."""
     from backend import read_deps
     from backend.store import H
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     r = two_bots(api)
     with api.app.state.store.transaction() as c:
@@ -340,7 +341,7 @@ def test_a_comment_in_the_room_a_task_moved_to_steers_the_turn_still_running_fro
 def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_run(api, botops):
     """HotMic, Oct 15: BotOps filed "Build a bot" citing `turn`; the task stored the literal and its own run, which starts
     from the task notice, was refused bot registration."""
-    from backend.tests.test_member_bots import register
+    from backend.tests.helpers.member_bots import register
 
     active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot in engineering")
     task = post(

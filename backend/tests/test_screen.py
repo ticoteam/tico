@@ -4,7 +4,8 @@ one; a ticket opens one session once, and the hub pipes the bytes both ways."""
 import pytest
 
 from backend.events import runner_read
-from backend.tests.test_api import assign, get, headers, post, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import assign, get, headers, post, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.screen import offer
 
 
 pytestmark = pytest.mark.slow
@@ -12,24 +13,10 @@ pytestmark = pytest.mark.slow
 
 @pytest.fixture
 def api(tmp_path):
-    from backend.tests.test_screen_relay_contract import running_service
+    from backend.tests.helpers.screen_relay_contract import running_service
 
     with running_service(tmp_path) as service:
         yield service.api
-
-
-def offer(api, r):
-    post(
-        api,
-        "runners/heartbeat",
-        {
-            "version": "test",
-            "platform": "test",
-            "capabilities": ["screen_v1"],
-            "readiness": {"schema_version": 1, "screen": {"available": True, "width": 1280, "height": 800}},
-        },
-        token=r["token"],
-    )
 
 
 def test_only_the_operator_or_an_admin_sets_or_opens_a_screen_and_only_once_the_computer_offers_one(api):

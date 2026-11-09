@@ -12,7 +12,7 @@ from backend.finance.context import load
 from backend.finance.core import tax as T
 from backend.finance.store import banking as SK
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     PEOPLE,
@@ -830,17 +830,17 @@ def test_an_exempt_income_line_is_listed_as_exempt_sales(keeper):
 
 
 def test_a_book_with_cards_and_a_new_jurisdiction_gets_distinct_codes(keeper):
-    connect(keeper, FakeMercury())  # Mercury IO takes the card line at 2100
+    connect(keeper, FakeMercury())  # Mercury IO takes the card line at 2101
     with keeper.transaction() as c:
         made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland"})
         assert made.status == "committed", made
         codes = {str(r[0]): str(r[1]) for r in c.execute("SELECT subtype, code FROM fin_accounts")}
-        assert (codes["credit_card"], codes[T.SALES_TAX]) == ("2100", "2300")
+        assert (codes["credit_card"], codes[T.SALES_TAX]) == ("2101", "2300")
 
 
 def test_a_card_never_maps_to_a_sales_tax_line_that_took_its_code(books):
-    with books.transaction() as c:  # a book whose jurisdiction was added while tax still started at 2100
-        old = {"code": "2100", "name": "Sales tax payable - Testland", "type": "liability", "subtype": T.SALES_TAX}
+    with books.transaction() as c:  # a book whose sales tax line took the first code after Accrued expenses (2101)
+        old = {"code": "2101", "name": "Sales tax payable - Testland", "type": "liability", "subtype": T.SALES_TAX}
         assert act(c, OWNER, "account_create", old).status == "committed"
     connect(books, FakeMercury())
     with books.read() as c:
@@ -848,4 +848,4 @@ def test_a_card_never_maps_to_a_sales_tax_line_that_took_its_code(books):
             "SELECT a.code, a.subtype FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id"
             " WHERE m.kind='card_program'"
         ).fetchall()
-    assert [tuple(r) for r in mapped] == [("2101", "credit_card")]
+    assert [tuple(r) for r in mapped] == [("2102", "credit_card")]

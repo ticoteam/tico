@@ -6,34 +6,14 @@ import jwt
 import pytest
 
 from backend import google_workspace, mailbox_access
-from backend.tests.test_api import api, get, headers, setup_attempt  # noqa: F401
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_gmail_live import BOX, NEXT, gmail_http  # noqa: F401
-from backend.tests.test_google_workspace import personal
-from backend.tests.test_google_workspace_authz import workspace_key  # noqa: F401
-from backend.tests.test_mail_api import put_mail
-
-SHARED = "legal@acme.example"
-
-
-@pytest.fixture(autouse=True)
-def no_cached_tokens():
-    google_workspace.forget_tokens()
-    yield
-    google_workspace.forget_tokens()
-
-
-@pytest.fixture
-def live(api, workspace_key, gmail_http):
-    with api.app.state.store.transaction() as c:
-        mailbox_access.ensure_mailbox(c, SHARED, kind="shared", created_by="human:ana")
-    return gmail_http
-
-
-@pytest.fixture
-def assistant_token(api):
-    _, attempt = assistant_turn(api, "ana-test", "Read my mail and the shared mailboxes I can access.")
-    return attempt["token"]
+from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
+from backend.tests.helpers.google_workspace import personal
+from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
+from backend.tests.helpers.mail_api import put_mail
+from backend.tests.helpers.mail_live import SHARED, assistant_token, live, no_cached_tokens
 
 
 def read(api, path, token="ana-test", **params):

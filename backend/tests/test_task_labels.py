@@ -6,9 +6,9 @@ import json
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_roadmaps import public_setup as roadmap_public_setup
-from backend.tests.test_tasks_board import api, get, headers, post  # noqa: F401 (fixture)
-from backend.tests.test_tasks_board import bot_token as board_bot_token
+from backend.tests.helpers.roadmaps import public_setup as roadmap_public_setup  # noqa: F401
+from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.tasks_board import bot_token as board_bot_token  # noqa: F401
 
 
 def public_setup(api):

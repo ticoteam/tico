@@ -1,7 +1,7 @@
-"""Release windows: when a window is open, which candidate ships, when stable may take the canary's approved release, and
-that a failure reaches the release-train issue (scripts/release_train.py)."""
+"""The release train: which candidate ships and when, when stable may take the canary's approved release (by a person, or
+automatically when no person is needed), and that a failure reaches the release-train issue (scripts/release_train.py)."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import re
 import sys
 from zoneinfo import ZoneInfo
@@ -19,8 +19,8 @@ def pt(*when):
 
 
 A, B, C, D = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
-NOW = datetime(2026, 11, 5, 15, 30, tzinfo=timezone.utc)  # Thursday 07:30 PST: the 07:00 window is open
-OPENED = pt(2026, 11, 5, 7, 0)
+NOW = datetime(2026, 11, 5, 15, 30, tzinfo=timezone.utc)  # Thursday 07:30 PST
+MORNING = pt(2026, 11, 5, 7, 0)  # half an hour before NOW
 
 
 def run(sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1):
@@ -36,9 +36,9 @@ def run(sha, version="v0.5.201", previous="v0.5.200", *, status="completed", con
 
 
 class FakeGitHub:
-    """main is A <- B <- C (C is the head); v0.5.200 is tagged at A and was published before the window opened."""
+    """main is A <- B <- C (C is the head); v0.5.200 is tagged at A and was published six hours before MORNING."""
 
-    def __init__(self, runs=(), tags=None, head=C, published=OPENED - timedelta(hours=6)):
+    def __init__(self, runs=(), tags=None, head=C, published=MORNING - timedelta(hours=6)):
         self.tags_ = dict(tags if tags is not None else {"v0.5.199": "0" * 40, "v0.5.200": A, "v0.6.0-rc.1": B})
         self.order = [A, B, C]
         self.head_ = head
@@ -195,11 +195,20 @@ def approval_of(gh, version):
     return next(issue for issue in gh.issue_list if issue["title"] == rt.approval_title(version))
 
 
-def approval_for(gh, version, *, approved_by=None, held=False, comment_by=None, account_type="User"):
+# An approval body whose notes list a High risk item, as scripts/release_notes.py writes them.
+HIGH_RISK_NOTES = (
+    "Candidate v0.5.200 at aaaaaaaaaaaa (validated: u)\n\n"
+    "Changes since v0.5.199: 0 user-facing, 1 high risk, 0 backend, 0 internal\n\n"
+    "## High risk\n\n### #9 Rewrite the task store\n- Risk: high — moves every task row\n"
+)
+
+
+def approval_for(gh, version, *, approved_by=None, held=False, comment_by=None, account_type="User", body=None):
     """An open approval record for version: approved by a login's `approved` label, held, or with a `/approve` comment.
-    The approving account is a person (type User) unless account_type says otherwise."""
+    The approving account is a person (type User) unless account_type says otherwise. Its notes list no High risk item
+    unless `body` says otherwise."""
     labels = [rt.APPROVAL_LABEL] + ([rt.APPROVED] if approved_by else []) + ([rt.HOLD] if held else [])
-    issue = gh.add_issue(rt.approval_title(version), labels=labels, body="notes for %s" % version)
+    issue = gh.add_issue(rt.approval_title(version), labels=labels, body=body or "notes for %s" % version)
     if approved_by:
         gh.events[issue["number"]] = [
             {
@@ -268,7 +277,10 @@ ENV = {
     "STABLE_URL": "https://stable.acme.example",
     "STABLE_UPDATE_KEY": "k2",
     "RELEASE_TRAINS": "on",
+    # Most tests are about a person's approval; AUTO turns it off (the default when the variable is not set).
+    "RELEASE_NEEDS_PERSON": "on",
 }
+AUTO = {key: value for key, value in ENV.items() if key != "RELEASE_NEEDS_PERSON"}
 
 
 # ---- loading the scripts' modules ----
@@ -292,112 +304,25 @@ def test_versions_order_numerically_and_skip_prereleases():
 
 def test_validation_title_round_trips_for_release_yml():
     assert rt.parse_title(rt.title(C, "v0.5.201", "v0.5.200")) == (C, "v0.5.201", "v0.5.200")
-    assert rt.parse_title("Release window opens") is None
+    assert rt.parse_title("Release train check") is None
 
 
-UTC = timezone.utc
-
-
-@pytest.mark.parametrize(
-    "now, start, following",
-    [
-        pytest.param(pt(2026, 11, 5, 7, 5), pt(2026, 11, 5, 7, 0), pt(2026, 11, 5, 8, 0), id="thu-0705-opens-0700"),
-        pytest.param(
-            pt(2026, 11, 5, 6, 59), pt(2026, 11, 4, 21, 0), pt(2026, 11, 5, 7, 0), id="thu-0659-yesterday-2100"
-        ),
-        pytest.param(pt(2026, 11, 5, 21, 30), pt(2026, 11, 5, 21, 0), pt(2026, 11, 6, 7, 0), id="thu-2130-last-window"),
-        pytest.param(pt(2026, 11, 5, 22, 30), pt(2026, 11, 5, 21, 0), pt(2026, 11, 6, 7, 0), id="thu-2230-no-2200"),
-        pytest.param(pt(2026, 7, 11, 7, 0), pt(2026, 7, 11, 7, 0), pt(2026, 7, 11, 8, 0), id="sat-0700-pdt-boundary"),
-        pytest.param(pt(2026, 7, 11, 15, 1), pt(2026, 7, 11, 15, 0), pt(2026, 7, 11, 16, 0), id="sat-1501-pdt"),
-        pytest.param(pt(2026, 7, 11, 21, 0), pt(2026, 7, 11, 21, 0), pt(2026, 7, 12, 7, 0), id="sun-weekend-2100"),
-    ],
-)
-def test_window_start_and_next_window_follow_los_angeles_time(now, start, following):
-    assert rt.window_start(now) == start, "latest window start"
-    assert rt.next_window(now) == following, "next window start"
-    assert rt.window_start(now) <= now < rt.next_window(now)
-
-
-def test_a_dst_change_day_uses_the_offset_of_each_window():
-    # Sunday 8 March 2026 springs forward at 02:00 PST (10:00 UTC): 07:00 is daylight time after that (14:00 UTC).
-    assert rt.window_start(datetime(2026, 3, 8, 14, 1, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 0, tzinfo=UTC), (
-        "spring forward: 07:00 PDT is 14:00 UTC"
-    )
-    assert rt.window_start(datetime(2026, 3, 8, 13, 59, tzinfo=UTC)) == datetime(2026, 3, 8, 5, 0, tzinfo=UTC), (
-        "spring forward: before 07:00 PDT, Saturday's 21:00 PST window is the latest start"
-    )
-    assert rt.next_window(datetime(2026, 3, 8, 13, 59, tzinfo=UTC)) == datetime(2026, 3, 8, 14, 0, tzinfo=UTC), (
-        "spring forward: the next window is 07:00 PDT"
-    )
-    # Sunday 1 November 2026 falls back at 02:00 PDT (09:00 UTC): 07:00 is standard time after that (15:00 UTC).
-    assert rt.window_start(datetime(2026, 11, 1, 15, 1, tzinfo=UTC)) == datetime(2026, 11, 1, 15, 0, tzinfo=UTC), (
-        "fall back: 07:00 PST is 15:00 UTC"
-    )
-    assert rt.window_start(datetime(2026, 11, 1, 14, 59, tzinfo=UTC)) == datetime(2026, 11, 1, 4, 0, tzinfo=UTC), (
-        "fall back: before 07:00 PST, Saturday's 21:00 PDT window is the latest start"
-    )
-
-
-@pytest.mark.parametrize(
-    "cron, now, opens, why",
-    [
-        pytest.param("0 15 * * *", pt(2026, 11, 5, 7, 0), True, "07:00 PST, in season", id="in-season-pst"),
-        pytest.param("0 15 * * *", pt(2026, 11, 5, 7, 45), True, "07:00 PST, 45 minutes late", id="late-opens"),
-        pytest.param("0 15 * * *", pt(2026, 11, 5, 8, 5), False, "08:00 has started since", id="superseded"),
-        pytest.param("0 14 * * *", pt(2026, 7, 7, 7, 5), True, "07:00 PDT is 14:00 UTC", id="in-season-pdt"),
-        pytest.param("0 14 * * *", pt(2026, 11, 5, 6, 5), False, "06:00 PST is no window", id="pdt-cron-in-pst-twin"),
-        pytest.param("0 15 * * *", pt(2026, 7, 11, 8, 5), True, "08:00 PDT, a Saturday", id="weekend-pdt"),
-        pytest.param("0 22 * * *", pt(2026, 7, 11, 15, 5), True, "15:00 PDT is 22:00 UTC", id="pdt-afternoon"),
-        pytest.param("0 4 * * *", pt(2026, 7, 11, 21, 5), True, "21:00 PDT is 04:00 UTC", id="pdt-last-window"),
-        pytest.param("0 4 * * *", pt(2026, 11, 5, 21, 5), False, "04:00 UTC is 20:00 PST: no window", id="pst-twin"),
-        pytest.param("0 5 * * *", pt(2026, 11, 5, 21, 5), True, "21:00 PST is 05:00 UTC", id="pst-last-window"),
-    ],
-)
-def test_a_window_cron_opens_only_at_its_own_real_window_start(cron, now, opens, why):
-    assert rt.window_cron_opens(cron, now) is opens, why
-
-
-@pytest.mark.parametrize(
-    "env, opens",
-    [
-        pytest.param({"GITHUB_EVENT_NAME": "workflow_dispatch"}, True, id="manual-run"),
-        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "0 15 * * *"}, True, id="window-cron"),
-        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": "0 14 * * *"}, False, id="off-season-twin"),
-        pytest.param({"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": rt.BACKSTOP_CRON}, False, id="backstop"),
-        pytest.param({"GITHUB_EVENT_NAME": "push"}, False, id="push"),
-    ],
-)
-def test_only_a_window_start_or_a_manual_run_opens_a_window(env, opens):
-    assert rt.window_opens(env, pt(2026, 11, 5, 7, 45)) is opens
-
-
-def test_crons_are_each_utc_window_start_once_and_backstop_minutes_are_clear():
-    assert rt.WINDOWS == tuple((hour, 0) for hour in range(7, 22)), "every hour on the hour, 07:00 to 21:00"
-    starts, day = set(), date(2026, 1, 1)
-    while day < date(2028, 1, 1):  # two years: both offsets, weekdays and weekends
-        starts |= {(start.hour, start.minute) for start in rt.window_starts_on(day)}
-        day += timedelta(days=1)
-    crons = [rt.cron_time(cron) for cron in rt.CRONS]
-    assert len(crons) == len(set(crons)), "a window cron is listed twice"
-    assert set(crons) == starts, "CRONS are not exactly the UTC times a window starts at"
-    assert {minute for _, minute in crons} == {0}, "a window cron is not on a window's minute (on the hour)"
-    assert rt.BACKSTOP_CRON == "5-59/20 * * * *" and not {5, 25, 45} & {minute for _, minute in crons}, (
-        "the backstop shares a minute with a window cron"
-    )
-
-
-# ---- what an open window does ----
+# ---- what the train does ----
 
 
 def plan(gh, now=NOW, finished=None, manual=False):
     return rt.plan_step(gh, now, finished, manual)
 
 
-def test_window_closes_once_a_release_is_published_after_it_opened():
-    gh = FakeGitHub([run(C)], published=OPENED + timedelta(minutes=40))
-    assert plan(gh)["action"] == "none" and "window closed" in plan(gh)["why"]
-    # The 14:00 window opens and ships.
-    assert plan(gh, now=pt(2026, 11, 5, 14, 5))["action"] == "ship"
+@pytest.mark.parametrize(
+    "now", [NOW, pt(2026, 11, 6, 3, 0), pt(2026, 11, 7, 23, 30)], ids=["morning", "3am", "late-saturday"]
+)
+def test_there_are_no_windows_a_green_candidate_ships_at_any_hour_right_after_the_last_release(now):
+    # v0.5.200 was published a minute before C's validation finished: the next release goes out at once.
+    gh = FakeGitHub([run(C, at=now)], published=now - timedelta(minutes=1))
+    assert plan(gh, now=now)["action"] == "ship"
+    # Main's head with no validation yet is validated at once, whatever the hour.
+    assert plan(FakeGitHub(published=now - timedelta(minutes=1)), now=now)["action"] == "dispatch"
 
 
 def release_run(status="completed", conclusion="failure", at=NOW - timedelta(minutes=40), id=70):
@@ -428,12 +353,14 @@ def test_nothing_to_do_when_main_has_not_moved():
     assert plan(FakeGitHub(head=A))["action"] == "none"
 
 
-def test_the_first_green_candidate_of_the_window_ships():
-    picked = plan(FakeGitHub([run(B, id=2, at=OPENED + timedelta(minutes=20))]))
+def test_the_first_green_candidate_of_the_next_release_ships():
+    picked = plan(FakeGitHub([run(B, id=2, at=MORNING + timedelta(minutes=20))]))
     assert (picked["action"], picked["sha"], picked["version"]) == ("ship", B, "v0.5.201")
-    # Green before the window opened: main's head ships, an older commit does not (main's head is validated instead).
-    assert plan(FakeGitHub([run(C, at=OPENED - timedelta(hours=2))]))["action"] == "ship"
-    assert plan(FakeGitHub([run(B, at=OPENED - timedelta(hours=2))]))["action"] == "dispatch"
+    # However long ago it went green: an older commit ships too, and the next push validates main's head.
+    assert plan(FakeGitHub([run(C, at=MORNING - timedelta(hours=2))]))["action"] == "ship"
+    assert plan(FakeGitHub([run(B, at=MORNING - timedelta(hours=2))]))["sha"] == B
+    # A green run of another release (validated from an older one) ships nothing.
+    assert plan(FakeGitHub([run(C, "v0.5.200", "v0.5.199", at=MORNING)]))["action"] != "ship"
 
 
 HELD = "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to validate again"
@@ -479,12 +406,12 @@ def test_a_red_head_waits_for_a_push_and_a_red_older_commit_holds_the_day_until_
     assert (older["action"], older["held"]) == ("wait", HELD % ("https://github.example/run/1", "failure"))
     forced = plan(FakeGitHub([run(B, conclusion="failure")]), manual=True)
     assert (forced["action"], forced["mode"]) == ("dispatch", "full")
-    # A window still red at the next open carries on, without validating the same head again.
+    # Hours later, a red head still waits for a push: the same head is not validated again.
     later = pt(2026, 11, 5, 14, 5)
-    assert plan(FakeGitHub([run(C, conclusion="failure", at=OPENED)]), now=later)["action"] == "wait"
+    assert plan(FakeGitHub([run(C, conclusion="failure", at=MORNING)]), now=later)["action"] == "wait"
 
 
-def test_a_finished_red_candidate_of_this_window_is_reported():
+def test_a_finished_red_candidate_of_the_next_release_is_reported():
     finished = {"conclusion": "failure", "title": rt.title(B, "v0.5.201", "v0.5.200"), "url": "red-url"}
     assert plan(FakeGitHub([run(B, conclusion="failure")]), finished=finished)["red"]["sha"] == B
     stale = dict(finished, title=rt.title(B, "v0.5.200", "v0.5.199"))
@@ -496,7 +423,7 @@ def test_a_finished_red_candidate_of_this_window_is_reported():
 CEILING_HOLD = "Full runs: ceiling reached (10/day) · next after 00:00 UTC"
 
 
-def test_a_run_the_ceiling_stopped_holds_the_window_and_is_never_a_failure():
+def test_a_run_the_ceiling_stopped_holds_the_train_and_is_never_a_failure():
     stopped = run(C, conclusion="failure", id=9, at=NOW - timedelta(minutes=5))
     gh = FakeGitHub([stopped])
     gh.ceiling_ids = {9}
@@ -504,7 +431,7 @@ def test_a_run_the_ceiling_stopped_holds_the_window_and_is_never_a_failure():
         held = plan(gh, manual=manual)
         assert held["action"] == "wait" and held["why"].endswith(CEILING_HOLD)
         assert (held["red"], held["held"], rt.problems(held)) == (None, None, [])
-    # Its failed finish, handed to the window job by the workflow_run event, is no red candidate either.
+    # Its failed finish, handed to the train job by the workflow_run event, is no red candidate either.
     finished = {"conclusion": "failure", "title": rt.title(C, "v0.5.201", "v0.5.200"), "url": stopped["html_url"]}
     assert plan(gh, finished=finished)["red"] is None
 
@@ -561,16 +488,22 @@ class FakeCheckout:
 PLAN_TEXT = '{"jobs":[{"name":"python-1","part":"python","files":["backend/tests/test_b.py"]}]}'
 
 
-def red_then_anchor(anchor_at=OPENED - timedelta(hours=1), red_at=NOW - timedelta(hours=1)):
-    """main is A <- B <- C <- D and D is the head. B was green before the window opened (the anchor); C went red after
-    it. Newest first, as GitHub lists them."""
-    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=red_at), run(B, id=2, at=anchor_at)], head=D)
+def out(sha, **fields):
+    """A validation of the release that is out (v0.5.200, from v0.5.199). A green validation of the next release ships
+    at once, so the green anchors the next candidates build on are the release's that went out before them."""
+    return run(sha, "v0.5.200", "v0.5.199", **fields)
+
+
+def red_then_anchor(anchor_at=MORNING - timedelta(hours=1), red_at=NOW - timedelta(hours=1)):
+    """main is A <- B <- C <- D and D is the head. B was green earlier, as the release now out (the anchor); C went red
+    after it. Newest first, as GitHub lists them."""
+    gh = FakeGitHub([run(C, id=3, conclusion="failure", at=red_at), out(B, id=2, at=anchor_at)], head=D)
     gh.order = [A, B, C, D]
     return gh
 
 
 def test_a_red_validation_reruns_incrementally_once_a_commit_selects_what_failed():
-    # C went red naming its failure, so C is the anchor: the window reruns from it, carrying what failed. No full run.
+    # C went red naming its failure, so C is the anchor: the train reruns from it, carrying what failed. No full run.
     gh = red_then_anchor()
     gh.failed = {3: {"backend/tests/test_b.py"}}
     checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
@@ -585,7 +518,7 @@ def test_a_red_validation_waits_and_says_so_while_no_commit_selects_what_failed(
     gh = red_then_anchor()
     gh.failed = {3: {"backend/tests/test_b.py"}}
     picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since={"ui/tests/threads.cjs"}, plan=PLAN_TEXT))
-    assert picked["action"] == "wait" and "the window waits" in picked["why"]
+    assert picked["action"] == "wait" and "the train waits" in picked["why"]
     assert "backend/tests/test_b.py" in picked["why"] and gh.dispatched == []
 
 
@@ -634,7 +567,7 @@ def test_a_red_full_naming_its_failures_is_the_anchor_and_the_next_candidate_is_
     assert ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
 
 
-def test_a_cancelled_full_is_no_anchor_and_holds_the_day_so_the_window_waits_for_a_person():
+def test_a_cancelled_full_is_no_anchor_and_holds_the_day_so_the_train_waits_for_a_person():
     gh = FakeGitHub([run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1))], head=D)
     gh.order = [A, B, C, D]
     picked = rt.plan_step(gh, NOW, checkout=FakeCheckout(since=None, plan=PLAN_TEXT))
@@ -657,11 +590,11 @@ def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_a
 @pytest.mark.parametrize(
     "runs, anchor, failed",
     [
-        ([run(B, id=2, at=OPENED - timedelta(hours=1))], B, {}),
+        ([out(B, id=2, at=MORNING - timedelta(hours=1))], B, {}),
         (
             [
                 run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
-                run(B, id=2, at=OPENED - timedelta(hours=1)),
+                out(B, id=2, at=MORNING - timedelta(hours=1)),
             ],
             B,
             {},
@@ -669,7 +602,7 @@ def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_a
         (
             [
                 run(C, id=3, conclusion="cancelled", at=NOW - timedelta(hours=1)),
-                run(B, id=2, at=OPENED - timedelta(hours=1)),
+                out(B, id=2, at=MORNING - timedelta(hours=1)),
             ],
             B,
             {},
@@ -677,7 +610,7 @@ def test_a_red_full_naming_no_failure_holds_the_day_and_a_manual_run_validates_a
         (
             [
                 run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
-                run(B, id=2, at=OPENED - timedelta(hours=1)),
+                out(B, id=2, at=MORNING - timedelta(hours=1)),
             ],
             C,
             {3: {"backend/tests/test_b.py"}},
@@ -740,14 +673,14 @@ def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_wai
     # within the day, so it is the anchor. C is an earlier release's green incremental run after B: it supersedes B's
     # red, so nothing is carried and nothing waits.
     earlier = dict(
-        run(C, version="v0.5.200", previous="v0.5.199", id=3, at=OPENED - timedelta(minutes=30)),
+        run(C, version="v0.5.200", previous="v0.5.199", id=3, at=MORNING - timedelta(minutes=30)),
         display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=A),
     )
     gh = FakeGitHub(
         [
             earlier,
-            run(B, id=2, conclusion="failure", at=OPENED - timedelta(hours=2)),
-            run(A, id=1, at=OPENED - timedelta(hours=3)),
+            run(B, id=2, conclusion="failure", at=MORNING - timedelta(hours=2)),
+            run(A, id=1, at=MORNING - timedelta(hours=3)),
         ],
         head=D,
     )
@@ -757,7 +690,7 @@ def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_wai
     picked = rt.plan_step(gh, NOW, checkout=checkout)
     assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
     assert checkout.calls == [("plan", C, D, set())]  # the green incremental C anchors: nothing carried, no red read
-    assert "carries" not in picked["why"] and "the window waits" not in picked["why"]
+    assert "carries" not in picked["why"] and "the train waits" not in picked["why"]
 
 
 def test_an_anchor_of_an_earlier_release_runs_the_product_part_when_the_previous_release_moved():
@@ -768,12 +701,11 @@ def test_an_anchor_of_an_earlier_release_runs_the_product_part_when_the_previous
     assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
     assert checkout.previous_changed is True
     assert "the product part runs: the previous release is v0.5.200, the anchor's was v0.5.199" in picked["why"]
-    # The same previous release (this window's own full run before it opened): the product part is not forced.
-    same = FakeCheckout(plan=PLAN_TEXT)
-    assert (
-        rt.plan_step(FakeGitHub([run(B, id=2, at=OPENED - timedelta(hours=1))]), NOW, checkout=same)["mode"]
-        == "incremental"
-    )
+    # The same previous release (a red full run of the next release that names its failure): not forced.
+    gh = FakeGitHub([run(B, id=2, conclusion="failure", at=MORNING - timedelta(hours=1))])
+    gh.failed = {2: {"backend/tests/test_b.py"}}
+    same = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
+    assert rt.plan_step(gh, NOW, checkout=same)["mode"] == "incremental"
     assert same.previous_changed is False
 
 
@@ -788,34 +720,18 @@ def guard(gh, env, tmp_path, monkeypatch, now=NOW):
     return dict(line.split("=", 1) for line in out.read_text().split())
 
 
-def test_guard_runs_the_window_job_only_when_it_has_work(tmp_path, monkeypatch):
+def test_guard_runs_the_train_job_only_when_it_has_work(tmp_path, monkeypatch):
     on = {"RELEASE_TRAINS": "on"}
-    # The 07:30 PST cron, fifteen minutes late: it opens the window (promotion, then a ship or a validation).
-    assert guard(
-        FakeGitHub(),
-        dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE="30 15 * * *"),
-        tmp_path,
-        monkeypatch,
-        now=pt(2026, 11, 5, 7, 45),
-    ) == {"go": "true"}
-    # The off-season twin ("30 14" is 06:30 PST) does exactly what a push does at the same moment, and opens nothing.
-    twin = guard(
-        FakeGitHub(),
-        dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE="30 14 * * *"),
-        tmp_path,
-        monkeypatch,
-        now=pt(2026, 11, 5, 7, 40),
-    )
-    push = guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch, now=pt(2026, 11, 5, 7, 40))
-    assert twin == push == {"go": "true"}, "an off-season twin cron should act like a push"
-    # The backstop takes a step in an open window like a push, never opens one, and idles otherwise.
+    push = dict(on, GITHUB_EVENT_NAME="push")
     backstop = dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON)
-    assert guard(FakeGitHub(), backstop, tmp_path, monkeypatch) == {"go": "true"}
-    closed = FakeGitHub([run(C)], published=OPENED + timedelta(minutes=40))
-    assert guard(closed, backstop, tmp_path, monkeypatch) == {"go": "false"}
-    assert guard(FakeGitHub(), dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch) == {"go": "true"}
+    # Main moved past the newest release: a push and the backstop both run the job, at any hour.
+    for now in (NOW, pt(2026, 11, 6, 2, 0)):
+        assert guard(FakeGitHub(), push, tmp_path, monkeypatch, now=now) == {"go": "true"}
+        assert guard(FakeGitHub(), backstop, tmp_path, monkeypatch, now=now) == {"go": "true"}
+    # Nothing new on main: the backstop idles.
+    assert guard(FakeGitHub(head=A), backstop, tmp_path, monkeypatch) == {"go": "false"}
     busy = FakeGitHub([run(C, status="in_progress", conclusion=None)])
-    assert guard(busy, dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch)["go"] == "false"
+    assert guard(busy, push, tmp_path, monkeypatch)["go"] == "false"
     red = {
         "GITHUB_EVENT_NAME": "workflow_run",
         "RUN_EVENT": "workflow_dispatch",
@@ -827,32 +743,47 @@ def test_guard_runs_the_window_job_only_when_it_has_work(tmp_path, monkeypatch):
 
 
 def test_the_backstop_runs_the_job_for_an_approved_release_that_stable_does_not_run_yet(tmp_path, monkeypatch):
-    backstop = {"RELEASE_TRAINS": "on", "GITHUB_EVENT_NAME": "schedule", "SCHEDULE": rt.BACKSTOP_CRON}
+    backstop = {
+        "RELEASE_TRAINS": "on",
+        "RELEASE_NEEDS_PERSON": "on",
+        "GITHUB_EVENT_NAME": "schedule",
+        "SCHEDULE": rt.BACKSTOP_CRON,
+    }
 
-    def closed():  # the window is closed: nothing to ship, only the approval can call the job
-        return FakeGitHub([run(C)], published=OPENED + timedelta(minutes=40))
+    def idle():  # main has not moved: nothing to ship, only the approval can call the job
+        return FakeGitHub([run(C)], head=A)
 
-    assert guard(closed(), backstop, tmp_path, monkeypatch) == {"go": "false"}, "no approval record"
-    labelled = closed()
+    assert guard(idle(), backstop, tmp_path, monkeypatch) == {"go": "false"}, "no approval record"
+    labelled = idle()
     approval_for(labelled, "v0.5.200", approved_by="mallory")  # approved by someone without write access
     assert guard(labelled, backstop, tmp_path, monkeypatch) == {"go": "false"}
-    approved = closed()
+    approved = idle()
     approval_for(approved, "v0.5.200", approved_by="chris")
     assert guard(approved, backstop, tmp_path, monkeypatch) == {"go": "true"}
-    held = closed()
+    held = idle()
     approval_for(held, "v0.5.200", approved_by="chris", held=True)
     assert guard(held, backstop, tmp_path, monkeypatch) == {"go": "false"}
+    # With RELEASE_NEEDS_PERSON off (or unset), a release with no High risk item is approved automatically.
+    auto = {key: value for key, value in backstop.items() if key != "RELEASE_NEEDS_PERSON"}
+    assert guard(labelled, auto, tmp_path, monkeypatch) == {"go": "true"}
+    risky = idle()
+    approval_for(risky, "v0.5.200", body=HIGH_RISK_NOTES)
+    assert guard(risky, auto, tmp_path, monkeypatch) == {"go": "false"}
+    # While RELEASE_HOLD or a release-blocker holds stable, an approved release does not run the job every 20 minutes.
+    assert guard(labelled, dict(auto, RELEASE_HOLD="billing fix first"), tmp_path, monkeypatch) == {"go": "false"}
+    labelled.blockers = [{"number": 7, "title": "Tasks vanish"}]
+    assert guard(labelled, auto, tmp_path, monkeypatch) == {"go": "false"}
 
 
-def test_guard_reports_a_red_head_from_any_event_once(tmp_path, monkeypatch):
+def test_guard_reports_a_red_head_from_any_event_once(installs, tmp_path, monkeypatch):
     gh = FakeGitHub([run(C, conclusion="cancelled", id=4)])
     for event in ({"GITHUB_EVENT_NAME": "push"}, {"GITHUB_EVENT_NAME": "schedule", "SCHEDULE": rt.BACKSTOP_CRON}):
         assert guard(gh, dict(event, RELEASE_TRAINS="on"), tmp_path, monkeypatch)["go"] == "true"
-    assert rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="push"), False, NOW) == 1
+    assert rt.cmd_step(gh, dict(ENV, GITHUB_EVENT_NAME="push"), NOW) == 1
     assert len(gh.created) == 1 and "ended cancelled" in gh.created[0]["body"]
-    # Reported: the next push and the backstop stay quiet, and a window job that runs anyway does not post it again.
+    # Reported: the next push and the backstop stay quiet, and a train job that runs anyway does not post it again.
     assert guard(gh, {"GITHUB_EVENT_NAME": "push", "RELEASE_TRAINS": "on"}, tmp_path, monkeypatch)["go"] == "false"
-    rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="push"), False, NOW)
+    rt.cmd_step(gh, dict(ENV, GITHUB_EVENT_NAME="push"), NOW)
     assert len(gh.created) == 1 and gh.comments == []
 
 
@@ -1052,7 +983,8 @@ def test_promote_updates_stable_to_the_approved_canary_release_and_closes_its_ap
     rt.promote(gh, ENV)
     assert installs["updated"] == [("stable", "0.5.200")]
     assert record["state"] == "closed" and record["number"] in gh.closed
-    assert any("approved by chris" in line for line in rt.LOG)
+    assert any("approved by @chris" in line for line in rt.LOG)
+    assert gh.comments == [(record["number"], "Promoted to stable (TIDY), approved by @chris.")]
 
 
 def test_a_comment_approve_by_someone_with_write_access_counts(installs):
@@ -1120,15 +1052,100 @@ def test_promote_skips_without_keys(installs):
     assert installs["updated"] == [] and any("STABLE_UPDATE_KEY" in line for line in rt.LOG)
 
 
-# ---- the window job ----
+# ---- approved automatically: no person needed (RELEASE_NEEDS_PERSON off, no High risk item) ----
 
 
-def test_window_open_promotes_then_ships_the_green_candidate_and_closes_the_issues(installs, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "value, person",
+    [("on", True), (" ON ", True), ("off", False), ("", False), (None, False), ("yes", False)],
+)
+def test_only_on_makes_every_release_wait_for_a_person(value, person):
+    env = {} if value is None else {"RELEASE_NEEDS_PERSON": value}
+    assert rt.needs_person(env) is person
+
+
+def test_a_release_with_no_high_risk_item_is_approved_automatically_and_its_issue_says_so(installs):
+    gh = FakeGitHub()
+    record = approval_for(gh, "v0.5.200")  # nobody approved it
+    rt.promote(gh, AUTO)
+    assert installs["updated"] == [("stable", "0.5.200")]
+    assert record["state"] == "closed"
+    assert gh.comments == [
+        (
+            record["number"],
+            "Promoted to stable (TIDY), approved automatically (no high-risk items; RELEASE_NEEDS_PERSON is off).",
+        )
+    ]
+    assert any(rt.AUTO_APPROVED in line for line in rt.LOG)
+
+
+@pytest.mark.parametrize(
+    "body, env, why",
+    [
+        (HIGH_RISK_NOTES, AUTO, "its notes list a High risk item"),
+        ("notes\n" + rt.release_notes.CUT_SHORT, AUTO, "its notes were cut short"),
+        (None, dict(AUTO, RELEASE_NEEDS_PERSON="on"), "RELEASE_NEEDS_PERSON is on"),
+    ],
+    ids=["high-risk", "cut-short", "needs-person-on"],
+)
+def test_a_high_risk_release_or_needs_person_on_still_waits_for_a_person(installs, body, env, why):
+    gh = FakeGitHub()
+    record = approval_for(gh, "v0.5.200", body=body)
+    rt.promote(gh, env)
+    assert installs["updated"] == [] and record["state"] == "open"
+    assert any("not approved yet (a person must approve: %s" % why in line for line in rt.LOG)
+    # A person's approval takes it, and the issue names them.
+    gh.events[record["number"]] = [
+        {"event": "labeled", "label": {"name": rt.APPROVED}, "actor": {"login": "chris", "type": "User"}}
+    ]
+    record["labels"].append({"name": rt.APPROVED})
+    rt.promote(gh, env)
+    assert installs["updated"] == [("stable", "0.5.200")]
+    assert gh.comments == [(record["number"], "Promoted to stable (TIDY), approved by @chris.")]
+
+
+def test_the_hold_label_release_hold_and_blockers_still_stop_an_automatic_approval(installs):
+    gh = FakeGitHub()
+    record = approval_for(gh, "v0.5.200", held=True)
+    rt.promote(gh, AUTO)
+    assert installs["updated"] == [] and any("on hold" in line for line in rt.LOG)
+    record["labels"] = [{"name": rt.APPROVAL_LABEL}]
+    rt.promote(gh, dict(AUTO, RELEASE_HOLD="billing fix first"))
+    gh.blockers = [{"number": 7, "title": "Tasks vanish"}]
+    rt.promote(gh, AUTO)
+    assert installs["updated"] == [] and record["state"] == "open"
+    gh.blockers = []
+    installs["canary"].update(state="rolled_back", message="health check")
+    with pytest.raises(rt.Fail, match="rolled_back"):
+        rt.promote(gh, AUTO)
+    assert installs["updated"] == []
+
+
+def test_with_no_person_needed_releases_flow_canary_then_stable_with_no_one_in_the_loop(installs):
+    # v0.5.200 is on the canary and nobody approved it; C is green as v0.5.201.
+    gh = publishes(FakeGitHub([run(C)]))
+    older = approval_for(gh, "v0.5.200")
+    assert rt.cmd_step(gh, dict(AUTO, GITHUB_EVENT_NAME="push"), NOW) == 0
+    assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201")]
+    assert older["state"] == "closed"
+    newer = approval_of(gh, "v0.5.201")
+    assert newer["state"] == "open" and "approved automatically" in newer["body"]
+    # The next run (the backstop, at 03:00) takes v0.5.201 to stable too.
+    installs["canary"].update(running="0.5.201", state="healthy")
+    backstop = dict(AUTO, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON)
+    assert rt.cmd_step(gh, backstop, pt(2026, 11, 6, 3, 0)) == 0
+    assert installs["updated"][-1] == ("stable", "0.5.201") and newer["state"] == "closed"
+
+
+# ---- the train job ----
+
+
+def test_a_step_promotes_then_ships_the_green_candidate_and_closes_the_issues(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = publishes(FakeGitHub([run(C)]))
     older = approval_for(gh, "v0.5.200", approved_by="chris")
-    gh.add_issue("Release window failing", labels=[rt.ISSUE_LABEL], number=7)
-    assert rt.cmd_window(gh, ENV, True, NOW) == 0
+    gh.add_issue("Release train failing", labels=[rt.ISSUE_LABEL], number=7)
+    assert rt.cmd_step(gh, ENV, NOW) == 0
     assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201")]
     assert gh.tagged == [("v0.5.201", C)]
     assert gh.dispatched == [("release.yml", "v0.5.201", {"desktop": "false", "latest": "false"})]
@@ -1146,42 +1163,41 @@ def test_window_open_promotes_then_ships_the_green_candidate_and_closes_the_issu
         ]
         for image in rt.IMAGES
     ]
-    # The promoted release's approval closes, the window's failure issue closes, and the new release awaits approval.
+    # The promoted release's approval closes, the train's failure issue closes, and the new release awaits approval.
     assert gh.closed == [older["number"], 7]
     assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.5.201")]
-    # Published: the window is closed, and the next event does nothing.
+    # Published, and main has nothing newer: the next event does nothing.
     assert rt.plan_step(gh, NOW + timedelta(minutes=5))["action"] == "none"
 
 
 def test_a_push_promotes_an_approved_release_before_the_canary_moves_on(installs):
     gh = publishes(FakeGitHub([run(C)]))
     approval_for(gh, "v0.5.200", approved_by="chris")
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    assert rt.cmd_step(gh, ENV, NOW) == 0
     assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201")]
 
 
 def test_without_an_approval_stable_waits_and_the_canary_still_ships(installs):
     gh = publishes(FakeGitHub([run(C)]))
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    assert rt.cmd_step(gh, ENV, NOW) == 0
     assert installs["updated"] == [("canary", "0.5.201")]
     assert any("no open approval" in line for line in rt.LOG)
     assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.5.201")]
 
 
-def test_a_push_does_not_promote_but_the_backstop_does(installs):
-    gh = FakeGitHub([run(C)], published=OPENED + timedelta(minutes=40))  # the window is closed: nothing to ship
+@pytest.mark.parametrize("event", ["push", "backstop", "workflow_run"])
+def test_every_step_promotes_an_approved_release_even_with_nothing_to_ship(installs, event):
+    gh = FakeGitHub([run(C)], head=A)  # main has not moved: nothing to ship
     record = approval_for(gh, "v0.5.200", approved_by="chris")
-    assert rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="push"), False, NOW) == 0
-    assert installs["updated"] == [] and record["state"] == "open"
-    backstop = dict(ENV, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON)
-    assert rt.cmd_window(gh, backstop, False, NOW) == 0
+    env = dict(ENV, GITHUB_EVENT_NAME="schedule" if event == "backstop" else event, SCHEDULE=rt.BACKSTOP_CRON)
+    assert rt.cmd_step(gh, env, NOW) == 0
     assert installs["updated"] == [("stable", "0.5.200")] and record["state"] == "closed"
 
 
 def test_a_newer_canary_release_closes_the_older_approval_with_a_link(installs):
     gh = publishes(FakeGitHub([run(C)]))
     older = approval_for(gh, "v0.5.200")  # on the canary, still waiting for approval
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    assert rt.cmd_step(gh, ENV, NOW) == 0
     newer = approval_of(gh, "v0.5.201")
     assert older["state"] == "closed"
     assert [body for number, body in gh.comments if number == older["number"]] == [
@@ -1196,7 +1212,7 @@ def test_a_canary_that_rolls_back_leaves_the_release_not_latest_and_its_approval
     installs["outcome"] = "rolled_back"
     gh = publishes(FakeGitHub([run(C)]))
     older = approval_for(gh, "v0.5.200")
-    assert rt.cmd_window(gh, ENV, False, NOW) == 1
+    assert rt.cmd_step(gh, ENV, NOW) == 1
     assert "v0.5.201" in gh.releases and gh.latest == [] and COMMANDS == []
     assert "rolled_back" in filed(gh)[0]["body"]
     refused = approval_of(gh, "v0.5.201")
@@ -1208,7 +1224,7 @@ def test_a_canary_that_rolls_back_leaves_the_release_not_latest_and_its_approval
 def test_a_failed_image_move_is_reported_and_the_release_stays_not_latest(installs, monkeypatch):
     monkeypatch.setattr(rt, "run_command", lambda argv, timeout=180: (1, "denied: permission_denied"))
     gh = publishes(FakeGitHub([run(C)]))
-    assert rt.cmd_window(gh, ENV, False, NOW) == 1
+    assert rt.cmd_step(gh, ENV, NOW) == 1
     assert gh.latest == [] and "permission_denied" in filed(gh)[0]["body"]
 
 
@@ -1216,7 +1232,7 @@ def test_latest_never_moves_backwards(installs):
     gh = publishes(FakeGitHub([run(C)]))
     gh.latest_ = "v0.5.202"  # pushed by a person while the canary was updating
     assert rt.mark_latest(gh, "v0.5.201") is False and COMMANDS == [] and gh.latest == []
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    assert rt.cmd_step(gh, ENV, NOW) == 0
     assert ("canary", "0.5.201") in installs["updated"] and gh.latest == [] and COMMANDS == []
     assert filed(gh)[0]["title"] == "Release v0.5.201 shipped, not marked latest (a newer release is)"
     assert "v0.5.202, a newer release" in filed(gh)[0]["body"]
@@ -1245,20 +1261,17 @@ def lagging():
 def test_a_missed_latest_is_caught_up_once_the_canary_runs_it_healthy(installs, tmp_path, monkeypatch):
     gh = lagging()
     assert rt.lagging_latest(gh) == "v0.5.201"
-    # The guard cannot read the canary: only the backstop runs the job for it; a push, or an off-season twin with
-    # nothing else to do, does not.
+    # The guard cannot read the canary: only the backstop runs the job for it; a push with nothing else to do does not.
     on = {"RELEASE_TRAINS": "on"}
     assert (
         guard(gh, dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), tmp_path, monkeypatch)["go"]
         == "true"
     )
     assert guard(gh, dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch)["go"] == "false"
-    twin = dict(on, GITHUB_EVENT_NAME="schedule", SCHEDULE="30 14 * * *")
-    assert guard(gh, twin, tmp_path, monkeypatch)["go"] == "false"
     # The canary still runs the older release (rolled back): it stays not latest, quietly.
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0 and gh.latest == [] and filed(gh) == []
+    assert rt.cmd_step(gh, ENV, NOW) == 0 and gh.latest == [] and filed(gh) == []
     installs["canary"].update(running="0.5.201", state="healthy")
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0 and gh.latest == ["v0.5.201"] and len(COMMANDS) == 3
+    assert rt.cmd_step(gh, ENV, NOW) == 0 and gh.latest == ["v0.5.201"] and len(COMMANDS) == 3
     assert rt.lagging_latest(gh) is None
 
 
@@ -1266,7 +1279,7 @@ def test_an_unpublished_tag_is_released_again_once_and_recorded(installs):
     gh = publishes(FakeGitHub([run(C)]))
     gh.tags_["v0.5.201"] = B
     gh.release_runs = [release_run()]
-    assert rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), False, NOW) == 0
+    assert rt.cmd_step(gh, dict(ENV, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), NOW) == 0
     assert gh.dispatched == [("release.yml", "v0.5.201", {"desktop": "false", "latest": "false"})]
     assert gh.tagged == [] and ("canary", "0.5.201") in installs["updated"] and gh.latest == ["v0.5.201"]
     record = filed(gh)[0]
@@ -1274,9 +1287,9 @@ def test_an_unpublished_tag_is_released_again_once_and_recorded(installs):
     assert "release/70" in record["body"]
 
 
-def test_window_validates_main_and_waits_until_the_run_is_listed(installs):
+def test_a_step_validates_main_and_waits_until_the_run_is_listed(installs):
     gh = publishes(FakeGitHub())
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    assert rt.cmd_step(gh, ENV, NOW) == 0
     assert gh.dispatched == [
         ("ci.yml", "main", {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"})
     ]
@@ -1296,19 +1309,19 @@ def test_a_red_candidate_goes_on_the_issue_and_holds_main_until_a_person_validat
         RUN_TITLE=rt.title(B, "v0.5.201", "v0.5.200"),
         RUN_URL="https://github.example/run/red",
     )
-    assert rt.cmd_window(gh, env, False, NOW) == 1
+    assert rt.cmd_step(gh, env, NOW) == 1
     assert len(gh.created) == 1 and "run/red" in gh.created[0]["body"]
     # Its full validation named no failure, so it holds the day: main's head is not validated automatically.
     assert HELD % ("https://github.example/run/1", "failure") in gh.created[0]["body"]
     assert gh.dispatched == [] and gh.tagged == []
     # A person runs Release train by hand: main's head is validated.
-    assert rt.cmd_window(gh, dict(ENV, GITHUB_EVENT_NAME="workflow_dispatch"), False, NOW) == 0
+    assert rt.cmd_step(gh, dict(ENV, GITHUB_EVENT_NAME="workflow_dispatch"), NOW) == 0
     assert [d[0] for d in gh.dispatched] == ["ci.yml"] and gh.tagged == []
 
 
 def test_missing_canary_key_fails_without_tagging(installs):
     gh = publishes(FakeGitHub([run(C)]))
-    assert rt.cmd_window(gh, dict(ENV, CANARY_UPDATE_KEY=""), False, NOW) == 1
+    assert rt.cmd_step(gh, dict(ENV, CANARY_UPDATE_KEY=""), NOW) == 1
     assert gh.tagged == [] and gh.created and "CANARY_UPDATE_KEY" in gh.created[0]["body"]
 
 
@@ -1322,7 +1335,7 @@ def test_a_failed_release_workflow_is_reported(installs):
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     ]
-    assert rt.cmd_window(gh, ENV, False, NOW) == 1
+    assert rt.cmd_step(gh, ENV, NOW) == 1
     assert "release-run" in gh.created[0]["body"] and ("canary", "0.5.201") not in installs["updated"]
 
 
@@ -1345,15 +1358,15 @@ def test_wait_release_fails_on_this_release_run_only():
 
 def test_the_same_failure_is_posted_once_and_a_new_one_again():
     gh = FakeGitHub()
-    rt.report(gh, False, ["Run log", "Window: waiting", "promote: holding"], key=["promote: holding"])
-    rt.report(gh, False, ["Run log", "Window: something else", "promote: holding"], key=["promote: holding"])
+    rt.report(gh, False, ["Run log", "Train: waiting", "promote: holding"], key=["promote: holding"])
+    rt.report(gh, False, ["Run log", "Train: something else", "promote: holding"], key=["promote: holding"])
     assert len(gh.created) == 1 and gh.comments == []
     rt.report(gh, False, ["ship: canary rolled back"])
     rt.report(gh, False, ["promote: holding"], key=["promote: holding"])
     assert len(gh.comments) == 2
 
 
-def test_failures_share_one_issue_and_a_shipped_window_closes_it():
+def test_failures_share_one_issue_and_a_shipped_release_closes_it():
     gh = FakeGitHub()
     rt.report(gh, False, ["ship: canary rolled back"])
     rt.report(gh, False, ["promote: stable failed"])
@@ -1484,10 +1497,10 @@ def test_failed_hotfix_validation_stops_before_tagging(installs, tmp_path, monke
     assert open_issues(gh) and "Release validation ended failure" in filed(gh)[0]["body"]
 
 
-# ---- the release shots: a shipped candidate's pictures on its approval issue, and the window's outputs for them ----
+# ---- the release shots: a shipped candidate's pictures on its approval issue, and the train job's outputs for them ----
 
 
-def window_outputs(path):
+def step_outputs(path):
     lines = path.read_text().splitlines()
     keys = [line.split("=", 1)[0] for line in lines]
     assert len(keys) == len(set(keys)), "a key written twice, GitHub keeps only the last: %s" % lines
@@ -1497,9 +1510,9 @@ def window_outputs(path):
 def test_a_shipped_candidate_hands_its_version_sha_and_base_to_the_shots(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = publishes(FakeGitHub([run(C)]))
-    assert rt.cmd_window(gh, ENV, False, NOW) == 0
+    assert rt.cmd_step(gh, ENV, NOW) == 0
     # The base is the release stable runs: what the approver reads the changes since, and the pictures compare with.
-    assert window_outputs(tmp_path / "out") == {
+    assert step_outputs(tmp_path / "out") == {
         "reported": "true",
         "shipped": "true",
         "version": "v0.5.201",
@@ -1508,7 +1521,7 @@ def test_a_shipped_candidate_hands_its_version_sha_and_base_to_the_shots(install
     }
 
 
-def test_the_shipped_candidate_is_in_the_outputs_even_if_the_window_dies_after_it(installs, tmp_path, monkeypatch):
+def test_the_shipped_candidate_is_in_the_outputs_even_if_the_step_dies_after_it(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = publishes(FakeGitHub([run(C)]))
 
@@ -1517,10 +1530,10 @@ def test_the_shipped_candidate_is_in_the_outputs_even_if_the_window_dies_after_i
 
     monkeypatch.setattr(rt, "report", dies)
     with pytest.raises(RuntimeError, match="runner went away"):
-        rt.cmd_window(gh, ENV, False, NOW)
+        rt.cmd_step(gh, ENV, NOW)
     # The canary runs the candidate, so its shots still run; reported is missing, so the job's fallback reports the death.
     assert installs["updated"] == [("canary", "0.5.201")]
-    assert window_outputs(tmp_path / "out") == {
+    assert step_outputs(tmp_path / "out") == {
         "shipped": "true",
         "version": "v0.5.201",
         "sha": C,
@@ -1536,8 +1549,8 @@ def test_a_later_step_that_fails_keeps_the_shipped_candidate_in_the_outputs(inst
         raise rt.Fail("the latest marking was refused")
 
     monkeypatch.setattr(rt, "mark_latest", refused)
-    assert rt.cmd_window(gh, ENV, False, NOW) == 1
-    assert window_outputs(tmp_path / "out") == {
+    assert rt.cmd_step(gh, ENV, NOW) == 1
+    assert step_outputs(tmp_path / "out") == {
         "reported": "true",
         "shipped": "true",
         "version": "v0.5.201",
@@ -1546,21 +1559,21 @@ def test_a_later_step_that_fails_keeps_the_shipped_candidate_in_the_outputs(inst
     }
 
 
-def test_a_window_whose_canary_rolls_back_hands_no_candidate_to_the_shots(installs, tmp_path, monkeypatch):
+def test_a_step_whose_canary_rolls_back_hands_no_candidate_to_the_shots(installs, tmp_path, monkeypatch):
     installs["outcome"] = "rolled_back"
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = publishes(FakeGitHub([run(C)]))
-    assert rt.cmd_window(gh, ENV, False, NOW) == 1
-    assert window_outputs(tmp_path / "out") == {"reported": "true", "shipped": "false"}
+    assert rt.cmd_step(gh, ENV, NOW) == 1
+    assert step_outputs(tmp_path / "out") == {"reported": "true", "shipped": "false"}
 
 
 def test_without_stable_the_pictures_compare_with_the_previous_release(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = publishes(FakeGitHub([run(C)]))
     no_stable = {key: value for key, value in ENV.items() if not key.startswith("STABLE")}
-    assert rt.cmd_window(gh, no_stable, False, NOW) == 0
+    assert rt.cmd_step(gh, no_stable, NOW) == 0
     assert installs["updated"] == [("canary", "0.5.201")]
-    assert window_outputs(tmp_path / "out")["base"] == "v0.5.200"
+    assert step_outputs(tmp_path / "out")["base"] == "v0.5.200"
 
 
 def test_the_base_is_stables_release_and_an_unreachable_stable_falls_back_to_the_previous_tag(installs):
@@ -1650,7 +1663,8 @@ def test_pictures_without_an_approval_record_fail_loudly(tmp_path):
 
 def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_failures():
     # Full A (green, 5 h ago), incremental B (green, 3 h ago, anchored on A), incremental C (red, names a failed test,
-    # 1 h ago), head D. C anchors D: the plan runs C..D and what C failed, never A..D again.
+    # 1 h ago), head D. C anchors D: the plan runs C..D and what C failed, never A..D again. (A and B validated the
+    # release that is out: a green of the next release ships at once.)
     gh = FakeGitHub(
         [
             dict(
@@ -1658,9 +1672,9 @@ def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_fa
                 display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B),
             ),
             dict(
-                run(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.201", "v0.5.200", anchor=A)
+                out(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.200", "v0.5.199", anchor=A)
             ),
-            run(A, id=1, at=NOW - timedelta(hours=5)),
+            out(A, id=1, at=NOW - timedelta(hours=5)),
         ],
         head=D,
     )
@@ -1674,12 +1688,12 @@ def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_fa
     gh = FakeGitHub(
         [
             dict(
-                run(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+                out(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=B)
             ),
             dict(
-                run(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.201", "v0.5.200", anchor=A)
+                out(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.200", "v0.5.199", anchor=A)
             ),
-            run(A, id=1, at=NOW - timedelta(hours=5)),
+            out(A, id=1, at=NOW - timedelta(hours=5)),
         ],
         head=D,
     )
@@ -1694,9 +1708,9 @@ def test_a_full_validation_older_than_a_day_runs_even_when_a_fresh_incremental_a
     gh = FakeGitHub(
         [
             dict(
-                run(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
+                out(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=B)
             ),
-            run(B, id=2, at=NOW - timedelta(hours=26)),
+            out(B, id=2, at=NOW - timedelta(hours=26)),
         ],
         head=D,
     )

@@ -6,7 +6,7 @@ chooses the status each step means. Types belong to the whole team. General keep
 each standard status except waiting and declined (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
-dropdown; General shows **Status**. The Tasks header is one row: **Tasks**, the scope menu (**You** with its count, or
+dropdown; General shows **Status**. Wider than 760 px, the Tasks header is one row: **Tasks**, the scope menu (**You** with its count, or
 the type in view, such as **General**), then search, the filter icon, the **List** and **Board** layout icons, the
 archive icon (**Finished**), **Catch up** when it shows, **⋯** and **+**. The scope menu lists **You**, then the types:
 **General**, **Roadmap**, **Engineering** (or **Dev tickets**) and the team's other types. Picking a type shows its
@@ -19,7 +19,7 @@ finished tasks, with **Done**, **Closed** and **Snoozed** (while something is sn
 goes back. The filter icon's menu starts with **Group** (on a list) and then the fields to filter by; a number on the
 icon counts the filters on, and while any is on their chips show in a row under the header, with **Clear**. **⋯**
 holds **Select tasks**, **Stats** and **Pin to sidebar**. When the header has no room, the search folds to its icon
-first; on a phone it is always an icon. Old addresses keep working: `?view=foryou` is You, `?view=list` and
+first. On a phone it is an icon until you tap it. Old addresses keep working: `?view=foryou` is You, `?view=list` and
 `?view=board` that layout, `?view=done|closed|snoozed` the finished tasks, and `?type=` the type. On a desktop, drag a card to another column or to a new place
 in its column: it saves the step and `step_rank` at once, and a card dropped on a folded strip goes to
 the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
@@ -123,6 +123,30 @@ Other viewers appear beside the editor line. Each visible window heartbeats ever
 one leaves only that window's session, and sessions expire after 30 seconds. Task and presence events use current
 task read permissions. Losing access closes the task window within 60 seconds, including bot-access revocation.
 The open task refetches on invalidations, with a three-minute safety refresh.
+
+## Tasks on a phone
+
+At 760 px wide or narrower, the Tasks header takes two rows. The first row holds the scope menu, **⋯**, the
+**✎** pencil (Edit pipeline), the ▶ button and **+**. The second row holds the view tools: the faces, search, the
+filter icon, the layout icons and the archive icon (**Finished**). The **Tasks** title is hidden, because the bottom
+bar already names the page.
+
+The **✎** shows only when you may change that type's rules, and never on **You**. The ▶ button shows on a board only
+when tasks there wait on you.
+
+From 601 to 760 px, the board keeps its columns and scrolls sideways. Folding works as on a desktop there.
+
+At 600 px wide or narrower, the board shows one step at a time. Each step is a chip in a row at the top, with its task
+count. A chip has a dot when tasks in that step wait on you. The board opens on the first step with tasks.
+
+Tap a chip to show its step. Or swipe across the cards: left for the next step, right for the previous one. A swipe
+counts when it moves more than 60 px sideways and twice as far sideways as up or down. Under the last card, a button
+reads **Swipe for** and the next step's name, and it goes to that step. It shows only on a step with cards, so the
+last step has none.
+
+Nothing folds on a phone. Backlog, finished and other steps each get a chip. A step's line above its cards shows its
+**warn after** limit, its ▶ button when tasks wait on you, and a select-all button. An empty step says **Nothing
+here**. General works the same way, with its steps as chips.
 
 ## Managers acting on tasks
 

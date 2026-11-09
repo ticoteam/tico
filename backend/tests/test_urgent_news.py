@@ -5,15 +5,11 @@ import json
 import pytest
 
 from backend import hubdb as H, rules as R, wake_presets as W
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
-from backend.tests.test_profiles import put
-from backend.tests.test_wake_rules import as_cause
-
-
-def sent_job(c, task, target, text, refs=None):
-    msg = H._wake(c, H.task(c, task['id']), target, text, refs=refs)
-    job = c.execute('SELECT * FROM jobs WHERE message_id=? AND bot_id=?', (msg['id'], H.actor_id(target))).fetchone()
-    return msg, dict(job) if job else None
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.profiles import put
+from backend.tests.helpers.wake_rules import as_cause
+from backend.tests.helpers.urgent_news import sent_job
 
 
 def test_incident_move_is_unheld_and_claimable_within_five_minutes(api):
@@ -137,7 +133,7 @@ def test_creation_tags_incident_titles_and_preserves_existing_tags(api):
 
 def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
     from clients.watchers import events
-    from backend.tests.test_watchers import hosted, report
+    from backend.tests.helpers.watchers import hosted, report
 
     r = hosted(api)
     raw = {'op': 'task', 'key': 'error:outage', 'title': 'Error Monitor: Outage', 'incident': True}

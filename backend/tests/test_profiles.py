@@ -11,25 +11,11 @@ from backend import redesign_migration
 from backend import rules as R
 from backend import wake_presets as W
 from backend.store import encode
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_wake_rules import jobs, news
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.wake_rules import jobs, news
 from backend import bot_settings as BS
-
-
-def add_bot(c, slug, **config):
-    H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
-    c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, None, 'ana'))
-    BS.write(c, slug, {'name': slug, 'runtime': 'fake', 'status': 'active', **config})
-
-
-def profile_of(c, slug):
-    return BS.read(c, slug)
-
-
-def put(c, slug, name, **options):
-    """Give an existing bot a profile the way the API does (without the Strategy Bot gate or audit)."""
-    declared = profile_of(c, slug)
-    BS.write(c, slug, P.apply(declared, name, options))
+from backend.tests.helpers.profiles import add_bot, profile_of, put
 
 
 def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api):
@@ -565,7 +551,7 @@ def test_the_cli_and_mcp_tool_read_the_choices_and_send_the_revision():
 
 
 def test_the_profiles_catch_all_never_beats_a_team_or_type_rule_and_a_leads_own_writes_are_not_digested(api):
-    from backend.tests.test_wake_rules import as_cause
+    from backend.tests.helpers.wake_rules import as_cause
 
     with api.app.state.store.transaction() as c:
         add_bot(c, "checker")
@@ -705,7 +691,7 @@ def last_to(c, slug):
 
 
 def test_a_lead_wakes_for_a_task_given_to_it_a_reviewer_for_a_review_handed_back_and_neither_for_its_own_write(api):
-    from backend.tests.test_wake_rules import as_cause
+    from backend.tests.helpers.wake_rules import as_cause
 
     with api.app.state.store.transaction() as c:
         add_bot(c, "boss")

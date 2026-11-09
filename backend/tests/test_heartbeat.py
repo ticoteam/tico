@@ -14,7 +14,8 @@ import pytest
 from backend import heartbeat as HB
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
-from backend.tests.test_api import api, get, put  # noqa: F401  (fixture)
+from backend.tests.helpers.api import get, put  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.mirror_rows import dead_mirror, live, mirrors, sync
 
 # Two hours ago: a beat's day counts are read against the clock, and every beat below stays inside the day.
@@ -30,6 +31,7 @@ ORDER = [
     "snooze_ends",
     "queue_check",
     "milestone_waits",
+    "ci_sweep",
     "due_reminders",
     "updates",
     "company_page",

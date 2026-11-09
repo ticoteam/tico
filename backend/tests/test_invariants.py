@@ -11,7 +11,8 @@ from types import SimpleNamespace
 from backend import invariants as I
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 NOW = datetime.now(timezone.utc)
 EPOCH = int(NOW.timestamp())

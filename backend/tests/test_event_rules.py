@@ -9,47 +9,14 @@ import pytest
 
 from backend import hubdb as H
 from backend import rules as R
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_wake_rules import jobs, setup
-
-CALL = {
-    "trigger": "shop",
-    "trigger_name": "Acme shop",
-    "type": "order.created",
-    "delivery": "d1",
-    "payload": {"order": 42, "customer": {"name": "Buyer"}},
-    "via": "direct",
-}
-
-
-def rule(
-    api, by="human:ben", scope_kind="team", scope_id="", event="webhook.received", then="wake", when=None, params=None
-):
-    """A row in the rules table, as the engine reads it."""
-    row = {
-        "id": "rule_" + H.new_id()[:8],
-        "scope_kind": scope_kind,
-        "scope_id": scope_id,
-        "event": event,
-        "condition": json.dumps(when or {}),
-        "then_outcome": then,
-        "params": json.dumps(params or {}),
-        "created_by": by,
-        "created_at": H.now(),
-        "updated_at": H.now(),
-    }
-    with api.app.state.store.transaction() as c:
-        c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
-    return {"rule": {**row, "params": params or {}}}
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.wake_rules import jobs, setup
+from backend.tests.helpers.event_rules import CALL, judge, rule
 
 
 def wake_rule(api, bot="cpo", text="New {{type}}: order {{data.order}} from {{data.customer.name}}", **more):
     return rule(api, then="action", params={"action": "wake_bot", "bot": bot, "text": text}, **more)["rule"]
-
-
-def judge(api, ctx=None, **more):
-    with api.app.state.store.transaction() as c:
-        return R.judge_event(c, "webhook.received", {**CALL, **(ctx or {}), **more})
 
 
 def last_message(c, bot):

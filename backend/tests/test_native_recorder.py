@@ -19,7 +19,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 import uvicorn
 
-from backend.tests.test_api import api, get  # noqa: F401
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 @pytest.mark.slow
@@ -281,7 +282,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
 def test_recorder_rows_link_both_ways_resume_batches_and_reconcile_save(api, tmp_path):
     import asyncio
     from starlette.responses import JSONResponse
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     targets = [
         post(

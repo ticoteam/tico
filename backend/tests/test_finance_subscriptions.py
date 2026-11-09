@@ -16,8 +16,8 @@ from backend.finance.core import watch as W
 from backend.finance.store import ledger as SL
 from backend.finance.store import subscriptions as SS
 from backend.store import Store
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-from backend.tests.test_finance_watch import PRIOR_MONTHS, WATCH_AT, _bot_card_charges
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_watch import PRIOR_MONTHS, WATCH_AT, _bot_card_charges
 
 TODAY = date(2026, 11, 1)
 MONTHLY = ("2026-08-05", "2026-09-05", "2026-10-05")

@@ -4,9 +4,10 @@
 import pytest
 
 from backend import hubdb as H, rules, step_flow as F, verdict_moves as V
-from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
+from backend.tests.helpers.github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
 from backend.tests.usage_rows import segment
 from backend import bot_settings as BS
+from backend.tests.helpers.verdict_moves import BASE, HEAD, NEW, STEPS, builder_jobs, check, step, usage, verdict
 
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [
@@ -115,36 +116,9 @@ def ticket(api, step="Review 1", labels=(), steps=STEPS, qa=False):
     return task
 
 
-def check(api, task, title="Review 1: PR #412", owner="bot:cmo", **ran):
-    """A check `owner` ran on the ticket; `ran` names the model it ran on (usage's model, provider, runtime)."""
-    with api.app.state.store.transaction() as c:
-        row = H.task_create(c, "bot:cpo", title, f"Check PR #412 head {HEAD}", owner, parent_id=task["id"], lint=False)
-        turn = usage(c, row["id"], H.actor_id(owner), **ran)
-        from backend.check_independence import capture_attempt
-
-        capture_attempt(c, task["id"], row["id"], HEAD, turn)
-        c.execute("DELETE FROM jobs")
-    return row
-
-
-def verdict(api, row, value, head=HEAD):
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, row["owner_id"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
-        turn = c.execute(
-            "SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1", (row["id"],)
-        ).fetchone()
-        if turn:
-            V.after_capture(c, row["id"], head, turn["id"])
-
-
-def step(api, task):
-    with api.app.state.store.read() as c:
-        return V.step_of(c, H.task(c, task["id"]))
-
-
 def flow(api, task, step_name, **settings):
     """Set one step's flow the way Settings > Tasks does: the whole type saved with its steps."""
-    from backend.tests.test_github import get, headers
+    from backend.tests.helpers.github import get, headers
 
     kind = get(api, "task-types/" + task["type_id"])["type"]
     steps = [
@@ -161,14 +135,6 @@ def flow(api, task, step_name, **settings):
 def checks_of(api, task):
     with api.app.state.store.read() as c:
         return [t for t in (H.task(c, i) for i in H.TR.child_ids(c, task["id"])) if t["status"] in H.ACTIVE_STATUSES]
-
-
-def builder_jobs(api):
-    with api.app.state.store.read() as c:
-        return [
-            H.message(c, r[0])
-            for r in c.execute("SELECT message_id FROM jobs WHERE bot_id='cpo' AND state='queued' ORDER BY rowid")
-        ]
 
 
 def step_events(api, task):
@@ -751,7 +717,7 @@ def test_a_verdict_given_while_the_ticket_was_held_moves_it_once_the_hold_clears
 
 def test_a_private_review_is_not_replayed_into_its_wider_parent_when_a_hold_clears(api):
     from backend.check_independence import capture_attempt
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     task = ticket(api)
     with api.app.state.store.transaction() as c:
@@ -1022,7 +988,7 @@ def test_a_round_timed_out_after_a_fail_at_the_head_goes_to_on_fail_and_never_to
 def test_timeout_keeps_the_private_qa_verdict_source(api):
     import json
     from backend import task_privacy
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     task = ticket(api, step="QA", qa=True)
     with api.app.state.store.transaction() as c:

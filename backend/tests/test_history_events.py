@@ -3,7 +3,6 @@
 append-only, a market subject kind the table does not know refuses the move, and the readers answer what the old
 tables answered (test_the_readers_answer_what_the_old_tables_did)."""
 
-import importlib.util
 import json
 import sqlite3
 from pathlib import Path
@@ -14,34 +13,14 @@ from backend import company, goals, market, task_delete
 from backend import hubdb as H
 from backend.config import Settings
 from backend.store import Store
+from backend.tests.helpers.history_events import OLD, migration
 
 FIXTURES = Path(__file__).parent / "fixtures"
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0064_history_events.py"
-OLD = (
-    "CREATE TABLE task_events (id TEXT PRIMARY KEY, task_id TEXT, created_at TEXT, actor TEXT, field TEXT, old TEXT, "
-    "new TEXT, note TEXT, action_id TEXT, via TEXT)",
-    "CREATE TABLE goal_events (id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, created_at TEXT NOT NULL, actor TEXT NOT NULL, "
-    "field TEXT NOT NULL, old TEXT, new TEXT, note TEXT NOT NULL DEFAULT '', status_by TEXT, status_source TEXT)",
-    "CREATE TABLE market_events (id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL, subject_id TEXT NOT NULL, "
-    "created_at TEXT NOT NULL, actor TEXT NOT NULL, field TEXT NOT NULL, old TEXT, new TEXT, insight_id TEXT, "
-    "note TEXT NOT NULL DEFAULT '')",
-    "CREATE TABLE company_events (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, field TEXT NOT NULL, "
-    "old TEXT NOT NULL DEFAULT '', new TEXT NOT NULL DEFAULT '')",
-    "CREATE TABLE strategy_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL, "
-    "payload TEXT NOT NULL DEFAULT '{}')",
-)
 SOURCES = ("task_events", "goal_events", "market_events", "company_events", "strategy_events")
 
 
 def boot(path):
     Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
-
-
-def migration():
-    spec = importlib.util.spec_from_file_location("history_events_0064", MIGRATION)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def fill(c):

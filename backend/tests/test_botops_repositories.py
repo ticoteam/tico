@@ -6,35 +6,11 @@ import re
 
 import pytest
 
-from backend.tests.test_api import api, get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.store import H
-from backend import bot_settings as BS
-
-
-@pytest.fixture
-def repos(api):
-    """Acme/product and Acme/docs ticked in Settings; ops has write on product, BotOps read on docs."""
-    api.app.state.store.settings.github_owner = "Acme"
-    with api.app.state.store.transaction() as c:
-        for name in ("Acme/product", "Acme/docs"):
-            c.execute(
-                "INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)", (H.new_id(), name, H.now())
-            )
-        for bot, name, level in (("ops", "Acme/product", "write"), ("botops", "Acme/docs", "read")):
-            config = json.loads(
-                c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (bot,)).fetchone()[
-                    0
-                ]
-                or "{}"
-            )
-            BS.write(c, bot, {**config, 'repo_access_mode': 'chosen'})
-            c.execute("INSERT INTO bot_repo_access VALUES(?,?,?)", (bot, name, level))
-
-
-def effective(api, bot="ops"):
-    return get(api, f"bots/{bot}/repositories", "ana-test")["effective"]
+from backend.tests.helpers.api import get, headers, post, put  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.botops_repositories import FLAG, effective, repos
 
 
 def test_botops_acting_for_a_person_reads_its_own_repositories(api, botops, repos):
@@ -159,7 +135,6 @@ def test_the_cli_grant_suffix_sets_each_workflow_option_or_leaves_it():
             chosen_grant(wrong)
 
 
-FLAG = {"full_name": "Acme/product", "access": "write", "run_workflows": True}
 # Each workflow option BotOps may only put on a Confirm card, and what the card says it allows.
 OPTIONS = [("run_workflows", "may run workflows in product"), ("edit_workflows", "may edit workflow files in product")]
 
@@ -214,7 +189,7 @@ def test_an_owner_or_admin_asking_botops_to_tick_run_workflows_gets_a_confirm_ca
 def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops, repos, option, words):
     """Dev 641: a repository's own tick under All ticked repos is the person's own click too, both ways, and the
     catalogue cards it from the body."""
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     put(api, "bots/ops/repositories", {"mode": "all"}, token="ana-test")
     before = effective(api)
@@ -311,7 +286,7 @@ def test_a_declined_run_workflows_card_changes_nothing(api, botops, repos):
 def test_a_member_asking_botops_for_run_workflows_changes_nothing_and_is_told_who_can(
     api, botops, repos, option, words
 ):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     FLAG = {"full_name": "Acme/product", "access": "write", option: True}
     cara = turn(api, botops, person="cara-test", text="Tick Run workflows on product for ops")
@@ -330,7 +305,7 @@ def test_a_member_asking_botops_for_run_workflows_changes_nothing_and_is_told_wh
 
 
 def test_run_workflows_on_a_read_only_grant_says_write_comes_first_and_makes_no_card(api, botops, repos):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     ana = turn(api, botops, person="ana-test", text="Let ops run workflows in docs")
     body = {
@@ -350,7 +325,7 @@ def test_run_workflows_on_a_read_only_grant_says_write_comes_first_and_makes_no_
 
 
 def test_the_catalogue_puts_run_workflows_on_a_card_in_the_bots_own_words(api, botops, repos):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     ana = turn(api, botops, person="ana-test", text="Tick Run workflows on product for ops")
     err, shown = mcp(api, "hub_settings_show", {"key": "bot.repositories", "bot": "ops"}, ana["token"])
@@ -436,7 +411,7 @@ def test_botops_never_clears_or_brings_back_run_workflows_without_a_card(api, bo
 def test_the_catalogue_classifies_a_repository_change_by_what_it_does_not_only_by_its_body(api, botops, repos):
     """Review 2 of PR #1700: a kept Run workflows tick comes back with `{"mode": "chosen"}`, which holds no tick; the
     catalogue tries the change as the person's own click, so it asks for the card the route would make."""
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     def ask(value):
         err, answer = mcp(
@@ -464,7 +439,7 @@ def test_the_catalogue_classifies_a_repository_change_by_what_it_does_not_only_b
 def test_turning_product_repositories_back_on_is_the_owners_card_and_an_admin_is_told_only_the_owner(
     api, botops, repos
 ):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     assert (
         put(api, "bots/ops/repositories", {"mode": "chosen", "create_product_repositories": False}, token="ana-test")[

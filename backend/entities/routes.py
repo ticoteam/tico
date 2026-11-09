@@ -136,6 +136,15 @@ def install(
     def ambiguous(ref: str, c: sqlite3.Connection, actor: str) -> dict[str, Any]:
         return {"ambiguous": True, "ref": ref, "matches": [ES.brief(row) for row in ES.get(c, actor, ref)]}
 
+    def where_we_operate(request: Request, link_key: str | None, touches_self: bool) -> None:
+        """Where we operate switches laws on for the whole company, so a person changes it only as an owner or an admin.
+        Bots keep the writer gate every Directory write has."""
+        who = request.state.identity
+        if link_key != "operates_in" or not touches_self or who.role not in ("owner", "human"):
+            return
+        if auth.company_role(who) not in ("owner", "admin"):  # pyright: ignore[reportUnknownMemberType]
+            raise Problem("forbidden", "Only an owner or an admin changes where we operate", 403)
+
     def page_error(error: ValueError) -> Problem:
         return Problem("validation", str(error), 422)
 
@@ -344,12 +353,14 @@ def install(
 
     @app.post("/api/v2/entities/links")
     def directory_link(request: Request, body: DirectoryLinkCreate):
-        """A typed, dated link between two entities you can see. The link type says which ends it may join."""
+        """A typed, dated link between two entities you can see. The link type says which ends it may join. Where we
+        operate (our company operates_in a place) is an owner's or an admin's."""
         actor = caller(request)
 
         def work(c: sqlite3.Connection):
             from_id = ES.target(c, actor, body.from_ref)
             to_id = ES.target(c, actor, body.to_ref)
+            where_we_operate(request, body.link_key, ES.touches_self(c, entity_ids=[from_id, to_id]))
             link_id = ES.link(
                 c,
                 actor,
@@ -369,9 +380,14 @@ def install(
 
     @app.post("/api/v2/entities/unlink")
     def directory_unlink(request: Request, body: DirectoryUnlink):
-        """End a link: it stops being current today. Its history stays."""
+        """End a link: it stops being current today. Its history stays. Where we operate is an owner's or an admin's."""
         actor = caller(request)
-        return mutate(request, body, lambda c: {"id": ES.unlink(c, actor, body.link_id)})
+
+        def work(c: sqlite3.Connection):
+            where_we_operate(request, ES.link_key_of(c, body.link_id), ES.touches_self(c, link_id=body.link_id))
+            return {"id": ES.unlink(c, actor, body.link_id)}
+
+        return mutate(request, body, work)
 
     @app.post("/api/v2/entities/merge")
     def directory_merge(request: Request, body: DirectoryMerge):

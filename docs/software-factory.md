@@ -9,7 +9,7 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Builder | `builder` (Builder), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
+| 1 | Builder | `builder` (Builder), set to build | Builds the change and does every fix step; Tico merges it once it is approved |
 | 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
 | 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change; every change gets one |
 | 4 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
@@ -77,9 +77,12 @@ history; its clear PR number still prevents a second review. New requests, saved
 follow the same reader rule. If the number is unclear, Tico leaves the request as it is and logs it for review.
 A push closes the old request as superseded and gets a new review;
 an old-head approval never clears the new head. Changes wake the owner with the findings. Once the current head
-has all required approvals and green checks, Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`.
-If the owner lacks repo write access, an existing repo manager, Release Manager or repo owner with write access
-gets the merge task. This grants no new access and does not change the repo's merge rules.
+has all required approvals and green checks, Tico merges it itself when the card is a bot's and the company's GitHub
+App reaches the repository: it adds the PR to the merge queue at that head, or merges it there when the branch has no
+queue ([Tico merges](releasing.md#tico-merges)). A red queue run or a conflict goes to the pipeline's manager, not the
+Builder. Otherwise Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`. If the owner lacks repo write
+access, an existing repo manager, Release Manager or repo owner with write access gets the merge task. This grants no new access and
+does not change the repo's merge rules.
 The merge is of the approved head: a push after approval needs new reviews, so non-blocking notes go in a follow-up PR.
 
 Forwarded review and QA notes keep the source check's readers, even when a later public check sends them.
@@ -89,7 +92,8 @@ Merge tasks hold the work instructions; their approval notice keeps the checks' 
 The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at most three new checks per reviewer
 per hour and within each pool's open-check limit. A settled approval at the current head that has no saved outcome
 runs the next step once: Review 2 when needed, else the merge handoff when checks are green. This also applies when
-a hold clears; an old-head approval does not count. Conflicting PRs go back to the owner to resolve. A branch behind
+a hold clears; an old-head approval does not count. Conflicting PRs go back to the owner to resolve, unless they are
+approved and Tico merges them: then the pipeline's manager resolves it. A branch behind
 main does not: the merge queue tests it on current main. A ticket whose PR already merged needs no open PR for a check after the merge (Watch 24h, or Post Release QA on a board set up before the stage map that still has it); a review before the
 merge still needs one. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
 read the task gets no request. Health names visible bot PRs open over 24 hours without a review and the wait reason.

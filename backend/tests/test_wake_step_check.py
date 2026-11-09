@@ -9,8 +9,9 @@ import json
 import pytest
 
 from backend import redesign_migration as M
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_redesign_migration import db, first_start
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.redesign_migration import db, first_start
 
 STEPS = [("Ready", "open"), ("QA/PR Rejected", "open"), ("Closed", "closed")]
 

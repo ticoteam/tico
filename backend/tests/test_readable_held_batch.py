@@ -1,7 +1,7 @@
 """_readable_held batches privacy and reuses one list per snapshot for status/operations callers."""
 
 from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_held_runs import held
+from backend.tests.helpers.held_runs import held
 from backend import execution
 from backend import task_privacy as privacy
 from backend.auth import Identity

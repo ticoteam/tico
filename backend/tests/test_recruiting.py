@@ -8,9 +8,11 @@ import pytest
 from backend import recruiting
 from backend.auth import Identity
 from backend.store import H, Problem
-from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_strategy_bot import as_bot
+from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.strategy_bot import as_bot
 from backend import bot_settings as BS
+from backend.tests.helpers.recruiting import providers
 
 
 def strategy_bot(api):
@@ -23,18 +25,6 @@ def strategy_bot(api):
         if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('goal-manager','ana')").rowcount:
             BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
     return as_bot(api, "goal-manager")
-
-
-def providers(api, *enabled):
-    current = get(api, "providers")
-    assert (
-        api.put(
-            "/api/v2/providers",
-            headers=headers(),
-            json={"enabled": list(enabled), "expected_revision": current["revision"]},
-        ).status_code
-        == 200
-    )
 
 
 def test_org_model_recommendations_are_only_the_published_starter_catalog(api):

@@ -6,7 +6,8 @@ waits: nothing is queued, and the next run the bot has for any reason carries it
 prompt as a task of its own. Closing it before then is a cancel and wakes nobody. (2026-09-24.)
 """
 
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def claim(api, r, next_run=True):

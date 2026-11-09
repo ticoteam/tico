@@ -12,7 +12,7 @@ from contextlib import closing
 import pytest
 
 from backend.config import ROOT
-from backend.tests.test_replication import prepare
+from backend.tests.helpers.replication import prepare
 
 spec = importlib.util.spec_from_file_location("page_churn", ROOT / "scripts" / "page_churn.py")
 page_churn = importlib.util.module_from_spec(spec)

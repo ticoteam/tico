@@ -6,7 +6,7 @@ from backend import hubdb as H
 from backend import pipeline_setup as S
 from backend import roadmap_flow
 from backend import step_flow as F
-from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, rows, step_id
 
 OLD = [
     ("On Deck", "open"),

@@ -16,7 +16,8 @@ from backend.company_page import readers as R
 from backend.entities import ingest as ING
 from backend.entities import store as ES
 from backend.entities import visible as V
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 ANA, BEN, CARA = "human:ana", "human:ben", "human:cara"
 

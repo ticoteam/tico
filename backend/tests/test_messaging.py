@@ -3,8 +3,9 @@
 from pathlib import Path
 
 from backend.store import H, encode
-from backend.tests.test_api import api, as_member, assign, get, post, runner  # noqa: F401
-from backend.tests.test_mail_api import put_mail, seed_org
+from backend.tests.helpers.api import as_member, assign, get, post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.mail_api import put_mail, seed_org
 from backend import bot_settings as BS
 
 

@@ -5,8 +5,9 @@ import json
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_gateway_connection import KEY, fake_gateway, finish, handed_to, put_bot_on, save, setup
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.gateway_connection import KEY, fake_gateway, finish, handed_to, put_bot_on, save, setup
 from backend import bot_settings as BS
 
 

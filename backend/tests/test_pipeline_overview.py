@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from backend import hubdb as H
 from backend import pipeline_review
 from backend import pipeline_setup as S
-from backend.tests.test_api import api, get, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import get, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 
 
 def ago(**delta):
@@ -518,7 +519,7 @@ def test_a_real_spawn_then_ship_then_resume_makes_one_spawn_lap(api):
         pipeline_review.approve(c, "human:ana", parent["id"], req_id, requirement_version=req_version)
     with api.app.state.store.read() as c:
         (subtask,) = c.execute("SELECT target_task_id FROM pipeline_handoffs WHERE source_task_id=?", (parent["id"],))
-    move(api, subtask[0], step=steps[(eng, "Done")])  # ships (the booted Engineering type keeps its own stages)
+    move(api, subtask[0], step=steps[(eng, "Closed")])  # ships (the booted Engineering type keeps its own stages)
     move(api, parent["id"], step=steps[(prod, "Validate")])  # resumes
     (loop,) = overview(api)["loops"]
     assert sorted(loop["pipelines"]) == sorted([prod, eng])

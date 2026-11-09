@@ -5,9 +5,10 @@ from clients import judge as J
 from backend import thread_rank as TR
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helpers)
-from backend.tests.test_thread_api import new_thread, say, sidebar
-from backend.tests.test_thread_tasks import make_task
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helpers)
+from backend.tests.test_api import api  # noqa: F401  (the fixture and its helpers)
+from backend.tests.helpers.thread_api import new_thread, say, sidebar
+from backend.tests.helpers.thread_tasks import make_task
 
 
 class FakeDecide:

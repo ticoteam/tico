@@ -7,8 +7,9 @@ import pytest
 from backend import hubdb as H
 from backend import roadmaps as R
 from backend import models as M
-from backend.tests.test_tasks_board import api, get, headers, post, relate
+from backend.tests.helpers.tasks_board import api, get, headers, post, relate
 from backend import bot_settings as BS
+from backend.tests.helpers.roadmaps import ORIGIN, public_setup
 
 
 def _engineering_children_drive_approved_roadmap_and_reopen(api):
@@ -698,7 +699,7 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
 
 
 def test_bot_public_text_and_comment_need_exact_single_use_approval(api):
-    from backend.tests.test_tasks_board import bot_token
+    from backend.tests.helpers.tasks_board import bot_token
 
     token = bot_token(api, 'cpo')
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve search', 'body': 'Draft', 'type': 'Product roadmap'})
@@ -739,7 +740,7 @@ def test_the_cli_carries_public_and_the_approval_id_on_a_comment_and_its_edit(ap
     """`hub task comment --public --approval-id` and `hub task comment-edit --approval-id` reach the server's gate."""
     from clients import remotecli
     from clients.hubcli import parser
-    from backend.tests.test_tasks_board import bot_token
+    from backend.tests.helpers.tasks_board import bot_token
 
     token = bot_token(api, 'cpo')
 
@@ -788,33 +789,6 @@ def test_the_cli_carries_public_and_the_approval_id_on_a_comment_and_its_edit(ap
     )
     edited = cli('comment-edit', task['id'], comment['id'], 'Now available to all', '--approval-id', second)['comment']
     assert edited['body'] == 'Now available to all' and edited['public'] == 1 and consumed(second)
-
-
-def public_setup(api, limit=10):
-    post(api, 'tags', {'key': 'roadmap'})
-    post(api, 'tags', {'key': 'internal'})
-    post(
-        api,
-        'roadmaps/settings',
-        {'labels': ['roadmap'], 'cors_origins': ['https://acme.example'], 'action_limit': limit},
-    )
-    return post(
-        api,
-        'tasks',
-        {
-            'owner': 'cpo',
-            'title': 'Internal title',
-            'body': 'Internal summary',
-            'type': 'Product roadmap',
-            'labels': ['roadmap'],
-            'visibility': 'public',
-            'public_title': 'Roadmap item',
-            'public_summary': 'What it does',
-        },
-    )
-
-
-ORIGIN = {'Origin': 'https://acme.example'}
 
 
 def test_public_projection_moderation_and_no_label_enumeration(api):
@@ -942,7 +916,7 @@ def test_requester_contacts_follow_task_privacy_and_teammates_can_remove_themsel
         'tasks/' + task['id'] + '/requesters',
         {'email': 'customer@acme.example', 'name': 'Customer', 'source': 'meeting'},
     )
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     failed, result = call(
         api, 'hub_task_requester_save', {'id': task['id'], 'requester_id': external['id'], 'important': True}
@@ -968,7 +942,7 @@ def test_requester_contacts_follow_task_privacy_and_teammates_can_remove_themsel
 
 
 def test_bot_creation_and_label_publication_require_review(api):
-    from backend.tests.test_tasks_board import bot_token
+    from backend.tests.helpers.tasks_board import bot_token
 
     task = public_setup(api)
     token = bot_token(api, 'cpo')
@@ -1750,3 +1724,15 @@ def test_a_refused_roadmap_move_keeps_the_child_start_and_is_logged_on_the_card(
             (card['id'],),
         ).fetchall()
     assert len(refusals) == 1 and 'Due' in refusals[0][0]
+
+
+def test_suggestions_receiver_is_a_new_org_product_bot_after_the_old_roles(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo')")
+        BS.update(c, 'cpo', {'template': 'product-team-manager'})
+        assert R.suggestions_receiver(c) == ('cpo', 'automatic')
+        BS.update(c, 'cpo', {'template': 'segment-product-owner'})
+        BS.update(c, 'cmo', {'template': 'product-lead'})
+        assert R.suggestions_receiver(c) == ('cmo', 'automatic')
+        BS.update(c, 'cmo', {'template': None})
+        assert R.suggestions_receiver(c) == ('cpo', 'automatic')

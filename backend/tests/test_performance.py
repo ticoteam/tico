@@ -8,22 +8,10 @@ from backend import models as M
 from backend import performance as P
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401  (the api fixture)
-from backend.tests.test_bot_access import world  # noqa: F401  (a Legal bot and who may see it)
-
-
-def sample(at, cpu=20.0, mem=0.5, procs=()):
-    return {
-        "at": at,
-        "cpu": cpu,
-        "cores": 8,
-        "load": [1.0, 1.0, 1.0],
-        "mem_total": 1000,
-        "mem_used": int(1000 * mem),
-        "disk": [{"volume": "state", "total_bytes": 100, "free_bytes": 50}],
-        "active": 1,
-        "procs": [{"name": n, "cpu": c, "mem": 10, "count": 1} for n, c in procs],
-    }
+from backend.tests.helpers.api import get, headers, post, runner, setup_attempt  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.bot_access import world  # noqa: F401  (a Legal bot and who may see it)
+from backend.tests.helpers.performance import sample
 
 
 def beat(api, r):
@@ -142,7 +130,7 @@ def test_a_support_attachment_carries_the_window_with_computers_and_bots_relabel
 
 
 def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summary(world):
-    from backend.tests.test_bot_access import set_access
+    from backend.tests.helpers.bot_access import set_access
 
     api, tokens, _ = world
     r, _, attempt = setup_attempt(api)
@@ -223,7 +211,7 @@ def test_turning_it_off_ends_an_open_overload(api):
 def test_a_bot_discovers_computers_and_reads_performance_by_label_or_id(api):
     """The computer list lets bots discover computers; performance is every bot's to read, by label or id. An unknown
     name and a removed computer's get the same answer, and a caller who may not read it learns nothing either way."""
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     r, _, attempt = setup_attempt(api)
     rid = r["runner_id"]

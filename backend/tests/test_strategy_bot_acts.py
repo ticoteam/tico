@@ -6,11 +6,12 @@ becomes a proposal in their Needs you, and so does a change a bot offline can't 
 from urllib.parse import quote
 
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_strategy_bot_level import level
-from backend.tests.test_strategy_bot_suggests import bot_task
-from backend.tests.test_company import bot, with_strategy_bot
-from backend.tests.test_kpis import goal_with_kpi
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.strategy_bot_level import level
+from backend.tests.helpers.strategy_bot_suggests import bot_task
+from backend.tests.helpers.company import bot, with_strategy_bot
+from backend.tests.helpers.kpis import goal_with_kpi
 from backend import bot_settings as BS
 from backend import mailbox_access
 
@@ -303,7 +304,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -462,7 +463,7 @@ def test_only_the_owner_reads_the_log_and_it_names_a_task_as_it_is_now(api):
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

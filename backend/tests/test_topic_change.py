@@ -15,8 +15,9 @@ from backend import team_rules, views
 from backend import topic_change as T
 from backend.harnesses import HARNESS_CATALOG
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_session_clear import clear, finish
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.session_clear import clear, finish
 from clients import judge as J
 
 UNRELATED = "Draft a blog post about our new pricing"

@@ -4,9 +4,10 @@ import pytest
 
 from backend.hubdb import Refused
 from backend.store import H
-from backend.tests.test_api import api, post  # noqa: F401
-from backend.tests.test_subtask_results import queued_in
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.subtask_results import queued_in
+from backend.tests.helpers.task_lanes import task_bot
 
 HEAD = "a1b2c3d" * 5 + "a1b2c"
 
@@ -178,7 +179,7 @@ def test_a_person_owned_child_titled_as_a_check_finishes_without_a_verdict(api, 
 
 @pytest.mark.parametrize("verdict", ["approve", "fail"])
 def test_completed_runner_final_reply_records_inline_verdict_before_done(api, verdict):
-    from backend.tests.test_subtask_results import start, finish
+    from backend.tests.helpers.subtask_results import start, finish
 
     machine = task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:

@@ -4,41 +4,9 @@ so the spend cap counts it; `assistant:<person>` makes the person's Assistant ro
 
 import json
 
-from backend.tests.test_api import api, assign, claim, get, post, put, ready, runner  # noqa: F401
-
-USAGE = {
-    "input_tokens": 400_000,
-    "cached_tokens": 0,
-    "output_tokens": 10_000,
-    "model": "claude-opus-5-5",
-    "runtime": "claude",
-    "billing": "api",
-}
-
-
-def finish(api, r, text="A draft"):
-    attempt = claim(api, r)
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=r["token"])
-    post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "text": text, "last_seq": 0, "usage": USAGE},
-        token=r["token"],
-    )
-    return attempt
-
-
-def draft_then_tell(**extra):
-    return {
-        "name": "Draft",
-        "owner": "bot:ops",
-        "trigger": {"type": "event", "name": "x.y"},
-        **extra,
-        "steps": [
-            {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Draft a reply", "out": "reply"},
-            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "{{reply.text}}"}},
-        ],
-    }
+from backend.tests.helpers.api import assign, claim, get, post, put, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.automation_turns import draft_then_tell, finish
 
 
 def test_an_llm_step_waits_for_the_bots_turn_in_its_own_room_and_goes_on(api):
@@ -100,7 +68,7 @@ def test_an_assistant_step_makes_the_persons_assistant_room_on_first_use(api):
 def test_a_market_change_made_in_an_automations_turn_names_the_turn_and_the_match(api):
     """A listening match reaches the graph only through the Librarian's turn: what the turn files through the market
     routes is shown on the graph with the turn, the run and the match it came from."""
-    from backend.tests.test_market import _librarian
+    from backend.tests.helpers.market import _librarian
 
     _librarian(api)
     r = runner(api)

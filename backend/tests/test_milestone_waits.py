@@ -12,7 +12,7 @@ from backend import hubdb as H
 from backend import milestone_waits as MW
 from backend.app import create_app
 from backend.scheduler import Scheduler
-from backend.tests.test_github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
+from backend.tests.helpers.github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v0.3.63"
 

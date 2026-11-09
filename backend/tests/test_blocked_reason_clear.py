@@ -7,8 +7,9 @@ import importlib
 import pytest
 
 from backend import hubdb as H, task_holds, task_relations as TR
-from backend.tests.test_api import api, get, post  # noqa: F401  (fixture)
-from backend.tests.test_question_tasks import _answer, _work
+from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.question_tasks import _answer, _work
 
 ASK = "Pick the launch date? I'll book the venue after."
 ROUTES = ["waiting_flag_cleared", "child_done", "question_answered", "question_withdrawn", "status_change"]

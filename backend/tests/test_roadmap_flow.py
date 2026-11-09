@@ -6,7 +6,7 @@ import json
 
 from backend import hubdb as H
 from backend import onboarding, pipeline_review, pipeline_setup, roadmap_flow
-from backend.tests.test_pipeline_foundation import ANA, boot, hub, step_id
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, step_id  # noqa: F401
 
 T = "2026-11-07T09:00:00.000000Z"
 

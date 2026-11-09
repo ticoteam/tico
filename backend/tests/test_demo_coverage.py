@@ -9,7 +9,7 @@ import pytest
 import time_machine
 
 from backend import demo
-from backend.tests.test_demo import NOW, signed_in
+from backend.tests.helpers.demo import NOW, signed_in
 
 UI = Path(__file__).resolve().parents[2] / "ui"
 WEEK_AGO = NOW - timedelta(days=7)

@@ -16,7 +16,7 @@ def snapshot(source, target):
 
 def settings_for(directory, db_path):
     """The `api` fixture's settings (fictional company, test identities, its registry) over `db_path`."""
-    from backend.tests.test_api import api_settings
+    from backend.tests.helpers.api import api_settings
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)

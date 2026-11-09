@@ -1,19 +1,9 @@
 """Docs: internal docs (versions, locks, import, search) and linked docs (docs/docs.md)."""
 
-from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import assign, claim, ready, runner
+from backend.tests.test_api import api
 from backend import bot_settings as BS
-
-ANA, BEN, CARA = "ana-test", "ben-test", "cara-test"  # owner, bot administrator, everyone else
-
-
-def call(api, method, path, body=None, who=ANA, expected=200, **kw):
-    r = api.request(method, "/api/v2/" + path, json=body, headers=headers(who), **kw)
-    assert r.status_code == expected, (path, r.status_code, r.text)
-    return r.json()
-
-
-def make(api, title="Refund policy", body="Refund within 30 days.", who=ANA, **fields):
-    return call(api, "POST", "docs", {"title": title, "body": body, **fields}, who)["doc"]
+from backend.tests.helpers.docs import ANA, BEN, CARA, call, make
 
 
 def edit(api, doc, who=ANA, expected=200, **fields):
@@ -118,7 +108,7 @@ def test_search_ranks_internal_docs_and_lists_linked_docs_beside_them(api):
 
 
 def test_a_bots_docs_tools_read_write_and_survive_a_concurrent_edit(api):
-    from backend.tests.test_mcp import call as tool
+    from backend.tests.helpers.mcp import call as tool
 
     machine = runner(api)
     assign(api, machine, "ops")

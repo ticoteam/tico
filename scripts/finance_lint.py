@@ -16,8 +16,10 @@ SCAN = ("backend", "clients", "connectors", "integrations", "scripts", "tools", 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv"}
 OWNED = ("backend/finance/",)
 EXEMPT = ("scripts/finance_lint.py", "backend/tests/test_status_values.py")  # that test builds its own small tables
-# The migration files are the one schema authority (backend/migrations): they make and rebuild every table.
-EXEMPT_PREFIX = ("backend/tests/test_finance_", "backend/migrations/")
+# The migration files are the one schema authority (backend/migrations): they make and rebuild every table. The Finance
+# tests and the helpers they share (backend/tests/helpers/finance_*, moved out of the test_finance_ files) set up and
+# check Finance's tables directly.
+EXEMPT_PREFIX = ("backend/tests/test_finance_", "backend/tests/helpers/finance_", "backend/migrations/")
 READ_OK = {"fin_actions", "fin_connections"}
 WRITE = re.compile(
     r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE|"

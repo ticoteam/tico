@@ -13,7 +13,8 @@ import pytest
 
 from backend import redesign_migration as M
 from backend.store import H, Store
-from backend.tests.test_api import api, api_settings, get  # noqa: F401  (api: the fixture)
+from backend.tests.helpers.api import api_settings, get  # noqa: F401  (api: the fixture)
+from backend.tests.test_api import api  # noqa: F401  (api: the fixture)
 from backend import usage_limits
 from backend import bot_settings as BS
 
@@ -201,7 +202,7 @@ def test_pending_reads_a_database_an_older_release_wrote(tmp_path):
 def test_the_container_starts_an_old_install_with_no_setting(tmp_path):
     """docker/entrypoint.sh `prepare` (what `server` runs first) on a database that still holds routines: it starts, and
     the install's id is written. The move itself runs in the server, at Store.initialize."""
-    from backend.tests.test_replication import prepare
+    from backend.tests.helpers.replication import prepare
 
     settings = old_install(tmp_path / "old")
     (tmp_path / "data").mkdir()
@@ -251,7 +252,7 @@ GONE_TOOLS = (
 
 
 def test_the_old_systems_routes_and_tools_are_gone(api):
-    from backend.tests.test_api import headers
+    from backend.tests.helpers.api import headers
     from clients import hubtools
 
     for method, path in GONE_ROUTES:

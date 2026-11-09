@@ -17,13 +17,13 @@ from backend import org_rule_check as K
 from backend import thread_attention
 from backend import approval_expiry
 from backend import threads
-from backend.tests.test_question_tasks import keep_asking
+from backend.tests.helpers.question_tasks import keep_asking  # noqa: F401
 from backend import updates
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
 from backend.store import H, Problem
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
+from backend.tests.helpers.org_rules import api, as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
 
 
@@ -257,6 +257,62 @@ def test_a_mixed_bulk_change_holds_only_the_breaking_task(ruled):
     }
     assert owners == {a["id"]: "human:ana", b["id"]: "bot:ops"}
     assert [s.get("code") for s in r.json()["tasks"]["skipped"]] == ["held"]
+
+
+def test_a_bulk_close_holds_a_subtask_and_its_parent_is_skipped_not_closed(ruled):
+    """The rule holds only the subtask. The subtask stays open, so the parent is skipped with subtasks_left_out: closing
+    the parent would close the held subtask through its cascade, which runs no rule check."""
+    api, _ = ruled
+    parent = post(
+        api, "tasks", {"owner": "ops", "title": "Launch the spring campaign", "body": "Plan it."}, token="ops-test"
+    )
+    kid = post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Our favorite color is red",
+            "body": "Pick a palette.",
+            "relations": [{"task": parent["id"], "kind": "parent"}],
+        },
+        token="ops-test",
+    )
+    color_rule(api)  # after the two tasks exist: their own creation would be held by the same rule
+    r = api.post(
+        "/api/v2/task-bulk",
+        json={"filter": {"ids": [parent["id"], kid["id"]]}, "action": "close", "note": "Closing the batch"},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert (out["matched"], out["changed"]) == (2, 0)
+    assert {(t["id"], t["code"]) for t in out["tasks"]["skipped"]} == {
+        (kid["id"], "held"),
+        (parent["id"], "subtasks_left_out"),
+    }
+    rows = sql(api, "SELECT id, status FROM tasks WHERE id IN (?,?)", (parent["id"], kid["id"]))
+    assert {row["id"]: row["status"] for row in rows} == {parent["id"]: "open", kid["id"]: "open"}
+
+
+def test_a_dry_run_does_not_run_the_rule_check(ruled):
+    """A dry run skips the org rule check (a judge call per task, whose spend a rollback cannot take back): the task a rule
+    would hold counts as changed in the dry run, and the real run holds it."""
+    api, judge = ruled
+    kid = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Our favorite color is red", "body": "Pick a palette."},
+        token="ops-test",
+    )
+    color_rule(api)  # after the task exists: its own creation would be held by the same rule
+    body = {"filter": {"ids": [kid["id"]]}, "action": "close", "note": "Closing it"}
+    dry = api.post("/api/v2/task-bulk", json={**body, "dry_run": True}, headers=headers("ops-test"))
+    assert dry.status_code == 200, dry.text
+    assert (dry.json()["changed"], dry.json()["skipped"]) == (1, 0) and judge.calls == []
+    real = api.post("/api/v2/task-bulk", json=body, headers=headers("ops-test"))
+    assert real.status_code == 200, real.text
+    assert [(t["id"], t["code"]) for t in real.json()["tasks"]["skipped"]] == [(kid["id"], "held")]
+    assert len(judge.calls) == 1
 
 
 def test_a_note_to_a_bot_and_a_wake_bot_step_are_checked(ruled):
@@ -1018,9 +1074,9 @@ def test_no_engine_call_happens_under_the_write_lock(ruled):
 
 
 def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
-    from backend.tests.test_org_rules_surfaces import cli, mcp
+    from backend.tests.helpers.org_rules_surfaces import cli, mcp  # noqa: F401
     from clients import hubcli, remotecli
-    from backend.tests.test_automation_cli import Client
+    from backend.tests.helpers.automation_cli import Client  # noqa: F401
 
     api, judge = ruled
     color_rule(api, reviewer="ben")
@@ -1910,7 +1966,7 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled, monk
 
 
 def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch):
-    from backend.tests.test_org_rules_surfaces import mcp
+    from backend.tests.helpers.org_rules_surfaces import mcp  # noqa: F401
 
     api, _ = ruled
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
@@ -2558,7 +2614,7 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
     # The mail CLI only queues: POST email/sends runs the org rule check itself (backend/email_sending.py rule_gate).
     import base64
     from backend import email_sending as S, mailbox_access as MA
-    from backend.tests.test_email_sending import BOX, mime
+    from backend.tests.helpers.email_sending import BOX, mime  # noqa: F401
 
     api, judge = ruled
     monkeypatch.setattr(

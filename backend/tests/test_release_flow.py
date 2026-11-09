@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from backend import hubdb as H
 from backend import release_flow as RF
 from backend.store import encode
-from backend.tests.test_github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
+from backend.tests.helpers.github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
 from backend import bot_settings as BS
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"
@@ -422,3 +422,53 @@ def test_a_release_closes_the_schedule_filed_release_task_but_not_one_the_manage
         rows = {r["title"]: r["status"] for r in c.execute("SELECT title, status FROM tasks WHERE owner_id='bot:cmo'")}
     assert rows["Release: 1 ticket at Release"] in ("closed", "done")
     assert rows["Release: notes for the team"] not in ("closed", "done") and mine
+
+
+def _bots_with_templates(api, pairs):
+    """Active bots, each built from the named starter template (a new company's bots are built the same way)."""
+    with api.app.state.store.transaction() as c:
+        bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug, _ in pairs}
+        H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
+        for slug, template in pairs:
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "product", "ana"))
+            BS.write(c, slug, {**bots[slug], "template": template})
+
+
+def test_a_team_with_a_release_owner_bot_has_a_release_manager(api):
+    _bots_with_templates(api, [("rel", "release-owner")])
+    with api.app.state.store.read() as c:
+        assert RF.release_manager(c) == "rel"
+
+
+def test_a_team_with_a_qa_owner_bot_finds_it_for_any_ticket_without_a_qa_subtask(api):
+    _bots_with_templates(api, [("qao", "qa-owner")])
+    with api.app.state.store.transaction() as c:
+        ticket = H.task_create(c, "human:ana", "Visual replies", "x", "human:ana")
+    with api.app.state.store.read() as c:
+        assert RF.qa_owner(c, {"id": ticket["id"]}) == "qao"
+
+
+def test_the_starter_release_notes_and_issue_triage_bots_still_do_both_jobs(api):
+    _bots_with_templates(api, [("cmo", RF.MANAGER), ("qab", RF.QA)])
+    with api.app.state.store.transaction() as c:
+        ticket = H.task_create(c, "human:ana", "Visual replies", "x", "human:ana")
+    with api.app.state.store.read() as c:
+        assert RF.release_manager(c) == "cmo"
+        assert RF.qa_owner(c, {"id": ticket["id"]}) == "qab"
+
+
+def test_the_default_org_bots_win_over_the_starter_ones(api):
+    _bots_with_templates(
+        api,
+        [
+            ("old-rel", "release-notes"),
+            ("new-rel", "release-owner"),
+            ("old-qa", "issue-triage"),
+            ("new-qa", "qa-owner"),
+        ],
+    )
+    with api.app.state.store.transaction() as c:
+        ticket = H.task_create(c, "human:ana", "Visual replies", "x", "human:ana")
+    with api.app.state.store.read() as c:
+        assert RF.release_manager(c) == "new-rel"
+        assert RF.qa_owner(c, {"id": ticket["id"]}) == "new-qa"

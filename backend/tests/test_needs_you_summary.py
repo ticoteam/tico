@@ -1,7 +1,8 @@
 """The Needs you summary answers with the board's own count, split by kind and by the bot that put each item there."""
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def test_summary_total_is_the_board_count_and_splits_by_bot(api):

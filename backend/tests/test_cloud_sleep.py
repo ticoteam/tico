@@ -19,10 +19,11 @@ from backend import (
     views,
 )
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, claim, get, ready, runner  # noqa: F401
-from backend.tests.test_cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
-from backend.tests.test_start_places import memory
-from backend.tests.test_thread_halfway import bot_status, new_thread, say
+from backend.tests.helpers.api import assign, claim, get, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
+from backend.tests.helpers.start_places import memory
+from backend.tests.helpers.thread_halfway import bot_status, new_thread, say
 
 
 def asleep_bot(cloud):

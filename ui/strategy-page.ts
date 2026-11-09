@@ -125,7 +125,7 @@ interface StratMkt {
   spend?: MktSpend | null;
   rivals?: StratRival[] | null;
   news?: StratNews[] | null;
-  growth?: {brand: unknown} | null;
+  growth?: {brand: BrandDoc | null} | null;
   [key: string]: unknown;
 }
 

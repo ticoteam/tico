@@ -4,14 +4,15 @@ own hours set when it is late."""
 
 from backend import step_age as SA
 from backend.store import H
-from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_dev_ticket_rules import dev_type
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.dev_ticket_rules import stage_dev_type
 from backend.tests.hold_rows import set_holds
 
 
 def ticket(c, title="Fix the connection", owner="bot:cpo", manager="coo"):
     found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
-    typ = {"id": found[0]} if found else dev_type(c)
+    typ = {"id": found[0]} if found else stage_dev_type(c)
     if manager is None:
         c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (typ["id"],))
     else:
@@ -22,6 +23,8 @@ def ticket(c, title="Fix the connection", owner="bot:cpo", manager="coo"):
         (typ["id"],),
     )
     row = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step="Build", lint=False)
+    # A ticket being built is doing (the Build step's own status is open): only doing time counts toward its limit.
+    c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row["id"],))
     return H.task(c, row["id"])
 
 

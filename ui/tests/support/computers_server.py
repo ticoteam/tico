@@ -1,4 +1,4 @@
-"""A real Tico server for the Computers page browser test (ui/tests/computers-shared.cjs).
+"""A real Tico server for the Computers page browser test (ui/tests/computers-shared.cts).
 
     python3 ui/tests/support/computers_server.py
 
@@ -32,7 +32,7 @@ from backend.config import Settings  # noqa: E402
 from backend.credentials import CredentialCipher  # noqa: E402
 from backend.getting_started import save_state  # noqa: E402
 from backend.store import H, encode  # noqa: E402
-from backend.tests.test_credentials import FakeKMS  # noqa: E402
+from backend.tests.helpers.credentials import FakeKMS  # noqa: E402
 
 LOCAL_TOKEN = "local-owner-token-for-the-browser-test-0123456789"
 OWNER = "ana@acme.example"

@@ -1412,7 +1412,7 @@ async function header(browser) {
 async function recheckSaves(browser) {
   // N1: a quick second edit is never lost. Saves queue per task, each with the version the last one returned; the
   // panel redraws at once from the server's answer while the (slow) list reload runs behind it.
-  const {page, errors, posts, tasks} = await open(browser);
+  const {page, errors, posts, tasks, conflictNextUpdate} = await open(browser);
   // The list reloads are held until the test lets them through.
   let releaseLists;
   const listsHeld = new Promise(r => { releaseLists = r; });
@@ -1439,7 +1439,11 @@ async function recheckSaves(browser) {
   assert.equal(await props.locator('[data-props-msg]').innerText(), '');
   assert.match(await props.locator('[data-prop="owner"]').innerText(), /Writer/, 'the slow reload does not draw an older copy');
   // A refused save's reason stays until that property saves; another property's save does not wipe it.
+  // The server refuses the next save itself: the Writer save's own detail read may still be on its way, and if it
+  // lands after the bump it hands the panel the new version, so a refusal judged by version alone would not come
+  // (the Nov 8 queue flake, a 30 s wait for the message).
   tasks.find(x => x.id === 't-triage').version += 5;                     // changed elsewhere
+  conflictNextUpdate('t-triage');
   await props.locator('[data-prop="owner"]').click();
   await peek.locator('.prop-pop [data-prop-pick="support"]').click();
   await page.waitForFunction(() => document.querySelector('#task-peek [data-props-msg]')?.textContent === 'Changed elsewhere. Showing the latest.');

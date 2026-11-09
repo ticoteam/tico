@@ -3,7 +3,8 @@
 may name people hold."""
 
 from backend import task_roles as TRo
-from backend.tests.test_api import api, get, post  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import get, post  # noqa: F401  (fixtures)
+from backend.tests.test_api import api  # noqa: F401  (fixtures)
 
 
 def test_people_join_a_task_under_any_role_and_the_list_finds_them(api):

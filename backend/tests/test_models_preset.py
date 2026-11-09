@@ -7,7 +7,7 @@ import pytest
 
 from backend import models_preset, providers
 from backend.tests.test_api import api, assign, claim, post, runner  # noqa: F401
-from backend.tests.test_gateway_connection import KEY, fake_gateway, handed_to, save, setup
+from backend.tests.helpers.gateway_connection import KEY, fake_gateway, handed_to, save, setup  # noqa: F401
 from backend import bot_settings as BS
 
 CLAUDE = {"runtime": "claude", "harness": "claude-code", "model": "claude-opus-5-5"}
@@ -113,7 +113,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
 
 def test_a_new_computer_prepares_the_gateway_before_its_first_subscription_turn(api, monkeypatch):
     from backend.tests.test_api import get
-    from backend.tests.test_gateway_connection import delete
+    from backend.tests.helpers.gateway_connection import delete  # noqa: F401
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -341,7 +341,7 @@ def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_ti
 
 def on_tico(api, machine, isolated):
     """ops on Tico Medium 1.0 itself, ready on `machine`, which says (or does not say) it runs bots as their own user."""
-    from backend.tests.test_gateway_connection import put_bot_on
+    from backend.tests.helpers.gateway_connection import put_bot_on  # noqa: F401
 
     put_bot_on(api, "ops", "tico-medium-1.0")
     readiness = {
@@ -383,7 +383,7 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
     """A Tico model the bot names itself, under any choice: no attempt is handed out that its runner must refuse
     (runner-rs/src/gateway_relay.rs NOT_ISOLATED). The work stays queued and Health says why."""
     from backend import health
-    from backend.tests.test_claim_refusals import health_admin, held
+    from backend.tests.helpers.claim_refusals import health_admin, held  # noqa: F401
 
     connected(api, monkeypatch)
     choose(api, preset, enabled=("anthropic", "openai", "tico"))
@@ -448,7 +448,7 @@ def waiting_heartbeat(api, machine, change):
 def test_waiting_for_a_sign_in_lets_through_only_the_missing_sign_in(api, monkeypatch, change):
     """The Gateway turn before sign-in passes over the bot's missing subscription and nothing else: its checkout, its
     settings and the Gateway's own runtime must still be ready, and the computer must have reported the bot."""
-    from backend.tests.test_claim_refusals import held
+    from backend.tests.helpers.claim_refusals import held  # noqa: F401
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -510,7 +510,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
     """The key id is the one handed with the credentials: a key rotated or cleared before the run ends doesn't change
     which key paid. A turn that used up Claude and finished on the Gateway records it on the Gateway segment only."""
     from backend import gateway_connection
-    from backend.tests.test_gateway_connection import OTHER, delete
+    from backend.tests.helpers.gateway_connection import OTHER, delete  # noqa: F401
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -565,7 +565,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
 
 
 def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
-    from backend.tests.test_api import get, put
+    from backend.tests.helpers.api import get, put
 
     view = get(api, "providers")
     assert view["presets"] == list(models_preset.PRESETS) and view["preset"] == ""

@@ -2,7 +2,7 @@
 something the requester still has to act on."""
 
 from backend.store import H
-from backend.tests.test_tasks_board import api, get, post  # noqa: F401
+from backend.tests.helpers.tasks_board import api, get, post  # noqa: F401
 
 ANA, OPS = "human:ana", "bot:ops"
 

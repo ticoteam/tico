@@ -7,13 +7,15 @@ with no manager counts as reporting to the owner, Ana: doc-updater and Scout, wh
 Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from backend import bot_settings as BS
 from backend import reach, task_allocator
 from backend.auth import Identity
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_task_caps import as_bot
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
+from backend.tests.helpers.task_caps import as_bot
 import pytest
 
 
@@ -252,10 +254,20 @@ def test_everyone_open_restores_reach_to_anyone(api):
     assert get(api, "reach")["defaults"] == {**reach.DEFAULTS, "person_mode": "open"}
 
 
-def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
+def dry_run(api, capsys):
+    """scripts/reach_dry_run.py over the last day of `api`'s database, as its JSON."""
     import importlib.util
     from pathlib import Path
 
+    path = Path(__file__).resolve().parents[2] / "scripts" / "reach_dry_run.py"
+    spec = importlib.util.spec_from_file_location("reach_dry_run", path)
+    dry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dry)
+    assert dry.main(["--db", str(api.app.state.store.settings.db_path), "--days", "1", "--json"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
     chart(api)
     r = api.put("/api/v2/reach/settings/*", json={"mode": "open"}, headers=headers())
     assert r.status_code == 200, r.text
@@ -264,12 +276,7 @@ def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
     task(api, "pd-test", "bot:finance", title="Before nearby, to a peer")
     r = api.put("/api/v2/reach/settings/*", json={"mode": None}, headers=headers())
     assert r.status_code == 200, r.text
-    path = Path(__file__).resolve().parents[2] / "scripts" / "reach_dry_run.py"
-    spec = importlib.util.spec_from_file_location("reach_dry_run", path)
-    dry = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(dry)
-    assert dry.main(["--db", str(api.app.state.store.settings.db_path), "--days", "1", "--json"]) == 0
-    out = json.loads(capsys.readouterr().out)
+    out = dry_run(api, capsys)
     assert out["refused"] == 2 and out["refused_to_people"] == 2 and out["people_hit"] == 1
     assert out["pairs"] == [
         {
@@ -284,13 +291,41 @@ def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
     assert out["by_kind"] == {"task:made": 2}
 
 
+def test_a_task_made_in_a_slow_write_is_still_read_as_made(api, capsys, monkeypatch):
+    """A new task's send is logged in the write that makes it, after everything else that write does. On a loaded box
+    that took 2 s or more once, and the dry run, which matched the send to the task by the clock, read the task as
+    handed on (merge queue run 42484614049). The send carries the task's own creation time."""
+    import time_machine
+
+    chart(api)
+    r = api.put("/api/v2/reach/settings/*", json={"mode": "open"}, headers=headers())
+    assert r.status_code == 200, r.text
+    create = H.task_create
+    with time_machine.travel(datetime.now(timezone.utc), tick=True) as clock:
+
+        def slow(*args, **kwargs):
+            row = create(*args, **kwargs)
+            clock.shift(timedelta(seconds=3))  # the rest of the write takes 3 s
+            return row
+
+        monkeypatch.setattr(H, "task_create", slow)
+        made = task(api, "pd-test", "human:cara", title="Filed on a slow day")
+        monkeypatch.setattr(H, "task_create", create)
+    with api.app.state.store.read() as c:
+        sent = c.execute("SELECT sent_at FROM task_cap_log WHERE task_id=?", (made["id"],)).fetchone()[0]
+        assert sent == H.task(c, made["id"])["created_at"]
+    r = api.put("/api/v2/reach/settings/*", json={"mode": None}, headers=headers())
+    assert r.status_code == 200, r.text
+    assert dry_run(api, capsys)["by_kind"] == {"task:made": 1}
+
+
 def refused_code(r):
     assert r.status_code == 409, r.text
     return r.json()["error"]
 
 
 def test_a_refusal_never_names_a_teammate_the_bot_may_not_see(api):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     chart(api)
     with api.app.state.store.transaction() as c:

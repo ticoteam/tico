@@ -6,83 +6,11 @@ from backend import check_pools
 from backend import hubdb as H
 from backend import verdict_moves as V
 from backend.store import encode
-from backend.tests.test_github import api, get, headers  # noqa: F401
-from backend.tests.test_review_gate import HEAD, move, ticket as base_ticket
+from backend.tests.helpers.github import api, get, headers  # noqa: F401
+from backend.tests.helpers.review_gate import HEAD, move, ticket as base_ticket
+from backend.tests.helpers.check_pools import RECEIPT, busy, checks, set_pool, team, ticket
 from backend.tests.usage_rows import segment
 from backend import bot_settings as BS
-
-RECEIPT = f"Tests: base {'c' * 40} head {HEAD}: 9 passed, 0 failed"
-# The builder (cpo) runs on Anthropic; rev-a and rev-b on OpenAI; rev-c on Anthropic like the builder.
-MODELS = {"cpo": "claude-opus-5-5", "rev-a": "gpt-6-sol", "rev-b": "gpt-6-sol", "rev-c": "claude-haiku-5-5"}
-
-
-def team(api, seen=None):
-    """The reviewer bots, each on a computer seen just now (or at `seen`)."""
-    with api.app.state.store.transaction() as c:
-        bots = {
-            slug: {"name": slug, "runtime": "fake", "status": "active"}
-            for slug in ("cpo", "cmo", "rev-a", "rev-b", "rev-c")
-        }
-        H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
-        for slug, model in MODELS.items():
-            config = {
-                "name": slug,
-                "runtime": "claude" if model.startswith("claude") else "codex",
-                "model": model,
-                "status": "active",
-                **({"profile": "reviewer"} if slug.startswith("rev-") else {}),
-            }
-            c.execute(
-                "INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?) ON CONFLICT(bot) DO NOTHING",
-                (slug, "engineering", "ana"),
-            )
-            BS.write(c, slug, config)
-        c.execute(
-            "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),)
-        )
-        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (seen or H.now(),))
-        for slug in ("rev-a", "rev-b", "rev-c"):
-            c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
-
-
-def set_pool(api, task, step, pool, limit=2):
-    """Set a step's pool the way Settings > Tasks does: the whole type saved with its steps."""
-    kind = get(api, "task-types/" + task["type_id"])["type"]
-    steps = [
-        {
-            **{k: s[k] for k in ("id", "name", "status")},
-            **({"check_pool": pool, "check_limit": limit} if s["name"] == step else {}),
-        }
-        for s in kind["steps"]
-    ]
-    r = api.post("/api/v2/task-types/" + task["type_id"], headers=headers(), json={"steps": steps})
-    assert r.status_code == 200, r.text
-    return r.json()["type"]
-
-
-def ticket(api, receipt):
-    """A synthetic PR built by cpo on Anthropic, with head-specific run evidence for the family gate."""
-    task = base_ticket(api, receipt)
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
-            ("builder-" + task["id"], "cpo", H.now(), H.now(), task["id"]),
-        )
-        segment(c, "builder-" + task["id"], model='claude-opus-5-5', provider='anthropic', runtime='claude')
-    return task
-
-
-def busy(api, slug, title="Review 1: PR #77", change=None):
-    """An open check `slug` holds on another ticket (of the change `change`, unless it is the first for this slug)."""
-    with api.app.state.store.transaction() as c:
-        other = H.task_create(c, "bot:cpo", change or f"Another change for {slug}", "x", "bot:cpo")
-        return H.task_create(c, "bot:cpo", title, "Check it.", "bot:" + slug, parent_id=other["id"])
-
-
-def checks(api, task):
-    with api.app.state.store.read() as c:
-        kids = [H.task(c, i) for i in H.TR.child_ids(c, task["id"])]
-    return [k for k in kids if k["status"] in H.ACTIVE_STATUSES]
 
 
 def woken(api, slug, task_id):
@@ -232,7 +160,7 @@ def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
             ).fetchone()[0]
             == 1
         )
-    assert moved_step == "Build"
+    assert moved_step == "Review 1 Fixes"
 
 
 def test_same_family_fallback_verdict_counts_and_advances_the_ticket(api):
@@ -317,7 +245,7 @@ def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
         _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
-        assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Build"
+        assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Review 1 Fixes"
         moves = c.execute(
             "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' ORDER BY rowid",
             (check["id"],),
@@ -331,7 +259,7 @@ def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
         assert [
             json.loads(evidence[key]) for key in ("builder_families", "configured_families", "checker_families")
         ] == [["anthropic"], ["openai"], ["anthropic"]]
-    assert _step(c, task) == "Build"
+    assert _step(c, task) == "Review 1 Fixes"
 
 
 def test_unknown_or_same_family_provenance_does_not_create_a_verdict_wait(api):
@@ -345,7 +273,7 @@ def test_unknown_or_same_family_provenance_does_not_create_a_verdict_wait(api):
         waits = c.execute(
             "SELECT child_id,attempt_id FROM check_waits WHERE ticket_id=? AND state='waiting'", (task["id"],)
         ).fetchall()
-        assert _step(c, task) == "Build"
+        assert _step(c, task) == "Review 1 Fixes"
     assert waits == []
 
 
@@ -386,7 +314,7 @@ def test_same_family_verdict_does_not_become_an_unowned_wait(api):
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
         waiting = c.execute("SELECT * FROM check_waits WHERE ticket_id=? AND state='waiting'", (task["id"],)).fetchone()
     assert waiting is None
-    assert get(api, "tasks/" + task["id"])["task"]["step"]["name"] == "Build"
+    assert get(api, "tasks/" + task["id"])["task"]["step"]["name"] == "Review 1 Fixes"
     assert H.task(c, check["id"])["verdict"] == "approve"
 
 
@@ -636,8 +564,8 @@ def test_a_refiled_review_1_check_that_approves_moves_the_ticket_on(api):
     [again] = checks(api, task)
     with api.app.state.store.transaction() as c:
         _finish(c, "refiled-turn", again["owner_id"].split(":", 1)[1], again, "gpt-6-sol", "openai", "codex")
-        assert _step(c, task) == "Build", (
-            "the refiled check's approval is the Review 1 verdict: its ticket goes to Build"
+        assert _step(c, task) == "Review 1 Fixes", (
+            "the refiled check's approval is the Review 1 verdict: its ticket goes to Review 1 Fixes"
         )
 
 
@@ -658,7 +586,7 @@ def test_pool_setting_is_checked_and_shown(api):
     kind = set_pool(api, task, "Review 1", ["bot:rev-a", "rev-a", "rev-b"], limit=3)
     step = next(s for s in kind["steps"] if s["name"] == "Review 1")
     assert step["check_pool"] == ["rev-a", "rev-b"] and step["check_limit"] == 3
-    other = next(s for s in kind["steps"] if s["name"] == "Build")
+    other = next(s for s in kind["steps"] if s["name"] == "Review 1 Fixes")
     assert other["check_pool"] == [] and other["check_limit"] == check_pools.DEFAULT_LIMIT
     with api.app.state.store.read() as c:
         assert check_pools.pool(c, other["id"]) is None, "a step saved beside a pool does not become a check step"
@@ -779,7 +707,8 @@ def qa_ticket(api, built=True, ran=("claude-opus-5-5", "anthropic", "claude")):
     adds the builder's run on `ran` (model, provider, runtime: Anthropic); without it the ticket's only run has no usage
     record (provenance unknown)."""
     from backend import rules, step_flow as F
-    from backend.tests.test_github import PR, hook, post, pr_event
+    from backend.tests.helpers.github import PR, hook, post, pr_event
+    from backend.tests.helpers.verdict_moves import STEPS
 
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in QA_STEPS])
@@ -986,7 +915,7 @@ def test_other_company_prefer_gives_a_same_company_bot_the_check_when_no_other_i
 def task_model(api, slug, model, harness):
     """Give `slug` a task model: the model a task filed to it, a check included, runs on. Both companies are on, as a
     task model needs."""
-    from backend.tests.test_check_models import company
+    from backend.tests.helpers.check_models import company
 
     company(api, "anthropic", "openai")
     with api.app.state.store.transaction() as c:
@@ -1378,7 +1307,7 @@ def test_periodic_pool_retry_bounds_each_pass(api):
     first = ticket(api, RECEIPT)
     with api.app.state.store.transaction() as c:
         second = H.task_create(
-            c, "human:ana", "Another change", "Build it.", "bot:cpo", type=first["type_id"], step="Build"
+            c, "human:ana", "Another change", "Build it.", "bot:cpo", type=first["type_id"], step="In Progress"
         )
         original = next(p for p in H.task_links(c, first["id"]) if p["kind"] == "pr")
         link = H.task_link(c, "human:ana", second["id"], original["url"])
@@ -1405,7 +1334,7 @@ def test_a_check_pool_run_needs_a_passing_check_on_every_open_pr_at_its_own_revi
     requirement's own stage. One passing PR of two leaves it waiting, and a Review 1 check never meets Review 2."""
     from backend import pipeline_engine as E
     from backend import pipeline_requirements as R
-    from backend.tests.test_pipeline_foundation import ANA, boot, hub, insert, step_id
+    from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, insert, step_id
 
     boot(tmp_path / "hub.sqlite")
     c = hub(tmp_path / "hub.sqlite")

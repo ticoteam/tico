@@ -4,7 +4,8 @@ import pytest
 
 from backend import turns
 from backend.store import H
-from backend.tests.test_api import api, as_member, assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import as_member, assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 @pytest.mark.parametrize("reader", ["ana-test", "ben-test"])

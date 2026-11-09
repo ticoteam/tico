@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from backend import bot_settings as BS, check_pools as P, health, hubdb as H, pr_identity as PR, verdict_moves as V
-from backend.tests.test_check_pools import team
-from backend.tests.test_github import api, headers  # noqa: F401
-from backend.tests.test_review_gate import HEAD, OLD
+from backend.tests.helpers.check_pools import team
+from backend.tests.helpers.github import api, headers  # noqa: F401
+from backend.tests.helpers.review_gate import HEAD, OLD
 
 
 def setup(api, reviews=1, qa=False, limit=20):
@@ -232,7 +232,7 @@ def test_private_reviewer_cannot_send_a_private_verdict_to_a_public_task(api):
 def test_later_public_pass_keeps_the_findings_source_audience(api, private, title, bad, good):
     from backend import task_privacy
     from backend.auth import Identity
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     setup(api, qa=True)
     task = task_pr(api, labels=["qa"])
@@ -307,7 +307,7 @@ def test_later_public_pass_keeps_the_findings_source_audience(api, private, titl
 )
 def test_delayed_merge_notice_keeps_its_approval_sources(api, private, other_merger):
     from backend import task_privacy
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     typ = setup(api)
     task = task_pr(api)

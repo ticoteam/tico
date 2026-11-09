@@ -6,9 +6,9 @@ import uuid
 import pytest
 
 from backend import hubdb as H, worktrees as W, worktree_waits as waits
-from backend.tests.test_github_app import api, gh, auth  # noqa: F401
-from backend.tests.test_worktrees import prepared, post, mark_ready  # noqa: F401
-from backend.tests.test_repositories import put
+from backend.tests.helpers.github_app import api, gh, auth  # noqa: F401
+from backend.tests.helpers.worktrees import prepared, post, mark_ready  # noqa: F401
+from backend.tests.helpers.repositories import put
 
 READY = {'schema_version': 1, 'bots': {}, 'worktrees': True, 'worktree_waits': True, 'worktree_recovery': True}
 

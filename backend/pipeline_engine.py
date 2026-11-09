@@ -1583,14 +1583,30 @@ def record_waiting(conn: sqlite3.Connection, actor: str, task_id: str, exc: hubd
         H.PRIVATE_WRITE.reset(token)
 
 
+def queue_back_stage(conn: sqlite3.Connection, step_id: str) -> Row | None:
+    """Where a card the merge queue dropped goes: Build, the stage every fix starts from, so the card goes through
+    Review 1 again. A pipeline without a Build stage sends it one stage back."""
+    here = stage(conn, step_id)
+    if here is None:
+        return None
+    build = _one(
+        conn,
+        "SELECT id, type_id, name, position, status, card_cap FROM task_steps WHERE type_id = ? AND name = 'Build'",
+        (here["type_id"],),
+    )
+    if build is not None and str(build["id"]) != step_id:
+        return build
+    return previous_stage(conn, step_id)
+
+
 def queue_ejected(conn: sqlite3.Connection, task_id: str, reason: str) -> bool:
-    """The merge queue dropped the ticket's pull request: the card goes back a stage, with the reason in its history.
+    """The merge queue dropped the ticket's pull request: the card goes back to Build, with the reason in its history.
     Tico moves it (a back move needs no editor). Only a ticket in a pipeline with requirements moves; the answer says
     whether it did."""
     row = _one(conn, "SELECT id, type_id, step_id FROM tasks WHERE id = ?", (task_id,))
     if row is None or not row["step_id"] or not has_requirements(conn, str(row["type_id"])):
         return False
-    before = previous_stage(conn, str(row["step_id"]))
+    before = queue_back_stage(conn, str(row["step_id"]))
     if before is None:
         return False
     conn.execute("SAVEPOINT queue_ejected")

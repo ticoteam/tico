@@ -4,11 +4,12 @@ What a check step does with a verdict is set on the step (backend/step_flow.py),
 filed while its ticket sat at a check step, finished on the head the ticket's pull request is at now while the ticket
 is still at that step, moves the ticket as Tico (`after_verdict` marks it, `after_capture` moves it once the judging
 attempt is recorded):
-- approve or pass -> the step's `on_pass`; when that is the merge, the builder is woken to merge once CI is green;
+- approve or pass -> the step's `on_pass`; when that is the merge, Tico merges it once CI is green (or wakes the builder);
 - changes, fail, or a check finished with no verdict (its comments are the feedback) -> the step's `on_fail`, and the
   builder is woken once, with the verdict and the head. A pass at a head that one of those already stands on at the
   step goes there too: a later round at the same head clears nothing (`_verdict_at`).
-Tico never merges: the builder does, woken once per head (`merge_wake`). The merge moves the ticket to the type's
+Tico merges a bot's ticket itself when the GitHub App reaches its repository (backend/merge_arm.py); otherwise the
+builder does, woken once per head (`merge_wake`). The merge moves the ticket to the type's
 `on_merge` step from any earlier step (`merged`), and green CI on a new head at a step with `after_green` moves it on
 to its next check (`checks_done`). A ticket entering a step whose `skip_tag` it carries goes on to the step's
 `on_pass` (`skip`), and a check open past its step's `timeout_hours` is closed and its round skipped (`timeouts`).
@@ -26,6 +27,7 @@ import json
 import logging
 
 from . import hubdb as H
+from . import merge_arm
 from . import review_gate
 from . import pr_identity as PR
 from . import step_flow as F
@@ -445,6 +447,14 @@ def _passed(c, ticket, step, why, *, sources=()):
         target = F.merge_step(c, ticket["type_id"]) if is_merged(c, ticket) else None
         if not target:
             ready = merge_ready(c, ticket)
+            if ready and merge_arm.tico_merges(c, ticket, ready[0]):
+                # Tico arms the merge itself on its next sweep (backend/merge_arm.py): nothing for the builder to do.
+                return {
+                    "moved": None,
+                    "handoff": None,
+                    "quiet": True,
+                    "say": f"{why}. Tico merges PR #{ready[0].get('number') or '?'} at head {ready[1][:12]}.",
+                }
             if ready:
                 _merge_woken(c, ticket, ready[1])
             return {
@@ -746,6 +756,8 @@ def merge_wake(c, row, snapshots=None):
         ready = row and merge_ready(c, row)
     if ready and _queued(ready[0], ready[1]):
         return False  # GitHub already has it in the merge queue at this head: nothing to merge again
+    if ready and merge_arm.tico_merges(c, row, ready[0]):
+        return False  # Tico arms the merge itself (backend/merge_arm.py)
     sources = (merge_sources(c, row, ready[1], pr=ready[0]) or [row["id"]]) if ready else []
     if ready and F.pr_checks(c, row):
         recipient = merge_recipient(c, row, ready[0])

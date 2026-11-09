@@ -9,9 +9,10 @@ turn was taken away by a reassignment. A record the API refuses must not be in S
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_media import import_meeting
-from backend.tests.test_sql import query
+from backend.tests.helpers.api import assign, claim, expire, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.media import import_meeting
+from backend.tests.helpers.sql import query
 
 
 @pytest.fixture

@@ -7,9 +7,10 @@ from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import question_tasks as QT
 from backend import task_relations as TR
-from backend.tests import test_ask_ingest as ingest
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
+from backend.tests.helpers import ask_ingest as ingest
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
 QUESTIONS = (
     "1. Should weekly reports go to Ana or the team? Suggested: the team\n2. Drop the old deploy rule? Suggested: yes"
@@ -193,7 +194,7 @@ def test_a_hand_labelled_task_is_no_dream(gate):
 
 
 def test_get_reads_the_same_branch_post_files_on(api):
-    from backend.tests.test_shared_bots import branch, share
+    from backend.tests.helpers.shared_bots import branch, share
 
     share(api)
     branch(api, runner(api, "cara"))

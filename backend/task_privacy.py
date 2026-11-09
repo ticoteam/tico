@@ -1428,6 +1428,8 @@ def guard_write(c, who, path, auth):
         return
     if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
         return
+    if path == "/api/v2/ci/permits":
+        return  # a CI minutes permit publishes nothing; the route admits only the ticket's own workers (ci_runs.may_ask)
     if path == "/api/v2/rules":
         from . import counsel
 
