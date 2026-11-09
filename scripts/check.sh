@@ -107,8 +107,11 @@ else
 fi
 
 # 1a. No Python file imports a test module (scripts/check_test_imports.py): shared names live in the tests' helpers/.
+# Like the other gates, a branch checks only the files it changed, so a violation that main gained alone is not this change's.
 if [ "$ALL" = 1 ] || changed_matches '\.py$|^scripts/test-imports-allowed\.txt$'; then
-  run "test imports (no test module imported)" python3 scripts/check_test_imports.py
+  test_imports_base=()
+  if [ "$ALL" != 1 ] && [ -n "$base" ]; then test_imports_base=(--base "$base"); fi
+  run "test imports (no test module imported)" python3 scripts/check_test_imports.py ${test_imports_base[@]+"${test_imports_base[@]}"}
 else
   skip "test imports (no test module imported)" "no Python file changed"
 fi

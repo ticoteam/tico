@@ -11,17 +11,7 @@ from backend.tests.helpers.org_rule_check import COLOR, bodies, hold_row, ruled 
 from backend.tests.helpers.org_rules import rule
 from backend import org_rule_check, threads
 from backend.store import Problem
-from backend.tests.helpers.thread_api import new_thread, row_of, say, set_bot_access, sidebar
-
-
-def get_thread(api, thread_id, token="ben-test"):
-    return api.get(f"/api/v2/threads/{thread_id}", headers=headers(token))
-
-
-def search(api, query, token):
-    response = api.get("/api/v2/threads/search", params={"q": query}, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json()
+from backend.tests.helpers.thread_api import get_thread, new_thread, row_of, say, search, set_bot_access, sidebar
 
 
 def test_a_member_reads_a_members_thread_and_a_stranger_gets_404_and_no_listing(api):
