@@ -358,7 +358,7 @@ the caller's own choices. Runners and bots get `403`.
 | `POST /api/v2/setup/getting-started/market` | Owner |
 
 The code is `backend/getting_started.py` and `ui/getting-started.ts`. Tests: `backend/tests/test_getting_started.py`
-and `ui/tests/getting-started.cjs`.
+and `ui/tests/getting-started.cts`.
 
 ## What finishing creates
 

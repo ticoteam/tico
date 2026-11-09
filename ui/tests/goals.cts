@@ -2,17 +2,27 @@
 // with the goal to the right (cut short, whole in its tooltip) and KPI chips; helper bots off it; tapping a line opens
 // that owner's panel, where goals and KPIs are added and edited. No helper chat sits beside it; Ask is the way in.
 // Fixtures only, no network.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type * as PageSupport from './support/page.cjs';
+import type * as RoutesSupport from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
+interface KpiLink { goal_id?: string; kind: string; target?: number; baseline?: number; deadline?: string; min?: number; max?: number }
+interface Kpi { id: string; name: string; unit: string; direction: string; cadence: string; owner_id: string; definition: string; definition_version: number; source_note: string; freshness: string; status: string; reason: string; spark: number[]; latest: {value: number; period_end: string; quality: string} | null; target_label: string; link?: KpiLink | undefined; archived_at?: string | null }
+interface GoalRow { id: string; title: string; owner_id: string; parent_id: string | null; status: string; status_source: string; status_by_id?: string; status_note?: string; rank: number; kpis: Kpi[]; checkin?: {id: string; body: string; signal: string; sender_id: string; created_at: string} }
+// Page-defined globals (the goals script) used inside page.evaluate callbacks.
+declare const GOALS_ST: unknown;
+declare function goalsRender(state: unknown): void;
+declare const ticoTheme: {set: (theme: string) => void};
+declare function setDrawer(open: boolean): void;
 
 const LONG = 'Publish one deeply researched comparison page every week for each of the twelve competitor keywords we track, with fresh pricing, screenshots and a customer quote on every page';
-const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
+const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [
   bot('cmo', 'AI CMO', 'p:ana'), bot('seo', 'SEO', 'b:cmo'), bot('sales', 'Sales', 'p:ana'),
   bot('support', 'Support', 'p:ana', {status: 'paused', onboarding_state: 'needs_setup'}),
@@ -21,7 +31,7 @@ const bots = [
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;
-const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence: 'weekly', owner_id: 'bot:cmo', definition: 'Signed-up accounts that finish setup',
+const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, unit: '%', direction: 'up', cadence: 'weekly', owner_id: 'bot:cmo', definition: 'Signed-up accounts that finish setup',
   definition_version: 2, source_note: 'Product database', freshness: 'fresh', status: 'yellow', reason: name + ' is behind', spark: [44, 47, 50, 52],
   latest: {value: 52, period_end: new Date(day).toISOString(), quality: 'measured'}, target_label: '→ 65% by Dec 31',
   link: {goal_id: 'g-cmo', kind: 'improve', target: 65, baseline: 40, deadline: '2027-12-31'}, ...over});
@@ -30,13 +40,13 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [], posted = [];
-    const confirms = [];
+    const errors: string[] = [], posted: {path: string; body: Record<string, unknown>}[] = [];
+    const confirms: string[] = [];
     page.on('dialog', dialog => { confirms.push(dialog.message()); dialog.accept(); });
     page.on('pageerror', e => errors.push(e.message));
     const activation = kpi('k-act', 'Activation', {reason: 'Activation 52% vs 58% needed on pace'});
     const nps = kpi('k-nps', 'NPS', {freshness: 'stale', status: 'gray', reason: 'NPS is stale', target_label: 'range 40–60', link: {goal_id: 'g-cmo', kind: 'maintain', min: 40, max: 60}});
-    const goals = [
+    const goals: GoalRow[] = [
       {id: 'g-top', title: 'Grow revenue 30% this year', owner_id: 'company', parent_id: null, status: 'red', status_source: 'person', status_by_id: 'human:ana',
        status_note: 'Launch slipped', rank: 0, kpis: []},
       {id: 'g-cmo', title: 'Double organic signups', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
@@ -55,14 +65,14 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       definitions: [], checkins: [], proposals: [], may_edit: true, may_log: true};
     const archivedKpi = kpi('k-retired', 'Retired conversion', {owner_id: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
     let archivedMayEdit = true;
-    const requests = [], liveStreams = [];
+    const requests: string[] = [], liveStreams: unknown[] = [];
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname, post = req.method() === 'POST';
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/api/v2/events') { liveStreams.push(route); return; }   // held until the test sends a change
       if (p.startsWith('/api/')) requests.push(req.method() + ' ' + p);
@@ -90,16 +100,16 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
         await new Promise(r => setTimeout(r, 250)); return json({kpi: archivedKpi}); }
       if (/^\/api\/v2\/kpis\/[^/]+\/readings$/.test(p) && post) return json({reading: {id: 'r-new'}});
       const link = p.match(/^\/api\/v2\/goals\/([^/]+)\/kpis$/);
-      if (link && post) { goals.find(g => g.id === link[1]).kpis.push(kpi('k-link', body.name, {freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: {}}); }
-      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1].checkin, {id: 'c0', body: 'Started the email series.', sender_id: 'bot:cmo', created_at: new Date(day - 7 * 86400000).toISOString()}]});
+      if (link && post) { goals.find(g => g.id === link[1])!.kpis.push(kpi('k-link', body.name, {freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: {}}); }
+      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1]!.checkin, {id: 'c0', body: 'Started the email series.', sender_id: 'bot:cmo', created_at: new Date(day - 7 * 86400000).toISOString()}]});
       if (/\/status\/auto$/.test(p) && post) return json({goal: {}});
       if (/^\/api\/v2\/proposals\/[^/]+\/decide$/.test(p) && post) { needs.splice(1); return json({proposal: {}}); }
       const edit = p.match(/^\/api\/v2\/goals\/([^/]+)$/);
-      if (edit && post) { const {owner, ...fields} = body; Object.assign(goals.find(g => g.id === edit[1]), fields, owner ? {owner_id: owner} : {}); return json({goal: {}}); }
+      if (edit && post) { const {owner, ...fields} = body; Object.assign(goals.find(g => g.id === edit[1])!, fields, owner ? {owner_id: owner} : {}); return json({goal: {}}); }
       return json(unrouted(p));
     });
-    const until = async (fn, what) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
-    const last = () => posted.at(-1);
+    const until = async (fn: () => unknown, what: string) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
+    const last = () => posted.at(-1)!;
 
     await page.goto('http://tico-ui.test/#/goals');
     await page.locator('#goal-tree .gt-row').first().waitFor();
@@ -111,11 +121,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree', 'GET /api/v2/growth/kpis']);
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
-    const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
+    const lines = await page.locator('#goal-tree > li').evaluateAll(els => (els as HTMLElement[]).map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
     assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Bot is a helper too
     // The sidebar leaves the same helper bots off.
     assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"], #tree [data-org="b:goal-manager"]').count(), 0);
-    const row = owner => page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`);
+    const row = (owner: string) => page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`);
     assert.equal(await row('bot:sales').locator('.gt-goal').count(), 0, 'no goal: nothing written');
     assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 0, 'its built-in goals are hidden, and no line of its own');
     assert.equal(await page.locator('#nav-assistant, #nav-botops').count(), 0, 'Ask is the way in to both');
@@ -126,7 +136,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     // kept for context, the rest taken out; a redraw keeps it, Escape clears it.
     const search = page.getByRole('searchbox', {name: 'Search goals or people'});
     assert.equal(await search.getAttribute('placeholder'), 'Search goals or people…');
-    const shown = () => page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : el.dataset.owner));
+    const shown = () => page.locator('#goal-tree > li').evaluateAll(els => (els as HTMLElement[]).map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : el.dataset.owner));
     await search.fill('SEO');
     assert.deepEqual(await shown(), ['human:ana', 'bot:cmo', 'bot:seo'], 'a bot with its manager chain; an unrelated bot hidden');
     await page.evaluate(() => goalsRender(GOALS_ST));
@@ -157,7 +167,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.match(await row('human:ben').innerText(), /Keep the board honest\./, 'a profile goal shows');
     // KPIs are chips: the dot and the latest value; no fresh data, no number.
     const chips = row('bot:cmo').locator('.gt-chip');
-    assert.deepEqual(await chips.evaluateAll(els => els.map(el => el.querySelector('.gdot').className.replace('gdot ', '') + ' ' + el.innerText.trim())), ['yellow 52%', 'gray –']);
+    assert.deepEqual(await chips.evaluateAll(els => els.map(el => (el.querySelector('.gdot') as HTMLElement).className.replace('gdot ', '') + ' ' + (el as HTMLElement).innerText.trim())), ['yellow 52%', 'gray –']);
     assert.equal(await row('company').locator('.gt-goal .gdot').getAttribute('class'), 'gdot red');
     // Needs you: one quiet line with a count; Review opens its cards in a sheet, where a proposal is confirmed.
     assert.match(await page.locator('#goal-needs-line').innerText(), /^2 waiting on you\s*·\s*Review$/);
@@ -184,7 +194,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await until(() => row('bot:sales').locator('.gt-goal').count().then(n => n === 1), 'sales has a goal');
     assert.deepEqual(last(), {path: '/api/v2/goals', body: {title: 'Book 20 demos a month', owner: 'bot:sales'}});
     // Then a KPI on that goal, from the panel.
-    const added = goals.at(-1).id;
+    const added = goals.at(-1)!.id;
     await panel.locator(`[data-gp-kpi-add="${added}"]`).click();
     const kform = panel.locator(`[data-kpi-add="${added}"]`);
     await kform.locator('input[name=name]').fill('Demos booked');
@@ -273,12 +283,12 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Archive KPI', 'restore returns to the active state');
     await panel.locator('[data-kpi-archive]').click();
     await until(() => last()?.path === '/api/v2/kpis/k-retired/archive', 'KPI archived again');
-    assert.equal(confirms.at(-1), 'Archive “Retired conversion”? Its readings and definition history will stay available.', 'unlinked archive keeps its wording');
+    assert.equal(confirms.at(-1)!, 'Archive “Retired conversion”? Its readings and definition history will stay available.', 'unlinked archive keeps its wording');
     await panel.locator('[data-kpi-back]').click();
     await panel.locator('[data-gp-close]').click();
     // Archived links stay on goals as muted, keyboard-openable lines; show only three.
-    goals[1].kpis.push(archivedKpi);
-    goals[2].kpis.push(archivedKpi, ...[1, 2, 3].map(i => ({...archivedKpi, id: 'old-' + i, name: 'Old measure ' + i})));
+    goals[1]!.kpis.push(archivedKpi);
+    goals[2]!.kpis.push(archivedKpi, ...[1, 2, 3].map(i => ({...archivedKpi, id: 'old-' + i, name: 'Old measure ' + i})));
     await page.goto('http://tico-ui.test/#/goals/g-cmo2');
     const archivedLines = panel.locator('[data-gp-goal="g-cmo2"] .kpi-line.kpi-archived-line');
     await archivedLines.first().waitFor();
@@ -294,9 +304,9 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await panel.locator('[data-kpi-archive]').click();
     await until(() => panel.locator('[data-kpi-archive]').innerText().then(t => t === 'Archive KPI'), 'linked restore completed');
     await panel.locator('[data-kpi-archive]').click();
-    assert.match(confirms.at(-1), /It stops counting toward 2 goals:/);
-    assert.ok(confirms.at(-1).includes(goals[1].title));
-    assert.ok(confirms.at(-1).includes(goals[2].title));
+    assert.match(confirms.at(-1)!, /It stops counting toward 2 goals:/);
+    assert.ok(confirms.at(-1)!.includes(goals[1]!.title));
+    assert.ok(confirms.at(-1)!.includes(goals[2]!.title));
     await until(() => panel.locator('[data-kpi-archive]').innerText().then(t => t === 'Restore KPI'), 'linked archive completed');
     await panel.locator('[data-kpi-back]').click();
     if (screenshotDir) {
@@ -314,7 +324,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     // A link to one goal opens its owner's panel on it.
     await page.goto('http://tico-ui.test/#/goals/g-cmo2');
     await page.locator('#goal-panel[open] [data-goal-form="g-cmo2"] input[name=title]').waitFor();
-    assert.equal(await page.evaluate(() => document.activeElement.name), 'title');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLInputElement).name), 'title');
     await page.keyboard.press('Escape');   // Escape leaves the goal; the panel stays
     await panel.locator('[data-gp-edit="g-cmo2"]').waitFor();
     assert.equal(new URL(page.url()).hash, '#/strategy/goals');
@@ -327,15 +337,15 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await page.evaluate(() => setDrawer(false));
     await search.fill('seo');
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'searching: no sideways scroll on a phone');
-    const box = await search.boundingBox();
+    const box = (await search.boundingBox())!;
     assert(box.x >= 0 && box.x + box.width <= 390, 'the search fits a phone');
     if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-search-phone.png')});
     await search.press('Escape');
     if (screenshotDir) await page.screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-phone-test.png')});
     // Measured in one step: a refresh may redraw the tree between separate reads.
     const {cmo, seo, ana} = await page.evaluate(() => {
-      const box = (owner, inner = '') => {
-        const r = document.querySelector(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) ${inner}`).getBoundingClientRect();
+      const box = (owner: string, inner = '') => {
+        const r = (document.querySelector(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) ${inner}`) as HTMLElement).getBoundingClientRect();
         return {x: r.x, height: r.height};
       };
       return {cmo: box('bot:cmo'), seo: box('bot:seo', '.gt-av'), ana: box('human:ana', '.gt-av')};
@@ -345,7 +355,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert(seo.x - ana.x <= 40, 'a smaller indent: ' + (seo.x - ana.x));
     assert.equal(await row('bot:cmo').locator('.gt-kn').isVisible(), true, 'a count instead of chips');
     await row('bot:sales').locator('.gt-name').click();
-    const sheet = await panel.boundingBox();
+    const sheet = (await panel.boundingBox())!;
     assert(Math.abs(sheet.y + sheet.height - 844) <= 2 && sheet.width >= 388, 'a sheet at the bottom');
     await page.keyboard.press('Escape');
 

@@ -15,15 +15,31 @@
 //  - one full read at a time: a save's reload or the clock asked for while one is on its way shares it (the save's then
 //    reads what changed), and its first page is short, the rest 500 at a time;
 //  - leaving Tasks keeps the list and its cursor: coming back reads only what changed, unless the stream said reset.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
+type Task = {id: string; title: string};
+type TasksState = {since: string | null; fullAt: number; fullRead: boolean; activeComplete: boolean; stale: boolean; type: string; view: string; tasks: Task[]};
+interface PageWin { __streams: number; __hidden: boolean; __prevented: number; EventSource: unknown }
+declare const TASKS_ST: TasksState;
+declare const LIVE_SOON: Set<string>;
+declare const S: {lastRead: {tasks: {since: string | null}}};
+declare let tasksHiddenAt: number;
+declare let tasksTickAt: number;
+declare function refresh(full: boolean): void;
+declare function tasksReadFull(state: TasksState): Promise<unknown>;
+declare function tasksLoad(state: TasksState): Promise<unknown>;
+declare function tasksTick(): void;
+declare function decideOpen(id: string): void;
+declare function liveEmit(type: string, data: object): void;
 const now = new Date().toISOString();
-const task = (id, title, over) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', lane: 'company',
+const task = (id: string, title: string, over?: Record<string, unknown>) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', lane: 'company',
   labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 // A question to Ana outside any task is a question task now: its card is keyed by the task id.
 const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
@@ -34,31 +50,34 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, serviceWorkers: 'block'});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   // `second`: the open tasks past the first page (null: one page); `failSecond` fails the read of that page.
-  const server = {title: 'Draft the release notes', fail: false, second: null, failSecond: false};
-  const reads = {full: [], delta: 0, limits: []};
+  const server: {title: string; fail: boolean; second: Task[] | null; failSecond: boolean} = {title: 'Draft the release notes', fail: false, second: null, failSecond: false};
+  const reads: {full: string[]; delta: number; limits: (string | null)[]} = {full: [], delta: 0, limits: []};
   await page.addInitScript(() => {
-    window.__streams = 0;
-    window.EventSource = class {
-      constructor(url) { this.url = url; this.on = {}; window.__streams++; setTimeout(() => this.emit('ready', {seq: 10}), 0); }
-      addEventListener(type, fn) { (this.on[type] ||= []).push(fn); }
+    (window as unknown as PageWin).__streams = 0;
+    (window as unknown as PageWin).EventSource = class {
+      declare url: string;
+      declare on: Record<string, ((ev: MessageEvent) => void)[]>;
+      declare closed: boolean;
+      constructor(url: string) { this.url = url; this.on = {}; (window as unknown as PageWin).__streams++; setTimeout(() => this.emit('ready', {seq: 10}), 0); }
+      addEventListener(type: string, fn: (ev: MessageEvent) => void) { (this.on[type] ||= []).push(fn); }
       close() { this.closed = true; }
-      emit(type, data) { for (const fn of this.on[type] || []) fn(new MessageEvent(type, {data: JSON.stringify(data)})); }
+      emit(type: string, data: unknown) { for (const fn of this.on[type] || []) fn(new MessageEvent(type, {data: JSON.stringify(data)})); }
     };
     // The page's visibility, as the test sets it.
-    window.__hidden = false;
-    Object.defineProperty(document, 'hidden', {configurable: true, get: () => window.__hidden});
-    Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => window.__hidden ? 'hidden' : 'visible'});
+    (window as unknown as PageWin).__hidden = false;
+    Object.defineProperty(document, 'hidden', {configurable: true, get: () => (window as unknown as PageWin).__hidden});
+    Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => (window as unknown as PageWin).__hidden ? 'hidden' : 'visible'});
   });
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
@@ -84,8 +103,8 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
     }
     return json(unrouted(p));
   });
-  const shows = title => page.locator('#task-body', {hasText: title}).waitFor({timeout: t(8000)});
-  const until = async (ok, what) => {
+  const shows = (title: string) => page.locator('#task-body', {hasText: title}).waitFor({timeout: t(8000)});
+  const until = async (ok: () => boolean, what: string) => {
     for (const end = Date.now() + t(8000); !ok();) {
       if (Date.now() > end) throw new Error('timed out: ' + what);
       await new Promise(r => setTimeout(r, 50));
@@ -120,19 +139,19 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
 
   // Pulling down at the top: a spinner, the page held still, and on release a full read with no tag.
   const cdp = await page.context().newCDPSession(page);
-  const touch = (type, y, x = 195) => cdp.send('Input.dispatchTouchEvent', {type, touchPoints: type === 'touchEnd' ? [] : [{x, y}]});
+  const touch = (type: 'touchStart' | 'touchEnd' | 'touchMove' | 'touchCancel', y?: number, x = 195) => cdp.send('Input.dispatchTouchEvent', {type, touchPoints: type === 'touchEnd' ? [] : [{x, y: y!}]});
   await page.evaluate(() => {
-    window.__prevented = 0;
-    document.addEventListener('touchmove', ev => { if (ev.defaultPrevented) window.__prevented++; }, {passive: true});
+    (window as unknown as PageWin).__prevented = 0;
+    document.addEventListener('touchmove', ev => { if (ev.defaultPrevented) (window as unknown as PageWin).__prevented++; }, {passive: true});
   });
-  const top = async () => (await page.locator('#task-body').boundingBox()).y;
+  const top = async () => (await page.locator('#task-body').boundingBox())!.y;
   const before = await top(), fullReads = reads.full.length;
   await touch('touchStart', 220);
   for (let y = 240; y <= 420; y += 30) await touch('touchMove', y);
   await page.locator('.pull-spin.armed').waitFor({timeout: t(3000)});
   assert.equal(await top(), before, 'nothing else moves while pulling');
-  assert.equal(await page.evaluate(() => document.scrollingElement.scrollTop), 0);
-  assert.ok(await page.evaluate(() => window.__prevented) > 0, 'the pull holds the page still');
+  assert.equal(await page.evaluate(() => document.scrollingElement!.scrollTop), 0);
+  assert.ok(await page.evaluate(() => (window as unknown as PageWin).__prevented) > 0, 'the pull holds the page still');
   assert.equal(reads.full.length, fullReads, 'nothing is read until the pull is let go');
   await touch('touchEnd');
   await shows('Draft the final release notes');
@@ -150,8 +169,8 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
   assert.equal(reads.full.length, fullReads + 1);
 
   // A pull mid-list just scrolls: no spinner, no read, the touch left to the browser.
-  await page.evaluate(() => { document.scrollingElement.scrollTop = 600; window.__prevented = 0; });
-  assert.ok(await page.evaluate(() => document.scrollingElement.scrollTop) > 0, 'the list is long enough to scroll on a phone');
+  await page.evaluate(() => { document.scrollingElement!.scrollTop = 600; (window as unknown as PageWin).__prevented = 0; });
+  assert.ok(await page.evaluate(() => document.scrollingElement!.scrollTop) > 0, 'the list is long enough to scroll on a phone');
   await touch('touchStart', 300);
   for (let y = 330; y <= 480; y += 30) {
     await touch('touchMove', y);
@@ -159,15 +178,15 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
   }
   await touch('touchEnd');
   await page.waitForTimeout(t(300));
-  assert.equal(await page.evaluate(() => window.__prevented), 0, 'a pull mid-list is the browser\'s scroll');
+  assert.equal(await page.evaluate(() => (window as unknown as PageWin).__prevented), 0, 'a pull mid-list is the browser\'s scroll');
   assert.equal(reads.full.length, fullReads + 1, 'a pull mid-list reads nothing');
   // The swipe's fling ends before the page goes back to the top.
   const still = () => page.waitForFunction(() => new Promise(done => {
-    const at = document.scrollingElement.scrollTop;
-    setTimeout(() => done(document.scrollingElement.scrollTop === at), 200);
+    const at = document.scrollingElement!.scrollTop;
+    setTimeout(() => done(document.scrollingElement!.scrollTop === at), 200);
   }), null, {timeout: t(5000)});
   await still();
-  await page.evaluate(() => { document.scrollingElement.scrollTop = 0; });
+  await page.evaluate(() => { document.scrollingElement!.scrollTop = 0; });
   await still();
 
   // A full read that fails keeps the list on screen and says so.
@@ -218,9 +237,9 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
   await page.evaluate(() => tasksReadFull(TASKS_ST));
   await settled();
 
-  const away = async ms => {
-    await page.evaluate(() => { window.__hidden = true; document.dispatchEvent(new Event('visibilitychange')); });
-    await page.evaluate(ms => { tasksHiddenAt = Date.now() - ms; window.__hidden = false; document.dispatchEvent(new Event('visibilitychange')); }, ms);
+  const away = async (ms: number) => {
+    await page.evaluate(() => { (window as unknown as PageWin).__hidden = true; document.dispatchEvent(new Event('visibilitychange')); });
+    await page.evaluate((ms: number) => { tasksHiddenAt = Date.now() - ms; (window as unknown as PageWin).__hidden = false; document.dispatchEvent(new Event('visibilitychange')); }, ms);
   };
   // A minute away: only what changed (a delta read), as before.
   server.title = 'Draft the release notes, third pass';
@@ -233,11 +252,11 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
   assert.ok(reads.delta > delta, 'a short time away catches up from the cursor');
 
   // More than 10 minutes away: the list is read in full and the stream reconnects (it may have died unheard).
-  const streams = await page.evaluate(() => window.__streams);
+  const streams = await page.evaluate(() => (window as unknown as PageWin).__streams);
   await away(11 * 60e3);
   await shows('Draft the release notes, third pass');
   assert.equal(reads.full.at(-1), '', 'read without the tag');
-  assert.ok(await page.evaluate(() => window.__streams) > streams, 'the live stream reconnects');
+  assert.ok(await page.evaluate(() => (window as unknown as PageWin).__streams) > streams, 'the live stream reconnects');
   await settled();
 
   // Back while the server is down: the stream reconnects once, and the ticks that retry the full read leave it to its
@@ -247,11 +266,11 @@ const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the s
   await away(11 * 60e3);
   await until(() => reads.full.length > tries, 'the full read on return');
   await settled();
-  const resumed = await page.evaluate(() => window.__streams);
+  const resumed = await page.evaluate(() => (window as unknown as PageWin).__streams);
   tries = reads.full.length;
   for (let i = 0; i < 2; i++) { await page.evaluate(() => tasksTick()); await settled(); }
   assert.ok(reads.full.length > tries, 'each tick retries the full read while the list is stale');
-  assert.equal(await page.evaluate(() => window.__streams), resumed, 'the retries leave the stream alone');
+  assert.equal(await page.evaluate(() => (window as unknown as PageWin).__streams), resumed, 'the retries leave the stream alone');
   server.fail = false;
   await page.evaluate(() => tasksTick());
   await settled();

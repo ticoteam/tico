@@ -3,7 +3,7 @@
 // earlier in the task window (an unsent draft there) never goes with the card's Done and stays for its task.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 // The bot says what it would do, so the request is answered on a card (a request with nothing to pick opens whole).
 const request = (id, title, created) => ({id, kind: 'task', title, body: '', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',

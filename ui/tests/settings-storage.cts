@@ -2,24 +2,29 @@
 // ask for it), and the owner's Storage row from GET /api/v2/health `storage` (local disk or S3, files and size,
 // copy progress, failures in red, a Set up S3 link on local disk); nobody else sees it; no sideways scroll on a
 // phone. Every request is intercepted. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SHOTS || '';
+// Defined by the app's Health and Storage code, which the page loads.
+declare const GET_INFLIGHT: Set<string>;
+declare function hlRefresh(): void;
 
 (async () => {
   const t0 = Date.now();
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     const checks = [{id: 'version', label: 'Version', status: 'ok', summary: 'v0.3.0', fixes: []}];
-    let health = {audience: 'owner', attention: 0, checks, computers: [], waiting: [], slow: [], failures: [], checked: new Date().toISOString(),
+    let health: Record<string, unknown> = {audience: 'owner', attention: 0, checks, computers: [], waiting: [], slow: [], failures: [], checked: new Date().toISOString(),
       storage: {mode: 's3', bucket: 'acme-tico-files', region: 'us-east-1', files: 1204, bytes: 3435973837, copy: {done: 120, total: 400, failed: 3}}};
     const now = Math.floor(Date.now() / 1000);
     const metrics = {minutes: 60, now, since: now - 3600,
@@ -34,10 +39,10 @@ const shots = process.env.TICO_SHOTS || '';
         threads: {busy: [{thread: 'MainThread', loop: true, stack: ['backend/app.py:520 request_timing', 'backend/hubdb.py:900 task_list']}], idle: 60}}]}};
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -56,8 +61,8 @@ const shots = process.env.TICO_SHOTS || '';
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const theme = mode => page.evaluate(m => document.documentElement.setAttribute('data-theme', m), mode);
-    const shot = async name => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
+    const theme = (mode: string) => page.evaluate((m: string) => document.documentElement.setAttribute('data-theme', m), mode);
+    const shot = async (name: string) => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
     // The fake server's data changes with no write, so a refresh would join a health read already on its way (from
     // before the change): every change waits for the page's own health read to land first.
     const settled = () => page.waitForFunction(() => !GET_INFLIGHT.has('/v2/health'), null, {timeout: t(5000)});
@@ -70,8 +75,8 @@ const shots = process.env.TICO_SHOTS || '';
     // S3 while copying: bucket, files and size, progress, failures in red; no Set up S3
     const text = (await row.locator('.hl-storage-main').innerText()).replace(/\s+/g, ' ').trim();
     assert.match(text, /^Storage S3 · acme-tico-files 1,204 files · 3\.2 GB Copying to S3 · 120 of 400 3 failed$/, text);
-    const red = await row.locator('[data-hl-copy-failed]').evaluate(el => {
-      const probe = el.parentNode.appendChild(document.createElement('span'));
+    const red = await row.locator('[data-hl-copy-failed]').evaluate((el: HTMLElement) => {
+      const probe = el.parentNode!.appendChild(document.createElement('span'));
       probe.style.color = 'var(--fail)';
       const want = getComputedStyle(probe).color; probe.remove();
       return [getComputedStyle(el).color, want];

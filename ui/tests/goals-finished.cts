@@ -1,20 +1,25 @@
 // Finished goals on the Goals page (ui/app/goals.ts goalFinishedMount): under an owner's live goals, "Finished (N)",
 // closed until opened, newest first, the latest 20 until "Show all"; a row opens read only; Reopen only for whoever may set
 // the goal's colour; "Goal removed" offers Undo, which puts the colour back. Fixtures only, no network.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
-const bot = (name, display_name, org_parent) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true});
+// A goal as the goals tree and the goal detail send it; `before` is what Undo puts back.
+interface Goal { id: string; status?: string; status_note?: string; rank?: number | null; before?: {status?: string | undefined; status_note?: string | undefined}; [k: string]: unknown }
+
+const bot = (name: string, display_name: string, org_parent: string) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true});
 const bots = [bot('sales', 'Sales', 'p:ana'), bot('seo', 'SEO', 'p:ana')];
 const people = [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana'}];
-const at = day => `2026-10-${day}T09:00:00Z`;
-const finished = (id, title, owner, status, day, by) => ({id, title, owner_id: owner, parent_id: null, status, status_source: 'person', status_by_id: by,
+const at = (day: number) => `2026-10-${day}T09:00:00Z`;
+const finished = (id: string, title: string, owner: string, status: string, day: number, by: string) => ({id, title, owner_id: owner, parent_id: null, status, status_source: 'person', status_by_id: by,
   status_note: '', status_at: at(day), rank: null, kpis: []});
-const goals = [
+const goals: Goal[] = [
   {id: 'g-company', title: 'Grow revenue', owner_id: 'company', parent_id: null, status: 'green', status_source: 'person', status_by_id: 'human:ana', status_at: at(1), rank: 0, kpis: []},
   {id: 'g-ben', title: 'Ship the stats page', owner_id: 'human:ben', parent_id: null, status: 'yellow', status_source: 'person', status_by_id: 'human:ben',
    status_note: 'Backend is late', status_at: at(10), rank: 0, kpis: []},
@@ -31,17 +36,17 @@ const goals = [
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
-    const errors = [], posted = [];
+    const errors: string[] = [], posted: {path: string; body: Record<string, unknown>}[] = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname, post = req.method() === 'POST';
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/v2/events') return;
-      const body = post ? req.postDataJSON() : null;
+      const body = (post ? req.postDataJSON() : null) as Record<string, unknown>;
       if (post) posted.push({path: p, body});
       if (p === '/api/employees') return json(bots);
       // Ben: a person, not the owner. He sets his own goals' colour; Sales and SEO report to Ana, not to him.
@@ -64,11 +69,11 @@ const goals = [
       }
       return json(unrouted(p));
     });
-    const until = async (fn, what) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
+    const until = async (fn: () => unknown, what: string) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
     const panel = page.locator('#goal-panel');
-    const open = async owner => {
+    const open = async (owner: string) => {
       // Count first: before the first open there is no panel, and evaluate would wait out its 30 s timeout.
-      if (await panel.count() && await panel.evaluate(d => d.open)) await panel.locator('[data-gp-close]').click();
+      if (await panel.count() && await panel.evaluate((d: HTMLDetailsElement) => d.open)) await panel.locator('[data-gp-close]').click();
       await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
       await panel.locator('.gp-body').waitFor();
     };
@@ -107,7 +112,7 @@ const goals = [
     await proposalForm.locator('input[name=note]').fill('The proposal is back');
     await proposalForm.locator('button[type=submit]').click();
     await until(() => posted.some(r => r.path === '/api/v2/goals/g-proposed/reopen'), 'proposal reopened automatically');
-    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-proposed/reopen').body, {status: 'auto', note: 'The proposal is back'});
+    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-proposed/reopen')!.body, {status: 'auto', note: 'The proposal is back'});
 
     // 4. Ben may set his goal's colour: Reopen asks for a colour and one line why, and the goal is live again.
     await rows.first().locator('[data-fin-reopen]').click();
@@ -121,7 +126,7 @@ const goals = [
     await form.locator('input[name=note]').fill('The beta is back on');
     await form.locator('button[type=submit]').click();
     await until(() => posted.some(r => r.path === '/api/v2/goals/g-b2/reopen'), 'reopen sent');
-    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-b2/reopen').body, {status: 'green', note: 'The beta is back on'});
+    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-b2/reopen')!.body, {status: 'green', note: 'The beta is back on'});
     await panel.locator('[data-gp-goal="g-b2"]').waitFor();
     await until(async () => await panel.locator('[data-fin-toggle]').innerText() === 'Finished (2)', 'two left');
     assert.equal(await page.locator('#goal-tree [data-goal="g-b2"]').count(), 1, 'back in the tree');
@@ -133,7 +138,7 @@ const goals = [
     const toast = page.locator('.toast', {hasText: 'Goal removed'});
     await toast.locator('button', {hasText: 'Undo'}).click();
     await until(() => posted.some(r => r.path === '/api/v2/goals/g-ben/reopen'), 'undo sent');
-    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-ben/reopen').body, {undo: true}, 'the server reads what it had');
+    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-ben/reopen')!.body, {undo: true}, 'the server reads what it had');
     await panel.locator('[data-gp-goal="g-ben"]').waitFor();
 
     // 5. Ben may not set the colour of Sales's goals: no Reopen. 3. An owner with no finished goal has no "Finished" line.

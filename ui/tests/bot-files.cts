@@ -3,20 +3,22 @@
 // (a new tab), a stored file in the app's viewer (a CSV as a table, a quoted comma kept in one cell),
 // a file that did not sync is plain text, never a storage address; on a computer and on a phone.
 // Fixtures only, no network.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
-const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), min = 60e3;
+const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), min = 60e3;
 const bots = [{name: 'cmo', display_name: 'AI CMO', org_parent: '', host: 'keeper', status: 'active', can_chat: true,
   users: [{id: 'ana', name: 'Ana'}], schedules: []}];
 const GDOC = 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit';
-const file = (id, extra) => ({id, bot: 'cmo', title: id, kind: 'document', mime: '', locator: 'tico_blob', scope: 'task', version: 1,
+const file = (id: string, extra: Record<string, unknown>) => ({id, bot: 'cmo', title: id, kind: 'document', mime: '', locator: 'tico_blob', scope: 'task', version: 1,
   state: 'ready', synced: true, size: 10, name: id + '.md', open: {type: 'tico', url: '/api/v2/files/' + id}, provider: '', provider_label: '',
   note: '', source: '', task_id: null, task_title: null, working: false, github_url: null, actor: 'bot:cmo', actor_name: 'AI CMO',
   action: 'modified', first_activity_at: iso(-90 * min), last_activity_at: iso(-90 * min), archived: false, ...extra});
@@ -29,21 +31,24 @@ const files = [
   file('file-000000000000000000000004', {title: 'Traffic export', kind: 'spreadsheet', source: 's3', last_activity_at: iso(-30 * 60 * min)}),
   file('file-000000000000000000000005', {title: 'Old brief', last_activity_at: iso(-60 * 60 * min)}),
 ];
-const CSV = files.find(f => f.title === 'Traffic export');
+type Row = (typeof files)[number];
+const CSV = files.find(f => f.title === 'Traffic export')!;
 CSV.name = 'traffic.csv';
 const csvText = 'page,note,visits\r\n/home,"Hello, world",120\r\n/pricing,"Two\nlines ""quoted""",80\r\n' + Array.from({length: 1200}, (_, i) => `/p${i},row,${i}`).join('\n') + '\n';
 
-async function open(browser, viewport, state) {
+interface State { rows: Row[]; listed: (string | null)[]; patched: unknown[]; opened: string[] }
+
+async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, state: State) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -65,12 +70,12 @@ async function open(browser, viewport, state) {
     }
     const patch = p.match(/^\/api\/v2\/files\/([^/]+)$/);
     if (patch && route.request().method() === 'PATCH') {
-      state.patched.push([patch[1], JSON.parse(route.request().postData())]);
+      state.patched.push([patch[1], JSON.parse(route.request().postData()!)]);
       state.rows = state.rows.filter(f => f.id !== patch[1]);
       return json({file: {id: patch[1]}});
     }
-    if (patch && patch[1] === CSV.id) { state.opened.push(patch[1]); return route.fulfill({contentType: 'text/csv', headers: {'Content-Disposition': "attachment; filename*=UTF-8''traffic.csv"}, body: csvText}); }
-    if (patch) { state.opened.push(patch[1]); return route.fulfill({contentType: 'application/octet-stream', headers: {'Content-Disposition': "attachment; filename*=UTF-8''weekly.md"}, body: '# Weekly'}); }
+    if (patch && patch[1] === CSV.id) { state.opened.push(patch[1]!); return route.fulfill({contentType: 'text/csv', headers: {'Content-Disposition': "attachment; filename*=UTF-8''traffic.csv"}, body: csvText}); }
+    if (patch) { state.opened.push(patch[1]!); return route.fulfill({contentType: 'application/octet-stream', headers: {'Content-Disposition': "attachment; filename*=UTF-8''weekly.md"}, body: '# Weekly'}); }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -78,16 +83,16 @@ async function open(browser, viewport, state) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    for (const [tag, viewport, url] of [['desktop', {width: 1280, height: 900}, '#/bot/cmo'], ['phone', {width: 390, height: 800}, '#/bot/cmo/tasks']]) {
-      const state = {rows: files.slice(), listed: [], patched: [], opened: []};
+    for (const [tag, viewport, url] of [['desktop', {width: 1280, height: 900}, '#/bot/cmo'], ['phone', {width: 390, height: 800}, '#/bot/cmo/tasks']] as [string, {width: number; height: number}, string][]) {
+      const state: State = {rows: files.slice(), listed: [], patched: [], opened: []};
       const {page, errors} = await open(browser, viewport, state);
       await page.goto('https://tico-ui.test/' + url);
       const card = page.locator('#bot-files');
       await card.locator('.bf-row').first().waitFor();
       assert.equal(await card.locator('.bf-row').count(), 3, tag + ': three rows');
-      assert.equal((await card.locator('h2').textContent()).trim(), 'Files', tag + ': no count in the title');
+      assert.equal((await card.locator('h2').textContent())!.trim(), 'Files', tag + ': no count in the title');
       assert.equal(await card.locator('.nav-icon').count(), 0, tag + ': names only, no icon');
       assert.equal((await card.locator('[data-bf-all]').innerText()).trim(), '+2', tag + ': a small +N for the rest');
       assert.equal(await card.locator('.sub, [data-bf-add], [data-bf-remove], [data-bf-promote], .bf-meta, .bf-open, button.ghost:not([data-bf-all])').count(), 0, tag + ': just icons and names');
@@ -95,7 +100,7 @@ async function open(browser, viewport, state) {
       const link = card.locator('.bf-row').nth(0).locator('a.bf-name');
       assert.equal(await link.getAttribute('href'), 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit');
       assert.equal(await link.getAttribute('target'), '_blank', tag + ': a linked file opens in a new tab');
-      assert.match(await link.getAttribute('rel'), /noopener/);
+      assert.match((await link.getAttribute('rel'))!, /noopener/);
       const stored = card.locator('.bf-row').nth(1);
       assert.equal(await stored.locator('a.bf-name').getAttribute('href'), '/api/v2/files/file-000000000000000000000002');
       const unsynced = card.locator('.bf-row').nth(2);
@@ -103,7 +108,7 @@ async function open(browser, viewport, state) {
       // A long name is cut with an ellipsis and keeps its full name as a tooltip.
       assert.equal(await stored.locator('.bf-name').getAttribute('title'), 'Weekly report');
       assert.equal(await stored.locator('.bf-name').evaluate(el => getComputedStyle(el).textOverflow), 'ellipsis');
-      if (shots) for (const scheme of ['light', 'dark']) {
+      if (shots) for (const scheme of ['light', 'dark'] as const) {
         await page.emulateMedia({colorScheme: scheme});
         await card.screenshot({path: path.join(shots, `bot-files-${tag}-${scheme}.png`)});
       }
@@ -127,7 +132,7 @@ async function open(browser, viewport, state) {
       assert.equal(await table.locator('tbody tr').nth(1).locator('td').nth(1).textContent(), 'Two\nlines "quoted"', tag + ': a quoted line break and quote too');
       assert.equal(await table.locator('tbody tr').nth(0).locator('td').count(), 3);
       assert.match(await page.locator('.csv-note').innerText(), /Showing 1,000 of 1,202 rows/);
-      if (shots) for (const scheme of ['light', 'dark']) {
+      if (shots) for (const scheme of ['light', 'dark'] as const) {
         await page.emulateMedia({colorScheme: scheme});
         await page.screenshot({path: path.join(shots, `bot-files-csv-${tag}-${scheme}.png`)});
       }
@@ -141,7 +146,7 @@ async function open(browser, viewport, state) {
       assert.deepEqual(state.patched, [], tag + ': nothing was changed');
       if (viewport.width < 760) {
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone: no sideways scroll');
-        assert((await card.boundingBox()).width <= 390, 'phone: the card fits');
+        assert((await card.boundingBox())!.width <= 390, 'phone: the card fits');
       }
       assert.deepEqual(errors, [], tag + ': page errors');
       await page.close();
@@ -149,4 +154,4 @@ async function open(browser, viewport, state) {
     }
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
-async function until(test, ms = 5000) { for (const end = Date.now() + t(ms); !test(); ) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 50)); } }
+async function until(test: () => boolean, ms = 5000) { for (const end = Date.now() + t(ms); !test(); ) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 50)); } }

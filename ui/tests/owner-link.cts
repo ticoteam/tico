@@ -5,28 +5,35 @@
 //  - a session that lapses: the banner's Sign in again goes to the link page with ?next=, which shows the page that
 //    says to open the link (not "This sign-in link is not valid"), and keeps where the app was;
 //  - the first 401 of a page that has loaded nothing yet: straight to the link page, ?next= and all, the same.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
-const path = require('node:path');
-const readline = require('node:readline');
-const {spawn, execFileSync} = require('node:child_process');
-const {html, uiFile} = require('./support/page.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const crypto = require('node:crypto') as typeof import('node:crypto');
+const path = require('node:path') as typeof import('node:path');
+const readline = require('node:readline') as typeof import('node:readline');
+const {spawn, execFileSync} = require('node:child_process') as typeof import('node:child_process');
+import type * as PageSupport from './support/page.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+
+// What the server prints on its first stdout line, and the child process that serves it.
+interface Tico { child: import('node:child_process').ChildProcess; public: string; url: string; token: string; db: string; registry: string }
+type Seen = string[] & {redirects: {from: string; status: number; to: string | undefined}[]};
+// Defined by the signed-in app's session code (ui/app/session.ts), which the page loads.
+declare const SESSION: {seen?: unknown};
 
 const ROOT = path.join(__dirname, '../..');
 const PYTHON = process.env.TICO_PYTHON || 'python3';
 const NOT_VALID = 'This sign-in link is not valid';
 const LANDING = 'Open the sign-in link Tico sent you';
 
-function server() {
+function server(): Promise<Tico> {
   const child = spawn(PYTHON, ['ui/tests/support/owner_link_server.py'], {cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe']});
-  let err = ''; child.stderr.on('data', d => { err += d; });
-  return new Promise((resolve, reject) => {
+  let err = ''; child.stderr!.on('data', d => { err += d; });
+  return new Promise<Tico>((resolve, reject) => {
     child.on('exit', code => reject(new Error('owner_link_server.py exited ' + code + ': ' + err.slice(-1500))));
     const timer = setTimeout(() => reject(new Error('server did not start: ' + err.slice(-1500))), t(60000));
-    readline.createInterface({input: child.stdout}).on('line', line => {
-      try { const v = JSON.parse(line); clearTimeout(timer); resolve({child, ...v}); } catch {}
+    readline.createInterface({input: child.stdout!}).on('line', line => {
+      try { const v: Omit<Tico, 'child'> = JSON.parse(line); clearTimeout(timer); resolve({child, ...v}); } catch {}
     });
   });
 }
@@ -35,7 +42,7 @@ function server() {
 // that with `page` the app's own page and files come from disk, as the other browser tests serve them.
 // Playwright does not route the target of a navigation's redirect, so a redirect is handed on as a page that goes
 // there (with the response's cookies), and kept in `seen.redirects` for the asserts.
-async function hosted(context, tico, seen, {page: own} = {}) {
+async function hosted(context: import('playwright').BrowserContext, tico: Tico, seen: Seen, {page: own}: {page?: string} = {}) {
   seen.redirects = [];
   await context.route(tico.public + '/**', async route => {
     const req = route.request(), url = new URL(req.url());
@@ -58,12 +65,12 @@ async function hosted(context, tico, seen, {page: own} = {}) {
 
 (async () => {
   const tico = await server();
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     // The emailed link, then a session that lapses.
     {
       const context = await browser.newContext({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-      const seen = [];
+      const seen = [] as unknown as Seen;
       await hosted(context, tico, seen);
       const page = await context.newPage();
       await page.goto(tico.public + '/auth/owner-link#' + tico.token);
@@ -87,8 +94,8 @@ async function hosted(context, tico, seen, {page: own} = {}) {
       await page.click('#signed-out button');
       const res = await landing;
       assert.equal(res.status(), 200, 'Sign in again lands on the link page, not ' + res.status());
-      assert.ok(new URL(page.url()).searchParams.get('next').startsWith('/'), 'and says where to come back to');
-      const text = await page.textContent('body');
+      assert.ok(new URL(page.url()).searchParams.get('next')!.startsWith('/'), 'and says where to come back to');
+      const text = (await page.textContent('body'))!;
       assert.ok(text.includes(LANDING) && !text.includes(NOT_VALID), text);
       console.log('a lapsed session: Sign in again shows the page that says to open the link, with ?next= kept');
       await context.unrouteAll({behavior: 'ignoreErrors'});   // the signed-in app is still fetching
@@ -97,7 +104,7 @@ async function hosted(context, tico, seen, {page: own} = {}) {
     // The first 401 of a page that has loaded nothing: session.js goes straight to the sign-in page.
     {
       const context = await browser.newContext({viewport: {width: 390, height: 844}, serviceWorkers: 'block'});
-      const seen = [];
+      const seen = [] as unknown as Seen;
       await hosted(context, tico, seen, {page: html});
       const page = await context.newPage();
       const landing = page.waitForResponse(r => new URL(r.url()).pathname === '/auth/owner-link', {timeout: t(20000)});
@@ -106,7 +113,7 @@ async function hosted(context, tico, seen, {page: own} = {}) {
       assert.equal(res.status(), 200, 'the first 401 lands on the link page, not ' + res.status());
       assert.equal(new URL(res.url()).searchParams.get('next'), '/?a=1#/tasks');
       await page.waitForLoadState();
-      const text = await page.textContent('body');
+      const text = (await page.textContent('body'))!;
       assert.ok(text.includes(LANDING) && !text.includes(NOT_VALID), text);
       assert.equal(await page.getAttribute('input[name="next"]', 'value'), '/?a=1#/tasks');
       // A link opened on that page (its secret after #) signs in and comes back to where the app was.

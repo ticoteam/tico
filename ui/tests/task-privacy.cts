@@ -5,13 +5,29 @@
 // bulk changes, the keys) is ui/tests/tasks-page.cjs.
 // The Product lane is retired: no lane switch, no product board, and the page
 // only asks the hub for company tasks (the product rows below must never show).
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+interface Attachment {id: string; name: string}
+interface Follower {actor: string; notify: string; reason: string}
+interface Tag {id: string; key: string; label: string; metadata: Record<string, unknown>; markdown: string; is_template: boolean; template_id: string | null; owner_id: string; version: number}
+interface Task {
+  [key: string]: unknown;
+  id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string; rank: number;
+  labels: string[]; links: unknown[]; parts: {total: number; done: number}; version: number; created_at: string; updated_at: string;
+  private?: boolean; readers?: string[]; followers?: Follower[]; tags?: Tag[]; attachments?: Attachment[]; note?: string; close?: unknown; closed_at?: string;
+}
+interface CommentRow {id: string; kind: string; sender_id: string; recipient_id: string; body: string; created_at: string; edited_at?: string; refs: {task: string; comment: boolean; attachments?: Attachment[]}}
+type Body = Record<string, unknown>;
+declare const S: {me?: {id: string}};
+declare const TASKS_ST: {tasks?: unknown[]};
+declare function openTaskCreate(owner: string, opts?: {parent: {id: string; title: string; private: boolean}}): void;
+declare function loadSettings(): Promise<void>;
+declare function settingsEditBot(name: string): void;
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 // The icon font is subset (ui/vendor/fonts/icons.txt); a ligature missing from that list renders as a stray glyph.
 {
@@ -24,18 +40,18 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const bots = [['coo', 'COO', 'leadership'], ['cpo', 'AI CPO', 'product'], ['cmo', 'AI CMO', 'marketing'],
-      ['cto', 'CTO', 'engineering']].map(([name, display_name, team]) =>
+    const bots = ([['coo', 'COO', 'leadership'], ['cpo', 'AI CPO', 'product'], ['cmo', 'AI CMO', 'marketing'],
+      ['cto', 'CTO', 'engineering']] as [string, string, string][]).map(([name, display_name, team]) =>
       ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team,
-        runtime: {cpo: 'codex', cmo: 'claude'}[name], private_tasks_default: name === 'cpo',
+        runtime: ({cpo: 'codex', cmo: 'claude'} as Record<string, string>)[name], private_tasks_default: name === 'cpo',
         update_subscriptions: name === 'cpo' ? ['templates'] : []}));
     const now = new Date().toISOString();
-    const task = (id, over) => ({id, title: id, body: 'Details.', owner_id: 'bot:cmo', requester_id: 'human:reviewer', status: 'open',
+    const task = (id: string, over: Partial<Task>): Task => ({id, title: id, body: 'Details.', owner_id: 'bot:cmo', requester_id: 'human:reviewer', status: 'open',
       lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
     let me = {id: 'reviewer', name: 'Test Reviewer', email: 'reviewer@example.test', role: 'owner', mover: true, cloud: true};
-    const tags = [
+    const tags: Tag[] = [
       {id: 'tag-newsletter', key: 'newsletter', label: 'release', metadata: {date: '2026-10-02'},
         markdown: '# Release\n\n- [ ] Smoke checks\n- [x] Tell the team\n\n```md\n- [ ] Literal example\n```\n\n<script>window.tagUnsafe = true</script>',
         is_template: false, template_id: null, owner_id: 'human:reviewer', version: 1},
@@ -45,7 +61,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     let staleTag = false, raceStarter = false;
     let tasks = [
       task('Draft the newsletter', {private: true, readers: ['human:ben'], rank: 2,
-        followers: [{actor: 'bot:cmo', notify: 'live', reason: 'owner'}, {actor: 'human:ben', notify: 'digest', reason: 'manual'}], labels: ['newsletter'], tags: [tags[0]], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
+        followers: [{actor: 'bot:cmo', notify: 'live', reason: 'owner'}, {actor: 'human:ben', notify: 'digest', reason: 'manual'}], labels: ['newsletter'], tags: [tags[0]!], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
         attachments: [{id: 'doc', name: 'review-packet.md'}, {id: 'clip', name: 'first-cut.mp4'}, {id: 'archive', name: 'source.zip'}]}),
       task('Approve the budget', {owner_id: 'human:reviewer', requester_id: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
       task('Write the copy', {rank: 1, labels: ['newsletter', 'copy']}),
@@ -53,23 +69,24 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         links: [{id: 'l1', kind: 'pr', url: 'https://github.com/ticoteam/tico/pull/412', title: 'tico#412', state: 'open'}], parts: {total: 2, done: 1}}),
       task('Fix the checkout bug', {owner_id: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
     ];
-    const comments = [{id: 'm1', kind: 'say', sender_id: 'human:ben', recipient_id: 'bot:cmo', body: 'Use the September numbers.', created_at: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
+    const comments: CommentRow[] = [{id: 'm1', kind: 'say', sender_id: 'human:ben', recipient_id: 'bot:cmo', body: 'Use the September numbers.', created_at: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
     const events = [{id: 'e1', task_id: 'Draft the newsletter', created_at: now, actor: 'human:reviewer', field: 'status', old: null, new: 'open', note: ''},
                     {id: 'e2', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'status', old: 'open', new: 'doing', note: 'Drafting from the brief'},
                     {id: 'e3', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Drafting from the brief', note: 'Drafting from the brief'},
                     {id: 'e4', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Waiting on the logo', note: ''},
                     {id: 'e5', task_id: 'Draft the newsletter', created_at: now, actor: 'human:ben', field: 'comment', old: 'm1', new: 'm1', note: ''},
                     {id: 'e6', task_id: 'Draft the newsletter', created_at: now, actor: 'human:ben', field: 'comment', old: 'm0', new: null, note: ''}];
-    const posted = [];
-    const people = [];
+    const posted: {path: string; body: Body}[] = [];
+    const people: unknown[] = [];
+    // @ts-expect-error write-only flag, kept for emitted-JS parity with the .cjs
     let preferencePending = true, tasksStartedBeforePreference = false;
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
       if (p === '/api/employees') return json(bots);
@@ -78,7 +95,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/humans') return json({people});
-      if (p === '/api/v2/tasks/labels') return json({labels: ['newsletter', 'copy', 'bug', 'finance'], tags: [tags[0]]});
+      if (p === '/api/v2/tasks/labels') return json({labels: ['newsletter', 'copy', 'bug', 'finance'], tags: [tags[0]!]});
       if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags});
       if (p === '/api/v2/tags' && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
@@ -93,7 +110,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       }
       const tagRoute = p.match(/^\/api\/v2\/tags\/([^/]+)(\/instances)?$/);
       if (tagRoute) {
-        const tag = tags.find(tag => tag.id === decodeURIComponent(tagRoute[1]) || tag.key === decodeURIComponent(tagRoute[1]));
+        const tag = tags.find(tag => tag.id === decodeURIComponent(tagRoute[1]!) || tag.key === decodeURIComponent(tagRoute[1]!));
         if (!tag) return json({error: {detail: 'Tag not found'}}, 404);
         if (req.method() === 'GET') return json({tag, editable: me.mover,
           tasks: tasks.filter(task => task.labels.includes(tag.key)), next_offset: null});
@@ -110,7 +127,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         Object.assign(tag, body, {version: tag.version + 1}); return json({tag});
       }
       if (p.startsWith('/api/v2/files/')) {
-        const id = p.split('/').at(-1);
+        const id = p.split('/').at(-1)!;
         const file = {doc: {name: 'review-packet.md', body: '# Script one\n\nApprove the storyboard. <script>window.previewUnsafe = true</script>'},
           clip: {name: 'first-cut.mp4', body: 'not a real video'}, archive: {name: 'source.zip', body: 'not a real zip'}}[id];
         if (!file) return json({}, 404);
@@ -144,26 +161,26 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       }
       const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
       if (one && req.method() === 'GET') {
-        const t = tasks.find(x => x.id === decodeURIComponent(one[1]));
+        const t = tasks.find(x => x.id === decodeURIComponent(one[1]!))!;
         return json({task: t, events: events.filter(e => e.task_id === t.id), comments: comments.filter(c => c.refs.task === t.id), children: [], parent: null, mover: me.mover, messages: []});
       }
       if (one && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        const t = tasks.find(x => x.id === decodeURIComponent(one[1]));
+        const t = tasks.find(x => x.id === decodeURIComponent(one[1]!))!;
         Object.assign(t, body, {version: t.version + 1}); delete t.close;
         return json({task: t});
       }
       const rd = p.match(/^\/api\/v2\/tasks\/([^/]+)\/readers$/);
       if (rd && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        const t = tasks.find(x => x.id === decodeURIComponent(rd[1]));
+        const t = tasks.find(x => x.id === decodeURIComponent(rd[1]!))!;
         t.readers = [...(t.readers || []).filter(a => !(body.remove || []).includes(a)), ...(body.add || [])];
         return json({private: true, requester_id: t.requester_id, owner_id: t.owner_id, readers: t.readers});
       }
       const fl = p.match(/^\/api\/v2\/tasks\/([^/]+)\/followers$/);
       if (fl && req.method() === 'PUT') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        const t = tasks.find(x => x.id === decodeURIComponent(fl[1])), who = body.actor || 'human:reviewer';
+        const t = tasks.find(x => x.id === decodeURIComponent(fl[1]!))!, who = body.actor || 'human:reviewer';
         const had = (t.followers || []).find(f => f.actor === who);
         t.followers = (t.followers || []).filter(f => f.actor !== who);
         if (body.following) t.followers.push({actor: who, notify: body.notify || had?.notify || 'live', reason: had?.reason || 'manual'});
@@ -173,7 +190,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       const cm = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
       if (cm && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        comments.push({id: 'm' + comments.length, kind: 'say', sender_id: 'human:reviewer', recipient_id: 'bot:cmo', body: body.text, created_at: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
+        comments.push({id: 'm' + comments.length, kind: 'say', sender_id: 'human:reviewer', recipient_id: 'bot:cmo', body: body.text, created_at: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]!), comment: true}});
         return json({comment: comments.at(-1), comments, woke: true});
       }
       if (/^\/api\/v2\/bots\/[^/]+\/definition$/.test(p) && req.method() === 'POST') {
@@ -187,8 +204,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => S.me?.id === 'reviewer' && TASKS_ST?.tasks?.length === 3);
     if (screenshotDir) fs.mkdirSync(screenshotDir, {recursive: true});
-    const shot = async name => { await page.evaluate(() => document.fonts.ready); if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, name + '.png')}); };
-    for (const [device, width, height] of [['desktop', 1200, 900], ['phone', 390, 844]]) {
+    const shot = async (name: string) => { await page.evaluate(() => document.fonts.ready); if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, name + '.png')}); };
+    for (const [device, width, height] of [['desktop', 1200, 900], ['phone', 390, 844]] as [string, number, number][]) {
       await page.setViewportSize({width, height});
       await page.evaluate(() => openTaskCreate('bot:cpo'));
       const create = page.locator('#task-create[open]');
@@ -232,25 +249,25 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#task-modal .prop-pop [data-prop-pick="bot:cmo"]').count(), 0, 'the owner is not offered');
     await pick.click();
     await seen.locator('[data-prop-clear-reader="bot:cpo"]').waitFor();
-    assert.deepEqual(posted.at(-1).body, {add: ['bot:cpo']});
+    assert.deepEqual(posted.at(-1)!.body, {add: ['bot:cpo']});
     await shot('who-can-see-desktop');
     // Followers: each name, with its level when not live; Follow or Following for you, × and + for others.
     const fol = page.locator('#task-modal[open] [data-prop-row="followers"]');
     const followerWords = () => fol.locator('.prop-chip .prop-txt').allTextContents();
     const named = await followerWords();
     assert.equal(named.length, 2, 'the owner and one chosen follower');
-    assert.match(named[1], / · Digest$/, 'a level shows when it is not live');
-    assert.doesNotMatch(named[0], /·/, 'live shows no level');
+    assert.match(named[1]!, / · Digest$/, 'a level shows when it is not live');
+    assert.doesNotMatch(named[0]!, /·/, 'live shows no level');
     await fol.locator('[data-prop-follow]').click();
     await fol.locator('[data-prop="follow-me"]').waitFor();
     assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/Draft%20the%20newsletter/followers', body: {following: true}});
     await fol.locator('[data-prop="follow-me"]').click();
     await page.locator('#task-modal .prop-pop [data-prop-pick="muted"]').click();
     await fol.locator('[data-prop="follow-me"][aria-label="Following: Muted"]').waitFor();
-    assert.deepEqual(posted.at(-1).body, {following: true, notify: 'muted'});
+    assert.deepEqual(posted.at(-1)!.body, {following: true, notify: 'muted'});
     await fol.locator('[data-prop-unfollow="human:ben"]').click();
     await fol.locator('[data-prop-unfollow="human:ben"]').waitFor({state: 'detached'});
-    assert.deepEqual(posted.at(-1).body, {actor: 'human:ben', following: false});
+    assert.deepEqual(posted.at(-1)!.body, {actor: 'human:ben', following: false});
     assert.equal((await followerWords()).length, 2, 'the owner and you');
     await page.locator('#task-modal[open] [data-modal-close]').click();
     await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Write the copy'); });
@@ -267,9 +284,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert(!await create.locator('[name=follow]').isChecked(), 'filing does not follow by default');
     await create.locator('[name=follow]').check();
     await create.locator('[type=submit]').click();
-    await page.waitForFunction(() => !document.querySelector('#task-create').open);
-    assert.equal(posted.find(p => p.path === '/api/v2/tasks').body.private, false, 'explicit human company choice reaches API');
-    assert.equal(posted.find(p => p.path === '/api/v2/tasks').body.follow, true, 'Follow reaches the API');
+    await page.waitForFunction(() => !(document.querySelector('#task-create') as HTMLDialogElement).open);
+    assert.equal(posted.find(p => p.path === '/api/v2/tasks')!.body.private, false, 'explicit human company choice reaches API');
+    assert.equal(posted.find(p => p.path === '/api/v2/tasks')!.body.follow, true, 'Follow reaches the API');
     await page.setViewportSize({width: 1200, height: 900});
     await page.evaluate(() => { location.hash = '#/settings'; });
     await page.locator('#bot-editor').waitFor({state: 'attached'});
@@ -285,7 +302,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await settings.locator('[name=update_tico]').check();
     await settings.locator('[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
-    assert.deepEqual(posted.find(p => p.path === '/api/v2/bots/cpo/definition').body.update_subscriptions, ['templates', 'tico']);
+    assert.deepEqual(posted.find(p => p.path === '/api/v2/bots/cpo/definition')!.body.update_subscriptions, ['templates', 'tico']);
     assert.deepEqual(errors, []);
     console.log('task privacy UI passed: desktop/phone create/edit, default, manual intent, private parent, explicit company payload, who can see');
   } finally { await browser.close(); }

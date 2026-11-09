@@ -3,7 +3,7 @@
 // person's own roadmap item goes as a comment; on a plain task it still finishes or declines it.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const card = (id, title, extra = {}) => ({id, kind: 'task', title, body: '', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   version: 1, labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, created_at: at(60), updated_at: at(60),

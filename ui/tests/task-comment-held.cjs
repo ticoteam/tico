@@ -3,7 +3,7 @@
 // Every request is intercepted (tasks-page.cjs).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const TEXT = 'Our favorite color is gold.';
 const HOLD = {id: 'h-task', operation: 'comment', author: 'human:ana', author_name: 'Ana', state: 'held', outcome: 'blocked',
   rules: [{id: 'r-color', kind: 'internal', text: 'Acme does not name a favorite color.', version: 1, status: 'active',

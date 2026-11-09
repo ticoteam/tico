@@ -1,7 +1,7 @@
 // Regressions for stale focused fields, redraws of every Add form, draft ownership and reload recovery.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./task-code.cjs');
+const {open} = require('./task-code.cts');
 const gate = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
 const init = () => {
  window.taskSources = []; window.taskSafety = [];

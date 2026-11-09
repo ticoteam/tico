@@ -1,3 +1,4 @@
+/// <reference lib="dom.iterable" />
 // Offline browser regression: the Tico team chat (ui/support.ts). The ? beside Search (in the phone's More drawer, beside
 // the Search row) opens one ongoing conversation with the Tico team: every ticket's messages merged in time order as
 // bubbles (theirs with the writer's name when it changes, a date line where the day changes), one box and a paperclip
@@ -5,12 +6,16 @@
 // message (email and install details filled in). A reply on the person's own request opens the chat once and puts a dot on the ?; a bot's report is not in the chat at all. A #/support
 // link, Report this, Want help setting up?, old #/help links and Let the Tico team in all work through it; with
 // support off the ? is gone and the chat says so. Nothing a message says is rendered as HTML.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const {html, uiFile, beta} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const fs = require('node:fs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+import type {Page} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {html, uiFile, beta} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const fs = require('node:fs') as typeof import('node:fs');
+// @ts-expect-error t is not called in this spec; the require stays for load.cjs's side effects
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const INSTALL = '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63';
 const DIAGNOSTICS_TEXT = '{\n  "format": 1,\n  "versions": {\n    "tico": "0.2.17"\n  }\n}';
 const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
@@ -18,14 +23,53 @@ const UNREACHABLE = 'Not sent. Could not reach the Tico team. Try again in a mom
 // No help-desk words anywhere in the chat.
 const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Open|Answered|Closed|sup_/;
 
+interface Message {id: number; created_at: string; from: string; body: string; author_name?: string}
+interface Sent {source?: string; diagnostics?: string; version?: string; install_id?: string}
+interface Ticket {id: string; key?: string | undefined; created_at: string; status: string; message: string; email?: string | undefined;
+  sent: Sent; messages: Message[]; seen?: number}
+interface Session {id: string; ticket_id?: string | undefined; tier?: string | undefined; started_by?: string; seconds_left: number;
+  ended_at?: string; end_reason?: string}
+interface Access {available: boolean; off_reason: string; active: Session | null; last: Session | null; sessions: Session[];
+  can_start?: boolean; can_full?: boolean}
+// A request body as the page sends it (null for a GET): only the fields a route reads.
+interface SupportBody {message?: string; email?: string; include_ids?: boolean; diagnostics?: string; text?: string;
+  ticket_id?: string; tier?: string; hours?: number; moment?: string; answer?: string}
+interface Hq {full: string[]; tickets: Ticket[]; seen: Record<string, number>; reply: boolean; fail: boolean; abort: boolean;
+  pollFail: boolean; confirm: boolean; asked: string[]; access: Access | null; accessGate: Promise<unknown> | null;
+  gate: Promise<unknown> | null; refreshGate: Promise<unknown> | null; refreshStarted: (() => void) | null;
+  captureGate?: Promise<unknown> | null; captureId?: string; createKeys?: (string | undefined)[]; loseCreate?: boolean;
+  deleteGate?: Promise<unknown> | null}
+interface VisitOptions {enabled?: boolean; seed?: Ticket[]; native?: boolean; feedback?: {moment: string; question: string} | null;
+  viewport?: {width: number; height: number}; access?: Access | null; hash?: string; theme?: string; keyboard?: boolean;
+  userAgent?: string | undefined}
+interface Report {kind: string; title: string; checks?: {name: string; status: string}[]}
+// Page globals: the window hooks the app and these tests install (the mock's init scripts and the app's support.ts).
+interface PageWin {
+  __pwned?: number;
+  __keys: (height: number, top?: number, scale?: number) => void;
+  __posted: unknown[];
+  ticoNative: (name: string) => {postMessage: (body: unknown) => void};
+  ticoNativeFeatures: string[];
+  ticoNativeVersion: string;
+  ticoNativeLog: () => Promise<unknown>;
+  __closed: Promise<void>;
+  __focus: string[];
+  supportPoll: () => void;
+  supportState: () => {enabled: boolean; unread: number};
+  supportOn: (on: boolean) => boolean;
+}
+// App scripts and the page's own helpers, called inside page.evaluate.
+declare function toast(message: string, err?: boolean): void;
+declare function talkToUs(report: unknown): void;
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
-    const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light', keyboard = false, userAgent} = {}) => {
+    const visit = async ({enabled = true, seed = [], native = false, feedback = null, viewport = {width: 1440, height: 900}, access = null, hash = '#/tasks', theme = 'light', keyboard = false, userAgent}: VisitOptions = {}) => {
       // The fixtures are minutes and days before now; a browser whose local time is near midnight would put 'an hour
       // ago' on yesterday. A fixed-offset zone where it is about noon keeps every day line where the test expects it.
       const noon = `Etc/GMT${(h => (h > 0 ? '+' : '-') + Math.abs(h))(new Date().getUTCHours() - 12)}`.replace('-0', '+0');
-      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent, timezoneId: noon});
+      const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent: userAgent as string, timezoneId: noon});
       await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.ts
       // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
       // shrinks to what is left above the keyboard and pans (offsetTop); pinch zoom divides its height by the scale.
@@ -33,56 +77,56 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       if (keyboard) await ctx.addInitScript(() => {
         const vv = Object.assign(new EventTarget(), {height: 0, width: 0, offsetTop: 0, offsetLeft: 0, scale: 1});
         Object.defineProperty(window, 'visualViewport', {value: vv, configurable: true});
-        window.__keys = (height, top = 0, scale = 1) => { Object.assign(vv, {height, offsetTop: top, scale}); vv.dispatchEvent(new Event('resize')); };
+        (window as unknown as PageWin).__keys = (height, top = 0, scale = 1) => { Object.assign(vv, {height, offsetTop: top, scale}); vv.dispatchEvent(new Event('resize')); };
       });
       // The desktop app's bridge (app/src/main.rs BRIDGE_SCRIPT), recording what the page posts to it.
       if (native) await ctx.addInitScript(() => {
-        window.__posted = [];
-        window.ticoNative = name => ({postMessage: body => window.__posted.push(name)});
-        window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog'];
-        window.ticoNativeVersion = '0.3.48';
-        window.ticoNativeLog = async () => ({version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401']});
+        (window as unknown as PageWin).__posted = [];
+        (window as unknown as PageWin).ticoNative = name => ({postMessage: body => (window as unknown as PageWin).__posted.push(name)});
+        (window as unknown as PageWin).ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog'];
+        (window as unknown as PageWin).ticoNativeVersion = '0.3.48';
+        (window as unknown as PageWin).ticoNativeLog = async () => ({version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401']});
       });
       const page = await ctx.newPage();
       // An iPhone's home bar: a 34 px safe area at the bottom.
       if (keyboard) await (await ctx.newCDPSession(page)).send('Emulation.setSafeAreaInsetsOverride', {insets: {bottom: 34}});
-      const errors = [], calls = [];
+      const errors: string[] = [], calls: string[] = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
       // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
-      const hq = {full: [], tickets: seed, seen: Object.fromEntries(seed.map(t => [t.id, t.seen || 0])), reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
-      const unread = t => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
+      const hq: Hq = {full: [], tickets: seed, seen: Object.fromEntries(seed.map(t => [t.id, t.seen || 0])), reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
+      const unread = (t: Ticket) => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
       // A bot's report (sent.source) is not in the person's chat, as the server lists it: not listed, not counted.
-      const source = t => t.sent?.source || 'person';
+      const source = (t: Ticket) => t.sent?.source || 'person';
       const listedTickets = () => hq.tickets.filter(t => source(t) === 'person');
-      const out = t => ({...t, source: 'person', unread: unread(t)});
+      const out = (t: Ticket) => ({...t, source: 'person', unread: unread(t)});
       const view = () => ({enabled, tickets: listedTickets().slice(0, 50).map(out),   // the server lists at most 50
       unread: listedTickets().reduce((n, t) => n + unread(t), 0)});
       page.on('pageerror', e => errors.push(e.message));
       page.on('dialog', d => { hq.asked.push(d.message()); return hq.confirm ? d.accept() : d.dismiss(); });
       await page.route('**/*', async route => {
         const req = route.request(), p = new URL(req.url()).pathname;
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.2.17', update: null, app_name: 'Tico', usage_count_notice: false, beta, feedback_question: feedback, changelog: {unread_count: 2}};
         if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
         if (p === '/api/v2/config') return json(config);
         if (p.startsWith('/api/v2/support/')) {
-          const rest = p.slice('/api/v2/support/'.length), body = req.postData() ? JSON.parse(req.postData()) : null;
+          const rest = p.slice('/api/v2/support/'.length), body = (req.postData() ? JSON.parse(req.postData()!) : null) as SupportBody;
           calls.push(req.method() + ' ' + rest + (body ? ' ' + JSON.stringify(body) : ''));
           if (rest === 'access' && req.method() === 'GET' && hq.accessGate) await hq.accessGate;
           if (rest === 'access' && req.method() === 'GET') return json(hq.access || {available: false, off_reason: 'TICO_SUPPORT_ACCESS', active: null, last: null, sessions: []});
           if (rest === 'access') {
-            hq.access.active = hq.access.last = {id: 'sa_1', ticket_id: body.ticket_id, tier: body.tier, started_by: 'human:ana', seconds_left: body.hours * 3600 - 48 * 60};
-            hq.access.sessions = [hq.access.active, ...(hq.access.sessions || [])];
-            return json(hq.access.active);
+            hq.access!.active = hq.access!.last = {id: 'sa_1', ticket_id: body.ticket_id, tier: body.tier, started_by: 'human:ana', seconds_left: body.hours! * 3600 - 48 * 60};
+            hq.access!.sessions = [hq.access!.active!, ...(hq.access!.sessions || [])];
+            return json(hq.access!.active);
           }
           if (rest === 'access/sa_1/stop') {
-            const stopped = {...hq.access.active, seconds_left: 0, ended_at: new Date().toISOString(), end_reason: 'stopped'};
-            hq.access.active = null; hq.access.sessions = hq.access.sessions.map(x => x.id === stopped.id ? stopped : x);
+            const stopped = {...hq.access!.active!, seconds_left: 0, ended_at: new Date().toISOString(), end_reason: 'stopped'};
+            hq.access!.active = null; hq.access!.sessions = hq.access!.sessions.map(x => x.id === stopped.id ? stopped : x);
             return json(stopped);
           }
           if (rest === 'access/sa_1/log') return json({log: [{created_at: new Date().toISOString(), by: 'support-agent', method: 'GET', path: '/api/v2/health' + HOSTILE, status: 200}]});
@@ -108,20 +152,20 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
             (hq.createKeys ||= []).push(key);
             const again = hq.tickets.find(x => x.key === key);
             if (again) return json(out(again));
-            const ticket = {key, id: 'sup_' + (hq.tickets.length + 1), created_at: new Date().toISOString(), status: 'open', message: body.message, email: body.email,
+            const ticket: Ticket = {key, id: 'sup_' + (hq.tickets.length + 1), created_at: new Date().toISOString(), status: 'open', message: body.message!, email: body.email,
                             sent: body.include_ids ? {version: '0.2.17', install_id: INSTALL} : {}, messages: []};
             hq.tickets.unshift(ticket);
             if (hq.loseCreate) { hq.loseCreate = false; return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502); }
             return json(out(ticket));
           }
-          const id = decodeURIComponent(rest.split('/')[1] || ''), ticket = hq.tickets.find(x => x.id === id);
+          const id = decodeURIComponent(rest.split('/')[1] || ''), ticket = hq.tickets.find(x => x.id === id)!;
           if (rest.endsWith('/read')) { hq.seen[id] = ticket.messages.filter(m => m.from === 'staff').length; return json(out(ticket)); }
           if (rest.endsWith('/messages') && hq.gate) await hq.gate;
           // `full`: tickets HQ refuses follow-ups to (60 messages), as backend/support.py passes HQ's 409 on.
           if (rest.endsWith('/messages') && hq.full?.includes(id)) return json({error: {code: 'support_closed', detail: 'This request is closed.'}}, 409);
           if (rest.endsWith('/messages') && hq.abort) return route.abort('connectionrefused');
           if (rest.endsWith('/messages') && hq.fail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
-          if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created_at: new Date().toISOString(), from: 'person', body: body.message}); return json(out(ticket)); }
+          if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created_at: new Date().toISOString(), from: 'person', body: body.message!}); return json(out(ticket)); }
           if (req.method() === 'DELETE' && hq.deleteGate) await hq.deleteGate;
           if (req.method() === 'DELETE') { hq.tickets = hq.tickets.filter(x => x.id !== id); return json({deleted: true}); }
         }
@@ -134,28 +178,28 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
         return json(unrouted(p));
       });
       await page.goto('https://tico-ui.test/' + hash);
-      await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
+      await page.waitForFunction(() => !document.querySelector<HTMLElement>('#account .account-email')?.textContent!.includes('Signing in'));
       return {page, ctx, errors, calls, hq};
     };
     // A link to #/support, as an Assistant reply carries ("Talk to the Tico team"), opens the chat over the page (the
     // app's click handler for any such link, ui/app/ask-panel.ts); it is ready once the box (or the "turned off" line)
     // shows. Focus goes back to the link on closing.
-    const supportLink = page => page.evaluate(() => {
+    const supportLink = (page: Page) => page.evaluate(() => {
       if (document.getElementById('t-support')) return;
       const a = Object.assign(document.createElement('a'), {id: 't-support', href: '#/support', textContent: 'Talk to the Tico team'});
       a.style.cssText = 'position:fixed;top:4px;left:50%;z-index:30';
       document.body.append(a);
     });
-    const openSupport = async page => {
+    const openSupport = async (page: Page) => {
       await supportLink(page);
       await page.locator('#t-support').click();
       await page.locator('#support-pop[open] [data-view]:not([hidden]) [name=message], #support-pop[open] [data-off]:not([hidden])').first().waitFor();
-      await page.waitForFunction(() => !document.querySelector('#support-pop [data-connection]')?.textContent);
+      await page.waitForFunction(() => !document.querySelector<HTMLElement>('#support-pop [data-connection]')?.textContent);
     };
-    const active = page => page.evaluate(() => ({id: document.activeElement?.id, name: document.activeElement?.getAttribute('name'), inPop: !!document.activeElement?.closest('#support-pop')}));
+    const active = (page: Page) => page.evaluate(() => ({id: document.activeElement?.id, name: document.activeElement?.getAttribute('name'), inPop: !!document.activeElement?.closest('#support-pop')}));
 
-    const at = m => new Date(Date.now() - m * 60000).toISOString();
-    const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth
+    const at = (m: number) => new Date(Date.now() - m * 60000).toISOString();
+    const noSideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth
       && [...document.querySelectorAll('#support-pop *')].every(x => x.getBoundingClientRect().right <= innerWidth + 1));
 
     // ---- A computer, no conversation yet.
@@ -165,8 +209,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     const q = page.locator('#support-open');
     await q.waitFor();
     const row = await page.evaluate(() => {
-      const b = id => document.getElementById(id).getBoundingClientRect(), q = b('support-open'), s = b('search-open');
-      return {prev: document.getElementById('support-open').previousElementSibling?.id, gap: q.left - s.right, dy: Math.abs(q.top - s.top), w: q.width, h: q.height, sw: s.width, sh: s.height};
+      const b = (id: string) => document.getElementById(id)!.getBoundingClientRect(), q = b('support-open'), s = b('search-open');
+      return {prev: document.getElementById('support-open')!.previousElementSibling?.id, gap: q.left - s.right, dy: Math.abs(q.top - s.top), w: q.width, h: q.height, sw: s.width, sh: s.height};
     });
     assert.equal(row.prev, 'search-open');
     assert.ok(row.gap >= 0 && row.gap < 8 && row.dy < 2 && row.w === row.sw && Math.abs(row.h - row.sh) < 1, `next to Search, the same size: ${JSON.stringify(row)}`);
@@ -175,7 +219,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     const pop = page.getByRole('dialog', {name: 'Tico team'});
     await pop.locator('[name=message]').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/tasks', 'the page behind stays');
-    const box0 = await pop.boundingBox(), side = await page.locator('#side').boundingBox();
+    const box0 = (await pop.boundingBox())!, side = (await page.locator('#side').boundingBox())!;
     assert.ok(box0.x >= side.x + side.width && box0.x - (side.x + side.width) < 30 && Math.abs(box0.width - 400) <= 2 && box0.height <= 640, `a panel beside the sidebar: ${JSON.stringify(box0)}`);
     assert.deepEqual(await active(page), {id: 'support-message', name: 'message', inPop: true}, 'focus in the box');
     // The header: the headset and "Tico team", a close button. No list, form, subject, status or ticket words.
@@ -195,11 +239,11 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'Shift+Enter does not send');
     await box.press('Enter');
     await pop.locator('.support-msg.you').waitFor();
-    const filed = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
+    const filed = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {'))!.slice('POST tickets '.length));
     assert.deepEqual(filed, {message: 'The board will not load.\n' + HOSTILE, diagnostics: '', email: 'ana@acme.example', include_ids: true});
     assert.equal(await box.inputValue(), '', 'the box empties');
     assert.equal(await pop.locator('.support-msg.you .support-body').innerText(), 'The board will not load.\n' + HOSTILE);
-    assert.equal(await page.evaluate(() => window.__pwned), undefined, 'text, never HTML');
+    assert.equal(await page.evaluate(() => (window as unknown as PageWin).__pwned), undefined, 'text, never HTML');
     assert.doesNotMatch(await pop.innerText(), DESK);
     assert.deepEqual(await pop.locator('.support-day').allInnerTexts(), ['Today']);
     // The next message continues that conversation.
@@ -215,29 +259,29 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await box.fill('half a thought');
     // The close event (which hands focus back to the ?) is dispatched after Escape: wait for it, so it cannot take focus
     // from a field the test focuses later.
-    await page.evaluate(() => { window.__closed = new Promise(done => document.getElementById('support-pop').addEventListener('close', done, {once: true})); });
+    await page.evaluate(() => { (window as unknown as PageWin).__closed = new Promise(done => document.getElementById('support-pop')!.addEventListener('close', done as () => void, {once: true})); });
     await page.keyboard.press('Escape');
-    await page.evaluate(() => window.__closed);
+    await page.evaluate(() => (window as unknown as PageWin).__closed);
     await page.locator('#support-pop').waitFor({state: 'hidden'});
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'support-open');
     // A reply while the person is typing in another field: the ? gets its dot and the chat waits. It opens by itself once
     // the field is left (the unsent words are still in its box), and opening reads the reply. No notice, no toast.
     const focused = await page.evaluate(() => {
-      window.__focus = [];
-      for (const type of ['focusin', 'focusout']) document.addEventListener(type, e => window.__focus.push(type + ' ' + (e.target.id || e.target.tagName)), true);
+      (window as unknown as PageWin).__focus = [];
+      for (const type of ['focusin', 'focusout']) document.addEventListener(type, e => (window as unknown as PageWin).__focus.push(type + ' ' + ((e.target as HTMLElement).id || (e.target as HTMLElement).tagName)), true);
       const i = Object.assign(document.createElement('input'), {id: 't-elsewhere'}); document.body.append(i); i.focus();
       return document.activeElement?.id;
     });
     assert.equal(focused, 't-elsewhere', 'the field being typed in has focus');
     v.hq.reply = true;
-    await page.evaluate(() => window.supportPoll());
+    await page.evaluate(() => (window as unknown as PageWin).supportPoll());
     await page.locator('#support-open.has-unread').waitFor();
-    const {log, ...waiting} = await page.evaluate(() => ({unread: window.supportState().unread, active: document.activeElement?.id,
-      open: document.getElementById('support-pop').open, label: document.getElementById('support-open').getAttribute('aria-label'), log: window.__focus.slice()}));
+    const {log, ...waiting} = await page.evaluate(() => ({unread: (window as unknown as PageWin).supportState().unread, active: document.activeElement?.id,
+      open: (document.getElementById('support-pop') as HTMLDialogElement).open, label: document.getElementById('support-open')!.getAttribute('aria-label'), log: (window as unknown as PageWin).__focus.slice()}));
     assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Tico team, 1 new'},
       `the reply waits while the field has focus; focus: ${JSON.stringify(log)}; calls: ${v.calls.slice(-6).join(' | ')}`);
     assert.equal(await page.locator('#ask-row').evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on Ask');
-    await page.evaluate(() => document.getElementById('t-elsewhere').blur());
+    await page.evaluate(() => document.getElementById('t-elsewhere')!.blur());
     await pop.locator('.support-msg.them').waitFor();
     assert.equal(await box.inputValue(), 'half a thought', 'unsent words survive');
     await page.locator('#support-open:not(.has-unread)').waitFor();
@@ -246,7 +290,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     // Theirs: the name above, in a bubble on the left; text, never HTML.
     assert.equal(await pop.locator('.support-msg.them .support-who').innerText(), 'Tico team');
     assert.match(await pop.locator('.support-msg.them .support-body').innerText(), /^Try the latest release\. <img src=x/);
-    const sides = await pop.evaluate(el => { const b = s => el.querySelector(s).getBoundingClientRect(), t = el.querySelector('[data-thread]').getBoundingClientRect();
+    const sides = await pop.evaluate((el: Element) => { const b = (s: string) => el.querySelector(s)!.getBoundingClientRect(), t = el.querySelector('[data-thread]')!.getBoundingClientRect();
       return {them: b('.support-msg.them').left - t.left, you: t.right - b('.support-msg.you').right}; });
     assert.ok(sides.them < 20 && sides.you < 30, `theirs left, mine right: ${JSON.stringify(sides)}`);
     // A send that fails says so in place and keeps the words: HQ down, or no connection at all.
@@ -265,8 +309,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     // A click outside closes it, and so does ✕.
     await page.mouse.click(1200, 100);
     await page.locator('#support-pop').waitFor({state: 'hidden'});
-    await page.evaluate(() => window.supportPoll());
-    assert.equal(await page.locator('#support-pop').evaluate(el => el.open), false, 'opened once, not again');
+    await page.evaluate(() => (window as unknown as PageWin).supportPoll());
+    assert.equal(await page.locator('#support-pop').evaluate(el => (el as HTMLDialogElement).open), false, 'opened once, not again');
     await q.click();
     await pop.getByRole('button', {name: 'Close'}).click();
     await page.locator('#support-pop').waitFor({state: 'hidden'});
@@ -278,7 +322,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     // one still open.
     // Within an hour after midnight the newest replies would straddle two days: then the whole seed sits in yesterday.
     const sinceMidnight = (Date.now() - new Date().setHours(0, 0, 0, 0)) / 60000, shift = sinceMidnight < 61 ? sinceMidnight + 120 : 0;
-    const atDay = m => at(m + shift);
+    const atDay = (m: number) => at(m + shift);
     v = await visit({viewport: {width: 1280, height: 800}, seed: [
       {id: 'sup_2', created_at: atDay(60), status: 'answered', message: 'Bots stopped', sent: {},
         messages: [{id: 1, created_at: atDay(50), from: 'staff', author_name: 'Mia', body: 'Restarted the runner.'},
@@ -297,8 +341,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     assert.deepEqual(order.filter(x => x !== 'day'), ['me: Can bots share a computer? | Diagnostics attached', 'them: Tico team | Yes.', 'me: Thanks',
       'me: Bots stopped', 'them: Mia | Restarted the runner.', 'them: Try now.', 'them: Tico team | Anything else?'], `in time order: ${order}`);
     // Days are the browser's own (its time zone may not be this script's): count them there.
-    const seen = await page.evaluate(times => ({days: new Set(times.map(t => new Date(t).toDateString())).size,
-      today: new Date(times[0]).toDateString() === new Date().toDateString()}),
+    const seen = await page.evaluate((times: string[]) => ({days: new Set(times.map(t => new Date(t).toDateString())).size,
+      today: new Date(times[0]!).toDateString() === new Date().toDateString()}),
       [atDay(40), atDay(49), atDay(50), atDay(60), atDay(3 * 24 * 60), atDay(3 * 24 * 60 - 4), atDay(3 * 24 * 60 - 5)]);
     assert.equal(order.filter(x => x === 'day').length, seen.days, 'a date line for each day');
     assert.equal(await chat.locator('.support-day').last().innerText(), seen.today ? 'Today' : 'Yesterday');
@@ -318,7 +362,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await dialog.locator('[data-use]:not([disabled])').waitFor();
     assert.equal(await dialog.locator('textarea').inputValue(), DIAGNOSTICS_TEXT);
     await dialog.locator('[name=perf]').selectOption('168');
-    await page.waitForFunction(() => document.querySelector('dialog.support-modal [data-use]') && !document.querySelector('dialog.support-modal [data-use]').disabled);
+    await page.waitForFunction(() => document.querySelector('dialog.support-modal [data-use]') && !document.querySelector<HTMLButtonElement>('dialog.support-modal [data-use]')!.disabled);
     assert.equal(v.calls.filter(c => c === 'GET diagnostics').length, 2, 'a new window captures again');
     await dialog.locator('textarea').fill('{"format":1}');
     assert.equal(await dialog.locator('[data-use]').isDisabled(), true);
@@ -337,8 +381,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     assert.doesNotMatch(await chat.innerText(), /Access for/);
     // Delete chat history: asked inside the chat (Cancel keeps everything), then every ticket deleted and the chat empty.
     const trash = chat.getByRole('button', {name: 'Delete chat history'});
-    const boxes = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(); return [b('#support-pop [data-delete]').right, b('#support-pop [data-close]').left]; });
-    assert.ok(boxes[0] <= boxes[1], 'left of Close');
+    const boxes = await page.evaluate(() => { const b = (s: string) => document.querySelector(s)!.getBoundingClientRect(); return [b('#support-pop [data-delete]').right, b('#support-pop [data-close]').left]; });
+    assert.ok(boxes[0]! <= boxes[1]!, 'left of Close');
     await trash.click();
     const confirmBox = chat.getByRole('alertdialog', {name: 'Delete chat history?'});
     await confirmBox.waitFor();
@@ -364,7 +408,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await v.page.locator('#support-message').fill('New thing');
     await v.page.locator('#support-message').press('Enter');
     await v.page.locator('#support-pop .support-msg.you', {hasText: 'New thing'}).waitFor();
-    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).message, 'New thing');
+    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {'))!.slice('POST tickets '.length)).message, 'New thing');
     assert.equal((await active(v.page)).id, 'support-message');
     await v.page.keyboard.press('Escape');
     assert.equal((await active(v.page)).id, 't-support', 'focus back on the link');
@@ -381,7 +425,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     const letIn = v.page.locator('dialog[aria-label="Let the Tico team in"]');
     assert.equal(await letIn.locator('[name=tier][value=full]').isDisabled(), true, "full access is the owner's to give");
     assert.equal(await letIn.locator('[name=hours]').inputValue(), '72');
-    assert.deepEqual(await letIn.locator('[name=hours] option').evaluateAll(options => options.map(o => [o.value, o.textContent])),
+    assert.deepEqual(await letIn.locator('[name=hours] option').evaluateAll(options => options.map(o => [(o as HTMLOptionElement).value, o.textContent])),
       [['1', '1 hour'], ['4', '4 hours'], ['24', '24 hours'], ['72', '3 days'], ['168', '7 days'], ['720', '30 days'], ['2160', '90 days'], ['8760', '365 days'], ['custom', 'Other…']]);
     await letIn.locator('[name=hours]').selectOption('4');
     await letIn.locator('[type=submit]').click();
@@ -394,7 +438,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await v.page.keyboard.press('Escape');
     await v.page.locator('#support-access-banner [data-access-left]').click();
     await v.page.locator('#support-pop[open]').waitFor();
-    let releaseAccess;
+    let releaseAccess!: (value?: unknown) => void;
     v.hq.accessGate = new Promise(resolve => { releaseAccess = resolve; });
     await strip.getByRole('button', {name: 'Stop'}).click();
     await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
@@ -410,7 +454,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       await strip.getByRole('button', {name: 'Stop'}).click();
       await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
     }
-    assert.equal(await v.page.evaluate(() => window.__pwned), undefined);
+    assert.equal(await v.page.evaluate(() => (window as unknown as PageWin).__pwned), undefined);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
@@ -425,17 +469,17 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     const customHours = customDialog.locator('[name=custom]');
     assert.equal(await customHours.getAttribute('max'), '8760');
     await customHours.fill('8761');
-    assert.equal(await customHours.evaluate(el => el.validity.rangeOverflow), true);
+    assert.equal(await customHours.evaluate(el => (el as HTMLInputElement).validity.rangeOverflow), true);
     await customDialog.locator('[type=submit]').click();
     assert.ok(!v.calls.some(c => c.startsWith('POST access ')), 'native validation sends no grant');
-    await customDialog.locator('form').evaluate(el => { el.noValidate = true; });
+    await customDialog.locator('form').evaluate(el => { (el as HTMLFormElement).noValidate = true; });
     await customDialog.locator('[type=submit]').click();
     await customDialog.locator('[data-error]:not([hidden])').waitFor();
     assert.match(await customDialog.locator('[data-error]').innerText(), /8760/);
     assert.ok(!v.calls.some(c => c.startsWith('POST access ')), 'JS validation sends no grant');
-    await customDialog.locator('form').evaluate(el => { el.noValidate = false; });
+    await customDialog.locator('form').evaluate(el => { (el as HTMLFormElement).noValidate = false; });
     await customHours.fill('8760');
-    assert.equal(await customHours.evaluate(el => el.checkValidity()), true);
+    assert.equal(await customHours.evaluate(el => (el as HTMLInputElement).checkValidity()), true);
     await customDialog.locator('[type=submit]').click();
     await v.page.locator('#support-access-banner:not([hidden])').waitFor();
     assert.ok(v.calls.includes('POST access {"ticket_id":"sup_10","tier":"app","hours":8760}'));
@@ -451,17 +495,17 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     ({page} = v);
     await page.locator('#mobile-more').click();
     await page.locator('#search-open').waitFor();
-    const drawer = await page.evaluate(() => { const b = id => document.getElementById(id).getBoundingClientRect(), q = b('support-open'), s = b('search-open');
-      return {gap: q.left - s.right, dy: Math.abs(q.top + q.height / 2 - s.top - s.height / 2), w: q.width, h: q.height, right: q.right, sameParent: document.getElementById('support-open').parentElement === document.getElementById('search-open').parentElement}; });
+    const drawer = await page.evaluate(() => { const b = (id: string) => document.getElementById(id)!.getBoundingClientRect(), q = b('support-open'), s = b('search-open');
+      return {gap: q.left - s.right, dy: Math.abs(q.top + q.height / 2 - s.top - s.height / 2), w: q.width, h: q.height, right: q.right, sameParent: document.getElementById('support-open')!.parentElement === document.getElementById('search-open')!.parentElement}; });
     assert.ok(drawer.sameParent && drawer.gap >= 0 && drawer.gap < 8 && drawer.dy < 2 && drawer.w >= 44 && drawer.h >= 44 && drawer.right <= 390, `beside Search in the drawer: ${JSON.stringify(drawer)}`);
     await page.locator('#support-open').click();
     const phone = page.locator('#support-pop');
     await phone.locator('.support-msg.them').waitFor();
     assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), false, 'the drawer gets out of the way');
-    const sheet = await phone.boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
+    const sheet = (await phone.boundingBox())!, bar = (await page.locator('#mobile-nav').boundingBox())!;
     assert.ok(sheet.x === 0 && sheet.y === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a full page above the tab bar: ${JSON.stringify([sheet, bar])}`);
     assert.equal(await phone.evaluate(el => getComputedStyle(el).borderTopLeftRadius), '0px', 'square, like a page');
-    const close = await phone.getByRole('button', {name: 'Close'}).boundingBox();
+    const close = (await phone.getByRole('button', {name: 'Close'}).boundingBox())!;
     assert.ok(close.width >= 44 && close.height >= 44 && close.y < 60, `a close control in the header: ${JSON.stringify(close)}`);
     assert.ok(await noSideways(page), 'no horizontal scroll at 390 px');
     assert.equal(await phone.locator('[name=message]').evaluate(el => getComputedStyle(el).fontSize), '16px', 'Safari does not zoom in on the box');
@@ -472,14 +516,14 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await v.ctx.close();
     // With the keyboard up the chat ends at the keyboard: the box and Send stay in view.
     v = await visit({viewport: {width: 390, height: 844}, keyboard: true});
-    await v.page.evaluate(() => window.__keys(844));
+    await v.page.evaluate(() => (window as unknown as PageWin).__keys(844));
     await openSupport(v.page);
-    await v.page.evaluate(() => window.__keys(458, 120));
-    await v.page.waitForFunction(() => document.querySelector('#support-pop').getBoundingClientRect().height <= 458 + 1);
-    const send = await v.page.locator('#support-pop .support-send').boundingBox();
+    await v.page.evaluate(() => (window as unknown as PageWin).__keys(458, 120));
+    await v.page.waitForFunction(() => document.querySelector('#support-pop')!.getBoundingClientRect().height <= 458 + 1);
+    const send = (await v.page.locator('#support-pop .support-send').boundingBox())!;
     assert.ok(send.y + send.height <= 458 + 1, `Send above the keyboard: ${JSON.stringify(send)}`);
-    await v.page.evaluate(() => window.__keys(844));
-    await v.page.waitForFunction(() => Math.abs(document.querySelector('#support-pop').getBoundingClientRect().bottom - document.querySelector('#mobile-nav').getBoundingClientRect().top) < 2);
+    await v.page.evaluate(() => (window as unknown as PageWin).__keys(844));
+    await v.page.waitForFunction(() => Math.abs(document.querySelector('#support-pop')!.getBoundingClientRect().bottom - document.querySelector('#mobile-nav')!.getBoundingClientRect().top) < 2);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
@@ -496,31 +540,31 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await v.page.evaluate(() => { const a = Object.assign(document.createElement('a'), {id: 't-manage', href: '#/support/manage', textContent: 'Fully managed'});
       a.style.cssText = 'position:fixed;top:4px;left:50%;z-index:30'; document.body.append(a); });
     await v.page.locator('#t-manage').click();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value === "We'd like Tico to fully manage our company.");
+    await v.page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#support-pop[open] #support-message')?.value === "We'd like Tico to fully manage our company.");
     assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')));
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
     // ---- Report this on an error toast: the chat opens with the error named and attached; sent only on Send.
     v = await visit();
-    await v.page.waitForFunction(() => window.supportOn(true));      // offered once Tico knows support is on
+    await v.page.waitForFunction(() => (window as unknown as PageWin).supportOn(true));      // offered once Tico knows support is on
     await v.page.evaluate(() => toast('Could not save the task "Ship it" (409)', true));
     await v.page.locator('.toast.err button', {hasText: 'Report this'}).click();
     await v.page.locator('#support-pop[open] [data-report]').waitFor();
     assert.match(await v.page.locator('[data-report]').innerText(), /Diagnostics: Error/);
     // The message names only the kind: the words on screen go in the redacted attachment, never in the text.
     assert.equal(await v.page.locator('#support-message').inputValue(), 'Error: details attached. ');
-    await v.page.waitForFunction(() => document.activeElement?.name === 'message' && document.activeElement.selectionStart === document.activeElement.value.length);
+    await v.page.waitForFunction(() => (document.activeElement as HTMLTextAreaElement | null)?.name === 'message' && (document.activeElement as HTMLTextAreaElement).selectionStart === (document.activeElement as HTMLTextAreaElement).value.length);
     assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing is sent yet');
     await v.page.locator('#support-message').pressSequentially('It happens every time.');
     await v.page.locator('#support-message').press('Enter');
     await v.page.locator('.support-msg.you').waitFor();
-    const reported = JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture')).slice('POST diagnostics/capture '.length)).report;
+    const reported = (JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture'))!.slice('POST diagnostics/capture '.length)) as {report: Report}).report;
     assert.deepEqual([reported.kind, reported.title], ['toast', 'Could not save the task "Ship it" (409)']);
-    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).diagnostics, 'c'.repeat(64));
+    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {'))!.slice('POST tickets '.length)).diagnostics, 'c'.repeat(64));
     // A Setup check makes a new ticket a setup one; another report in its place, or ×, gives back the kind before.
     await v.page.keyboard.press('Escape');
-    v.hq.tickets[0].status = 'closed';
+    v.hq.tickets[0]!.status = 'closed';
     const setup = {kind: 'setup_check', title: '1 of 2 checks fail', checks: [{name: 'HTTPS certificate', status: 'bad', detail: 'no', fix: 'Open port 443.', source: 'doctor'}]};
     await v.page.evaluate(r => talkToUs(r), setup);
     await v.page.locator('#support-pop[open] [data-report]', {hasText: 'Setup check'}).waitFor();
@@ -531,31 +575,31 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await v.page.locator('[data-report]', {hasText: 'Setup check'}).waitFor();
     await v.page.locator('[data-compose] [data-preview]').click();
     await v.page.locator('dialog.support-modal [data-use]:not([disabled])').waitFor();
-    const previewed = JSON.parse(v.calls.filter(c => c.startsWith('POST diagnostics/capture')).at(-1).slice('POST diagnostics/capture '.length)).report;
-    assert.deepEqual(previewed.checks.map(c => [c.name, c.status]), [['HTTPS certificate', 'bad']]);
+    const previewed = (JSON.parse(v.calls.filter(c => c.startsWith('POST diagnostics/capture')).at(-1)!.slice('POST diagnostics/capture '.length)) as {report: Report}).report;
+    assert.deepEqual(previewed.checks!.map(c => [c.name, c.status]), [['HTTPS certificate', 'bad']]);
     await v.page.locator('dialog.support-modal [data-use]').click();
     await v.page.locator('#support-message').press('Enter');
     await v.page.waitForFunction(() => document.querySelectorAll('#support-pop .support-msg.you').length === 2);
-    assert.equal(JSON.parse(v.calls.filter(c => c.startsWith('POST tickets {')).at(-1).slice('POST tickets '.length)).kind, 'setup');
+    assert.equal(JSON.parse(v.calls.filter(c => c.startsWith('POST tickets {')).at(-1)!.slice('POST tickets '.length)).kind, 'setup');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
     // ---- "Want help setting up?": the snapshot in the box, whole, for the person to read and send; twice is still once.
     v = await visit();
-    await v.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="health">Want help setting up?</button>'));
+    await v.page.evaluate(() => document.querySelector('#main')!.insertAdjacentHTML('beforeend', '<button type="button" data-setup-help="health">Want help setting up?</button>'));
     await v.page.locator('#main [data-setup-help]').click();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
+    await v.page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#support-pop[open] #support-message')?.value.startsWith("I'd like help setting up Tico."));
     assert.ok(v.calls.includes('asked from health'));
     assert.ok(await v.page.locator('#support-message').evaluate(el => el.scrollHeight <= el.clientHeight + 1), 'the snapshot shows whole');
     await v.page.keyboard.press('Escape');
     await v.page.locator('#main [data-setup-help]').click();
-    await v.page.waitForFunction(() => document.querySelector('#support-pop[open]') && !document.querySelector('#main [data-setup-help]').disabled);
+    await v.page.waitForFunction(() => document.querySelector('#support-pop[open]') && !document.querySelector<HTMLButtonElement>('#main [data-setup-help]')!.disabled);
     await v.page.waitForTimeout(100);
     assert.equal((await v.page.locator('#support-message').inputValue()).split("I'd like help setting up Tico.").length, 2, 'one snapshot, not two');
     assert.ok(!v.calls.some(c => c.startsWith('POST tickets {')), 'nothing sent before Send');
     await v.page.locator('#support-message').press('Enter');
     await v.page.locator('.support-msg.you', {hasText: 'Computer online'}).waitFor();
-    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length)).kind, 'setup');
+    assert.equal(JSON.parse(v.calls.find(c => c.startsWith('POST tickets {'))!.slice('POST tickets '.length)).kind, 'setup');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
@@ -564,13 +608,13 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await openSupport(v.page);
     await v.page.getByRole('button', {name: 'Attach diagnostics'}).click();
     await v.page.locator('dialog.support-modal [data-use]:not([disabled])').waitFor();
-    const app = JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture')).slice('POST diagnostics/capture '.length)).app;
+    const app = JSON.parse(v.calls.find(c => c.startsWith('POST diagnostics/capture'))!.slice('POST diagnostics/capture '.length)).app;
     assert.deepEqual(app, {version: '0.3.48', lines: ['2026-10-16T06:47:31Z WARN tico_app: update check failed: 401'], mac: true});
     await v.page.locator('dialog.support-modal [data-use]').click();
     await v.page.locator('#support-message').fill('From the app');
     await v.page.locator('#support-message').press('Enter');
     await v.page.locator('.support-msg.you').waitFor();
-    const fromApp = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {')).slice('POST tickets '.length));
+    const fromApp = JSON.parse(v.calls.find(c => c.startsWith('POST tickets {'))!.slice('POST tickets '.length));
     assert.deepEqual([fromApp.app_version, fromApp.diagnostics], ['0.3.48', 'c'.repeat(64)]);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
@@ -619,8 +663,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       await chat.locator('[data-error]').waitFor();
       await chat.locator('[name=message]').press('Enter');
       await chat.locator('.support-msg.you', {hasText: 'One more thing'}).waitFor();
-      assert.equal(v.hq.createKeys.length, 2);
-      assert.equal(v.hq.createKeys[0], v.hq.createKeys[1], 'the retry carries the first creation\'s key');
+      assert.equal(v.hq.createKeys!.length, 2);
+      assert.equal(v.hq.createKeys![0], v.hq.createKeys![1], 'the retry carries the first creation\'s key');
       assert.equal(v.hq.tickets.filter(t => t.message === 'One more thing').length, 1, 'one new conversation');
       assert.equal(await chat.locator('[name=message]').inputValue(), '');
     }
@@ -643,11 +687,11 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       await chat.locator('.support-msg.you', {hasText: 'One more thing'}).first().waitFor();
       assert.equal(await chat.locator('[name=message]').inputValue(), 'One more thing', 'the unsent words are still in the box');
       await chat.locator('[name=message]').press('Enter');
-      await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === '');
+      await v.page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#support-pop [name=message]')?.value === '');
       assert.equal(v.calls.filter(c => c.startsWith('POST tickets/sup_2/messages')).length, 0, 'not added to the new conversation');
-      assert.equal(v.hq.createKeys.length, 2);
-      assert.equal(v.hq.createKeys[0], v.hq.createKeys[1]);
-      const made = v.hq.tickets.find(t => t.message === 'One more thing');
+      assert.equal(v.hq.createKeys!.length, 2);
+      assert.equal(v.hq.createKeys![0], v.hq.createKeys![1]);
+      const made = v.hq.tickets.find(t => t.message === 'One more thing')!;
       assert.ok(made && made.messages.length === 0, 'the message is there once');
     }
     await v.ctx.close();
@@ -659,9 +703,9 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       const chat = v.page.locator('#support-pop');
       await chat.locator('.support-msg.you', {hasText: 'Old 0'}).waitFor();
       await chat.getByRole('button', {name: 'Delete chat history'}).click();
-      let release; v.hq.deleteGate = new Promise(r => { release = r; });
+      let release!: (value?: unknown) => void; v.hq.deleteGate = new Promise(r => { release = r; });
       await chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'}).click();
-      await v.page.waitForFunction(() => [...document.querySelectorAll('#support-pop [data-compose] :is(textarea, [type=submit])')].every(el => el.disabled));
+      await v.page.waitForFunction(() => [...document.querySelectorAll('#support-pop [data-compose] :is(textarea, [type=submit])')].every(el => (el as HTMLButtonElement).disabled));
       assert.equal(await chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'}).isDisabled(), true, 'once');
       release(); v.hq.deleteGate = null;
       await chat.getByRole('alertdialog').waitFor({state: 'hidden'});
@@ -679,15 +723,15 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await openSupport(v.page);
     {
       const chat = v.page.locator('#support-pop');
-      let release; v.hq.gate = new Promise(r => { release = r; });
+      let release!: (value?: unknown) => void; v.hq.gate = new Promise(r => { release = r; });
       await chat.locator('[name=message]').fill('Slow one');
       await chat.locator('[name=message]').press('Enter');
-      await v.page.waitForFunction(() => document.querySelector('#support-pop [data-compose] [name=message]').disabled);
+      await v.page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#support-pop [data-compose] [name=message]')!.disabled);
       await chat.getByRole('button', {name: 'Delete chat history'}).click();
       const yes = chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'});
       assert.equal(await yes.isDisabled(), true, 'Delete waits while a message is on its way');
       release(); v.hq.gate = null;
-      await v.page.waitForFunction(() => !document.querySelector('#support-pop [data-confirm-yes]').disabled);
+      await v.page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('#support-pop [data-confirm-yes]')!.disabled);
       await yes.click();
       await chat.getByRole('alertdialog').waitFor({state: 'hidden'});
       assert.ok(v.calls.includes('DELETE tickets/sup_1'));
@@ -706,12 +750,12 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       {id: 'sup_1', created_at: at(30), status: 'answered', message: 'Bot report', sent: {source: 'bot_report'},
         messages: [{id: 1, created_at: at(5), from: 'staff', body: 'The report is with the team.'}]},
       {id: 'sup_2', created_at: at(10), status: 'open', message: 'My own question', sent: {}, messages: []}]});
-    await v.page.waitForFunction(() => window.supportState().enabled === true);
-    await v.page.evaluate(() => window.supportPoll());
+    await v.page.waitForFunction(() => (window as unknown as PageWin).supportState().enabled === true);
+    await v.page.evaluate(() => (window as unknown as PageWin).supportPoll());
     // The chat is built the first time it opens: before that there is no dialog to look at.
-    assert.equal(await v.page.evaluate(() => !!document.getElementById('support-pop')?.open), false, 'a bot report does not open the chat');
+    assert.equal(await v.page.evaluate(() => !!(document.getElementById('support-pop') as HTMLDialogElement | null)?.open), false, 'a bot report does not open the chat');
     assert.equal(await v.page.locator('#support-open.has-unread').count(), 0, 'nor a dot on the ?');
-    assert.equal(await v.page.evaluate(() => window.supportState().unread), 0, 'nor a count');
+    assert.equal(await v.page.evaluate(() => (window as unknown as PageWin).supportState().unread), 0, 'nor a count');
     await openSupport(v.page);
     await v.page.locator('#support-pop .support-msg.you', {hasText: 'My own question'}).waitFor();
     assert.equal(await v.page.getByText('The report is with the team.').count(), 0, 'the bot report is not in the chat');
@@ -722,7 +766,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
 
     // ---- Support turned off: no ?; a #/support link still opens the chat, which says so, with no box.
     v = await visit({enabled: false});
-    await v.page.waitForFunction(() => window.supportOn(true) === false);
+    await v.page.waitForFunction(() => (window as unknown as PageWin).supportOn(true) === false);
     await v.page.locator('#support-open').waitFor({state: 'hidden'});
     await openSupport(v.page);
     const off = v.page.getByRole('dialog', {name: 'Tico team'});

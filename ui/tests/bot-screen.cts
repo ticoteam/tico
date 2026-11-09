@@ -1,26 +1,36 @@
 // Screen permissions, setup and reverse states in the bot’s Info and Settings tabs.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+
+// The bot's computer as the operations list and the bot list give it.
+interface Machine { runner_id: string; label: string; platform: string; screen: string; screen_available: boolean; owner_id: string | null;
+  generation: number; last_seen_at: string; version: string }
+interface Bot { name: string; online?: boolean; machine?: Machine | null; [k: string]: unknown }
+// Defined by the app's bot screen code (ui/bot-screen.ts) and the bot page, which the page loads.
+declare function refresh(): void;
+declare function setDrawer(open: boolean): void;
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    const visit = async me => {
+    const visit = async (me: {id: string; name: string; role: string}) => {
       const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
       page.setDefaultTimeout(t(5000));
       await page.emulateMedia({reducedMotion: 'reduce'});
-      const errors = [], writes = [];
+      const errors: string[] = [], writes: {mode: string}[] = [];
       page.on('pageerror', error => errors.push(error.message));
       const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true, owner_id: 'sam',
         my_access: {see: true, read: true, write: true}, schedules: [], revision: 1, thread_mode: 'personal', users: []};
-      const computer = (id, more) => ({runner_id: id, generation: 1, label: id, owner_id: 'sam', last_seen_at: new Date().toISOString(),
+      const computer = (id: string, more?: Partial<Machine>) => ({runner_id: id, generation: 1, label: id, owner_id: 'sam', last_seen_at: new Date().toISOString(),
         platform: 'linux', version: '0.3.52', screen: 'off', screen_available: false, ...more});
-      const bot = (name, online, machine) => ({...base, name, slug: name, display_name: name, online, machine});
-      const bots = [
+      const bot = (name: string, online: boolean, machine: Machine | null) => ({...base, name, slug: name, display_name: name, online, machine});
+      const bots: Bot[] = [
         bot('ready', true, computer('c-ready', {screen: 'control', screen_available: true})),
         bot('off', true, computer('c-off', {screen_available: true})),
         bot('linux', true, computer('c-linux')),
@@ -35,10 +45,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
          team: '', org_parent: '', is_branch: false, users: [], icon: '', helper: false, can_chat: false}];
       await page.route('**/*', route => {
         const request = route.request(), p = new URL(request.url()).pathname;
-        const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/api/me') return json({...me, cloud: true, registered: true, config: {version: '0.3.52', app_name: 'Tico'}});
         if (p === '/api/employees') return json(bots);
@@ -49,11 +59,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         if (p === '/api/v2/goals') return json({goals: [], chain: [], company: [], reports: []});
         if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, today: {}});
         if (p === '/api/v2/tasks') return json({tasks: []});
-        if (p === '/api/v2/operations') return json({machines: bots.filter(b => b.machine).map(b => ({id: b.machine.runner_id, label: b.machine.label,
-          owner_id: b.machine.owner_id, online: b.online, platform: b.machine.platform, screen: b.machine.screen, screen_available: b.machine.screen_available})), services: []});
+        if (p === '/api/v2/operations') return json({machines: bots.filter(b => b.machine).map(b => ({id: b.machine!.runner_id, label: b.machine!.label,
+          owner_id: b.machine!.owner_id, online: b.online, platform: b.machine!.platform, screen: b.machine!.screen, screen_available: b.machine!.screen_available})), services: []});
         if (p === '/api/v2/conversations') return json({conversations: []});
         if (/^\/api\/v2\/computers\/[^/]+\/screen$/.test(p)) {
-          const body = JSON.parse(request.postData()); writes.push(body);
+          const body = JSON.parse(request.postData()!); writes.push(body);
           const machine = bots.find(b => b.machine?.runner_id === p.split('/')[4])?.machine;
           if (machine) machine.screen = body.mode;
           return json({screen: body.mode, screen_available: true});
@@ -63,12 +73,12 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         return json(unrouted(p));
       });
       // The row's words, without the icon's ligature name.
-      const rowText = () => page.locator('#bot-screen-row').evaluate(el => {
+      const rowText = () => page.locator('#bot-screen-row').evaluate((el: HTMLElement) => {
         let text = el.innerText;
-        for (const icon of el.querySelectorAll('.nav-icon')) text = text.replace(icon.textContent, '');
+        for (const icon of el.querySelectorAll('.nav-icon')) text = text.replace(icon.textContent!, '');
         return text.replace(/\s+/g, ' ').trim();
       });
-      const open = async slug => {
+      const open = async (slug: string) => {
         await page.goto(`https://tico-ui.test/#/bot/${slug}/more`);
         await page.locator('#bot-screen-row').waitFor();
         return {state: await page.locator('#bot-screen-row').getAttribute('data-screen-state'),
@@ -88,13 +98,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await admin.page.locator('dialog#bot-editor').count(), 0);
     assert.equal(await admin.page.locator('[data-screen-toggle]').isChecked(), true);
     await admin.page.locator('[data-screen-toggle]').uncheck();
-    await admin.page.waitForFunction(() => document.querySelector('[data-screen-toggle]')?.disabled === false);
+    await admin.page.waitForFunction(() => (document.querySelector('[data-screen-toggle]') as HTMLInputElement | null)?.disabled === false);
     assert.deepEqual(admin.writes, [{mode: 'off'}]);
     assert.equal(await admin.page.locator('[data-screen-toggle]').isChecked(), false);
     await admin.page.locator('[data-screen-toggle]').check();
     await admin.page.locator('[data-screen-mode]').waitFor();
     await admin.page.locator('[data-screen-mode]').selectOption('view');
-    await admin.page.waitForFunction(() => document.querySelector('[data-screen-mode]')?.disabled === false);
+    await admin.page.waitForFunction(() => (document.querySelector('[data-screen-mode]') as HTMLSelectElement | null)?.disabled === false);
     assert.deepEqual(admin.writes, [{mode: 'off'}, {mode: 'control'}, {mode: 'view'}]);
 
     // An unavailable screen reveals one primary command only after the operator asks to enable it.
@@ -104,11 +114,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await admin.page.locator('[data-screen-toggle]').check();
     assert.equal(await admin.page.locator('[data-screen-copy]:visible').count(), 1);
     assert.equal(await admin.page.locator('[data-screen-toggle]').isChecked(), true);
-    const linux = admin.bots.find(b => b.name === 'linux'); linux.machine.screen_available = true;
+    const linux = admin.bots.find(b => b.name === 'linux'); linux!.machine!.screen_available = true;
     await admin.page.evaluate(() => refresh());
     await admin.page.locator('[data-screen-mode]').waitFor();
     assert.equal(await admin.page.locator('[data-screen-copy]').count(), 0);
-    assert.equal(admin.writes.at(-1).mode, 'control');
+    assert.equal(admin.writes.at(-1)!.mode, 'control');
 
     // Draft settings survive navigation, and Instructions stays inline.
     await admin.page.locator('#bot-editor [name=description]').fill('Unsaved draft');

@@ -4,7 +4,7 @@
 // taskQcardWait, ui/app/hub-v2.js NEEDS_FIRST).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const NOW = Date.now(), at = hours => new Date(NOW - hours * 3600e3).toISOString();
 const late = {id: 't-late', kind: 'question', title: 'Which launch date?', body: '', owner_id: 'bot:writer', requester_id: 'bot:writer',
   status: 'waiting', waiting_on: 'human:ana', version: 1, created_at: at(5), updated_at: at(5), open_asks: 1, labels: [], tags: [],

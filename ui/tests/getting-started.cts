@@ -6,24 +6,34 @@
 // on Escape and works in the phone drawer. Fixtures only - no server.
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots (the market's empty states and the sidebar line in both
 // themes, and a phone).
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type {Page} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RoutesSupport from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+interface PageWin { gsStartTour: () => void }
+type Answers = {sell: string; buyers: string; competitors: string; watch: string};
+interface Body { action?: string; answers?: Answers; step?: number; tour?: boolean; checklist?: boolean; skip?: string }
+interface Setup { can_answer: boolean; answers: Answers; step: number; skipped: boolean; task: {id: string; status: string; created_at?: string} | null }
+interface MarketEntity { id: string; name: string; type: string; tier: string; aliases: string[]; summary: string; status: string }
+// Page-defined global of the getting-started script, read inside page callbacks.
+declare const GS: {tour_seen?: boolean} | undefined;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 // Before a screenshot: the new viewport is laid out and no finite transition is still running.
-const settled = (page, width) => page.waitForFunction(w => innerWidth === w && document.getAnimations()
+const settled = (page: Page, width: number) => page.waitForFunction(w => innerWidth === w && document.getAnimations()
   .every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity), width, {timeout: t(5000)});
-const shot = (page, name) => shots ? page.screenshot({path: path.join(shots, `onboarding-v2-${name}.png`)}) : null;
+const shot = (page: Page, name: string) => shots ? page.screenshot({path: path.join(shots, `onboarding-v2-${name}.png`)}) : null;
 // One state of the Market page, light and dark, on a desktop and a phone.
-const shotAll = async (page, name) => {
+const shotAll = async (page: Page, name: string) => {
   if (!shots) return;
-  for (const colorScheme of ['light', 'dark']) {
+  for (const colorScheme of ['light', 'dark'] as const) {
     await page.emulateMedia({colorScheme});
-    for (const [size, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]]) {
+    for (const [size, viewport] of [['desktop', {width: 1440, height: 900}], ['phone', {width: 390, height: 844}]] as [string, {width: number; height: number}][]) {
       await page.setViewportSize(viewport);
       await settled(page, viewport.width);
       await page.screenshot({path: path.join(shots, `market-${name}-${colorScheme}-${size}.png`)});
@@ -33,7 +43,7 @@ const shotAll = async (page, name) => {
   await page.setViewportSize({width: 1200, height: 800});
 };
 
-const item = (id, label, done, extra = {}) => ({id, label, done, optional: false, skipped: false, why: '', href: '', tab: '', action: '', ...extra});
+const item = (id: string, label: string, done: boolean, extra: Record<string, unknown> = {}) => ({id, label, done, optional: false, skipped: false, why: '', href: '', tab: '', action: '', ...extra});
 // What the server computed for a company with a computer online but no model signed in yet.
 const checklist = () => [
   item('signed_in', 'Signed in', true),
@@ -53,12 +63,12 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-    const calls = [];
+    const calls: {p: string; body: Body}[] = [];
     let items = checklist(), role = 'owner', canBuild = true;
-    let dismissed = {tour: true, checklist: false, skipped: []};
-    let librarianOff = false, polls = [], held = null;
-    let setup = {can_answer: true, answers: {sell: '', buyers: '', competitors: '', watch: ''}, step: 0, skipped: false, task: null};
-    let market = {entities: [], docs: [{id: 'market/overview', title: 'Overview', seeded: true, fetched: '2026-01-01T00:00:00Z'}]};
+    let dismissed = {tour: true, checklist: false, skipped: [] as string[]};
+    let librarianOff = false, polls: number[] = [], held: {gate: Promise<unknown>; body?: Body} | null = null;
+    let setup: Setup = {can_answer: true, answers: {sell: '', buyers: '', competitors: '', watch: ''}, step: 0, skipped: false, task: null};
+    let market: {entities: MarketEntity[]; docs: {id: string; title: string; fetched: string; seeded?: boolean}[]} = {entities: [], docs: [{id: 'market/overview', title: 'Overview', seeded: true, fetched: '2026-01-01T00:00:00Z'}]};
     const view = () => {
       const rows = items.map(row => ({...row, skipped: row.optional && !row.done && dismissed.skipped.includes(row.id)}));
       const done = rows.filter(row => row.done || row.skipped).length;
@@ -67,11 +77,11 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     };
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p.startsWith('/vendor/fonts/') && p.endsWith('.woff2')) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
       if (p === '/api/employees') return json(bots);
       if (p === '/api/issues') return json([]);
@@ -86,7 +96,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       if (p === '/api/v2/linked-docs') return json({linked: []});
       if (p === '/api/v2/setup/getting-started' && req.method() === 'GET') return json(view());
       if (p === '/api/v2/setup/getting-started/state') {
-        const body = req.postDataJSON(); calls.push({p, body});
+        const body: Body = req.postDataJSON(); calls.push({p, body});
         if (body.tour !== undefined) dismissed.tour = body.tour;
         if (body.checklist !== undefined) dismissed.checklist = body.checklist;
         if (body.skip) dismissed.skipped = [...new Set([...dismissed.skipped, body.skip])];
@@ -94,10 +104,10 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       }
       if (p === '/api/v2/librarian/setup') return json({available: true, docs: {show: false, empty: true, skipped: false, task: null}, market: setup});
       if (p === '/api/v2/librarian/setup/market') {
-        const body = req.postDataJSON(); calls.push({p, body});
+        const body: Body = req.postDataJSON(); calls.push({p, body});
         if (held && !held.body) { held.body = body; await held.gate; }   // this write is slow to arrive
         if (body.action === 'finish' && librarianOff) return json({error: {code: 'librarian', detail: 'The Librarian is not running yet.'}}, 409);
-        setup = {...setup, answers: {...setup.answers, ...body.answers}, step: body.step, skipped: body.action === 'skip',
+        setup = {...setup, answers: {...setup.answers, ...body.answers}, step: body.step!, skipped: body.action === 'skip',
                  task: body.action === 'finish' ? {id: 't-market', status: 'open'} : setup.task};
         return json(setup);
       }
@@ -108,9 +118,9 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const errors = [];
-    const ready = page => page.waitForFunction(() => typeof GS !== 'undefined' && !!GS);
-    const open = async (hash, viewport) => {
+    const errors: string[] = [];
+    const ready = (page: Page) => page.waitForFunction(() => typeof GS !== 'undefined' && !!GS);
+    const open = async (hash: string, viewport?: {width: number; height: number}) => {
       const page = await context.newPage();
       page.on('pageerror', e => errors.push(hash + ': ' + e.message));
       if (viewport) await page.setViewportSize(viewport);
@@ -149,7 +159,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     assert.equal(await box.locator('[data-market-back]').count(), 0);
     // It fills the page: no empty graph, index or ask box, and never the seed's text.
     assert.equal(await page.locator('#market-canvas, #market-index, #market-ask').count(), 0);
-    assert.doesNotMatch(await page.locator('#market-shell').textContent(), /None in the seed|Northwind/);
+    assert.doesNotMatch((await page.locator('#market-shell').textContent())!, /None in the seed|Northwind/);
     await shotAll(page, 'empty');
     await box.locator('[type=submit]').click();                          // the first answer is the one it needs
     await box.locator('[data-market-error]:not([hidden])').waitFor();
@@ -157,14 +167,14 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await box.locator('textarea').fill('https://northwind.example');
     await box.locator('[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#market-shell h1')?.textContent === 'Who buys it?');
-    assert.deepEqual(posts().at(-1).body, {answers: {sell: 'https://northwind.example', buyers: '', competitors: '', watch: ''}, step: 1, action: 'save'});
+    assert.deepEqual(posts().at(-1)!.body, {answers: {sell: 'https://northwind.example', buyers: '', competitors: '', watch: ''}, step: 1, action: 'save'});
     await box.locator('textarea').fill('Property managers in Ohio');
     // Skip for now keeps the answer and the place; the page then offers to continue.
     await box.locator('[data-market-skip]').click();
     const resume = page.locator('#market-shell [data-market-resume]');
     await resume.waitFor();
-    assert.deepEqual(posts().at(-1).body, {answers: {sell: 'https://northwind.example', buyers: 'Property managers in Ohio', competitors: '', watch: ''}, step: 1, action: 'skip'});
-    assert.match(await resume.textContent(), /You've answered 2\./);
+    assert.deepEqual(posts().at(-1)!.body, {answers: {sell: 'https://northwind.example', buyers: 'Property managers in Ohio', competitors: '', watch: ''}, step: 1, action: 'skip'});
+    assert.match((await resume.textContent())!, /You've answered 2\./);
     await shotAll(page, 'skipped');
     // A reload (or another browser) resumes from the server at the same question, with the answer in it.
     await page.reload();
@@ -189,26 +199,26 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     librarianOff = true;
     await box.locator('[type=submit]').click();
     await box.locator('[data-market-error]:not([hidden])').waitFor();
-    assert.match(await box.locator('[data-market-error]').textContent(), /Librarian is not running/);
+    assert.match((await box.locator('[data-market-error]').textContent())!, /Librarian is not running/);
     assert.equal(await box.locator('textarea').inputValue(), 'r/PropertyManagement');
     librarianOff = false;
     await box.locator('[type=submit]').click();
     const notice = page.locator('#market-shell [data-market-researching]');
     await notice.waitFor();
-    assert.deepEqual(posts().at(-1).body, {answers: {sell: 'https://northwind.example', buyers: 'Property managers in Ohio',
+    assert.deepEqual(posts().at(-1)!.body, {answers: {sell: 'https://northwind.example', buyers: 'Property managers in Ohio',
       competitors: 'CleanCo', watch: 'r/PropertyManagement'}, step: 3, action: 'finish'});
     assert.equal(posts().filter(c => c.body.action === 'finish').length, 2);
-    assert.match(await notice.textContent(), /^\s*Researching your market\.\s+This usually takes 5–10 minutes\./);
+    assert.match((await notice.textContent())!, /^\s*Researching your market\.\s+This usually takes 5–10 minutes\./);
     assert.equal(await page.locator('[data-market-setup]').count(), 0);
     assert.equal(await notice.locator('a[href="#/task/t-market"]').count(), 1);
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.market.researching')).task), 't-market');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.market.researching')!).task), 't-market');
     await shotAll(page, 'researching');
     // The notice is kept in this browser: a reload still shows it.
     await page.reload();
     await notice.waitFor();
     // It polls the market every 30 seconds while it shows: two small GETs, no server change.
     const beforePolls = polls.length;
-    const pollsReach = async n => { for (const end = Date.now() + t(10000); polls.length < n && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
+    const pollsReach = async (n: number) => { for (const end = Date.now() + t(10000); polls.length < n && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
     await page.clock.fastForward(31000);
     await pollsReach(beforePolls + 1);
     assert.equal(polls.length, beforePolls + 1);
@@ -225,7 +235,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await page.locator('#market-index a', {hasText: 'CleanCo'}).waitFor();
     // The index renders before the separate overview request finishes.
     await page.locator('#market-read', {hasText: 'Northwind sells office cleaning'}).waitFor();
-    assert.match(await page.locator('#market-read').textContent(), /Northwind sells office cleaning/);
+    assert.match((await page.locator('#market-read').textContent())!, /Northwind sells office cleaning/);
     assert.equal(await notice.count(), 0);
     assert.equal(await page.evaluate(() => localStorage.getItem('tico.market.researching')), null);
     market = {entities: [], docs: []};
@@ -235,7 +245,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     setup = {...setup, task: {id: 't-market', status: 'done'}};
     for (const [minutes, shows] of [[10, '[data-market-researching]'], [31, '[data-market-setup]']]) {
       page = await context.newPage();
-      await page.addInitScript(([ago]) => localStorage.setItem('tico.market.researching', JSON.stringify({at: Date.now() - ago * 60000, task: 't-market', base: '0|'})), [minutes]);
+      await page.addInitScript(([ago]: [number]) => localStorage.setItem('tico.market.researching', JSON.stringify({at: Date.now() - ago * 60000, task: 't-market', base: '0|'})), [minutes] as [number]);
       page.on('pageerror', e => errors.push('market-old: ' + e.message));
       await page.goto('http://tico-ui.test/#/strategy/market/players');
       await page.locator('#market-shell ' + shows).waitFor();
@@ -244,7 +254,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     }
     // An open task restores the notice in another browser, but its thirty minutes count from when the task was
     // filed: a reload never starts them again, and the clock running out brings the questions back.
-    const filedAgo = minutes => ({id: 't-market', status: 'open', created_at: new Date(Date.now() - minutes * 60000).toISOString()});
+    const filedAgo = (minutes: number) => ({id: 't-market', status: 'open', created_at: new Date(Date.now() - minutes * 60000).toISOString()});
     setup = {...setup, task: filedAgo(31)};
     page = await context.newPage();
     page.on('pageerror', e => errors.push('market-open: ' + e.message));
@@ -271,15 +281,15 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     // that followed it, so a reload resumes at the newer answer and place.
     setup = {...setup, answers: {sell: 'https://northwind.example', buyers: '', competitors: '', watch: ''}, step: 1, skipped: false, task: null};
     page = await open('#/strategy/market/players');
-    const shows = text => page.waitForFunction(text => document.querySelector('#market-shell h1')?.textContent === text, text);
+    const shows = (text: string) => page.waitForFunction(text => document.querySelector('#market-shell h1')?.textContent === text, text);
     const form = page.locator('#market-shell [data-market-setup]');
     await shows('Who buys it?');
-    let release;
+    let release!: (value?: unknown) => void;
     held = {gate: new Promise(resolve => { release = resolve; })};
     await form.locator('[data-market-back]').click();
     await shows('What do you sell?');
     for (const end = Date.now() + t(5000); !held.body && Date.now() < end;) await new Promise(r => setTimeout(r, 20));
-    assert.equal(held.body.step, 0);
+    assert.equal(held.body!.step, 0);
     await form.locator('textarea').fill('https://northwind.example/cleaning');
     await form.locator('[type=submit]').click();
     await new Promise(r => setTimeout(r, 300));
@@ -314,7 +324,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     assert.equal(await hint.locator('a').textContent(), 'Ask');
     assert.equal(await hint.locator('button').count(), 0);                 // no buttons, no X
     assert.equal(await page.locator('#gs-org-card, [data-gs-build], [data-gs-connect], [data-gs-dismiss]').count(), 0);
-    if (shots) for (const colorScheme of ['light', 'dark']) {
+    if (shots) for (const colorScheme of ['light', 'dark'] as const) {
       await page.setViewportSize({width: 1440, height: 900});
       await page.emulateMedia({colorScheme});
       await settled(page, 1440);
@@ -347,10 +357,10 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await shot(page, 'tour');
     for (let i = 0; i < 4; i++) {
       await page.keyboard.press('Tab');
-      assert.equal(await page.evaluate(() => !!document.activeElement.closest('.gs-tour')), true);
+      assert.equal(await page.evaluate(() => !!(document.activeElement as Element).closest('.gs-tour')), true);
     }
     await page.keyboard.press('Shift+Tab');
-    assert.equal(await page.evaluate(() => !!document.activeElement.closest('.gs-tour')), true);
+    assert.equal(await page.evaluate(() => !!(document.activeElement as Element).closest('.gs-tour')), true);
     const titles = [];
     for (let i = 0; i < 5; i++) {
       await tour.locator('[data-tour-next]').click();
@@ -374,14 +384,14 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await page.locator('#account').click();
     assert.deepEqual(await page.locator('#account-menu :is(a, button):not([hidden])').evaluateAll(els => els.map(e => e.textContent.trim()).slice(-1)), ['tourTake the tour']);
     await page.locator('#account').press('ArrowUp');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'account-tour', 'the arrow keys reach it');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).id), 'account-tour', 'the arrow keys reach it');
     await page.keyboard.press('Enter');
     await menuTour.waitFor();
     assert.equal(await page.locator('#account-menu').isHidden(), true);
     assert.equal(await page.locator('.gs-tour-count').textContent(), '1 of 6');
     await page.keyboard.press('Escape');
     await menuTour.waitFor({state: 'detached'});
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'account');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement).id), 'account');
     await page.locator('#account').click();
     await page.locator('#account-tour').click();
     await menuTour.waitFor();
@@ -405,12 +415,12 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
 
     // Skip is the same as closing, and the tour works on a phone, through the drawer.
     page = await open('#/updates', {width: 390, height: 844});
-    await page.evaluate(() => window.gsStartTour());
+    await page.evaluate(() => (window as unknown as PageWin).gsStartTour());
     const phoneTour = page.locator('.gs-tour');
     await phoneTour.waitFor();
     assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), true);
     const fits = async () => page.evaluate(() => {
-      const card = document.querySelector('.gs-tour-card').getBoundingClientRect(), hole = document.querySelector('.gs-tour-hole').getBoundingClientRect();
+      const card = (document.querySelector('.gs-tour-card') as HTMLElement).getBoundingClientRect(), hole = (document.querySelector('.gs-tour-hole') as HTMLElement).getBoundingClientRect();
       return card.left >= 0 && card.right <= innerWidth && card.top >= 0 && card.bottom <= innerHeight && hole.width > 0
         && document.documentElement.scrollWidth <= innerWidth;
     });

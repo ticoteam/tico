@@ -5,23 +5,33 @@
 // on the update and goes to the bot's chat. On a phone Updates takes Tasks' place in the bottom bar.
 // "Getting updates and working through them should be very very snappy."
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = require('./support/load.cjs');
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type * as LoadSupport from './support/load.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {t} = require('./support/load.cjs') as typeof LoadSupport;
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
-const day = ms => new Date(now + ms).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
+type Body = {ids: string[]; all?: boolean; read?: boolean; text?: string; archived?: boolean};
+type Msg = {id: string; sender_id: string; body: string; created_at: string; conversation_id?: string};
+type Update = {id: string; bot: string; kind: string; day: string; headline: string; body: string; created_at: string; updated_at: string; read: boolean; replies: number; superseded?: boolean; slides?: unknown};
+type Gate = {held: Promise<unknown>; received: boolean};
+interface PageWin { __badges: (string | null)[]; __staleLoadDone: boolean }
+declare const UPD: {mine: boolean; loading: boolean; fromCache: boolean};
+declare function updLoad(state: typeof UPD): Promise<unknown>;
+const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), hour = 3600e3;
+const day = (ms: number) => new Date(now + ms).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['game', 'Temp Game']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', owner_id: name === 'game' ? 'ben' : 'ana'}));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
-  const posted = [];
-  let updates = [
+  const posted: {path: string; body: Body}[] = [];
+  let updates: Update[] = [
     {id: 'u-seo', bot: 'seo', kind: 'daily', day: day(0), headline: 'Published the vacation rental checklist page',
      body: '- Published the vacation rental checklist page, 1,240 words\n- Linked it from six older posts\n- Pitching it to three host newsletters next',
      created_at: iso(-2 * hour), updated_at: iso(-2 * hour), read: false, replies: 0},
@@ -32,7 +42,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     {id: 'u-cmo', bot: 'cmo', kind: 'daily', day: day(-86400e3), headline: 'Drafted October content plan',
      body: '- Drafted the October content plan', created_at: iso(-26 * hour), updated_at: iso(-26 * hour), read: true, replies: 0},
   ];
-  const weekly = [{id: 'w-seo', bot: 'seo', kind: 'weekly', day: day(0), headline: 'Week: 4 pages shipped, rankings up on 2 of 3 goals',
+  const weekly: Update[] = [{id: 'w-seo', bot: 'seo', kind: 'weekly', day: day(0), headline: 'Week: 4 pages shipped, rankings up on 2 of 3 goals',
     body: '- Shipped four pages this week\n- Organic signups are on track', created_at: iso(-hour), updated_at: iso(-hour), read: false, replies: 0,
     slides: {goal: 'Grow organic signups to 400 a month; at 310 and on pace.',
              tracked: [{name: 'Organic signups', unit: 'signups', value: 310, spark: [240, 262, 281, 310], status: 'green', target_label: '400 by Dec 31', fresh: true}],
@@ -40,39 +50,39 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
              done: ['Shipped four landing pages', 'Linked them from six older posts'], focus: ['Pitch the checklist to three newsletters'], blockers: []}},
     {id: 'w-cmo', bot: 'cmo', kind: 'weekly', day: day(-7 * 86400e3), headline: 'Old bullets', body: '- An older week, posted as bullets',
      created_at: iso(-170 * hour), updated_at: iso(-170 * hour), read: true, replies: 0}];
-  const threads = {'u-fin': [{id: 'm1', sender_id: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
+  const threads: Record<string, Msg[]> = {'u-fin': [{id: 'm1', sender_id: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
                              {id: 'm2', sender_id: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
-  const archivedIds = new Set(), archiveRequests = [];
-  let archiveFails = false, nextListGate = null, holdList = null, holdReply = null, keepUnread = null;
-  const isArchived = u => archivedIds.has(u.id) || !!u.superseded;
-  const feed = (kind, archive = false, includeArchive = false) => {
+  const archivedIds = new Set<string>(), archiveRequests: Body[] = [];
+  let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, keepUnread: string | null = null;
+  const isArchived = (u: Update) => archivedIds.has(u.id) || !!u.superseded;
+  const feed = (kind: string | null, archive = false, includeArchive = false) => {
     const source = kind === 'weekly' ? weekly : updates;
     const list = includeArchive ? source : source.filter(u => isArchived(u) === archive);
     return {updates: list, missed: kind === 'weekly' || archive ? [] : [{bot: 'game', kind: 'daily', day: day(0), reason: 'its run stopped part-way'}],
             unread: source.filter(u => !isArchived(u) && !u.read).length, today: {posted: 2, missed: 1, queued: 1}};
   };
-  const open = async (viewport) => {
+  const open = async (viewport: {width: number; height: number}) => {
     const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(viewport.width < 600 ? {isMobile: true, hasTouch: true} : {})});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     // Every value the rail badge shows, in order: seen-is-read can lower it within a second of the first paint.
     await page.addInitScript(() => {
       localStorage.setItem('tico.updates.layout', 'list');   // the flat feed; the org-chart tree is updates-tree.cjs
-      window.__badges = [];
+      (window as unknown as PageWin).__badges = [];
       new MutationObserver(() => {
-        const b = document.querySelector('.side-scroll [data-upd-badge]');
+        const b = document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null;
         const v = b && !b.hidden ? b.textContent : '';
-        if (v && v !== window.__badges.at(-1)) window.__badges.push(v);
+        if (v && v !== (window as unknown as PageWin).__badges.at(-1)) (window as unknown as PageWin).__badges.push(v);
       }).observe(document, {subtree: true, childList: true, characterData: true, attributes: true});
     });
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/employees') return json(bots);
       if (p === '/api/issues') return json([]);
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true});
@@ -103,13 +113,13 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
         const body = req.postDataJSON(); posted.push({path: p, body});
         if (holdReply) await holdReply;                 // held until the test has seen the pending reply
         const msg = {id: 'm-new', sender_id: 'human:ana', body: `Re your update "x": ${body.text}`, created_at: new Date().toISOString(), conversation_id: 'c-seo'};
-        threads[reply[1]] = [...(threads[reply[1]] || []), msg];
-        return json({message: msg, thread: threads[reply[1]]});
+        threads[reply[1]!] = [...(threads[reply[1]!] || []), msg];
+        return json({message: msg, thread: threads[reply[1]!]});
       }
       const one = p.match(/^\/api\/v2\/updates\/([^/]+)$/);
       if (one) {
         const u = updates.find(x => x.id === one[1]);
-        return u ? json({update: u, thread: threads[one[1]] || []}) : json({error: {code: 'not_found', detail: 'Update not found'}}, 404);
+        return u ? json({update: u, thread: threads[one[1]!] || []}) : json({error: {code: 'not_found', detail: 'Update not found'}}, 404);
       }
       return json(unrouted(p));
     });
@@ -135,26 +145,26 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const company = page.locator('#search-results li[data-href="#/home"]');
     await company.waitFor();
     assert.match(await company.innerText(), /Company/, 'search finds Company by "overview"');
-    await page.evaluate(() => document.querySelector('#search-modal').close());
+    await page.evaluate(() => (document.querySelector('#search-modal') as HTMLDialogElement).close());
     // A folded group's pages are still in search.
     await page.locator('#side .rd-co-toggle').click();
     assert.equal(await page.locator('#rd-co').isVisible(), false, 'Company folds');
     await page.keyboard.press('Control+k');
     await page.locator('#search-input').fill('strat');
     await page.locator('#search-results li[data-href="#/strategy/market"]').waitFor();
-    await page.evaluate(() => document.querySelector('#search-modal').close());
+    await page.evaluate(() => (document.querySelector('#search-modal') as HTMLDialogElement).close());
     await page.locator('#side .rd-co-toggle').click();
     assert.equal(await page.locator('#rd-co').isVisible(), true, 'and opens again');
     assert.equal(await page.locator('.side-scroll .nav-link:visible').first().getAttribute('data-nav'), 'overview');
-    await page.waitForFunction(() => window.__badges.length > 0);
-    assert.equal(await page.evaluate(() => window.__badges[0]), '2', 'the badge opens on the unread count');
+    await page.waitForFunction(() => (window as unknown as PageWin).__badges.length > 0);
+    assert.equal(await page.evaluate(() => (window as unknown as PageWin).__badges[0]), '2', 'the badge opens on the unread count');
     // Just the updates, each only its bullets: no title, no sections, no greeting,
     // no day headers, no who did not report, no More / Less.
     // My bots is on by default: Ben's bot's update is hidden until it is off.
     assert.equal(await page.locator('#upd-mine').getAttribute('aria-pressed'), 'true');
     assert.deepEqual(await page.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd)), ['u-seo', 'u-fin', 'u-cmo']);
     // All bots paints at once from the cards already loaded; its own load (held here) then sets its order.
-    let releaseAll; holdList = new Promise(r => { releaseAll = r; });
+    let releaseAll!: (value?: unknown) => void; holdList = new Promise(r => { releaseAll = r; });
     await page.locator('#upd-mine').click();
     assert.deepEqual(await page.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd)), ['u-seo', 'u-fin', 'u-game', 'u-cmo']);
     holdList = null; releaseAll();
@@ -166,11 +176,11 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.match(await page.locator('[data-upd="u-seo"] .upd-body').innerText(), /Published the vacation rental checklist page/);
     // Seen is read: the visible unread cards are marked in one small request.
     await page.waitForFunction(() => !document.querySelector('#upd-feed .upd-card.unread'));
-    await page.waitForFunction(() => document.querySelector('.side-scroll [data-upd-badge]')?.hidden === true);
+    await page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.hidden === true);
     for (const end = Date.now() + t(10000); !posted.some(x => x.path === '/api/v2/updates/read') && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
     const reads = posted.filter(x => x.path === '/api/v2/updates/read');
     assert.equal(reads.length, 1, 'batched: ' + JSON.stringify(reads));
-    assert.deepEqual(reads[0].body.ids.sort(), ['u-fin', 'u-seo']);
+    assert.deepEqual(reads[0]!.body.ids.sort(), ['u-fin', 'u-seo']);
     if (shots) await page.screenshot({path: path.join(shots, 'updates-desktop.png')});
     // No Unread filter. Unread first, then newest; marking one unread (or read)
     // never moves anything while the page is open.
@@ -178,14 +188,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // The actions are icons, each named for a screen reader and a tooltip; no words on the card. Reply, Mark unread and
     // Archive sit at the top right, on the line with the name and the time; no row is left under the update.
     const acts = page.locator('[data-upd="u-cmo"] .upd-actions .upd-act'), corner = page.locator('[data-upd="u-cmo"] .upd-corner .upd-act');
-    const named = locator => locator.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.title, b.querySelector('.nav-icon')?.textContent]));
-    const words = locator => locator.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
+    const named = (locator: import('playwright').Locator) => locator.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), (b as HTMLElement).title, b.querySelector('.nav-icon')?.textContent]));
+    const words = (locator: import('playwright').Locator) => locator.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !(n as Element).classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
     assert.equal(await acts.count(), 0, 'no bottom row');
     assert.equal(await page.locator('[data-upd="u-cmo"] .upd-actions').evaluate(r => getComputedStyle(r).display), 'none');
     assert.deepEqual(await named(corner), [['Reply', 'Reply', 'chat_bubble'], ['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']],
       'reply, read and archive at the top right');
-    assert.deepEqual(await page.locator('[data-upd="u-cmo"] .upd-corner').evaluate(c => {
-      const m = c.closest('.upd-meta').getBoundingClientRect(), r = c.getBoundingClientRect(), body = c.closest('.upd-main').querySelector('.upd-body').getBoundingClientRect();
+    assert.deepEqual(await page.locator('[data-upd="u-cmo"] .upd-corner').evaluate((c: HTMLElement) => {
+      const m = c.closest('.upd-meta')!.getBoundingClientRect(), r = c.getBoundingClientRect(), body = c.closest('.upd-main')!.querySelector('.upd-body')!.getBoundingClientRect();
       // The icons' centre is on the name line; the button's box may reach a little past it (its negative margins).
       const mid = (r.top + r.bottom) / 2;
       return {onNameLine: mid >= m.top && mid <= m.bottom, atRight: Math.abs(m.right - r.right) <= 10, aboveBody: mid < body.top};
@@ -204,18 +214,18 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     archiveFails = true;
     await page.locator('[data-upd="u-cmo"] [data-upd-archive]').click();
     await page.waitForFunction(() => {
-      const b = document.querySelector('[data-upd="u-cmo"] [data-upd-archive]'); return b && !b.disabled;
+      const b = document.querySelector('[data-upd="u-cmo"] [data-upd-archive]') as HTMLButtonElement | null; return b && !b.disabled;
     });
     assert.equal(await page.locator('[data-upd="u-cmo"] textarea').inputValue(), 'Keep this reply draft');
     assert.equal(archiveRequests.length, 1);
     archiveFails = false;
-    let releaseStale;
-    const staleGate = {held: new Promise(r => { releaseStale = r; }), received: false};
+    let releaseStale!: (value?: unknown) => void;
+    const staleGate: Gate = {held: new Promise(r => { releaseStale = r; }), received: false};
     nextListGate = staleGate;
     const staleList = page.waitForResponse(r => r.url().includes('/api/v2/updates?') && r.url().includes('kind=daily'));
     await page.evaluate(() => {
-      window.__staleLoadDone = false;
-      void updLoad(UPD).finally(() => { window.__staleLoadDone = true; });
+      (window as unknown as PageWin).__staleLoadDone = false;
+      void updLoad(UPD).finally(() => { (window as unknown as PageWin).__staleLoadDone = true; });
     });
     for (const end = Date.now() + t(30000); !staleGate.received && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
     assert(staleGate.received, 'the stale inbox request is held before archiving');
@@ -223,7 +233,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await archiveButton.focus(); await page.keyboard.press('Enter');
     await page.locator('[data-upd="u-cmo"]').waitFor({state: 'detached'});
     releaseStale(); await staleList;                    // the stale payload returns after the archive write
-    await page.waitForFunction(() => window.__staleLoadDone);
+    await page.waitForFunction(() => (window as unknown as PageWin).__staleLoadDone);
     assert.equal(await page.locator('[data-upd="u-cmo"]').count(), 0, 'a delayed old inbox load cannot restore an archived card');
     assert.deepEqual(archiveRequests[1], {ids: ['u-cmo'], archived: true});
     await page.locator('#upd-view').click();
@@ -245,7 +255,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.locator('[data-upd="u-seo"] [data-upd-reply]').click();
     const box = page.locator('[data-upd="u-seo"] textarea');
     await box.fill('Pitch it to Northwind Homes first');
-    let sendReply; holdReply = new Promise(r => { sendReply = r; });
+    let sendReply!: (value?: unknown) => void; holdReply = new Promise(r => { sendReply = r; });
     await box.press('Enter');
     await page.locator('[data-upd="u-seo"] .upd-msg.pending').waitFor();   // shown while the round trip is held
     holdReply = null; sendReply();
@@ -260,7 +270,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // Keyboard: j / k move the selection.
     await page.locator('#upd-feed').click({position: {x: 5, y: 5}});
     await page.keyboard.press('Escape');
-    await page.evaluate(() => document.activeElement?.blur());
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     // Coming back from Archive is a new visit, so the order depends on what was seen meanwhile; j j is the second card.
     const visitOrder = await page.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd));
     assert.deepEqual([...visitOrder].sort(), ['u-cmo', 'u-fin', 'u-seo']);
@@ -283,7 +293,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await deck.locator('[data-upd-go="4"]').click();
     await page.waitForFunction(() => document.querySelector('[data-upd="w-seo"] [data-upd-go="4"]')?.hasAttribute('aria-current'));
     assert.match(await deck.locator('.upd-slide').nth(4).innerText(), /Nothing blocking/);
-    await page.evaluate(() => document.activeElement?.blur());
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('j');
     await page.keyboard.press('ArrowLeft');
     await page.waitForFunction(() => document.querySelector('[data-upd="w-seo"] [data-upd-go="3"]')?.hasAttribute('aria-current'));
@@ -292,12 +302,12 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // Snappy: coming back to Daily paints from this tab's cache before the network answers, and the
     // unread one (AI CMO, marked unread above) now comes first.
     // Seeing AI CMO in Archive or Inbox above may have marked it read; another device marks it unread again.
-    keepUnread = 'u-cmo'; updates.find(u => u.id === 'u-cmo').read = false;
-    let release; holdList = new Promise(r => { release = r; });
+    keepUnread = 'u-cmo'; updates.find(u => u.id === 'u-cmo')!.read = false;
+    let release!: (value?: unknown) => void; holdList = new Promise(r => { release = r; });
     await page.evaluate(() => { location.hash = '#/updates'; });
     await page.locator('[data-upd="u-seo"]').waitFor();   // painted while the network reply is still held
     holdList = null; release();
-    await page.waitForFunction(() => document.querySelector('#upd-feed .upd-card')?.dataset.upd === 'u-cmo');
+    await page.waitForFunction(() => (document.querySelector('#upd-feed .upd-card') as HTMLElement | null)?.dataset.upd === 'u-cmo');
     keepUnread = null;
     assert.deepEqual(errors, []);
     await page.close();
@@ -311,20 +321,20 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // Six items; Assistant (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
     // side evenly.
     const nav = () => p.locator('#mobile-nav .mobile-nav-item:not([hidden])').evaluateAll(items => items.map(el => { const r = el.getBoundingClientRect(); return {w: r.width, mid: r.left + r.width / 2}; }));
-    const even = list => Math.max(...list.map(i => i.w)) - Math.min(...list.map(i => i.w)) < 1;
+    const even = (list: {w: number; mid: number}[]) => Math.max(...list.map(i => i.w)) - Math.min(...list.map(i => i.w)) < 1;
     const items = await nav();
     assert.equal(items.length, 6);
-    assert.ok(Math.abs(items[2].mid - 195) < 1, `Assistant in the middle: ${items[2].mid}`);
+    assert.ok(Math.abs(items[2]!.mid - 195) < 1, `Assistant in the middle: ${items[2]!.mid}`);
     assert.ok(even(items.slice(0, 2)) && even(items.slice(3)), 'each side spaced evenly');
     // The six fit a 360px phone: no label is cut and the bar does not scroll sideways.
     await p.setViewportSize({width: 360, height: 800});
-    await p.waitForFunction(() => document.querySelector('#mobile-nav').getBoundingClientRect().width <= 360);
+    await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width <= 360);
     assert.equal(await p.locator('#mobile-nav').evaluate(nav => nav.scrollWidth <= nav.clientWidth &&
-      [...nav.querySelectorAll('.mobile-nav-label')].every(l => { const r = l.getBoundingClientRect(), item = l.parentElement.getBoundingClientRect();
+      [...nav.querySelectorAll('.mobile-nav-label')].every(l => { const r = l.getBoundingClientRect(), item = l.parentElement!.getBoundingClientRect();
         return r.left >= item.left && r.right <= item.right; })), true, 'the bar fits 360px');
     if (shots) await p.screenshot({path: path.join(shots, 'updates-phone-360.png')});
     await p.setViewportSize({width: 390, height: 844});
-    await p.waitForFunction(() => document.querySelector('#mobile-nav').getBoundingClientRect().width > 380);
+    await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width > 380);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
     // Day, week, unread and my bots are icons on a phone.
     for (const sel of ['[data-upd-kind="daily"]', '[data-upd-kind="weekly"]', '#upd-mine']) {
@@ -332,14 +342,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       assert.equal(await p.locator(sel + ' .upd-lbl').isVisible(), false, sel + ' hides its word');
     }
     assert.equal(await p.locator('#mobile-nav [data-nav="updates"]').evaluate(el => el.classList.contains('cur')), true);
-    const card = await p.locator('#upd-feed .upd-card').first().boundingBox();
+    const card = (await p.locator('#upd-feed .upd-card').first().boundingBox())!;
     assert(card.x >= 8 && card.x + card.width <= 390 - 8, 'cards fit the phone with a gutter');
     if (shots) await p.screenshot({path: path.join(shots, 'updates-phone.png')});
     // A week's slides fit the phone and swipe sideways inside the card.
     await p.evaluate(() => { location.hash = '#/updates?kind=weekly'; });
     const track = p.locator('[data-upd="w-seo"] .upd-track');
     await track.waitFor();
-    const deckBox = await track.boundingBox();
+    const deckBox = (await track.boundingBox())!;
     assert(deckBox.x >= 8 && deckBox.x + deckBox.width <= 390 - 8, 'the slides fit the phone with a gutter');
     assert(await track.evaluate(el => el.scrollWidth >= el.clientWidth * 4.9), 'five slides side by side');
     if (shots) await p.screenshot({path: path.join(shots, 'updates-phone-weekly.png')});
@@ -351,7 +361,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.locator('#upd-mine').click();
     await p.locator('[data-upd="u-game"]').waitFor();
     await p.waitForFunction(() => UPD && !UPD.mine && !UPD.loading && !UPD.fromCache);   // this scope's load has repainted
-    const dispatchDrag = async (target, dx, dy) => {
+    const dispatchDrag = async (target: import('playwright').Locator, dx: number, dy: number) => {
       const box = await target.boundingBox(); assert(box, 'gesture target is visible');
       const x = box.x + Math.min(20, box.width / 3), y = box.y + Math.min(20, box.height / 2);
       await target.dispatchEvent('pointerdown', {pointerId: 7, pointerType: 'touch', clientX: x, clientY: y});
@@ -396,7 +406,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await none.page.goto('http://tico-ui.test/#/updates');
     const empty = none.page.locator('#upd-feed .upd-empty');
     await empty.waitFor();
-    assert.equal(await empty.evaluate(el => [...el.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), 'No updates yet.');
+    assert.equal(await empty.evaluate(el => [...el.childNodes].filter(n => !(n as Element).classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), 'No updates yet.');
     assert.equal(await none.page.locator('#main .talk-line, #main [data-chat-with-us]').count(), 0, 'no Chat with us');
     assert.deepEqual(none.errors, []);
     await none.page.close();

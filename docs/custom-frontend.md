@@ -453,7 +453,7 @@ are described loosely on purpose (`additionalProperties` is open), so treat the 
 the team chart (humans and bots nested by `reports_to`), a DM with any bot with the reply streaming in through
 `/api/v2/events`, the open tasks, and Needs you. It sets no cookies and puts everything on the page as text.
 
-`ui/tests/custom-frontend.cjs` runs it in a real browser against a real server on another origin, once with a local
+`ui/tests/custom-frontend.cts` runs it in a real browser against a real server on another origin, once with a local
 server (`TICO_AUTH_PROXY=none` with the owner token, the development shortcut the example offers only for a Tico on
 `localhost`) and once with built-in sign-in and PKCE against a stand-in identity provider. Run it with `npm run test:ui`.
 `backend/tests/test_frontend_access.py` covers the server side: CORS for allowed and other origins, preflights, the

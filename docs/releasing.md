@@ -152,7 +152,7 @@ A window validates a head in one of two ways. A **full** validation is the whole
   head waits for a push.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
   contracts lane, and `alone` tests never do. A UI script runs when its own files change or a `UI_MAP` entry selects it:
-  `ui/tests/task-code.cjs` has no entry for the UI files it covers, so a change to them does not select it. The measured
+  `ui/tests/task-code.cts` has no entry for the UI files it covers, so a change to them does not select it. The measured
   UI test map (#2897, `ci/ui-test-map`) closes that gap; until it lands, the next full validation is the check.
 - **Not changed.** Hotfixes, approval, promotion, the `release-train` issue, the concurrency group and the schedule.
   `release.yml` accepts an incremental run's title for the tag, because the title starts the same way.

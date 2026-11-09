@@ -11,7 +11,7 @@
 // payload has been ready and whose decision it is ("Ready 2 h 10 min, waiting on you", or the person's name).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const HASH = 'a'.repeat(12) + 'b'.repeat(52), HASH2 = 'c'.repeat(64);
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:support',

@@ -5,7 +5,7 @@
 // pick 3 as "not this one" (the server's answer text); Yes to all sends all four. A check from Tico says "Tico".
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const NOW = Date.now(), at = hours => new Date(NOW - hours * 3600e3).toISOString();
 const BODY = 'Website sales chat: go with these picks?\n\nRun 8719e1a6 failed: ValueError: bad date in reports/chat-plan.md';
 const PICKS = [

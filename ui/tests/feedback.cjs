@@ -17,7 +17,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const {assistantView} = require('./support/assistant-chat.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const SHOTS = process.env.FEEDBACK_SHOTS || '';
 const iso = () => new Date().toISOString();
 const shot = async (page, name) => {

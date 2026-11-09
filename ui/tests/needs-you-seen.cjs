@@ -3,7 +3,7 @@
 // delivered, is not sent (hub-v2.js needsSeen). A task's questions are read on each open of the full task.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const ask = (id, to, delivered = null) => ({id, recipient_id: to, sender_id: 'bot:writer', body: 'Approve the venue?', delivered_at: delivered, read_at: null});
 const request = (id, title, a) => ({id, kind: 'task', title, body: 'Which venue?', owner: 'human:ana', requester: 'bot:writer', status: 'open',

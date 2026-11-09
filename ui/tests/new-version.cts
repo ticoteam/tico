@@ -1,33 +1,39 @@
 // Offline browser regression: the sidebar's version row offers a newer release only when the server says one exists,
 // offers "Update now" to the owner alone, and dismissal is remembered. It is one row: "Update to" while a release is
 // on offer, else "Updated to" while changes are unread (ui/changelog.ts), and nothing when neither applies.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
 const {html, uiFile, bundled} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 // Every finite animation and transition has finished (an endless spinner does not count).
 const settled = () => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity);
-const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https://github.com/ticoteam/tico/releases/tag/v0.2.0',
+interface NewVersionUpdate {current: string; latest: string; available: boolean; url: string; published_at: string; name: string; scheduled?: string; managed?: boolean}
+interface VisitOptions {role?: string; update?: NewVersionUpdate | null; updater?: string | null; changelog?: {unread_count: number} | null; context?: import('playwright').BrowserContext}
+// The page's own globals, which the spec drives from the page.
+declare const PAGE_BUILD: string | null | undefined;
+declare function get(path: string): Promise<Record<string, unknown>>;
+declare function applyConfig(config: unknown): void;
+const UPDATE: NewVersionUpdate = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https://github.com/ticoteam/tico/releases/tag/v0.2.0',
                 published_at: '2026-10-20T10:00:00Z', name: 'Tico 0.2.0'};
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    const visit = async ({role = 'owner', update = UPDATE, updater = null, changelog = null, context} = {}) => {
+    const visit = async ({role = 'owner', update = UPDATE, updater = null, changelog = null, context}: VisitOptions = {}) => {
       const ctx = context || await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
-      const errors = [], posts = [];
-      let reloads = 0, polls = 0, served = null;
+      const errors: string[] = [], posts: unknown[] = [];
+      let reloads = 0, polls = 0, served: string | null = null;
       page.on('pageerror', e => errors.push(e.message));
       await page.route('**/*', route => {
         const req = route.request(), p = new URL(req.url()).pathname;
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: update ? update.current : '0.1.0', update, app_name: 'Tico', ...(changelog ? {changelog} : {})};
@@ -53,7 +59,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
       await page.goto('https://tico-ui.test/#/settings');
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
       page.on('framenavigated', () => reloads++);
-      return {page, ctx, errors, posts, reloads: () => reloads, serve: version => { served = version; }};
+      return {page, ctx, errors, posts, reloads: () => reloads, serve: (version: string) => { served = version; }};
     };
 
     // Nothing available, nothing shown.
@@ -93,7 +99,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     assert.equal((await notice.innerText()).trim(), 'Update to v0.2.0');
     await notice.click();
     assert.equal(await v.page.locator('#nv-update').isVisible(), true, 'owner sees Update now');
-    if (shots) { await v.page.waitForFunction(settled, null, {timeout: t(5000)}); const box = await v.page.locator('aside').first().boundingBox(); await v.page.screenshot({path: path.join(shots, 'new-version-notice.png'), clip: {x: 0, y: Math.max(0, box.y + box.height - 330), width: box.width, height: 330}}); }
+    if (shots) { await v.page.waitForFunction(settled, null, {timeout: t(5000)}); const box = (await v.page.locator('aside').first().boundingBox())!; await v.page.screenshot({path: path.join(shots, 'new-version-notice.png'), clip: {x: 0, y: Math.max(0, box.y + box.height - 330), width: box.width, height: 330}}); }
     await v.page.locator('#nv-dismiss').click();
     assert.equal(await v.page.locator('#new-version-wrap').isVisible(), false, 'dismissed');
     const again = await visit({context: v.ctx});
@@ -161,7 +167,7 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     // One version row. An update on offer (or running) is the row, and its pop-up links What's new so unread changes
     // stay reachable; unread changes alone read "Updated to" and open What's new; a dismissed update hands the row back
     // to them; nothing unread and no update means no row. On a phone the More drawer shows the same one row.
-    const versionRows = page => page.locator('.side-footer > .new-version:not([hidden]) > #new-version, .side-footer > #changelog-notice:not([hidden])')
+    const versionRows = (page: import('playwright').Page) => page.locator('.side-footer > .new-version:not([hidden]) > #new-version, .side-footer > #changelog-notice:not([hidden])')
       .allInnerTexts().then(texts => texts.map(text => text.replace(/\s+/g, ' ').trim()));
     v = await visit({changelog: {unread_count: 2}});
     assert.deepEqual(await versionRows(v.page), ['Update to v0.2.0'], 'an update on offer takes the one row, unread changes wait');

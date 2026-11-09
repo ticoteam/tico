@@ -3,16 +3,22 @@
 // what is going on and "How is it going?". Empty words send nothing; an answer on a goal with no judged measure colours it
 // without a page reload; no answer saves words only; a goal its measures colour says so; a refusal or a dropped line
 // keeps the words and shows why. Fixtures only.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
-const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
+// A goal as the goals tree sends it; `checkin` is the one this page just posted.
+interface Goal { id: string; status: string | null; status_source: string | null; rank?: number; kpis: {status: string; [k: string]: unknown}[]; checkin?: unknown; [k: string]: unknown }
+interface PageWin { __sameLoad?: boolean }
+
+const bot = (name: string, display_name: string, org_parent: string, over?: object) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''})];
 const people = [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana'},
@@ -24,15 +30,15 @@ const measure = {id: 'k-demos', name: 'Demos booked', unit: '', direction: 'up',
 // A targeted measure with no recent reading judges nothing: the server colours that goal from its latest check-in.
 const stale = {...measure, id: 'k-calls', name: 'Calls made', freshness: 'stale', status: 'gray', reason: 'No reading in 3 weeks',
   link: {...measure.link, goal_id: 'g-stale'}};
-const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.status));
+const judged = (g: Goal) => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.status));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [], posted = [];
+    const errors: string[] = [], posted: {goal: string; body: unknown; key: string | undefined}[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const goals = [
+    const goals: Goal[] = [
       {id: 'g-ana', title: 'Raise the seed round', owner_id: 'human:ana', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
       {id: 'g-ben', title: 'Sign three pilot landlords', owner_id: 'human:ben', parent_id: null, status: null, status_source: 'auto', rank: 0, kpis: []},
       {id: 'g-demos', title: 'Book twenty demos', owner_id: 'human:ben', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [measure]},
@@ -44,14 +50,14 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
       {id: 'g-cara-pilot', title: 'Write the pilot contract', owner_id: 'human:cara', parent_id: 'g-ben', status: null, status_source: 'auto', rank: 1, kpis: []},
     ];
     let refuse = '';   // '' answers; 'forbidden' refuses; 'drop' drops the line
-    let hold = null;   // a promise the next reply waits for: a slow server
+    let hold: Promise<unknown> | null = null;   // a promise the next reply waits for: a slow server
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/v2/events') return;
       if (p === '/api/v2/config') return json({});
       if (p === '/api/employees') return json(bots);
@@ -65,38 +71,38 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
       if (p === '/api/v2/strategy') return json({current: null, bets: [], label: 'Bets', label_one: 'Bet', may_edit: false, goals_by_bet: {}, health_by_bet: {}});
       const add = p.match(/^\/api\/v2\/goals\/([^/]+)\/checkins$/);
       if (add && req.method() === 'POST') {
-        const body = req.postDataJSON();
-        posted.push({goal: add[1], body, key: req.headers()['idempotency-key']});
+        const body: {body: string; signal?: string | null} = req.postDataJSON();
+        posted.push({goal: add[1]!, body, key: req.headers()['idempotency-key']});
         if (hold) await hold;
         if (refuse === 'drop') return route.abort('failed');
         if (refuse === 'forbidden') return json({error: {code: 'forbidden', detail: 'The goal\'s owner, the owner of the goal it serves, someone above them or the Strategy Bot records a check-in'}}, 403);
         // The server's colour (backend/goals.py score): a judged measure wins, else the latest check-in that answered.
-        const g = goals.find(x => x.id === add[1]);
+        const g = goals.find(x => x.id === add[1])!;
         const checkin = {id: 'c' + posted.length, goal_id: g.id, created_at: new Date().toISOString(), author: 'human:ben', sender_id: 'human:ben', body: body.body, signal: body.signal || null};
         g.checkin = checkin;
-        if (body.signal && !judged(g) && g.status_source !== 'person') g.status = SIGNAL_COLOUR[body.signal];
+        if (body.signal && !judged(g) && g.status_source !== 'person') g.status = SIGNAL_COLOUR[body.signal as keyof typeof SIGNAL_COLOUR];
         return json({checkin});
       }
       return json(unrouted(p));
     });
-    const until = async (fn, what) => { for (const end = Date.now() + t(6000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
+    const until = async (fn: () => unknown, what: string) => { for (const end = Date.now() + t(6000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
 
     await page.goto('http://tico-ui.test/#/goals');
     await page.locator('#goal-tree .gt-row').first().waitFor();
-    await page.evaluate(() => { window.__sameLoad = true; });
+    await page.evaluate(() => { (window as unknown as PageWin).__sameLoad = true; });
     const panel = page.locator('#goal-panel');
-    const openPanel = async owner => {
+    const openPanel = async (owner: string) => {
       // Count first: before the first open there is no panel, and evaluate would wait out its 30 s timeout.
-      if (await panel.count() && await panel.evaluate(d => d.open)) await panel.locator('[data-gp-close]').click();
+      if (await panel.count() && await panel.evaluate((d: HTMLDetailsElement) => d.open)) await panel.locator('[data-gp-close]').click();
       await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
       await panel.locator('.gp-goal').first().waitFor();
     };
-    const goal = id => panel.locator(`[data-gp-goal="${id}"]`);
-    const form = id => panel.locator(`[data-gp-update-form="${id}"]`);
+    const goal = (id: string) => panel.locator(`[data-gp-goal="${id}"]`);
+    const form = (id: string) => panel.locator(`[data-gp-update-form="${id}"]`);
 
     // 1. Ben owns these: each live goal offers "Post update"; the done goal is not listed.
     await openPanel('human:ben');
-    assert.deepEqual(await panel.locator('.gp-goal').evaluateAll(els => els.map(el => el.dataset.gpGoal)), ['g-ben', 'g-demos', 'g-hand', 'g-stale']);
+    assert.deepEqual(await panel.locator('.gp-goal').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.gpGoal)), ['g-ben', 'g-demos', 'g-hand', 'g-stale']);
     for (const id of ['g-ben', 'g-demos', 'g-hand', 'g-stale']) assert.equal(await goal(id).locator('[data-gp-update]').innerText(), 'Post update');
     // 2. Cara's: only the goal that supports Ben's offers it; Ana's (his manager's) offers nothing.
     await openPanel('human:cara');
@@ -143,14 +149,14 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
 
     // A slow reply: the form is frozen while it is out, so nothing typed after Post is dropped as if saved, and a panel
     // redraw meanwhile neither re-arms Post nor loses the refusal that follows.
-    let release;
+    let release!: (value?: unknown) => void;
     hold = new Promise(r => { release = r; });
     refuse = 'forbidden';
     const sent = posted.length;
     await form('g-ben').locator('[type=submit]').click();
     await until(() => posted.length > sent, 'the post is out');
-    const frozen = async why => {
-      assert.equal(await text.evaluate(el => el.readOnly), true, why + ': the words are frozen');
+    const frozen = async (why: string) => {
+      assert.equal(await text.evaluate((el: HTMLTextAreaElement) => el.readOnly), true, why + ': the words are frozen');
       assert.equal(await form('g-ben').locator('input[name=signal][value=on_track]').isDisabled(), true, why + ': the answer is frozen');
       assert.equal(await form('g-ben').locator('[type=submit]').isDisabled(), true, why + ': Post waits');
       assert.equal(await form('g-ben').locator('[data-gp-update-cancel]').isDisabled(), true, why + ': no Cancel while it is out');
@@ -165,7 +171,7 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
     release();
     await until(() => form('g-ben').locator('[data-gp-update-err]').innerText().then(s => /records a check-in/.test(s)), 'the refusal shows after a redraw');
     assert.equal(await text.inputValue(), words);
-    assert.equal(await text.evaluate(el => el.readOnly), false, 'the words can be edited again');
+    assert.equal(await text.evaluate((el: HTMLTextAreaElement) => el.readOnly), false, 'the words can be edited again');
     assert.equal(await form('g-ben').locator('[type=submit]').isEnabled(), true, 'Post can be pressed again after a redraw');
     await panel.locator('[data-kpi-add] [data-cancel]').click();
     // The panel closes while a post is out: its refusal is still said, in a toast.
@@ -186,19 +192,19 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
     assert.equal(await goal('g-ben').locator('.gp-gline .gdot').getAttribute('class'), 'gdot gray');
     await form('g-ben').locator('[type=submit]').click();
     await until(() => goal('g-ben').locator('.kpi-check').count().then(n => n === 1), 'the update shows');
-    assert.deepEqual(posted.at(-1).body, {body: words, signal: 'at_risk'});
+    assert.deepEqual(posted.at(-1)!.body, {body: words, signal: 'at_risk'});
     assert.equal(await form('g-ben').count(), 0, 'the form closes');
     assert.match(await goal('g-ben').locator('.kpi-check').innerText(), new RegExp(words.replace(/[.;]/g, '\\$&') + '[\\s\\S]*Ben Park · at risk'));
     await until(() => goal('g-ben').locator('.gp-gline .gdot').getAttribute('class').then(c => c === 'gdot yellow'), 'the goal turns yellow');
     await until(() => page.locator('#goal-tree .gt-row[data-owner="human:ben"] .gdot.yellow').count().then(n => n > 0), 'the tree turns yellow');
-    assert.equal(await page.evaluate(() => window.__sameLoad), true, 'no page reload');
+    assert.equal(await page.evaluate(() => (window as unknown as PageWin).__sameLoad), true, 'no page reload');
 
     // 5. No answer: saved with no signal, and the colour stays.
     await goal('g-ben').locator('[data-gp-update]').click();
     await form('g-ben').locator('textarea[name=body]').fill('Lawyer meeting is on Thursday.');
     await form('g-ben').locator('[type=submit]').click();
     await until(() => goal('g-ben').locator('.kpi-check').innerText().then(s => /Lawyer meeting/.test(s)), 'the newest shows');
-    assert.deepEqual(posted.at(-1).body, {body: 'Lawyer meeting is on Thursday.'}, 'no signal sent');
+    assert.deepEqual(posted.at(-1)!.body, {body: 'Lawyer meeting is on Thursday.'}, 'no signal sent');
     assert.doesNotMatch(await goal('g-ben').locator('.kpi-check footer').innerText(), /track|risk/);
     assert.equal(await goal('g-ben').locator('.gp-gline .gdot').getAttribute('class'), 'gdot yellow', 'colour unchanged');
 

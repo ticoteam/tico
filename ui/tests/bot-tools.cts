@@ -1,21 +1,28 @@
 // The bot page keeps Active, Updates and Files paths, with empty sections hidden.
 // Tools open from the bot header or More on desktop and phone; one theme exercises each path.
 // Fixtures only, no network. TICO_SCREENSHOT_DIR keeps screenshots of the page.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type {Browser, BrowserContextOptions, LaunchOptions, Page} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RoutesSupport from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+interface PageWin { opened: string[]; open: (url: string) => null }
+interface OpenData { updates?: unknown[]; files?: unknown[]; bots?: unknown[]; goals?: unknown[]; status?: Record<string, unknown> }
+// Page-defined function (the bot page script), called inside page.evaluate.
+declare function botLatestUpdate(bot: string): void;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
-const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
+const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), hour = 3600e3;
 const bots = [{name: 'cmo', display_name: 'AI CMO', org_parent: '', host: 'keeper', status: 'active', can_chat: true, runtime: 'codex',
   users: [{id: 'ana', name: 'Ana'}],
   schedules: [{id: 'r1', title: 'Morning metrics digest', cron: '0 8 * * 1-5', active: true, next: iso(14 * hour)},
     {id: 'r2', title: 'Friday launch review', cron: '0 15 * * 5', active: true, next: iso(50 * hour)}]}];
-const tool = (id, service, name, extra) => ({id, service, name, logo_key: null, identity: '', can: [], scope: {}, note: '',
+const tool = (id: string, service: string, name: string, extra: Record<string, unknown>) => ({id, service, name, logo_key: null, identity: '', can: [], scope: {}, note: '',
   status: 'ready', ...extra});
 const TOOLS = [
   tool('model', 'codex', 'Codex', {logo_key: 'openai', identity: 'openai/gpt-6-luna', can: ['use'], scope: {effort: 'high'}}),
@@ -30,40 +37,40 @@ const TOOLS = [
   ...['acme-co/docs', 'acme-co/pricing-api'].map((name, n) => tool('github-extra-' + n, 'github', 'GitHub', {logo_key: 'github', identity: name,
     can: n ? ['read', 'write'] : ['read'], scope: {repo: name}, url: 'https://github.com/' + name, status: 'unknown', detail: 'Granted repository'})),
 ];
-const task = (id, title, extra) => ({id, title, status: 'doing', owner_id: 'bot:cmo', requester_id: 'human:ana', created_at: iso(-30 * hour), updated_at: iso(-hour), ...extra});
+const task = (id: string, title: string, extra?: Record<string, unknown>) => ({id, title, status: 'doing', owner_id: 'bot:cmo', requester_id: 'human:ana', created_at: iso(-30 * hour), updated_at: iso(-hour), ...extra});
 const TASKS = [task('t1', 'Draft the October pricing page copy'), task('t2', 'Pull last week\'s funnel numbers from PostHog', {status: 'open'}),
   task('t3', 'Write the launch email for the new plan', {status: 'waiting'}),
   task('t4', 'Weekly report', {status: 'done', done_at: iso(-20 * hour)}), task('t5', 'Clean up UTM tags', {status: 'done', done_at: iso(-40 * hour)})];
 const ASKED = [task('a1', 'Approve the pricing page before Friday', {owner_id: 'human:ana', requester_id: 'bot:cmo'})];
 const UPDATE = {id: 'u1', bot: 'cmo', kind: 'daily', day: '2026-10-01', read: false, created_at: iso(-10 * hour), updated_at: iso(-10 * hour),
   body: '- Drafted the pricing page copy; two headline options are on the task.\n- Funnel: sign-ups up 8% week over week.'};
-const said = (n, who, body) => ({id: 'm' + n, sender_id: who, body, created_at: iso((n - 9) * hour)});
+const said = (n: number, who: string, body: string) => ({id: 'm' + n, sender_id: who, body, created_at: iso((n - 9) * hour)});
 const CHAT = [said(1, 'human:ana', 'Where are we on the pricing page?'),
   said(2, 'bot:cmo', 'The copy is drafted, with two headline options on the task. I am pulling last week\'s funnel numbers to pick between them.'),
   said(3, 'human:ana', 'Go with the shorter headline if the numbers are close.'),
   said(4, 'bot:cmo', 'Will do. The launch email waits on your approval of the page.')];
-const file = (n, title) => ({id: 'file-' + n, bot: 'cmo', title, kind: 'document', locator: 'tico_blob', name: title + '.md',
+const file = (n: number, title: string) => ({id: 'file-' + n, bot: 'cmo', title, kind: 'document', locator: 'tico_blob', name: title + '.md',
   open: {type: 'tico', url: '/api/v2/files/file-' + n}, last_activity_at: iso(-n * hour)});
 const FILES = ['Q4 launch plan', 'Pricing page draft', 'Funnel export', 'Old brief', 'Brand voice notes'].map((t, n) => file(n + 1, t));
 
-async function open(browser, viewport, options = {}, data = {}) {
+async function open(browser: Browser, viewport: {width: number; height: number}, options: BrowserContextOptions = {}, data: OpenData = {}) {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, ...options});
-  await context.addInitScript(theme => { try { localStorage.setItem('tico.theme', theme); } catch {} }, options.colorScheme || 'dark');
+  await context.addInitScript((theme: string) => { try { localStorage.setItem('tico.theme', theme); } catch {} }, options.colorScheme || 'dark');
   const page = await context.newPage();
-  const errors = [], read = [];
+  const errors: string[] = [], read: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const {updates = [UPDATE], files = FILES} = data;
-  const cleared = [];
+  const cleared: string[] = [];
   let status = data.status || {bot: 'cmo', state: 'running', task_id: 't1'};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
-    const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     // The vendored Markdown and icon font, so the page reads as it does for real.
     const vendor = p.match(/^\/vendor\/((?:fonts\/)?[\w.-]+)$/);
     if (vendor && fs.existsSync(uiFile('vendor/' + vendor[1]))) return route.fulfill({path: uiFile('vendor/' + vendor[1])});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -71,13 +78,13 @@ async function open(browser, viewport, options = {}, data = {}) {
     // /api/v2/status, and the bot page never opened (the bot-needs.cjs hang from the v0.3.54 release check).
     if (p === '/api/issues') return json([]);
     if (p === '/api/employees') return json(data.bots || bots);
-    if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: bots[0].schedules.map(s => ({...s, employee: 'cmo'}))});
+    if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: bots[0]!.schedules.map(s => ({...s, employee: 'cmo'}))});
     if (p === '/api/v2/status') return json({bots: [status]});
     if (p === '/api/v2/bots/cmo/limit/retry') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({cleared: 1}); }
     if (p === '/api/v2/bots/cmo/execution-review') return json({jobs: []});
     if (p === '/api/v2/bots/cmo/quarantine/clear') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({}); }
     if (p === '/api/v2/goals') return json({goals: data.goals || [], chain: [], reports: [], company: []});
-    if (p === '/api/v2/updates/read') { read.push(...JSON.parse(route.request().postData()).ids); return json({}); }
+    if (p === '/api/v2/updates/read') { read.push(...JSON.parse(route.request().postData()!).ids); return json({}); }
     if (p === '/api/v2/updates') return json({updates: q.get('bot') ? updates : [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: q.get('owner') === 'cmo' ? TASKS : q.get('requester') === 'cmo' ? ASKED : []});
     if (p === '/api/v2/conversations') return json({conversations: q.get('chat_with') ? [{id: 'c-cmo', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:cmo']}] : []});
@@ -93,15 +100,15 @@ async function open(browser, viewport, options = {}, data = {}) {
   return {page, errors, read, context, cleared};
 }
 
-const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pane-tasks>.bot-w>section.rail-sec')]
-  .filter(el => !el.hidden).map(el => el.querySelector('.rail-h').firstChild.textContent.trim()));
+const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelectorAll('#pane-tasks>.bot-w>section.rail-sec') as unknown as HTMLElement[])]
+  .filter(el => !el.hidden).map(el => el.querySelector('.rail-h')!.firstChild!.textContent!.trim()));
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
     // A long, real bot goal must not take the last fractional pixel from the name. Keep the production
     // botGoalLoad/render path, the desktop Tasks rail, and the precise 1380px Chromium repro in both themes.
-    for (const scheme of ['light', 'dark']) {
+    for (const scheme of ['light', 'dark'] as const) {
       const name = 'Head of Engineering';
       const longGoal = 'Deliver dependable releases and keep every customer informed about important improvements across the whole team';
       const {page, errors, context} = await open(browser, {width: 1380, height: 900}, {colorScheme: scheme}, {
@@ -118,21 +125,21 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       // right of the bot's name.
       assert.equal(await page.locator('#bot-goal .bot-goal-n').innerText(), '+1', scheme + ': the other goal is a count');
       const line = await page.evaluate(() => {
-        const mid = s => { const r = document.querySelector(s).getBoundingClientRect(); return {y: r.top + r.height / 2, left: r.left, right: r.right}; };
+        const mid = (s: string) => { const r = (document.querySelector(s) as HTMLElement).getBoundingClientRect(); return {y: r.top + r.height / 2, left: r.left, right: r.right}; };
         return {name: mid('.bot-ident h1'), goal: mid('#bot-goal-btn'), more: mid('#bot-more-btn')};
       });
       assert(Math.abs(line.name.y - line.goal.y) < 4 && Math.abs(line.goal.y - line.more.y) < 4, scheme + ': one line ' + JSON.stringify(line));
       assert(line.goal.left > line.name.right && line.goal.right <= line.more.left, scheme + ': the goal sits right, by the actions');
       await page.locator('#bot-goal-btn').click();
       const items = await page.locator('#bot-goal-pop .tl-mi').evaluateAll(els => els.map(el =>
-        [...el.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
+        [...(el.childNodes as unknown as Element[])].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
       assert.deepEqual(items, [longGoal, 'Keep the docs current', 'Add goal'], scheme + ': the goal menu');
       await page.keyboard.press('Escape');
-      const header = await page.locator('.bot-ident h1').evaluate(el => {
+      const header = await page.locator('.bot-ident h1').evaluate((el: Element) => {
         // Measure the whole heading: the runtime mark sits inside it, and a fractional overflow ellipsizes the line.
         const range = document.createRange();
         range.selectNodeContents(el);
-        const text = el.firstChild.textContent;
+        const text = el.firstChild!.textContent;
         return {text, contentWidth: range.getBoundingClientRect().width, boxWidth: el.getBoundingClientRect().width,
                 scroll: el.scrollWidth, client: el.clientWidth};
       });
@@ -140,8 +147,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert(header.contentWidth <= header.boxWidth + 0.01 && header.scroll <= header.client,
              `${scheme}: name and runtime mark fit without ellipsis (${header.contentWidth}px in ${header.boxWidth}px)`);
       const layout = await page.evaluate(() => {
-        const top = document.querySelector('#bot-top').getBoundingClientRect();
-        const rail = document.querySelector('#pane-tasks').getBoundingClientRect();
+        const top = (document.querySelector('#bot-top') as HTMLElement).getBoundingClientRect();
+        const rail = (document.querySelector('#pane-tasks') as HTMLElement).getBoundingClientRect();
         return {topRight: top.right, railLeft: rail.left, railRight: rail.right, viewport: innerWidth};
       });
       assert(layout.topRight <= layout.railLeft + 1, scheme + ': toolbar stays left of the Tasks rail');
@@ -196,7 +203,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const repos = list.locator('.bt-item[data-tool=github-repos]');
       assert.match(await repos.locator('summary').first().innerText(), /4 repositories · 2 read and write, 1 read only[\s\S]*Needs attention/);
       // Opened, every detail reads as before.
-      await list.locator('details').evaluateAll(els => els.forEach(el => { el.open = true; }));
+      await list.locator('details').evaluateAll(els => (els as HTMLDetailsElement[]).forEach(el => { el.open = true; }));
       assert.equal(await repos.locator('.bt-repo').count(), 4);
       const text = await list.innerText();
       for (const expected of ['GPT 6 Luna', 'acme-co/emp-cmo', 'acme-co/website', 'GH_TOKEN', 'acme-co/pricing-api', 'PostHog project 12345 (US), personal key', '12345', 'POSTHOG_KEY',
@@ -206,11 +213,11 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       // Who else has a tool, and its keys, are one link away: the tool's page under Tools.
       assert.equal(await list.locator('[data-tool=repo] .bt-open').getAttribute('href'), '#/tools/github');
       // The repository's name opens GitHub (window.open is stubbed: nothing leaves the test) and leaves its line as it was.
-      await page.evaluate(() => { window.opened = []; window.open = url => { window.opened.push(url); return null; }; });
-      await list.locator('[data-tool=repo]').evaluate(d => { d.open = false; });
+      await page.evaluate(() => { (window as unknown as PageWin).opened = []; (window as unknown as PageWin).open = url => { (window as unknown as PageWin).opened.push(url); return null; }; });
+      await list.locator('[data-tool=repo]').evaluate(d => { (d as HTMLDetailsElement).open = false; });
       await list.locator('[data-tool=repo] summary a').click();
-      assert.deepEqual(await page.evaluate(() => window.opened), ['https://github.com/acme-co/emp-cmo']);
-      assert.equal(await list.locator('[data-tool=repo]').evaluate(d => d.open), false, 'following the link does not open the line');
+      assert.deepEqual(await page.evaluate(() => (window as unknown as PageWin).opened), ['https://github.com/acme-co/emp-cmo']);
+      assert.equal(await list.locator('[data-tool=repo]').evaluate(d => (d as HTMLDetailsElement).open), false, 'following the link does not open the line');
       assert.equal(await list.locator('[data-tool=meeting-notes] .tool-initials').innerText(), 'Me');
       if (shots && scheme === 'dark') await page.screenshot({path: path.join(shots, 'bot-page-tools-desktop-dark.png')});
       assert.deepEqual(errors, [], scheme + ': page errors');
@@ -219,7 +226,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
 
     // Nothing to show: no Updates or Files section; Active still says so in one line.
     {
-      const saved = bots[0].schedules; bots[0].schedules = [];
+      const saved = bots[0]!.schedules; bots[0]!.schedules = [];
       const {page, errors, context} = await open(browser, {width: 1280, height: 800}, {}, {updates: [], files: []});
       await page.route('**/api/v2/tasks*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({tasks: []})}));
       await page.route('**/api/status', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []})}));
@@ -230,7 +237,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await page.evaluate(() => botLatestUpdate('cmo'));
       assert.deepEqual(await railOrder(page), ['Tasks']);
       assert.deepEqual(errors, []);
-      bots[0].schedules = saved;
+      bots[0]!.schedules = saved;
       await context.close();
     }
 
@@ -288,7 +295,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.deepEqual(errors, [], 'quarantine banner errors');
       await context.close();
     }
-    for (const scheme of ['dark', 'light']) {
+    for (const scheme of ['dark', 'light'] as const) {
       // A usage limit offers Try now beside the warning and in the chat banner; one click clears it.
       const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {colorScheme: scheme},
         {status: {bot: 'cmo', state: 'limited', bot_state: 'active', changed_at: iso(-10 * 60e3), focus: 'claude usage limit at 01:43; retrying after 02:13 UTC'}});

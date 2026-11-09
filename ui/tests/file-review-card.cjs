@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const SHOTS = process.env.REVIEW_SHOTS || '';
 const NOW = Date.now(), at = hours => new Date(NOW - hours * 3600e3).toISOString();
 

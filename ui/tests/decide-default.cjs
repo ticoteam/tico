@@ -3,7 +3,7 @@
 // waits for the answer, and the card says so.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const NOW = Date.now(), at = minutes => new Date(NOW - minutes * 60000).toISOString();
 const question = (id, title, ifNoAnswer, goesAheadAt) => ({id, kind: 'question', title, body: '', owner_id: 'bot:writer',
   requester_id: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created_at: at(400), updated_at: at(360), open_asks: 1,

@@ -1,34 +1,42 @@
 // Offline branch picker, computer ownership and definition editor contracts.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
+const {chromium} = require('playwright') as typeof import('playwright');
+// Page globals this spec reads and drives, as the UI declares them.
+declare const BOT: {slug: string; tab: string} | undefined;
+declare const S: {emps: Record<string, unknown>[]; people: unknown};
+declare const SETTINGS_DATA: {models: unknown[]; people: unknown; machines: unknown[]};
+declare function botBranchesLoad(slug: string): void;
+declare function botBranchCreate(slug: string): void;
+declare function settingsEditBot(slug: string, refresh?: boolean): void;
+declare let settingsChoiceFromValue: (value: unknown) => unknown;
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block'});
     page.setDefaultTimeout(t(5000));
-    const errors = [], writes = [];
+    const errors: string[] = [], writes: [string, Record<string, unknown>][] = [];
     page.on('pageerror', error => errors.push(error.message));
     const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true,
       my_access: {see: true, read: true, write: true}, schedules: [], revision: 1, thread_mode: 'personal', users: []};
     const original = {...base, name: 'architect', slug: 'architect', display_name: 'Architect', owner_id: 'sam', shared: true, repo: 'bot-architect', reports_to: 'bot:lead'};
-    const bots = [original];
+    const bots: Record<string, unknown>[] = [original];
     const people = [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}];
-    let computers = [
+    let computers: {id: string; label: string; owner_id: string; revoked_at?: string; bots?: string[]}[] = [
       {id: 'ana-mac', label: 'My Mac', owner_id: 'ana'},
       {id: 'sam-mac', label: 'Other Mac', owner_id: 'sam'},
       {id: 'old-mac', label: 'Old Mac', owner_id: 'ana', revoked_at: '2026-01-01'}];
     let collision = true, stale = true;
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json(bots);
       if (p === '/api/humans') return json({people});
@@ -43,14 +51,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p.endsWith('/branches')) return json({original: 'architect', shared: original.shared,
         branches: bots.filter(b => b.shared_from).map(b => ({...b, id: b.id || b.name, slug: b.name}))});
       if (p.endsWith('/copies')) {
-        writes.push([p, JSON.parse(request.postData())]);
+        writes.push([p, JSON.parse(request.postData()!)]);
         if (collision) return route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({error: {detail: 'That computer already runs the original or a branch of it. Choose another computer.'}})});
         const branch = {...base, id: 'architect-ana', name: 'architect-ana', slug: 'architect-ana', display_name: 'Architect', owner_id: 'ana', shared_from: 'architect',
-          status: JSON.parse(request.postData()).runner_id ? 'active' : 'planned'};
+          status: JSON.parse(request.postData()!).runner_id ? 'active' : 'planned'};
         bots.push(branch); return json(branch);
       }
       if (p.endsWith('/definition')) {
-        writes.push([p, JSON.parse(request.postData())]);
+        writes.push([p, JSON.parse(request.postData()!)]);
         if (p.includes('architect-ana') && stale) {
           stale = false;
           return route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({error: {code: 'version_conflict', detail: 'Bot configuration changed; refresh before saving'}})});
@@ -59,7 +67,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       }
       if (p === '/api/v2/bots/architect-ana') return json({revision: 2});
       if (p === '/api/v2/bots' && request.method() === 'POST') {
-        writes.push([p, JSON.parse(request.postData())]);
+        writes.push([p, JSON.parse(request.postData()!)]);
         return json({slug: 'head-of-marketing', display_name: 'Head of Marketing'});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -86,7 +94,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await page.locator('[data-branch-picker]').inputValue(), 'architect-ana');
     assert.equal(await page.locator('[data-branch-make]').count(), 0);
     assert.equal(await page.locator('#bot-branches a').getAttribute('href'), '#/bot/architect');
-    assert.deepEqual(writes.find(([path]) => path.endsWith('/copies'))[1], {runner_id: 'ana-mac'});
+    assert.deepEqual(writes.find(([path]) => path.endsWith('/copies'))![1], {runner_id: 'ana-mac'});
     original.shared = false;
     await page.evaluate(() => botBranchesLoad('architect-ana'));
     assert.match(await page.locator('#bot-branches').innerText(), /branches off/);
@@ -98,17 +106,17 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await dialog.locator('[name=status]').selectOption('paused');
     await dialog.locator('[type=submit]').click();
     await dialog.locator('[data-branch-status]').filter({hasText: 'configuration changed'}).waitFor();
-    await page.waitForFunction(() => !document.querySelector('#bot-editor [type=submit]').disabled);
+    await page.waitForFunction(() => !(document.querySelector('#bot-editor [type=submit]') as HTMLButtonElement).disabled);
     await dialog.locator('[type=submit]').click();
-    await page.waitForFunction(() => !document.querySelector('#bot-editor [type=submit]')?.disabled);
-    assert.deepEqual(writes.at(-1)[1], {status: 'paused', expected_revision: 2});
+    await page.waitForFunction(() => !(document.querySelector('#bot-editor [type=submit]') as HTMLButtonElement | null)?.disabled);
+    assert.deepEqual(writes.at(-1)![1], {status: 'paused', expected_revision: 2});
     await page.waitForFunction(() => document.querySelector('#bot-branches select'));
     await page.evaluate(() => { location.hash = '#/bot/architect/more'; });
     await page.waitForFunction(() => BOT?.slug === 'architect' && BOT?.tab === 'info');
     await page.locator('[data-branch-picker]').waitFor();
     assert.equal(await page.locator('[data-branch-picker] option[value=architect-ana]').count(), 1);
     dialog = page.locator('#bot-editor');
-    await page.evaluate(() => { S.emps.find(e => e.name === 'architect').shared = false; SETTINGS_DATA.models = []; SETTINGS_DATA.people = S.people; SETTINGS_DATA.machines = []; settingsEditBot('architect'); });
+    await page.evaluate(() => { S.emps.find(e => e.name === 'architect')!.shared = false; SETTINGS_DATA.models = []; SETTINGS_DATA.people = S.people; SETTINGS_DATA.machines = []; settingsEditBot('architect'); });
     const allow = dialog.locator('[name=shared]');
     await allow.waitFor();
     assert.equal(await allow.isChecked(), false);
@@ -116,12 +124,12 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await allow.check();
     await dialog.locator('[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
-    assert.equal(writes.at(-1)[1].shared, true);
+    assert.equal(writes.at(-1)![1].shared, true);
     // Rebuilding the inline form leaves only its current settings subscription active.
     const refreshed = await page.evaluate(() => {
       settingsEditBot('architect', true);
-      const editor = document.querySelector('#bot-editor');
-      const bot = S.emps.find(e => e.name === 'architect'), name = bot.display_name;
+      const editor = document.querySelector('#bot-editor')!;
+      const bot = S.emps.find(e => e.name === 'architect')!, name = bot.display_name;
       bot.display_name = 'Refreshed Architect';
       document.dispatchEvent(new Event('tico:settings-loaded'));
       const label = editor.querySelector('[data-edit-access]')?.getAttribute('aria-label');
@@ -142,8 +150,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await dialog.locator('[name=display_name]').fill('Head of Marketing');
     assert.equal(await slug.inputValue(), 'head-of-marketing');
     await dialog.locator('[type=submit]').click();
-    await page.waitForFunction(() => !document.querySelector('#bot-editor').open);
-    const added = writes.at(-1);
+    await page.waitForFunction(() => !(document.querySelector('#bot-editor') as HTMLDialogElement).open);
+    const added = writes.at(-1)!;
     assert.equal(added[0], '/api/v2/bots');
     assert.equal(added[1].display_name, 'Head of Marketing');
     assert.ok(!('slug' in added[1]) && !('repo' in added[1]));
@@ -164,7 +172,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await dialog.locator('[type=submit]').click();
     // The submit refreshes the roster (S.emps) and then opens the branch: wait for that, so it cannot replace the row added below.
     await page.waitForFunction(() => !document.querySelector('#branch-editor') && location.hash === '#/bot/architect-ana' && BOT?.slug === 'architect-ana');
-    assert.deepEqual(writes.at(-1)[1], {});
+    assert.deepEqual(writes.at(-1)![1], {});
     computers = [{id: 'ana-mac', label: 'My Mac', owner_id: 'ana', bots: ['architect-sam']}];
     await page.evaluate(() => {
       // A roster row has an id and a display name, as the API sends it: the bot's name lookup reads them on any later render.

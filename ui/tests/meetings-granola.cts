@@ -4,19 +4,25 @@
 // opens and the list refreshes; Sync now and Remove (confirmed) sit on its row; a signed-out account offers
 // "Sign in again" and a dot on Sources; the API-key importer is a dialog link.
 // Fixtures only, no network. GRANOLA_SHOTS=<dir> also saves screenshots.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const path = require('node:path') as typeof import('node:path');
+import type {Browser, LaunchOptions, Page} from 'playwright';
+import type * as PageSupport from './support/page.cjs';
+import type * as RoutesSupport from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+interface World { role: string; meetings: unknown[]; granola: Record<string, unknown>; syncSteps: number; syncLeft: number; finish: (() => void) | null; polls: {state: string; email?: string}[]; calls: string[]; listed: number; missing?: boolean; code?: Record<string, unknown> }
+// Page-defined state of the Granola module (ui/app/meetings-granola.ts), read inside page.evaluate callbacks.
+declare const MEET: {gTimer: unknown; gSyncTimer: unknown; gflow: unknown; gSyncing: unknown};
 
 const shots = process.env.GRANOLA_SHOTS || '';
 if (shots) fs.mkdirSync(shots, {recursive: true});
 const now = Date.now();
-const ago = minutes => new Date(now - minutes * 6e4).toISOString();
-const meeting = (id, title, minutes) => ({id, title, source: 'granola', kind: 'meeting', status: 'done', started: ago(minutes), created: ago(minutes),
+const ago = (minutes: number) => new Date(now - minutes * 6e4).toISOString();
+const meeting = (id: string, title: string, minutes: number) => ({id, title, source: 'granola', kind: 'meeting', status: 'done', started: ago(minutes), created: ago(minutes),
   duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}], outbox: {doc: [], task: [], feature: []}});
 // Shapes as the server sends them (OpenAPI GranolaStatus / GranolaSync); `syncing` is filled in by the fake below.
 const OFF = {mode: 'off', connected: false, plan_hint: null, last_synced_at: null, last_error: null, imported_count: 0, skipped: 0, needs_signin: false};
@@ -24,22 +30,22 @@ const ON = {mode: 'account', connected: true, email: 'ana@acme.example', plan_hi
 const CODE = {user_code: 'WDJB-MJHT', verification_uri: 'https://mcp-auth.granola.ai/device',
   verification_uri_complete: 'https://mcp-auth.granola.ai/device?user_code=WDJB-MJHT', expires_in: 600, interval: 3};
 
-async function open(browser, viewport, w, scheme = 'dark') {
+async function open(browser: Browser, viewport: {width: number; height: number}, w: World, scheme: 'light' | 'dark' = 'dark') {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', colorScheme: scheme, hasTouch: viewport.width < 760, isMobile: viewport.width < 760});
-  await context.addInitScript(theme => { try { localStorage.setItem('tico.theme', theme); } catch {} }, scheme);
+  await context.addInitScript((theme: string) => { try { localStorage.setItem('tico.theme', theme); } catch {} }, scheme);
   const page = await context.newPage();
   // Install before the pause target: a busy machine can take time between the two protocol calls.
   await page.clock.install({time: new Date(now - 3600000)});
   await page.clock.pauseAt(new Date(now));
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: w.role, name: 'Ana', email: 'ana@acme.example', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}]});
@@ -67,7 +73,7 @@ async function open(browser, viewport, w, scheme = 'dark') {
     if (p === '/api/v2/meetings/granola/connect' && method === 'DELETE') { w.calls.push('disconnect'); w.granola = {...OFF}; return json({ok: true}); }
     if (p === '/api/v2/meetings/granola/connect/status') {
       w.calls.push('poll');
-      const next = w.polls.length > 1 ? w.polls.shift() : w.polls[0];
+      const next = w.polls.length > 1 ? w.polls.shift()! : w.polls[0]!;
       if (next.state === 'connected') w.granola = {...ON, email: next.email, last_synced_at: null, imported_count: 0};
       return json(next);
     }
@@ -82,34 +88,34 @@ async function open(browser, viewport, w, scheme = 'dark') {
   await page.goto('https://tico-ui.test/#/meetings');
   return {page, errors, context};
 }
-const world = (extra = {}) => ({role: 'owner', meetings: [meeting('g1', 'Renewal call with Dana', 300)], granola: {...OFF}, syncSteps: 0, syncLeft: 0, finish: null,
+const world = (extra: Partial<World> = {}): World => ({role: 'owner', meetings: [meeting('g1', 'Renewal call with Dana', 300)], granola: {...OFF}, syncSteps: 0, syncLeft: 0, finish: null,
   polls: [{state: 'pending'}], calls: [], listed: 0, ...extra});
 // Granola's row in Sources, opened when it is not open yet.
 const G = '#meet-src-dialog [data-src=granola]';
-const sources = async page => {
+const sources = async (page: Page) => {
   if (await page.locator('#meet-src-dialog[open]').count()) return;
   await page.locator('#meet-sources .meet-src-btn').click();
   await page.locator(G).waitFor();
 };
 // The row's facts as read on screen: CSS puts the ' · ' between them.
-const lineText = page => page.locator(G + ' .msrc-line').evaluate(el => [...el.children].map(c => c.textContent.trim()).join(' · '));
-const count = (w, name) => w.calls.filter(c => c === name).length;
-const until = async (fn, what, ms = 10000) => {
+const lineText = (page: Page) => page.locator(G + ' .msrc-line').evaluate((el: Element) => [...(el.children as unknown as Element[])].map(c => c.textContent!.trim()).join(' · '));
+const count = (w: World, name: string) => w.calls.filter(c => c === name).length;
+const until = async (fn: () => unknown, what: string, ms = 10000) => {
   for (const end = Date.now() + t(ms); !await fn();) { if (Date.now() > end) throw new Error('timed out: ' + what); await new Promise(r => setTimeout(r, 10)); }
 };
 // HTTP responses finish in real time; wait for each handler to arm its next fake timer before advancing again.
-const poll = async (page, w, name, ms) => {
+const poll = async (page: Page, w: World, name: string, ms: number) => {
   const before = count(w, name);
   const timer = await page.evaluate(name => name === 'poll' ? MEET.gTimer : MEET.gSyncTimer, name);
   await page.clock.fastForward(ms);
   await until(() => count(w, name) === before + 1, name + ' request');
-  await until(() => page.evaluate(([name, timer]) => name === 'poll' ? !MEET.gflow || (!!MEET.gTimer && MEET.gTimer !== timer)
+  await until(() => page.evaluate(([name, timer]: unknown[]) => name === 'poll' ? !MEET.gflow || (!!MEET.gTimer && MEET.gTimer !== timer)
     : !MEET.gSyncing || (!!MEET.gSyncTimer && MEET.gSyncTimer !== timer), [name, timer]), name + ' response');
 };
-const shot = async (page, name) => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
+const shot = async (page: Page, name: string) => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   const desk = {width: 1280, height: 800};
   try {
     // Functional contracts run once; both themes and viewports keep the layout checks below.
@@ -134,7 +140,7 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
       assert.equal(await page.locator('#mg-dialog [data-g=open]').getAttribute('href'), CODE.verification_uri_complete);
       assert.equal(await page.locator('#mg-dialog [data-g=open]').getAttribute('target'), '_blank');
       assert.equal(await page.locator('#mg-dialog .mg-key').innerText(), 'Use an API key');
-      assert.equal(await page.evaluate(() => document.activeElement?.dataset.g), 'open', 'focus moves to Open Granola');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.g), 'open', 'focus moves to Open Granola');
       assert.equal(await page.locator('#mg-live').getAttribute('aria-live'), 'polite');
       await page.waitForFunction(() => /Enter it in Granola/.test(document.querySelector('#mg-live')?.textContent || ''));
       await shot(page, `granola-code-${scheme}`);
@@ -151,7 +157,7 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
       assert.equal(count(w, 'connect'), 1);
       assert.match(await lineText(page), /^Granola · Connected · ana@acme\.example · (Syncing…|Not synced yet|Synced .+) · \d+ notes?$/);
       assert.equal(await page.locator('#meet-src-dialog ul[aria-label=Connected] [data-src=granola]').count(), 1, 'connected moves up');
-      assert.equal(await page.evaluate(() => document.activeElement?.closest('[data-src]')?.dataset.src), 'granola', 'focus lands on the row');
+      assert.equal(await page.evaluate(() => (document.activeElement?.closest('[data-src]') as HTMLElement | null)?.dataset.src), 'granola', 'focus lands on the row');
       assert.equal(await page.locator('#mg-code').count(), 0);
       assert.equal(await page.locator('#mg-dialog[open]').count(), 0, 'the dialog closes once connected');
       const polls = count(w, 'poll');
@@ -161,7 +167,7 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
       await context.close();
 
       // ---- expired and denied: one short line, Connect Granola again, polling stops
-      for (const [state, words] of [['expired', 'The code expired. Try again.'], ['denied', 'Granola access was denied.'], ['needs_signin', 'Granola sign-in failed. Try again.']]) {
+      for (const [state, words] of [['expired', 'The code expired. Try again.'], ['denied', 'Granola access was denied.'], ['needs_signin', 'Granola sign-in failed. Try again.']] as const) {
         w = world({polls: [{state: 'pending'}, {state}]});
         ({page, errors, context} = await open(browser, desk, w, scheme));
         await sources(page);
@@ -173,7 +179,7 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
         assert.equal(await page.locator(G + ' .msrc-err').innerText(), words);
         assert.equal(await page.locator(G + ' .msrc-err').getAttribute('role'), 'alert');
         assert.equal(await page.locator('#mg-code').count(), 0);
-        assert.equal(await page.evaluate(() => document.activeElement?.dataset.act), 'g-connect', state + ': focus on Connect');
+        assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.act), 'g-connect', state + ': focus on Connect');
         // Signed out is a dot on Sources; a code that expired or was denied is not.
         assert.equal(await page.locator('#meet-sources .meet-src-btn .dot').count(), state === 'needs_signin' ? 1 : 0);
         const n = count(w, 'poll');
@@ -203,7 +209,7 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
       await page.waitForFunction(() => document.querySelectorAll('.meet-row').length === 2, null, {timeout: t(12000)});
       assert.equal(count(w, 'sync'), 1, 'one sync when the page opens');
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Pricing review', 'Renewal call with Dana']);
-      await page.waitForFunction(G => /42 notes/.test(document.querySelector(G + ' .msrc-line')?.textContent || ''), G);
+      await page.waitForFunction((G: string) => /42 notes/.test(document.querySelector(G + ' .msrc-line')?.textContent || ''), G);
       assert.equal(await lineText(page), 'Granola · Connected · ana@acme.example · Synced 3m ago · 42 notes · 2 skipped');
       assert.equal(await page.locator(G + ' .mg-skip').getAttribute('title'), '2 notes from Granola could not be imported');
       const polled = count(w, 'status');
@@ -215,7 +221,7 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
       await shot(page, `granola-connected-${scheme}`);
       await page.locator(G + ' [data-act=g-sync]').click();
       await until(() => count(w, 'sync') === 2, 'Sync asks again');
-      await page.waitForFunction(G => /Syncing…/.test(document.querySelector(G + ' .msrc-line')?.textContent || ''), G);
+      await page.waitForFunction((G: string) => /Syncing…/.test(document.querySelector(G + ' .msrc-line')?.textContent || ''), G);
       // Remove asks first; a dismissed confirm keeps the account.
       page.once('dialog', d => d.dismiss());
       await page.locator(G + ' [data-act=g-remove]').click();
@@ -312,8 +318,8 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
     await context.close();
 
     // ---- desktop and phone, both themes: code, account row and menu fit without sideways scroll
-    for (const [device, viewport] of [['desktop', desk], ['phone', {width: 390, height: 844}]]) {
-      for (const scheme of ['dark', 'light']) {
+    for (const [device, viewport] of [['desktop', desk], ['phone', {width: 390, height: 844}]] as [string, {width: number; height: number}][]) {
+      for (const scheme of ['dark', 'light'] as const) {
         w = world();
         ({page, errors, context} = await open(browser, viewport, w, scheme));
         await sources(page);
@@ -329,7 +335,7 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
         await page.locator(G + ' [data-act=g-remove]').waitFor();
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${device}-${scheme}: connected row fits`);
         assert(await page.locator('#meet-src-dialog').evaluate(d => d.scrollWidth <= d.clientWidth), `${device}-${scheme}: panel fits`);
-        const remove = await page.locator(G + ' [data-act=g-remove]').boundingBox();
+        const remove = (await page.locator(G + ' [data-act=g-remove]').boundingBox())!;
         assert(remove.x >= 16 && remove.x + remove.width <= viewport.width - 16, 'Remove on screen');
         await shot(page, `granola-${device}-connected-${scheme}`);
         assert.deepEqual(errors, []);

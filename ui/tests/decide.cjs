@@ -5,7 +5,7 @@
 // or its task when it has none. Back closes the card.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const NOW = Date.now(), at = minutes => new Date(NOW - minutes * 60000).toISOString();
 const NOTE = 'Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static Larkspur. '
   + 'Docs task Doing; no sample edit/deploy or duplicate human question. <img src=x onerror="window.pwned=1">';

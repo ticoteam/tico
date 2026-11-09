@@ -1,11 +1,35 @@
 // The whole personal plate across boards: tab and both navigation badges agree before paging.
 // Full-task rows count too; Catch up walks only answerable cards. Threads and updates have their own pages.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const {t} = require('./support/load.cjs');
+import type {Browser, Page, Route} from 'playwright';
+interface Item {id: string; kind: string; title?: string; requester_id?: string; created_at?: string; folded?: Item[]; merged?: string[]; [key: string]: unknown}
+interface Entry {label: string; body: string; arrived: (value?: void) => void; gate: Promise<void>; release: (value?: void) => void; response?: Promise<void>; read?: Promise<unknown>}
+type Hold = (label: string, snapshot: unknown, more?: boolean) => Promise<() => Promise<unknown>>;
+declare const S: {route: string; v2: {needsVersion: string; needs: Item[]}};
+declare const TASKS_ST: {activeComplete?: boolean; view?: string; loading?: boolean; type?: string; peek?: string};
+declare const NEEDS_IO: {disconnect(): void} | undefined;
+declare let needsMoreWatch: () => void;
+declare const NEEDS_MORE: unknown;
+declare const DEC: unknown;
+declare const DEC_HANDLED: Set<string>;
+declare function tasksRender(st: unknown): void;
+declare function tasksCounts(st: unknown): {foryou: number};
+declare function needsAll(): boolean;
+declare function needsQueueItems(): Item[];
+declare function needsItem(id: string): Item;
+declare function needsListsRedraw(): void;
+declare function needsTake(d: unknown): void;
+declare function v2NeedsChanged(d: unknown): void;
+declare function v2NeedsMore(): boolean;
+declare function v2NeedsRead(): unknown;
+declare function v2Refresh(): void;
+declare function taskNeedsViewer(it: Item): boolean;
+declare function decideLive(d: unknown): string[];
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {open} = require('./tasks-page.cjs') as {open: (browser: Browser, opts: Record<string, unknown>) => Promise<{page: Page; errors: string[]}>};
+const {t} = require('./support/load.cjs') as typeof import('./support/load.cjs');
 const now = new Date().toISOString();
-const task = (id, over = {}) => ({id, kind: 'task', title: 'Review the launch plan ' + id, body: 'Please review.',
+const task = (id: string, over: Record<string, unknown> = {}): Item => ({id, kind: 'task', title: 'Review the launch plan ' + id, body: 'Please review.',
   person_ask: 'Can you approve the launch plan?', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   lane: 'company', type_id: 'general', labels: [], tags: [], links: [], version: 1, created_at: now, updated_at: now, ...over});
 const tasks = [
@@ -30,33 +54,33 @@ const extras = [
   {id: 'stale', kind: 'stale', title: 'Stale tickets', created_at: now, rows: []},
 ];
 const threadKinds = ['thread_ask', 'thread_mention', 'thread_dm', 'thread_held', 'thread_capped'];
-const items = [...tasks, foldedWait, mergedWait, ...Array.from({length: 238}, (_, n) => ({id: 'thread-' + n, kind: threadKinds[n % threadKinds.length],
+const items = [...tasks, foldedWait, mergedWait, ...Array.from({length: 238}, (_, n) => ({id: 'thread-' + n, kind: threadKinds[n % threadKinds.length]!,
   title: 'Check the thread', requester_id: 'human:sam', created_at: now})), ...extras, unreadCard,
-  wholeTask, tasks[0], {id: 'update', kind: 'update', title: 'Launch progress'}];
-const kinds = rows => rows.reduce((out, it) => { out[it.kind] = (out[it.kind] || 0) + 1; return out; }, {});
-const foldedIds = rows => [...new Set(rows.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])]))].sort();
+  wholeTask, tasks[0]!, {id: 'update', kind: 'update', title: 'Launch progress'}];
+const kinds = (rows: Item[]): Record<string, number> => rows.reduce<Record<string, number>>((out, it) => { out[it.kind] = (out[it.kind] || 0) + 1; return out; }, {});
+const foldedIds = (rows: Item[]): string[] => [...new Set(rows.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])]))].sort();
 const types = ['general', 'dev', 'roadmap'].map(id => ({id, name: id, steps: []}));
 // The You count: on the scope button while on You, else the count its menu shows.
-const count = page => page.evaluate(() => document.querySelector('#task-scope .cnt')?.textContent ?? String(tasksCounts(TASKS_ST).foryou));
-const badges = page => within(page.locator('[data-nav="tasks"] [data-needs-badge]')
-  .evaluateAll(bs => bs.map(b => ({text: b.textContent, hidden: b.hidden}))), 'Tasks navigation badges to be read');
+const count = (page: Page): Promise<string> => page.evaluate(() => document.querySelector('#task-scope .cnt')?.textContent ?? String(tasksCounts(TASKS_ST).foryou));
+const badges = (page: Page) => within(page.locator('[data-nav="tasks"] [data-needs-badge]')
+  .evaluateAll((bs: Element[]) => bs.map(b => ({text: b.textContent, hidden: (b as HTMLElement).hidden}))), 'Tasks navigation badges to be read');
 
-const plateCount = rows => {
+const plateCount = (rows: Item[]): number => {
   const folded = new Set(foldedIds(rows));
   const keys = rows.filter(it => ['task', 'question', 'waiting', 'declined', 'approval', 'ask', 'stale'].includes(it.kind)
     && !(['task', 'question', 'waiting', 'declined'].includes(it.kind) && folded.has(it.id)))
     .map(it => (['task', 'question', 'waiting', 'declined'].includes(it.kind) ? 'task' : it.kind) + ':' + it.id);
   return new Set(keys).size;
 };
-const snapshot = (rows, version, limit = 50) => ({items: rows.slice(0, limit), version, count: rows.length,
+const snapshot = (rows: Item[], version: string, limit = 50) => ({items: rows.slice(0, limit), version, count: rows.length,
   plate_count: plateCount(rows), by_kind: kinds(rows), folded_task_ids: foldedIds(rows),
   next: rows.length > limit ? version + '.' + limit : null});
 
 // page.evaluate and a manual gate have no Playwright timeout. Name what stalled before the CI script watchdog fires.
-async function within(promise, waitingFor) {
-  let timer;
+async function within<T>(promise: Promise<T>, waitingFor: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([promise, new Promise((_, reject) => {
+    return await Promise.race([promise, new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         const error = new Error(`Timed out waiting for ${waitingFor} (${t(10000)} ms)`);
         console.error(error.message);   // report the first stall even if releasing a held browser read also stalls
@@ -65,16 +89,16 @@ async function within(promise, waitingFor) {
     })]);
   } finally { clearTimeout(timer); }
 }
-const evaluate = (page, fn, arg) => within(page.evaluate(fn, arg), `page.evaluate: ${fn.toString()}`);
-const waitFor = (page, fn) => within(page.waitForFunction(fn, null, {timeout: t(10000)}), `page.waitForFunction: ${fn.toString()}`);
+const evaluate = <R, A = undefined>(page: Page, fn: (arg: A) => R, arg?: A) => within(page.evaluate(fn as (arg: unknown) => R, arg), `page.evaluate: ${fn.toString()}`);
+const waitFor = (page: Page, fn: () => unknown) => within(page.waitForFunction(fn, null, {timeout: t(10000)}), `page.waitForFunction: ${fn.toString()}`);
 
 // Each hold belongs to the fetch made synchronously by this invocation, with its real URL and GET dedupe intact.
 // Other requests fall through; even a background reader of the same URL cannot steal a hold.
 let readSequence = 0;
-async function withNeedsReads(page, run) {
-  const held = new Map(), pattern = '**/api/v2/needs-you?*';
-  const handler = route => {
-    const entry = held.get(route.request().headers()['x-tico-test-needs-read']);
+async function withNeedsReads(page: Page, run: (hold: Hold) => Promise<void>) {
+  const held = new Map<string, Entry>(), pattern = '**/api/v2/needs-you?*';
+  const handler = (route: Route) => {
+    const entry = held.get(route.request().headers()['x-tico-test-needs-read']!);
     if (!entry) return route.fallback();
     assert.equal(entry.response, undefined, `${entry.label}: only one tagged request`);
     entry.arrived();
@@ -85,16 +109,16 @@ async function withNeedsReads(page, run) {
   };
   await within(page.route(pattern, handler), 'installing held Needs you route');
   try {
-    await run(async (label, snapshot, more = false) => {
-      let arrived, release;
-      const started = new Promise(done => { arrived = done; });
-      const gate = new Promise(done => { release = done; });
-      const token = String(++readSequence), entry = {label, body: JSON.stringify(snapshot), arrived, gate, release};
+    await run(async (label: string, snapshot: unknown, more = false) => {
+      let arrived!: (value?: void) => void, release!: (value?: void) => void;
+      const started = new Promise<void>(done => { arrived = done; });
+      const gate = new Promise<void>(done => { release = done; });
+      const token = String(++readSequence), entry: Entry = {label, body: JSON.stringify(snapshot), arrived, gate, release};
       held.set(token, entry);
-      const read = entry.read = page.evaluate(({token, more, label}) => {
+      const read = entry.read = page.evaluate(({token, more, label}: {token: string; more: boolean; label: string}) => {
         if (more && (NEEDS_MORE || needsAll())) throw new Error(`${label}: paging already in flight or no next cursor`);
         const fetch = window.fetch;
-        window.fetch = (input, init = {}) => {
+        window.fetch = (input: RequestInfo | URL, init: RequestInit = {}) => {
           const headers = new Headers(init.headers);
           headers.set('X-Tico-Test-Needs-Read', token);
           return fetch(input, {...init, headers});
@@ -122,23 +146,23 @@ async function withNeedsReads(page, run) {
       let rows = items, version = 'count-v1', wholeReads = 0, cursorReads = 0, idsReads = 0, failCursor = false;
       const {page, errors} = await open(browser, {viewport: {width, height: 844}, types,
         hash: '#/tasks?view=list&type=roadmap&tag=absent', baseTasks: [...tasks, foldedWait, mergedWait, unreadCard, wholeTask],
-        beforeGoto: async page => {
+        beforeGoto: async (page: Page) => {
           page.setDefaultTimeout(t(10000));
           page.setDefaultNavigationTimeout(t(10000));
           await page.addInitScript(() => {
             // This test drives reads and live mends itself; wall-clock polls and SSE reconnects cannot race them.
-            window.EventSource = undefined;
-            window.setInterval = () => 0;
+            (window as unknown as {EventSource: unknown}).EventSource = undefined;
+            (window as unknown as {setInterval: unknown}).setInterval = () => 0;
           });
-          await page.route('**/api/v2/needs-you?*', route => {
+          await page.route('**/api/v2/needs-you?*', (route: Route) => {
             const q = new URL(route.request().url()).searchParams;
             const facts = {version, count: rows.length, plate_count: plateCount(rows)};
-            const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+            const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
             if (q.has('ids')) {
               idsReads++;
-              const wanted = new Set(q.get('ids').split(','));
+              const wanted = new Set(q.get('ids')!.split(','));
               return json({...facts, items: rows.filter(it => wanted.has(it.id)),
-                positions: Object.fromEntries(rows.flatMap((it, n) => wanted.has(it.id) ? [[it.id, n]] : []))});
+                positions: Object.fromEntries(rows.flatMap((it, n): [string, number][] => wanted.has(it.id) ? [[it.id, n]] : []))});
             }
             if (q.has('cursor')) {
               cursorReads++;
@@ -200,7 +224,7 @@ async function withNeedsReads(page, run) {
 
       // A changed row is mended by id. The ids response carries the whole-list plate count too.
       const changedBase = version;
-      await withNeedsReads(page, async hold => {
+      await withNeedsReads(page, async (hold: Hold) => {
         const beforeMend = await hold('read before live mend', snapshot(rows, version));
         rows = rows.map(it => it.id === 't-1' ? {...it, title: 'Latest launch plan'} : it); version = 'count-v3';
         await evaluate(page, d => v2NeedsChanged(d),
@@ -213,7 +237,7 @@ async function withNeedsReads(page, run) {
       assert.equal(await count(page), '13');
 
       // Load later pages explicitly, keeping the same number throughout.
-      await withNeedsReads(page, async hold => {
+      await withNeedsReads(page, async (hold: Hold) => {
         for (let n = 0; n < 10 && !await evaluate(page, () => needsAll()); n++) {
           const beforePage = n === 0 ? await hold('read before added page', snapshot(rows, version)) : null;
           assert.equal(await evaluate(page, () => v2NeedsMore()), true);
@@ -273,7 +297,7 @@ async function withNeedsReads(page, run) {
       assert.equal(await count(page), '13');
 
       for (const theme of ['light', 'dark']) {
-        await evaluate(page, theme => { document.documentElement.dataset.theme = theme; }, theme);
+        await evaluate(page, (theme: string) => { document.documentElement.dataset.theme = theme; }, theme);
         assert.equal(await evaluate(page, () => document.documentElement.scrollWidth <= innerWidth), true, theme + ': no sideways page scroll');
         if (process.env.TICO_UI_SHOTS) {
           await waitFor(page, () => {
@@ -294,7 +318,7 @@ async function withNeedsReads(page, run) {
         await evaluate(page, d => needsTake(d), snapshot(rows, version));
         assert.equal(await count(page), '1');
         assert.equal(await evaluate(page, () => needsAll()), false);
-        await withNeedsReads(page, async hold => {
+        await withNeedsReads(page, async (hold: Hold) => {
           const older = await hold(`older page (newer first: ${newerFirst})`, {...snapshot(rows, version), items: rows.slice(50), next: null}, true);
           rows = rows.filter(it => it.id !== wholeTask.id); version = 'count-page-saved-' + newerFirst;
           const newer = await hold(`post-save read (newer first: ${newerFirst})`, snapshot(rows, version));
@@ -317,7 +341,7 @@ async function withNeedsReads(page, run) {
         rows = [wholeTask]; version = 'count-overlap-base-' + newerFirst;
         await evaluate(page, () => v2Refresh());
         assert.equal(await count(page), '1');
-        await withNeedsReads(page, async hold => {
+        await withNeedsReads(page, async (hold: Hold) => {
           const older = await hold(`older read (newer first: ${newerFirst})`, snapshot(rows, 'count-overlap-older-' + newerFirst));
           rows = []; version = 'count-overlap-newer-' + newerFirst;
           const newer = await hold(`newer read (newer first: ${newerFirst})`, snapshot(rows, version));

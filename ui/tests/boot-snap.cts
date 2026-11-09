@@ -3,26 +3,39 @@
 // roster) in a shadow root over #main, out of the page's id space, while the new page draws into the real #main under
 // it, and goes when that page settles, or at most SNAP_SHOW_MAX_MS after it was shown. Another person, or a sign-out,
 // never sees it, and a sign-out takes a copy on screen down at once.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = require('./support/load.cjs');
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+import type * as PageSupport from './support/page.cjs';
+import type * as RoutesSupport from './support/routes.cjs';
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
+const {t} = require('./support/load.cjs') as typeof import('./support/load.cjs');
+
+interface PageWin { EventSource: unknown; ticoBootSnap: boolean; __dbGo: () => void }
+interface KeptScreen { route: string; who: string; html: string }
+interface BootSnapState { who: string; banned: boolean; epoch: number | null; db: Promise<unknown> | null; timer: ReturnType<typeof setTimeout> | undefined }
+// Page-defined globals (app/boot-snap.ts) used inside page.evaluate callbacks.
+declare const SNAP: BootSnapState;
+declare const snapChannel: BroadcastChannel;
+declare function snapDb(): Promise<unknown>;
+declare function snapRouteOk(route: string): boolean;
+declare function bootSnapSave(): void;
+declare function bootSnapDrop(): unknown;
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const context = await browser.newContext({serviceWorkers: 'block'});
     const page = await context.newPage();
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     // Under automation the kept screen is off unless the page asks for it, as this script does.
-    await context.addInitScript(() => { window.EventSource = undefined; window.ticoBootSnap = true; });
-    let person = 'ana', held = null;
+    await context.addInitScript(() => { (window as unknown as PageWin).EventSource = undefined; (window as unknown as PageWin).ticoBootSnap = true; });
+    let person = 'ana', held: Array<() => unknown> | null = null;
     await context.route('**/*', async route => {
       const p = new URL(route.request().url()).pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p.startsWith('/tico/ui/')) {
         const file = uiFile(p.slice('/tico/ui/'.length));
@@ -45,7 +58,7 @@ const {t} = require('./support/load.cjs');
     // The kept entry, read without creating the database when there is none.
     const kept = () => page.evaluate(async () => {
       if (!(await indexedDB.databases()).some(d => d.name === 'tico-boot')) return null;
-      return new Promise(done => {
+      return new Promise<KeptScreen | null>(done => {
         const req = indexedDB.open('tico-boot');
         req.onsuccess = () => {
           const db = req.result;
@@ -57,17 +70,17 @@ const {t} = require('./support/load.cjs');
         req.onerror = () => done(null);
       });
     });
-    const keptAs = async (test, what) => {
+    const keptAs = async (test: (entry: KeptScreen | null) => unknown, what: string): Promise<KeptScreen> => {
       for (const end = Date.now() + t(10000); Date.now() < end; await page.waitForTimeout(50)) {
         const entry = await kept();
-        if (test(entry)) return entry;
+        if (test(entry)) return entry as KeptScreen;
       }
       assert.fail(what);
     };
     const heading = () => page.getByRole('heading', {name: 'Tasks', exact: true});
 
     const copyState = () => page.evaluate(() => {
-      const host = document.querySelector('[data-boot-snap]'), main = document.getElementById('main');
+      const host = document.querySelector('[data-boot-snap]') as HTMLElement | null, main = document.getElementById('main') as HTMLElement;
       const inner = host?.shadowRoot?.querySelector('main');
       return {host: !!host, inert: host?.inert, hidden: host?.getAttribute('aria-hidden'), text: inner?.textContent || '',
         innerId: inner?.id, mains: document.querySelectorAll('#main').length, mainKids: main.childElementCount,
@@ -92,12 +105,12 @@ const {t} = require('./support/load.cjs');
       bits.innerHTML = '<div data-secret>sk-live-secret</div><input value="typed-secret"><input type="password" value="pw-secret">'
         + '<textarea>draft-secret</textarea><div contenteditable="true">edit-secret</div>'
         + '<div class="settings-card"><code>code-secret</code><pre>pre-secret</pre></div><p>kept-words</p>';
-      document.getElementById('main').append(bits);
+      (document.getElementById('main') as HTMLElement).append(bits);
       bootSnapSave();
     });
     const scrubbed = await keptAs(entry => /kept-words/.test(entry?.html || ''), 'the screen is kept again');
     assert.doesNotMatch(scrubbed.html, /secret/, 'no secret, value, draft or settings code is kept');
-    await page.evaluate(() => { document.getElementById('private-bits').remove(); bootSnapSave(); });
+    await page.evaluate(() => { (document.getElementById('private-bits') as HTMLElement).remove(); bootSnapSave(); });
     await keptAs(entry => entry && !/kept-words/.test(entry.html), 'kept without the test bits');
 
     // Again, with the roster held: the kept screen is up before it, in a copy outside #main's id space.
@@ -154,11 +167,11 @@ const {t} = require('./support/load.cjs');
     // A save the other tab queued (held behind its database) before this tab signs out writes nothing when it runs.
     await other.evaluate(() => {
       const real = SNAP.db || snapDb();
-      SNAP.db = new Promise(go => { window.__dbGo = () => go(real); });
+      SNAP.db = new Promise(go => { (window as unknown as PageWin).__dbGo = () => go(real); });
       bootSnapSave();
     });
     await page.evaluate(() => bootSnapDrop());
-    await other.evaluate(() => window.__dbGo());
+    await other.evaluate(() => (window as unknown as PageWin).__dbGo());
     await other.waitForTimeout(300);
     assert.equal(await kept(), null, 'a save queued before the sign-out keeps nothing');
     assert.equal(await other.evaluate(() => SNAP.banned && SNAP.who === ''), true, 'and the other tab keeps nothing more');
@@ -177,7 +190,7 @@ const {t} = require('./support/load.cjs');
     };
     const epochNow = () => page.evaluate(async () => {
       if (!(await indexedDB.databases()).some(d => d.name === 'tico-boot')) return null;
-      return new Promise(done => {
+      return new Promise<number>(done => {
         const req = indexedDB.open('tico-boot');
         req.onsuccess = () => {
           const db = req.result, get = db.transaction('screens').objectStore('screens').get('epoch');
@@ -186,7 +199,7 @@ const {t} = require('./support/load.cjs');
       });
     });
     // The sign-out's readwrite transactions abort, `times` of them (a test stub over IndexedDB).
-    const abortSignOut = times => page.evaluate(async times => {
+    const abortSignOut = (times: number) => page.evaluate(async (times: number) => {
       let left = times;
       const real = IDBDatabase.prototype.transaction;
       IDBDatabase.prototype.transaction = function (names, mode, ...rest) {
@@ -196,7 +209,7 @@ const {t} = require('./support/load.cjs');
       };
       await bootSnapDrop();
     }, times);
-    const otherKeepsNothing = async what => {
+    const otherKeepsNothing = async (what: string) => {
       await other.evaluate(() => { bootSnapSave(); window.dispatchEvent(new Event('pagehide')); });
       await other.waitForTimeout(300);
       assert.equal(await kept(), null, what);
@@ -204,7 +217,7 @@ const {t} = require('./support/load.cjs');
 
     // One aborted try: the second moves the epoch, and the other tab's save writes nothing.
     await fresh();
-    const before = await epochNow();
+    const before = (await epochNow()) as number;
     await abortSignOut(1);
     assert.equal(await epochNow(), before + 1, 'the retry moved the epoch');
     await otherKeepsNothing('an aborted first try still bans every tab');
@@ -225,11 +238,11 @@ const {t} = require('./support/load.cjs');
     await page.reload({waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => performance.getEntriesByName('tico:paint-cached').length === 1);
     const out = await page.evaluate(() => {
-      const link = document.querySelector('#sign-out');
+      const link = document.querySelector('#sign-out') as HTMLElement;
       link.hidden = false;
-      window.addEventListener('click', e => { if (e.target.closest('#sign-out')) e.preventDefault(); });
+      window.addEventListener('click', e => { if ((e.target as Element).closest('#sign-out')) e.preventDefault(); });
       link.click();
-      const main = document.getElementById('main');
+      const main = document.getElementById('main') as HTMLElement;
       return {host: !!document.querySelector('[data-boot-snap]'), kids: main.childElementCount, shown: main.style.visibility};
     });
     assert.deepEqual(out, {host: false, kids: 0, shown: ''}, 'nothing of the screen is left on the page');

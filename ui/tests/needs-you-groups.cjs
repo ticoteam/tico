@@ -8,7 +8,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const SHOTS = process.env.NEEDS_SHOTS || '';
 const inDays = days => new Date(Date.now() + days * 86400000).toISOString();
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();

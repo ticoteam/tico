@@ -3,22 +3,32 @@
 // Health lists it as a note with "Review stopped runs". That opens the card: the safe pick first, the evidence folded.
 // One that holds nothing is a note under Health too. Health's BotOps checks (stopped runs, a quarantined bot) stay off
 // the person's status dot. Every request is intercepted.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// The fixture's shapes, as the server returns them.
+interface Body {decision: string; run_id: string; note: string; acknowledge_uncertain_effects: boolean}
+interface Job {
+  id: string; run_id: string; readable: boolean; stopped: string; acted: string[];
+  task: {id: string; title: string; status: string; owner_id: string; owner_name: string};
+  request: string; run: {started_at: string; final_text: string};
+  output: {kind: string; text: string}[]; tools: {tool: string; summary: string; status: string}[];
+  reason: string; pending_decision?: {decision: string} | null;
+}
+declare function executionReview(bot: string): void;
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
 (async () => {
   const t0 = Date.now();
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     // The runs the server lists for an issue (backend/views.py): one per stopped run, with its title and why.
-    const stoppedRun = (title, retry, jobs) => ({title, cause: 'interrupted', why: 'Interrupted on its computer',
+    const stoppedRun = (title: string, retry: boolean, jobs: string[]) => ({title, cause: 'interrupted', why: 'Interrupted on its computer',
       routine: true, retry,
       at: '2026-10-26T05:39:09Z', jobs: jobs.map(id => ({id, run_id: `a-${jobs[0]}`}))});
     const holding = {kind: 'uncertain_work', title: 'Builder has 2 stopped runs holding up work', bot: 'builder',
@@ -30,20 +40,20 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const later = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for later', bot: 'writer',
       detail: 'The bot stopped before returning an answer. Other work can continue. Review it whenever useful.',
       severity: 'warning', needs_person: false, action: 'review'};
-    const reviewed = [], decisions = [];
-    const shot = async name => { if (process.env.SHOTS) await page.screenshot({path: `${process.env.SHOTS}/${name}.png`}); };
+    const reviewed: string[] = [], decisions: ({id: string} & Body)[] = [];
+    const shot = async (name: string) => { if (process.env.SHOTS) await page.screenshot({path: `${process.env.SHOTS}/${name}.png`}); };
     // `refusal` is true to refuse every choice, or one job's id to refuse only that one.
-    let refusal = false, deferred = false;
+    let refusal: boolean | string = false, deferred = false;
     // Keep a safe default first, with supporting evidence folded.
-    const job = (id, title, stopped, acted, tools) => ({id, run_id: `a-${id}`, readable: true, stopped, acted,
+    const job = (id: string, title: string, stopped: string, acted: string[], tools: string[]): Job => ({id, run_id: `a-${id}`, readable: true, stopped, acted,
       task: {id: `t-${id}`, title, status: 'doing', owner_id: 'bot:builder', owner_name: 'Builder'},
       request: 'Ship Billing 3/5.', run: {started_at: '2026-10-22T08:12:00Z', final_text: 'Merged #25; deploying next.'},
-      output: [], tools: tools.map(tool => ({tool, summary: '', status: 'completed'})),
+      output: [], tools: tools.map((tool: string) => ({tool, summary: '', status: 'completed'})),
       reason: 'The run stopped after using a tool that can change things (Bash). Tico cannot tell whether it finished.'});
     const jobs = {builder: [job('j1', 'Billing 3/5', 'changed', ['Bash'], ['Read', 'Bash'])],
       writer: [job('j2', 'Weekly digest', 'read', [], ['Read'])]};
-    jobs.writer[0].run.final_text = '';
-    jobs.writer[0].output = ['The ', 'saved ', 'answer ', 'is ', 'one paragraph.\n\nA second paragraph.'].map(text => ({kind: 'message', text}));
+    jobs.writer[0]!.run.final_text = '';
+    jobs.writer[0]!.output = ['The ', 'saved ', 'answer ', 'is ', 'one paragraph.\n\nA second paragraph.'].map(text => ({kind: 'message', text}));
     // Health's BotOps checks as the server builds them (backend/health.py): Builder's stopped runs, and a quarantined bot
     // whose queued work waits. Both are warn or bad, yet BotOps reviews them, so neither lights the person's dot.
     const stoppedCheck = {id: 'stopped_runs', label: 'Stopped runs nobody decided', status: 'warn',
@@ -67,10 +77,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       checked: new Date().toISOString()};
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
@@ -89,13 +99,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [holding, later]});
       const reconcile = p.match(/^\/api\/v2\/jobs\/([^/]+)\/reconcile$/);
       if (reconcile) {
-        const body = route.request().postDataJSON(); decisions.push({id: reconcile[1], ...body});
+        const body: Body = route.request().postDataJSON(); decisions.push({id: reconcile[1]!, ...body});
         if (refusal === true || refusal === reconcile[1]) return json({error: {code: 'uncertain', detail: 'This run changed. Refresh and review it again.'}}, 409);
         const state = body.decision === 'resume' ? 'queued' : 'canceled';
         return json({job_id: reconcile[1], state: deferred ? 'uncertain' : state, deferred});
       }
       const review = p.match(/^\/api\/v2\/bots\/([^/]+)\/execution-review$/);
-      if (review) { reviewed.push(review[1]); return json({jobs: jobs[review[1]] || []}); }
+      if (review) { reviewed.push(review[1]!); return json({jobs: (jobs as Record<string, Job[] | undefined>)[review[1]!] || []}); }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -122,7 +132,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.match(await stoppedRow.innerText(), /Builder: 2 stopped runs waiting 72 h/);
     assert.equal(await quarantineRow.getAttribute('data-status'), 'bad');
     assert.match(await quarantineRow.innerText(), /Vault \(vault\): 1 job queued/);
-    assert.equal(await page.evaluate(() => document.querySelector('#heartbeat').hidden), true, 'BotOps checks never light the dot');
+    assert.equal(await page.evaluate(() => (document.querySelector('#heartbeat') as HTMLElement).hidden), true, 'BotOps checks never light the dot');
     assert.equal(await page.evaluate(() => document.querySelectorAll('.account-status-line').length), 0, 'no line for them either');
 
     // A bot's stopped runs open their review card from the note: the decision first, the evidence folded.
@@ -141,7 +151,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await card.locator('[data-retry-warning]').isVisible(), true);
     assert.notEqual(await card.locator('[data-result]').evaluate(el => getComputedStyle(el).display), 'none');
     await page.setViewportSize({width: 390, height: 680});
-    const warning = await card.locator('[data-retry-warning]').boundingBox();
+    const warning = (await card.locator('[data-retry-warning]').boundingBox())!;
     assert.ok(warning.y >= 0 && warning.y + warning.height <= 680, 'retry risk is visible with details folded');
     await shot('stopped-phone-warning');
     await page.setViewportSize({width: 1280, height: 800});
@@ -149,9 +159,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await shot('stopped-desktop');
     await card.locator('button[value=dismiss]').click();
     await card.locator('[data-result]', {hasText: 'Dismissed.'}).waitFor();
-    assert.equal(decisions[0].decision, 'dismiss');
-    assert.equal(decisions[0].run_id, 'a-j1');
-    assert.equal(decisions[0].acknowledge_uncertain_effects, true);
+    assert.equal(decisions[0]!.decision, 'dismiss');
+    assert.equal(decisions[0]!.run_id, 'a-j1');
+    assert.equal(decisions[0]!.acknowledge_uncertain_effects, true);
     assert.equal(await card.locator('button:enabled').count(), 0);
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
 
@@ -169,7 +179,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.setViewportSize({width: 390, height: 680});
     await shot('stopped-phone-saved');
     const geometry = await page.locator('dialog.stopped-runs-dialog').evaluate(d => {
-      const box = el => el.getBoundingClientRect().toJSON();
+      const box = (el: Element | null) => el!.getBoundingClientRect().toJSON();
       return {dialog: box(d), header: box(d.querySelector('header')), close: box(d.querySelector('[data-close]')),
         body: box(d.querySelector('[data-review]')), saved: box(d.querySelector('[data-saved]'))};
     });
@@ -177,21 +187,21 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.ok(geometry.saved.left >= geometry.dialog.left + 12, 'content is padded');
     assert.ok(geometry.dialog.right <= 390 && geometry.dialog.bottom <= 680);
     // Outside Settings, its refresh function used to throw after replacing the form with success.
-    await page.evaluate(() => document.querySelector('#settings-tabs').remove());
+    await page.evaluate(() => (document.querySelector('#settings-tabs') as Element).remove());
     refusal = true;
     await read.locator('button[value=resume]').click();
     const result = read.locator('[data-result]');
     await result.filter({hasText: 'This run changed.'}).waitFor();
-    const rect = await result.boundingBox();
+    const rect = (await result.boundingBox())!;
     assert.ok(rect.y >= 0 && rect.y + rect.height <= 680, 'refusal stays in the visible window');
     assert.equal(await read.locator('button:enabled').count(), 2);
     await shot('stopped-phone-refusal');
     refusal = false;
     await read.locator('button[value=resume]').click();
     await result.filter({hasText: 'Queued to try again.'}).waitFor();
-    assert.equal(decisions.at(-1).decision, 'resume');
-    assert.equal(decisions.at(-1).run_id, 'a-j2');
-    assert.doesNotMatch(decisions.at(-1).note, /no outside action completed/, 'retry records a choice, not an unasked confirmation');
+    assert.equal(decisions.at(-1)!.decision, 'resume');
+    assert.equal(decisions.at(-1)!.run_id, 'a-j2');
+    assert.doesNotMatch(decisions.at(-1)!.note, /no outside action completed/, 'retry records a choice, not an unasked confirmation');
     assert.equal(await read.locator('button:enabled').count(), 0);
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
     deferred = true;
@@ -199,7 +209,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const busy = page.locator('dialog.stopped-runs-dialog form');
     await busy.locator('button[value=dismiss]').click();
     await busy.locator('[data-result]', {hasText: 'Choice saved. The bot is busy'}).waitFor();
-    jobs.writer[0].pending_decision = {decision: 'dismiss'};
+    jobs.writer[0]!.pending_decision = {decision: 'dismiss'};
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
     await page.evaluate(() => executionReview('writer'));
     await page.locator('dialog.stopped-runs-dialog [data-result]', {hasText: 'Choice saved. The bot is busy'}).waitFor();
@@ -208,8 +218,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
 
     // A first timeout waiting on live session work retains the safe retry choice, without claiming a restart.
-    jobs.writer[0].stopped = 'timeout';
-    jobs.writer[0].pending_decision = null;
+    jobs.writer[0]!.stopped = 'timeout';
+    jobs.writer[0]!.pending_decision = null;
     deferred = false;
     await page.evaluate(() => executionReview('writer'));
     const timed = page.locator('dialog.stopped-runs-dialog form[data-job="j2"]');
@@ -218,8 +228,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(await timed.locator('.stopped-run-actions .row button').allInnerTexts(), ['Try again', 'Don’t retry']);
     await timed.locator('button[value=resume]').click();
     await timed.locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
-    assert.equal(decisions.at(-1).run_id, 'a-j2');
-    assert.equal(decisions.at(-1).acknowledge_uncertain_effects, true);
+    assert.equal(decisions.at(-1)!.run_id, 'a-j2');
+    assert.equal(decisions.at(-1)!.acknowledge_uncertain_effects, true);
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
     assert.deepEqual(errors, []);
     console.log(`PASS: stopped runs are reviewed from Health and its review card (${((Date.now() - t0) / 1000).toFixed(1)}s)`);

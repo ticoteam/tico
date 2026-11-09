@@ -2,17 +2,18 @@
 // are sorted by spend whatever order they arrive in, a subscription's figure stays apart from spend, a bot opens to its
 // daily chart and routines and a CSV, every limit is changed in one Limits table, and an empty range says so. A bot over its limit is marked in the org tree and its
 // page leads with a banner whose link opens Usage.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs = require('node:fs') as typeof import('node:fs');
 // The page as the server sends it (the real bundle, TypeScript compiled), like every other browser script.
 const {html, uiFile} = require('./support/page.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const {unrouted} = require('./support/routes.cjs');
 
-const day = n => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
-const figures = (runs, i, c, o, est, sub = 0) => ({runs, input_tokens: i, cached_tokens: c, output_tokens: o, est_cost_usd: est, subscription_equiv_usd: sub, unpriced_runs: 0});
-const limit = (daily, monthly, percent = 0, blocked = null) => ({daily_usd: daily, monthly_usd: monthly, own_daily_usd: daily, own_monthly_usd: monthly, percent, blocked, may_edit: true, source: {}});
+declare function useLimits(): void;
+const day = (n: number) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+const figures = (runs: number, i: number, c: number, o: number, est: number | null, sub = 0) => ({runs, input_tokens: i, cached_tokens: c, output_tokens: o, est_cost_usd: est, subscription_equiv_usd: sub, unpriced_runs: 0});
+const limit = (daily: number | null, monthly: number | null, percent = 0, blocked: string | null = null) => ({daily_usd: daily, monthly_usd: monthly, own_daily_usd: daily, own_monthly_usd: monthly, percent, blocked, may_edit: true, source: {}});
 // Arriving in the wrong order on purpose.
 const ROWS = [
   {bot: 'sales', name: 'Sales', department: 'Revenue', ...figures(3, 1000, 2000, 500, 0.4), low_estimate_runs: 2, share: 0.05, limit: limit(null, null)},
@@ -26,26 +27,26 @@ const LIMITS = {default: {daily_usd: 20, monthly_usd: null, count_subscription: 
          inbox: limit(null, null), coo: limit(null, null)},
   pools: {company: {hourly_usd: 10, per_30m_usd: 4, spent: {hour: 4, '30m': 3.5}, percent: 87},
           groups: {ops: {name: 'Ops', parent: null, daily_usd: 30, spent: {day: 3}}, revenue: {name: 'Revenue', parent: null}}}};
-const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
+const total = (rows: {runs: number; est_cost_usd: number | null; subscription_equiv_usd: number; low_estimate_runs?: number}[]) => rows.reduce<{runs: number; est_cost_usd: number; subscription_equiv_usd: number; input_tokens: number; cached_tokens: number; output_tokens: number; unpriced_runs: number; low_estimate_runs: number}>((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
                                               input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: t.low_estimate_runs + (r.low_estimate_runs || 0)}),
                                      {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: 0});
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block', acceptDownloads: true});
     const page = await ctx.newPage();
-    const errors = [], asked = [];
+    const errors: string[] = [], asked: Record<string, string>[] = [];
     let empty = false;
-    const puts = [], purges = [];
+    const puts: [string, unknown][] = [], purges: Record<string, unknown>[] = [];
     let mayPurge = true, purgeFails = false;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.2.18', update: null, app_name: 'Tico', usage_count_notice: false};
@@ -53,11 +54,11 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/v2/usage/limits' && req.method() === 'GET') return json({...LIMITS, may_edit_default: mayPurge});
       if (p === '/api/v2/usage/queues/purge' && req.method() === 'POST') {
-        purges.push(JSON.parse(req.postData()));
+        purges.push(JSON.parse(req.postData()!));
         return purgeFails ? json({error: {code: 'unavailable', detail: 'Try again.'}}, 503)
-          : json({scope: purges.at(-1).scope, cancelled: 3, kept_people: 2, still_running: 1});
+          : json({scope: purges.at(-1)!.scope, cancelled: 3, kept_people: 2, still_running: 1});
       }
-      if (/^\/api\/v2\/usage\/(limits|pools)/.test(p) && req.method() === 'PUT') { puts.push([p, JSON.parse(req.postData())]); return json({ok: true}); }
+      if (/^\/api\/v2\/usage\/(limits|pools)/.test(p) && req.method() === 'PUT') { puts.push([p, JSON.parse(req.postData()!)]); return json({ok: true}); }
       if (p === '/api/v2/usage') {
         const q = Object.fromEntries(url.searchParams);
         asked.push(q);
@@ -122,7 +123,7 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await dialog.getByRole('button', {name: 'Clear queue', exact: true}).click();
     await dialog.waitFor({state: 'detached'});
     assert.equal(purges.length, failedRequests + 1);
-    assert.ok(purges.every(body => Object.keys(body).length === 1 && body.scope === 'group:ops'));
+    assert.ok(purges.every((body: Record<string, unknown>) => Object.keys(body).length === 1 && body.scope === 'group:ops'));
     assert.deepEqual(puts, [], 'clearing the queue never changes spending limits');
     await page.setViewportSize({width: 1440, height: 900});
 
@@ -135,7 +136,7 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await purge.waitFor();
 
     // Seven days by default, sorted by API-equivalent (billed plus subscriptions), one figure each, billed in the hover.
-    assert.deepEqual([asked[0].from, asked[0].to], [day(6), day(0)]);
+    assert.deepEqual([asked[0]!.from, asked[0]!.to], [day(6), day(0)]);
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['Support', 'COO', 'Sales', 'Inbox']);
     assert.match(await page.locator('.use-total').innerText(), /^\$10\.20 API-equivalent · 24 runs/);
     assert.equal(await page.locator('.use-note').count(), 1, 'API-equivalent is said once');
@@ -167,8 +168,8 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     assert.deepEqual(await lim.locator('[data-lim-row]').evaluateAll(rows => rows.map(r => r.dataset.limRow)),
                      ['default', 'company', 'group:ops', 'bot:sales', 'bot:support']);
     assert.deepEqual(await lim.locator('.use-lim-head [role=columnheader]').allInnerTexts(), ['', '30 min', 'Hour', 'Day', 'Week', 'Month']);
-    const cell = (row, key) => lim.locator(`input[name="${row}|${key}"]`);
-    assert.equal(await page.evaluate(() => document.activeElement.name), 'bot:sales|per_30m_usd', 'the cursor lands in the bot asked for');
+    const cell = (row: string, key: string) => lim.locator(`input[name="${row}|${key}"]`);
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLInputElement).name), 'bot:sales|per_30m_usd', 'the cursor lands in the bot asked for');
     assert.equal(await cell('bot:sales', 'daily_usd').getAttribute('placeholder'), '$20', 'a bot shows the default it follows');
     assert.equal(await cell('company', 'hourly_usd').inputValue(), '10');
     assert.equal(await cell('bot:sales', 'hourly_usd').count(), 0, 'no new hour limits');
@@ -203,26 +204,26 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await page.locator('[data-use-view=spend]').click();
 
     // The range switch asks for the days it says.
-    for (const [label, expect] of [['Today', [day(0), day(0)]], ['30 days', [day(29), day(0)]], ['This month', [day(0).slice(0, 8) + '01', day(0)]]]) {
+    for (const [label, expect] of [['Today', [day(0), day(0)]], ['30 days', [day(29), day(0)]], ['This month', [day(0).slice(0, 8) + '01', day(0)]]] as const) {
       await page.locator('.use-seg button', {hasText: label}).click();
       await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy])'));
-      assert.deepEqual([asked.at(-1).from, asked.at(-1).to], expect, label);
+      assert.deepEqual([asked.at(-1)!.from, asked.at(-1)!.to], expect, label);
       assert.equal(await page.locator('.use-seg button[aria-selected=true]').innerText(), label);
     }
     await page.locator('.use-seg button', {hasText: 'Custom'}).click();
     await page.locator('#use-from').waitFor();
     await page.locator('#use-from').fill('2026-09-01');
     await page.locator('#use-to').fill('2026-09-10');
-    await page.waitForFunction(() => document.querySelector('#use-from').value === '2026-09-01');
+    await page.waitForFunction(() => (document.querySelector('#use-from') as HTMLInputElement).value === '2026-09-01');
     const custom = () => asked.at(-1)?.from === '2026-09-01' && asked.at(-1)?.to === '2026-09-10';
     for (const end = Date.now() + t(10000); !custom() && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
-    assert.deepEqual([asked.at(-1).from, asked.at(-1).to], ['2026-09-01', '2026-09-10'], 'a custom range');
+    assert.deepEqual([asked.at(-1)!.from, asked.at(-1)!.to], ['2026-09-01', '2026-09-10'], 'a custom range');
 
     // The department filter.
     await page.locator('.use-seg button', {hasText: '7 days'}).click();
     await page.locator('#use-dept').selectOption('Ops');
     await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 1);
-    assert.equal(asked.at(-1).department, 'Ops');
+    assert.equal(asked.at(-1)!.department, 'Ops');
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['COO']);
     await page.locator('#use-dept').selectOption('');
     await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 4);
@@ -233,7 +234,7 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     assert.equal(await support.locator('.use-col').count(), 7);
     assert.match(await support.locator('.use-routines tbody tr').first().innerText(), /Morning triage\s+7\s+\$4\.20/);
     assert.match(await support.locator('.use-routines tbody tr').nth(1).innerText(), /Other runs.*\$3\.40/s);
-    assert.equal(asked.at(-1).bot, 'support');
+    assert.equal(asked.at(-1)!.bot, 'support');
     const [download] = await Promise.all([page.waitForEvent('download'), support.locator('[data-use-csv]').click()]);
     assert.match(download.suggestedFilename(), /^usage-support-\d{4}-\d\d-\d\d-\d{4}-\d\d-\d\d\.csv$/);
     const csv = fs.readFileSync(await download.path(), 'utf8').trim().split('\n');

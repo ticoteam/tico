@@ -5,7 +5,7 @@
 // also in a narrow list where row notes hide; a person's QA waiver reads "QA waived", never as a pass. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cts');
 const at = mins => new Date(Date.now() - mins * 60000).toISOString();
 const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,

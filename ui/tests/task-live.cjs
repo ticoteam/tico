@@ -1,7 +1,7 @@
 // Concurrent task drafts, versions, focus and authorized-place lifecycle in the real app bundle.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./task-code.cjs');
+const {open} = require('./task-code.cts');
 const gate = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
 (async () => {
  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined});
