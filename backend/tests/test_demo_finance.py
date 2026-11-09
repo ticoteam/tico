@@ -3,7 +3,7 @@ budgets, invoices, bills and rules the demo tells. The bookkeeper's books view i
 approved before the build, so nothing about them is waiting in Ana's queue.
 
 The demo is built early in a month. Finance reads its default month from its clock, so the test pins that clock to the
-build's moment, as the demo is shown the day it is built. test_demo_other_moments.py runs every test here again on a
+build's moment, as the demo is shown the day it is built. test_demo_other_moments.py runs every check here again on a
 demo built mid-month in a later quarter (each takes `book`, a (settings, now) pair)."""
 
 import sqlite3
@@ -62,7 +62,7 @@ def this_month_by_account():
     return {"4100": C["store_this_month"]["amount"], "4200": payout["gross"], "6200": payout["fees"]}
 
 
-def test_default_month_has_this_months_numbers_and_last_month_is_complete(book):
+def _default_month_has_this_months_numbers_and_last_month_is_complete(book):
     settings, now = book
     prev_start, this_start = months(now)
     with signed_in(settings) as api:
@@ -85,7 +85,7 @@ def test_default_month_has_this_months_numbers_and_last_month_is_complete(book):
     assert sheet["totals"]["asset"] == sheet["totals"]["liability"] + sheet["totals"]["equity"]
 
 
-def test_budgets_are_monthly_and_only_paid_advertising_is_near_its_limit(book):
+def _budgets_are_monthly_and_only_paid_advertising_is_near_its_limit(book):
     settings, now = book
     _, this_start = months(now)
     with signed_in(settings) as api:
@@ -99,7 +99,7 @@ def test_budgets_are_monthly_and_only_paid_advertising_is_near_its_limit(book):
     assert near == ["Paid advertising"]
 
 
-def test_invoices_one_paid_and_one_overdue_that_the_chase_task_covers(book):
+def _invoices_one_paid_and_one_overdue_that_the_chase_task_covers(book):
     settings, _ = book
     with signed_in(settings) as api:
         invoices = {i["number"]: i for i in api.get("/api/v2/finance/invoices").json()["invoices"]}
@@ -111,7 +111,7 @@ def test_invoices_one_paid_and_one_overdue_that_the_chase_task_covers(book):
     assert C["chase"]["title"] in [t["title"] for t in tasks]
 
 
-def test_bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
+def _bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
     settings, _ = book
     with signed_in(settings) as api:
         bills = {b["number"]: b for b in api.get("/api/v2/finance/bills").json()["bills"]}
@@ -130,7 +130,7 @@ def test_bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
     )
 
 
-def test_rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_ago(book):
+def _rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_ago(book):
     settings, now = book
     with signed_in(settings) as api:
         rules = {r["name"]: r for r in api.get("/api/v2/finance/rules").json()["rules"]}
@@ -152,7 +152,7 @@ def test_rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_a
     assert approval_id not in [item["id"] for item in queue]
 
 
-def test_the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again(book):
+def _the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again(book):
     settings, now = book
     with signed_in(settings) as api:
         access = api.get("/api/v2/finance/access").json()
@@ -166,3 +166,21 @@ def test_the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_
         pass
     with sqlite3.connect(settings.db_path) as db:
         assert db.execute("SELECT COUNT(*) FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchone()[0] == 1
+
+
+# Every check takes `book` (settings, now). test_demo_other_moments.py runs these same checks on a mid-month build.
+CHECKS = (
+    _default_month_has_this_months_numbers_and_last_month_is_complete,
+    _budgets_are_monthly_and_only_paid_advertising_is_near_its_limit,
+    _invoices_one_paid_and_one_overdue_that_the_chase_task_covers,
+    _bills_are_drafted_by_accounts_payable_and_approved_by_ana,
+    _rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_ago,
+    _the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again,
+)
+
+
+def test_the_demo_finance_tells_its_story(book, subtests):
+    """One build (the book) for every check, in file order, each as its own subtest."""
+    for check in CHECKS:
+        with subtests.test(check.__name__):
+            check(book)
