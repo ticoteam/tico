@@ -4,8 +4,7 @@ import type {Route} from 'playwright';
 // saved; the offer is gone from the second screen on. Fixtures only - no server, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
@@ -36,11 +35,7 @@ const SAMPLE_BOTS = ([['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-prod
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       // index.html loads marked from /vendor: a stub, so the page's own script errors do not hold the recovery card up.
       if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
-      const module =p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (module) {
-        const file = uiFile(module[1]!);
-        if (fs.existsSync(file)) return route.fulfill({contentType: module[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
-      }
+      if (isUiPath(p)) return serveUi(route, p);
       const config = {...CONFIG, ...record.names, onboarding_needed: record.needed, providers_configured: !!record.sample};
       if (p === '/api/me') return json({id: 'owner', name: 'Owner Person', role: 'owner', cloud: true, email: 'owner@initech.test', config});
       if (p === '/api/v2/config') return json(config);
