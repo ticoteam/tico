@@ -30,6 +30,10 @@ function taskBaseAt(table: Record<string, TaskFieldBase>, key: string): TaskFiel
   if (!base) throw new TypeError(`No base for ${key}`);
   return base;
 }
+// A copy of a field's base. A missing base copies as {} exactly as the bare spread did before (no throw).
+function taskBaseCopy(table: Record<string, TaskFieldBase>, key: string): TaskFieldBase {
+  return {...table[key]} as TaskFieldBase;
+}
 // The edit draft a task keeps across redraws: unsent patches, the versions they were made against, and the save's state.
 interface TaskLiveDraft {
   patch: Record<string, TaskFieldValue>;
@@ -387,7 +391,7 @@ function taskLiveWireField(d: TaskDialog, live: TaskLive, field: TaskField) {
     }
     if (key === 'size') { if (!field.checkValidity()) return; value = value === '' ? null : Number(value); }
     if (value === live.fields[key]?.value && !(key in draft.dirty)) return;
-    if (!(key in draft.dirty)) draft.bases[key] = {...taskBaseAt(live.fields, key)};
+    if (!(key in draft.dirty)) draft.bases[key] = taskBaseCopy(live.fields, key);
     sharedDraftPatch(draft, key, value);
     draft.dirty[key] = taskBaseAt(draft.bases, key).value;
     taskLivePersist(live);
@@ -405,7 +409,7 @@ function taskLivePaint(d: TaskDialog, live: TaskLive) {
   for (const field of d.querySelectorAll<TaskField>('[data-task-field], .tmodal-title')) {
     const key = field.dataset.taskField || 'title', value = String(taskLiveDisplay(key in pending ? pending[key] : taskLiveValue(base, key), key, key in pending ? null : base) ?? '');
     if ((field === document.activeElement || field === live.focus?.field) && !draft.current) continue;
-    live.fields[key] = key in draft.dirty ? {...taskBaseAt(draft.bases, key)} : {value: taskLiveValue(base, key), version: base.version};
+    live.fields[key] = key in draft.dirty ? taskBaseCopy(draft.bases, key) : {value: taskLiveValue(base, key), version: base.version};
     if (field.matches('input, textarea')) {
       if (field.value === value) continue;
       const selection: [number, number, 'forward' | 'backward' | 'none'] | null = field === document.activeElement && typeof field.selectionStart === 'number' && typeof field.selectionEnd === 'number' && typeof field.selectionDirection === 'string' ? [field.selectionStart, field.selectionEnd, field.selectionDirection] : null;
