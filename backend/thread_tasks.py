@@ -62,8 +62,9 @@ def install(app, store, auth, create_task, public_url=""):
             text, href = task_body(c, message, row, public_url)
             keep_private = private(message, root)
         links = [href] if public_url else []
-        create = M.TaskCreate(title=body.title.strip(), body=text, owner=body.owner,
-                              private=True if keep_private else None, links=links)
+        create = M.TaskCreate(
+            title=body.title.strip(), body=text, owner=body.owner, private=True if keep_private else None, links=links
+        )
         try:
             return create_task(request, create)
         except Problem as refused:

@@ -44,10 +44,10 @@ async function run(viewport, shot) {
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
@@ -165,10 +165,10 @@ async function answered(viewport, shot) {
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'lead', display_name: 'Head of Engineering', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
@@ -274,10 +274,10 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'lead', display_name: 'Head of Engineering', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
@@ -325,6 +325,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     // a bot filed, is for senders that name no way).
     assert.deepEqual(await looks(), {shows: 'steer:', label: 'Send', badge: ''});
     assert.equal(await caret.isVisible(), true, 'the caret shows where a bot gets the comment');
+    assert.equal(await modal.locator('[data-task-chat-to]').innerText(), '', 'the way has no line of its own: the reach line says it');
     assert.deepEqual(await send('Which is first?'), {text: 'Which is first?', public: false, delivery: 'steer'});
 
     // The menu: Steer, Queue, Defer and its durations, then Set as goal apart, each with Send's icon; upward, inside
@@ -434,6 +435,111 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
   } finally { await browser.close(); }
 }
 
+// Under a task's box: no Follow (following is the Followers row; posting never follows); the reach line ("To Head of Engineering and Ben") opens who the comment reaches by the way Send
+// shows (GET /v2/threads/{task thread}/reach). A task in a shared chat (no followers list) shows neither.
+async function followReach(viewport, shot, theme) {
+  const browser = await launch();
+  try {
+    const phone = viewport.width < 761;
+    const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(phone ? {isMobile: true, hasTouch: true} : {})});
+    await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
+    const errors = [], reads = [], follows = [], posted = [], prefs = {};
+    let followers = [{actor: 'bot:lead', notify: 'live', reason: 'owner'}, {actor: 'human:ben', notify: 'live', reason: 'requester'}];
+    const rel = {id: 't-rel', title: 'Cut the release', owner_id: 'bot:lead', requester_id: 'human:ben', status: 'doing',
+      lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-rel'};
+    const said = [{id: 'r1', conversation_id: 'r-rel', sender_id: 'bot:lead', kind: 'say', body: 'Tagging after the checks.', created_at: at(20)}];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.route('**/*', async route => {
+      const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
+      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+      if (ui && fs.existsSync(uiFile(ui[1])))
+        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+      if (p === '/api/employees') return json([{name: 'lead', display_name: 'Head of Engineering', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
+      if (p === '/api/issues') return json([]);
+      if (p === '/api/v2/conversations') return json({conversations: []});
+      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
+      if (pref && method === 'POST') { prefs[pref[1]] = JSON.parse(req.postData() || '{}').value; return json({key: pref[1], value: prefs[pref[1]]}); }
+      if (pref) return json({key: pref[1], value: prefs[pref[1]] ?? null});
+      if (p === '/api/v2/threads/r-rel/reach') {
+        const q = Object.fromEntries(url.searchParams), way = q.delivery || 'steer';
+        reads.push(q);
+        return json({thread_id: 'r-rel', way, outside: [], reaches: [
+          {actor: 'bot:lead', reason: 'follower', mode: way, defer_for: way === 'defer' ? q.defer_for : null, adds_reader: false},
+          ...(way === 'defer' && q.defer_for === 'never' ? [] : [{actor: 'human:ben', reason: 'follower', mode: 'queue', defer_for: null, adds_reader: false}])]});
+      }
+      if (p === '/api/v2/tasks/t-rel/followers' && method === 'PUT') {
+        follows.push(JSON.parse(req.postData() || '{}'));
+        followers = [...followers, {actor: 'human:ana', notify: 'live', reason: 'manual'}];
+        return json({task_id: 't-rel', following: true, notify: 'live', followers});
+      }
+      if (p === '/api/v2/tasks') return json({tasks: [rel]});
+      if (p === '/api/v2/tasks/t-rel/comments' && method === 'POST') {
+        const body = JSON.parse(req.postData() || '{}');
+        posted.push(body);
+        said.push({id: 'r' + (said.length + 1), conversation_id: 'r-rel', sender_id: 'human:ana', kind: 'say', body: body.text, created_at: at(0)});
+        return json({comment: said.at(-1), comments: said, woke: true});
+      }
+      if (p === '/api/v2/tasks/t-rel')
+        return json({task: {...rel, followers}, events: [], can_comment: true, children: [], comments: said, execution: null,
+          comment_to: {bot: 'lead', wakes: true, mention: []}, comment_delivery: {default: 'steer', default_for: null, steer: true, queue: true, steers: true, goal: true}});
+      if (p.endsWith('/files')) return json({files: []});
+      return json(unrouted(p));
+    });
+    await page.goto('https://tico-ui.test/#/tasks');
+    await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
+    await page.evaluate(t => taskModalShow(t), rel);
+    const modal = page.locator('#task-modal'), foot = modal.locator('.task-pill .p-foot'), reach = foot.locator('.p-reach');
+    const pop = foot.locator('.p-reach-pop');
+    const rows = () => pop.locator('.p-reach-row').evaluateAll(xs => xs.map(x => [x.querySelector('.p-reach-name').textContent, x.querySelector('.p-reach-mode').textContent]));
+    const pick = async way => { await modal.locator('[data-task-caret]').click(); await modal.locator(`[data-task-menu] [data-deliver="${way}"]`).last().click(); };
+    await reach.filter({hasText: /^To Head of Engineering and /}).waitFor();
+    assert.equal(reads[0].delivery, 'steer', 'the reach asks for the way Send shows');
+    assert.equal(await foot.locator('.p-follow').count(), 0, 'no Follow under the box');
+    // The way changes the list: Queue, then Defer never (Ben is not notified, so he is not listed).
+    await pick('queue');
+    await page.waitForFunction(() => document.querySelector('#task-modal .p-reach-pop .p-reach-mode')?.textContent === 'After its turn');
+    await pick('defer:never');
+    await reach.filter({hasText: /^To Head of Engineering$/}).waitFor();
+    await reach.click();
+    assert.deepEqual(await rows(), [['Head of Engineering', 'Next turn']]);
+    await page.keyboard.press('Escape');
+    assert.equal(await pop.isHidden(), true);
+    // Set as goal is no comment: no reach.
+    await pick('goal');
+    await reach.waitFor({state: 'hidden'});
+    await pick('steer');
+    await reach.filter({hasText: /^To Head of Engineering and /}).waitFor();
+    // The list says who gets the comment.
+    await reach.click();
+    const got = await rows();
+    assert.deepEqual(got.map(r => r[1]), ['Now', 'Notified']);
+    assert.equal(got[0][0], 'Head of Engineering'); assert.match(got[1][0], /ben/i);
+    const box = await pop.boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= viewport.width && box.y >= 0, 'the list fits');
+    const covered = await pop.evaluate(m => {
+      const r = m.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + 10), cs = getComputedStyle(m);
+      return m.contains(e) ? '' : JSON.stringify({r: [r.left, r.top, r.width, r.height], hidden: m.hidden, vis: cs.visibility, op: cs.opacity, z: cs.zIndex, pos: cs.position, at: e?.outerHTML?.slice(0, 160)});
+    });
+    assert.equal(covered, '', 'the list is on top');
+    await pop.evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));   // its fade in (base.css)
+    if (shot) await page.screenshot({path: shot});
+    assert.equal(await pop.isVisible(), true, 'the list stays open');
+    await page.keyboard.press('Escape');
+    // Send: the comment only; posting never follows.
+    await modal.locator('textarea').fill('Ship it after lunch.');
+    await modal.locator('[data-task-main]').click();
+    await modal.locator('.task-comments', {hasText: 'Ship it after lunch.'}).waitFor();
+    assert.deepEqual(posted.map(b => [b.text, 'follow' in b]), [['Ship it after lunch.', false]], 'posting itself never follows');
+    assert.deepEqual(follows, [], 'a comment follows nothing');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+}
+
 (async () => {
   const shot = name => SHOTS ? require('node:path').join(SHOTS, name) : '';
   await run({width: 1200, height: 800}, shot('task-session-desktop.png'));
@@ -442,5 +548,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
   await answered({width: 390, height: 844}, shot('task-session-answered-phone.png'));
   await deliveryChoice({width: 1200, height: 800}, shot('task-session-delivery.png'));
   await deliveryChoice({width: 390, height: 844}, shot('task-session-delivery-phone.png'), 'dark');
+  await followReach({width: 1200, height: 800}, shot('task-follow-reach-light.png'), 'light');
+  await followReach({width: 390, height: 844}, shot('task-follow-reach-phone-dark.png'), 'dark');
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });

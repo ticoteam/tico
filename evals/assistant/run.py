@@ -26,6 +26,7 @@ Checks, per sample:
 
 Results: out/<tag>/<case>.s<n>.json per sample, and out/<tag>/summary.md with pass rate per case.
 """
+
 import argparse
 import concurrent.futures as cf
 from collections import Counter
@@ -43,14 +44,18 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = "assistant"
-JUDGE_TRIES = 3          # a judge reply with no JSON object is retried: 1 try + 2 retries
-JUDGE_BACKOFF = 5        # seconds; the wait before retry n is JUDGE_BACKOFF * n
+JUDGE_TRIES = 3  # a judge reply with no JSON object is retried: 1 try + 2 retries
+JUDGE_BACKOFF = 5  # seconds; the wait before retry n is JUDGE_BACKOFF * n
 # A run that produced no turns and says why: a rate limit, a usage limit, an overloaded or failed API call.
 API_ERROR = re.compile(r"rate.?limit|\b429\b|usage limit|overloaded|api error|quota|capacity", re.I)
 CONVERSATION = "dana-coo"  # the id of the owner's Assistant chat, as the opening names it
 OWNER = "human:dana"
-FILL = {"{{app_name}}": "Tico", "{{assistant_name}}": "Tico Assistant", "{{company_name}}": "Acme",
-        "{{mailbox}}": "ops@acme.example"}
+FILL = {
+    "{{app_name}}": "Tico",
+    "{{assistant_name}}": "Tico Assistant",
+    "{{company_name}}": "Acme",
+    "{{mailbox}}": "ops@acme.example",
+}
 
 FAKE_CORE = r'''import json, os, re, sys
 
@@ -307,6 +312,14 @@ def propose_count(out, argv):
     return out
 
 
+def bulk_echo(out, argv):
+    """`task bulk close`: matched and changed are the number of distinct task ids the call names (any form of argv)."""
+    ids = set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", " ".join(argv)))
+    if isinstance(out, dict) and "matched" in out:
+        out = {**out, "matched": len(ids), "changed": len(ids)}
+    return out
+
+
 def apply_state(obj, table, field, drop=None):
     """Set `field` on each dict in obj whose id is in table (a short id matches its full id); with `drop`, leave out the
     list items whose table value is drop."""
@@ -430,6 +443,8 @@ def answer(argv, via, tool=None):
             out = apply_state(out, state["automations"], "enabled")
         if words[:2] == ["assistant", "propose"]:
             out = propose_count(out, argv)
+        if words[:3] == ["task", "bulk", "close"]:
+            out = bulk_echo(out, argv)
     if out is not None:
         text = out if isinstance(out, str) else json.dumps(out, indent=1)
     elif resp is not None:
@@ -454,7 +469,10 @@ def answer(argv, via, tool=None):
     return text, code
 '''
 
-FAKE_HUB = "#!/usr/bin/env python3\n" + FAKE_CORE + r'''
+FAKE_HUB = (
+    "#!/usr/bin/env python3\n"
+    + FAKE_CORE
+    + r'''
 
 # The `hub` CLI on PATH: the repo's real parser validates argv, then the shared answer runs.
 import contextlib, io, sys
@@ -486,6 +504,7 @@ text, code = answer(argv, "cli")
 print(text)
 sys.exit(code)
 '''
+)
 
 # With --surface mcp there is no hub CLI in the run: a stub on PATH says so, and the attempt is logged as an invalid call.
 STUB_HUB = r'''#!/usr/bin/env python3
@@ -498,7 +517,10 @@ sys.stderr.write(message + "\n")
 sys.exit(127)
 '''
 
-FAKE_MCP = "#!/usr/bin/env python3\n" + FAKE_CORE + r'''
+FAKE_MCP = (
+    "#!/usr/bin/env python3\n"
+    + FAKE_CORE
+    + r'''
 
 # The hub as an MCP server on stdio, as clients/hubmcp.py serves it to a Claude run: `tools/list` is the real listing for
 # the caller's kind, and `tools/call` turns the call into the canonical CLI line and answers it with the same `answer`.
@@ -640,6 +662,7 @@ for raw in sys.stdin:
         sys.stdout.write(json.dumps(response, default=str) + "\n")
         sys.stdout.flush()
 '''
+)
 
 
 def opening(background=False):
@@ -665,7 +688,8 @@ def opening(background=False):
         "turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose "
         "an arbitrary answer-length or list-length cap.",
         "A task owner marks work done; its requester or an authorized human closes it.",
-        "Use hub question ask/answer for questions, and preserve durable knowledge in your repository's memory/ or "
+        "Ask a person with hub task question, ask a bot with hub message send and --needs-action, answer a question task in "
+        "Tico, and preserve durable knowledge in your repository's memory/ or "
         "knowledge/; end each such commit message with the line `Tico-Run: this run`.",
         "Your memory is your repository, where your owner reads and edits it; keep none anywhere else. Read the working rules "
         "at the top of memory/learnings.md at the start of each turn and follow them. Save a working rule you are given or "
@@ -683,16 +707,22 @@ def opening(background=False):
         "`next_before` reads the page before. Your repository, its files and git log, is the record of your own past work.",
     ]
     if background:
-        first = [f"This is a scheduled run for {OWNER}'s queue, not a chat. It acts as the Assistant, not as the person: a "
-                 "write uses only the Assistant's own rights, and anything that needs the person's rights goes on a Confirm "
-                 "card (`hub assistant propose`)."]
+        first = [
+            f"This is a scheduled run for {OWNER}'s queue, not a chat. It acts as the Assistant, not as the person: a "
+            "write uses only the Assistant's own rights, and anything that needs the person's rights goes on a Confirm "
+            "card (`hub assistant propose`)."
+        ]
         last = []
     else:
-        first = [f"You are privately assisting {OWNER}. ",
-                 "This provider session and its conversation history belong only to that person. Never copy personal "
-                 "preferences, messages, or attachments into shared repository files."]
-        last = ["Replies in this chat follow AGENT.md: short, with links, what changed and how to undo it. Never mention your "
-                "repository, state.md, memory or commits to the person."]
+        first = [
+            f"You are privately assisting {OWNER}. ",
+            "This provider session and its conversation history belong only to that person. Never copy personal "
+            "preferences, messages, or attachments into shared repository files.",
+        ]
+        last = [
+            "Replies in this chat follow AGENT.md: short, with links, what changed and how to undo it. Never mention your "
+            "repository, state.md, memory or commits to the person."
+        ]
     personal = [
         "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `hub health check`. "
         "Its response is already filtered to the signed-in person you represent.",
@@ -714,10 +744,14 @@ def turn_text(case):
     """The whole prompt for one turn: the standing part, the earlier words of this chat, then the owner's message. A
     background run gets its routine's standing text instead of a person's message, as the runner sends a scheduled routine."""
     if case.get("background"):
-        return "\n\n".join([opening(background=True),
-                             f"Scheduled routine for {OWNER}: the assigned task's body is the routine's standing text, not a "
-                             "person's message. Do what it says for this occurrence.",
-                             case["prompt"].strip()])
+        return "\n\n".join(
+            [
+                opening(background=True),
+                f"Scheduled routine for {OWNER}: the assigned task's body is the routine's standing text, not a "
+                "person's message. Do what it says for this occurrence.",
+                case["prompt"].strip(),
+            ]
+        )
     parts = [opening()]
     history = case.get("history") or []
     if history:
@@ -750,7 +784,9 @@ def run_sample(case, sample, args, outdir):
     g = ["git", "-C", str(work / "repo")]
     subprocess.run(g + ["init", "-q"], check=True)
     subprocess.run(g + ["add", "-A"], check=True)
-    subprocess.run(g + ["-c", "user.name=Bot", "-c", "user.email=bot@example.invalid", "commit", "-qm", "seed"], check=True)
+    subprocess.run(
+        g + ["-c", "user.name=Bot", "-c", "user.email=bot@example.invalid", "commit", "-qm", "seed"], check=True
+    )
     tools = work / "tools"
     tools.mkdir(parents=True)
     (tools / "fake_mcp.py").write_text(FAKE_MCP)
@@ -770,34 +806,96 @@ def run_sample(case, sample, args, outdir):
     mail.chmod(0o755)
     # Inherited HUB_* and TICO_* (credentials, tokens, hub addresses) never reach the child: the run has its own.
     inherited = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "TICO_"))}
-    env = {**inherited, "PATH": path, "EVAL_REPO": args.repo, "EVAL_LOG": str(logf),
-           "EVAL_CANNED": str(work / "canned.json"), "EVAL_STATE": str(work / "state.json"), "HUB_DIR": str(work / "hubdir"), "TICO_BOT": "coo"}
+    env = {
+        **inherited,
+        "PATH": path,
+        "EVAL_REPO": args.repo,
+        "EVAL_LOG": str(logf),
+        "EVAL_CANNED": str(work / "canned.json"),
+        "EVAL_STATE": str(work / "state.json"),
+        "HUB_DIR": str(work / "hubdir"),
+        "TICO_BOT": "coo",
+    }
     # The hub MCP server, as runner-rs/src/hosts/claude.rs gives it: the same state and canned files as the CLI.
-    servers = {} if args.surface == "cli" else {"hub": {"command": sys.executable, "args": [str(tools / "fake_mcp.py")], "env": {
-        "EVAL_REPO": args.repo, "EVAL_LOG": str(logf), "EVAL_CANNED": str(work / "canned.json"),
-        "EVAL_STATE": str(work / "state.json"), "EVAL_MCP_KIND": os.environ.get("EVAL_MCP_KIND", "assistant")}}}
-    cmd = ["claude", "-p", turn_text(case), "--model", args.model, "--effort", effort, "--setting-sources", "project",
-           "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": servers}), "--no-session-persistence",
-           "--permission-mode", "bypassPermissions", "--output-format", "json", "--max-turns", str(args.max_turns)]
+    servers = (
+        {}
+        if args.surface == "cli"
+        else {
+            "hub": {
+                "command": sys.executable,
+                "args": [str(tools / "fake_mcp.py")],
+                "env": {
+                    "EVAL_REPO": args.repo,
+                    "EVAL_LOG": str(logf),
+                    "EVAL_CANNED": str(work / "canned.json"),
+                    "EVAL_STATE": str(work / "state.json"),
+                    "EVAL_MCP_KIND": os.environ.get("EVAL_MCP_KIND", "assistant"),
+                },
+            }
+        }
+    )
+    cmd = [
+        "claude",
+        "-p",
+        turn_text(case),
+        "--model",
+        args.model,
+        "--effort",
+        effort,
+        "--setting-sources",
+        "project",
+        "--strict-mcp-config",
+        "--mcp-config",
+        json.dumps({"mcpServers": servers}),
+        "--no-session-persistence",
+        "--permission-mode",
+        "bypassPermissions",
+        "--output-format",
+        "json",
+        "--max-turns",
+        str(args.max_turns),
+    ]
     t0 = time.time()
     p, start_failed = None, False
     try:
-        p = subprocess.run(cmd, cwd=work / "repo", env=env, capture_output=True, text=True, timeout=args.timeout, check=False)
+        p = subprocess.run(
+            cmd, cwd=work / "repo", env=env, capture_output=True, text=True, timeout=args.timeout, check=False
+        )
         data = json.loads(p.stdout or "{}")
     except OSError as e:  # no claude binary: the model run never started
         start_failed = True
         data = {"result": f"(harness error: {e})", "is_error": True}
-    except (subprocess.TimeoutExpired, ValueError) as e:  # timeout, or stdout that is not JSON (a usage-limit text, say)
+    except (
+        subprocess.TimeoutExpired,
+        ValueError,
+    ) as e:  # timeout, or stdout that is not JSON (a usage-limit text, say)
         data = {"result": f"(harness error: {e})", "is_error": True}
     raw = f"{p.stdout or ''} {p.stderr or ''}" if p is not None else ""
     reply = str(data.get("result") or "")
     turns = data.get("num_turns")
     if not turns and (start_failed or API_ERROR.search(f"{json.dumps(data)} {raw}")):
         # The model never ran a turn because of the API or a rate limit: an error to rerun, not a failed check.
-        res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "judge": args.judge,
-               "pass": False, "fails": [], "error": "model", "why": reply[:300], "score": None, "reply": reply,
-               "calls": [], "surface": args.surface, "surfaces": [], "invalid": 0, "invalid_by_surface": {},
-               "turns": turns, "cost_usd": data.get("total_cost_usd"), "secs": round(time.time() - t0)}
+        res = {
+            "id": case["id"],
+            "sample": sample,
+            "model": args.model,
+            "effort": effort,
+            "judge": args.judge,
+            "pass": False,
+            "fails": [],
+            "error": "model",
+            "why": reply[:300],
+            "score": None,
+            "reply": reply,
+            "calls": [],
+            "surface": args.surface,
+            "surfaces": [],
+            "invalid": 0,
+            "invalid_by_surface": {},
+            "turns": turns,
+            "cost_usd": data.get("total_cost_usd"),
+            "secs": round(time.time() - t0),
+        }
         (outdir / f"{tag}.json").write_text(json.dumps(res, indent=1))
         return res
     calls = [json.loads(l) for l in logf.read_text().splitlines() if l.strip()]
@@ -806,8 +904,12 @@ def run_sample(case, sample, args, outdir):
     lines = [c["argv"] for c in shown]
     surfaces = [c.get("via", "cli") for c in shown]
     worked = [c["argv"] for c in shown if not int(c.get("exit", 0))]
-    judged = [c["argv"] if not int(c.get("exit", 0)) else
-              f"{c['argv']}   [FAILED exit {c.get('exit')}: {c.get('out', '')[:120]}]" for c in shown]
+    judged = [
+        c["argv"]
+        if not int(c.get("exit", 0))
+        else f"{c['argv']}   [FAILED exit {c.get('exit')}: {c.get('out', '')[:120]}]"
+        for c in shown
+    ]
     attached = {k: v for c in calls for k, v in (c.get("files") or {}).items()}
     fails = []
     must_lines = lines if case.get("must_allow_failed") else worked
@@ -836,22 +938,51 @@ def run_sample(case, sample, args, outdir):
             fails.append(f"invalid {c.get('via', 'cli')} call: hub {c['argv'][:100]}")
     verdict = judge(case, reply, judged, attached, args)
     if verdict.get("error") == "judge":
-        res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "judge": args.judge,
-               "pass": False, "fails": fails, "error": "judge", "why": verdict.get("why", ""), "score": None,
-               "reply": reply, "calls": lines, "surface": args.surface, "surfaces": surfaces, "invalid": len(bad),
-               "invalid_by_surface": dict(Counter(c.get("via", "cli") for c in bad)), "turns": turns,
-               "cost_usd": data.get("total_cost_usd"), "secs": round(time.time() - t0)}
+        res = {
+            "id": case["id"],
+            "sample": sample,
+            "model": args.model,
+            "effort": effort,
+            "judge": args.judge,
+            "pass": False,
+            "fails": fails,
+            "error": "judge",
+            "why": verdict.get("why", ""),
+            "score": None,
+            "reply": reply,
+            "calls": lines,
+            "surface": args.surface,
+            "surfaces": surfaces,
+            "invalid": len(bad),
+            "invalid_by_surface": dict(Counter(c.get("via", "cli") for c in bad)),
+            "turns": turns,
+            "cost_usd": data.get("total_cost_usd"),
+            "secs": round(time.time() - t0),
+        }
         (outdir / f"{tag}.json").write_text(json.dumps(res, indent=1))
         return res
     if not verdict.get("pass"):
         fails.append(f"judge: {verdict.get('why', '')[:300]}")
-    res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "judge": args.judge,
-           "pass": not fails, "fails": fails,
-           "score": verdict.get("score"), "why": verdict.get("why", ""), "reply": reply, "calls": lines,
-           "surface": args.surface, "surfaces": surfaces,
-           "invalid": len(bad), "invalid_by_surface": dict(Counter(c.get("via", "cli") for c in bad)),
-           "turns": data.get("num_turns"), "cost_usd": data.get("total_cost_usd"),
-           "secs": round(time.time() - t0)}
+    res = {
+        "id": case["id"],
+        "sample": sample,
+        "model": args.model,
+        "effort": effort,
+        "judge": args.judge,
+        "pass": not fails,
+        "fails": fails,
+        "score": verdict.get("score"),
+        "why": verdict.get("why", ""),
+        "reply": reply,
+        "calls": lines,
+        "surface": args.surface,
+        "surfaces": surfaces,
+        "invalid": len(bad),
+        "invalid_by_surface": dict(Counter(c.get("via", "cli") for c in bad)),
+        "turns": data.get("num_turns"),
+        "cost_usd": data.get("total_cost_usd"),
+        "secs": round(time.time() - t0),
+    }
     (outdir / f"{tag}.json").write_text(json.dumps(res, indent=1))
     return res
 
@@ -860,9 +991,21 @@ def judge(case, reply, lines, attached, args):
     if not case.get("reply"):
         return {"pass": True, "score": 5, "why": "no rubric"}
     # A row's `after` entries are what the same read returns once a write they name has run (a read-back).
-    canned = json.dumps([{"matches": h["match"], "returns": h.get("out", ""),
-                          **({"after_a_write": [{"when": a["when"], "returns": a["out"]} for a in h["after"]]}
-                             if h.get("after") else {})} for h in case.get("hub") or []], indent=1)[:6000]
+    canned = json.dumps(
+        [
+            {
+                "matches": h["match"],
+                "returns": h.get("out", ""),
+                **(
+                    {"after_a_write": [{"when": a["when"], "returns": a["out"]} for a in h["after"]]}
+                    if h.get("after")
+                    else {}
+                ),
+            }
+            for h in case.get("hub") or []
+        ],
+        indent=1,
+    )[:6000]
     prompt = f"""You grade one turn of an AI assistant that works for one person in a company work app (Tico). Be strict but
 fair: judge only against the rubric, not style. The assistant's hub CLI calls are listed; a call marked FAILED did not
 work (a canned failure or a rejected argument), so it does not count as done. The CANNED RECORD is what the hub returned for the calls the grader scripted; numbers in the reply must match it. A row's after_a_write is what that read returns once a write its `when` names has run.
@@ -889,10 +1032,27 @@ THE ASSISTANT'S FINAL REPLY:
 {reply.strip() or '(empty)'}
 
 Answer with only a JSON object: {{"pass": true|false, "score": 1-5, "why": "<one or two sentences: the main miss, or why it passes>"}}"""
-    cmd = ["claude", "-p", prompt, "--model", args.judge, "--effort", "medium", "--setting-sources", "project",
-           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
-           "--output-format", "json", "--max-turns", "1", "--disallowedTools",
-           "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task"]
+    cmd = [
+        "claude",
+        "-p",
+        prompt,
+        "--model",
+        args.judge,
+        "--effort",
+        "medium",
+        "--setting-sources",
+        "project",
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "--max-turns",
+        "1",
+        "--disallowedTools",
+        "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task",
+    ]
     why = ""
     for attempt in range(JUDGE_TRIES):
         if attempt:
@@ -910,8 +1070,7 @@ Answer with only a JSON object: {{"pass": true|false, "score": 1-5, "why": "<one
         except (subprocess.TimeoutExpired, OSError, ValueError, KeyError, TypeError) as e:
             why = str(e)
     # No verdict after every try: the sample is an error to rerun, not a failed check.
-    return {"error": "judge", "pass": False, "score": None,
-            "why": f"no verdict after {JUDGE_TRIES} tries: {why}"}
+    return {"error": "judge", "pass": False, "score": None, "why": f"no verdict after {JUDGE_TRIES} tries: {why}"}
 
 
 def load_cases(only="", case_ids=""):
@@ -952,18 +1111,28 @@ def summarise(outdir, tag, model, judge, samples, surface="both"):
     for r in rows:
         by_case.setdefault(r["id"], []).append(r)
     passed = sum(r["pass"] for r in scored)
-    md = [f"# {tag}: {passed}/{len(scored)} pass ({passed / max(len(scored), 1):.0%}), {len(errored)} errored, "
-          f"model {model}, judge {judge}",
-          f"Surface {surface}: {calls['mcp']} MCP calls ({bad['mcp']} invalid), {calls['cli']} CLI calls "
-          f"({bad['cli']} invalid).",
-          f"invalid calls per sample: {sum(r.get('invalid', 0) for r in rows) / max(len(rows), 1):.1f}"]
+    md = [
+        f"# {tag}: {passed}/{len(scored)} pass ({passed / max(len(scored), 1):.0%}), {len(errored)} errored, "
+        f"model {model}, judge {judge}",
+        f"Surface {surface}: {calls['mcp']} MCP calls ({bad['mcp']} invalid), {calls['cli']} CLI calls "
+        f"({bad['cli']} invalid).",
+        f"invalid calls per sample: {sum(r.get('invalid', 0) for r in rows) / max(len(rows), 1):.1f}",
+    ]
     if errored:
         kinds = Counter(r["error"] for r in errored)
         where = ", ".join(f"{r['id']} s{r['sample']}" for r in sorted(errored, key=lambda r: (r["id"], r["sample"])))
-        md.append(f"{len(errored)} samples errored: " + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items()))
-                  + f" ({where}). Left out of the pass rate; rerun with --rerun-errors {tag}.")
-    md += ["", f"{len(by_case)} cases x up to {samples} samples. Score is the judge's 1-5 mean.", "",
-           "| case | pass | score | turns | $ | first failure |", "|---|---|---|---|---|---|"]
+        md.append(
+            f"{len(errored)} samples errored: "
+            + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items()))
+            + f" ({where}). Left out of the pass rate; rerun with --rerun-errors {tag}."
+        )
+    md += [
+        "",
+        f"{len(by_case)} cases x up to {samples} samples. Score is the judge's 1-5 mean.",
+        "",
+        "| case | pass | score | turns | $ | first failure |",
+        "|---|---|---|---|---|---|",
+    ]
     for cid in sorted(by_case):
         rs = by_case[cid]
         ok_rs = [r for r in rs if not r.get("error")]
@@ -975,10 +1144,11 @@ def summarise(outdir, tag, model, judge, samples, surface="both"):
         turns = statistics.mean(r["turns"] or 0 for r in ok_rs)
         cost = sum(r["cost_usd"] or 0 for r in rs)
         first = next((r["fails"][0] for r in ok_rs if r["fails"]), "")
-        md.append(f"| {cid} | {ok}/{len(ok_rs)} | {score:.1f} | {turns:.0f} | {cost:.3f} | "
-                  f"{first[:160].replace('|', '/')} |")
+        md.append(
+            f"| {cid} | {ok}/{len(ok_rs)} | {score:.1f} | {turns:.0f} | {cost:.3f} | {first[:160].replace('|', '/')} |"
+        )
     (outdir / "summary.md").write_text("\n".join(md) + "\n")
-    return "\n".join(md[:md.index("")])
+    return "\n".join(md[: md.index("")])
 
 
 def main():
@@ -990,11 +1160,19 @@ def main():
     ap.add_argument("--only", default="", help="comma list of case files (queue, approvals, jobs) or id prefixes")
     ap.add_argument("--case", default="", help="comma list of exact case ids")
     ap.add_argument("--samples", type=int, default=1, help="runs per case")
-    ap.add_argument("--surface", choices=["cli", "mcp", "both"], default="both",
-                    help="how the Assistant reaches the hub: both is production (MCP server and the hub CLI)")
+    ap.add_argument(
+        "--surface",
+        choices=["cli", "mcp", "both"],
+        default="both",
+        help="how the Assistant reaches the hub: both is production (MCP server and the hub CLI)",
+    )
     ap.add_argument("--tag", default="run")
-    ap.add_argument("--rerun-errors", default="", metavar="TAG",
-                    help="rerun only the errored samples of an earlier TAG, into that folder, and rewrite its summary")
+    ap.add_argument(
+        "--rerun-errors",
+        default="",
+        metavar="TAG",
+        help="rerun only the errored samples of an earlier TAG, into that folder, and rewrite its summary",
+    )
     ap.add_argument("-j", type=int, default=6)
     ap.add_argument("--max-turns", type=int, default=30)
     ap.add_argument("--timeout", type=int, default=900)
@@ -1032,8 +1210,12 @@ def main():
             if r.get("error"):
                 print(f"ERR  {cid} s{s}  {r['error']} error: {r.get('why', '')[:200]}", flush=True)
                 continue
-            print(("PASS " if r["pass"] else "FAIL ") + f"{cid} s{s}" +
-                  ("" if r["pass"] else "  " + " | ".join(r["fails"])[:400]), flush=True)
+            print(
+                ("PASS " if r["pass"] else "FAIL ")
+                + f"{cid} s{s}"
+                + ("" if r["pass"] else "  " + " | ".join(r["fails"])[:400]),
+                flush=True,
+            )
     print(summarise(outdir, args.tag, args.model, args.judge, args.samples, args.surface), flush=True)
 
 

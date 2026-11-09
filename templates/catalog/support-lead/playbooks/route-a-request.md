@@ -41,5 +41,5 @@ If two owners fit, say which you would choose and why. If the human in `team.md`
 On the task: one line naming the owner and the reason, the age and what it waits on.
 Create the task with `hub task create --owner <owner> --parent <id>`, link the ticket, and note it in
 `knowledge/decisions-needed.md`. If the routing rules do not identify an owner, ask the support owner
-with `hub task ask <id>` for that missing information. Record useful routing lessons in
+with `hub task question "<question>" --on <person> --parent <id>` for that missing information. Record useful routing lessons in
 `memory/learnings.md`.

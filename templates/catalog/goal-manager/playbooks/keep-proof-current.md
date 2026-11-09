@@ -34,8 +34,8 @@ Read each source. Keep only facts that say whether customers want the product.
    `hub meeting read <id>` for customer calls. Team meetings only; you never see private ones.
 4. **Listening.** `hub market briefing latest` and `hub market delta`: what people said in public about the product
    or the problem, with links.
-5. **Learnings.** Ask the customer-facing bots once: `hub question ask <slug> "What did customers say about <product>
-   in the last 30 days? Quote them, with the task or message each came from."` Use only answers that name a source.
+5. **Learnings.** Ask the customer-facing bots once: `hub message send <slug> "What did customers say about <product>
+   in the last 30 days? Quote them, with the task or message each came from." --needs-action` Use only answers that name a source.
 
 ## 3. Write it
 

@@ -1,9 +1,9 @@
-// Settings > System (ui/app/settings-recurring.js): one flat list of Tico's own jobs, no group headings, a search box
+// Automations > System jobs (ui/app/settings-recurring.ts, #/automations/system-jobs): one flat list of Tico's own jobs, no group headings, a search box
 // that matches name, trigger, action and department; each row reads WHEN ... THEN ... with one department tag, its
 // schedule, last run in words (a failure in red with its reason), next run, and for a Decide job the route that answered,
 // a fallback in words and this month's spend. Housekeeping says Tico needs it. An owner or admin gets a switch, a
 // schedule preset (no every 15 minutes for an AI job) and Run now on controlled jobs; a member none.
-// Fixtures only.
+// Fixtures only. TICO_UI_SHOTS=<dir> saves the screen at 1440 and 390, dark.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -26,11 +26,11 @@ function system(role) {
       spent_this_month_usd: 0.42, next: soon, last: {started_at: before, finished_at: before, ok: true, result: '9 checked, 2 suggestions', runs: 1}})),
     job('kpi_asks', 'KPI stale asks', ctl({schedule: 'Daily at 09:00', preset: 'daily', at: '09:00', presets: ALL, group: 'checks', next: soon,
       when: ['every day at 09:00'], last: {started_at: before, finished_at: before, ok: false, result: 'Failed: the database was busy', runs: 1}})),
-    job('memory_tidy', 'Nightly memory tidy', ctl({on: false, schedule: 'Nightly at 03:30', group: 'learning', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}], pilots: [], pilot_models: [{model: 'codex:gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['low', 'high']}, {model: 'claude:claude-sonnet-5-5', label: 'Sonnet 5.5', efforts: ['low', 'high']}]})),
+    job('daily_check', 'Daily check', ctl({on: false, schedule: 'Daily at 03:30', group: 'checks', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}]})),
     job('due_reminders', 'Due reminders', {schedule: 'Every 10 seconds', group: 'reminders', when: ['every 10 seconds'], then: ['tell a bot when one of its tasks reaches its due time']}),
     job('approval_expiry', 'Approval expiry', {group: 'reminders', then: ['take approvals and asks nobody will act on out of Needs you']}),
     job('stall_checks', 'Stall checks', {needed: true, schedule: 'Every minute', when: ['every minute']}),
-    job('topic_fresh', 'Start fresh when the topic changes', {switch: true, can_change: admin, on: false, records: false, group: 'chat', schedule: 'When it happens',
+    job('topic_fresh', 'Start fresh when the topic changes', {switch: true, can_change: admin, on: false, group: 'chat', schedule: 'When it happens',
       when: ['a message in a direct chat changes the topic'], then: ['start a fresh session, like Clear']}),
   ];
   jobs.push(job('task-rule-close-after-done', 'Close 24h after done', {kind: 'task_rule', group: 'task_rules', switch: true, on: true, can_change: role !== 'member', preset: '15m', presets: ALL, department: {id: 'engineering', name: 'Engineering', in_chart: true}, triggers: [{key: 'done_untouched', hours: 24}], actions: ['close'], when: ['a task has been done and untouched for 24 hours'], then: ['close it']}));
@@ -47,10 +47,10 @@ async function open(browser, role) {
   await page.route('**/*', route => {
     const req = route.request(), p = new URL(req.url()).pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role: role === 'owner' ? 'owner' : 'human', bot_admin: role === 'admin',
@@ -82,7 +82,6 @@ async function open(browser, role) {
         j.last = {started_at: new Date().toISOString(), finished_at: new Date().toISOString(), ok: true, result: '4 checked, 1 suggestion', runs: 1};
         return json({job: j, running: false});
       }
-      if (body.pilots) j.pilots = body.pilots;
       if (body.on != null) j.on = body.on;
       if (body.preset) { j.preset = body.preset; j.schedule = body.preset === '4h' ? 'Every 4 hours' : j.schedule; j.when = body.preset === '4h' ? ['every 4 hours'] : j.when; }
       return json({job: j});
@@ -90,10 +89,7 @@ async function open(browser, role) {
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/settings');
-  await page.locator('#settings-tabs').waitFor();
-  await page.locator('#settings-more summary').click();
-  await page.locator('[data-settings-tab="system"]').click();
+  await page.goto('https://tico-ui.test/#/automations/system-jobs');
   await page.locator('[data-system-routine="stale_review"]').waitFor();
   return {page, errors, asked, writes};
 }
@@ -101,7 +97,10 @@ const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
 // A change on a row is saved once its write has gone, the row is no longer busy, and it shows no error ("Saved" is a toast).
 const saved = async (page, writes, count, key) => {
   for (let i = 0; i < 200 && writes.length < count; i++) await page.waitForTimeout(25);
-  assert.ok(writes.length >= count, `the ${key} change is sent`);
+  if (writes.length < count) {
+    const box = await page.evaluate(k => { const i = document.querySelector(`[data-system-routine="${k}"] [data-sysr-at]`); return {value: i?.value, focus: document.activeElement?.outerHTML?.slice(0, 120)}; }, key);
+    assert.fail(`the ${key} change is sent: ${JSON.stringify({writes, box})}`);
+  }
   await page.waitForFunction(k => !SYSTEM_ROUTINE_BUSY.has(k) && !document.querySelector(`[data-system-routine="${k}"] [data-sysr-status].err`), key);
 };
 
@@ -111,8 +110,10 @@ const saved = async (page, writes, count, key) => {
     for (const role of ['owner', 'admin', 'member']) {
       const {page, errors, asked, writes} = await open(browser, role);
       // One flat list, no wake rules or bot routines: no group headings, a search box on top.
-      const headings = await page.locator('#settings-system h2:visible').allInnerTexts();
-      assert.equal(headings[0].trim(), 'What Tico runs on its own', role);
+      assert.equal((await page.locator('.au-hd .au-name').innerText()).trim(), 'System jobs', role);
+      assert.equal((await page.locator('.au-hd .pill').innerText()).trim(), 'Built-in', role);
+      assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'detail', 'it opens in place');
+      const headings = await page.locator('.au-pane h2:visible').allInnerTexts();
       assert.ok(!headings.some(h => /wakes|routines/i.test(h)), role + ': ' + headings);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
@@ -150,7 +151,7 @@ const saved = async (page, writes, count, key) => {
       assert.equal(await row(page, 'health_scan').count(), 0, 'Check health runs through Maintenance');
       if (role === 'member') {
         // A member reads the list: no switch, schedule choice or Run now anywhere.
-        assert.equal(await page.locator('#set-system-card input:not([data-sysr-search]), #set-system-card select, #set-system-card button').count(), 0);
+        assert.equal(await page.locator('#set-system-routines input:not([data-sysr-search]), #set-system-routines select, #set-system-routines button').count(), 0);
         assert.match(await row(page, 'stale_review').locator('[data-sysr-state]').innerText(), /On/);
         assert.equal(await page.locator('[data-sysr-owner]').count(), 0);
       } else {
@@ -158,8 +159,8 @@ const saved = async (page, writes, count, key) => {
         const presets = key => row(page, key).locator('[data-sysr-preset] option').evaluateAll(els => els.map(el => el.value));
         assert.deepEqual(await presets('stale_review'), ['hourly', '4h', 'daily']);
         assert.deepEqual(await presets('kpi_asks'), ['15m', 'hourly', '4h', 'daily']);
-        assert.equal(await row(page, 'memory_tidy').locator('[data-sysr-preset]').count(), 0, 'one choice: its time');
-        assert.equal(await row(page, 'memory_tidy').locator('[data-sysr-at]').inputValue(), '03:30');
+        assert.equal(await row(page, 'daily_check').locator('[data-sysr-preset]').count(), 0, 'one choice: its time');
+        assert.equal(await row(page, 'daily_check').locator('[data-sysr-at]').inputValue(), '03:30');
         assert.equal(await row(page, 'kpi_asks').locator('[data-sysr-at]').inputValue(), '09:00');
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-on]').isChecked(), false);
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-run]').count(), 0, 'a switch only');
@@ -174,7 +175,7 @@ const saved = async (page, writes, count, key) => {
         await page.waitForFunction(() => /4 checked, 1 suggestion/.test(document.querySelector('[data-system-routine="stale_review"] [data-sysr-result]')?.textContent || ''));
         // The daily time saves once, when the box is left, not after the hour alone.
         const at = row(page, 'kpi_asks').locator('[data-sysr-at]');
-        await at.click();
+        await at.click({position: {x: 16, y: 12}});   // the hour
         await page.keyboard.type('1030');
         await page.keyboard.type('AM');
         assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sysr-at]')), true, 'focus stays while typing');
@@ -187,32 +188,17 @@ const saved = async (page, writes, count, key) => {
       assert.deepEqual(asked, ['GET']);
       assert.deepEqual(errors, []);
       if (role !== 'member') {
-        const tidy = row(page, 'memory_tidy');
-        assert.equal(await tidy.locator('[data-sysr-on]').isChecked(), false);
-        assert.equal(await tidy.locator('[data-sysr-run]').isDisabled(), true);
-        assert.match(await tidy.locator('[data-sysr-run]').getAttribute('title'), /Switch it on/);
-        await tidy.locator('[data-memory-tidy-edit]').click();
-        const dialog = page.locator('dialog:visible');
-        assert.equal(await dialog.locator('[data-pilot-row]').count(), 0);
-        await dialog.locator('[data-add]').click();
-        await dialog.locator('[data-bot]').fill('botops');
-        assert.deepEqual(await dialog.locator('[data-model] option').evaluateAll(es => es.map(e => e.value)), ['', 'codex:gpt-6.1-sol', 'claude:claude-sonnet-5-5']);
-        await dialog.locator('[data-model]').selectOption('claude:claude-sonnet-5-5');
-        assert.equal(await dialog.locator('[data-effort]').inputValue(), 'low');
-        await dialog.locator('[type="submit"]').click();
-        await dialog.waitFor({state: 'detached'});
-        assert.deepEqual(writes.at(-1).body, {pilots: [{bot: 'botops', model: 'claude:claude-sonnet-5-5', effort: 'low'}]});
-        await tidy.locator('[data-memory-tidy-edit]').click();
-        await page.locator('dialog:visible [data-remove]').click();
-        await page.locator('dialog:visible [type="submit"]').click();
-        await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
-        assert.deepEqual(writes.at(-1).body, {pilots: []});
+        // A job switched off cannot run until it is switched on.
+        const daily = row(page, 'daily_check');
+        assert.equal(await daily.locator('[data-sysr-on]').isChecked(), false);
+        assert.equal(await daily.locator('[data-sysr-run]').isDisabled(), true);
+        assert.match(await daily.locator('[data-sysr-run]').getAttribute('title'), /Switch it on/);
         const count = writes.length;
-        await tidy.locator('[data-sysr-on]').check();
-        await saved(page, writes, count + 1, 'memory_tidy');
-        assert.equal(await tidy.locator('[data-sysr-run]').isDisabled(), false);
-        await tidy.locator('[data-sysr-run]').click();
-        await saved(page, writes, count + 2, 'memory_tidy');
+        await daily.locator('[data-sysr-on]').check();
+        await saved(page, writes, count + 1, 'daily_check');
+        assert.equal(await daily.locator('[data-sysr-run]').isDisabled(), false);
+        await daily.locator('[data-sysr-run]').click();
+        await saved(page, writes, count + 2, 'daily_check');
         assert.equal(writes.at(-1).method, 'POST');
       }
       await page.close();
@@ -256,10 +242,18 @@ const saved = async (page, writes, count, key) => {
     }
     {
       // A phone: the row stacks and nothing spills sideways.
-      const {page} = await open(browser, 'owner');
+      const {page, errors} = await open(browser, 'owner');
+      const dir = process.env.TICO_UI_SHOTS;
+      const shot = async name => { if (dir) { fs.mkdirSync(dir, {recursive: true}); await page.screenshot({path: `${dir}/${name}.png`, animations: 'disabled'}); } };
+      await page.evaluate(() => window.ticoTheme?.set('dark'));
+      await shot('automations-system-jobs-desktop-dark');
       await page.setViewportSize({width: 390, height: 844});
+      await page.waitForTimeout(100);
       const wide = await page.evaluate(() => document.querySelector('#set-system-routines').scrollWidth - document.querySelector('#set-system-routines').clientWidth);
       assert.ok(wide <= 1, `no sideways scroll on a phone (${wide}px)`);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'the page does not scroll sideways');
+      await shot('automations-system-jobs-phone-dark');
+      assert.deepEqual(errors, []);
       await page.close();
     }
     console.log('settings-system-routines: ok');

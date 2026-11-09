@@ -3,6 +3,7 @@
 Nothing here talks to a server. The catalog is a temporary directory holding one card, which is
 what `TICO_CATALOG_DIR` is for, so these tests say nothing about which bots the product ships.
 """
+
 import functools
 import subprocess
 import tempfile
@@ -52,12 +53,15 @@ labels: [owner:CHANGE-ME]
 schedules: []
 """
 
-NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada",
-         "assistant_bot": "coo"}
-ANSWERS = {"what_we_do": "we clean holiday homes", "customers": "owners of holiday homes",
-           "team_size": "nine people", "work_arrives": ["email", "Slack"],
-           "repetitive_work": "chasing cleaners for photos",
-           "never_without_person": ["refunds", "signing a contract"]}
+NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "coo"}
+ANSWERS = {
+    "what_we_do": "we clean holiday homes",
+    "customers": "owners of holiday homes",
+    "team_size": "nine people",
+    "work_arrives": ["email", "Slack"],
+    "repetitive_work": "chasing cleaners for photos",
+    "never_without_person": ["refunds", "signing a contract"],
+}
 
 
 def fixture(root, template="assistant", card=CARD, agent=AGENT):
@@ -66,7 +70,9 @@ def fixture(root, template="assistant", card=CARD, agent=AGENT):
     (directory / "playbooks").mkdir(parents=True)
     (directory / "card.yaml").write_text(card)
     (directory / "AGENT.md").write_text(agent)
-    (directory / "employee.yaml").write_text(MANIFEST)      # an older template: the manifest under its old name still materializes
+    (directory / "employee.yaml").write_text(
+        MANIFEST
+    )  # an older template: the manifest under its old name still materializes
     (directory / "state.md").write_text("# State\n\nNothing yet.\n")
     (directory / ".gitignore").write_text(".env\n")
     (directory / "playbooks" / "README.md").write_text("Playbooks for {{bot_name}}.\n")
@@ -101,8 +107,7 @@ class Materialize(unittest.TestCase):
         self.workspace = Path(self.tmp.name) / "Companies/Acme"
 
     def make(self, slug="coo", **over):
-        return catalog.materialize("assistant", slug, self.workspace, NAMES, ANSWERS,
-                                   directory=self.catalog, **over)
+        return catalog.materialize("assistant", slug, self.workspace, NAMES, ANSWERS, directory=self.catalog, **over)
 
     def test_an_existing_repository_is_never_overwritten(self):
         path = self.make()
@@ -153,7 +158,9 @@ class Refresh(unittest.TestCase):
         self.catalog = Path(self.tmp.name) / "catalog"
         self.template = fixture(self.catalog)
         (self.template / "playbooks" / "fleet.md").write_text("Check the fleet for {{company_name}}.\n")
-        self.path = catalog.materialize("assistant", "coo", Path(self.tmp.name) / "ws", NAMES, ANSWERS, directory=self.catalog)
+        self.path = catalog.materialize(
+            "assistant", "coo", Path(self.tmp.name) / "ws", NAMES, ANSWERS, directory=self.catalog
+        )
 
     def refresh(self):
         return catalog.refresh("assistant", self.path, NAMES, directory=self.catalog)
@@ -176,8 +183,11 @@ class Refresh(unittest.TestCase):
         (outside / "fleet.md").write_text("Keep me.\n")
         (self.template / "AGENT.md").write_text("Updated instructions.\n")
         before = (self.path / "AGENT.md").read_text()
-        for rel, destination in (("playbooks/fleet.md", outside / "fleet.md"),
-                                 (catalog.STAMP, outside / "new-stamp"), ("playbooks", outside)):
+        for rel, destination in (
+            ("playbooks/fleet.md", outside / "fleet.md"),
+            (catalog.STAMP, outside / "new-stamp"),
+            ("playbooks", outside),
+        ):
             path = self.path / rel
             backup = path.with_name(path.name + ".saved")
             path.rename(backup)
@@ -209,12 +219,17 @@ class Refresh(unittest.TestCase):
         (self.path / "state.md").write_text("# State\n\nMid-task.\n")
         (self.template / "playbooks" / "fleet.md").write_text("Check the fleet, then fix it, for {{company_name}}.\n")
         self.assertEqual(self.refresh(), ["playbooks/fleet.md"])
-        self.assertEqual((self.path / "playbooks" / "fleet.md").read_text(), "Check the fleet, then fix it, for Acme Ltd.\n")
+        self.assertEqual(
+            (self.path / "playbooks" / "fleet.md").read_text(), "Check the fleet, then fix it, for Acme Ltd.\n"
+        )
         self.assertEqual((self.path / "playbooks" / "mine.md").read_text(), "A playbook the bot wrote.\n")
         self.assertIn("Mid-task.", (self.path / "state.md").read_text())
         self.assertIn("Refresh 1 product file", git(self.path, "log", "-1", "--format=%s"))
-        self.assertEqual(git(self.path, "show", "HEAD~1:playbooks/fleet.md"), "Improved by the bot.")     # kept in the history
-        self.assertEqual(self.refresh(), [])                        # once
+        self.assertEqual(
+            git(self.path, "show", "HEAD~1:playbooks/fleet.md"), "Improved by the bot."
+        )  # kept in the history
+        self.assertEqual(self.refresh(), [])  # once
+
 
 @functools.lru_cache(maxsize=None)
 def read_catalog(directory):
@@ -224,7 +239,9 @@ def read_catalog(directory):
 
 def starters(directory):
     """Every template a company can pick: all but the built-ins the platform always creates."""
-    return sorted(name for name, card in read_catalog(directory).items() if not card.get("required") and not card.get("bootstrap"))
+    return sorted(
+        name for name, card in read_catalog(directory).items() if not card.get("required") and not card.get("bootstrap")
+    )
 
 
 class StarterBots(unittest.TestCase):
@@ -239,11 +256,13 @@ class StarterBots(unittest.TestCase):
             folder, where = self.directory / name, f"template {name}"
             card = read_catalog(self.directory)[name]
             self.assertIs(card["first_routine"]["draft_only"], True, where)
-            self.assertNotIn("approval_required", card, f"{where}: sending uses outbound_send")
+            self.assertNotIn("approval_required", card, f"{where}: sending follows the sending policy")
             manifest = yaml.safe_load((folder / "bot.yaml").read_text())
-            self.assertIs(manifest["outbound_send"], False, where)
+            self.assertNotIn("outbound_send", manifest, where)  # sending is the server's policy, never bot.yaml
             routines = validate_schedules(manifest.get("routines") or [], lambda rel: (folder / rel).read_text())
-            self.assertTrue(all(r["enabled"] is False for r in routines), where)     # a bot with no routines has none to arm
+            self.assertTrue(
+                all(r["enabled"] is False for r in routines), where
+            )  # a bot with no routines has none to arm
             for access in manifest["tools"]:
                 self.assertFalse({"send", "write", "modify", "delete"} & set(access.get("can", [])), where)
 
@@ -259,15 +278,28 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
 
     def test_the_instructions_stop_ask_once_and_report_tico_bugs(self):
         agent = self.text("AGENT.md")
-        for rule in ("`retryable: false` means stop", "never `sleep` and call again", "ask once", "then end the run",
-                     "Never hand-edit a computer", "remove or change a git remote", "hub support file",
-                     "operation_id", "Blocked on a Tico bug, reported as"):
+        for rule in (
+            "`retryable: false` means stop",
+            "never `sleep` and call again",
+            "ask once",
+            "then end the run",
+            "Never hand-edit a computer",
+            "remove or change a git remote",
+            "hub support file",
+            "operation_id",
+            "Blocked on a Tico bug, reported as",
+        ):
             self.assertIn(rule, agent)
 
     def test_build_checks_create_names_the_refusal_and_waits_without_copying(self):
         build = self.text("playbooks/build-me-a-bot.md")
-        for rule in ("`hub bot create`'s exit status", "`github_permission_missing`", "ask the person once",
-                     "waiting for a computer to get the repository is not a failure", "do not copy the repository"):
+        for rule in (
+            "`hub bot create`'s exit status",
+            "`github_permission_missing`",
+            "ask the person once",
+            "waiting for a computer to get the repository is not a failure",
+            "do not copy the repository",
+        ):
             self.assertIn(rule, build)
 
     def test_a_new_bot_is_built_on_defaults_not_questions(self):
@@ -280,39 +312,13 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
     def test_no_playbook_suggests_a_sleep_retry_or_a_hand_copy(self):
         for path in [self.folder / "AGENT.md", *sorted((self.folder / "playbooks").glob("*.md"))]:
             for line in path.read_text().splitlines():
-                self.assertNotRegex(line, r"sleep \d|retry until|git clone \S*/projects|git remote (remove|rm)\b",
-                                    f"{path.name}: {line}")
+                self.assertNotRegex(
+                    line,
+                    r"sleep \d|retry until|git clone \S*/projects|git remote (remove|rm)\b",
+                    f"{path.name}: {line}",
+                )
                 if "sleep" in line.lower():
                     self.assertRegex(line.lower(), r"\b(never|no)\b", f"{path.name}: {line}")
-
-
-class FundraisingManagerAsksForEveryInvestorMessage(unittest.TestCase):
-    """Turning mail sending on does not let the Fundraising Manager write to an investor: each message waits for a
-    person's yes on it, or the person sends it, and no draft carries terms."""
-
-    folder = catalog.ROOT / "templates/catalog/fundraising-manager"
-
-    def text(self, name):
-        return " ".join((self.folder / name).read_text().split())
-
-    def test_every_investor_message_needs_a_person_even_with_sending_on(self):
-        sending = self.text("AGENT.md").split("## Sending", 1)[1].split("##", 1)[0]
-        for rule in ("Every message to an investor or a prospective investor is a draft, even with mail sending on",
-                     "a reply on their own thread", "`hub approval request --kind send`",
-                     "Send it only after a person approves it, and only as approved",
-                     "a changed draft needs a new yes", "to send themselves",
-                     "Never state, offer or agree terms in any draft",
-                     "no valuation, amount, allocation or date for the round",
-                     "Draft messages to other outsiders until a person turns mail sending on"):
-            self.assertIn(rule, sending)
-        self.assertNotIn("Draft messages to outsiders until", sending)
-        card = yaml.safe_load((self.folder / "card.yaml").read_text())
-        self.assertTrue(any("investor" in line and "even with mail sending on" in line for line in card["never"]))
-        self.assertIn("in a message or a draft", " ".join(card["never"]))
-        prep = self.text("playbooks/meeting-prep.md")
-        self.assertIn("Leave terms out, even ones you have been given", prep)
-        for name in ("AGENT.md", "card.yaml", *(f"playbooks/{p.name}" for p in (self.folder / "playbooks").glob("*.md"))):
-            self.assertNotIn("I never send to an investor myself", self.text(name), name)
 
 
 if __name__ == "__main__":

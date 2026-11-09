@@ -2,6 +2,7 @@
 Unattributed, the P&L by location adds up to the P&L, a teammate sees only their own lines however they group, a tag
 value
 cannot hold the rollup key's separator, and search finds items, locations and projects by name."""
+
 import pytest
 
 from backend.finance import reads as FR
@@ -32,9 +33,19 @@ def _records(c) -> dict[str, dict[str, str]]:
 
 
 def _post(c, amount: int, tags: dict[str, str], code: str = "5100", day: str = DAY) -> None:
-    done = act(c, OWNER, "journal", {"date": day, "memo": "Spend", "lines": [
-        {"account_id": account(c, code), "amount": amount, "tags": tags},
-        {"account_id": account(c, "1000"), "amount": -amount}]})
+    done = act(
+        c,
+        OWNER,
+        "journal",
+        {
+            "date": day,
+            "memo": "Spend",
+            "lines": [
+                {"account_id": account(c, code), "amount": amount, "tags": tags},
+                {"account_id": account(c, "1000"), "amount": -amount},
+            ],
+        },
+    )
     assert done.status == "committed", done.reason
 
 
@@ -60,8 +71,12 @@ def test_each_grouping_adds_up_to_the_total_with_an_unattributed_row(books):
         assert _amounts(got["class"]) == {"Web": 1_400, "Unattributed": 9_800}
         assert _amounts(got["project"]) == {"Job 12": 1_400, "Job 2": 7_000, "Unattributed": 2_800}
         assert _amounts(got["location_project"]) == {
-            "Denver · Job 12": 1_000, "Denver · Unattributed": 2_500, "Unattributed · Job 12": 400,
-            "Office · Job 2": 7_000, "Unattributed": 300}
+            "Denver · Job 12": 1_000,
+            "Denver · Unattributed": 2_500,
+            "Unattributed · Job 12": 400,
+            "Office · Job 2": 7_000,
+            "Unattributed": 300,
+        }
 
 
 def test_the_pnl_by_location_adds_up_to_the_pnl(books):
@@ -72,9 +87,19 @@ def test_the_pnl_by_location_adds_up_to_the_pnl(books):
         _post(c, 2_500, {"location": denver})
         _post(c, 7_000, {"location": office}, "6100")
         _post(c, 300, {})
-        sale = act(c, OWNER, "journal", {"date": DAY, "memo": "Sale", "lines": [
-            {"account_id": account(c, "4000"), "amount": -9_000, "tags": {"location": denver}},
-            {"account_id": account(c, "1000"), "amount": 9_000}]})
+        sale = act(
+            c,
+            OWNER,
+            "journal",
+            {
+                "date": DAY,
+                "memo": "Sale",
+                "lines": [
+                    {"account_id": account(c, "4000"), "amount": -9_000, "tags": {"location": denver}},
+                    {"account_id": account(c, "1000"), "amount": 9_000},
+                ],
+            },
+        )
         assert sale.status == "committed", sale.reason
         by_location = FR.pnl_by(c, OWNER, "location", *WINDOW, basis="accrual", top_n=50, at=AT)
         plain = FR.pnl(c, OWNER, *WINDOW, basis="accrual", at=AT)
@@ -82,7 +107,10 @@ def test_the_pnl_by_location_adds_up_to_the_pnl(books):
         assert sum(int(r["income"]) for r in by_location["rows"]) == by_location["income"]
         assert sum(int(r["expense"]) for r in by_location["rows"]) == by_location["expense"]
         assert {r["label"]: (r["income"], r["expense"]) for r in by_location["rows"]} == {
-            "Denver": (9_000, 3_500), "Office": (0, 7_000), "Unattributed": (0, 300)}
+            "Denver": (9_000, 3_500),
+            "Office": (0, 7_000),
+            "Unattributed": (0, 300),
+        }
 
 
 def test_a_teammate_sees_only_their_own_lines_however_they_group(books):
@@ -92,7 +120,7 @@ def test_a_teammate_sees_only_their_own_lines_however_they_group(books):
         job12, job2 = ids["job"]["Job 12"], ids["job"]["Job 2"]
         _post(c, 1_000, {"location": denver, "project": job12, "teammate": "human:eve"})
         _post(c, 9_000, {"location": office, "project": job2, "teammate": "human:ben"})
-        _post(c, 500, {"project": job12})                          # company-wide: not Eve's
+        _post(c, 500, {"project": job12})  # company-wide: not Eve's
         mine = FR.spend_by(c, "human:eve", "location_project", *WINDOW, top_n=50, at=AT)
         assert mine["total"] == 1_000
         assert _amounts(mine) == {"Denver · Job 12": 1_000}
@@ -102,9 +130,19 @@ def test_a_teammate_sees_only_their_own_lines_however_they_group(books):
 
 def test_a_tag_value_cannot_hold_the_rollup_separator(books):
     with books.transaction() as c:
-        refused = act(c, OWNER, "journal", {"date": DAY, "memo": "Bad tag", "lines": [
-            {"account_id": account(c, "5100"), "amount": 100, "tags": {"custom": "x|location=y"}},
-            {"account_id": account(c, "1000"), "amount": -100}]})
+        refused = act(
+            c,
+            OWNER,
+            "journal",
+            {
+                "date": DAY,
+                "memo": "Bad tag",
+                "lines": [
+                    {"account_id": account(c, "5100"), "amount": 100, "tags": {"custom": "x|location=y"}},
+                    {"account_id": account(c, "1000"), "amount": -100},
+                ],
+            },
+        )
         assert refused.status != "committed"
         assert refused.code == "invalid"
 
@@ -114,10 +152,13 @@ def test_search_finds_items_locations_and_projects_by_name_and_pages(books):
         _records(c)
         found = FR.search(c, OWNER, kind="location", q="den", at=AT)
         assert [(r["kind"], r["label"]) for r in found["results"]] == [("location", "Denver")]
-        assert [r["label"] for r in FR.search(c, OWNER, kind="project", q="job", at=AT)["results"]] == \
-            ["Job 12", "Job 2"]
-        assert [(r["kind"], r["label"]) for r in FR.search(c, OWNER, kind="item", q="wid", at=AT)["results"]] == \
-            [("item", "Widget")]
+        assert [r["label"] for r in FR.search(c, OWNER, kind="project", q="job", at=AT)["results"]] == [
+            "Job 12",
+            "Job 2",
+        ]
+        assert [(r["kind"], r["label"]) for r in FR.search(c, OWNER, kind="item", q="wid", at=AT)["results"]] == [
+            ("item", "Widget")
+        ]
         across = FR.search(c, OWNER, kind=None, q="den", at=AT)["results"]
         assert ("location", "Denver") in {(r["kind"], r["label"]) for r in across}
         page = FR.search(c, OWNER, kind="project", limit=1, at=AT)
@@ -139,16 +180,27 @@ def test_record_lists_page_by_name_and_hide_archived_by_default(books):
         assert [r["name"] for r in rest["locations"]] == ["Office"] and rest["next_cursor"] is None
         RS.update(c, "locations", locations["Office"], {"archived_at": AT})
         assert [r["name"] for r in FR.records(c, OWNER, kind="location", at=AT)["locations"]] == ["Denver"]
-        assert [r["name"] for r in FR.records(c, OWNER, kind="location", archived="only", at=AT)["locations"]] == \
-            ["Office"]
+        assert [r["name"] for r in FR.records(c, OWNER, kind="location", archived="only", at=AT)["locations"]] == [
+            "Office"
+        ]
         assert len(FR.records(c, OWNER, kind="location", archived="all", at=AT)["locations"]) == 2
 
 
 def test_item_records_are_found_by_sku_and_show_their_accounts_to_the_owner(books):
     with books.transaction() as c:
         _records(c)
-        made = act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "sku": "GDG-9", "price": 2500,
-                                             "income_account_id": account(c, "4000")})
+        made = act(
+            c,
+            OWNER,
+            "item_create",
+            {
+                "name": "Gadget",
+                "kind": "service",
+                "sku": "GDG-9",
+                "price": 2500,
+                "income_account_id": account(c, "4000"),
+            },
+        )
         assert made.status == "committed", made.reason
         found = FR.records(c, OWNER, kind="item", q="gdg", at=AT)["items"]
         assert [r["name"] for r in found] == ["Gadget"]
@@ -161,9 +213,18 @@ def test_item_records_are_found_by_sku_and_show_their_accounts_to_the_owner(book
 def test_a_viewer_sees_an_items_price_and_accounts_only_where_they_see_the_accounts(books):
     with books.transaction() as c:
         _records(c)
-        made = act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2500,
-                                             "income_account_id": account(c, "4000"),
-                                             "expense_account_id": account(c, "5100")})
+        made = act(
+            c,
+            OWNER,
+            "item_create",
+            {
+                "name": "Gadget",
+                "kind": "service",
+                "price": 2500,
+                "income_account_id": account(c, "4000"),
+                "expense_account_id": account(c, "5100"),
+            },
+        )
         assert made.status == "committed", made.reason
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
         assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "payables"}).status == "committed"
@@ -180,9 +241,11 @@ def test_a_viewer_with_no_finance_view_is_refused_the_records_and_their_search(b
     with books.transaction() as c:
         locations = _records(c)["location"]
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
-        for call in (lambda: FR.records(c, "human:eve", kind="location", at=AT),
-                     lambda: FR.record(c, "human:eve", kind="location", record_id=locations["Denver"], at=AT),
-                     lambda: FR.search(c, "human:eve", kind="item", q="wid", at=AT)):
+        for call in (
+            lambda: FR.records(c, "human:eve", kind="location", at=AT),
+            lambda: FR.record(c, "human:eve", kind="location", record_id=locations["Denver"], at=AT),
+            lambda: FR.search(c, "human:eve", kind="item", q="wid", at=AT),
+        ):
             with pytest.raises(FinanceError) as refused:
                 call()
             assert refused.value.code == DENIED

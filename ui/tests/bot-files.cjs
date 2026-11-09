@@ -1,4 +1,4 @@
-// The Files section of a bot's right rail (ui/bot-files.js): a plain list of names, three rows and a small
+// The Files section of a bot's right rail (ui/bot-files.ts): a plain list of names, three rows and a small
 // "+N" / "Less" inline, no counts, subtitle or buttons. A linked document opens at its provider
 // (a new tab), a stored file in the app's viewer (a CSV as a table, a quoted comma kept in one cell),
 // a file that did not sync is plain text, never a storage address; on a computer and on a phone.
@@ -42,7 +42,7 @@ async function open(browser, viewport, state) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});

@@ -5,6 +5,7 @@ passes and the failure first shows in the image build or the release smoke, afte
 locks compiled for one Python installed into an image on another, or Rust code using a feature newer than the image's
 compiler. These checks read the files only, so they run on every PR.
 """
+
 import re
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def minor(text):
 
 def dockerfile_python():
     image = re.search(r'^ARG PYTHON_IMAGE=(\S+)$', (ROOT / 'Dockerfile').read_text(), re.M).group(1)
-    return image, minor(re.match(r'python:(\S+)', image).group(1))   # digest pins: test_image_pins.py
+    return image, minor(re.match(r'python:(\S+)', image).group(1))  # digest pins: test_image_pins.py
 
 
 def test_locks_and_release_validation_use_the_image_python():
@@ -33,7 +34,9 @@ def test_locks_and_release_validation_use_the_image_python():
     for workflow in WORKFLOWS:
         versions = [minor(v) for v in re.findall(r"python-version:\s*['\"]?([\d.]+)", workflow.read_text())]
         if workflow.name == 'ci.yml':
-            assert versions and set(versions) == {python}, f'Release validation tests on {versions}, the image runs {python}'
+            assert versions and set(versions) == {python}, (
+                f'Release validation tests on {versions}, the image runs {python}'
+            )
         elif versions:
             assert python in versions, f'{workflow.name} tests on {versions}, never on the image Python {python}'
 
@@ -60,23 +63,32 @@ def test_every_pinned_rust_can_compile_its_crates():
     stages = rust_stages()
     assert {crate for *_, crate in stages} == {'runner-rs', 'relay-rs'}, stages
     for path, line, compiler, crate in stages:
-        assert compiler >= crate_msrv(crate), (f'{path}: {line} is older than {crate} rust-version '
-                                               f'{".".join(map(str, crate_msrv(crate)))}')
+        assert compiler >= crate_msrv(crate), (
+            f'{path}: {line} is older than {crate} rust-version {".".join(map(str, crate_msrv(crate)))}'
+        )
     msrv = max(crate_msrv('runner-rs'), crate_msrv('relay-rs'))
-    pins = [(workflow.name, version) for workflow in WORKFLOWS
-            for version in re.findall(r'rustup toolchain install ([\d.]+)', workflow.read_text())]
+    pins = [
+        (workflow.name, version)
+        for workflow in WORKFLOWS
+        for version in re.findall(r'rustup toolchain install ([\d.]+)', workflow.read_text())
+    ]
     assert pins, 'no workflow pins a Rust toolchain'
     for name, version in pins:
         assert minor(version) >= msrv, f'{name} installs Rust {version}, older than rust-version {msrv}'
 
 
 def test_workflows_test_on_the_image_node():
-    versions = dict(line.split('=', 1) for line in (ROOT / 'docker' / 'versions.env').read_text().splitlines()
-                    if line and not line.startswith('#'))
+    versions = dict(
+        line.split('=', 1)
+        for line in (ROOT / 'docker' / 'versions.env').read_text().splitlines()
+        if line and not line.startswith('#')
+    )
     image_major = int(versions['NODE_VERSION'].split('.')[0])
     found = 0
     for workflow in WORKFLOWS:
         for version in re.findall(r"node-version:\s*['\"]?(\d+)", workflow.read_text()):
             found += 1
-            assert int(version) == image_major, f'{workflow.name} tests on Node {version}, the images ship {image_major}'
+            assert int(version) == image_major, (
+                f'{workflow.name} tests on Node {version}, the images ship {image_major}'
+            )
     assert found, 'no workflow pins a Node version'

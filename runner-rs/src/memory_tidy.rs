@@ -2,9 +2,9 @@
 //! read; neither model sees the checkout, Hub credentials, or its ordinary prompt.
 use crate::client::Client;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Read;
-use sha2::{Digest, Sha256};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -31,7 +31,9 @@ async fn git(root: &Path, args: &[&str]) -> Result<String, String> {
         .args(crate::safegit::args(root))
         .args(args)
         .env_clear()
-        .envs(crate::safegit::clean_environment(&crate::env::process_environment()))
+        .envs(crate::safegit::clean_environment(
+            &crate::env::process_environment(),
+        ))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
@@ -41,7 +43,8 @@ async fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     if !output.status.success() || output.stdout.len() > LIMIT {
         return Err("Nightly memory tidy: pushed snapshot unavailable".into());
     }
-    String::from_utf8(output.stdout).map_err(|_| "Nightly memory tidy: snapshot is not UTF-8".into())
+    String::from_utf8(output.stdout)
+        .map_err(|_| "Nightly memory tidy: snapshot is not UTF-8".into())
 }
 
 pub struct Packet {
@@ -50,8 +53,14 @@ pub struct Packet {
     pub checkout: PathBuf,
 }
 
-fn walk(root: &Path, path: &Path, entries: &mut BTreeMap<String, String>, bytes: &mut usize) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|_| "Nightly memory tidy: manifest read failed")?;
+fn walk(
+    root: &Path,
+    path: &Path,
+    entries: &mut BTreeMap<String, String>,
+    bytes: &mut usize,
+) -> Result<(), String> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|_| "Nightly memory tidy: manifest read failed")?;
     let name = path
         .strip_prefix(root)
         .map_err(|_| "Nightly memory tidy: invalid manifest path")?
@@ -73,10 +82,14 @@ fn walk(root: &Path, path: &Path, entries: &mut BTreeMap<String, String>, bytes:
                 .display()
         )
     } else if metadata.is_dir() {
-        for child in std::fs::read_dir(path).map_err(|_| "Nightly memory tidy: directory read failed")? {
+        for child in
+            std::fs::read_dir(path).map_err(|_| "Nightly memory tidy: directory read failed")?
+        {
             walk(
                 root,
-                &child.map_err(|_| "Nightly memory tidy: directory read failed")?.path(),
+                &child
+                    .map_err(|_| "Nightly memory tidy: directory read failed")?
+                    .path(),
                 entries,
                 bytes,
             )?;
@@ -90,14 +103,19 @@ fn walk(root: &Path, path: &Path, entries: &mut BTreeMap<String, String>, bytes:
             return Err("Nightly memory tidy: checkout exceeds manifest limit".into());
         }
         // Hash bounded chunks so retained assets never become a large allocation.
-        let file = std::fs::File::open(path).map_err(|_| "Nightly memory tidy: manifest file read failed")?;
+        let file = std::fs::File::open(path)
+            .map_err(|_| "Nightly memory tidy: manifest file read failed")?;
         let mut reader = file.take(metadata.len() + 1);
         let mut hash = Sha256::new();
         let mut buffer = [0u8; 65536];
         let mut read = 0u64;
         loop {
-            let n = reader.read(&mut buffer).map_err(|_| "Nightly memory tidy: manifest file read failed")?;
-            if n == 0 { break; }
+            let n = reader
+                .read(&mut buffer)
+                .map_err(|_| "Nightly memory tidy: manifest file read failed")?;
+            if n == 0 {
+                break;
+            }
             read += n as u64;
             hash.update(&buffer[..n]);
         }
@@ -122,23 +140,49 @@ async fn manifest(checkout: &Path, workspace: &Path) -> Result<String, String> {
         }
     }
     // Git internals are not traversed, but a commit or checkout move must count.
-    all.insert("git-head".into(), git(checkout, &["rev-parse", "HEAD"]).await?);
+    all.insert(
+        "git-head".into(),
+        git(checkout, &["rev-parse", "HEAD"]).await?,
+    );
     Ok(crate::gitrun::sha256_hex(
         &serde_json::to_vec(&all).map_err(|_| "Nightly memory tidy: invalid manifest")?,
     ))
 }
 
 impl Packet {
-    pub async fn prepare(client: &Client, source: &Path, checkout: &Path, aid: &str, identity: Option<(u32, u32)>) -> Result<Self, String> {
-        let commit = git(source, &["rev-parse", "--verify", "@{u}"]).await?.trim().to_string();
+    pub async fn prepare(
+        client: &Client,
+        source: &Path,
+        checkout: &Path,
+        aid: &str,
+        identity: Option<(u32, u32)>,
+    ) -> Result<Self, String> {
+        let commit = git(source, &["rev-parse", "--verify", "@{u}"])
+            .await?
+            .trim()
+            .to_string();
         if ![40, 64].contains(&commit.len()) || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("Nightly memory tidy: no pinned pushed commit".into());
         }
-        let tree = git(source, &["ls-tree", "-rz", &commit, "--", "AGENT.md", "memory", "knowledge"]).await?;
+        let tree = git(
+            source,
+            &[
+                "ls-tree",
+                "-rz",
+                &commit,
+                "--",
+                "AGENT.md",
+                "memory",
+                "knowledge",
+            ],
+        )
+        .await?;
         let mut snapshot = BTreeMap::new();
         let mut size = 0;
         for entry in tree.split('\0').filter(|e| !e.is_empty()) {
-            let (object, path) = entry.split_once('\t').ok_or("Nightly memory tidy: invalid pushed tree")?;
+            let (object, path) = entry
+                .split_once('\t')
+                .ok_or("Nightly memory tidy: invalid pushed tree")?;
             if path != "AGENT.md" && !path.ends_with(".md") {
                 continue;
             }
@@ -178,7 +222,8 @@ impl Packet {
         if !result["packet"].is_object() {
             return Err("Nightly memory tidy: admission withdrawn before model call".into());
         }
-        let prompt = serde_json::to_string(&result["packet"]).map_err(|_| "Nightly memory tidy: invalid packet")?;
+        let prompt = serde_json::to_string(&result["packet"])
+            .map_err(|_| "Nightly memory tidy: invalid packet")?;
         Ok(Self {
             workspace,
             prompt,
@@ -186,7 +231,12 @@ impl Packet {
         })
     }
 
-    pub async fn propose(&self, client: &Client, aid: &str, reply: &str) -> Result<Option<String>, String> {
+    pub async fn propose(
+        &self,
+        client: &Client,
+        aid: &str,
+        reply: &str,
+    ) -> Result<Option<String>, String> {
         let result = client
             .post(
                 &format!("attempts/{aid}/memory-tidy/proposal"),
@@ -263,11 +313,11 @@ mod tests {
         assert_eq!(env["OPENAI_API_KEY"], "synthetic-login");
     }
 
-
     #[test]
     fn manifest_streams_assets_larger_than_packet_limit_and_keeps_checkout_bound() {
         use std::io::{Seek, SeekFrom, Write};
-        let root = std::env::temp_dir().join(format!("tico-tidy-size-{}", uuid::Uuid::new_v4().simple()));
+        let root =
+            std::env::temp_dir().join(format!("tico-tidy-size-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("retained-asset");
         let mut file = std::fs::File::create(&path).unwrap();
@@ -278,15 +328,23 @@ mod tests {
         file.write_all(b"x").unwrap();
         let mut after = BTreeMap::new();
         walk(&root, &root, &mut after, &mut 0).unwrap();
-        assert_ne!(before, after, "the hash includes content beyond the packet limit");
+        assert_ne!(
+            before, after,
+            "the hash includes content beyond the packet limit"
+        );
         file.set_len(MANIFEST_LIMIT as u64 + 1).unwrap();
-        assert!(walk(&root, &root, &mut BTreeMap::new(), &mut 0).unwrap_err().contains("checkout exceeds"));
+        assert!(walk(&root, &root, &mut BTreeMap::new(), &mut 0)
+            .unwrap_err()
+            .contains("checkout exceeds"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn manifest_covers_untracked_files_modes_and_symlinks_without_following_them() {
-        let root = std::env::temp_dir().join(format!("tico-tidy-fixture-{}", uuid::Uuid::new_v4().simple()));
+        let root = std::env::temp_dir().join(format!(
+            "tico-tidy-fixture-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("untracked");
         std::fs::write(&file, "synthetic before").unwrap();

@@ -1,4 +1,5 @@
 """Ephemeral, bounded screen frames for people in a live meeting. Nothing is persisted."""
+
 import asyncio
 import hashlib
 import threading
@@ -37,14 +38,14 @@ def jpeg_size(data):
             break
         if 0xD0 <= marker <= 0xD7 or marker == 1:
             continue
-        length = int.from_bytes(data[pos:pos + 2], "big")
+        length = int.from_bytes(data[pos : pos + 2], "big")
         if length < 2 or pos + length > len(data):
             break
         if marker in (0xC0, 0xC1, 0xC2):
             if length < 8:
                 break
-            height = int.from_bytes(data[pos + 3:pos + 5], "big")
-            width = int.from_bytes(data[pos + 5:pos + 7], "big")
+            height = int.from_bytes(data[pos + 3 : pos + 5], "big")
+            width = int.from_bytes(data[pos + 5 : pos + 7], "big")
             if 0 < width <= MAX_EDGE and 0 < height <= MAX_EDGE:
                 return width, height
             raise Problem("screen_image", "Screen dimensions exceed the limit", 422)
@@ -123,20 +124,34 @@ def install(app, store, auth, require_read, connector):
     def audience(rid):
         with store.read() as c:
             row = c.execute("SELECT visibility,owner_actor FROM live_meetings WHERE id=?", (rid,)).fetchone()
-            actors = [] if row["visibility"] == "team" else c.execute("SELECT actor FROM live_meeting_access WHERE meeting_id=? UNION SELECT actor FROM live_meeting_humans WHERE meeting_id=? ORDER BY actor", (rid, rid)).fetchall()
+            actors = (
+                []
+                if row["visibility"] == "team"
+                else c.execute(
+                    "SELECT actor FROM live_meeting_access WHERE meeting_id=? UNION SELECT actor FROM live_meeting_humans WHERE meeting_id=? ORDER BY actor",
+                    (rid, rid),
+                ).fetchall()
+            )
             return hashlib.sha256(repr((tuple(row), [a[0] for a in actors])).encode()).hexdigest()
 
     @app.get(prefix)
     def capability(request: Request, rid: str):
         row = check(request, rid, True)
-        return {"visibility": row["visibility"], "limits": {"max_bytes": MAX_BYTES, "max_edge": MAX_EDGE, "fps": 5}, "supported": True, "audience": audience(rid)}
+        return {
+            "visibility": row["visibility"],
+            "limits": {"max_bytes": MAX_BYTES, "max_edge": MAX_EDGE, "fps": 5},
+            "supported": True,
+            "audience": audience(rid),
+        }
 
     @app.get(prefix + "/status")
     def status(request: Request, rid: str):
         check(request, rid)
         with frames.lock:
             share = frames.current(rid)
-            return Response(content='{"generation":"' + share.generation + '"}', media_type="application/json", headers=HEADERS)
+            return Response(
+                content='{"generation":"' + share.generation + '"}', media_type="application/json", headers=HEADERS
+            )
 
     @app.post(prefix + "/start")
     def start(request: Request, rid: str, expected_audience: str = ""):
@@ -170,6 +185,7 @@ def install(app, store, auth, require_read, connector):
             if len(data) + len(chunk) > MAX_BYTES:
                 raise Problem("too_large", "Screen frame exceeds the limit", 413)
             data.extend(chunk)
+
         def accept():
             jpeg_size(data)
             check(request, rid, True)
@@ -178,6 +194,7 @@ def install(app, store, auth, require_read, connector):
                 if not share.seq < seq <= 2**53 - 1:
                     raise Problem("screen_sequence", "Screen frame is out of order", 409)
                 share.frame, share.seq, share.alive = bytes(data), seq, time.monotonic()
+
         await asyncio.to_thread(accept)
         return Response(status_code=204, headers=HEADERS)
 
@@ -227,13 +244,18 @@ def install(app, store, auth, require_read, connector):
                 checked = time.monotonic()
             if frame:
                 data, version = frame
-                return Response(data, media_type="image/jpeg", headers={**HEADERS,
-                    "ETag": f'"{version}"', "X-Screen-Version": version})
+                return Response(
+                    data,
+                    media_type="image/jpeg",
+                    headers={**HEADERS, "ETag": f'"{version}"', "X-Screen-Version": version},
+                )
             if time.monotonic() >= deadline or await request.is_disconnected():
                 return Response(status_code=204, headers=HEADERS)
             began = time.perf_counter()
             try:
-                await asyncio.sleep(.2)
+                await asyncio.sleep(0.2)
             finally:
                 # Intentional idle waiting is not server processing; loop stalls still count.
-                request.state.idle_wait_ms = getattr(request.state, "idle_wait_ms", 0) + min(200, (time.perf_counter() - began) * 1000)
+                request.state.idle_wait_ms = getattr(request.state, "idle_wait_ms", 0) + min(
+                    200, (time.perf_counter() - began) * 1000
+                )

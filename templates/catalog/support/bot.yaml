@@ -7,10 +7,6 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 60
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts the draft on the task and drafts until a person turns mail sending on in Tico.
-outbound_send: false
-
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
 # (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
@@ -57,7 +53,7 @@ watchers:
 # tools:
 #   - service: gmail
 #     identity: "support@example.com"
-#     can: [read, draft]          # never send: outbound_send stays false
+#     can: [read, draft]          # never send: drafts only
 #     env: GOOGLE_SA_KEY
 #     note: "reads and drafts on the support mailbox; never files, archives or sends"
 #   - service: slack

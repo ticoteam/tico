@@ -84,6 +84,7 @@ an old-head approval never clears the new head. Changes wake the owner with the 
 has all required approvals and green checks, Tico wakes the owner: `Approved at <sha>, checks green: merge PR #N`.
 If the owner lacks repo write access, an existing repo manager, Release Manager or repo owner with write access
 gets the merge task. This grants no new access and does not change the repo's merge rules.
+The merge is of the approved head: a push after approval needs new reviews, so non-blocking notes go in a follow-up PR.
 
 Forwarded review and QA notes keep the source check's readers, even when a later public check sends them.
 A wake or saved result stays limited by both the source check and the task it reaches.
@@ -92,8 +93,9 @@ Merge tasks hold the work instructions; their approval notice keeps the checks' 
 The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at most three new checks per reviewer
 per hour and within each pool's open-check limit. A settled approval at the current head that has no saved outcome
 runs the next step once: Review 2 when needed, else the merge handoff when checks are green. This also applies when
-a hold clears; an old-head approval does not count. Conflicting PRs and branches reported behind main go back to the
-owner to rebase. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
+a hold clears; an old-head approval does not count. Conflicting PRs go back to the owner to resolve. A branch behind
+main does not: the merge queue tests it on current main. A ticket whose PR already merged needs no open PR for a check after the merge (Post Release QA); a review before the
+merge still needs one. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
 read the task gets no request. Health names visible bot PRs open over 24 hours without a review and the wait reason.
 
 In Settings → Tasks, rename the default **Engineering** type to **Dev tickets** and replace its steps with these.
@@ -110,7 +112,7 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | Review 2 Fixes | doing | Builder | Builder acts on the feedback, then moves the ticket to In QA; the merge follows QA's pass |
 | In QA | review | Builder | QA runs the acceptance tests |
 | QA Fixes | doing | QA | A test failed; the Builder fixes it and moves the ticket back to In QA |
-| Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake |
+| Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake. A published release moves the ticket on to the next step by itself |
 | Post Release QA | review | Release Manager | Shipped; QA runs the *check live* tests and watches the *watch live* items for 48 hours |
 | Done | done | QA | Post-release QA passed |
 | Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate, superseded or dropped ticket |
@@ -192,6 +194,9 @@ The Release Manager keeps one checklist per release:
 - the security result
 - the release notes
 - the roadmap items moved to Shipped
+
+A private Dev ticket is left out of the release notes and docs unless it has a public title, which is used in its
+place. Nobody is asked to name a private ticket.
 
 ## After launch
 

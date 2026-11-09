@@ -28,8 +28,8 @@ const shots = process.env.TICO_SHOTS || '';
         {label: 'Grant', source: 'grant', amount_micros: 5_000_000, left_micros: 4_000_000, expired_micros: 4_000_000,
           expires: '2026-11-04T00:00:00.000000Z', expired: true, used_up: false, current: false}],
       usage: [{period: '2026-11-02', total_micros: 1_250_003, lines: [
-        {product: 'gateway', sku: 'tico-mid-1.0:input', amount_micros: 1_250_000},
-        {product: 'gateway', sku: 'tico-cheap-1.1:output', amount_micros: 3}]}],
+        {product: 'gateway', sku: 'tico-medium-1.0:input', amount_micros: 1_250_000},
+        {product: 'gateway', sku: 'tico-low-1.0:output', amount_micros: 3}]}],
       statement};
     let billing = full, role = 'owner', hoursDown = true;
     const slow = {};                                       // month -> ms its answer waits
@@ -37,12 +37,12 @@ const shots = process.env.TICO_SHOTS || '';
     await page.route('**/*', route => {
       const url = new URL(route.request().url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.3.0', app_name: 'Tico'};
       if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -93,7 +93,7 @@ const shots = process.env.TICO_SHOTS || '';
     await day.locator('summary').click();
     await day.locator('summary').click();
     await day.locator('.billing-hour').waitFor();
-    assert.match((await day.innerText()).replace(/\s+/g, ' '), /Tico models tico-cheap-1\.1 <\$0\.01/);
+    assert.match((await day.innerText()).replace(/\s+/g, ' '), /Tico models tico-low-1\.0 <\$0\.01/);
     assert.match((await day.locator('.billing-hour-head').innerText()).replace(/\s+/g, ' '), /^09:00 UTC \$1\.25$/);
     assert(asked.includes('/api/v2/billing/usage?day=2026-11-02'), asked.join());
     // the statement: opening + credits - debits - expired = closing, and its CSV

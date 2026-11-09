@@ -1,5 +1,6 @@
 """The `runner` package forwards what installed units, older binaries, older update processes and saved cloud images
 still start or import (runner/__init__.py)."""
+
 import importlib
 import os
 import shutil
@@ -14,8 +15,9 @@ SUPPORT = ROOT / "runner_support"
 
 
 def run(*args, stdin=None, env=None):
-    return subprocess.run([sys.executable, *args], cwd=ROOT, capture_output=True, text=True, timeout=60, input=stdin,
-                          env=env)
+    return subprocess.run(
+        [sys.executable, *args], cwd=ROOT, capture_output=True, text=True, timeout=60, input=stdin, env=env
+    )
 
 
 def support_modules():
@@ -34,7 +36,7 @@ def test_every_runner_module_path_is_the_runner_support_module(name):
     assert (ROOT / "runner" / rel.with_suffix(".py")).is_file() or (ROOT / "runner" / rel / "__init__.py").is_file()
     real = importlib.import_module("runner_support." + name)
     old = importlib.import_module("runner." + name)
-    if name == "importers":   # a package of its own, so its modules load the forwarders beside it
+    if name == "importers":  # a package of its own, so its modules load the forwarders beside it
         assert old.__path__ == [str(ROOT / "runner" / "importers")]
         assert old.importer_class is real.importer_class and old.REGISTRY is real.REGISTRY
     else:
@@ -51,6 +53,7 @@ def test_lazy_relative_imports_of_an_old_process_reach_runner_support():
     assert importlib.import_module(".freshness", "runner").CodeWatch is runner_support.freshness.CodeWatch
     assert importlib.import_module(".importers.service", "runner").doctor is runner_support.importers.service.doctor
     from runner.importers.base import email_of
+
     assert email_of is runner_support.importers.base.email_of
 
 
@@ -77,18 +80,14 @@ def test_python_dash_m_runner_engine_keeps_its_exit_codes_and_answers():
         assert old.returncode == 0 and Path(old.stdout.strip()).is_file(), old.stderr
 
 
-@pytest.mark.parametrize("module", ["release_update", "cloud_machine", "systemd_units", "git_credentials", "checkout_links"])
+@pytest.mark.parametrize(
+    "module",
+    ["release_update", "release_branch", "cloud_machine", "systemd_units", "git_credentials", "checkout_links"],
+)
 def test_python_dash_m_runner_entry_points_run_runner_support(module):
     old, new = run("-m", "runner." + module, "--help"), run("-m", "runner_support." + module, "--help")
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout
-
-
-def test_python_dash_m_runner_memory_tidy_keep_answers_as_runner_support(tmp_path):
-    answers = [run("-m", name, str(tmp_path / "no-checkout"), str(tmp_path / f"journal-{i}"), stdin="{}")
-               for i, name in enumerate(("runner.memory_tidy_keep", "runner_support.memory_tidy_keep"))]
-    assert answers[0].returncode == answers[1].returncode == 0, answers[0].stderr
-    assert answers[0].stdout == answers[1].stdout and '"status"' in answers[0].stdout
 
 
 @pytest.mark.parametrize("shell", ["bash", "zsh"])

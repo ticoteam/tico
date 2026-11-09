@@ -56,6 +56,7 @@
     ],
     "next": null,
     "older": [],
+    "plate_count": 1,
     "version": "<opaque>",
     "went_away": {
       "assistant": 0,

@@ -11,7 +11,7 @@ def make(api, owner="ops", title="Write the report", token="ana-test"):
 
 def slip(ident, at=20):
     """The id with one character changed."""
-    return ident[:at] + ("a" if ident[at] != "a" else "b") + ident[at + 1:]
+    return ident[:at] + ("a" if ident[at] != "a" else "b") + ident[at + 1 :]
 
 
 def renumber(api, old, new):

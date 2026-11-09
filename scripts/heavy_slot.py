@@ -3,6 +3,7 @@ ui-tests.cjs do. Bots on one shared computer each ran the suite directly, with x
 every new turn on that computer; heavy.sh lets a few run at once, at low priority, and the rest wait.
 
 The root conftest.py calls `reexec` from pytest_configure, before collection and before xdist starts workers."""
+
 import os
 import sys
 from pathlib import Path
@@ -42,8 +43,13 @@ LOCAL_FILES = 3
 
 def named_files(args):
     """The test files a pytest command line names (a file or a node id in one); a directory names none of them."""
-    return {arg.split('::')[0] for arg in args if not arg.startswith('-') and arg.split('::')[0].endswith('.py')
-            and arg.split('::')[0].rsplit('/', 1)[-1].startswith('test_')}
+    return {
+        arg.split('::')[0]
+        for arg in args
+        if not arg.startswith('-')
+        and arg.split('::')[0].endswith('.py')
+        and arg.split('::')[0].rsplit('/', 1)[-1].startswith('test_')
+    }
 
 
 def reexec():

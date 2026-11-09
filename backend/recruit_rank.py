@@ -9,25 +9,37 @@ release (`scripts/build_catalog_json.py --out DIR`), so both sides agree on `cat
 {version, departments, cards}. `rank(catalog, department, briefing, about)` answers {bots: [{template_id, why}],
 suggested_default: [template_id]} with template ids from that department only, never free text a bot would follow.
 """
+
 import hashlib
 import json
 import re
 
 DEPARTMENT_IDS = ("sales", "marketing", "support", "finance", "operations", "legal", "hr", "product", "engineering")
 # A card written before departments existed has only a `pack`; this is the department it sits in.
-PACK_DEPARTMENT = {"sales": "sales", "marketing": "marketing", "support": "support", "operations": "operations",
-                   "engineering": "engineering", "basics": "operations", "finance": "finance", "legal": "legal",
-                   "hr": "hr", "product": "product"}
+PACK_DEPARTMENT = {
+    "sales": "sales",
+    "marketing": "marketing",
+    "support": "support",
+    "operations": "operations",
+    "engineering": "engineering",
+    "basics": "operations",
+    "finance": "finance",
+    "legal": "legal",
+    "hr": "hr",
+    "product": "product",
+}
 SUGGEST = ("default", "common", "niche")
 MAX_BOTS = 8
 WHY_LIMIT = 140
 BRIEFING_LIMIT = 500
 # A tag of up to this many words, said whole, is a why; a longer `pains` phrase only scores.
 REASON_WORDS = 3
-STOP_WORDS = frozenset("""a an and are as at be but by can do does for from get gets had has have how i if in into is it
+STOP_WORDS = frozenset(
+    """a an and are as at be but by can do does for from get gets had has have how i if in into is it
 its just like more most much my no not of on one or our out over so than that the their them then there these they this
 those to too up us was we were what when where which who why will with without you your really still every again things
-thing going about people lot lots some any all via per etc""".split())
+thing going about people lot lots some any all via per etc""".split()
+)
 
 
 def _text(value, limit=400):
@@ -36,13 +48,13 @@ def _text(value, limit=400):
 
 def _first_sentence(text, limit=160):
     first = re.split(r"(?<=[.!?])\s", _text(text, 2000), maxsplit=1)[0]
-    return first if len(first) <= limit else first[:limit - 1].rstrip() + "…"
+    return first if len(first) <= limit else first[: limit - 1].rstrip() + "…"
 
 
 def _stem(word):
     for suffix in ("ing", "ed", "es", "s"):
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
-            return word[:-len(suffix)]
+            return word[: -len(suffix)]
     return word
 
 
@@ -78,11 +90,17 @@ def _department_of(card, heads, teams):
 
 def department(document):
     """One department as served: every field present, nothing else."""
-    return {"id": _text(document.get("id"), 40), "name": _text(document.get("name"), 60),
-            "description": _text(document.get("description"), 160), "goal": _text(document.get("goal"), 160),
-            "question": _text(document.get("question"), 160), "placeholder": _text(document.get("placeholder"), 160),
-            "icon": _text(document.get("icon"), 40), "head": _text(document.get("head"), 80),
-            "software_only": bool(document.get("software_only"))}
+    return {
+        "id": _text(document.get("id"), 40),
+        "name": _text(document.get("name"), 60),
+        "description": _text(document.get("description"), 160),
+        "goal": _text(document.get("goal"), 160),
+        "question": _text(document.get("question"), 160),
+        "placeholder": _text(document.get("placeholder"), 160),
+        "icon": _text(document.get("icon"), 40),
+        "head": _text(document.get("head"), 80),
+        "software_only": bool(document.get("software_only")),
+    }
 
 
 def build(departments, cards):
@@ -111,17 +129,25 @@ def build(departments, cards):
             continue
         suggest = str(card.get("suggest") or "").strip()
         when = set(_strings(card.get("recommend_when")))
-        out.append({"template": template, "name": _text(card.get("name") or template, 100), "department": home,
-                    "icon": _text(card.get("icon"), 40) or by_id[home]["icon"],
-                    "tags": _strings(card.get("tags")) or _strings(card.get("pains")),
-                    "suggest": suggest if suggest in SUGGEST else "common",
-                    "summary": _first_sentence(card.get("summary")),
-                    "lead": bool(card.get("lead")),
-                    "business_only": "sells_to_businesses" in when and "sells_to_consumers" not in when})
+        out.append(
+            {
+                "template": template,
+                "name": _text(card.get("name") or template, 100),
+                "department": home,
+                "icon": _text(card.get("icon"), 40) or by_id[home]["icon"],
+                "tags": _strings(card.get("tags")) or _strings(card.get("pains")),
+                "suggest": suggest if suggest in SUGGEST else "common",
+                "summary": _first_sentence(card.get("summary")),
+                "lead": bool(card.get("lead")),
+                "business_only": "sells_to_businesses" in when and "sells_to_consumers" not in when,
+            }
+        )
     for row in known:
         members = [card for card in out if card["department"] == row["id"]]
         leads = [card["template"] for card in members if card["lead"]]
-        row["head"] = leads[0] if leads else row["head"] if any(card["template"] == row["head"] for card in members) else ""
+        row["head"] = (
+            leads[0] if leads else row["head"] if any(card["template"] == row["head"] for card in members) else ""
+        )
         for card in members:
             card["lead"] = card["template"] == row["head"]
     body = {"departments": known, "cards": out}
@@ -131,7 +157,9 @@ def build(departments, cards):
 
 def head_of(catalog, department_id):
     """The department's head: its `lead` card (build() settles it, and the department's `head` agrees)."""
-    return next((card["template"] for card in catalog["cards"] if card["department"] == department_id and card["lead"]), "")
+    return next(
+        (card["template"] for card in catalog["cards"] if card["department"] == department_id and card["lead"]), ""
+    )
 
 
 def _match(card, found, common=frozenset()):
@@ -163,7 +191,7 @@ def _match(card, found, common=frozenset()):
 def _phrase(wanted, found):
     """The tag's words as the answer writes them where it says them next to each other in the tag's order, else ""."""
     for start in range(len(found) - len(wanted) + 1):
-        run = found[start:start + len(wanted)]
+        run = found[start : start + len(wanted)]
         if [stem for stem, _ in run] == wanted:
             return " ".join(word for _, word in run)
     return ""
@@ -220,13 +248,19 @@ def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
             why = "A starting point for " + dept["name"]
         elif card["suggest"] == "common":
             why = "Common in " + dept["name"]
-        else:                               # a niche card the answer brought in on single words: no why line
+        else:  # a niche card the answer brought in on single words: no why line
             why = ""
         scored.append((tier, -score, card["name"].lower(), card["template"], why[:WHY_LIMIT]))
     scored.sort()
     bots = [{"template_id": template, "why": why} for _, _, _, template, why in scored[:limit]]
     chosen = {row["template_id"] for row in bots}
     defaults = [head] if head in chosen else []
-    defaults += [card["template"] for card in catalog["cards"] if card["department"] == department_id
-                 and card["suggest"] == "default" and card["template"] in chosen and card["template"] != head]
+    defaults += [
+        card["template"]
+        for card in catalog["cards"]
+        if card["department"] == department_id
+        and card["suggest"] == "default"
+        and card["template"] in chosen
+        and card["template"] != head
+    ]
     return {"bots": bots, "suggested_default": defaults}

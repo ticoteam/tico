@@ -31,5 +31,11 @@ once through `scripts/remote.py` against the pushed HEAD, and prints the results
 reclaimed, and a group whose VM was runs once more. `--local` runs here instead; `--save-timings` refreshes the
 times after scenarios change. Release validation runs seeds 1-3 (docs/releasing.md).
 
+The merge queue runs seed 1 of every scenario, in the same VM groups (`--shard i/n`), when a change reaches what the
+sim runs. `call_path.json` lists those files: the Python files a run executes (module bodies included), the non-Python
+files it reads and the folders it lists. `--save-call-path` rewrites it from a RunsOn run of seeds 1-3, so run it
+after the sim's reach changes (a new import, a new data file). `scripts/pr_checks.py` (`factory_reason`) says why a
+change runs it.
+
 The simulation is not part of the test suite. Run it before and after a change to the wake rules, the queue, the
 review gate, the Dev steps or usage limits, and compare.
