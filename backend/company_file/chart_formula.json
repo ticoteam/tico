@@ -1,11 +1,16 @@
 {
-  "about": "The org chart formula's data: the teams in output order, each seat's title, template, department, reason and manager, the channel list, the default channels, the phrases the reasons are made of and the limits. chart_formula.py builds the chart from this file and holds the rules; nothing here is logic. A seat with `per` is made once for each picked segment (`segment`), picked channel (`channel`), initiative (`initiative`) or industry Owner (`industry`). Placeholders are filled in by chart_formula.py, in one pass: {label} is a segment's or initiative's short label, {initiatives} the initiatives a product owner's segment owns, {ref} the bet id an initiative Owner's reason names, {statement} the bet's statement, {title} and {topic} an industry Owner's title and its topic.",
+  "about": "The org chart formula's data: the teams in output order, each seat's id, title, template, department, reason and manager, the channel list, the default channels, the phrases the reasons are made of and the limits. chart_formula.py builds the chart from this file and holds the rules; nothing here is logic. A seat with `per` is made once for each picked segment (`segment`), picked channel (`channel`), initiative (`initiative`) or industry Owner (`industry`); a seat with `unless` is made only when nothing was picked for it (`segment`: no segment picked). `live` says the seat starts with a bot at setup: true for every seat it is on, \"first\" for the first picked segment's seat only. Placeholders are filled in by chart_formula.py, in one pass: {label} is a segment's or initiative's short label, {seg} a segment's id part, {initiatives} the initiatives a product owner's segment owns, {ref} the bet id an initiative Owner's reason names, {statement} the bet's statement, {title} and {topic} an industry Owner's title and its topic.",
   "rules": "Cross-language rules: the JS port must match the chart byte for byte. A length counts Unicode code points (JS [...s].length). Whitespace is the ASCII set space, tab, line feed, carriage return, form feed and vertical tab: each run becomes one space, and none is kept at either end. Names are compared by lower() (JS toLowerCase), never casefold(), and only to tell names apart. An id is a slug of a-z and 0-9: every other run of characters becomes one '-', none at either end, and 'x' when nothing is left. Placeholders are filled in one pass, so a name that contains braces is only text. A reason quotes a label with curly quotes.",
   "version": 1,
   "label_length": 40,
   "title_length": 80,
   "industry_max": 3,
-  "channels_default": ["cro", "seo", "social-ads", "search-ads"],
+  "channels_default": [
+    "cro",
+    "seo",
+    "social-ads",
+    "search-ads"
+  ],
   "phrases": {
     "one": " and the {names} initiative",
     "many": " and the {names} initiatives",
@@ -16,91 +21,465 @@
     "statement": ": “{statement}”"
   },
   "channels": [
-    {"key": "cro", "title": "Conversion Rate Optimization Owner", "template": "cro-owner", "department": "marketing", "reason": "Owns conversion: turning visitors into customers."},
-    {"key": "seo", "title": "SEO Owner", "template": "seo-visibility", "department": "marketing", "reason": "Owns search visibility: getting found in search results."},
-    {"key": "social-ads", "title": "Social Ads Owner", "template": "paid-media", "department": "marketing", "reason": "Owns paid ads on social networks."},
-    {"key": "search-ads", "title": "Search Ads Owner", "template": "paid-media", "department": "marketing", "reason": "Owns paid ads in search results."},
-    {"key": "email", "title": "Email Owner", "template": "email-marketing", "department": "marketing", "reason": "Owns email to customers and prospects."},
-    {"key": "content", "title": "Content Owner", "template": "content", "department": "marketing", "reason": "Owns articles, posts and pages."},
-    {"key": "community", "title": "Community Owner", "template": "community", "department": "marketing", "reason": "Owns the community and the people in it."},
-    {"key": "pr", "title": "PR Owner", "template": "pr", "department": "marketing", "reason": "Owns press and public relations."},
-    {"key": "app-store", "title": "App Store Owner", "template": "app-store", "department": "marketing", "reason": "Owns the app store listing, its updates and reviews."},
-    {"key": "affiliates", "title": "Affiliates Owner", "template": "affiliates", "department": "marketing", "reason": "Owns affiliate and referral partners."},
-    {"key": "events", "title": "Events Owner", "template": "events", "department": "marketing", "reason": "Owns events, webinars and trade shows."}
+    {
+      "key": "cro",
+      "id": "cro-owner",
+      "title": "Conversion Rate Optimization Owner",
+      "template": "cro-owner",
+      "department": "marketing",
+      "reason": "Owns conversion: turning visitors into customers."
+    },
+    {
+      "key": "seo",
+      "id": "seo-owner",
+      "title": "SEO Owner",
+      "template": "seo-owner",
+      "department": "marketing",
+      "reason": "Owns search visibility: getting found in search results."
+    },
+    {
+      "key": "social-ads",
+      "id": "social-ads-owner",
+      "title": "Social Ads Owner",
+      "template": "social-ads-owner",
+      "department": "marketing",
+      "reason": "Owns paid ads on social networks."
+    },
+    {
+      "key": "search-ads",
+      "id": "search-ads-owner",
+      "title": "Search Ads Owner",
+      "template": "search-ads-owner",
+      "department": "marketing",
+      "reason": "Owns paid ads in search results."
+    },
+    {
+      "key": "email",
+      "id": "email-owner",
+      "title": "Email Owner",
+      "template": "email-marketing",
+      "department": "marketing",
+      "reason": "Owns email to customers and prospects."
+    },
+    {
+      "key": "content",
+      "id": "content-owner",
+      "title": "Content Owner",
+      "template": "content",
+      "department": "marketing",
+      "reason": "Owns articles, posts and pages."
+    },
+    {
+      "key": "community",
+      "id": "community-owner",
+      "title": "Community Owner",
+      "template": "community",
+      "department": "marketing",
+      "reason": "Owns the community and the people in it."
+    },
+    {
+      "key": "pr",
+      "id": "pr-owner",
+      "title": "PR Owner",
+      "template": "pr",
+      "department": "marketing",
+      "reason": "Owns press and public relations."
+    },
+    {
+      "key": "app-store",
+      "id": "app-store-owner",
+      "title": "App Store Owner",
+      "template": "app-store",
+      "department": "marketing",
+      "reason": "Owns the app store listing, its updates and reviews."
+    },
+    {
+      "key": "affiliates",
+      "id": "affiliates-owner",
+      "title": "Affiliates Owner",
+      "template": "affiliates",
+      "department": "marketing",
+      "reason": "Owns affiliate and referral partners."
+    },
+    {
+      "key": "events",
+      "id": "events-owner",
+      "title": "Events Owner",
+      "template": "events",
+      "department": "marketing",
+      "reason": "Owns events, webinars and trade shows."
+    }
   ],
   "teams": [
     {
       "team": "Product",
       "seats": [
-        {"key": "product-lead", "title": "Product Team Manager", "template": "product-lead", "department": "product", "reports_to": null, "reason": "Leads the product team and its owners."},
-        {"key": "segment-product", "per": "segment", "covers": "product", "title": "{label} Product Owner", "template": "product-manager", "department": "product", "reports_to": "product-lead", "reason": "Owns the {label} segment's product{initiatives}."}
-      ]
-    },
-    {
-      "team": "Marketing",
-      "seats": [
-        {"key": "marketing-lead", "title": "Marketing Team Manager", "template": "marketing-lead", "department": "marketing", "reports_to": null, "reason": "Leads the marketing team and its owners."},
-        {"key": "segment-marketing", "per": "segment", "covers": "marketing", "title": "{label} Marketing Owner", "template": "product-marketing", "department": "marketing", "reports_to": "marketing-lead", "reason": "Owns the {label} segment's marketing."},
-        {"key": "channel", "per": "channel", "reports_to": "marketing-lead"}
-      ]
-    },
-    {
-      "team": "Sales",
-      "seats": [
-        {"key": "sales-lead", "title": "Sales Manager", "template": "sales-lead", "department": "sales", "reports_to": null, "reason": "Leads sales and its owners."},
-        {"key": "lead-generation", "title": "Lead Generation Owner", "template": "lead-generation-owner", "department": "sales", "reports_to": "sales-lead", "reason": "Owns finding new leads."},
-        {"key": "inbound-sales", "title": "Inbound Sales Owner", "template": "sales", "department": "sales", "reports_to": "sales-lead", "reason": "Owns inbound leads: answering, qualifying and closing them."},
-        {"key": "outbound-sales", "title": "Outbound Sales Owner", "template": "sdr-research", "department": "sales", "reports_to": "sales-lead", "reason": "Owns outbound prospecting: finding and reaching out to buyers."}
+        {
+          "key": "product-team-manager",
+          "id": "product-team-manager",
+          "title": "Product Team Manager",
+          "template": "product-team-manager",
+          "department": "product",
+          "reports_to": null,
+          "reason": "Leads the product team and its owners."
+        },
+        {
+          "key": "product-pipeline-manager",
+          "id": "product-pipeline-manager",
+          "title": "Product Pipeline Manager",
+          "template": "pipeline-manager",
+          "department": "product",
+          "reports_to": "product-team-manager",
+          "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
+          "live": true
+        },
+        {
+          "key": "segment-product",
+          "per": "segment",
+          "covers": "product",
+          "id": "{seg}-product-owner",
+          "title": "{label} Product Owner",
+          "template": "segment-product-owner",
+          "department": "product",
+          "reports_to": "product-team-manager",
+          "reason": "Owns the {label} segment's product{initiatives}.",
+          "live": "first"
+        },
+        {
+          "key": "product-owner",
+          "id": "product-owner",
+          "title": "Product Owner",
+          "template": "segment-product-owner",
+          "department": "product",
+          "reports_to": "product-team-manager",
+          "reason": "Owns the product: what gets built next, and the spec for each change.",
+          "unless": "segment",
+          "live": true
+        }
       ]
     },
     {
       "team": "Engineering",
       "seats": [
-        {"key": "engineering-manager", "title": "Engineering Manager", "template": "engineering-manager", "department": "engineering", "reports_to": null, "reason": "Leads engineering: builds, reviews, security, infrastructure and the pipeline."},
-        {"key": "builder", "title": "Builder", "template": "builder", "department": "engineering", "reports_to": "engineering-manager", "reason": "Builds the product: writes the code for each change."},
-        {"key": "reviewer-1", "title": "Reviewer 1", "template": "pr-reviewer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Reviews each code change before it ships, as the first reviewer."},
-        {"key": "reviewer-2", "title": "Reviewer 2", "template": "pr-reviewer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Reviews each code change before it ships, as the second reviewer."},
-        {"key": "security-owner", "title": "Security Owner", "template": "security-engineer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Owns security: keeping the product and its data safe."},
-        {"key": "infrastructure-owner", "title": "Infrastructure Owner", "template": "devops-engineer", "department": "engineering", "reports_to": "engineering-manager", "reason": "Owns infrastructure: the servers and systems the product runs on."},
-        {"key": "pipeline-owner", "title": "Pipeline Owner", "template": "pipeline", "department": "engineering", "reports_to": "engineering-manager", "reason": "Owns the pipeline: how each change is tested and shipped."}
+        {
+          "key": "engineering-team-manager",
+          "id": "engineering-team-manager",
+          "title": "Engineering Team Manager",
+          "template": "engineering-team-manager",
+          "department": "engineering",
+          "reports_to": null,
+          "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases."
+        },
+        {
+          "key": "engineering-pipeline-manager",
+          "id": "engineering-pipeline-manager",
+          "title": "Engineering Pipeline Manager",
+          "template": "pipeline-manager",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Moves the engineering pipeline's cards through build, review and release.",
+          "live": true
+        },
+        {
+          "key": "builder",
+          "id": "builder",
+          "title": "Builder",
+          "template": "builder",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Builds the product: writes the code for each change."
+        },
+        {
+          "key": "reviewer-1",
+          "id": "reviewer-1",
+          "title": "Reviewer 1",
+          "template": "pr-reviewer",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Reviews each code change before it ships, as the first reviewer."
+        },
+        {
+          "key": "reviewer-2",
+          "id": "reviewer-2",
+          "title": "Reviewer 2",
+          "template": "pr-reviewer",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Reviews each code change before it ships, as the second reviewer."
+        },
+        {
+          "key": "qa-owner",
+          "id": "qa-owner",
+          "title": "QA Owner",
+          "template": "qa-owner",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
+          "live": true
+        },
+        {
+          "key": "security-owner",
+          "id": "security-owner",
+          "title": "Security Owner",
+          "template": "security-owner",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Owns security: keeping the product and its data safe."
+        },
+        {
+          "key": "infrastructure-owner",
+          "id": "infrastructure-owner",
+          "title": "Infrastructure Owner",
+          "template": "infrastructure-owner",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Owns infrastructure: the servers and systems the product runs on."
+        },
+        {
+          "key": "release-owner",
+          "id": "release-owner",
+          "title": "Release Owner",
+          "template": "release-owner",
+          "department": "engineering",
+          "reports_to": "engineering-team-manager",
+          "reason": "Owns releases: how each change is checked, shipped and rolled out."
+        }
       ]
     },
     {
-      "team": "Initiatives",
+      "team": "Growth",
       "seats": [
-        {"key": "initiative", "per": "initiative", "title": "{label} Owner", "template": "initiative-owner", "department": "leadership", "reports_to": null, "reason": "Owns the “{label}” initiative{ref}{statement}."}
+        {
+          "key": "growth-team-manager",
+          "id": "growth-team-manager",
+          "title": "Growth Team Manager",
+          "template": "growth-team-manager",
+          "department": "marketing",
+          "reports_to": null,
+          "reason": "Leads growth: from first contact to customer, and its owners."
+        },
+        {
+          "key": "growth-experiments-pipeline-manager",
+          "id": "growth-experiments-pipeline-manager",
+          "title": "Growth Experiments Pipeline Manager",
+          "template": "pipeline-manager",
+          "department": "marketing",
+          "reports_to": "growth-team-manager",
+          "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped."
+        },
+        {
+          "key": "lead-pipeline-manager",
+          "id": "lead-pipeline-manager",
+          "title": "Lead Pipeline Manager",
+          "template": "pipeline-manager",
+          "department": "sales",
+          "reports_to": "growth-team-manager",
+          "reason": "Moves leads from targets to qualified, and hands qualified ones on."
+        },
+        {
+          "key": "opportunity-pipeline-manager",
+          "id": "opportunity-pipeline-manager",
+          "title": "Opportunity Pipeline Manager",
+          "template": "pipeline-manager",
+          "department": "sales",
+          "reports_to": "growth-team-manager",
+          "reason": "Moves each opportunity from first talk to a signed deal or a loss."
+        },
+        {
+          "key": "segment-marketing",
+          "per": "segment",
+          "covers": "marketing",
+          "id": "{seg}-marketing-owner",
+          "title": "{label} Marketing Owner",
+          "template": "segment-marketing-owner",
+          "department": "marketing",
+          "reports_to": "growth-team-manager",
+          "reason": "Owns the {label} segment's marketing."
+        },
+        {
+          "key": "channel",
+          "per": "channel",
+          "reports_to": "growth-team-manager"
+        },
+        {
+          "key": "lead-generation",
+          "id": "lead-generation-owner",
+          "title": "Lead Generation Owner",
+          "template": "lead-generation-owner",
+          "department": "sales",
+          "reports_to": "growth-team-manager",
+          "reason": "Owns finding new leads."
+        },
+        {
+          "key": "inbound-sales",
+          "id": "inbound-sales-owner",
+          "title": "Inbound Sales Owner",
+          "template": "inbound-sales-owner",
+          "department": "sales",
+          "reports_to": "growth-team-manager",
+          "reason": "Owns inbound leads: answering, qualifying and closing them."
+        },
+        {
+          "key": "outbound-sales",
+          "id": "outbound-sales-owner",
+          "title": "Outbound Sales Owner",
+          "template": "outbound-sales-owner",
+          "department": "sales",
+          "reports_to": "growth-team-manager",
+          "reason": "Owns outbound prospecting: finding and reaching out to buyers."
+        }
+      ]
+    },
+    {
+      "team": "Success",
+      "seats": [
+        {
+          "key": "success-team-manager",
+          "id": "success-team-manager",
+          "title": "Success Team Manager",
+          "template": "success-team-manager",
+          "department": "support",
+          "reports_to": null,
+          "reason": "Leads success: support, onboarding and renewals, and its owners."
+        },
+        {
+          "key": "customer-pipeline-manager",
+          "id": "customer-pipeline-manager",
+          "title": "Customer Pipeline Manager",
+          "template": "pipeline-manager",
+          "department": "support",
+          "reports_to": "success-team-manager",
+          "reason": "Moves each new customer from onboarding to active, referred or closed."
+        },
+        {
+          "key": "success-experiments-pipeline-manager",
+          "id": "success-experiments-pipeline-manager",
+          "title": "Success Experiments Pipeline Manager",
+          "template": "pipeline-manager",
+          "department": "support",
+          "reports_to": "success-team-manager",
+          "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped."
+        },
+        {
+          "key": "support-owner",
+          "id": "support-owner",
+          "title": "Support Owner",
+          "template": "support-owner",
+          "department": "support",
+          "reports_to": "success-team-manager",
+          "reason": "Owns customer support: answering and resolving customer issues."
+        },
+        {
+          "key": "success-owner",
+          "id": "success-owner",
+          "title": "Success Owner",
+          "template": "success-owner",
+          "department": "support",
+          "reports_to": "success-team-manager",
+          "reason": "Owns customer success: onboarding, adoption and renewals."
+        }
       ]
     },
     {
       "team": "Corporate",
       "seats": [
-        {"key": "general-counsel", "title": "General Counsel", "template": "general-counsel", "department": "legal", "reports_to": null, "reason": "Owns legal: contracts, terms and compliance."},
-        {"key": "finance-lead", "title": "Finance Owner", "template": "finance-lead", "department": "finance", "reports_to": null, "reason": "Owns finance: the books, budgets and money."},
-        {"key": "partnerships", "title": "Partnerships Owner", "template": "partnerships", "department": "sales", "reports_to": null, "reason": "Owns partnerships with other companies."}
+        {
+          "key": "corporate-team-manager",
+          "id": "corporate-team-manager",
+          "title": "Corporate Team Manager",
+          "template": "corporate-team-manager",
+          "department": "operations",
+          "reports_to": null,
+          "reason": "Leads the corporate team: legal, finance and partnerships, and its owners."
+        },
+        {
+          "key": "legal-owner",
+          "id": "legal-owner",
+          "title": "Legal Owner",
+          "template": "legal-owner",
+          "department": "legal",
+          "reports_to": "corporate-team-manager",
+          "reason": "Owns legal: contracts, terms and compliance."
+        },
+        {
+          "key": "finance-owner",
+          "id": "bookkeeper",
+          "title": "Finance Owner",
+          "template": "bookkeeper",
+          "department": "finance",
+          "reports_to": "corporate-team-manager",
+          "reason": "Owns finance: the books, bills, cash and the monthly close.",
+          "live": true
+        },
+        {
+          "key": "partnerships-owner",
+          "id": "partnerships-owner",
+          "title": "Partnerships Owner",
+          "template": "partnerships-owner",
+          "department": "sales",
+          "reports_to": "corporate-team-manager",
+          "reason": "Owns partnerships with other companies."
+        }
       ]
     },
     {
-      "team": "Support",
+      "team": "Other",
       "seats": [
-        {"key": "support-lead", "title": "Support Owner", "template": "support-lead", "department": "support", "reports_to": null, "reason": "Owns customer support: answering and resolving customer issues."}
-      ]
-    },
-    {
-      "team": "Operations",
-      "seats": [
-        {"key": "industry", "per": "industry", "title": "{title}", "reports_to": null, "reason": "Owns {topic} for the company."}
+        {
+          "key": "initiative",
+          "title": "{label} Owner",
+          "department": "leadership",
+          "reports_to": null,
+          "reason": "Owns the “{label}” initiative{ref}{statement}.",
+          "per": "initiative",
+          "template": "initiative-owner"
+        },
+        {
+          "key": "industry",
+          "title": "{title}",
+          "reports_to": null,
+          "reason": "Owns {topic} for the company.",
+          "per": "industry"
+        }
       ]
     }
   ],
   "coverage": [
-    {"seat": "sales-lead", "name": "Sales"},
-    {"seat": "engineering-manager", "name": "Engineering"},
-    {"seat": "security-owner", "name": "Security"},
-    {"seat": "infrastructure-owner", "name": "Infrastructure"},
-    {"seat": "pipeline-owner", "name": "Pipeline"},
-    {"seat": "support-lead", "name": "Support"},
-    {"seat": "finance-lead", "name": "Finance"},
-    {"seat": "general-counsel", "name": "Legal"},
-    {"seat": "partnerships", "name": "Partnerships"}
+    {
+      "seat": "growth-team-manager",
+      "name": "Growth"
+    },
+    {
+      "seat": "engineering-team-manager",
+      "name": "Engineering"
+    },
+    {
+      "seat": "security-owner",
+      "name": "Security"
+    },
+    {
+      "seat": "infrastructure-owner",
+      "name": "Infrastructure"
+    },
+    {
+      "seat": "release-owner",
+      "name": "Release"
+    },
+    {
+      "seat": "success-team-manager",
+      "name": "Success"
+    },
+    {
+      "seat": "finance-owner",
+      "name": "Finance"
+    },
+    {
+      "seat": "legal-owner",
+      "name": "Legal"
+    },
+    {
+      "seat": "partnerships-owner",
+      "name": "Partnerships"
+    }
   ]
 }

@@ -4603,5 +4603,94 @@
    ],
    "default": false
   }
+ ],
+ "helpers": [
+  {
+   "slug": "bookkeeper",
+   "template": "bookkeeper",
+   "name": "Bookkeeper",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Operational accounting, not strategy. Tico checks the Finance work queue in plain code every hour and gives the Bookkeeper one task only when there is something to do: rows to categorize, bills to enter, bills due, overdue invoices, receipts, failed syncs or a month ready to close. It acts only through the hub_finance tools, as itself, with finance.book, ap, ar, pay, cards and rules; it proposes posting rules, and a person approves each one. Every payment and the close still go to a person under the company's rules.",
+   "when": "Built in: keeps the books. Categorizes bank and card rows, enters bills, schedules payments, drafts reminders for overdue invoices, reconciles, prepares the monthly close and writes the monthly report, all through Finance's own actions and approvals.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "brand",
+   "template": "brand",
+   "name": "Brand Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Builds the brand book with the owner (who it's for, the promise, the voice, the look, tested on real pieces the owner marks us or not us), keeps the Brand card current, reviews copy and assets against it, checks new names, and audits what went public each month with three fixes. It changes no live page or asset itself.",
+   "when": "Built in: every team has a brand, and every bot that writes for customers checks its drafts against the Brand card this bot keeps.",
+   "tags": [
+    "brand",
+    "voice",
+    "naming",
+    "design",
+    "consistency",
+    "b2c",
+    "retail"
+   ],
+   "pains": [
+    "every team describes our team differently",
+    "our logo and colours are used wrong",
+    "new copy never sounds like us",
+    "we have no brand guidelines anyone follows",
+    "we don't know what we stand for or how we should look"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Monthly brand consistency audit · The 1st of each month at 10:00 team time",
+   "tools": [
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "task-manager",
+   "template": "task-manager",
+   "name": "Task Manager",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Tidies tasks, never the work. Once an hour on weekdays Tico checks each department's tasks in plain code: stalled or overdue asks, review tickets with no linked pull request, merged work whose step did not move, held bots and duplicates. Nothing to report means no task and no model run. Otherwise the Task Manager gets one task per department, fixes the obvious items and leaves one line in Needs you for anything it is unsure of.",
+   "when": "Built in: once an hour on weekdays it has the stalled, overdue and out-of-step tasks of each department checked, fixes the obvious ones and leaves one line per department for what it is unsure of.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "tico-counsel",
+   "template": "tico-counsel",
+   "name": "Counsel",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Reads a document someone adds to Rules (a file or a link) and suggests the obligations that bind us, each with its section and quote, for a person to add or skip. Answers \"can I...?\" questions with the rules that apply, and cites them. Not legal advice: it says so, and says to ask a lawyer for real exposure. It cannot send, sign or change anything; it only reads and suggests.",
+   "when": "Built in: reads a contract, terms or policy you add and suggests the obligations that bind us, with the quote; answers \"can I...?\" from the rules in force.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [
+    "never"
+   ],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  }
  ]
 }

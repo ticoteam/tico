@@ -76,17 +76,21 @@ function frProblem(state) {
 }
 
 // ----------------------------------------------------------------- review
+// The built-in bots as one collapsed group: its count, and the names when it is opened.
+function frBuiltInHTML(names: string[]): string {
+  return names.length ? `<details class="onb-builtins" data-review-builtin><summary>${names.length} ${names.length === 1 ? 'bot' : 'bots'}</summary> ${names.join(', ')}</details>` : '—';
+}
 function frSummaryTeamHTML(state) {
   const cat = state.catalog, org = state.org;
   // In the order they are set up: each department's head first, then its team.
   const rows = Object.keys(frSelection(state)).map(slug => catalogCard(cat, slug)).filter(card => card && !card.required && card.kind !== 'helper');
-  // Built-ins and explicit catalog helpers stay outside the chart, in separate review rows.
-  const helpers = cat.cards.filter(card => card.required)
-    .map(card => esc(catalogName(cat, card))).join(', ');
+  // The built-ins are a Built-in group of their own, folded until opened; message bots stay outside the chart, in a row of
+  // their own.
+  const builtIns = cat.cards.filter(card => card.required).map(card => esc(catalogName(cat, card)));
   const messageBots = cat.cards.filter(card => !card.required && card.kind === 'helper' && cat.picked.has(card.slug))
     .map(card => esc(catalogName(cat, card))).join(', ');
   const departments = org.chosen.filter(id => obPicked(state, id).length).map(id => esc(obDept(org, id)?.name || id)).join(', ');
-  return `<div><span class="k">Built-in</span><span data-review-helpers>${helpers || '—'}</span></div>
+  return `<div><span class="k">Built-in</span><span data-review-helpers>${frBuiltInHTML(builtIns)}</span></div>
     <div><span class="k">Message bots</span><span data-review-message-bots>${messageBots || '—'}</span></div>
     ${org.loaded ? `<div><span class="k">Groups</span><span data-review-departments>${departments || '—'}</span></div>` : ''}
     <div><span class="k">Your team</span><span data-review-team>${rows.length ? rows.map(card =>

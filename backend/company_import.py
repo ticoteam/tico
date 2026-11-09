@@ -42,6 +42,11 @@ PLAN_KEY = "onboarding.company_file"
 FAILED_KEY = "onboarding.company_import_failed"
 
 
+# The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner is the Bookkeeper, in
+# Corporate. Every other built-in stays in the Built-in group whatever team a file names.
+IN_TEAM_BUILT_INS = ("bookkeeper",)
+
+
 def plan(onboarding, c, who, text):
     """Validate and translate without changing the company or trusting file owner IDs.
 
@@ -79,6 +84,10 @@ def plan(onboarding, c, who, text):
         elif onboarding._bot_slug(bot["id"]) in required or bot["id"] in required:
             raise Problem("company_file", "An employee ID conflicts with another employee or a built-in role", 422)
         else:
+            if bot.get("live") and card is None:
+                raise Problem(
+                    "company_file", "A live seat needs a template Tico can build a bot from: %s" % bot["template"], 422
+                )
             roles[bot["id"]] = (bot, card)
 
     def holder(at):
@@ -136,6 +145,7 @@ def plan(onboarding, c, who, text):
                 "reports_to": reports_to,
                 "waits_on": waits,
                 "team": bot.get("team", ""),
+                "live": bool(bot.get("live")),
             }
     except ValidationError:
         raise Problem(
@@ -180,6 +190,7 @@ def plan(onboarding, c, who, text):
                 "title": seat["title"],
                 "reports_to": seat["reports_to"],
                 **({"waits_on": seat["waits_on"]} if seat["waits_on"] else {}),
+                **({"live": True} if seat["live"] else {}),
             }
             for key, seat in seats.items()
         ],
@@ -189,6 +200,9 @@ def plan(onboarding, c, who, text):
             for goal in draft["goals"]
         ],
         "builtins": sorted(required),
+        "built_in_teams": {
+            slug: bot["team"] for slug, (bot, _) in builtins.items() if bot.get("team") and slug in IN_TEAM_BUILT_INS
+        },
         "deferred": deferred,
     }
     if D.has_strategy(saved):
@@ -612,12 +626,21 @@ def apply(onboarding, c, who, text, fingerprint):
     teams = Groups.seat_teams(
         c, onboarding.settings, sorted({seat["template"] for seat in seats.values() if not seat["team"]})
     )
-    named = Groups.team_groups(c, [seat["team"] for seat in seats.values() if seat["team"]])
+    built_in_teams = summary["built_in_teams"]
+    named = Groups.team_groups(
+        c, [seat["team"] for seat in seats.values() if seat["team"]] + list(built_in_teams.values())
+    )
     chart = {}
     for key, seat in seats.items():
         team = named.get(seat["team"]) or teams.get(seat["template"], "")
         chart[key] = {**seat, "team": team, "description_by": "chart"}
     made = lifecycle.lay_out(c, who.actor, chart)
+    _go_live(onboarding, c, who, seats, made, {key: seat["team"] for key, seat in chart.items()})
+    for slug, team in built_in_teams.items():
+        found = H.resolve_bot(c, slug)  # a built-in on the chart (the Finance Owner is the Bookkeeper) goes to its team
+        if found and named.get(team):
+            Groups.move_bot(c, found["id"], named[team])
+    _factory_setup(c, who, made)
     owners = {goal["id"]: goal["owner"] for goal in summary["goals"]}
     import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]], bets)
     record = O.load(c)
@@ -651,6 +674,94 @@ def apply(onboarding, c, who, text, fingerprint):
         {"fingerprint": fingerprint, "bots": sorted(body.selected), "seats": len(made)},
     )
     return onboarding.view(c, who)
+
+
+def _depth(key, seats):
+    """How many seats sit above this one in the file, so a manager is made before the seats under it."""
+    depth, at = 0, seats[key]["reports_to"]
+    while at in seats and depth <= len(seats):
+        depth, at = depth + 1, seats[at]["reports_to"]
+    return depth
+
+
+def _go_live(onboarding, c, who, seats, made, teams):
+    """Each live seat of the chart gets a bot that fills it, parents first. A bot reports to a bot or a person, never to a
+    seat (lifecycle.bot_parent), so it is defined under the line its seat answers to. BotOps sets it up like any picked
+    role, it goes in its team's group, and it fills its seat (lifecycle.fill_seat moves the seats under it onto the bot).
+    `placed_under` is the line it was defined on: a bot that is later hired above it follows the seat (recruiting)."""
+    record = O.load(c)
+    cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
+    names = O.display_names(onboarding.settings, record)
+    home = "human:" + onboarding.auth.owner_id(c)
+    for key in sorted((key for key in seats if seats[key]["live"]), key=lambda key: _depth(key, seats)):
+        seat, seat_id = seats[key], made[key]
+        above = c.execute("SELECT reports_to FROM seats WHERE id=?", (seat_id,)).fetchone()["reports_to"] or ""
+        under = lifecycle.bot_parent(c, above) or home
+        card = O.render(cards[seat["template"]], names, seat["title"])
+        instructions = card["instructions"].rstrip()
+        if seat["description"]:
+            instructions += "\n\nJob description:\n" + seat["description"]
+        choice = {
+            "template": seat["template"],
+            "display_name": seat["title"],
+            "instructions": instructions,
+            "reports_to": under,
+        }
+        bot_id = onboarding._define(c, who, key, choice, card, reports_to=under)
+        declared = onboarding._declared(c, bot_id)
+        declared["placed_under"] = under
+        onboarding._write_config(c, bot_id, declared)
+        onboarding._setup_task(c, who, bot_id, choice, card, record["answers"])
+        if teams.get(key):
+            Groups.move_bot(c, bot_id, teams[key])
+        lifecycle.fill_seat(c, who, seat_id, bot_id)
+
+
+# The pipelines of company_default (backend/pipeline_setup.py) and what manages each: a bot by its slug, or a seat by its
+# chart key. A chart key that is not on the chart leaves its pipeline to the name match, as apply_factory_setup always did.
+FACTORY_BINDINGS = {
+    "Product": ("bot", "product-pipeline-manager"),
+    "Engineering": ("bot", "engineering-pipeline-manager"),
+    "Growth Experiments": ("seat", "growth-experiments-pipeline-manager"),
+    "Lead": ("seat", "lead-pipeline-manager"),
+    "Opportunity": ("seat", "opportunity-pipeline-manager"),
+    "Customer": ("seat", "customer-pipeline-manager"),
+    "Success Experiments": ("seat", "success-experiments-pipeline-manager"),
+    "Legal": ("seat", "legal-owner"),
+    "Finance": ("bot", "bookkeeper"),
+}
+
+
+def _factory_setup(c, who, made):
+    """The company's factories and pipelines, once the bots and seats exist: one call, with each pipeline's manager. A
+    bot is named by its slug (a live seat's bot is made under its chart key). Best effort, as onboarding's market task
+    is: a failure rolls back its own writes, is recorded, and the team stays set up."""
+    bindings = {}
+    for name, (kind, key) in FACTORY_BINDINGS.items():
+        if kind == "seat":
+            if key in made:
+                bindings[name] = {"seat": made[key]}
+        elif found := H.resolve_bot(c, key):
+            bindings[name] = {"bot": found["id"]}
+    c.execute("SAVEPOINT company_factories")
+    try:
+        from . import pipeline_setup
+
+        # `bindings` is the pipelines branch's parameter (org-v2-pipes); until that lands, this call raises and is recorded.
+        pipeline_setup.apply_factory_setup(
+            c,
+            who.actor,
+            preset="company_default",
+            bindings=bindings,  # pyright: ignore[reportCallIssue]
+        )
+    except Exception as err:  # noqa: BLE001 - best effort: setup never fails on the factories
+        c.execute("ROLLBACK TO company_factories")
+        c.execute("RELEASE company_factories")
+        H.event(
+            c, who.actor, "onboarding.pipelines_failed", "", {"error": str(err)[:200], "bindings": sorted(bindings)}
+        )
+        return
+    c.execute("RELEASE company_factories")
 
 
 def add_invitee(onboarding, c, who, key, email):
