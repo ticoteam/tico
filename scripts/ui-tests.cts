@@ -213,15 +213,15 @@ function runScript(script: string, {env = process.env, timeout, preload = path.j
     const calls: string[] = [], pending: string[] = [];
     // A pw:api line's one group always matches.
     const take = (line: string) => {
-      const api = / pw:api (.*)$/.exec(line);
-      if (!api) { out += line + '\n'; return; }
-      calls.push(redact(api[1], TRACE.call));
+      const pw = / pw:api (.*)$/.exec(line);
+      if (!pw) { out += line + '\n'; return; }
+      calls.push(redact(pw[1], TRACE.call));
       if (calls.length > TRACE.calls) calls.shift();
       let call: RegExpExecArray | null;
-      if ((call = /^=> (\S+) started/.exec(api[1]!))) {
+      if ((call = /^=> (\S+) started/.exec(pw[1]!))) {
         pending.push(redact(call[1], 80));
         if (pending.length > TRACE.pending) pending.shift();
-      } else if ((call = /^<= (\S+) (succeeded|failed)/.exec(api[1]!)) && pending.includes(redact(call[1], 80))) {
+      } else if ((call = /^<= (\S+) (succeeded|failed)/.exec(pw[1]!)) && pending.includes(redact(call[1], 80))) {
         pending.splice(pending.lastIndexOf(redact(call[1], 80)), 1);
       }
     };
