@@ -3,10 +3,9 @@ advance, the 10-second undo, send-back, Message manager and Mark met. The concur
 file: the database decides, not a Python lock."""
 
 import json
-import sqlite3
 import threading
 import time
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -35,27 +34,13 @@ STEPS = [
 ]
 
 
-BOOTED = {}
-
-
-@pytest.fixture(scope="module", autouse=True)
-def booted_hub(tmp_path_factory):
-    """One boot for the module (Store.initialize is the slow part); each World copies this file instead."""
-    path = tmp_path_factory.mktemp("pipeline-review") / "booted.sqlite"
-    Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
-    BOOTED["path"] = path
-    yield path
-
-
 class World:
     """A Design pipeline: Making, Review (a Mockup attachment and a Sign-off approval, both ana's) and Shipped."""
 
     def __init__(self, path, reviewed_by="person", conn=None, steps=STEPS):
         self.path = path
         if conn is None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with closing(sqlite3.connect(BOOTED["path"])) as source, closing(sqlite3.connect(path)) as target:
-                source.backup(target)
+            Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
             conn = H.connect(path)
         self.c = conn
         H.sync_registry(
