@@ -80,7 +80,7 @@ interface ChatMessage {
   prompted_by?: string | undefined;
   refs?: ChatRefs | undefined;
   ref_tasks?: Record<string, { title?: string | undefined }> | undefined;
-  run?: ChatRun | undefined;
+  run?: ChatRun | null | undefined;
   delivery?: { mode?: string | undefined; run_id?: string | undefined } | undefined;
   elsewhere?: ChatElsewhere | undefined;
 }
