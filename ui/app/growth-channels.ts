@@ -166,6 +166,6 @@ async function gcChannelDialog(state: GrowthState, c: GrowthChannelRow | null = 
       slug.oninput = () => { slug.dataset.touched = '1'; };
     }
   }
-  const retire = dlg.querySelector<HTMLElement>('[data-retire]');
+  const retire = dlg.querySelector<HTMLButtonElement>('[data-retire]');
   if (retire && c) grRetireButton(retire, dlg, `/v2/growth/channels/${encodeURIComponent(c.slug)}/retire`, () => grReload(state));
 }
