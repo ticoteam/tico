@@ -1447,11 +1447,13 @@ def factory_plan(event, changed, own_inputs=False):
 # For an event in NARROW, the plan keeps the Python tests of the selection above (unchanged, so release validation's
 # incremental runs, scripts/release_increment.py, still select with it) that a change reaches within `depth` levels:
 #   level 0: a changed test file;
-#   level 1: a test that runs (imports, names) or reads a changed file directly, uses a conftest fixture that runs it, or
-#            a rule above picks for it directly (owned data, a changed conftest, docs readers, a gone file's namers);
-#   level 2: a test that runs a level-1 file, unless that file is a hub (more than HUB_TEST_USERS tests run it directly:
-#            backend/app.py, backend/store.py), whose closure is what made every change select hundreds of tests.
-# When it drops anything, it adds the smoke set (scripts/queue-smoke.json). Then it caps the Python tests to `shards` VMs
+#   level 1: a file that runs (imports, names) or reads a changed file directly, uses a conftest fixture that runs it,
+#            reads the whole repository (DependencyMap.everything), or a rule above picks for it directly (owned data, a
+#            changed conftest, docs readers, a gone file's namers);
+#   level 2: a file that runs a level-1 file (a test helper or a shared test module included), unless that file is a
+#            hub (more than HUB_TEST_USERS tests run it directly: backend/app.py, backend/store.py), whose closure is
+#            what made every change select hundreds of tests.
+# When it drops anything, by depth or by the cap below, it adds the smoke set (scripts/queue-smoke.json). Then it caps the Python tests to `shards` VMs
 # of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
 # test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
 # job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
@@ -1494,6 +1496,8 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
             first |= graph.named_by(name)
         elif name in graph.unparsed or name not in graph.files:
             first |= {t for t in graph.named_by(name) if is_check(t)}
+    # A file that lists the repository or imports a computed name (DependencyMap.everything) reads every file directly.
+    first |= graph.everything
     frontier = first - set(level)
     for f in frontier:
         level[f] = 1
@@ -1501,7 +1505,7 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         found = set()
         for name in frontier:
             users = set(graph.run_by.get(name, ()))
-            if is_check(name) or sum(1 for user in users if is_test(user)) > HUB_TEST_USERS:
+            if is_browser(name) or sum(1 for user in users if is_test(user)) > HUB_TEST_USERS:
                 continue
             found |= users
         frontier = found - set(level)
@@ -1522,7 +1526,10 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     full = set(picked["python"])
     python = {p for p in full if p in level}
     left = sorted(full - python)
-    if left:
+    # The smoke set runs when the plan drops anything: here by depth, or later by the time budget (prepare removes
+    # `smoke_unless_capped` when the cap drops nothing).
+    extra = sorted(set(smoke_tests) - python - full) if full and not left else []
+    if full:
         python |= set(smoke_tests)
     # Changed tests 0, the smoke set 1, level 1 is 2, level 2 is 3.
     tier = {p: 0 if level.get(p) == 0 else 1 if p in smoke_tests else 1 + level[p] for p in python}
@@ -1533,6 +1540,7 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
         "shards": mode["shards"],
         "budget_seconds": narrow_budget(mode["shards"]),
         "smoke": bool(left),
+        "smoke_unless_capped": extra,
         "left_transitive": left,
         "tier": tier,
     }
@@ -1621,7 +1629,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         changed = sorted(set(changed) | set(script_changes(base, head, changed)))
     light = light and event in NARROW
     # One map for the selection and the narrowing; selection builds none for a change it answers without one.
-    graph = DependencyMap(ROOT) if light and any(not unread(n) and not owned_data(n) for n in changed) else None
+    graph = DependencyMap(ROOT) if light and any(not unread(n) for n in changed) else None
     picked = selection(changed, event, base=base, added=added, graph=graph)
     if light:
         picked = narrow(picked, changed, event, added=added, graph=graph)
@@ -1641,8 +1649,15 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
             timings.update(json.loads(path.read_text()))
     record = picked.pop("narrow", None)
     if record is not None:
-        seconds = weights(counts, {**committed_timings(), **timings})
+        # A light plan caps and packs with the same seconds: the run's measured timings over the committed table.
+        timings = {**committed_timings(), **timings}
+        seconds = weights(counts, timings)
         kept, record["left_over_budget"] = cap_tests(counts, record.pop("tier"), seconds, record["budget_seconds"])
+        if record["left_over_budget"]:
+            record["smoke"] = True
+        else:
+            kept = [f for f in kept if f not in record["smoke_unless_capped"]]
+        del record["smoke_unless_capped"]
         counts = Counter({f: counts[f] for f in kept})
         picked["python"] = sorted(counts)
         record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)

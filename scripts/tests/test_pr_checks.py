@@ -1933,10 +1933,12 @@ def test_a_light_pull_request_runs_the_tests_a_change_reaches_directly_and_the_s
         root=tmp_path,
     )
     assert helper["caddy"] and "backend/tests/test_helper.py" in helper["python"]
-    # A changed test file is tier 0, and a change that drops nothing adds no smoke set.
+    # A changed test file is tier 0. A change that drops nothing by depth carries the smoke set only for the cap: prepare
+    # removes it when the cap drops nothing too.
     name = "backend/tests/test_outer.py"
     own = checks.narrow(checks.selection([name], root=tmp_path, core=[]), [name], "pull_request", root=tmp_path)
-    assert own["python"] == [name] and own["narrow"]["tier"] == {name: 0} and not own["narrow"]["smoke"]
+    assert set(own["python"]) == {name} | set(smoke_tests) and own["narrow"]["tier"][name] == 0
+    assert not own["narrow"]["smoke"] and own["narrow"]["smoke_unless_capped"] == sorted(smoke_tests)
     # The selection is the same for both events (release validation's incremental runs use it too); main passes as is.
     assert checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=["page"]) == full
     main = checks.selection(["backend/leaf.py"], "push", root=tmp_path, core=[])
@@ -1982,6 +1984,7 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
         narrowed.append((event, graph))
         tier = {name: 0 if name.endswith("_00.py") else 2 for name in files}
         record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": True}
+        record["smoke_unless_capped"] = []
         return {**picked, "python": sorted(files), "narrow": {**record, "left_transitive": [far], "tier": tier}}
 
     monkeypatch.setattr(checks, "selection", fake_selection)
@@ -2063,3 +2066,60 @@ def test_release_validation_selects_the_full_closure_so_it_runs_what_a_queue_gro
     assert "pr_checks.selection(" in source and "narrow" not in source and "--light" not in source
     for name in ("ci.yml", "train.yml", "release.yml", "hotfix.yml"):
         assert "--light" not in (ROOT / ".github/workflows" / name).read_text(), name
+
+
+def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_with_the_seconds_it_capped_by(
+    tmp_path, monkeypatch
+):
+    """Codex review: the cap alone can drop tests, so the smoke set waits for it; and the VMs are packed with the same
+    seconds the cap used (the committed table under the run's timings), so a VM is not planned from a guess."""
+    smoke_tests, _ = checks.smoke(ROOT)
+    direct = [f"backend/tests/test_direct_{i:02}.py" for i in range(14)]
+    collected = Counter(dict.fromkeys([*direct, *smoke_tests], 1))
+    monkeypatch.setattr(checks, "collect", lambda: collected)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "image_checks", lambda changed: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    size = {"n": 14}
+
+    def fake_selection(changed, event, base=None, added=None, graph=None):
+        empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": direct[: size["n"]], "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed, event, added=None, graph=None):
+        tier = dict.fromkeys(picked["python"], 2) | dict.fromkeys(smoke_tests, 1)
+        record = {"event": event, "depth": 1, "shards": 4, "budget_seconds": checks.narrow_budget(4), "smoke": False}
+        record |= {"left_transitive": [], "tier": tier, "smoke_unless_capped": sorted(smoke_tests)}
+        return {**picked, "python": sorted({*picked["python"], *smoke_tests}), "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(direct, 600.0))
+    # Fourteen ten-minute files: the cap drops some, so the smoke set runs (it ranks before them).
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert plan["narrow"]["left_over_budget"] and plan["narrow"]["smoke"]
+    assert set(smoke_tests) <= set(plan["python"])
+    # Packed from the same seconds: no VM carries more than its share of the budget plus one file.
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    assert len(python) == 4 and max(plan["estimated_seconds"][: len(python)]) <= checks.narrow_budget(4) / 4 + 600
+    # Two files fit: nothing is dropped, so the smoke set does not run.
+    size["n"] = 2
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
+    assert plan["python"] == direct[:2] and not plan["narrow"]["smoke"] and not plan["narrow"]["left_over_budget"]
+
+
+def test_a_queue_group_follows_shared_test_modules_and_reads_by_repository_listers(tmp_path):
+    light_tree(tmp_path)
+    source(tmp_path, "backend/tests/test_shared.py", "from backend.leaf import LEAF\ndef test_x(): pass\n")
+    source(tmp_path, "backend/tests/test_reuses.py", "from backend.tests.test_shared import LEAF\ndef test_y(): pass\n")
+    source(tmp_path, "backend/tests/test_lists.py", "import importlib\nimportlib.import_module(name)\n")
+    full = checks.selection(["backend/leaf.py"], "merge_group", root=tmp_path, core=[])
+    group = checks.narrow(full, ["backend/leaf.py"], "merge_group", root=tmp_path)
+    # A test module that other tests import is followed like any module; a file that may load anything is level 1.
+    assert {"backend/tests/test_reuses.py", "backend/tests/test_lists.py"} <= set(group["python"])
+    light = checks.narrow(full, ["backend/leaf.py"], "pull_request", root=tmp_path)
+    assert "backend/tests/test_lists.py" in light["python"] and "backend/tests/test_reuses.py" not in light["python"]
