@@ -371,6 +371,9 @@ interface NeedsAsk {
   sender_id?: string;
   created_at?: string;
   delivered_at?: string | null;
+  /** What it says, and its structured questions (the Ask panel, ui/app/ask-panel.ts). */
+  body?: string;
+  refs?: QcRefs | null;
 }
 
 /** One row of Needs you (`S.v2.needs`). */

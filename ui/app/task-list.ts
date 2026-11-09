@@ -337,8 +337,8 @@ function tasksFilterOptions(state: TaskState, field: string): TaskFilterOption[]
   const tasks = (state.tasks || []).filter(t => (t.lane || 'company') === 'company');
   const selected = (state.filters[field] || []) as string[];
   const me = myActor();
-  const actorOpts = (actors: string[], withMe: boolean) => {
-    const list = [...new Set([...actors, ...selected.filter(v => v !== 'me')])].filter(a => a && a !== me);
+  const actorOpts = (actors: (string | null | undefined)[], withMe: boolean) => {
+    const list = [...new Set([...actors, ...selected.filter(v => v !== 'me')])].filter((a): a is string => !!a && a !== me);
     list.sort((a, b) => (actorPerson(a) ? 0 : 1) - (actorPerson(b) ? 0 : 1) || actorLabel(a).localeCompare(actorLabel(b)));
     return [...(withMe && me ? [{value: 'me', label: 'You', face: actorFace(me, 16)}] : []),
       ...list.map(a => ({value: a, label: actorLabel(a), face: actorFace(a, 16)}))];

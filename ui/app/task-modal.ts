@@ -950,7 +950,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id, can));
   const isUpdate = (x: ModalLine) => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
   state.openLines ||= new Set();
-  const html = (sourceRunsHTML(said, {isUpdate, open: (run: {message: ModalComment}[]) => run.some(x => state.openLines!.has(x.message.id)),
+  const html = (sourceRunsHTML(said, {isUpdate, open: (run: ModalLine[]) => run.some(x => state.openLines!.has(x.message!.id)),
     line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can)}) || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
   if (!can) d.askDrafts?.clear();

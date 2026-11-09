@@ -65,7 +65,7 @@ interface QcAsk {
   recipient_id?: string | null;
   created_at?: string;
   goes_ahead_at?: string | null;
-  refs?: QcRefs;
+  refs?: QcRefs | null;
 }
 /** One row of Needs you (`S.v2.needs`), as the card reads it. */
 interface QcItem {
@@ -308,7 +308,7 @@ function qcardRedraw(box: HTMLElement): void {
   box.outerHTML = qcardBoxHTML({id: box.dataset.qcard});
 }
 function qcardItem(t: QcTaskRef): QcFound | null {
-  const it: QcItem | undefined = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
+  const it: QcItem | null | undefined = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
   if (!it) return null;
   const q = qcardQuestion(it);
   return q ? {it, q} : null;

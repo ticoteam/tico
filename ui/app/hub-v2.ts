@@ -105,7 +105,7 @@ const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: 
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
 const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
-const v2StatusOf = (slug: string) => S.v2.status[slug] || null;
+const v2StatusOf = (slug: string | null | undefined) => S.v2.status[String(slug)] || null;
 const actorSlug = (a: unknown) => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
 const actorPerson = (a: unknown) => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
 const titleCase = (s: unknown) => String(s || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
