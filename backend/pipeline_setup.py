@@ -202,6 +202,7 @@ PRESETS: dict[str, dict[str, Any]] = {
                     ("Done", "done"),
                     ("Declined", "closed"),
                 ),
+                "caps": {"On ice": 0, "Specifying": 3, "In development": 3},
                 # The boot seed (roadmap_flow.ensure) takes these names in place; Approved goes into In development.
                 "adopt": {
                     "renamed": {

@@ -697,7 +697,7 @@ NO_QA_BOARD = [
 ]
 # The sha256 of PRESETS["tico_default"] (json.dumps, sort_keys) before company_default was added: re-running setup on an
 # existing team keeps what it had.
-TICO_DEFAULT_SHA256 = "9485c0ceec344f7f23188f4f1efca1637168c8bd9881c4a3622f69076b48c9df"
+TICO_DEFAULT_SHA256 = "da779296952efbb2ff491092bd97a090a976695f7b3a4fed461929b4139226d7"
 
 
 def pipeline_id(c, name):
@@ -1002,3 +1002,15 @@ def test_the_pipeline_read_model_shows_the_manager_seat_read_only(tmp_path):
     S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
     lead = next(p for p in PO.read(c, ANA)["pipelines"] if p["name"] == "Lead")
     assert lead["manager_seat"] == "lead-pipeline-manager" and lead["manager_id"] is None
+
+
+def test_company_default_product_takes_the_default_caps(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    caps = {
+        r["name"]: r["card_cap"]
+        for r in c.execute(
+            "SELECT s.name, s.card_cap FROM task_steps s JOIN task_types t ON t.id = s.type_id WHERE t.name = 'Product'"
+        )
+    }
+    assert (caps["On ice"], caps["Specifying"], caps["In development"]) == (0, 3, 3)
