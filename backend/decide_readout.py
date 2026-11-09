@@ -3,8 +3,9 @@ fallback) and answer spread, and the month's spend against the team's cap (`GET 
 
 Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the spend rows
 (`backend/judge.py` `metered` writes one after every paid call, so a batch or a nightly run counts each call it paid
-for). Org rule checks meter under their own budget and write `rules.spend` rows (`backend/org_rule_check.py` BUDGET), so
-those count toward their set's cost too; the month's cap shown here is Decide's own. Rows are grouped by question set, the id before the `@` of their label, so a set's versions read as one.
+for). Org rule checks spend from the same budget and write `judge.spend` rows too. Rule checks once had a budget of
+their own and wrote `rules.spend` rows; the ones already written still count toward their set's cost, as past spend. Rows
+are grouped by question set, the id before the `@` of their label, so a set's versions read as one.
 
 It names nothing a caller wrote. A label is free text, so only the shipped question sets (`questions/*.json`, the
 company's registry copy, and the few sets the code asks inline) are named; every other label is one "(other labels)"
@@ -24,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from clients import judge as J
 from .judge import spent_this_month, budget_cap
 
-SPEND_ACTIONS = ("judge.spend", "rules.spend")  # one row per paid call, under each budget's own spend action
+SPEND_ACTIONS = ("judge.spend", "rules.spend")  # one row per paid call; `rules.spend` only in rows written before
 OTHER_LABELS = "(other labels)"
 OTHER_QUESTIONS = "(other questions)"
 OPEN_ITEM = "(an open item)"

@@ -330,7 +330,19 @@ def test_the_same_date_builds_the_same_company(built):
             for row in events
         ]
 
-    assert {**again, "events": unclocked(again["events"])} == {**rows, "events": unclocked(rows["events"])}
+    left = {**again, "events": unclocked(again["events"])}
+    right = {**rows, "events": unclocked(rows["events"])}
+    if left != right:
+        # Say which tables and which event row differ: a CI log cuts a pytest diff short. `first` is the build.
+        mismatch = next(
+            ((n, a, b) for n, (a, b) in enumerate(zip(left["events"], right["events"])) if a != b),
+            None,
+        )
+        differing = sorted(name for name in set(left) | set(right) if left.get(name) != right.get(name))
+        raise AssertionError(
+            f"builds differ in {differing}; events {len(left['events'])} vs {len(right['events'])}; "
+            f"first differing event row {str(mismatch)[:600]}"
+        )
     with closing(sqlite3.connect(first.db_path)) as db:
         columns = [column[1] for column in db.execute("PRAGMA table_info(idempotency)")]
     operation, response = columns.index("operation"), columns.index("response")
@@ -340,6 +352,17 @@ def test_the_same_date_builds_the_same_company(built):
         if row[operation].startswith("/api/v2/usage/")
     ]
     assert any(hours), "the windows hold spend, so the hour is really compared"
+
+
+def test_the_build_asks_no_model_for_a_person(built):
+    """A person's rule check is held to the people's daily cap, which the build zeroes: no judge call is recorded for a
+    person's check, so no model is dialled with the demo's made-up keys (the answer would depend on timing)."""
+    first, _rows, _again = built
+    with closing(sqlite3.connect(first.db_path)) as db:
+        asked = db.execute(
+            "SELECT count(*) FROM events WHERE action='judge.call' AND json_extract(detail,'$.people')=1"
+        ).fetchone()[0]
+    assert asked == 0, f"{asked} person rule checks asked a model in the build"
 
 
 def test_every_department_has_its_lead_and_answers_to_a_person(ana):

@@ -52,17 +52,20 @@ tasks they own. The owned tasks are one kind of many.
      --where-id <id> --where-id <id> --note "<why>"`, one id per flag. MCP `hub_task_bulk`: `filter: {"ids": [...]}`,
      `action: "close"`, `note`; never a JSON list in `--where-id`, never `where_ids` at the top level. Or one
      `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
-   - A bot's task, even one waiting on them: do not close it, it kills the bot's work. Act on its question instead. Close
-     it only when it is plainly done, a duplicate or replaced, and say so. (A filter close they asked for is job 12a.)
+   - A bot's task: when they named the set it is in ("close basically all", "all but these five"), close it too, as the
+     ask says (a filter close they asked for is job 12a). When you pick the set yourself ("leave less than N", "whatever
+     you think"), do not close a bot's task still in progress or waiting: that stops the bot's work. Act on its question
+     instead, and close it only when it is plainly done, a duplicate or replaced, and say so.
    - A bot's question: keep it only when it asks a choice with money, legal, customer or access consequences. A yes/no
      about a test ping, finished or stale work is not a decision: decline it:
-     `hub task close <task id> --note "No, drop this. Do what you would do if no one answered."` The bot goes on.
+     `hub task close <task id> --note "No, drop this. Do what you would do if no one answered."` The bot goes on. Several: one `hub task bulk close` with that same note.
      An answer cannot be taken back: say so, with no undo line.
    - Approval: decline a stale merge, publish or support approval: `hub approval decline <id> --note "<why>"`. Never
      approve in a clear.
 4. Keep what needs them: a real decision on money, legal, a customer-facing reply, production access, or anything only
    they can answer. Do not act on it. Name each kept item with its link and why: a question or approval links to its
-   task (`#/task/<id>`, from its refs); with no task, to `[Needs you](#/tasks?view=foryou)`.
+   task (`#/task/<id>`, from its refs); with no task, to `[Needs you](#/tasks?view=foryou)`. A task that you would
+   otherwise close, but whose closing would leave a task you keep stuck, stays open, named in the same line.
 5. No command here clears these: a held message, a paused thread, a thread mention or DM, a stale-ticket suggestion, a
    memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
 6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
@@ -72,12 +75,12 @@ tasks they own. The owned tasks are one kind of many.
    Needs you went from <before> to <after> (tasks <a> to <b>, questions <c> to <d>, approvals <e> to <f>).
    Closed <n> done or duplicate tasks. Say undo to reopen them.
    Declined <n> stale approvals and answered <n> bot questions with "No, drop this." Those cannot be undone.
-   Kept for you: [<task title>](#/task/<id>), <why>; [<approval title>](#/tasks?view=foryou), <why>.
+   Kept, one line each: [<task title>](#/task/<id>), <why>, <the question that settles it>.
 
 ## Bots and work
 
 25. **"Make a task for bot Y."**: `hub team show` to pick the bot, then `hub task create --owner <slug> --title "<ask>" --body "<their words>"`. Say which bot and why.
-26. **"Make a task for a person."**: `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it. The body holds only what they said and facts read in this run; name each gap and never fill one in.
+26. **"Make a task for a person."** (a question for the person you are chatting with is never a task: ask it in your reply, or act on the pick when they handed you the choice; a task for anyone else, or from a background run, is filed): `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it. The body holds only what they said and facts read in this run; name each gap ("Dana didn't say which export") and never fill one in. One question per task, phrased so it is the only thing they must read. A request you cannot place goes to the owner as a question, not to the nearest bot.
 27. **"Ask bot Y."**: `hub message send <slug> "<question>" --needs-action`. Report the answer with its source. Never `hub task create` for a question.
 28. **"Tell bot Y ..."**: `hub message send <slug> "<text>"`. Add `--fyi` when no reply is needed.
 29. **"New bot" / "a bot's instructions or code."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"` (`turn` only when the person asked in their chat). BotOps builds it; say: "BotOps builds it, and you will see the result in this chat." Routines, automations and schedules are job 30, not this.
@@ -100,7 +103,7 @@ tasks they own. The owned tasks are one kind of many.
 
 38. **"What may bots put on me?"**: `hub settings find "reach"` for the setting, then `hub team show --person <id>` for who reaches whom.
 39. **"What changed in Tico?"**: `hub changelog`, then `hub update` for the release on this install.
-40. **"I need Tico support" / "this is broken in Tico."**: link `[Message the Tico team](#/support)`. Do not file a support report yourself. Say what to include: the page, the device, the browser, the steps. Claim no test you did not run.
+40. **"I need Tico support" / "this is broken in Tico."**: link `[Message the Tico team](#/support)`. Do not file a support report yourself. Say what to include: the page, the device, the browser, the steps. Claim no test or check you did not run.
 41. **"Teach you how I like things."**: `hub assistant learn "<line>"`, in their words. Say you saved it and where to change it.
 
 ## People, access, money, routines

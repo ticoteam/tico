@@ -5,9 +5,32 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// A "/" command: Tico's own (SLASH_TICO), or one the server lists for the chat's goal state.
+interface SlashCommand { name: string; args?: string | undefined; help?: string | undefined; kind?: string | undefined; sub?: string[] | undefined }
+// One menu row: what Return fills into the box, and what the row shows.
+interface SlashRow { fill: string; label: string; args: string; help: string; kind: string | undefined }
+// The menu's state on its composer (P.slash): the rows drawn, the highlighted one, and the text Esc kept it shut for.
+interface SlashState { rows: SlashRow[]; pick: number; closedFor: string | null }
+// The goal state the menu reads: the old chat's (V2C) or a thread's composer goals.
+interface SlashGoals { commands?: SlashCommand[] | null | undefined; goalSupported?: boolean | undefined }
+// The composer a "/" menu sits on: the old chat's pill, or a bot's Home or DM thread (its slug is null for a thread with no bot).
+interface SlashHost {
+  slug: string | null;
+  el?: HTMLElement | null | undefined;
+  mode?: string | undefined;
+  thread?: unknown;
+  newChat?: (() => unknown) | null | undefined;
+  clear?: (() => void) | undefined;
+  command?: ((text: string) => unknown) | undefined;
+  task?: ((text: string) => unknown) | undefined;
+  goalsOf?: (() => SlashGoals | null | undefined) | undefined;
+  slash?: SlashState | null | undefined;
+  slashUpdate?: (() => void) | undefined;
+}
+
 // Tico's own commands, for when the server has not listed this chat's yet (or is too old to). The server's list,
 // from GET /v2/conversations/{id}/goal, replaces it and adds what the bot's harness takes.
-const SLASH_TICO = [
+const SLASH_TICO: SlashCommand[] = [
   {name: 'goal', args: '<objective>', help: 'Pin a goal the bot works toward', kind: 'tico', sub: ['pause', 'resume', 'clear', 'edit']},
   {name: 'new', help: 'New chat', kind: 'tico'},
   {name: 'task', args: '<title>', help: 'Make a task for this bot', kind: 'tico'},
@@ -15,15 +38,15 @@ const SLASH_TICO = [
   {name: 'help', help: 'Show commands', kind: 'tico'},
 ];
 // Make my branch is offered on a shared bot that has no branch of the viewer's yet.
-function slashBranchAllowed(slug) {
+function slashBranchAllowed(slug: string | null) {
   const bot = botRow(slug);
   const original = bot?.shared_from || slug;
   return !!botRow(original)?.shared
     && !(S.emps || []).some(e => e.shared_from === original && e.owner_id === S.me?.id);
 }
 // The chat's goal state: the composer's own (a thread's), else the old chat's when it is this bot's.
-const slashGoals = (slug, P) => P?.goalsOf ? P.goalsOf() : V2C?.slug === slug ? V2C : null;
-function slashCommands(slug, P = null) {
+const slashGoals = (slug: string | null, P: SlashHost | null): SlashGoals | null | undefined => P?.goalsOf ? P.goalsOf() : V2C?.slug === slug ? V2C : null;
+function slashCommands(slug: string | null, P: SlashHost | null = null): SlashCommand[] {
   const state = slashGoals(slug, P);
   const list = state?.commands || SLASH_TICO;
   return list.filter(c => c && c.name
@@ -33,8 +56,8 @@ function slashCommands(slug, P = null) {
     && (c.name !== 'new' || !P?.thread || !!P.newChat));
 }
 // One row per command, plus a row per sub-command once a space follows its name (/goal pause).
-function slashEntries(slug, typed, P = null) {
-  const t = typed.toLowerCase(), spaced = /\s/.test(t), rows = [];
+function slashEntries(slug: string | null, typed: string, P: SlashHost | null = null): SlashRow[] {
+  const t = typed.toLowerCase(), spaced = /\s/.test(t), rows: SlashRow[] = [];
   for (const c of slashCommands(slug, P)) {
     const base = '/' + c.name;
     if (!spaced) rows.push({fill: base + (c.args ? ' ' : ''), label: base, args: c.args || '', help: c.help || '', kind: c.kind});
@@ -47,14 +70,15 @@ function slashEntries(slug, typed, P = null) {
 }
 
 // Attach the menu to a composer. It sits just above the box; keys it takes never reach the composer's own.
-function slashAttach(P) {
+function slashAttach(P: SlashHost) {
   const box = pq(P, '.p-text'), menu = document.createElement('div');
   menu.className = 'slash-menu'; menu.hidden = true;
   menu.setAttribute('role', 'listbox'); menu.setAttribute('aria-label', 'Commands');
   menu.id = 'slash-menu-' + Math.random().toString(36).slice(2, 8);
+  if (!P.el) throw new Error('The "/" menu needs its composer element');
   P.el.prepend(menu);
   box.setAttribute('aria-controls', menu.id);
-  const S_ = P.slash = {rows: [], pick: 0, closedFor: null};
+  const S_: SlashState = P.slash = {rows: [], pick: 0, closedFor: null};
   const close = () => { menu.hidden = true; S_.rows = []; box.removeAttribute('aria-activedescendant'); box.setAttribute('aria-expanded', 'false'); };
   const draw = () => {
     menu.innerHTML = S_.rows.map((r, i) => `<button type="button" role="option" id="${menu.id}-${i}" class="slash-row${i === S_.pick ? ' on' : ''}" aria-selected="${i === S_.pick}" data-slash="${i}">
@@ -73,7 +97,7 @@ function slashAttach(P) {
     menu.hidden = false; box.setAttribute('aria-expanded', 'true');
     draw();
   };
-  const choose = i => {
+  const choose = (i: number) => {
     const r = S_.rows[i]; if (!r) return;
     box.value = r.fill; box.focus(); box.setSelectionRange(r.fill.length, r.fill.length);
     box.dispatchEvent(new Event('input', {bubbles: true}));
@@ -92,12 +116,12 @@ function slashAttach(P) {
     else if (ev.key === 'Escape') { take(); S_.closedFor = box.value; close(); }
   }, true);
   menu.addEventListener('pointerdown', ev => ev.preventDefault());   // the box keeps focus (and a phone its keyboard)
-  menu.addEventListener('click', ev => { const b = ev.target.closest('[data-slash]'); if (b) choose(+b.dataset.slash); });
+  menu.addEventListener('click', ev => { const b = eventElement(ev)?.closest<HTMLElement>('[data-slash]'); if (b) choose(+b.dataset.slash!); });
 }
 
 // A typed "/command" in a bot chat. True when it was handled here; 'plain' when it goes to the bot as ordinary
 // text; false when it is not a command at all, or not one for this composer.
-function slashRun(P, text) {
+function slashRun(P: SlashHost, text: string): boolean | 'plain' {
   if ((P.mode !== 'chat' && !P.thread) || !P.slug || !/^\/[a-z0-9_-]/i.test(text)) return false;
   // A bot's own skills and commands may be namespaced (/docs:publish).
   const [, word, rest = ''] = text.match(/^\/([a-z0-9_:-]+)(?:\s+([\s\S]*))?$/i) || [];
@@ -142,7 +166,7 @@ function slashRun(P, text) {
   if (name === 'clear') return false;
   return 'plain';
 }
-function slashHelp(P) {
+function slashHelp(P: SlashHost) {
   const out = pq(P, '.p-cmd'); if (!out) return;
   out.innerHTML = `<div class="cmd-out slash-help-out">${slashCommands(P.slug, P).map(c =>
     `<div><code>/${esc(c.name)}${c.args ? ' ' + esc(c.args) : ''}</code> <span class="muted">${esc(c.help || '')}</span></div>`).join('')}</div>`;
@@ -150,10 +174,10 @@ function slashHelp(P) {
   out.onclick = () => { out.hidden = true; out.innerHTML = ''; out.onclick = null; };
 }
 // The server archives this person's room with the bot; the next message starts a fresh one.
-async function slashNewChat(slug) {
+async function slashNewChat(slug: string) {
   try {
     await post(`/v2/chat/${encodeURIComponent(slug)}/new`, {});
     CHAT_CACHE.delete(slug);
     if (BOT?.slug === slug) await v2ChatLoad(slug);
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { toast(errorMessage(e, 'Could not start a new chat.'), true); }
 }

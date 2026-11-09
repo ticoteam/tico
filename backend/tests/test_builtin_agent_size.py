@@ -85,6 +85,8 @@ MOVED = {
         "playbooks/tico-map.md": "## Links",
         "playbooks/acting-for-them.md": "## Many at once is one card",
         "playbooks/approvals-for-them.md": "# Deciding approvals for a human",
+        "playbooks/assistant-chat.md": "\"Why is this here?\" with no ask to stop it",
+        "playbooks/jobs.md": "One question per task",
         "playbooks/publish-a-file.md": "# Publishing your work",
     },
     "goal-manager": {
