@@ -3,7 +3,6 @@
 import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
 import type * as ThreadsFake from './support/threads-fake.cts';
-import type {ThreadsMessage} from './support/threads-fake.cts';
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -29,7 +28,7 @@ const markedStub = () => { (window as unknown as MarkedWin).marked = {parse: (sr
     const bot=(name: string,display_name: string)=>({name,display_name,host:'keeper',status:'active',can_chat:true,schedules:[]});
     const bots=[bot('legal','Legal'),bot('seo','AI SEO'),bot('cmo','AI CMO'),bot('finance','Finance'),bot('sales-ops','Sales Ops'),bot('designer','Designer')];
     const said=(bot: string)=>bot==='legal'?'I need your **review** of these:\n\n- [review packet](https://tico-ui.test/api/v2/files/file-md-0001)\n- [storyboard](https://tico-ui.test/api/v2/files/file-png-0001)\n- [cover photo](https://tico-ui.test/assets/cover.png)\n- [walkthrough](https://youtu.be/dQw4w9WgXcQ)\n- [lease](https://tico-ui.test/api/v2/files/file-pdf-0001)':bot==='designer'?'Here is the [launch page](https://tico-ui.test/api/v2/files/file-html-0001); the [style guide](https://evil.test/guide.html) is on the web.':bot==='finance'?'I gave Inbox [quote instructions](https://tico-ui.test/tasks/979a861b-a309-43db-a443-732a3674de81). See [goals](https://tico-ui.test/#/goals) and [the lender](https://lender.example/).':'Hello from '+bot;
-    const fakes=Object.fromEntries(bots.map(b=>[b.name,threadsFake({bot:b.name,messages:[{id:'m-'+b.name,sender_id:'bot:'+b.name,body:said(b.name)}] as unknown as ThreadsMessage[]})] as const));
+    const fakes=Object.fromEntries(bots.map(b=>[b.name,threadsFake({bot:b.name,messages:[{id:'m-'+b.name,sender_id:'bot:'+b.name,body:said(b.name)}]})] as const));
     await page.context().route('**/*',route=>{
       const url=new URL(route.request().url()),p=url.pathname;
       if(url.hostname==='evil.test'){outside.push(url.href);return route.fulfill({contentType:'text/html',body:'<p>outside</p>'});}

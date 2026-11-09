@@ -35,7 +35,7 @@ interface Api {
   reachSlow: number; follows: Json[]; chanFollows: boolean;
 }
 interface OpenOpts {
-  width?: number; theme?: string; tab?: string; supported?: boolean; goalMode?: boolean; dmMade?: boolean; home?: Json[]; refuse?: boolean;
+  width?: number; theme?: string; tab?: string; supported?: boolean; goalMode?: boolean; dmMade?: boolean; home?: ThreadsFake.ThreadsFixture[]; refuse?: boolean;
   execution?: Json | null; commands?: Json[]; role?: string; recent?: string[]; write?: boolean; prefs?: Record<string, unknown>;
 }
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -61,7 +61,7 @@ async function open(browser: Browser, {width = 390, theme = 'dark', tab = 'home'
                stops: [], commands: [], tasks: [], patches: [], snapshots: [], prefs: {...prefs}, slowRead: false, uploads: [],
                reachReads: [], reachOut: 0, reachMax: 0, reachSlow: 0, follows: [], chanFollows: false};
   page.on('pageerror', (e: Error) => api.errors.push(e.message));
-  const fake = threadsFake({bot: BOT, home: home as unknown as ThreadsFake.ThreadsMessage[], sent: api.sent});
+  const fake = threadsFake({bot: BOT, home, sent: api.sent});
   const now = () => new Date().toISOString();
   await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
