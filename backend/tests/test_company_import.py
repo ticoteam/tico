@@ -1624,3 +1624,127 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
     )
     preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": live_text()}, headers=signed_in())
     assert preview.status_code == 422 and "live seat needs a template" in preview.text
+
+
+# ------------------------------------------------------------------ the default chart, on every way a company starts
+NINE = ("Product", "Engineering", "Growth Experiments", "Lead", "Opportunity", "Customer", "Success Experiments")
+NINE += ("Legal", "Finance")
+LIVE_DEFAULT = ("product-pipeline-manager", "engineering-pipeline-manager", "product-owner", "qa-owner")
+
+
+def default_chart_text():
+    """The company file the site writes for a company that picked no segment or bet: the chart formula's default output
+    (backend/company_file/chart_formula.py) under the Assistant and BotOps. The Finance Owner row is the Bookkeeper."""
+    from backend.company_file import chart_formula as F
+    from backend.company_file import draft as D
+
+    draft = C.blank()
+    draft["company"].update(name="Acme Default", about="We build things.", signals=["sells_services"])
+    draft = C.Turn(draft).finish()
+    owner = D.owner_id(draft)
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("coo", "botops")]
+    for row in F.build({})["employees"]:
+        draft["bots"].append(
+            {
+                **{key: row[key] for key in ("id", "template", "title", "reason", "team", "live")},
+                "dept": row["department"],
+                "lead": False,
+                "core": row["template"] == "bookkeeper",
+                "start": True,
+                "routine": "",
+                "tools": [],
+                "about": "",
+                "runtime": None,
+                "existing": False,
+                "reports_to": row["reports_to"] or owner,
+            }
+        )
+    return C.to_yaml(draft)
+
+
+def types_of(api):
+    return {r["name"]: r for r in rows(api, "SELECT id,name,manager,manager_seat FROM task_types")}
+
+
+def test_setup_with_no_chart_starts_the_default_chart_its_live_bots_and_the_nine_pipelines_once(environment):
+    """Review finding 4: a company that finishes setup without a chart (POST /api/v2/onboarding/complete with nothing
+    picked) gets the default chart, as the site's file would give it: its live seats as bots, the rest Recruiting, and
+    company_default's pipelines with their managers. Completing again changes nothing."""
+    api = environment()
+    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    ids = bot_ids(api)
+    assert set(LIVE_DEFAULT) <= set(ids)
+    seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,closed_at FROM seats")}
+    assert seats["Product Team Manager"]["closed_at"] is None and seats["QA Owner"]["filled_by"] == ids["qa-owner"]
+    types = types_of(api)
+    assert set(NINE) <= set(types)
+    assert types["Product"]["manager"] == ids["product-pipeline-manager"]
+    assert types["Engineering"]["manager"] == ids["engineering-pipeline-manager"]
+    assert types["Lead"]["manager_seat"] == seats["Lead Pipeline Manager"]["id"]
+    assert not rows(api, "SELECT action FROM events WHERE action='onboarding.pipelines_failed'")
+    before = (len(rows(api, "SELECT id FROM seats")), len(types), len(ids))
+    again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert again.status_code == 200, again.text
+    assert (len(rows(api, "SELECT id FROM seats")), len(types_of(api)), len(bot_ids(api))) == before
+
+
+def test_setup_leaves_a_company_whose_work_is_already_set_up_alone(environment):
+    """The guard: a company with a task type of its own (beyond the boot seeds) gets no default chart and no pipelines."""
+    api = environment()
+    made = api.post("/api/v2/task-types", json={"name": "Orders"}, headers=signed_in())
+    assert made.status_code in (200, 201), made.text
+    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    assert not set(LIVE_DEFAULT) & set(bot_ids(api))
+    assert not rows(api, "SELECT id FROM seats")
+    assert "Growth Experiments" not in types_of(api)
+
+
+def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporate_manager_once_hired(environment):
+    """Review finding 7: the Bookkeeper is the Finance Owner on the default chart, under the Corporate Team Manager seat.
+    Its seat is filled by the built-in bot (no second bot), and hiring the manager moves the Bookkeeper under it."""
+    api = environment()
+    preview = preview_and_import(api, default_chart_text())
+    assert "bookkeeper" not in {s["id"] for s in preview["seats"]}  # it works from day one: not a Recruiting seat
+    ids = bot_ids(api)
+    assert sorted(slug for slug in ids if slug == "bookkeeper" or slug.startswith("finance")) == ["bookkeeper"]
+    seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,reports_to FROM seats")}
+    finance = seats["Finance Owner"]
+    assert finance["filled_by"] == ids["bookkeeper"]
+    assert finance["reports_to"] == "seat:" + seats["Corporate Team Manager"]["id"]
+    assert stored_line(api, "bookkeeper") == stored_config(api, "bookkeeper")["placed_under"] == "human:owner"
+    assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up Finance Owner%'")
+    hired = api.post(
+        "/api/v2/seats/%s/hire" % seats["Corporate Team Manager"]["id"],
+        json={"template": "corporate-team-manager"},
+        headers=signed_in(),
+    )
+    assert hired.status_code == 200, hired.text
+    assert stored_line(api, "bookkeeper") == hired.json()["bot"]
+
+
+def test_a_new_company_files_growth_work_in_growth_experiments(environment):
+    """Review finding 6: a company set up with company_default has Growth Experiments, and the Growth Team Manager files
+    its ideas there. The Marketing board stays for the Growth page and the older growth templates."""
+    api = environment()
+    preview_and_import(api, default_chart_text())
+    types = types_of(api)
+    assert "Growth Experiments" in types and "Marketing" in types
+    root = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "growth-team-manager"
+    for path in [root / "AGENT.md", *sorted((root / "playbooks").glob("*.md"))]:
+        assert "--type idea" not in path.read_text(), path.name
+    assert '--type "Growth Experiments"' in (root / "playbooks" / "propose-ideas.md").read_text()
+
+
+def test_an_existing_company_keeps_its_marketing_board(environment):
+    """Legacy: a company already set up keeps the Marketing board, and the boot seed keeps it."""
+    api = environment()
+    made = api.post("/api/v2/task-types", json={"name": "Orders"}, headers=signed_in())
+    assert made.status_code in (200, 201), made.text
+    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    from backend import marketing_tasks
+
+    with api.app.state.store.transaction() as c:
+        assert marketing_tasks.ensure(c) == "idea"
+    assert rows(api, "SELECT name FROM task_types WHERE id='idea'")
