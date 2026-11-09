@@ -353,7 +353,7 @@ function finTxPage(): void {
       <select data-fin-status aria-label="Status">${FIN_TX_STATUS.map(([v, l]) => `<option value="${v}"${v === t.status ? ' selected' : ''}>${l}</option>`).join('')}</select>
       <select data-fin-account aria-label="Line"><option value="">All lines</option>${t.account ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}</select>${orgChip}
       <span class="spacer"></span>${finNeed(finCaps(), 'the finance caps').may('finance.pay') ? '<button type="button" class="primary" data-fin-xfer-add>+ Transfer</button>' : ''}</div>`
-    + finSplit(`<div class="fin-scroll" id="fin-tx">${skelRows(8, {dot: false})}</div>`, '', 'Selected transaction');
+    + finSplit(`<div id="fin-receipts"></div><div class="fin-scroll" id="fin-tx">${skelRows(8, {dot: false})}</div>`, '', 'Selected transaction');
   const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
   let timer = 0;
   const search = finNeed(body.querySelector<HTMLInputElement>('[data-fin-q]'), 'the search box');
@@ -407,6 +407,7 @@ async function finTxLoad(more: boolean): Promise<void> {
   if (FIN_TX.source === 'transfer' && !finNeed(finCaps(), 'the finance caps').balance) FIN_TX.source = 'all';
   // Transfers are their own list: the bank filters don't apply to them.
   finNeed<HTMLElement>($('#fin-body'), 'the Finance body').querySelectorAll<HTMLElement>('[data-fin-status], [data-fin-account]').forEach(el => { el.hidden = FIN_TX.source === 'transfer'; });
+  if (!more) void finReceiptsLoad();
   if (FIN_TX.source === 'transfer') return finXferLoad(more);
   const state: FinTxState = FIN.tx, t = FIN_TX, load = ++state.load;
   const qs = new URLSearchParams({source: t.source, limit: '50'});

@@ -1624,6 +1624,46 @@ mod tests {
         [("TICO_SYSTEMD_UNIT".into(), "tico-bot.service".into())].into()
     }
 
+    // The parser check the launch test runs: it reads origin/main's runner_support/release_update.py, or the checkout's own
+    // copy when there is no origin/main ref, and runs the updater's parse_args on the launch arguments only.
+    const UPDATER_PARSER_CHECK: &str = r#"
+import argparse, ast, os, subprocess, sys
+from pathlib import Path
+if subprocess.run(['git', 'rev-parse', '--verify', '--quiet', 'origin/main^{commit}'], capture_output=True).returncode == 0:
+    print('launch arguments checked against origin/main parser', file=sys.stderr)
+    source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
+else:
+    print('no origin/main ref here; launch arguments checked against the checkout parser', file=sys.stderr)
+    source = Path(os.environ['TICO_UPDATER_CHECKOUT_PARSER']).read_text()
+main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+parse = next(n for n in ast.walk(main) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+             and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
+main.body = [n for n in main.body if n.end_lineno < parse.lineno] + [parse]
+scope = {'argparse': argparse, 'ROOT': Path('.')}
+exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
+scope['main'](sys.argv[1:])
+"#;
+
+    fn parse_with_updater(
+        cwd: &Path,
+        owned: &str,
+        checkout_parser: &Path,
+        launch: &[String],
+    ) -> std::process::Output {
+        let out = Command::new("python3")
+            .arg("-c")
+            .arg(UPDATER_PARSER_CHECK)
+            .args(launch)
+            .env("TICO_GIT_OWNED_ROOTS", owned)
+            .env("TICO_UPDATER_CHECKOUT_PARSER", checkout_parser)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        // libtest captures print output of passing tests; writing to stderr directly keeps the chosen parser in the log.
+        std::io::Write::write_all(&mut std::io::stderr(), &out.stderr).unwrap();
+        out
+    }
+
     #[test]
     fn updater_launch_arguments_work_with_the_origin_main_parser() {
         let f = checkout_follower();
@@ -1664,23 +1704,47 @@ mod tests {
             }
             let module = args.iter().position(|a| a == "-m").unwrap();
             assert_eq!(args[module + 1], "runner_support.release_update");
-            // Execute only origin/main's real parser, without starting an update or touching its status.
-            let out = Command::new("python3").arg("-c").arg(r#"
-import argparse, ast, subprocess, sys
-from pathlib import Path
-source = subprocess.check_output(['git', 'show', 'origin/main:runner_support/release_update.py'], text=True)
-main = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'main')
-parse = next(n for n in ast.walk(main) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
-             and isinstance(n.value.func, ast.Attribute) and n.value.func.attr == 'parse_args')
-main.body = [n for n in main.body if n.end_lineno < parse.lineno] + [parse]
-scope = {'argparse': argparse, 'ROOT': Path('.')}
-exec(compile(ast.Module(body=[main], type_ignores=[]), '<origin/main updater parser>', 'exec'), scope)
-scope['main'](sys.argv[1:])
-"#).args(&args[module + 2..]).env("TICO_GIT_OWNED_ROOTS", owned).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap();
+            // Execute only origin/main's real parser, without starting an update or touching its status. A checkout without an
+            // origin/main ref (a release candidate's clone) reads the checkout's own parser instead.
+            let checkout_parser = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("runner_support/release_update.py");
+            let launch = &args[module + 2..];
+            let out = parse_with_updater(
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                &owned,
+                &checkout_parser,
+                launch,
+            );
             assert!(
                 out.status.success(),
-                "{}",
-                String::from_utf8_lossy(&out.stderr)
+                "the updater parser refused the launch arguments"
+            );
+            // Without an origin/main ref the same arguments must still parse, and the checkout parser must be the one chosen.
+            let bare = std::env::temp_dir().join(format!(
+                "tico-updater-parser-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&bare).unwrap();
+            assert!(Command::new("git")
+                .arg("init")
+                .arg("-q")
+                .arg(&bare)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success());
+            let fallback = parse_with_updater(&bare, &owned, &checkout_parser, launch);
+            std::fs::remove_dir_all(&bare).unwrap();
+            assert!(
+                fallback.status.success(),
+                "the checkout parser refused the launch arguments without origin/main"
+            );
+            assert!(
+                String::from_utf8_lossy(&fallback.stderr).contains("checkout parser"),
+                "the fallback did not choose the checkout parser"
             );
         };
         for mode in ["systemd", "detached", "fallback"] {

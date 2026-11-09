@@ -27,6 +27,15 @@ and keep going on what is clear. Do not build a behaviour the spec does not stat
     git -C software/<repo> fetch origin
     git -C software/<repo> switch -c <ticket-number>-<short-name> origin/<base branch>
 
+If `<repo>` is `ticoteam/tico`, turn its pre-push hook on once for that clone (every worktree of the clone shares it):
+
+    git -C software/<repo> config core.hooksPath .githooks
+
+From then on each push runs `scripts/check.sh` and the branch conflict check first. A push it stops is a finding: fix it
+and push again. If `check.sh` cannot run on this computer (a tool it needs is missing), say so in the note in step 7 and
+push with `git push --no-verify`; the pull request's static checks run the same checks in CI. Do not change the hook
+setting of any other repository.
+
 Work only on that branch. Never commit to the base branch and never force-push.
 
 ## 3. Test first

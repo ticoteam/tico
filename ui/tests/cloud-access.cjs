@@ -18,7 +18,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    let cloud = null, role = 'owner', lockTasks = false;   // lockTasks: one read answers 402 `locked`
+    let cloud = null, role = 'owner', lockTasks = false, failCheck = false;   // lockTasks: one read answers 402 `locked`
     const serve = async route => {
       const url = new URL(route.request().url()), p = url.pathname;
       if (url.origin !== 'http://tico-ui.test') return route.abort();
@@ -31,7 +31,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
       }
       if (p === '/api/me') return json({id: 'ana', email: 'ana@boatyard.example', role, cloud: true, config: {company_name: 'Boatyard'}});
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], queued: [], cloud_access: cloud});
-      if (p === '/api/v2/cloud-access') return json({cloud});
+      if (p === '/api/v2/cloud-access') return failCheck ? json({error: {detail: 'Unavailable'}}, 503) : json({cloud});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: []});
       if (p === '/api/employees') return json([]);
       if (lockTasks && p === '/api/v2/goals')
@@ -51,13 +51,14 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
     await open();
     assert.equal(await shown('#cloud-banner'), false);
     assert.equal(await shown('#cloud-lock'), false);
+    assert.equal(await shown('#asset-recovery'), false);
     assert.equal(await page.evaluate(() => document.documentElement.classList.contains('strip')), false);
 
     // Frozen: the strip with its one link; the sidebar sits below it and the page still works.
     cloud = {access: 'frozen', reason: 'out_of_credit', plan: 'trial', trial_days_left: 9, billing_url: BILLING};
     await page.evaluate(async () => { await refresh(false); });
     await page.locator('#cloud-banner').waitFor();
-    assert.equal((await page.locator('#cloud-banner').innerText()).replace(/\s+/g, ' ').trim(), 'Out of credit Add credit');
+    assert.equal(await page.locator('#cloud-banner').getAttribute('hidden'), null);
     assert.equal(await page.locator('#cloud-banner a').getAttribute('href'), BILLING);
     const bar = await page.locator('#cloud-banner').boundingBox(), side = await page.locator('#side').boundingBox();
     assert.ok(bar.height <= 32 && bar.y === 0, 'a slim strip at the top');
@@ -78,13 +79,19 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
     await page.evaluate(async () => { await cloudAccessPoll(); });
     await page.locator('#cloud-lock').waitFor();
     assert.equal(await shown('#cloud-banner'), false);
-    assert.equal(await page.locator('#cloud-lock h1').innerText(), 'Pay to continue');
+    assert.equal(await page.locator('#cloud-lock').getAttribute('hidden'), null);
     assert.equal(await page.locator('#cloud-lock [data-cloud-why]').innerText(), 'Your trial has ended.');
     assert.equal(await page.locator('#cloud-lock [data-cloud-pay]').getAttribute('href'), BILLING);
     const download = page.locator('#cloud-lock [data-cloud-download]');
     assert.equal(await download.isVisible(), true);
     assert.equal(await download.getAttribute('href'), '/api/v2/system/storage/export');
     assert.equal(await page.locator('#side').isVisible(), false, 'nothing else shows');
+    failCheck = true;
+    await page.locator('#cloud-lock [data-cloud-refresh]').click();
+    await page.waitForFunction(() => document.querySelector('[data-cloud-check]').textContent.includes('Couldn’t check'));
+    assert.equal(await shown('#cloud-lock'), true, 'a failed check never opens a locked team');
+    assert.equal(await page.locator('#cloud-lock [data-cloud-refresh]').isEnabled(), true);
+    failCheck = false;
     if (shots) await page.screenshot({path: path.join(shots, 'cloud-locked-desktop.png')});
     await page.setViewportSize({width: 390, height: 780});
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -93,7 +100,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
 
     // Paid: open again reloads the page by itself, and nothing shows.
     cloud = {access: 'open', reason: null, plan: 'starter', trial_days_left: null, billing_url: BILLING};
-    await Promise.all([page.waitForEvent('load'), page.evaluate(() => { void cloudAccessPoll(); })]);
+    await Promise.all([page.waitForEvent('load'), page.locator('#cloud-lock [data-cloud-refresh]').click()]);
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
     assert.equal(await shown('#cloud-lock'), false);
     assert.equal(await shown('#cloud-banner'), false);

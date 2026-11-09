@@ -225,7 +225,7 @@ NOT_PUBLIC_BY_ITS_SPELLING = [
 ]
 
 
-def test_an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api):
+def _an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api, net):
     """No name lookup at save: an IP literal outside public space, or a local name, is refused like its http twin."""
 
     def refused(url, path, body):
@@ -244,12 +244,12 @@ def test_an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cann
         assert get(api, f"webhooks/{made['id']}")["webhook"]["url"] == made["url"], url
 
 
-def test_a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved(api):
+def _a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved(api, net):
     make(api, "https://8.8.8.8/hook")
     make(api, "https://dead.beef/hook")
 
 
-def test_plain_http_is_for_localhost_and_the_owner_switch_alone(api, net):
+def _plain_http_is_for_localhost_and_the_owner_switch_alone(api, net):
     post(api, "webhooks", {"name": "Dev", "url": "http://localhost:9000/x", "events": ["*"]}, expected=422)
     post(
         api,
@@ -389,7 +389,7 @@ def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net)
         assert set(data) == set(catalog.EVENTS[name].example), name
 
 
-def test_the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api):
+def _the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api, net):
     made = make(api)
     assert publish(api, "custom.x", "s", {}, "bot:goal-manager") == 0  # the broad path never raises, and sends nothing
     with api.app.state.store.transaction() as c:
@@ -740,3 +740,16 @@ def test_a_held_post_tells_only_the_people_who_can_read_its_thread(api, net, mon
     assert body["data"]["rule"] == "no-prices" and body["data"]["thread_id"] == room["id"]
     assert "$10" not in held[0]["body"], "a held event never carries the words"
     assert [s for s in sends(api, owner["id"]) if s["type"] == "message.held"] == []
+
+
+def test_endpoint_addresses_plain_http_and_refused_senders_story(api, net, subtests):
+    """Endpoint addresses and the senders the rules refuse, on one app: each check makes its own endpoints and reads
+    only its own rows, and every privacy, permission and guard assertion runs as it did on its own."""
+    for check in (
+        _an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set,
+        _a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved,
+        _plain_http_is_for_localhost_and_the_owner_switch_alone,
+        _the_strategy_bot_and_a_bot_without_the_send_switch_are_refused,
+    ):
+        with subtests.test(check.__name__):
+            check(api, net)

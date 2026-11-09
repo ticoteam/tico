@@ -13,7 +13,6 @@ const AU_MAINT_SCHEDULES = [['hourly', 'Every hour'], ['2h', 'Every 2 hours'], [
   ['12h', 'Every 12 hours'], ['daily', 'Once a day']];
 const AU_MAINT_OFTEN = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
 const AU_MAINT_CAPS = [0, 10, 25, 50, 100, 250, 500];
-const AU_RULES_CAPS = [0, 10, 25, 50, 80, 100, 250, 500];
 const AU_MAINT_WHAT = {collect: 'What changed since the last run', clean_up: 'Old data past retention',
   check_health: 'Setup problems to BotOps', find_stuck: 'Wakes bots on work that stalled', learn: 'Passes on what people said',
   suggest: 'Ideas from Tico Playbooks', update: 'Each bot that worked writes its update', dream: 'Bots tidy their memory'};
@@ -111,8 +110,6 @@ function auMaintSettingsHTML(m) {
   const capPairs = (list: number[], cur: unknown) => [...new Set([...list, Number(cur) || 0])].sort((x, y) => x - y)
     .map(v => [v, v ? '$' + (Number.isInteger(v) ? v : v.toFixed(2)) + ' a month' : 'No cap']);
   const caps = capPairs(AU_MAINT_CAPS, cap);
-  const rulesCap = s.rules_monthly_cap_usd ?? s.rules_monthly_cap_usd_in_effect ?? 0;
-  const rulesCaps = capPairs(AU_RULES_CAPS, rulesCap);
   const rows = m.steps.map((st, i) => {
     const on = st.enabled, isOpen = open.has(st.key), always = st.key === 'collect';
     const pills = (AU_MAINT_BETA.has(st.key) ? '<span class="pill beta">Beta</span>' : '')
@@ -136,9 +133,7 @@ function auMaintSettingsHTML(m) {
     <ol class="mt-steps">${rows}</ol>
     <div class="mt-set"><label class="mt-lb" for="mt-cap">Monthly cap</label>
       <select id="mt-cap" data-mt-cap${off ? ' disabled' : ''}>${opts(caps, Number(cap) || 0)}</select>
-      <span class="mt-hint muted">Learn and people’s update drafts</span></div>
-    <div class="mt-set"><label class="mt-lb" for="mt-rules-cap">Rules monthly cap</label>
-      <select id="mt-rules-cap" data-mt-rules-cap${off ? ' disabled' : ''}>${opts(rulesCaps, Number(rulesCap) || 0)}</select></div>
+      <span class="mt-hint muted">Decision models</span></div>
   </div>`;
 }
 
@@ -302,7 +297,6 @@ function auMaintChange(e) {
     void auMaintSave({paused: !t.checked});
   } else if ('mtSchedule' in d) void auMaintSave({schedule: t.value});
   else if ('mtCap' in d) void auMaintSave({monthly_cap_usd: Number(t.value)});
-  else if ('mtRulesCap' in d) void auMaintSave({rules_monthly_cap_usd: Number(t.value)});
   else if (d.mtOn) void auMaintStepSave(d.mtOn, {enabled: t.checked});
   else if (d.mtOften) {
     const s = step(d.mtOften);
