@@ -540,9 +540,12 @@ def _task_create(c, title, body):
     """The BotOps task for a setup signature. Quiet: its owner's notice is written without a wake (`_wake` wakes BotOps once)."""
     try:
         c.execute("SAVEPOINT check_health_task")
-        made = H.task_create(
-            c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False, quiet_notice=True
-        )
+        from .. import sources
+
+        with sources.writing_as("check-health"):
+            made = H.task_create(
+                c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False, quiet_notice=True
+            )
         c.execute("RELEASE check_health_task")
         return made
     except Exception:  # noqa: BLE001 - a refusal to file one task must not undo the check's record

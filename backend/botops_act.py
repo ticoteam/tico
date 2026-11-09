@@ -20,9 +20,11 @@ def request_task(c, auth, who, title, body):
     from . import rooms
     from .store import H
 
+    # BotOps files the card. Delegated identity authorizes the write, but it must not
+    # make the person look like the requester of a card BotOps created.
     task = H.task_create(
         c,
-        who.actor,
+        "bot:" + H.FLEET_MAINTAINER,
         title,
         body,
         H.bot_actor(H.FLEET_MAINTAINER),
@@ -30,7 +32,7 @@ def request_task(c, auth, who, title, body):
         conversation_id=rooms.task_conversation_id(c, auth, H.bot_actor(H.FLEET_MAINTAINER), who.actor),
     )
     if who.role in ("owner", "human") and who.via != "assistant":
-        H.event(c, who.actor, "botops.task_requested", task["id"], {})
+        H.event(c, "bot:" + H.FLEET_MAINTAINER, "botops.task_requested", task["id"], {})
     return task
 
 

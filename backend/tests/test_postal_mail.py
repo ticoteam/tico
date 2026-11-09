@@ -13,6 +13,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import postal_mail as P
+from backend import task_followers
 from backend.tests.helpers.api import get, post, put  # noqa: F401
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.api import setup_attempt
@@ -308,7 +309,7 @@ def test_legal_mail_routes_to_chosen_bot_privately_and_notifies_owner_then_reset
         made = task(api, row["task_id"])
         assert (made["owner_id"], made["requester_id"], made["private"], made["due_at"]) == (
             "bot:ops",
-            "human:ana",
+            "keeper",
             1,
             "2026-11-20",
         )
@@ -316,6 +317,14 @@ def test_legal_mail_routes_to_chosen_bot_privately_and_notifies_owner_then_reset
         assert scan(api, row) == scan(api, row, token) == 200
         with api.app.state.store.read() as c:
             assert H.task_private_readable(c, "human:ana", made)
+            assert H.task_requester_source(c, made) == "postal-mail"
+            assert "human:ana" in H.task_readers(made)
+            assert any(f["actor"] == "human:ana" for f in task_followers.listed(c, made))
+            task_notice = c.execute(
+                "SELECT body FROM messages WHERE conversation_id=? AND kind='notice' AND body LIKE 'New task from Postal mail:%'",
+                (made["conversation_id"],),
+            ).fetchone()
+            assert task_notice
             notice = c.execute(
                 "SELECT body FROM messages WHERE recipient_id='human:ana' "
                 "AND json_extract(refs,'$.task')=? AND body LIKE 'Legal mail:%'",

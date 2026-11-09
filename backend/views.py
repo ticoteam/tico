@@ -2483,6 +2483,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 # Finished and reopened only by a step move (the Product roadmap): no Done, Reopen or Close on it.
                 "steps_only": bool(typ.get("steps_only")),
                 "origin_actor": H.task_origin(c, row),
+                "requester_source": H.task_requester_source(c, row),
                 "ask": ask,
                 "open_asks": len(open_asks),
                 "first_line": (row.get("body") or "").split("\n")[0],

@@ -836,26 +836,30 @@ class PostalMail:
         """The letter's task for `to`; a bot that cannot take it (paused, gone) hands it to the owner."""
         private = True if private else None
         requester = owner_actor(c, self.auth) if inform_owner else None
+
+        def create(target):
+            kwargs = {
+                "due": due,
+                "lint": False,
+                "deduplicate": False,
+                "private": private,
+                "requester_actor": None if inform_owner else requester,
+                "follow_actors": [requester] if inform_owner and requester else [],
+            }
+            if inform_owner:
+                from . import sources
+
+                with sources.writing_as("postal-mail"):
+                    return H.task_create(c, H.KEEPER, title, body, target, **kwargs)["id"]
+            return H.task_create(c, H.KEEPER, title, body, target, **kwargs)["id"]
+
         try:
-            return H.task_create(
-                c,
-                H.KEEPER,
-                title,
-                body,
-                to,
-                due=due,
-                lint=False,
-                deduplicate=False,
-                private=private,
-                requester_actor=requester,
-            )["id"]
+            return create(to)
         except H.Refused:
             owner = owner_actor(c, self.auth)
             if not owner or owner == to:
                 raise
-            return H.task_create(
-                c, H.KEEPER, title, body, owner, due=due, lint=False, deduplicate=False, private=private
-            )["id"]
+            return create(owner)
 
     def file_bot(self, c):
         from .views import default_bot

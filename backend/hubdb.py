@@ -6922,6 +6922,7 @@ def task_create(
     mover=None,
     private=None,
     requester_actor=None,
+    follow_actors=None,
     own_room=True,
     visibility=None,
     public_title=None,
@@ -7035,6 +7036,12 @@ def task_create(
         if not is_human(requester_actor) or (actor != KEEPER and target != actor) or not human(conn, requester_actor):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
+    follow_actors = [follower for follower in dict.fromkeys(follow_actors or []) if follower not in (requester, target)]
+    for follower in follow_actors:
+        if not (
+            is_human(follower) and human(conn, actor_id(follower)) or is_bot(follower) and bot(conn, actor_id(follower))
+        ):
+            refuse(conn, actor, "identity", "A task follower must be a known person or bot")
     if parent:
         audience = {"id": "", "private": private, "owner_id": target, "requester_id": requester, "readers": None}
         body = review_gate.bind_prs(conn, actor, parent, title, body, child=audience)
@@ -7159,7 +7166,7 @@ def task_create(
         conv = open_conversation(
             conn,
             actor,
-            list(dict.fromkeys([actor, requester, target, *([watcher] if is_human(watcher) else [])])),
+            list(dict.fromkeys([actor, requester, target, *follow_actors, *([watcher] if is_human(watcher) else [])])),
             kind="task",
             subject=title,
             scope="task",
@@ -7201,6 +7208,13 @@ def task_create(
         ":lane, :rank, :goal_id, :next_run, :number, :private, :occurrence, :occurrence_step, :rule_due_id)",
         row,
     )
+    if private and follow_actors:
+        conn.execute("UPDATE tasks SET readers=? WHERE id=?", (_dump(follow_actors), row["id"]))
+        for follower in follow_actors:
+            _task_event(conn, row["id"], actor, "reader", None, follower, "")
+    source_key = SRC.scope() if actor == KEEPER else None
+    if source_key in SRC.BUILTINS:
+        event(conn, KEEPER, "task.origin", row["id"], {"source": source_key})
     _building(conn, row["id"])  # its first status and step are part of task.created, not changes (_task_changed)
     if parent:
         # Filed under its parent as it is made: _task_parent above checked the parent.
@@ -7331,11 +7345,12 @@ def task_create(
     gate_child = (
         {"wake": "review_request"} if profiles.is_review_task(conn, task(conn, row["id"])) else {"news": "assignment"}
     )
+    notice_from = SRC.BUILTINS.get(source_key, actor) if source_key else actor
     notice = _wake(
         conn,
         task(conn, row["id"]),
         target,
-        f"New task from {actor}: {title}",
+        f"New task from {notice_from}: {title}",
         {
             **({"reconcile": reconcile} if reconcile else {}),
             **({"filed_in": filed_in} if filed_in else {}),
@@ -7360,6 +7375,8 @@ def task_create(
 
     made = task(conn, row["id"])
     task_followers.seed_owner(conn, made)
+    for follower in follow_actors:
+        task_followers.follow_on_create(conn, made, follower)
     if follow:
         task_followers.follow_on_create(conn, made, actor)
     _recount(conn, target)
@@ -12089,3 +12106,10 @@ def task_origin(conn, row):
         if row.get("body") == body:
             origins.add(actor)
     return next(iter(origins)) if len(origins) == 1 and len(candidates) == 1 else None
+
+
+def task_requester_source(conn, row):
+    """Display-only source for a keeper-filed task; never an actor or a permission principal."""
+    explicit = _one(conn, TASK_ORIGIN_SQL, (KEEPER, row["id"]))
+    source = (_json(explicit["detail"], {}) or {}).get("source") if explicit else None
+    return source if source in SRC.BUILTINS else None

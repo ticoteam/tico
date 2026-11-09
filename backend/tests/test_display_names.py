@@ -5,9 +5,10 @@ from fastapi.routing import APIRoute
 
 from backend import meetings
 from backend import question_tasks as QT
+from backend import sources
 from backend.store import H
 from backend.tests.old_asks import old_ask
-from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
 
 
 @pytest.fixture
@@ -87,3 +88,19 @@ def test_a_task_the_server_filed_reads_new_task_without_from(api):
         and notice['body_raw'] == 'New task from keeper: Health: Watchers'
     )
     assert bot['body'] == 'New task from keeper: Health: Watchers'  # bots read it as written
+
+
+def test_a_keeper_task_scoped_to_a_builtin_names_that_source_as_requester_and_notice(api):
+    with api.app.state.store.transaction() as c:
+        with sources.writing_as('check-health'):
+            made = H.task_create(c, H.KEEPER, 'Health: Check', 'Fix the check.', 'bot:ops', lint=False)
+        notice = c.execute(
+            "SELECT body FROM messages WHERE conversation_id=? AND kind='notice' ORDER BY created_at DESC LIMIT 1",
+            (made['conversation_id'],),
+        ).fetchone()
+
+    task = next(t for t in get(api, 'tasks')['tasks'] if t['id'] == made['id'])
+    assert (
+        task['requester_id'] == 'keeper' and task['requester_source'] == 'check-health' and task['origin_actor'] is None
+    )
+    assert notice['body'] == 'New task from Health check: Health: Check'

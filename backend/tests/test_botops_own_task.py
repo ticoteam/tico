@@ -7,6 +7,8 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, ready  
 from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (fixture)
 from backend.store import H, Problem
 from backend import task_relations as TR
+from backend.auth import Identity
+from backend.botops_act import request_task
 
 
 def _route(api, path, method="POST", refuse=None):
@@ -60,6 +62,23 @@ def test_botops_adds_its_own_tasks_worktree_with_its_own_rights(api, botops):
             tried = api.post(path, json={"repo": "acme/site"}, headers={**headers(attempt["token"]), **cite})
             assert tried.status_code == 200, tried.text
             assert tried.json() == {"actor": "bot:botops", "role": "bot"}, (path, cite)
+
+
+def test_botops_files_its_delegated_task_as_the_requester(api, botops):
+    with api.app.state.store.transaction() as c:
+        made = request_task(
+            c,
+            api.app.state.auth,
+            Identity("human:ana", "human"),
+            "Review the shared access",
+            "Fix only the access issue.",
+        )
+        notice = c.execute(
+            "SELECT body FROM messages WHERE conversation_id=? AND kind='notice' ORDER BY created_at DESC LIMIT 1",
+            (made["conversation_id"],),
+        ).fetchone()
+    assert made["requester_id"] == "bot:botops"
+    assert notice["body"] == "New task from bot:botops: Review the shared access"
 
 
 def test_a_worktree_on_someone_elses_task_still_borrows(api, botops):

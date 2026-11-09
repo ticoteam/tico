@@ -28,6 +28,7 @@ BUILTINS = {
     "stuck-check": "Stuck check",
     "rule-check": "Rule check",
     "check-health": "Health check",
+    "postal-mail": "Postal mail",
     "maintenance": "Maintenance",
 }
 

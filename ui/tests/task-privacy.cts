@@ -65,6 +65,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         attachments: [{id: 'doc', name: 'review-packet.md'}, {id: 'clip', name: 'first-cut.mp4'}, {id: 'archive', name: 'source.zip'}]}),
       task('Approve the budget', {owner_id: 'human:reviewer', requester_id: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
       task('Write the copy', {rank: 1, labels: ['newsletter', 'copy']}),
+      task('Postal mail task', {owner_id: 'bot:cmo', requester_id: 'keeper', requester_source: 'postal-mail',
+        private: true, readers: ['human:reviewer']}),
       task('Ship the pricing page', {owner_id: 'bot:cpo', lane: 'product', status: 'review', rank: 1,
         links: [{id: 'l1', kind: 'pr', url: 'https://github.com/ticoteam/tico/pull/412', title: 'tico#412', state: 'open'}], parts: {total: 2, done: 1}}),
       task('Fix the checkout bug', {owner_id: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
@@ -202,7 +204,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/#/tasks');
-    await page.waitForFunction(() => S.me?.id === 'reviewer' && TASKS_ST?.tasks?.length === 3);
+    await page.waitForFunction(() => S.me?.id === 'reviewer' && TASKS_ST?.tasks?.length === 4);
     if (screenshotDir) fs.mkdirSync(screenshotDir, {recursive: true});
     const shot = async (name: string) => { await page.evaluate(() => document.fonts.ready); if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, name + '.png')}); };
     for (const [device, width, height] of [['desktop', 1200, 900], ['phone', 390, 844]] as [string, number, number][]) {
@@ -274,6 +276,14 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-modal[open] [data-prop-row="readers"]', {hasText: 'Public'}).waitFor();
     assert.equal(await page.locator('#task-modal[open] [data-prop-row="readers"] [data-prop="readers"]').count(), 0);
     await page.locator('#task-modal[open] [data-modal-close]').click();
+    await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Postal mail task'); });
+    const sourceTask = page.locator('#task-modal[open]');
+    const askedBy = sourceTask.locator('[data-prop-row="asker"] .prop-v');
+    await askedBy.waitFor();
+    assert.match(await askedBy.innerText(), /Postal mail/, 'the source label replaces the stored system requester');
+    const sourceReaders = sourceTask.locator('[data-prop-row="readers"]');
+    assert.doesNotMatch(await sourceReaders.innerText(), /Postal mail/, 'a source label is not a permission principal');
+    await sourceTask.locator('[data-modal-close]').click();
     await page.evaluate(() => { location.hash = '#/tasks'; });
     await page.locator('#task-new').waitFor();
     await page.evaluate(() => openTaskCreate('bot:cpo'));

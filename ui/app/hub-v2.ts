@@ -121,6 +121,8 @@ const actorLabel = (a: unknown): string => {
   if (slug) return botDisplayName(slug);
   const pid = actorPerson(a);
   if (pid) return pid === S.me?.id ? 'You' : personDisplay(pid);
+  const source = String(a || '').startsWith('source:') ? String(a).slice(7) : '';
+  if (source && SOURCE_BUILTINS[source]) return SOURCE_BUILTINS[source];
   // The keeper is the server itself, never the Assistant or the app: a row it wrote is labelled by its source (rowSource).
   return a === 'keeper' ? KEEPER_LABEL : String(a || '');
 };
@@ -141,7 +143,8 @@ const taskSourceLine = (t: HubTask) => {
   if (src.kind === 'bot') return 'Added by ' + src.label + ' (bot)';
   return 'Added by ' + src.label;
 };
-const taskRequester = (t: HubTask) => t.requester_id === 'keeper' ? t.origin_actor || t.requester_id : t.requester_id;
+const taskRequester = (t: HubTask) => t.requester_source ? 'source:' + t.requester_source
+  : t.requester_id === 'keeper' ? t.origin_actor || t.requester_id : t.requester_id;
 // Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
 const taskBody = (t: HubTask) => {
   const raw = String(t.body || '');

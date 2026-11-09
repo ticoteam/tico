@@ -191,7 +191,8 @@ function taskReadersRowHTML(t: PropTask, r: PropRights): string {
   const may = r.mover || r.party;
   const chip = (a: string, off: boolean): string => `<span class="prop-chip">${actorAvatar(a, 16)}<span class="prop-txt">${esc(actorName(a))}</span>${off
     ? `<button type="button" class="prop-x" data-prop-clear-reader="${esc(a)}" aria-label="Take ${esc(actorName(a))} off" title="Take off">${TL_ICON.x}</button>` : ''}</span>`;
-  const parties = [...new Set([taskRequester(t) || t.requester_id, t.owner_id].filter(Boolean))];
+  const asker = t.requester_source ? t.requester_id : taskRequester(t) || t.requester_id;
+  const parties = [...new Set([asker, t.owner_id].filter(Boolean))];
   const chips = parties.map(a => chip(a, false)).join('') + (t.readers || []).map(a => chip(a, may)).join('');
   const add = may ? `<button type="button" class="prop-add" data-prop="readers" aria-haspopup="menu" aria-label="Add who can see" title="Add">${TL_ICON.plus}</button>` : '';
   return head + `<span class="prop-tags" aria-label="Who can see">${chips}${add}</span></span></div>`;
@@ -446,7 +447,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       const have = new Set((TASK_FOLLOWERS.get(String(task.id)) || []).map(f => f.actor));
       // A private task: only who can see it (a group on its list may hold anyone, so then everyone is offered).
       const seen = task.private && !(task.readers || []).some(a => a.startsWith('group:'))
-        ? new Set([...(task.readers || []), task.owner_id, task.requester_id, taskRequester(task)]) : null;
+        ? new Set([...(task.readers || []), task.owner_id, task.requester_id, ...(task.requester_source ? [] : [taskRequester(task)])]) : null;
       const items = threadAddable({groups: false}).filter(it => !have.has(it.actor) && (!seen || seen.has(it.actor)))
         .map(it => ({value: it.actor, text: it.label ?? '', html: `<span class="tl-opt-face">${actorAvatar(it.actor, 16)}</span><span>${esc(it.label)}</span>`}));
       propMenu(d, b, {label: 'Add a follower', find: 'Find a person or bot', items, none: 'Nobody to add',

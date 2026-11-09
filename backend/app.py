@@ -1682,7 +1682,14 @@ def create_app(settings=None):
                 # A question task is its own ask; its files under review as this reader may see them.
                 mine = question_tasks.as_ask(row)
                 asks = [visual_view(c, who, [mine])[0] if who is not None else mine]
-            value.update({"origin_actor": H.task_origin(c, row), "ask": next(iter(asks), None), "open_asks": len(asks)})
+            value.update(
+                {
+                    "origin_actor": H.task_origin(c, row),
+                    "requester_source": H.task_requester_source(c, row),
+                    "ask": next(iter(asks), None),
+                    "open_asks": len(asks),
+                }
+            )
             if who is not None and visible_sql != "1":
                 value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             from .task_review import task_covers
@@ -1800,6 +1807,7 @@ def create_app(settings=None):
         open_counts = {tid: 1 for tid in asks}
 
         origins = {}
+        requester_sources = {}
         for event in c.execute(
             f"SELECT target,detail FROM events WHERE actor=? AND action='task.origin' "
             f"AND target IN ({marks}) ORDER BY target,created_at DESC",
@@ -1807,8 +1815,11 @@ def create_app(settings=None):
         ):
             if event["target"] in origins:
                 continue
-            origin = (H._json(event["detail"], {}) or {}).get("bot")
+            detail = H._json(event["detail"], {}) or {}
+            origin = detail.get("bot")
+            source = detail.get("source")
             origins[event["target"]] = origin if H.is_bot(origin) else None
+            requester_sources[event["target"]] = source if source in SRC.BUILTINS else None
 
         legacy_owner = None
         if any(row.get("requester_id") == H.KEEPER and H.is_human(row.get("owner_id")) for row in rows):
@@ -1859,6 +1870,7 @@ def create_app(settings=None):
                 value["origin_actor"] = H.task_origin(c, row)
             else:
                 value["origin_actor"] = None
+            value["requester_source"] = requester_sources.get(row["id"])
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
         from .files import readable_page_refs

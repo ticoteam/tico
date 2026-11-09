@@ -2512,6 +2512,10 @@ SCHEMAS = {
             "title": "s",
             "body": "s",
             "requester_id": "s",
+            "requester_source": {
+                "type": ["string", "null"],
+                "description": "Built-in source label for Asked by when a keeper files a card; not an actor.",
+            },
             "owner_id": "s",
             "status": "s",
             "created_at": "s",

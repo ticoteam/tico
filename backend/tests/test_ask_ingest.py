@@ -1050,7 +1050,9 @@ def test_a_task_filed_with_the_filter_on_is_listed_once(gate):
     """The gate judges a task in the request that files it, so its ask row comes before any owner change: its day lists
     it once, from the ask row, not again from the task."""
     api, model, token = gate
-    tid = file(api, token)["task"]["id"]
+    filed = file(api, token)
+    tid = filed["task"]["id"]
+    assert filed["task"]["requester_id"] == "bot:ops" and filed["task"]["owner_id"] == "human:ben"
     assert len([i for i in items(api) if i["ref"] == tid]) == 1
     with api.app.state.store.transaction() as c:
         day = H.task(c, tid)["created_at"][:10]

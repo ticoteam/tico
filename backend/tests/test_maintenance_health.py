@@ -44,6 +44,7 @@ from backend.tests.helpers.goal_manager import BASE
 from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.helpers.support import FakeHQ
 from backend.tests.helpers.maintenance_health import turn
+from backend.tests.test_member_bots import botops  # noqa: F401
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0096_retire_health_monitor.py"
 HM_SLUG = "health-monitor"  # the retired Health Monitor's slug: migration 0096 archives its row
@@ -140,6 +141,17 @@ def botops_tasks(api):
                 "SELECT id,title,body,owner_id,status FROM tasks WHERE title LIKE 'Health:%' ORDER BY created_at"
             )
         ]
+
+
+def test_check_health_tasks_name_health_check_as_requester_and_notice_source(api, botops):
+    with api.app.state.store.transaction() as c:
+        made = check_health._task_create(c, "Source label test", "Fix the check.")
+        notice = c.execute(
+            "SELECT body FROM messages WHERE conversation_id=? AND kind='notice' ORDER BY created_at DESC LIMIT 1",
+            (made["conversation_id"],),
+        ).fetchone()
+        assert H.task_requester_source(c, made) == "check-health"
+    assert notice["body"] == "New task from Health check: Health: Source label test"
 
 
 def said(api, task_id, start):
