@@ -8,9 +8,9 @@ Run rows are kept 30 days (`automations.prune` drops only their step detail), so
 migration's mirrors) read them from there. A quiet run that repeats its job's last result is folded into that row, so a
 system job counts one run per row, with `count` the runs folded into it. The Maintenance run (backend/maintenance.py)
 keeps its own run log, `maintenance_runs`; anyone signed in sees it, as GET /api/v2/maintenance does, so its runs are
-listed and counted here under the list's Maintenance row (ui/app/automations-maintenance.js). The Heartbeat
+listed and counted here under the list's Maintenance row (ui/app/automations-maintenance.ts). The Heartbeat
 (backend/heartbeat.py) is treated the same: its mirror is never listed, and its runs (`system_runs` job `heartbeat`,
-quiet beats folded) are listed and counted under the list's Heartbeat row (ui/app/automations-heartbeat.js), for anyone
+quiet beats folded) are listed and counted under the list's Heartbeat row (ui/app/automations-heartbeat.ts), for anyone
 signed in, as GET /api/v2/heartbeat is."""
 
 import json

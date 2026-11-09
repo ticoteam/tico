@@ -26,6 +26,8 @@ fields under the names the code always read (`FIELDS`).
 
 NOTHING = "Nothing tracked to wait on"
 LEFT = "Nothing left to wait on"
+# What a cleared wait with no hold left to name says it cleared (refresh's `cleared`, a waiting flag cleared by hand).
+WAIT_CLEARED = "The wait on a person was cleared"
 # Holds with a reconciliation of their own: their reason and resume stay with backend/task_blocked.py.
 OWN_RECONCILE = ("gate", "check", "worktree")
 
@@ -52,7 +54,8 @@ def _line(text, limit=160):
 
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
-    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject."""
+    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject. A child or
+    blocker hold also names its task (`task`)."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
 
     out = []
@@ -107,7 +110,7 @@ def _task_hold(conn, row, kind, other):
 
     if H.task_private(conn, other) and not H.subtask_flows_up(conn, other, row):
         return {"kind": "private", "on": None, "what": "a private task"}
-    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"])}
+    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"]), "task": other["id"]}
 
 
 def words(conn, found):
@@ -171,7 +174,10 @@ def refresh(conn, task_id, cleared=None, at=None):
             task_blocked.bump(conn, row)
             return "open"
         note = f"{cleared}; nothing left to wait on"
-        H._set_status(conn, H.KEEPER, row, "open", note=note)
+        # The restore is automatic, so the stage's rules may refuse it: then only the restore is undone, it is logged on the
+        # parent (auto_move_refused), and the child's change that cleared the hold stands.
+        if not H.try_auto_move(conn, H.KEEPER, row, status="open", note=note):
+            return None
         conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))
         task_blocked.bump(conn, row)
         H._task_event(conn, task_id, H.KEEPER, "note", row.get("note"), note, "")
@@ -219,6 +225,46 @@ def refresh_private_names(conn):
 def refresh_many(conn, task_ids, cleared=None):
     for task_id in dict.fromkeys(t for t in task_ids if t):
         refresh(conn, task_id, cleared)
+
+
+def recompute_reasons(conn):
+    """The one-time repair (migration 20261107140000): each waiting task's open hold that names a person gets the reason
+    its holds give now (`words`, or NOTHING when none is left). That is a dependency hold, and a hold a keeper or person
+    set by hand whose reason names someone ("Waiting on ..."); a hold set by hand over a step ("In Review") keeps its
+    reason. Only the reason text changes: the hold, its cause, its clock, its resume step and the task's status stay as
+    they are, so nothing clears, wakes, is messaged or touches an approval. Returns how many reasons changed."""
+    from . import hubdb as H
+
+    changed = 0
+    for task_id in [
+        r[0]
+        for r in conn.execute(
+            "SELECT t.id FROM tasks t JOIN task_holds h ON h.task_id=t.id AND h.kind='blocked' AND h.released_at IS NULL "
+            "WHERE t.status='waiting' AND (h.cause='dependency' OR (h.cause='manual' AND h.reason LIKE 'Waiting on %')) "
+            "ORDER BY t.created_at,t.id"
+        ).fetchall()
+    ]:
+        row = H.task(conn, task_id)
+        if row is None or not _repairable(conn, row):
+            continue
+        found = holds(conn, row)
+        text = (words(conn, found) if found else NOTHING)[:1000]
+        if text != row.get("blocked_reason"):
+            change(conn, task_id, "blocked", reason=text)
+            changed += 1
+    return changed
+
+
+def _repairable(conn, row):
+    """A waiting task whose hold the repair may re-word: the same as _applies, but a hold set by hand (blocked_kind
+    manual) is in scope, since the repair only rewords it and never clears it."""
+    from . import hubdb as H
+
+    if not row or row.get("status") != "waiting" or not row.get("blocked_since"):
+        return False
+    if row.get("blocked_kind") in OWN_RECONCILE:
+        return False
+    return (H.type_get(conn, row.get("type_id")) or {}).get("role") != "product-roadmap"
 
 
 def title(conn, row):

@@ -1,0 +1,5 @@
+{
+  "scripts/release_checks.py": {
+    "PLW1510": 7
+  }
+}

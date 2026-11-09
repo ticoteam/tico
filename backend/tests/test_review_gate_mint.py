@@ -131,7 +131,9 @@ def test_snapshot_read_failure_keeps_cause(failure, retryable, auth):
 def test_real_mint_failure_reaches_review_refusal(api, monkeypatch, failure, cause, retryable, auth):
     task = ticket(api, f'Tests: head {HEAD}: 9 passed')
     service = api.app.state.github_app
-    monkeypatch.setattr(service, 'row', lambda c=None: {'org': 'ticoteam', 'installation_id': None})
+    monkeypatch.setattr(
+        service, 'row', lambda c=None: {'org': 'ticoteam', 'installation_id': None, 'account_type': 'Organization'}
+    )
     discover = isinstance(failure, str) and failure.startswith('installation-')
     if not discover:
         monkeypatch.setattr(service, 'installation', lambda: None if failure == 'installation' else 123)

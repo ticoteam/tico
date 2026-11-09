@@ -762,6 +762,10 @@ def install_connectors(app, store, execution, mutate):
 
             # The mailbox's first batch sets its watch and later batches keep it (automations.mail_watch).
             watch = automations.mail_watch(c, body.mailbox, body.synced_at)
+            from . import mailbox_access
+            from .entities import ingest
+
+            box_id = str((mailbox_access.row_by_address(c, body.mailbox) or {}).get("id") or "")
             for message in body.messages:
                 # A message seen for the first time is what a mail automation hears (backend/automations.py).
                 fresh = not c.execute(
@@ -844,6 +848,14 @@ def install_connectors(app, store, execution, mutate):
                 )
                 if fresh:
                     automations.on_mail(c, body.mailbox, message, watch)
+                    headers = {
+                        "from_addr": message.from_addr,
+                        "from_header": message.from_header,
+                        "list_id": message.list_id,
+                        "has_unsubscribe": message.has_unsubscribe,
+                        "send_facts": message.send_facts,
+                    }
+                    ingest.safely(c, "mail", ingest.from_mail, c, box_id, headers)
             for msg_id in body.deleted:
                 existing = c.execute(
                     "SELECT epoch FROM mail_messages WHERE mailbox=? AND msg_id=?", (body.mailbox, msg_id)

@@ -1,7 +1,7 @@
-"""Per-company GitHub access through a GitHub App the company creates in its own organization.
+"""Per-company GitHub access through a GitHub App the company creates in its own account or organization.
 
 The owner registers the app with GitHub's manifest flow (nothing to copy by hand), installs it on the
-org, and from then on the hub mints short-lived installation tokens scoped to one bot repository.
+account, and from then on the hub mints short-lived installation tokens scoped to one bot repository.
 Runners fetch that token per turn (runner_support/git_credentials.py); no long-lived personal token is used.
 
 The app's private key and secrets are encrypted at rest and are never returned by any endpoint or
@@ -87,6 +87,14 @@ WORKFLOW_EDITS_REFUSED = (
     "GitHub refused a token with Workflows: write although the installation reports it, so these "
     "repositories get the ordinary write token; it is asked again after a minute."
 )
+# The pipeline engine's check run on a pull request's commit (backend/pipeline_github_checks.py) needs Checks: write.
+# It is not in the manifest and no run token carries it: the server mints its own token for it, and only after the
+# installation reports Checks as read and write. Until an Owner accepts that, the check is withheld and nothing is posted.
+CHECKS_PERMISSIONS = {"checks": "write", "metadata": "read"}
+CHECKS_WITHHELD = (
+    "Posting Tico's approval check on pull requests needs the GitHub App's Checks permission set to Read and write, "
+    "accepted on the installation; until then no check is posted."
+)
 # Each opt-in that raises a write grant's token: the grant flag, the permission raised to write, the `live` key that
 # remembers GitHub refusing it, the reasons a token answer gives, and the answer field that carries them. A grant
 # with both gets one token with both, as the git credential helper picks one token per remote.
@@ -127,7 +135,7 @@ MAX_EXTRA_REPOS = 20
 # A refusal about one bot's repository (not on GitHub yet, or not shared with the app), or a rehearsal that never calls GitHub. The bot's own readiness
 # and Health already name it; it says nothing about whether the App works, so it never marks the token unhealthy.
 BOT_SCOPED = ("github_repo_missing", "github_repo_not_accessible", "rehearsal")
-RECONNECT = "Reconnect GitHub in Settings."
+RECONNECT = "Reconnect GitHub in Tools."
 
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
 TRANSPORT = None
@@ -136,11 +144,45 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS github_app(
  id TEXT PRIMARY KEY, app_id INTEGER NOT NULL, slug TEXT NOT NULL, client_id TEXT NOT NULL, org TEXT NOT NULL,
  administration INTEGER NOT NULL, installation_id INTEGER, html_url TEXT NOT NULL DEFAULT '',
- ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+ ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+ account_type TEXT NOT NULL DEFAULT 'Organization');
 CREATE TABLE IF NOT EXISTS github_app_states(
  nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, administration INTEGER NOT NULL,
- created_at REAL NOT NULL);
+ created_at REAL NOT NULL, account_type TEXT NOT NULL DEFAULT 'Organization');
 """
+# GitHub's account types. `org` holds the account's login for either: for a personal account the App lives under the
+# user's settings, not an organization's.
+ORGANIZATION, PERSONAL = "Organization", "User"
+ACCOUNT_TYPES = (ORGANIZATION, PERSONAL)
+
+
+def account_kind(row):
+    """The type of the account that owns the App, as the row records it."""
+    return row["account_type"] or ORGANIZATION
+
+
+def account_word(row):
+    """What to call the App's account in a message: an organization, or a personal account."""
+    return "account" if account_kind(row) == PERSONAL else "organization"
+
+
+def links(row):
+    """The GitHub pages for the App and its installation, built from the row: an organization's settings live under its
+    own URL, a personal account's under the user's. Every link Tico shows or sends a person to is built here."""
+    slug = quote(str(row["slug"]), safe="")
+    if account_kind(row) == PERSONAL:
+        base = f"https://github.com/settings/apps/{slug}"
+        installations = "https://github.com/settings/installations"
+    else:
+        org = quote(str(row["org"]), safe="")
+        base = f"https://github.com/organizations/{org}/settings/apps/{slug}"
+        installations = f"https://github.com/organizations/{org}/settings/installations"
+    return {
+        "settings_url": base,
+        "permissions_url": base + "/permissions",
+        "install_url": f"https://github.com/apps/{slug}/installations/new",
+        "uninstall_url": installations,
+    }
 
 
 def _client():
@@ -321,7 +363,48 @@ class GitHubApp:
         """The same at-rest key, for other stored secrets (directory sync credentials)."""
         return self._key(c, create, replacing)
 
-    def save(self, c, actor, org, administration, conversion):
+    def account_type(self, name):
+        """What GitHub says `name` is, a "User" or an "Organization", from its public profile (no token is sent). An
+        unknown name is a 404 Problem; GitHub unreachable, rate limited or silent is a 502. Nothing is guessed."""
+        if self.settings.rehearsal:
+            raise Problem("rehearsal", "GitHub is not contacted from a rehearsal", 409)
+        try:
+            with _client() as http:
+                r = http.get("/users/" + quote(name, safe=""))
+        except httpx.HTTPError:
+            raise Problem(
+                "github_account",
+                "GitHub could not be reached to check that account; try again shortly",
+                502,
+                retryable=True,
+            ) from None
+        if r.status_code == 404:
+            raise Problem("github_account_missing", f"No GitHub account or organization named {name}", 404)
+        if rate_limited(r):
+            raise Problem("github_account", "GitHub is limiting account checks; try again shortly", 502, retryable=True)
+        try:
+            kind = r.json().get("type") if r.status_code < 300 else None
+        except (ValueError, AttributeError):
+            kind = None
+        if kind in ACCOUNT_TYPES:
+            return kind
+        if r.status_code < 300 and kind is not None:
+            raise Problem(
+                "github_account",
+                "GitHub says that account is not a user or an organization, so Tico cannot connect it. Enter a user or an organization name.",
+                422,
+            )
+        raise Problem(
+            "github_account", "GitHub could not say what that account is; try again shortly", 502, retryable=True
+        )
+
+    def save(self, c, actor, org, administration, conversion, account=ORGANIZATION):
+        """Store the App GitHub's manifest conversion made. The conversion's owner is the truth: under a personal account
+        GitHub makes the App for whoever is signed in, which may not be the name typed, so that login is kept."""
+        owner = conversion.get("owner") if isinstance(conversion.get("owner"), dict) else {}
+        kind = owner.get("type") if owner.get("type") in ACCOUNT_TYPES else account
+        if kind == PERSONAL and owner.get("login"):
+            org = str(owner["login"])
         secrets_blob = json.dumps(
             {
                 "pem": conversion["pem"],
@@ -332,11 +415,9 @@ class GitHubApp:
         nonce = os.urandom(12)
         sealed = AESGCM(self._key(c)).encrypt(nonce, secrets_blob, b"tico-github-app:v1")
         c.execute("DELETE FROM github_app")
-        from .repo_waits import remember_owner
-
-        remember_owner(c, conversion)
         c.execute(
-            "INSERT INTO github_app VALUES('app',?,?,?,?,?,NULL,?,?,?,?,?)",
+            "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,ciphertext,nonce,"
+            "created_at,created_by,account_type) VALUES('app',?,?,?,?,?,NULL,?,?,?,?,?,?)",
             (
                 int(conversion["id"]),
                 conversion["slug"],
@@ -348,6 +429,7 @@ class GitHubApp:
                 nonce,
                 H.now(),
                 actor,
+                kind,
             ),
         )
         self.cache.clear()
@@ -494,6 +576,17 @@ class GitHubApp:
             self.live["permissions"] = (time.time() + LIVE_TTL, permissions)
         return permissions
 
+    def checks_write_accepted(self):
+        """Whether the installation reports Checks as read and write now (CHECKS_WITHHELD says what to do when not)."""
+        permissions = self.live_permissions()
+        return bool(permissions) and permissions.get("checks") == "write"
+
+    def mint_checks(self, repo):
+        """A token that can create check runs on `repo` (`owner/name`), or None while Checks: write is withheld."""
+        if not self.checks_write_accepted():
+            return None
+        return self.mint([repo], CHECKS_PERMISSIONS, diagnose=False)[0]
+
     def raise_refused(self, raised):
         """Whether GitHub refused a token raising `raised` (a RAISES entry) the installation reports within LIVE_TTL:
         until then a token request falls back at once instead of repeating the refused mints."""
@@ -502,20 +595,22 @@ class GitHubApp:
         return bool(until and until > time.time())
 
     def can_create_repos(self, refresh=False):
-        """Whether the app may create repositories: the installation's live Administration permission
+        """Whether Tico creates repositories for the app: the installation's live Administration permission
         (write), falling back to the stored choice when GitHub cannot be asked. The stored flag follows
-        the live value so status views stay right."""
+        the live value so status views stay right. A personal account is never True yet: creating a repository
+        there is not built (the next change adds it), so a bot waits for a person (repo_waits)."""
         row = self.row()
         if not row:
             return False
         permissions = self.live_permissions(refresh)
         if permissions is None:
-            return bool(row["administration"])
-        allowed = permissions.get("administration") == "write"
-        if allowed != bool(row["administration"]):
-            with self.store.transaction() as c:
-                c.execute("UPDATE github_app SET administration=? WHERE id='app'", (int(allowed),))
-        return allowed
+            allowed = bool(row["administration"])
+        else:
+            allowed = permissions.get("administration") == "write"
+            if allowed != bool(row["administration"]):
+                with self.store.transaction() as c:
+                    c.execute("UPDATE github_app SET administration=? WHERE id='app'", (int(allowed),))
+        return allowed and account_kind(row) == ORGANIZATION
 
     def mint_turn(self, repos, base, narrow=True, **kw):
         """`mint_reachable` for a bot's turn: `base` plus the TURN_READS the installation has accepted (`base` wins, so it
@@ -547,7 +642,15 @@ class GitHubApp:
         ):
             raise Problem("github_repo", "Use an owner/name repository", 422)
         if repository.split("/")[0].lower() != row["org"].lower():
-            raise Problem("github_repo", f"The repository must be in the connected organization ({row['org']})", 422)
+            raise Problem(
+                "github_repo", f"The repository must be in the connected {account_word(row)} ({row['org']})", 422
+            )
+        if account_kind(row) == PERSONAL:
+            raise Problem(
+                "github_account",
+                "Deleting a repository in a personal account is not available yet; delete it on GitHub",
+                409,
+            )
         if not self.can_create_repos(refresh=True):
             raise Problem(
                 "github_app_permissions",
@@ -603,7 +706,9 @@ class GitHubApp:
     def _mint(self, key, repos, permissions, diagnose):
         installation = self.installation()
         if not installation:
-            raise Problem("github_not_installed", "The GitHub App is not installed on the organization yet", 409)
+            current = self.row()
+            word = account_word(current) if current else "organization"
+            raise Problem("github_not_installed", f"The GitHub App is not installed on the {word} yet", 409)
         token = self._jwt()
         body = {"permissions": permissions}
         if repos:
@@ -824,6 +929,11 @@ class GitHubApp:
                 f"Create it with BotOps: `hub bot repo-create {slugs.split(', ')[0]}` "
                 "(add `--empty` for a bot built locally, whose history its runner then pushes)"
             )
+        elif (row := self.row()) and account_kind(row) == PERSONAL:
+            create = (
+                "Tico does not create repositories in a personal account yet: create it yourself in GitHub "
+                "(empty, for a bot built locally, whose history its runner then pushes)"
+            )
         else:
             create = (
                 "The GitHub App can't create repositories (Administration is off): create it yourself in GitHub "
@@ -895,15 +1005,19 @@ class GitHubApp:
                 if empty
                 else f"from the {template} template (https://github.com/{template} > Use this template)"
             )
-            raise Problem(
-                "github_permission_missing",
-                f"A person must act: the GitHub App was set up without permission to create repositories, so "
-                f"{row['org']}/{name} was not created. Create it {how} ({found['create_url']}), or let BotOps "
-                f"create repositories by turning on Administration for the app ({found['permissions_url']}) and "
-                "accepting it for the organisation.",
-                409,
-                extra=found,
-            )
+            if account_kind(row) == PERSONAL:
+                detail = (
+                    f"A person must act: Tico does not create repositories in a personal account yet, so "
+                    f"{row['org']}/{name} was not created. Create it {how} ({found['create_url']})."
+                )
+            else:
+                detail = (
+                    f"A person must act: the GitHub App was set up without permission to create repositories, so "
+                    f"{row['org']}/{name} was not created. Create it {how} ({found['create_url']}), or let BotOps "
+                    f"create repositories by turning on Administration for the app ({found['permissions_url']}) and "
+                    "accepting it for the organisation."
+                )
+            raise Problem("github_permission_missing", detail, 409, extra=found)
         token, _ = self.mint(None, CREATE_PERMISSIONS)
         if empty:
             # For a bot whose history already exists on a computer: nothing generated, the runner pushes into it.
@@ -978,6 +1092,11 @@ class GitHubApp:
         row = self.row()
         if not row:
             return {"status": "not_connected", "detail": "Connect the GitHub App before creating a product repository."}
+        if account_kind(row) == PERSONAL:
+            return {
+                "status": "not_available",
+                "detail": "Product repositories are not available for a personal account yet. Create the repository on GitHub.",
+            }
         try:
             installation = self.installation()
         except (Problem, ValueError):
@@ -1021,6 +1140,7 @@ class GitHubApp:
                 "missing": "github_permission_missing",
                 "not_connected": "github_not_connected",
                 "not_installed": "github_not_installed",
+                "not_available": "github_account",
             }.get(capability["status"], "github_capability_unknown")
             raise Problem(code, capability["detail"], 409)
         try:
@@ -1358,19 +1478,22 @@ def install_github_app(app, settings, store):
                 }
                 for bot, wait in sorted(waits(c).items())
             ]
+        page = links(row)
         return {
             "connected": True,
+            "checks_withheld": None if service.checks_write_accepted() else CHECKS_WITHHELD,
             "slug": row["slug"],
             "org": row["org"],
+            "account_type": account_kind(row),
             "app_id": row["app_id"],
             "administration": administration,
             "installed": bool(row["installation_id"]),
-            "install_url": f"https://github.com/apps/{row['slug']}/installations/new",
-            "settings_url": f"https://github.com/organizations/{row['org']}/settings/apps/{row['slug']}",
+            "install_url": page["install_url"],
+            "settings_url": page["settings_url"],
             "permissions_url": fix["permissions_url"],
             "create_url": fix["create_url"],
             "waiting": waiting,
-            "uninstall_url": f"https://github.com/organizations/{row['org']}/settings/installations",
+            "uninstall_url": page["uninstall_url"],
         }
 
     @app.get("/api/v2/github/app")
@@ -1397,9 +1520,13 @@ def install_github_app(app, settings, store):
 
     @app.get("/api/v2/github/app/manifest")
     def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False):
+        """`org` is the GitHub account or organization the App is made under: GitHub says which it is, and the setup
+        page is GitHub's for that kind (a personal account's or an organization's)."""
         who = owner(request)
         if not ORG.match(org):
-            raise Problem("github_org", "Enter the GitHub organization's name (letters, digits and hyphens)", 422)
+            raise Problem(
+                "github_org", "Enter the GitHub account or organization's name (letters, digits and hyphens)", 422
+            )
         if service.row():
             raise Problem("github_connected", "GitHub is already connected; disconnect it first to start over", 409)
         # Before GitHub makes an app: one it could never be saved for (the key that seals other secrets is lost) is refused
@@ -1407,15 +1534,24 @@ def install_github_app(app, settings, store):
         with store.read() as c:
             if service.key_lost(c):
                 raise Problem("github_key_missing", LOST_KEY, 409)
+        kind = service.account_type(org)
+        if kind == PERSONAL:
+            # Always asked for a personal account, so one acceptance covers repository creation once it is built.
+            administration = True
         nonce = secrets.token_urlsafe(24)
         with store.transaction() as c:
             c.execute("DELETE FROM github_app_states WHERE created_at<?", (time.time() - STATE_TTL,))
             c.execute(
-                "INSERT INTO github_app_states VALUES(?,?,?,?,?)",
-                (nonce, who.actor, org, int(administration), time.time()),
+                "INSERT INTO github_app_states(nonce,actor,org,administration,created_at,account_type) VALUES(?,?,?,?,?,?)",
+                (nonce, who.actor, org, int(administration), time.time(), kind),
             )
         body = manifest(settings, (name or f"{settings.company_name} Tico").strip(), administration)
-        action = f"https://github.com/organizations/{org}/settings/apps/new?state={nonce}"
+        base = (
+            "https://github.com/settings/apps/new"
+            if kind == PERSONAL
+            else f"https://github.com/organizations/{org}/settings/apps/new"
+        )
+        action = f"{base}?state={nonce}"
         if html:
             page = (
                 "<!doctype html><meta charset=utf-8>" + brand_icons.HEAD + "<title>Connecting GitHub</title>"
@@ -1456,13 +1592,14 @@ def install_github_app(app, settings, store):
             raise Problem("github_exchange", "GitHub did not send a setup code", 400)
         conversion = service.exchange(code)
         with store.transaction() as c:
-            service.save(c, who.actor, row["org"], row["administration"], conversion)
+            service.save(c, who.actor, row["org"], row["administration"], conversion, row["account_type"])
+            saved = service.row(c)
             H.event(
                 c,
                 who.actor,
                 "github.app_connected",
                 conversion["slug"],
-                {"org": row["org"], "app_id": conversion["id"]},
+                {"org": saved["org"], "account_type": saved["account_type"], "app_id": conversion["id"]},
             )
         return RedirectResponse(f"https://github.com/apps/{conversion['slug']}/installations/new", status_code=302)
 
@@ -1477,7 +1614,7 @@ def install_github_app(app, settings, store):
                 log.warning("Repository sync failed: %s", exc.code)
         with store.transaction() as c:
             H.event(c, who.actor, "github.app_installed", "", {"installed": bool(found)})
-        return RedirectResponse("/#/settings?github=" + ("connected" if found else "pending"), status_code=302)
+        return RedirectResponse("/#/tools/github?github=" + ("connected" if found else "pending"), status_code=302)
 
     @app.post("/api/v2/github/app/disconnect")
     def disconnect(request: Request):
@@ -1737,7 +1874,7 @@ def install_github_app(app, settings, store):
             value, expires = tokens[0]['token'], tokens[0]['expires_at']
         except Problem as problem:
             if issuer is service and problem.code not in BOT_SCOPED:
-                note_github_token(store, problem.detail, "Open Settings > Tools and check the GitHub connection.")
+                note_github_token(store, problem.detail, "Open Tools and check the GitHub connection.")
             raise
         newly_minted = [item for item in tokens if not item["cached"]]
         if issuer is service and (newly_minted or any(item["reachability_changed"] for item in tokens)):
@@ -1818,7 +1955,7 @@ def install_github_app(app, settings, store):
                     raise Problem(
                         "github_repo",
                         f"'{value}' is not a repository in {row['org']}; extra repositories "
-                        "must be in the connected organization",
+                        "must be in the connected account or organization",
                         422,
                     )
                 if (own or "").lower() != repo.lower() and repo.lower() not in [w.lower() for w in wanted]:
@@ -1880,7 +2017,9 @@ def install_github_app(app, settings, store):
                 and body.template.split("/")[0].lower() != row["org"].lower()
             ):
                 raise Problem(
-                    "forbidden", "Bots generate from the default template or one in the connected organization", 403
+                    "forbidden",
+                    "Bots generate from the default template or one in the connected account or organization",
+                    403,
                 )
         template = body.template or DEFAULT_TEMPLATE
         if body.empty and body.template:
@@ -2106,7 +2245,9 @@ def install_github_app(app, settings, store):
                 )
             if body.org.lower() != row["org"].lower():
                 raise Problem(
-                    "github_repo", "The confirmed organization does not match the currently connected organization", 409
+                    "github_repo",
+                    f"The confirmed {account_word(row)} does not match the currently connected {account_word(row)}",
+                    409,
                 )
 
             # Capability checks and token minting are safe to retry. Bind the exact Owner operation

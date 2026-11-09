@@ -62,7 +62,7 @@ How a rule is used:
 |---|---|
 | Rules (Internal, External) | `org_rules` with `kind internal\|external` |
 | Who / With | `who`, `with` |
-| From | `rule_sources` |
+| From | `org_rules.source_entity_id` (an organization entity) |
 | Suggested | status `suggested` |
 | Due | `rule_due_dates` + `rule_due_status`; routine optional |
 | Decide | `judge.py`'s default engine; not "Jev" |
@@ -104,9 +104,10 @@ The shape follows `strategy_bets` (`backend/strategy.py`): a statement, cites, p
 events.
 
 ```
-rule_sources(id, name, kind vendor|customer|government|other, created_by, created_at)
+Rule sources are organization entities, not a table (migration 20261108044824 retired `rule_sources`): an entity's
+`properties.rule_source` holds {id, kind vendor|customer|government|other, created_by, created_at}.
 
-org_rules(id, kind internal|external, text, description?, source_id (external only),
+org_rules(id, kind internal|external, text, description?, source_entity_id (external only; the From),
           cite {file_id+version, section, quote} (external only),
           who  {everyone: bool, all_bots: bool, groups: [], bots: [], people: []},
           with {groups: [], bots: [], people: []} (internal only, optional; empty = any output),
