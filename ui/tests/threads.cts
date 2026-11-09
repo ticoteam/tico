@@ -5,23 +5,63 @@
 // New DM, a server without the rail (its empty pane: the picture and New thread), and a teammate who may see a bot
 // but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
+type Gate = (value?: unknown) => void;
+type ThvView = {id: string; messages: {id: string}[]; opts: {dm?: boolean}; gone?: boolean};
+type ThvLive = ThvView & {thread: {me: {can_post: boolean}; [key: string]: unknown}};
+type Thr = {id: string; title?: string; me: {pinned?: boolean; following?: boolean; member?: boolean; can_manage?: boolean; can_post?: boolean; [key: string]: unknown}; [key: string]: unknown};
+type Timeline = {thread: Thr; messages: Record<string, unknown>[]; breadcrumb?: unknown; next_cursor?: unknown};
+type Sse = {queue: unknown[]; seq: number; latest: import('playwright').Request | null; done: boolean};
+type Seen = {errors: string[]; posts: {text: string}[]; reads: string[]; readSeqs: string[]; homes: string[]; steps: string[]; tasks: unknown[]; calls: string[];
+  catchUps: unknown[]; follows: unknown[]; earlier: string[]; withdrawn: unknown[]; patches: unknown[]; readAll: string[]; pins: string[]; created: unknown[];
+  browsed: (string | null)[]; rails: number; threadGets: string[]; callSeats: Set<string>};
+declare global {
+  var THV_VIEWS: ThvView[];
+  var thvDraw: (view: ThvLive) => void;
+  var thvRefresh: (view: ThvLive) => void;
+  var threadViewsLive: (kind: string, event: unknown) => unknown;
+  var callAction: (view: ThvLive, kind: string) => Promise<void>;
+  var callJoin: (threadId: string, call: {id: string}, title: string) => Promise<void>;
+  var threadsSideRender: () => void;
+  var THREADS: {on: unknown};
+  var CU: {undo: {timer?: ReturnType<typeof setTimeout>} | null};
+  var CALL: {id: string} | null;
+  var CALL_JOINS: number;
+  var CALL_JOINING: Map<string, number>;
+  var CALL_LEAVING: Map<string, Promise<unknown>>;
+  var CALL_THREADS: Map<string, Record<string, unknown>>;
+  var pendingWrites: Map<string, string>;
+  var LIVE: unknown;
+  var LIVE_TOPICS: string[];
+  var LivekitClient: unknown;
+  var ticoPageHidden: () => {inCall: boolean};
+  var __rooms: {mic: boolean; gone: boolean; token?: string; mic_track: {stopped: boolean}}[];
+  var __connectGate: Gate[] | null;
+  var __joining: Promise<unknown> | undefined;
+  var __rejoining: Promise<unknown> | undefined;
+  var __starting: Promise<unknown> | undefined;
+}
+declare global {
+  interface Window {
+    __callLeaveTimeoutMs?: number;
+  }
+}
 const shots = process.env.TICO_SCREENSHOT_DIR;
-const now = Date.now(), at = min => new Date(now - min * 60000).toISOString();
-const me = (unread = 0, extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 0, unread, activity: false, can_post: true, can_manage: false, ...extra});
-const thread = (id, title, seq, extra = {}) => ({id, title, audience: 'team', audience_group_id: 'ops', last_seq: seq, last_unread_seq: 0,
+const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();
+const me = (unread = 0, extra: Record<string, unknown> = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 0, unread, activity: false, can_post: true, can_manage: false, ...extra});
+const thread = (id: string, title: string, seq: number, extra: Record<string, unknown> = {}): Thr => ({id, title, audience: 'team', audience_group_id: 'ops', last_seq: seq, last_unread_seq: 0,
   last_message_at: at(100 - seq), me: me(), members: [], ...extra});
 
 // Thirteen threads on the rail: two unread, one with activity under it, the rest read. Launch plan is pinned.
 const listed = Array.from({length: 13}, (_, i) => thread('t' + i, `Thread ${i}`, i + 1));
-listed[11].me = me(3); listed[4].me = me(1);
-listed[9].me = {...me(), activity: true};
+listed[11]!.me = me(3); listed[4]!.me = me(1);
+listed[9]!.me = {...me(), activity: true};
 const plan = thread('t-plan', 'Launch plan', 40, {me: me(0, {can_manage: true, pinned: true}), pinned_for_everyone: false});
 // The plain list (GET /v2/threads), for a server without the rail: Launch plan waits on Ana there.
 const attention = [plan];
@@ -37,7 +77,7 @@ const groupDm = {id: 't-gdm', title: '', audience: 'personal', last_seq: 3, last
 const openHouse = {...thread('t-open', 'Open house', 3, {audience: 'company', audience_group_id: null}), member_count: 4,
   me: {...me(), member: false, following: false, pinned: false}};
 
-const msg = (id, seq, from, body, extra = {}) => ({id, seq, thread_id: 't-plan', sender_id: from, body, created_at: at(60 - seq), depth: 0, ...extra});
+const msg = (id: string, seq: number, from: string, body: string, extra: Record<string, unknown> = {}) => ({id, seq, thread_id: 't-plan', sender_id: from, body, created_at: at(60 - seq), depth: 0, ...extra});
 // Catch up's cards (GET /v2/threads/catch-up), in the server's order.
 const catchUp = () => [
   {thread: listed[11], new_count: 3, mention: true, more: 1, messages: [msg('c1', 10, 'human:bea', 'Can someone check the venue?', {thread_id: 't11'}),
@@ -47,7 +87,7 @@ const catchUp = () => [
 ];
 const sub = {id: 't-sub', title: 'Pricing', audience: 'team', audience_group_id: 'ops', parent_id: 't-plan', parent_message_id: 'm2',
   last_seq: 4, me: me(), members: []};
-const timeline = {
+const timeline: Record<string, () => Timeline> = {
   't-plan': () => ({thread: plan, breadcrumb: [{id: 't-plan', title: 'Launch plan'}], next_cursor: null, messages: [
     msg('m1', 1, 'human:bea', 'Kickoff is Monday.'),
     msg('m2', 2, 'human:ana', 'What price do we open with?', {sub_thread: {id: 't-sub', title: 'Pricing', count: 3, last_seq: 4, unread: 0, more: 0}}),
@@ -102,18 +142,18 @@ const timeline = {
     {...msg('ed1', 1, 'human:ana', 'Open at 40.'), thread_id: 't-edit'},
   ]}),
 };
-const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'human:di': 'h-di', 'group:ops': ''};
+const homes: Record<string, string> = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'human:di': 'h-di', 'group:ops': ''};
 
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
-let dmRows = null, callsOff = false, railOff = false, threadsOff = false, threadsGate = null;
+let dmRows: Thr[] | null = null, callsOff = false, railOff = false, threadsOff: boolean | 'odd' = false, threadsGate: Gate[] | null = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
-let callMade = null, joinRefused = false, startWait = 150;
-let startGate = null, leaveGate = null, callLive = null;
-async function open(browser, who, {phone = false, sse = null} = {}) {
+let callMade: {id: string; state: string; connector: string} | null = null, joinRefused = false, startWait = 150;
+let startGate: Gate[] | null = null, leaveGate: Gate[] | null = null, callLive: {id: string; state: string; connector: string} | null = null;
+async function open(browser: import('playwright').Browser, who: string, {phone = false, sse = null}: {phone?: boolean; sse?: Sse | null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: [],
+  const seen: Seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: [],
     readAll: [], pins: [], created: [], browsed: [], rails: 0, threadGets: [], callSeats: new Set()};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
@@ -124,15 +164,21 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       RoomEvent: {TrackSubscribed: 'ts', TrackUnsubscribed: 'tu', ParticipantConnected: 'pc', ParticipantDisconnected: 'pd', LocalTrackUnpublished: 'lu', Disconnected: 'd'},
       Track: {Source: {ScreenShare: 'screen'}}, DisconnectReason: {PARTICIPANT_REMOVED: 'removed'},
       Room: class {
+        declare mic: boolean;
+        declare gone: boolean;
+        declare token: string;
+        declare remoteParticipants: Map<unknown, unknown>;
+        declare mic_track: {stopped: boolean; stop(): void};
+        declare localParticipant: {trackPublications: Map<string, {track: unknown}>; setMicrophoneEnabled(on: boolean): Promise<void>; setScreenShareEnabled(): Promise<void>};
         constructor() { this.mic = false; this.gone = false; this.remoteParticipants = new Map(); const room = this;
           // The microphone's track, as a publication: stopped is what a hidden page must do to it.
           this.mic_track = {stopped: false, stop() { this.stopped = true; }};
-          this.localParticipant = {trackPublications: new Map(), setMicrophoneEnabled: async on => {
+          this.localParticipant = {trackPublications: new Map(), setMicrophoneEnabled: async (on: boolean) => {
             room.mic = on; if (on) room.localParticipant.trackPublications.set('mic', {track: room.mic_track}); }, setScreenShareEnabled: async () => {}};
           window.__rooms.push(this); }
         on() { return this; }
-        async connect(url, token) { this.token = token;
-          if (window.__connectGate) await new Promise(go => window.__connectGate.push(go));
+        async connect(url: string, token: string) { this.token = token;
+          if (window.__connectGate) await new Promise(go => window.__connectGate!.push(go));
           else await new Promise(r => setTimeout(r, 200)); }
         disconnect() { this.gone = true; }
       },
@@ -140,16 +186,16 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
   });
   const bob = who === 'bob';
   // The rail as the server keeps it for this page: Ana's pins, and threads she joined from Browse.
-  const pins = new Set(['t-plan']), joined = [];
-  const railRows = () => [plan, ...listed, groupDm, ...(dmRows ? [dmRows[1]] : []), ...joined];
-  const known = id => [...railRows(), openHouse].find(t => t.id === id);
+  const pins = new Set(['t-plan']), joined: Thr[] = [];
+  const railRows = (): Thr[] => [plan, ...listed, groupDm, ...(dmRows ? [dmRows[1]!] : []), ...joined];
+  const known = (id: string): Thr | undefined => [...railRows(), openHouse].find(t => t.id === id);
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json(bob ? {id: 'bob', name: 'Bob', role: 'member', registered: true} : {id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
@@ -177,14 +223,14 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     if ((p === '/api/v2/threads' || p === '/api/v2/threads/rail') && method === 'GET') {
       if (threadsOff === 'odd') return json(p.endsWith('/rail') ? {error: 'not_found'} : {nothing: true}, p.endsWith('/rail') ? 404 : 200);
       if (threadsOff) return json({error: 'not_found'}, 404);
-      if (threadsGate) await new Promise(go => threadsGate.push(go));
+      if (threadsGate) await new Promise(go => threadsGate!.push(go));
     }
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : dmRows || [dm, botDm],
       bot_dms: bob ? {} : {'bot:ops': 2}, next_cursor: null});
     if (p === '/api/v2/threads/rail') {
       seen.rails++;
       if (railOff) return json({error: 'not_found'}, 404);
-      const pin = t => ({...t, me: {...t.me, pinned: pins.has(t.id)}});
+      const pin = (t: Thr) => ({...t, me: {...t.me, pinned: pins.has(t.id)}});
       return json(bob ? {pinned: [], threads: [], catch_up: 0, next_cursor: null, dms: {}} : {pinned: railRows().filter(t => pins.has(t.id)).map(pin),
         threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: 3, catch_up_ids: ['t11', 't4', 't-gdm'], next_cursor: null,
         dms: {'bot:ops': 2, 'human:bea': 1}});
@@ -199,33 +245,33 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
       return json(made);
     }
     const readAll = p.match(/^\/api\/v2\/threads\/([^/]+)\/read-all$/);
-    if (readAll) { seen.readAll.push(readAll[1]); return json({ok: true}); }
+    if (readAll) { seen.readAll.push(readAll[1]!); return json({ok: true}); }
     const pinned = p.match(/^\/api\/v2\/threads\/([^/]+)\/pin$/);
     if (pinned) {
-      seen.pins.push(method + ':' + pinned[1]);
-      if (method === 'PUT') pins.add(pinned[1]); else pins.delete(pinned[1]);
-      return json({...known(pinned[1]), me: {...known(pinned[1]).me, pinned: pins.has(pinned[1])}});
+      seen.pins.push(method + ':' + pinned[1]!);
+      if (method === 'PUT') pins.add(pinned[1]!); else pins.delete(pinned[1]!);
+      return json({...known(pinned[1]!)!, me: {...known(pinned[1]!)!.me, pinned: pins.has(pinned[1]!)}});
     }
     if (/^\/api\/v2\/threads\/[^/]+\/members$/.test(p))
       return json({members: [{actor: 'human:ana'}, {actor: 'human:bea'}, {actor: 'bot:ops'}], next_cursor: null});
     const home = p.match(/^\/api\/v2\/threads\/home\/(.+)$/);
     if (home) {
-      const actor = decodeURIComponent(home[1]); seen.homes.push(actor);
+      const actor = decodeURIComponent(home[1]!); seen.homes.push(actor);
       // Bob may see the bot but not read it: its Home is not his to open.
       if (bob && actor === 'bot:ops') return json({error: 'not_found'}, 404);
-      return homes[actor] ? json(timeline[homes[actor]]().thread) : json({error: 'not_found'}, 404);
+      return homes[actor] ? json(timeline[homes[actor]!]!().thread) : json({error: 'not_found'}, 404);
     }
     if (p === '/api/v2/threads/dm') return json({error: 'not_found'}, 404);
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
-    if (tl && timeline[tl[1]]) return json(timeline[tl[1]]());
-    if (tl && known(tl[1])) return json({thread: known(tl[1]), breadcrumb: [{id: tl[1], title: known(tl[1]).title}], next_cursor: null,
+    if (tl && timeline[tl[1]!]) return json(timeline[tl[1]!]!());
+    if (tl && known(tl[1]!)) return json({thread: known(tl[1]!), breadcrumb: [{id: tl[1], title: known(tl[1]!)!.title}], next_cursor: null,
       messages: [{...msg('x1', 1, 'human:bea', 'Morning.'), thread_id: tl[1]}]});
     const one = p.match(/^\/api\/v2\/threads\/([^/]+)\/read$/);
-    if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
+    if (one) { seen.reads.push(one[1]!); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
     if (callMade && method === 'POST' && /^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) {
       seen.calls.push('start:' + callMade.id);
       seen.callSeats.add(callMade.id);
-      if (startGate) await new Promise(go => startGate.push(go));
+      if (startGate) await new Promise(go => startGate!.push(go));
       else await new Promise(r => setTimeout(r, startWait));
       return json({call: callMade});
     }
@@ -234,7 +280,7 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
     if (settings && method === 'PATCH') {
       const body = JSON.parse(req.postData() || '{}');
       seen.patches.push(body);
-      return json({...timeline[settings[1]]().thread, ...body});
+      return json({...timeline[settings[1]!]!().thread, ...body});
     }
     const send = p.match(/^\/api\/v2\/threads\/([^/]+)\/messages$/);
     if (send && method === 'POST') {
@@ -256,38 +302,38 @@ async function open(browser, who, {phone = false, sse = null} = {}) {
         if (asked[1] === 't-open') joined.push({...openHouse, me: {...openHouse.me, following: true}});
         return json({notify: body.notify});
       }
-      seen.earlier.push(asked[1]); return json({home: 'bot:ops', messages: 2});
+      seen.earlier.push(asked[1]!); return json({home: 'bot:ops', messages: 2});
     }
     const react = p.match(/^\/api\/v2\/messages\/([^/]+)\/reactions\/(.+)$/);
     // The server answers a reaction with the message's reactions, a bare list.
-    if (react) return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]), count: 1, actors: ['human:ana']}] : []);
+    if (react) return json(method === 'PUT' ? [{emoji: decodeURIComponent(react[2]!), count: 1, actors: ['human:ana']}] : []);
     if (p === '/api/v2/threads/search') return json({hits: url.searchParams.get('q') === 'price' ? [{message_id: 'm2', thread_id: 't-plan', title: 'Launch plan',
       sender_id: 'human:ana', created_at: at(58), excerpt: 'What price do we open with?'}] : [], next_cursor: null});
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
     if (call) {
       seen.calls.push(call[2] + ':' + call[1]);
-      if (call[2] === 'leave' && leaveGate) await new Promise(go => leaveGate.push(go));
+      if (call[2] === 'leave' && leaveGate) await new Promise(go => leaveGate!.push(go));
       if (call[2] === 'join' && joinRefused) return json({error: {code: 'call_access_removed'}}, 403);
-      if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); seen.callSeats.add(call[1]); return json({token: 'tok-' + call[1], url: 'wss://meet.acme.example', call: {id: call[1], connector: 'human:ana'}}); }
-      if (call[2] === 'leave') seen.callSeats.delete(call[1]);
+      if (call[2] === 'join') { await new Promise(r => setTimeout(r, 150)); seen.callSeats.add(call[1]!); return json({token: 'tok-' + call[1]!, url: 'wss://meet.acme.example', call: {id: call[1]!, connector: 'human:ana'}}); }
+      if (call[2] === 'leave') seen.callSeats.delete(call[1]!);
       if (call[2] === 'end') return json({error: {code: 'internal', detail: 'Could not end'}}, 500);
       return json({ok: true});
     }
     const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
-    if (steps) { seen.steps.push(steps[1]); return json({steps: [{kind: 'tool', tool: 'search', text: 'pricing notes', at: at(57)}]}); }
+    if (steps) { seen.steps.push(steps[1]!); return json({steps: [{kind: 'tool', tool: 'search', text: 'pricing notes', at: at(57)}]}); }
     // One thread's view (Join reads it after following).
-    if (settings && method === 'GET' && known(settings[1])) { seen.threadGets.push(settings[1]); return json(known(settings[1])); }
+    if (settings && method === 'GET' && known(settings[1]!)) { seen.threadGets.push(settings[1]!); return json(known(settings[1]!)); }
     return json(unrouted(p));
   });
   return {page, seen};
 }
-async function shot(page, name) {
+async function shot(page: import('playwright').Page, name: string) {
   if (!shots) return;
   fs.mkdirSync(shots, {recursive: true});
   await page.screenshot({path: path.join(shots, `threads-${name}.png`)});
 }
 // A screen in both themes, desktop at 1280x800 or the phone's 390x844: threads-<name>-<desktop|phone>-<dark|light>.png.
-async function themed(page, name, phone = false) {
+async function themed(page: import('playwright').Page, name: string, phone = false) {
   if (!shots) return;
   const was = page.viewportSize();
   if (!phone) await page.setViewportSize({width: 1280, height: 800});
@@ -300,12 +346,12 @@ async function themed(page, name, phone = false) {
     await shot(page, `${name}-${phone ? 'phone' : 'desktop'}-${theme}`);
   }
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
-  if (!phone) await page.setViewportSize(was);
+  if (!phone) await page.setViewportSize(was!);
 }
-const sideways = page => page.evaluate(() => document.documentElement.scrollWidth);
+const sideways = (page: import('playwright').Page) => page.evaluate(() => document.documentElement.scrollWidth);
 
 // Closed on failure too: a browser left open keeps this process alive until the runner's time limit stops it.
-let browser = null;
+let browser: import('playwright').Browser | null = null;
 (async () => {
   browser = await chromium.launch();
 
@@ -318,7 +364,7 @@ let browser = null;
     await page.locator('#nav-threads:not([hidden]) .nav-badge:not([hidden])').waitFor();
     assert.equal(await link.getAttribute('href'), '#/threads');
     assert.equal(await link.locator('.nav-badge').textContent(), '3');
-    await page.evaluate(() => { const was = THREADS.cu; THREADS.cu = new Set(Array.from({length: 140}, (_, i) => 'x' + i)); threadsSideRender(); THREADS.cu = was; });
+    await page.evaluate(() => { const was = (THREADS as unknown as {cu: Set<string>}).cu; (THREADS as unknown as {cu: Set<string>}).cu = new Set(Array.from({length: 140}, (_, i) => 'x' + i)); threadsSideRender(); (THREADS as unknown as {cu: Set<string>}).cu = was; });
     assert.equal(await link.locator('.nav-badge').textContent(), '99+');
     await page.evaluate(() => threadsSideRender());
     // Each 1:1 DM's unread is counted on its teammate in Team, a bot or a person.
@@ -332,16 +378,16 @@ let browser = null;
     await page.getByText('And churn was low.').waitFor();
     assert.equal(await link.getAttribute('aria-current'), 'page', 'the link is the page on a thread');
     const rail = page.locator('#thread-rail');
-    const titles = list => rail.locator(`[data-list="${list}"] .tr-title`).allTextContents();
+    const titles = (list: string) => rail.locator(`[data-list="${list}"] .tr-title`).allTextContents();
     assert.deepEqual(await titles('pinned'), ['Launch plan']);
     const rest = await titles('threads');
     assert.ok(rest.includes('Thread 0') && rest.includes('Bea, Cy'), 'threads and group chats: ' + rest);
     assert.ok(!rest.includes('Bea') && !rest.includes('Ops'), 'a 1:1 DM is on its teammate, not here: ' + rest);
     assert.equal(await rail.locator('.tr-row.cur').getAttribute('data-thread'), 't-plan');
     // Bold for unread or activity; a count only for unread; never a bar.
-    const rowState = id => page.evaluate(id => {
-      const a = document.querySelector(`#thread-rail .tr-row[data-thread="${id}"]`);
-      return {bold: getComputedStyle(a).fontWeight >= 600, n: a.querySelector('.tr-count')?.textContent || ''};
+    const rowState = (id: string) => page.evaluate(id => {
+      const a = document.querySelector<HTMLElement>(`#thread-rail .tr-row[data-thread="${id}"]`)!;
+      return {bold: (getComputedStyle(a).fontWeight as unknown as number) >= 600, n: a.querySelector('.tr-count')?.textContent || ''};
     }, id);
     assert.deepEqual(await rowState('t11'), {bold: true, n: '3'});
     assert.deepEqual(await rowState('t9'), {bold: true, n: ''}, 'activity is bold, with no count');
@@ -359,7 +405,7 @@ let browser = null;
     assert.ok(await sideways(page) <= 1300, 'no sideways scroll');
     await themed(page, 'rail-thread');
     // Another thread opens in the same pane; the rail stays as it was.
-    const railBefore = await page.$('#thread-rail');
+    const railBefore = (await page.$('#thread-rail'))!;
     await rail.locator('.tr-row[data-thread="t4"]').click();
     await page.waitForFunction(() => location.hash === '#/thread/t4');
     await page.getByText('Morning.').waitFor();
@@ -392,11 +438,11 @@ let browser = null;
     await page.getByText('And churn was low.').waitFor();
     const order = await page.locator('.thv-list .th-msg .th-body').allTextContents();
     assert.deepEqual(order.slice(0, 5).map(s => s.trim()), ['Kickoff is Monday.', 'What price do we open with?', 'Last quarter we opened at 40.', 'And churn was low.', 'Then 45 this time.'], 'time order');
-    assert.equal((await page.locator('.th-notshown[data-mid="h1"]').textContent()).trim(), 'Not shown', 'a message the viewer may not read is one quiet row');
+    assert.equal((await page.locator('.th-notshown[data-mid="h1"]').textContent())!.trim(), 'Not shown', 'a message the viewer may not read is one quiet row');
     const lefts = await page.locator('.thv-list .th-msg[data-mid] .th-av').evaluateAll(els => [...new Set(els.map(e => Math.round(e.getBoundingClientRect().left)))]);
     assert.equal(lefts.length, 1, 'no indent: ' + lefts);
     assert.equal(await page.locator('.th-subhead, .th-sub').count(), 0, 'no sub-thread heads');
-    const quoted = id => page.locator(`.th-msg[data-mid="${id}"] .th-quote`).getAttribute('data-th-quote');
+    const quoted = (id: string) => page.locator(`.th-msg[data-mid="${id}"] .th-quote`).getAttribute('data-th-quote');
     assert.equal(await quoted('s1'), 'm2');
     assert.equal(await quoted('s1a'), 's1');
     assert.equal(await quoted('s2'), 'm2');
@@ -414,7 +460,7 @@ let browser = null;
     await page.locator('.thv-composer .p-send').click();
     await page.getByText('Checking…').waitFor();
     await page.locator('.th-msg[data-mid="n1"]').waitFor();
-    assert.equal(seen.posts.at(-1).text, 'Monday works.');
+    assert.equal(seen.posts.at(-1)!.text, 'Monday works.');
 
     // A held message stays with its author with the rule that held it.
     await page.locator('.thv-composer .p-text').fill('The secret code is 1234');
@@ -435,14 +481,14 @@ let browser = null;
     await page.evaluate(() => threadViewsLive('messages', {id: 'live1', thread_id: 't-plan', root_id: 't-plan',
       message: {id: 'live1', seq: 60, revision: 1, thread_id: 't-plan', sender_id: 'human:bea', body: 'Arrived live.', created_at: new Date().toISOString()}}));
     await page.getByText('Arrived live.').waitFor();
-    await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')));
+    await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive));
     assert.equal(await page.locator('.th-msg[data-mid="live1"]').count(), 1, 'the refresh did not wipe the live message');
 
     // An older server's whole tree, drawn flat: a long branch's start is one link to it, and what is drawn is what is read.
     await page.goto('https://tico-ui.test/#/thread/t-tree');
     await page.getByText('Unread inline.').waitFor();
     await page.waitForFunction(() => document.querySelector('.th-msg[data-mid="n1"]'));
-    const mids = () => page.locator('.thv-list [data-mid]').evaluateAll(els => els.map(e => e.dataset.mid).filter(id => !/^f\d/.test(id)));
+    const mids = () => page.locator('.thv-list [data-mid]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.mid!).filter(id => !/^f\d/.test(id)));
     assert.deepEqual(await mids(), ['p1', 'r1', 'p2', 'more:t-lb', 'b3', 'b4', 'p3', 'n1']);
     assert.equal(await page.locator('.th-more').getAttribute('href'), '#/thread/t-lb');
     await page.waitForTimeout(150);
@@ -453,11 +499,11 @@ let browser = null;
     assert.equal(await page.locator('.th-msg[data-mid="r1"].th-new').count(), 0);
     // One "New" line, above the first message not read when the thread opened.
     assert.equal(await page.locator('.th-newline').count(), 1);
-    assert.ok(await page.evaluate(() => document.querySelector('.th-newline').nextElementSibling?.classList.contains('th-new')), 'the line sits on the first new one');
-    await page.evaluate(() => document.querySelector('.th-msg[data-mid="p1"]').scrollIntoView());
+    assert.ok(await page.evaluate(() => document.querySelector<HTMLElement>('.th-newline')!.nextElementSibling?.classList.contains('th-new')), 'the line sits on the first new one');
+    await page.evaluate(() => document.querySelector<HTMLElement>('.th-msg[data-mid="p1"]')!.scrollIntoView());
     await shot(page, 'subthreads-desktop');
     // A reply arriving live in an old sub-thread lands at the bottom, in time order, quoting its sub-thread's message.
-    await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
+    await page.evaluate(() => { const b = document.querySelector<HTMLElement>('.thv-scroll')!; b.scrollTop = b.scrollHeight; });
     await page.evaluate(() => threadViewsLive('messages', {id: 'lv', thread_id: 't-rb', root_id: 't-tree',
       message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', sender_id: 'human:bea', body: 'Late reply.', created_at: new Date().toISOString()}}));
     assert.equal((await mids()).at(-1), 'lv');
@@ -470,9 +516,9 @@ let browser = null;
 
     // Posting closed (archived) hides the composer; reopened, it is back with what was typed.
     await page.locator('.thv-composer .p-text').fill('Kept while archived');
-    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); v.thread = {...v.thread, me: {...v.thread.me, can_post: false}}; thvDraw(v); });
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan')! as ThvLive; v.thread = {...v.thread, me: {...v.thread.me, can_post: false}}; thvDraw(v); });
     assert.equal(await page.locator('.thv-composer').isHidden(), true);
-    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); v.thread = {...v.thread, me: {...v.thread.me, can_post: true}}; thvDraw(v); });
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan')! as ThvLive; v.thread = {...v.thread, me: {...v.thread.me, can_post: true}}; thvDraw(v); });
     assert.equal(await page.locator('.thv-composer .p-text').inputValue(), 'Kept while archived');
     await page.locator('.thv-composer .p-text').fill('');
 
@@ -516,7 +562,7 @@ let browser = null;
     // Hidden while Start call is still making the call: in a call already, the call made is never joined, and the seat
     // creation gave goes back.
     callMade = {id: 'c5', state: 'live', connector: 'human:ana'};
-    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'); });
     for (let i = 0; i < 20 && !seen.calls.includes('start:c5'); i++) await page.waitForTimeout(25);
     assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a call being made counts as in a call');
     await page.evaluate(() => window.__starting);
@@ -527,17 +573,17 @@ let browser = null;
     assert.equal(await page.locator('#call-bar').count(), 0);
     // A join the server refuses still says so: Start call's own join number is the one the join checks.
     callMade = {id: 'c6', state: 'live', connector: 'human:ana'}; joinRefused = true;
-    await page.evaluate(() => callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'));
+    await page.evaluate(() => callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'));
     assert.ok(seen.calls.includes('join:c6'), 'the call made is joined: ' + seen.calls);
     await page.locator('.thv-call-note', {hasText: 'Removed from call'}).waitFor();
-    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), removed: false}); thvDraw(v); });
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan')! as ThvLive; CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), removed: false}); thvDraw(v); });
     callMade = null; joinRefused = false;
     // Start call still on its way, the call's start redraws the header to Join, and Join gets in first: when Start
     // answers, its cleanup leaves that seat alone and the call stays connected.
     callMade = {id: 'c7', state: 'live', connector: 'human:ana'}; startWait = 800;
-    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'); });
     for (let i = 0; i < 20 && !seen.calls.includes('start:c7'); i++) await page.waitForTimeout(25);
-    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), call: {id: 'c7', state: 'live'}}); thvDraw(v); });
+    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan')! as ThvLive; CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), call: {id: 'c7', state: 'live'}}); thvDraw(v); });
     await page.locator('.thv-call[data-call="join"]').first().click();
     await page.waitForFunction(() => CALL?.id === 'c7' && window.__rooms.some(r => r.mic));
     await page.evaluate(() => window.__starting);
@@ -552,11 +598,11 @@ let browser = null;
 
     // Start B while in A; its event redraws Join before Start answers. Join waits for A's held leave, then Start
     // answers and leaves the seat to Join. Hidden or refused, Join owes that seat back once; connected, it keeps it.
-    for (const [id, finish] of [['c8', 'hidden'], ['c9', 'refused'], ['c10', 'joined']]) {
+    for (const [id, finish] of [['c8', 'hidden'], ['c9', 'refused'], ['c10', 'joined']] as const) {
       await page.evaluate(async id => { window.__rooms.length = 0; await callJoin('t4', {id: id + '-a'}, 'A'); }, id);
       await page.locator('.thv-call[data-call="start"]').first().waitFor();
       callMade = {id, state: 'live', connector: 'human:ana'}; startGate = []; leaveGate = [];
-      await page.evaluate(() => { window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+      await page.evaluate(() => { window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'); });
       for (let i = 0; i < 20 && !startGate.length; i++) await page.waitForTimeout(25);
       assert.equal(startGate.length, 1, 'Start B waits for its response');
       callLive = callMade;
@@ -593,7 +639,7 @@ let browser = null;
           }, id);
           assert.equal(rejoinPosted, false, 'rejoining B waits for its pending finalizer leave');
           const cleanupLeft = page.waitForResponse(r => r.url().endsWith('/calls/' + id + '/leave'));
-          const cleanups = leaveGate; leaveGate = null; cleanups.forEach(go => go());
+          const cleanups = leaveGate!; leaveGate = null; cleanups.forEach(go => go());
           await (await cleanupLeft).finished();
           await page.evaluate(() => window.__rejoining);
           assert.equal(seen.callSeats.has(id), true, 'delayed cleanup cannot remove B\'s rejoined seat');
@@ -604,31 +650,31 @@ let browser = null;
         }
       }
       callMade = callLive = null; joinRefused = false;
-      await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan'); CALL_THREADS.set('t-plan', {call: null}); thvDraw(v); });
+      await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan')! as ThvLive; CALL_THREADS.set('t-plan', {call: null}); thvDraw(v); });
     }
 
     // Join B connects while Start's response waits. Hidden gives the seat back before Start answers; a late Start
     // must not recreate that debt. Hold any duplicate leave until after rejoining B, when it would remove the new seat.
     callMade = {id: 'c11', state: 'live', connector: 'human:ana'}; startGate = []; leaveGate = [];
     await page.evaluate(() => { window.__rooms.length = 0; window.__connectGate = [];
-      window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan'), 'start'); });
+      window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'); });
     for (let i = 0; i < 20 && !startGate.length; i++) await page.waitForTimeout(25);
     assert.equal(startGate.length, 1, 'Start B waits for its response');
     callLive = callMade;
     await page.evaluate(() => threadViewsLive('threads', {kind: 'call.started', thread_id: 't-plan'}));
     await page.locator('.thv-call[data-call="join"]').first().click();
-    await page.waitForFunction(() => window.__connectGate.length === 1);
+    await page.waitForFunction(() => window.__connectGate!.length === 1);
     const hiddenLeave = page.waitForResponse(r => r.url().endsWith('/calls/c11/leave'));
     assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true});
     for (let i = 0; i < 20 && !leaveGate.length; i++) await page.waitForTimeout(25);
     assert.equal(leaveGate.length, 1, 'Hidden gives B its seat back');
-    leaveGate.shift()();
+    leaveGate!.shift()!();
     await (await hiddenLeave).finished();
     await page.waitForFunction(() => !pendingWrites.has('POST /v2/calls/c11/leave\n{}'));
     assert.equal(seen.callSeats.has('c11'), false, 'the first leave has settled B\'s seat');
     const starts = startGate; startGate = null; starts.forEach(go => go());
     await page.evaluate(() => window.__starting);
-    await page.evaluate(() => { const connects = window.__connectGate; window.__connectGate = null; connects.forEach(go => go()); });
+    await page.evaluate(() => { const connects = window.__connectGate; window.__connectGate = null; connects!.forEach(go => go()); });
     await page.waitForFunction(() => CALL_JOINS === 0);
     // The API registers a write before sending it, so wait for its route only if the cancelled Join sent one.
     const duplicate = await page.evaluate(() => pendingWrites.has('POST /v2/calls/c11/leave\n{}'));
@@ -680,7 +726,7 @@ let browser = null;
     // The bot page: Home and DM, and a quiet link to every thread with the bot.
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
-    const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
+    const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => (b as HTMLElement).dataset.bt));
     assert.ok(tabs.includes('home') && !tabs.includes('dm'), 'one chat tab, Home; DM sits behind Incognito: ' + tabs);
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
@@ -747,7 +793,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/thread/h-old');
     await page.getByText('New plan.').waitFor();
     assert.equal(await page.locator('.th-earlier').count(), 1);
-    assert.match(await page.locator('.th-earlier').textContent(), /Earlier messages/);
+    assert.match((await page.locator('.th-earlier').textContent())!, /Earlier messages/);
     await shot(page, 'earlier-desktop');
     await page.locator('.th-earlier [data-th-earlier]').click();
     await page.locator('.toast', {hasText: 'Earlier messages open'}).waitFor();
@@ -755,7 +801,7 @@ let browser = null;
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
     await page.goto('https://tico-ui.test/#/thread/t-notice');
     await page.locator('.th-earlier-open').click();
-    await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Earlier messages open'));
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('.toast')?.textContent!.includes('Earlier messages open'));
     assert.deepEqual(seen.earlier, ['h-old', 'h-old']);
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
@@ -771,7 +817,7 @@ let browser = null;
     assert.equal(await nt.locator('[type=submit]').isDisabled(), true, 'no name, no thread');
     await nt.locator('#nt-sugg li', {hasText: 'Bea'}).click();
     await nt.locator('#nt-sugg li', {hasText: 'Cy'}).click();
-    assert.deepEqual(await nt.locator('.nt-chip').evaluateAll(els => els.map(e => e.dataset.actor)), ['human:bea', 'human:cy']);
+    assert.deepEqual(await nt.locator('.nt-chip').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.actor)), ['human:bea', 'human:cy']);
     assert.equal(await nt.locator('.nt-why').textContent(), 'Group chats need a name.');
     assert.equal(await nt.locator('[type=submit]').isDisabled(), true);
     await nt.locator('#nt-name').focus();      // the shot shows the form, not the suggestions
@@ -800,7 +846,7 @@ let browser = null;
     await themed(page, 'catch-up-typing');
     await sendBtn.click();
     await cu.locator('.cu-msg', {hasText: 'On it.'}).waitFor();
-    assert.equal(seen.posts.at(-1).text, 'On it.');
+    assert.equal(seen.posts.at(-1)!.text, 'On it.');
     assert.equal(await reply.inputValue(), '');
     assert.equal(await sendBtn.isVisible(), false);
     assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3', 'the card stays after a reply');
@@ -853,12 +899,12 @@ let browser = null;
     assert.deepEqual(seen.readAll, ['t11', 't-gdm', 't4']);
     assert.equal(seen.follows.at(-1), 'muted');
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector('#catch-up')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catch-up')?.open);
     // Opened again, Esc leaves from the first card too.
     await rail.locator('[data-tr-catch]').click();
     await cu.locator('.cu-card h3').waitFor();
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector('#catch-up')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catch-up')?.open);
 
     // Browse threads: one she reads but is not in; Join puts it on the rail.
     await rail.locator('[data-tr-browse]').click();
@@ -891,14 +937,14 @@ let browser = null;
     const mem = page.locator('#thread-members[open]');
     await mem.locator('.thd-list li .thd-name').nth(3).waitFor();
     const rows = await mem.locator('.thd-list li').evaluateAll(lis => lis.map(li => {
-      const box = e => e && e.getBoundingClientRect(), r = box(li), av = box(li.querySelector('.av')), name = box(li.querySelector('.thd-name'));
+      const box = (e: Element | null) => e && e.getBoundingClientRect(), r = box(li)!, av = box(li.querySelector('.av'))!, name = box(li.querySelector('.thd-name'))!;
       const end = box(li.querySelector('.thd-tag, [data-remove]'));
       return {w: av.width, h: av.height, avX: av.left, nameX: name.left, endGap: end ? r.right - end.right : null, tag: li.querySelector('.thd-tag')?.textContent || ''};
     }));
     for (const [i, r] of rows.entries()) assert.ok(Math.abs(r.w - r.h) < 1 && r.w <= 24, `row ${i}: the avatar is round at its size: ${r.w}x${r.h}`);
     assert.equal(new Set(rows.map(r => Math.round(r.avX))).size, 1, 'avatars line up');
     assert.equal(new Set(rows.map(r => Math.round(r.nameX))).size, 1, 'names start at one x');
-    assert.equal(rows[0].tag, 'Owner');
+    assert.equal(rows[0]!.tag, 'Owner');
     for (const [i, r] of rows.entries()) assert.ok(r.endGap !== null && r.endGap <= 8, `row ${i}: Owner or Remove ends the row (${r.endGap}px from its end)`);
     // Add is a plain link, with no disclosure triangle.
     const summary = mem.locator('.thd-add>summary');
@@ -919,7 +965,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     await page.locator('#btabs').waitFor({state: 'attached'});   // wide, the top tabs are hidden (Tasks sits beside the thread)
     await page.waitForTimeout(300);
-    const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
+    const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => (b as HTMLElement).dataset.bt));
     assert.ok(!tabs.includes('home'), 'no Home without Read: ' + tabs);
     assert.ok(!tabs.includes('dm'), 'no DM without Write: ' + tabs);
     // Nothing for Bob to catch up on: the Threads link with no count.
@@ -939,7 +985,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/tasks');
     await page.locator('#mobile-threads:not([hidden])').waitFor();
     assert.equal(await page.locator('#mobile-threads .nav-badge').textContent(), '3', 'the tab carries what Catch up has left');
-    assert.equal((await page.locator('#mobile-threads .mobile-nav-label').textContent()).trim(), 'Threads');
+    assert.equal((await page.locator('#mobile-threads .mobile-nav-label').textContent())!.trim(), 'Threads');
     // Threads takes Search's place in the bar, so search over everything is in the drawer.
     assert.equal(await page.locator('#mobile-search').isVisible(), false);
     await page.locator('#mobile-more').click();
@@ -967,7 +1013,7 @@ let browser = null;
     await page.getByText('And churn was low.').waitFor();
     assert.equal(await page.locator('#thread-rail').isVisible(), false);
     assert.ok(await sideways(page) <= 390, 'no sideways scroll on a thread');
-    const head = await page.locator('.tr-pane .thv-titleline').boundingBox();
+    const head = (await page.locator('.tr-pane .thv-titleline').boundingBox())!;
     assert.ok(head.height <= 48, 'the phone header is one line: ' + head.height);
     await themed(page, 'rail-thread', true);
     await page.locator('.thv-back-rail').tap();
@@ -977,7 +1023,7 @@ let browser = null;
     await page.locator('#thread-rail [data-tr-catch]').tap();
     await page.locator('#catch-up[open] .cu-card h3').waitFor();
     assert.equal(await page.locator('#catch-up [data-cu-mute]').isVisible(), false);
-    const cuBox = await page.locator('#catch-up').boundingBox(), navBox = await page.locator('#mobile-nav').boundingBox();
+    const cuBox = (await page.locator('#catch-up').boundingBox())!, navBox = (await page.locator('#mobile-nav').boundingBox())!;
     assert.ok(cuBox.width >= 389 && cuBox.y + cuBox.height <= navBox.y + 1, 'above the tab bar, the full width: ' + JSON.stringify([cuBox, navBox]));
     assert.ok(await sideways(page) <= 390);
     await themed(page, 'catch-up', true);
@@ -989,7 +1035,7 @@ let browser = null;
     await page.locator('#catch-up [data-cu-undo]').tap();
     await page.locator('#catch-up .cu-undo').waitFor({state: 'detached'});
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector('#catch-up')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catch-up')?.open);
     await page.locator('#thread-rail [data-tr-new]').tap();
     await page.locator('#thread-new[open] #nt-name').waitFor();
     assert.ok(await sideways(page) <= 390);
@@ -998,7 +1044,7 @@ let browser = null;
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#thread-new[open]').count(), 1);
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-new')?.open);
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
     // On a phone the timeline reads the same, with no sideways scroll; a long press, not a hover bar, holds the actions.
@@ -1009,7 +1055,7 @@ let browser = null;
     await shot(page, 'thread-phone');
     await page.goto('https://tico-ui.test/#/thread/t-tree');
     await page.getByText('Unread inline.').waitFor();
-    await page.evaluate(() => document.querySelector('.th-msg[data-mid="p1"]').scrollIntoView());
+    await page.evaluate(() => document.querySelector<HTMLElement>('.th-msg[data-mid="p1"]')!.scrollIntoView());
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
     await shot(page, 'subthreads-phone');
     await page.goto('https://tico-ui.test/#/bot/ops');
@@ -1020,12 +1066,12 @@ let browser = null;
     await shot(page, 'person-phone');
     await page.goto('https://tico-ui.test/#/person/cy');
     await page.locator('#person-home .thv-composer .p-text').waitFor();
-    await page.evaluate(() => document.querySelector('#person-home').scrollIntoView());
+    await page.evaluate(() => document.querySelector<HTMLElement>('#person-home')!.scrollIntoView());
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
     await shot(page, 'person-empty-home-phone');
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.locator('.th-notshown').waitFor();
-    await page.evaluate(() => document.querySelector('.th-notshown').scrollIntoView({block: 'center'}));
+    await page.evaluate(() => document.querySelector<HTMLElement>('.th-notshown')!.scrollIntoView({block: 'center'}));
     await shot(page, 'not-shown-phone');
     await page.goto('https://tico-ui.test/#/person/bea');
     await page.locator('#person-dm').tap();
@@ -1043,7 +1089,7 @@ let browser = null;
         dm_with: [{actor: 'human:bea', name: 'Bea'}, {actor: 'human:cy', name: 'Cy'}, {actor: 'human:di', name: ''}, {actor: 'bot:ops', name: 'Ops'}], dm_with_count: 6},
       {id: 't-none', title: '', audience: 'personal', last_seq: 7, last_unread_seq: 7, me: me(), dm_with: [], dm_with_count: 0},
     ];
-    timeline['t-zed'] = () => ({thread: dmRows[0], breadcrumb: [], next_cursor: null, messages: [msg('z1', 1, 'human:zed', 'Got a minute?', {thread_id: 't-zed'})]});
+    timeline['t-zed'] = () => ({thread: dmRows![0]!, breadcrumb: [], next_cursor: null, messages: [msg('z1', 1, 'human:zed', 'Got a minute?', {thread_id: 't-zed'})]});
     const {page, seen} = await open(browser, 'ana', {phone: true});
 
     // Home and DM by name in the top line, each switching the page, and all of it on the screen.
@@ -1059,9 +1105,9 @@ let browser = null;
     await page.setViewportSize({width: 390, height: 844});
     await shot(page, 'bot-tabs-phone');
     await page.locator('#bot-incognito').tap();
-    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'true');
+    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'true');
     await page.locator('#bot-incognito').tap();
-    await page.waitForFunction(() => document.querySelector('#bot-incognito').getAttribute('aria-pressed') === 'false');
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'false');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
 
     // A person's page starts a DM with them; your own does not offer one.
@@ -1085,8 +1131,8 @@ let browser = null;
     await page.locator('.thv-title', {hasText: 'Zed Stone'}).waitFor();
     // Measured by the page, once it has a box: a re-render can leave the title without one for a moment, and boundingBox()
     // then returns null (the CI failure, Nov 2). The poll waits for the box; the assert reports the width it got.
-    const titleBox = () => page.evaluate(() => [...document.querySelectorAll('.thv-title')].find(e => e.textContent.includes('Zed Stone'))?.getBoundingClientRect().width || 0);
-    await page.waitForFunction(() => [...document.querySelectorAll('.thv-title')].some(e => e.textContent.includes('Zed Stone') && e.getBoundingClientRect().width > 0));
+    const titleBox = () => page.evaluate(() => [...(document.querySelectorAll('.thv-title') as unknown as HTMLElement[])].find(e => e.textContent!.includes('Zed Stone'))?.getBoundingClientRect().width || 0);
+    await page.waitForFunction(() => [...(document.querySelectorAll('.thv-title') as unknown as HTMLElement[])].some(e => e.textContent!.includes('Zed Stone') && e.getBoundingClientRect().width > 0));
     const width = await titleBox();
     assert.ok(width >= 100, `the title is not squeezed: ${width}px wide`);
     await shot(page, 'dm-head-phone');
@@ -1100,7 +1146,7 @@ let browser = null;
     };
     const done = async () => {
       await page.locator('#thread-settings .tmodal-x').tap();
-      await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
+      await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-settings')?.open);
     };
     const select = await keep();
     assert.equal(await select.inputValue(), '', 'forever by default');
@@ -1135,7 +1181,7 @@ let browser = null;
   // viewer's own read clears both, a pin moves a row (a thread not on the rail is read alone), and none of it reads the
   // whole rail again.
   {
-    const sse = {queue: [], seq: 0, latest: null, done: false};
+    const sse: Sse = {queue: [], seq: 0, latest: null, done: false};
     const {page, seen} = await open(browser, 'ana', {sse});
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     const rail = page.locator('#thread-rail');
@@ -1143,13 +1189,13 @@ let browser = null;
     await page.waitForFunction(() => typeof LIVE !== 'undefined' && LIVE_TOPICS.includes('threads'));
     const rails = seen.rails;
     const badges = () => page.evaluate(() => ['#nav-threads .nav-badge', '#mobile-threads .nav-badge', '#thread-rail [data-tr-catch] .tr-badge']
-      .map(q => { const b = document.querySelector(q); return b && !b.hidden ? b.textContent : ''; }));
-    const row = id => page.evaluate(id => {
-      const a = document.querySelector(`#thread-rail .tr-row[data-thread="${id}"]`);
-      return a ? {list: a.closest('[data-list]')?.dataset.list, bold: getComputedStyle(a).fontWeight >= 600, n: a.querySelector('.tr-count')?.textContent || ''} : null;
+      .map(q => { const b = document.querySelector<HTMLElement>(q); return b && !b.hidden ? b.textContent : ''; }));
+    const row = (id: string) => page.evaluate(id => {
+      const a = document.querySelector<HTMLElement>(`#thread-rail .tr-row[data-thread="${id}"]`);
+      return a ? {list: a.closest<HTMLElement>('[data-list]')?.dataset.list, bold: (getComputedStyle(a).fontWeight as unknown as number) >= 600, n: a.querySelector('.tr-count')?.textContent || ''} : null;
     }, id);
     // Events come a stream at a time, after the page reconnects: wait up to 10 s for what one should do.
-    const until = async (fn, want) => {
+    const until = async (fn: () => Promise<unknown>, want: unknown) => {
       for (let i = 0; i < 100; i++) { if (JSON.stringify(await fn()) === JSON.stringify(want)) return; await page.waitForTimeout(100); }
       assert.deepEqual(await fn(), want);
     };
@@ -1188,7 +1234,7 @@ let browser = null;
     const {page, seen} = await open(browser, 'ana');
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('#thread-rail [data-list="threads"] .tr-row[data-thread="t11"]').waitFor();
-    const rows = await page.locator('#thread-rail [data-list="threads"] .tr-row').evaluateAll(els => els.map(a => a.dataset.thread));
+    const rows = await page.locator('#thread-rail [data-list="threads"] .tr-row').evaluateAll(els => els.map(a => (a as HTMLElement).dataset.thread));
     assert.ok(rows.includes('t0') && !rows.includes('t-dm') && !rows.includes('t-botdm'), 'threads, not 1:1 DMs: ' + rows);
     assert.equal(await page.locator('#thread-rail [data-tr-catch]').isVisible(), false);
     assert.equal(await page.locator('#thread-rail [data-tr-browse]').isVisible(), false);
@@ -1208,10 +1254,10 @@ let browser = null;
     // screen, its pane scrolls, and New thread can be scrolled into reach.
     await page.setViewportSize({width: 844, height: 260});
     // Wait until the pane has taken this window's height and overflows it, before measuring or scrolling it.
-    await page.waitForFunction(() => { const e = document.querySelector('.tr-empty'); return !!e && e.scrollHeight > e.clientHeight; });
+    await page.waitForFunction(() => { const e = document.querySelector<HTMLElement>('.tr-empty'); return !!e && e.scrollHeight > e.clientHeight; });
     const fit = await empty.locator('.empty-state').evaluate(e => ({top: Math.round(e.getBoundingClientRect().top),
-      picture: Math.round(e.querySelector('.tr-diagram').getBoundingClientRect().width),
-      pane: Math.round(e.parentElement.getBoundingClientRect().width)}));
+      picture: Math.round(e.querySelector('.tr-diagram')!.getBoundingClientRect().width),
+      pane: Math.round(e.parentElement!.getBoundingClientRect().width)}));
     assert.ok(fit.top >= 0 && fit.picture <= fit.pane, 'the block starts on screen, the picture fits its pane: ' + JSON.stringify(fit));
     await empty.evaluate(e => { e.scrollTop = e.scrollHeight; });
     assert.ok(await empty.locator('[data-tr-new]').evaluate(b => b.getBoundingClientRect().bottom <= innerHeight),
@@ -1220,7 +1266,7 @@ let browser = null;
     await page.locator('#thread-new[open]').waitFor();
     assert.ok(await sideways(page) <= 844, 'no sideways scroll');
     await page.locator('#thread-new .nt-x').click();
-    await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-new')?.open);
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;
@@ -1254,7 +1300,7 @@ let browser = null;
       await page.close();
     }
     // A 404, and a list read that answers something other than a list.
-    for (const [off, phone] of [[true, false], [true, true], ['odd', false], ['odd', true]]) {
+    for (const [off, phone] of [[true, false], [true, true], ['odd', false], ['odd', true]] as const) {
       threadsOff = off;
       const {page} = await open(browser, 'ana', {phone});
       await page.goto('https://tico-ui.test/#/tasks');

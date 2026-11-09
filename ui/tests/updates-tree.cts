@@ -4,62 +4,70 @@
 // see only cards below you in the org chart, with a toggle for the whole org chart. Unread alerts only for
 // direct reports (one level below you), not deeper." Your own card lets you write or edit your update, on
 // Friday the week in review too.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const fs = require('node:fs');
-const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
+const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), hour = 3600e3;
+type Page = import('playwright').Page;
+type Upd = {id: string; bot: string; kind: string; day: string; headline: string; body: string; read: boolean; created_at: string;
+  updated_at: string; replies: number; slides: unknown};
+type Entry = {key: string; author: string; name: string; direct: boolean; update: Upd | null; children: Entry[]};
+type PostBody = {kind?: string; body?: string; ids?: string[]; all?: boolean; slides?: unknown; replace_draft?: boolean};
+declare global {
+  var ticoTheme: {set(theme: string): unknown};
+}
 const today = new Date(now).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 // A manager with eight reports (Chris, Oct 19: "a comment icon, unread icon, archive icon, and a '8 dropdown'").
-const EIGHT = [['seo', 'AI SEO'], ['ads', 'Ads Bot'], ['copy', 'Copywriter'], ['social', 'Social Bot'], ['pr', 'PR Bot'],
+const EIGHT: [string, string][] = [['seo', 'AI SEO'], ['ads', 'Ads Bot'], ['copy', 'Copywriter'], ['social', 'Social Bot'], ['pr', 'PR Bot'],
   ['events', 'Events Bot'], ['brand', 'Brand Bot'], ['email', 'Email Bot']];
-const bots = [['cmo', 'AI CMO'], ...EIGHT, ['writer', 'Writer Bot'], ['intern', 'Intern Bot']].map(([name, display_name]) =>
+const bots = [['cmo', 'AI CMO'] as [string, string], ...EIGHT, ['writer', 'Writer Bot'] as [string, string], ['intern', 'Intern Bot'] as [string, string]].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', owner_id: 'ana'}));
-const update = (id, bot, body, read, more = {}) => ({id, bot, kind: 'daily', day: today, headline: body.slice(2), body, read,
+const update = (id: string, bot: string, body: string, read: boolean, more: Partial<Upd> = {}): Upd => ({id, bot, kind: 'daily', day: today, headline: body.slice(2), body, read,
   created_at: iso(-hour), updated_at: iso(-hour), replies: 0, slides: null, ...more});
 // Noon on the queue's clock (Pacific), for the Friday checks.
-const THURSDAY = '2026-10-15', FRIDAY = '2026-10-16', noon = day => new Date(`${day}T19:00:00Z`);
+const THURSDAY = '2026-10-15', FRIDAY = '2026-10-16', noon = (day: string) => new Date(`${day}T19:00:00Z`);
 const drafted = {goal: 'Open the Northwind office by November', done: ['Signed the lease'], focus: ['Hire an office manager'], blockers: [],
   kpis: [{name: 'Leases signed', value: '1', unit: 'lease', note: 'Northwind'}]};
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
-  const asked = [], posted = [];
-  let mine = null, mineWeek = null, unreadCount = 2, allSeen = false, eight = false;   // one more from a direct report on another day
-  const tree = (scope, kind) => {
+  const asked: string[] = [], posted: {path: string; body: PostBody}[] = [];
+  let mine: Upd | null = null, mineWeek: Upd | null = null, unreadCount = 2, allSeen = false, eight = false;   // one more from a direct report on another day
+  const tree = (scope: string | null, kind: string | null) => {
     if (kind === 'weekly') {
       return {kind, day: FRIDAY, scope: 'below', me: 'p:ana', unread: 0,
               roots: [{key: 'p:ana', author: 'human:ana', name: 'Ana', direct: false, update: mineWeek, children: []}]};
     }
-    const seo = {key: 'b:seo', author: 'seo', name: 'AI SEO', direct: false, update: update('u-seo', 'seo', '- Published the checklist page', allSeen), children: []};
-    const cmo = {key: 'b:cmo', author: 'cmo', name: 'AI CMO', direct: true,
+    const seo: Entry = {key: 'b:seo', author: 'seo', name: 'AI SEO', direct: false, update: update('u-seo', 'seo', '- Published the checklist page', allSeen), children: []};
+    const cmo: Entry = {key: 'b:cmo', author: 'cmo', name: 'AI CMO', direct: true,
                  update: update('u-cmo', 'cmo', '- The team shipped the checklist\nBlocked: Chris has not answered the storage question\nSuggestion: Ask him once', allSeen), children: [seo]};
     if (eight) {      // eight reports: three with no update yet (one of them with a report of its own), and one with a report
-      cmo.children.push(...EIGHT.slice(1).map(([bot, name], i) => ({key: 'b:' + bot, author: bot, name, direct: false, children: [],
+      cmo.children.push(...EIGHT.slice(1).map(([bot, name], i): Entry => ({key: 'b:' + bot, author: bot, name, direct: false, children: [],
         update: i >= 3 && i <= 5 ? null : update('u-' + bot, bot, `- ${name} finished its part of the checklist launch`, allSeen)})));
-      cmo.children.find(k => k.key === 'b:events').children = [{key: 'b:intern', author: 'intern', name: 'Intern Bot', direct: false, children: [],
+      cmo.children.find(k => k.key === 'b:events')!.children = [{key: 'b:intern', author: 'intern', name: 'Intern Bot', direct: false, children: [],
         update: update('u-intern', 'intern', '- Booked the venue', allSeen)}];
       seo.children = [{key: 'b:writer', author: 'writer', name: 'Writer Bot', direct: false, update: update('u-writer', 'writer', '- Drafted the checklist page', allSeen), children: []}];
     }
-    const ana = {key: 'p:ana', author: 'human:ana', name: 'Ana', direct: false, update: mine, children: [cmo]};
+    const ana: Entry = {key: 'p:ana', author: 'human:ana', name: 'Ana', direct: false, update: mine, children: [cmo]};
     return {kind: 'daily', day: today, scope: scope || 'below', me: 'p:ana', unread: 1,
             roots: scope === 'all' ? [{key: 'p:boss', author: 'human:boss', name: 'Bo', direct: false, update: null, children: [ana]}] : [ana]};
   };
-  const open = async viewport => {
+  const open = async (viewport: {width: number; height: number}) => {
     const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(viewport.width < 600 ? {isMobile: true, hasTouch: true} : {})});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
+      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/employees') return json(bots);
       if (p === '/api/issues') return json([]);
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true});
@@ -101,7 +109,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     // The toggle sits right of Archive on the name's line (no row under the update for it), and never fades with the corner.
     assert.equal(await cmo.locator('.upd-meta > .upd-corner + [data-upd-kids]').count(), 1, 'the toggle follows the corner on the name line');
     assert.equal(await cmo.locator('.upd-actions').evaluate(r => getComputedStyle(r).display), 'none', 'no row under the update for the toggle');
-    assert.equal(await kids.evaluate(b => { let o = 1; for (let e = b; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; }), 1, 'the toggle is fully visible');
+    assert.equal(await kids.evaluate(b => { let o = 1; for (let e: Element | null = b; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; }), 1, 'the toggle is fully visible');
     await kids.click();
     const seo = page.locator('#upd-feed [data-upd="u-seo"]');
     await seo.waitFor();
@@ -112,7 +120,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       'Reply, Mark read and Archive at the top right');
     assert.equal(await seo.locator('.upd-dot').count(), 0, 'one level down only: no dot two levels down');
     // Seen, the deeper card is marked read, and the badge (direct reports only) does not move.
-    const read = id => posted.some(x => x.path === '/api/v2/updates/read' && x.body.ids?.includes(id));
+    const read = (id: string) => posted.some(x => x.path === '/api/v2/updates/read' && x.body.ids?.includes(id));
     for (let i = 0; i < 50 && !(read('u-seo') && read('u-cmo')); i++) await page.waitForTimeout(100);
     assert.ok(read('u-seo') && read('u-cmo'), 'cards are read when seen, a deeper one too');
     assert.equal(await page.locator('[data-upd-badge]').first().textContent(), '1', 'reading a deeper card leaves the badge alone');
@@ -129,7 +137,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await page.locator('#upd-feed [data-upd-editor] textarea').fill('- Signed the Northwind lease');
     await page.locator('#upd-feed [data-upd-editor] [type=submit]').click();
     await page.locator('#upd-feed [data-upd="u-ana"]').waitFor();
-    assert.deepEqual(posted.find(x => x.path === '/api/v2/updates').body, {body: '- Signed the Northwind lease', kind: 'daily', replace_draft: false});
+    assert.deepEqual(posted.find(x => x.path === '/api/v2/updates')!.body, {body: '- Signed the Northwind lease', kind: 'daily', replace_draft: false});
     assert.equal(await page.locator('#upd-feed [data-upd="u-ana"] [data-upd-write]').count(), 1, 'your card can be edited all day');
     assert.deepEqual(errors, []);
     await page.close();
@@ -165,7 +173,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await editor.locator('[data-upd-slide="kpis"]').fill('Leases signed: 1');
     await editor.locator('[type=submit]').click();
     await week.page.locator('#upd-feed [data-upd="u-ana-week"]').waitFor();
-    assert.deepEqual(posted.filter(x => x.path === '/api/v2/updates').at(-1).body, {kind: 'weekly', replace_draft: false, slides: {
+    assert.deepEqual(posted.filter(x => x.path === '/api/v2/updates').at(-1)!.body, {kind: 'weekly', replace_draft: false, slides: {
       goal: 'Open the Northwind office by November', done: ['Signed the lease', 'Moved the desks in'], focus: ['Hire an office manager'],
       blockers: [], kpis: [{name: 'Leases signed', value: '1'}]}});
     // An Assistant draft: Edit opens it filled in, and posting it sends replace_draft false (there is no own-words box).
@@ -180,7 +188,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await editor.locator('[data-upd-slide="blockers"]').fill('Waiting on the landlord for keys');
     await editor.locator('[type=submit]').click();
     await editor.waitFor({state: 'detached'});
-    assert.deepEqual(posted.filter(x => x.path === '/api/v2/updates').at(-1).body, {kind: 'weekly', replace_draft: false,
+    assert.deepEqual(posted.filter(x => x.path === '/api/v2/updates').at(-1)!.body, {kind: 'weekly', replace_draft: false,
       slides: {...drafted, blockers: ['Waiting on the landlord for keys']}}, 'an unchanged KPI line keeps its unit and note');
     assert.deepEqual(week.errors, []);
     await week.page.close();
@@ -188,16 +196,16 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     eight = true;
     const posted1 = mine; mine = null;   // your own card as "No update yet", with Write your update and its count
     const icons = new Set(fs.readFileSync(uiFile('vendor/fonts/icons.txt'), 'utf8').split('\n').filter(Boolean));
-    const fitsRow = async (p, label) => {
+    const fitsRow = async (p: Page, label: string) => {
       // Each top line (name, time and the corner), each action row, and the "No update yet" row that carries a count too:
       // one line, no word broken over two. A hidden row (an empty action row) is not measured.
       const rows = await p.locator('#upd-feed .upd-meta, #upd-feed .upd-actions, #upd-feed .upd-none').evaluateAll(els => els.filter(row => getComputedStyle(row).display !== 'none').map(row => {
-        const card = row.closest('.upd-card, .upd-none').getBoundingClientRect();
-        const b = [...row.children].filter(c => getComputedStyle(c).display !== 'none').map(c => c.getBoundingClientRect());
-        const texts = [], walk = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+        const card = row.closest('.upd-card, .upd-none')!.getBoundingClientRect();
+        const b = [...(row.children as HTMLCollection & Iterable<Element>)].filter(c => getComputedStyle(c).display !== 'none').map(c => c.getBoundingClientRect());
+        const texts: boolean[] = [], walk = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
         // A text on a lower line than its first is wrapped; one cut short with an ellipsis stays on its line.
-        for (let n; (n = walk.nextNode());) if (n.textContent.trim() && !n.parentElement.closest('.nav-icon')) { const r = document.createRange(); r.selectNodeContents(n); const rects = [...r.getClientRects()]; texts.push(rects.some(b => b.top > rects[0].top + 4)); }
-        return {line: Math.max(...b.map(r => r.top)) < Math.min(...b.map(r => r.bottom)), overlap: b.some((r, i) => i && r.left < b[i - 1].right - 0.5),
+        for (let n; (n = walk.nextNode());) if (n.textContent!.trim() && !n.parentElement!.closest('.nav-icon')) { const r = document.createRange(); r.selectNodeContents(n); const rects = [...(r.getClientRects() as DOMRectList & Iterable<DOMRect>)]; texts.push(rects.some(b => b.top > rects[0]!.top + 4)); }
+        return {line: Math.max(...b.map(r => r.top)) < Math.min(...b.map(r => r.bottom)), overlap: b.some((r, i) => i && r.left < b[i - 1]!.right - 0.5),
                 inside: b.every(r => r.right <= card.right - 4 && r.left >= card.left), wrapped: texts.some(Boolean)};
       }));
       assert.ok(rows.length > 0);
@@ -206,19 +214,19 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     // Dense cards (Chris, Nov 2): the avatar is the name line's height, at its start; the update runs the card's full
     // width under it; Reply sits on the name line, just left of Mark read and Archive. A "No update yet" row has the
     // same avatar at the same inset, so a thread's avatars line up.
-    const dense = async (p, label) => {
-      const cards = await p.locator('#upd-feed .upd-card:not(.upd-edit), #upd-feed .upd-none:not(.upd-nones)').evaluateAll(els => els.map(card => {
+    const dense = async (p: Page, label: string) => {
+      const cards = await p.locator('#upd-feed .upd-card:not(.upd-edit), #upd-feed .upd-none:not(.upd-nones)').evaluateAll(els => (els as HTMLElement[]).map(card => {
         const r = card.getBoundingClientRect(), cs = getComputedStyle(card);
         const inL = r.left + card.clientLeft + parseFloat(cs.paddingLeft), inR = r.right - card.clientLeft - parseFloat(cs.paddingRight);
-        const box = sel => card.querySelector(sel)?.getBoundingClientRect();
-        const av = box('.upd-av .av'), name = box('.upd-name'), body = box(':scope .upd-body, :scope .upd-deck');
-        const meta = box('.upd-meta'), corner = [...card.querySelectorAll('.upd-corner .upd-act')].map(b => [b.getAttribute('aria-label'), b.getBoundingClientRect()]);
-        const reply = corner.findIndex(([l]) => l.startsWith('Reply')), mid = b => (b.top + b.bottom) / 2;
+        const box = (sel: string) => card.querySelector(sel)?.getBoundingClientRect();
+        const av = box('.upd-av .av')!, name = box('.upd-name')!, body = box(':scope .upd-body, :scope .upd-deck');
+        const meta = box('.upd-meta')!, corner = [...(card.querySelectorAll('.upd-corner .upd-act') as NodeListOf<HTMLElement> & Iterable<HTMLElement>)].map(b => [b.getAttribute('aria-label')!, b.getBoundingClientRect()] as const);
+        const reply = corner.findIndex(([l]) => l.startsWith('Reply')), mid = (b: DOMRect) => (b.top + b.bottom) / 2;
         return {id: card.dataset.upd || card.dataset.updNode, none: card.classList.contains('upd-none'),
           avH: av.height, nameH: name.height, avIn: Math.abs(av.left - inL), avMid: Math.abs(mid(av) - mid(name)),
           bodyL: body ? Math.abs(body.left - inL) : 0, bodyR: body ? Math.abs(body.right - inR) : 0, bodyBelow: body ? body.top >= av.bottom : true,
-          reply: reply < 0 ? null : {next: corner.slice(reply + 1).map(([l]) => l), onLine: Math.abs(mid(corner[reply][1]) - mid(meta)) <= 1,
-            leftOf: corner[reply][1].right <= corner[reply + 1][1].left + 0.5}};
+          reply: reply < 0 ? null : {next: corner.slice(reply + 1).map(([l]) => l), onLine: Math.abs(mid(corner[reply]![1]) - mid(meta)) <= 1,
+            leftOf: corner[reply]![1].right <= corner[reply + 1]![1].left + 0.5}};
       }));
       assert.ok(cards.some(c => !c.none) && cards.some(c => c.none), `${label}: cards and a "No update yet" row`);
       for (const c of cards) {
@@ -227,11 +235,11 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         assert.ok(c.bodyL <= 1 && c.bodyR <= 1 && c.bodyBelow, `${label}: ${c.id}'s update runs the card's full width under the avatar (${c.bodyL}, ${c.bodyR})`);
         if (c.none) continue;
         assert.ok(c.reply, `${label}: ${c.id} has Reply on its name line`);
-        assert.deepEqual(c.reply.next.length, 2, `${label}: ${c.id}'s Reply comes just before Mark read and Archive (${c.reply.next})`);
-        assert.ok(c.reply.onLine && c.reply.leftOf, `${label}: ${c.id}'s Reply sits on the name line, left of the others`);
+        assert.deepEqual(c.reply!.next.length, 2, `${label}: ${c.id}'s Reply comes just before Mark read and Archive (${c.reply!.next})`);
+        assert.ok(c.reply!.onLine && c.reply!.leftOf, `${label}: ${c.id}'s Reply sits on the name line, left of the others`);
       }
     };
-    const tree8 = async (viewport, label) => {
+    const tree8 = async (viewport: {width: number; height: number}, label: string) => {
       const {page: p, errors: errs} = await open(viewport);
       await p.goto('http://tico-ui.test/#/updates');
       const boss = p.locator('#upd-feed [data-upd="u-cmo"]');
@@ -240,16 +248,16 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       assert.equal(await boss.locator('.upd-actions').evaluate(r => getComputedStyle(r).display), 'none', `${label}: no row under the update`);
       assert.deepEqual(await boss.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
         ['Reply', 'Mark unread', 'Archive'], `${label}: comment, unread and archive at the top right`);
-      assert.equal(await toggle.evaluate(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
+      assert.equal(await toggle.evaluate(b => [...(b.childNodes as NodeListOf<ChildNode> & Iterable<ChildNode>)].filter(n => !(n as Element).classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
       assert.equal(await toggle.locator('.nav-icon').textContent(), 'chevron_right');
-      const [archive, main, meta] = [await boss.locator('[data-upd-archive]').boundingBox(), await toggle.boundingBox(), await boss.locator('.upd-meta').boundingBox()];
+      const [archive, main, meta] = [(await boss.locator('[data-upd-archive]').boundingBox())!, (await toggle.boundingBox())!, (await boss.locator('.upd-meta').boundingBox())!];
       assert.ok(main.x >= archive.x + archive.width - 0.5 && Math.abs(main.y + main.height / 2 - (archive.y + archive.height / 2)) <= 1,
         `${label}: the count sits right of Archive, on its line`);
       assert.ok(Math.abs(main.x + main.width - (meta.x + meta.width + 8)) <= 1, `${label}: the count ends the top line`);
-      const words = async () => p.locator('#upd-feed').evaluate(f => [...f.querySelectorAll('*')].filter(e => !e.closest('.nav-icon') && e.childNodes.length)
-        .flatMap(e => [...e.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent)).join(' '));
+      const words = async () => p.locator('#upd-feed').evaluate(f => [...(f.querySelectorAll('*') as NodeListOf<Element> & Iterable<Element>)].filter(e => !e.closest('.nav-icon') && e.childNodes.length)
+        .flatMap(e => [...(e.childNodes as NodeListOf<ChildNode> & Iterable<ChildNode>)].filter(n => n.nodeType === 3).map(n => n.textContent)).join(' '));
       assert.doesNotMatch(await words(), /\breports?\b/, `${label}: no "8 reports" row`);
-      const glyphs = async () => p.locator('#upd-feed .nav-icon').evaluateAll(els => els.map(e => e.textContent.trim()));
+      const glyphs = async () => p.locator('#upd-feed .nav-icon').evaluateAll(els => els.map(e => e.textContent!.trim()));
       // With the shipped font loaded, every icon is one glyph that fits its box (a missing name overflows as letters).
       const drawn = async () => {
         await p.evaluate(() => document.fonts.ready);
@@ -269,14 +277,14 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       assert.equal(await subs.nth(5).locator(':scope > .upd-nones').count(), 1, `${label}: the line comes after the cards`);
       assert.equal(await p.locator('#upd-feed [data-upd-node="b:pr"], #upd-feed [data-upd-node="b:brand"]').count(), 0, `${label}: no row each`);
       const nones = p.locator('#upd-feed .upd-nones');
-      assert.deepEqual(await nones.evaluate(r => [r.querySelectorAll('.upd-name').length, [...r.children].filter(c => !c.matches('.upd-whos')).map(c => c.textContent.trim())]),
+      assert.deepEqual(await nones.evaluate(r => [r.querySelectorAll('.upd-name').length, [...(r.children as HTMLCollection & Iterable<Element>)].filter(c => !c.matches('.upd-whos')).map(c => c.textContent!.trim())]),
         [0, ['No update yet']], `${label}: one label, no names`);
       const who = nones.locator('.upd-who');
       assert.deepEqual(await who.evaluateAll(els => els.map(e => [e.tagName, e.getAttribute('aria-label'), e.getAttribute('title')])),
         [['A', 'PR Bot', 'PR Bot'], ['BUTTON', 'Events Bot, 1 report', 'Events Bot, 1 report'], ['A', 'Brand Bot', 'Brand Bot']], `${label}: an avatar each, named`);
       assert.equal(await who.nth(0).getAttribute('href'), '#/bot/pr', `${label}: an avatar goes to its page`);
       const boxes = await who.evaluateAll(els => els.map(e => e.getBoundingClientRect()).map(r => ({top: r.top, h: r.height})));
-      assert.ok(boxes.every(b => Math.abs(b.top - boxes[0].top) < 1), `${label}: the avatars on one row`);
+      assert.ok(boxes.every(b => Math.abs(b.top - boxes[0]!.top) < 1), `${label}: the avatars on one row`);
       // One with reports carries the count; it opens them under the line (its row, then their cards), and closes them.
       const events = who.nth(1);
       assert.equal(await events.locator('.upd-who-n').textContent(), '1');
@@ -285,7 +293,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       await p.keyboard.press('Enter');
       await p.locator('#upd-feed [data-upd="u-intern"]').waitFor();
       assert.equal(await events.getAttribute('aria-expanded'), 'true');
-      assert.equal(await p.evaluate(() => document.activeElement?.dataset.updKids), 'b:events', `${label}: focus stays on the avatar`);
+      assert.equal(await p.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.updKids), 'b:events', `${label}: focus stays on the avatar`);
       assert.equal(await subs.count(), 7);
       assert.equal(await subs.nth(6).locator(':scope > .upd-none[data-upd-node="b:events"]').count(), 1, `${label}: its row under the line`);
       assert.equal(await subs.nth(6).locator('.upd-sub [data-upd="u-intern"]').count(), 1, `${label}: its report's card under its row`);
@@ -297,16 +305,16 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       // at the last (tree-lines.css). Measured from the boxes: the rail runs under the middle of the manager's avatar,
       // and each elbow ends where the report's avatar starts.
       const line = await p.locator('#upd-feed .upd-node[data-depth="1"] > .upd-sub').evaluate(sub => {
-        const box = el => el.getBoundingClientRect(), mid = el => box(el).left + box(el).width / 2;
-        const parentCard = sub.parentElement.firstElementChild, parentAv = parentCard.querySelector('.upd-av .av');
+        const box = (el: Element) => el.getBoundingClientRect(), mid = (el: Element) => box(el).left + box(el).width / 2;
+        const parentCard = sub.parentElement!.firstElementChild!, parentAv = parentCard.querySelector('.upd-av .av')!;
         const stub = getComputedStyle(parentCard, '::after'), sb = box(parentCard);
-        return [...sub.children].map((node, i) => {
+        return [...(sub.children as HTMLCollection & Iterable<Element>)].map((node, i) => {
           const el = node.querySelector(':scope>.upd-none') || node, r = box(el), b = getComputedStyle(el, '::before'), a = getComputedStyle(node, '::after');
           const w = parseFloat(b.borderLeftWidth), left = r.left + el.clientLeft + parseFloat(b.left), top = r.top + el.clientTop + parseFloat(b.top);
-          const av = node.firstElementChild.querySelector('.upd-av .av, .upd-who .av');
+          const av = node.firstElementChild!.querySelector('.upd-av .av, .upd-who .av')!;
           return {i, railX: left + w / 2, parentCx: mid(parentAv), elbowRight: left + parseFloat(b.width), avLeft: box(av).left,
                   elbowY: top + parseFloat(b.height) - parseFloat(b.borderBottomWidth) / 2, avCy: box(av).top + box(av).height / 2, top,
-                  prevBottom: i ? box(sub.children[i - 1]).bottom : sb.top + parentCard.clientTop + parseFloat(stub.top) + parseFloat(stub.height),
+                  prevBottom: i ? box(sub.children[i - 1]!).bottom : sb.top + parentCard.clientTop + parseFloat(stub.top) + parseFloat(stub.height),
                   stubX: sb.left + parentCard.clientLeft + parseFloat(stub.left) + parseFloat(stub.borderLeftWidth) / 2,
                   same: b.borderLeftWidth === b.borderBottomWidth && b.borderBottomLeftRadius !== '0px', on: a.content !== 'none' && a.content !== 'normal'};
         });
@@ -320,15 +328,15 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
         assert.ok(n.i ? Math.abs(n.top - n.prevBottom) <= 1 : n.top <= n.prevBottom + 1, `${label}: report ${n.i}'s line joins the one above it (${n.top} vs ${n.prevBottom})`);
         assert.equal(n.on, n.i < line.length - 1, `${label}: the line goes on past report ${n.i} only when another follows`);
       }
-      assert.ok(Math.abs(line[0].stubX - line[0].railX) <= 1, `${label}: the line leaves the manager's card under its avatar`);
+      assert.ok(Math.abs(line[0]!.stubX - line[0]!.railX) <= 1, `${label}: the line leaves the manager's card under its avatar`);
       await p.keyboard.press('Enter');
       await p.locator('#upd-feed [data-upd="u-intern"]').waitFor({state: 'detached'});
       assert.equal(await events.getAttribute('aria-expanded'), 'false', `${label}: pressed again, it closes`);
       // A report's report hangs the same way, one level further in.
       await p.locator('#upd-feed [data-upd-kids="b:seo"]').click();
       await p.locator('#upd-feed [data-upd="u-writer"]').waitFor();
-      const indent = await p.locator('#upd-feed .upd-sub').evaluateAll(subs => subs.map(s => s.firstElementChild.firstElementChild.getBoundingClientRect().left - s.parentElement.firstElementChild.getBoundingClientRect().left));
-      assert.ok(indent.length === 3 && indent.every(v => Math.abs(v - indent[0]) < 1), `${label}: nested levels indent the same (${indent})`);
+      const indent = await p.locator('#upd-feed .upd-sub').evaluateAll(subs => subs.map(s => s.firstElementChild!.firstElementChild!.getBoundingClientRect().left - s.parentElement!.firstElementChild!.getBoundingClientRect().left));
+      assert.ok(indent.length === 3 && indent.every(v => Math.abs(v - indent[0]!) < 1), `${label}: nested levels indent the same (${indent})`);
       for (const g of await glyphs()) assert.ok(icons.has(g), `${label}: icon "${g}" open is in the shipped font`);
       await drawn();
       await fitsRow(p, label);

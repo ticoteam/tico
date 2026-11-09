@@ -2,18 +2,19 @@
 // the thread's header, its Catch up card, a Browse row and the Name field's placeholder all show that name, and the
 // server's name is the one shown even when the members list would order the people differently. A DM is still named
 // by the other person. Ana is the viewer; the people are Bea, Cy and Dan (fictional).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-const at = min => new Date(Date.now() - min * 60000).toISOString();
-const me = (extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 4, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
-const thread = (id, extra = {}) => ({id, title: '', audience: 'members', last_seq: 4, last_unread_seq: 0, last_message_at: at(5), me: me(), members: [],
+type Thread = {id: string; name?: string; audience: string; members: unknown[]; [key: string]: unknown};
+const at = (min: number) => new Date(Date.now() - min * 60000).toISOString();
+const me = (extra: Record<string, unknown> = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 4, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
+const thread = (id: string, extra: Record<string, unknown> = {}): Thread => ({id, title: '', audience: 'members', last_seq: 4, last_unread_seq: 0, last_message_at: at(5), me: me(), members: [],
   pinned_for_everyone: false, ...extra});
 // Each page gets fresh copies: a PATCH changes the copy the page reads.
-const world = () => ({
+const world = (): Record<string, Thread> => ({
   // Untitled, with Ana, Cy and Bea in its members list (Cy first): the name the server gives is Bea, Cy.
   't-group': thread('t-group', {name: 'Bea, Cy', me: me({can_manage: true}),
     members: [{actor: 'human:cy'}, {actor: 'human:bea'}, {actor: 'human:ana'}]}),
@@ -23,19 +24,19 @@ const world = () => ({
 // A thread in the Browse list, not joined: the viewer is not in it, so the server names it from what it may read.
 const browsed = () => thread('t-open', {name: 'Bea, Dan +1', me: me({member: false, following: false})});
 
-async function open(browser) {
+async function open(browser: import('playwright').Browser) {
   const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce'});
   const threads = world();
-  const seen = {errors: []};
+  const seen: {errors: string[]} = {errors: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
@@ -52,7 +53,7 @@ async function open(browser) {
       body: 'Ready?', created_at: at(2), depth: 0}], new_count: 1, more: 0}], count: 1, next_cursor: null});
     if (p === '/api/v2/threads/browse') return json({threads: [browsed()], next_cursor: null});
     const m = p.match(/^\/api\/v2\/threads\/([^/]+)(?:\/([a-z-]+))?$/);
-    const t = m && threads[m[1]];
+    const t = m && threads[m[1]!];
     if (t) {
       const what = m[2];
       if (what === 'timeline') return json({thread: t, breadcrumb: [{id: t.id, title: t.name || ''}], next_cursor: null,
@@ -67,13 +68,13 @@ async function open(browser) {
   return {page, seen};
 }
 
-const until = async (page, check, what) => {
+const until = async (page: import('playwright').Page, check: () => Promise<boolean>, what: string) => {
   for (let i = 0; i < 60; i++) { if (await check()) return; await page.waitForTimeout(50); }
   assert.fail('timed out: ' + what);
 };
-const title = page => page.locator('.thv-head .thv-title').textContent().then(t => t.trim());
+const title = (page: import('playwright').Page) => page.locator('.thv-head .thv-title').textContent().then(t => t!.trim());
 
-let browser = null;
+let browser: import('playwright').Browser | null = null;
 (async () => {
   browser = await chromium.launch();
   const {page, seen} = await open(browser);
@@ -109,7 +110,7 @@ let browser = null;
   assert.equal(await name.inputValue(), '', 'an untitled thread has no stored name to edit');
   assert.equal(await name.getAttribute('placeholder'), 'Bea, Cy', 'the placeholder is the name the thread shows');
   await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
+  await page.waitForFunction(() => !(document.querySelector('#thread-settings') as HTMLDialogElement | null)?.open);
 
   // A DM is named by the other person, as before.
   await page.goto('https://tico-ui.test/#/thread/t-dm');

@@ -8,39 +8,58 @@
 //  - Task effort and Task context length beside it, "Same as bot" until set: each saves on its own and carries the
 //    other parts forward (a model "" record is the bot's own model, shown as Same as bot); only all three Same as bot
 //    sends null. The editor holds them until Save bot and sends one task-model save.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+type Page = import('playwright').Page;
+type TaskModel = {harness: string; model: string; reasoning_effort: string; runtime: string; compact_at: number | null};
+// The bot as the test serves and edits it (the fields it reads or writes).
+type Bot = {name: string; display_name: string; description: string; status: string; owner_id: string; repo: string; can_manage: boolean;
+  users: unknown[]; bot_owners: unknown[]; revision: number; model: string; harness: string; reasoning_effort: string;
+  keep_tasks_going: number | null; task_flow: {going: number; waiting: number}; task_model: TaskModel | null; task_model_warning?: string;
+  turns_at_once?: number | null; thread_mode: string; bot_contact: string; machine: {runner_id: string; label: string; owner_id: string; generation: number}};
+// A request body the page posted to the bot's save routes.
+type Body = {expected_revision?: number; task_model?: {harness?: string; model?: string | null; effort?: string | null; compact_at?: number | null} | null;
+  display_name?: string; description?: string; keep_tasks_going?: number | null; turns_at_once?: number | null};
+declare global {
+  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+  var SETTINGS: string;
+  var SETTINGS_DATA: {models: unknown[]};
+  function settingsShow(tab: string): void;
+  function settingsEditBot(slug?: string, inline?: boolean): void;
+  var renderSettingsBots: () => void;
+  var loadSettings: () => void;
+}
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const model = (id, harness, provider) => ({id, label: id.replace(/-/g, ' '), runtime: harness, provider,
+    const model = (id: string, harness: string, provider: string) => ({id, label: id.replace(/-/g, ' '), runtime: harness, provider,
       efforts: ['low', 'high'], default_effort: 'high', harnesses: [harness]});
     const catalog = {
       models: [model('claude-sonnet-5-5', 'claude', 'anthropic'), model('claude-haiku-5-5', 'claude', 'anthropic'), {...model('gpt-6-luna', 'codex', 'openai'), context_tokens: 1_050_000}],
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}],
       default: {runtime: 'claude', model: 'claude-sonnet-5-5'},
     };
-    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
+    const helper: Bot = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'claude-sonnet-5-5', harness: 'claude', reasoning_effort: 'high',
       keep_tasks_going: null, task_flow: {going: 2, waiting: 5}, task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
     const bots = [helper];
     const WARNING = 'This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, and may word things badly. It still saves, and its tasks run on it.';
-    let calls = [];
+    let calls: {what: string; body: Body}[] = [];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (req.method() === 'POST' && p.startsWith('/api/v2/bots/helper/')) {
-        const body = req.postDataJSON(), what = p.split('/').pop();
+        const body = req.postDataJSON(), what = p.split('/').pop()!;
         calls.push({what, body});
         if (body.expected_revision !== helper.revision) return json({error: {detail: 'Bot configuration changed; refresh before saving'}}, 409);
         if (what === 'task-model') {
@@ -84,12 +103,12 @@ const {unrouted} = require('./support/routes.cjs');
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    const capture = async (name, target) => {
+    const capture = async (name: string, target: Page | import('playwright').Locator) => {
       if (!process.env.TICO_UI_RECEIPT_DIR) return;
       fs.mkdirSync(process.env.TICO_UI_RECEIPT_DIR, {recursive: true});
       await target.screenshot({path: require('node:path').join(process.env.TICO_UI_RECEIPT_DIR, name + '.png'), animations: 'disabled'});
     };
-    const loaded = revision => page.waitForFunction(r => S.emps.find(e => e.name === 'helper')?.revision === r, revision);
+    const loaded = (revision: number) => page.waitForFunction((r: number) => S.emps.find(e => e.name === 'helper')?.revision === r, revision);
     await page.goto('https://tico-ui.test/#/settings/devices');
     await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.some(e => e.name === 'helper') && SETTINGS_DATA.models?.length);
 
@@ -115,8 +134,8 @@ const {unrouted} = require('./support/routes.cjs');
     await editor.locator('button[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
     assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition'], 'the task model, then the definition; never the bot model');
-    assert.deepEqual(calls[0].body, {task_model: {harness: 'codex', model: 'gpt-6-luna', effort: 'high', compact_at: null}, expected_revision: 4});
-    assert.equal(calls[1].body.expected_revision, 5, 'the definition follows the revision the task model made');
+    assert.deepEqual(calls[0]!.body, {task_model: {harness: 'codex', model: 'gpt-6-luna', effort: 'high', compact_at: null}, expected_revision: 4});
+    assert.equal(calls[1]!.body.expected_revision, 5, 'the definition follows the revision the task model made');
     await openEditor();
     assert.equal(await task.locator('[data-choice-model]').inputValue(), 'gpt-6-luna', 'reopening shows the task model');
     assert.equal(helper.model, 'claude-sonnet-5-5', "the bot's own model is unchanged");
@@ -132,11 +151,11 @@ const {unrouted} = require('./support/routes.cjs');
     const mark = page.locator('[data-settings-bot=helper] [data-task-open=helper]');
     await mark.waitFor();
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'marked: tasks run on gpt-6-luna');
-    assert.match(await mark.getAttribute('title'), /Tasks run on/);
+    assert.match((await mark.getAttribute('title'))!, /Tasks run on/);
     await mark.click();
     const row = page.locator('tr[data-task-row=helper]');
     await row.waitFor();
-    assert.equal(await row.evaluate(tr => tr.previousElementSibling?.dataset.settingsBot), 'helper', 'the row opens under its bot');
+    assert.equal(await row.evaluate(tr => (tr.previousElementSibling as HTMLElement | null)?.dataset.settingsBot), 'helper', 'the row opens under its bot');
     const pickers = row.locator('[data-bot-choice][data-kind=task]');
     assert.equal(await pickers.locator('[data-choice-model]').inputValue(), 'gpt-6-luna');
     assert.equal(await pickers.locator('[data-choice-effort]').isVisible(), false, 'Task effort stands in for the Effort picker');
@@ -159,7 +178,7 @@ const {unrouted} = require('./support/routes.cjs');
     await loaded(8);
     assert.deepEqual(calls, [{what: 'task-model', body: {task_model: null, expected_revision: 7}}]);
     await page.waitForFunction(() => !document.querySelector('[data-task-open=helper]')?.classList.contains('on'));
-    assert.equal(await page.evaluate(() => document.activeElement?.dataset.taskEffort), 'helper', 'the keyboard stays on Task effort');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.taskEffort), 'helper', 'the keyboard stays on Task effort');
 
     // 4/4. A cheaper pick on a high-stakes bot saves, and the row shows the warning in plain words.
     calls = [];
@@ -167,17 +186,17 @@ const {unrouted} = require('./support/routes.cjs');
     await pickers.locator('[data-choice-model]').selectOption('claude-haiku-5-5');
     await pickers.locator('[data-choice-apply]').click();
     await loaded(9);
-    assert.equal(calls[0].body.task_model.model, 'claude-haiku-5-5');
+    assert.equal(calls[0]!.body.task_model!.model, 'claude-haiku-5-5');
     await row.locator('[data-task-warning]').waitFor();
     assert.equal(await row.locator('[data-task-warning]').innerText(), WARNING);
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'it saved');
     // Context only, then effort only: each carries the other parts. The mark names the context length.
-    const savePart = async (select, value) => {
+    const savePart = async (select: import('playwright').Locator, value: string) => {
       const before = helper.revision; calls = [];
       await select.selectOption(value);
       await loaded(before + 1);
       assert.equal(calls.length, 1, 'one save per change');
-      return calls[0].body.task_model;
+      return calls[0]!.body.task_model;
     };
     assert.deepEqual(await savePart(contextPick, '600000'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 600000});
     assert.equal(await mark.innerText(), 'Tasks · 600k');
@@ -215,7 +234,7 @@ const {unrouted} = require('./support/routes.cjs');
     await editor.locator('button[type=submit]').click();
     await loaded(before + 2);
     assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition']);
-    assert.deepEqual(calls[0].body.task_model, {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 1000000}, 'context saved, model and effort kept');
+    assert.deepEqual(calls[0]!.body.task_model, {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 1000000}, 'context saved, model and effort kept');
     // A new task model: Task effort lists its efforts and keeps the one held; one save carries all three.
     await openEditor();
     assert.equal(await editorContext.inputValue(), '1000000');
@@ -227,7 +246,7 @@ const {unrouted} = require('./support/routes.cjs');
     await editor.locator('button[type=submit]').click();
     await loaded(before + 2);
     assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition'], 'one task-model save');
-    assert.deepEqual(calls[0].body.task_model, {harness: 'codex', model: 'gpt-6-luna', effort: 'low', compact_at: 1000000});
+    assert.deepEqual(calls[0]!.body.task_model, {harness: 'codex', model: 'gpt-6-luna', effort: 'low', compact_at: 1000000});
     // Same as bot for the model in the editor keeps the effort and context; it reopens as Same as bot.
     await openEditor();
     await task.locator('[data-choice-harness]').selectOption('');
@@ -235,7 +254,7 @@ const {unrouted} = require('./support/routes.cjs');
     before = helper.revision;
     await editor.locator('button[type=submit]').click();
     await loaded(before + 2);
-    assert.deepEqual(calls[0].body.task_model, {model: null, effort: 'low', compact_at: 1000000});
+    assert.deepEqual(calls[0]!.body.task_model, {model: null, effort: 'low', compact_at: 1000000});
     await openEditor();
     assert.equal(await task.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot', 'model "" shows Same as bot');
     assert.equal(await editorEffort.inputValue(), 'low');
@@ -248,7 +267,7 @@ const {unrouted} = require('./support/routes.cjs');
     await toBots();
     await page.locator('[data-task-close=helper]').click();
     await page.waitForFunction(() => !document.querySelector('tr[data-task-row=helper]'));
-    assert.equal(await page.evaluate(() => document.activeElement?.dataset.taskOpen), 'helper');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.taskOpen), 'helper');
 
     // A phone: the row stacks its pickers under the bot.
     await page.setViewportSize({width: 390, height: 844});
@@ -256,7 +275,7 @@ const {unrouted} = require('./support/routes.cjs');
     await row.waitFor();
     const width = await row.evaluate(tr => tr.getBoundingClientRect().width);
     assert.ok(width <= 390, `the row fits the phone (${width}px)`);
-    const parts = await row.locator('.sb-task-part').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return [r.left, r.right]; }));
+    const parts = await row.locator('.sb-task-part').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return [r.left, r.right] as const; }));
     assert.ok(parts.length === 2 && parts.every(([l, r]) => l >= 0 && r <= 390), `Task effort and Task context length fit the phone: ${JSON.stringify(parts)}`);
     await capture('phone-task-row', row);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
@@ -268,7 +287,7 @@ const {unrouted} = require('./support/routes.cjs');
       assert.match(await page.locator('[data-settings-bot=helper] [data-task-flow]').innerText(), /2 of unlimited tasks going, 5 waiting to start/);
       await openEditor();
       const keep = editor.locator('[data-bot-keep-tasks]');
-      for (const [value, stored] of [['3', 3], ['0', 0], ['', null]]) {
+      for (const [value, stored] of [['3', 3], ['0', 0], ['', null]] as const) {
         const before = helper.revision;
         calls = [];
         await keep.fill(value);
@@ -278,14 +297,14 @@ const {unrouted} = require('./support/routes.cjs');
         await editor.locator('button[type=submit]').click();
         await loaded(before + 2);
         assert.deepEqual(calls.map(c => c.what), ['definition', 'keep-tasks-going']);
-        assert.deepEqual(calls[1].body, {keep_tasks_going: stored, expected_revision: before + 1});
+        assert.deepEqual(calls[1]!.body, {keep_tasks_going: stored, expected_revision: before + 1});
         assert.equal(helper.keep_tasks_going, stored);
         await openEditor();
       }
       // Turns at once saves the same way; a value out of range or not a whole number is named under its row
       // and not sent.
       const turns = editor.locator('[data-bot-turns-at-once]');
-      for (const [value, stored] of [['5', 5], ['', null]]) {
+      for (const [value, stored] of [['5', 5], ['', null]] as const) {
         const before = helper.revision;
         calls = [];
         await turns.fill(value);
@@ -295,7 +314,7 @@ const {unrouted} = require('./support/routes.cjs');
         await editor.locator('button[type=submit]').click();
         await loaded(before + 2);
         assert.deepEqual(calls.map(c => c.what), ['definition', 'turns-at-once']);
-        assert.deepEqual(calls[1].body, {turns_at_once: stored, expected_revision: before + 1});
+        assert.deepEqual(calls[1]!.body, {turns_at_once: stored, expected_revision: before + 1});
         assert.equal(helper.turns_at_once, stored);
         await openEditor();
       }

@@ -5,18 +5,34 @@
 // automation's name links to it. A task update arriving live joins the line before it, and an older page read in
 // keeps the groups right. The same rule from the server's `source` and from the fallback; the Assistant's chat and a
 // task's thread fold task updates the same way. At 390px nothing scrolls sideways. Fixtures only.
-const {chromium} = require('playwright');
+type Page = import('playwright').Page;
+type Browser = import('playwright').Browser;
+type Route = import('playwright').Route;
+type Locator = import('playwright').Locator;
+// The live view the thread renderer draws (its own type is not exported).
+type SysLive = Parameters<typeof thvDraw>[0];
+declare global {
+  var thvApplyMessage: (view: SysLive, event: unknown) => void;
+  var thvUpdateReveal: (view: SysLive, id: string) => void;
+  var rowSource: (m: {[key: string]: unknown; sender_id: string}, by?: unknown) => {kind: string; name: string};
+  var isSourceLine: (m: unknown) => boolean;
+  var actorLabel: (id: string) => string;
+  var taskBody: (task: {[key: string]: unknown}) => string;
+  var sourceRunsHTML: <T>(items: T[], opts: {isUpdate: (x: T) => boolean; line: (x: T) => string; draw: () => string}) => string;
+  var commentLineHTML: (x: unknown, i: number, all: unknown[]) => string;
+}
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
-const now = Date.now(), at = min => new Date(now - min * 60000).toISOString();
+const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();
 const me = {member: true, following: true, notify: 'live', last_read_seq: 20, unread: 0, activity: false, can_post: true, can_manage: false};
 const thread = {id: 't-home', title: 'Ops', audience: 'members', last_seq: 20, last_unread_seq: 0, last_message_at: at(1), me, members: []};
-const msg = (id, seq, from, body, min, extra = {}) => ({id, seq, thread_id: 't-home', sender_id: from, recipient_id: 'bot:ops', body,
+const msg = (id: string, seq: number, from: string, body: string, min: number, extra: Record<string, unknown> = {}) => ({id, seq, thread_id: 't-home', sender_id: from, recipient_id: 'bot:ops', body,
   created_at: at(min), reply_to: null, routed: null, kind: 'say', refs: {}, ...extra});
-const update = (id, seq, body, min, extra = {}) => msg(id, seq, 'keeper', body, min, {kind: 'notice', refs: {task: 't-' + id}, ...extra});
+const update = (id: string, seq: number, body: string, min: number, extra: Record<string, unknown> = {}) => msg(id, seq, 'keeper', body, min, {kind: 'notice', refs: {task: 't-' + id}, ...extra});
 const messages = () => [
   msg('a1', 1, 'human:ana', 'Keep the Acme launch on track.', 60),
   update('k1', 2, 'Open: Draft the launch post', 50),
@@ -37,18 +53,18 @@ const messages = () => [
 ];
 const KEEPER = ['k1', 'k2', 'k3', 'k4', 'r1', 's1', 'n1', 'f1', 'au1'];
 
-async function open(browser, {phone = false} = {}) {
+async function open(browser: Browser, {phone = false}: {phone?: boolean} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route('**/*', async route => {
+  const errors: string[] = [];
+  page.on('pageerror', (e: Error) => errors.push(e.message));
+  await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Lima', role: 'owner', registered: true});
@@ -68,11 +84,11 @@ async function open(browser, {phone = false} = {}) {
   });
   return {page, errors};
 }
-const view = page => page.evaluateHandle(() => [...THV_VIEWS].find(v => v.id === 't-home'));
-const line = (page, id) => page.locator(`.th-line[data-mid="${id}"]`);
-const msgRow = (page, id) => page.locator(`.th-msg[data-mid="${id}"]`);
+const view = (page: Page) => page.evaluateHandle(() => [...THV_VIEWS].find(v => v.id === 't-home') as SysLive);
+const line = (page: Page, id: string) => page.locator(`.th-line[data-mid="${id}"]`);
+const msgRow = (page: Page, id: string) => page.locator(`.th-msg[data-mid="${id}"]`);
 
-let browser = null;
+let browser: Browser | null = null;
 (async () => {
   browser = await chromium.launch();
 
@@ -86,7 +102,7 @@ let browser = null;
     const group = page.locator('.thv-list details.src-group');
     assert.equal(await group.count(), 1, 'one group for the run of three');
     assert.match(await group.locator('> summary').innerText(), /^3 task updates/);
-    assert.equal(await group.evaluate(el => el.open), false, 'shut by default');
+    assert.equal(await group.evaluate((el: HTMLDetailsElement) => el.open), false, 'shut by default');
     assert.equal(await group.locator('.th-line').count(), 3);
     // A lone task update is one gray line, outside any group.
     assert.equal(await line(page, 'k4').count(), 1);
@@ -113,7 +129,7 @@ let browser = null;
     assert.deepEqual(tall, [], 'every gray line is one line');
     assert.match(await line(page, 'n1').getAttribute('title'), /\n\nNew task: Health: Watchers\./, 'the hover has the whole of a long line');
     // The group's row lines up with the lines around it.
-    const pad = el => el.evaluate(e => getComputedStyle(e).paddingLeft);
+    const pad = (el: Locator) => el.evaluate((e: HTMLElement) => getComputedStyle(e).paddingLeft);
     assert.equal(await pad(group.locator('> summary')), await pad(line(page, 'k4')));
     // Nothing the keeper wrote says "Assistant" but the relay.
     const lineText = await page.locator('.thv-list .src-line').allInnerTexts();
@@ -125,37 +141,37 @@ let browser = null;
 
     // Open the group: a line each; a redraw keeps it open.
     await group.locator('> summary').click();
-    await page.waitForFunction(() => [...THV_VIEWS].some(v => ['k1', 'k2', 'k3'].every(id => v.openLines.has(id))));
+    await page.waitForFunction(() => [...THV_VIEWS].some(v => ['k1', 'k2', 'k3'].every(id => (v as unknown as {openLines: Set<string>}).openLines.has(id))));
     assert.equal(await line(page, 'k1').isVisible(), true);
-    await page.evaluate(v => thvDraw(v), await view(page));
-    assert.equal(await page.locator('.thv-list details.src-group').evaluate(el => el.open), true, 'a redraw keeps it open');
+    await page.evaluate((v: SysLive) => thvDraw(v), await view(page));
+    assert.equal(await page.locator('.thv-list details.src-group').evaluate((el: HTMLDetailsElement) => el.open), true, 'a redraw keeps it open');
 
     // A task update arriving live after the lone one: the two are now a shut group of two; the open group stays open.
-    await page.evaluate(v => {
+    await page.evaluate((v: SysLive) => {
       thvApplyMessage(v, {id: 'k5', thread_id: 't-home', message: {id: 'k5', seq: 6.5, thread_id: 't-home', sender_id: 'keeper', kind: 'notice',
         body: 'Open: Book the launch venue', created_at: new Date().toISOString(), refs: {task: 't-k5'}}});
       thvDraw(v);
     }, await view(page));
     assert.equal(await page.locator('.thv-list details.src-group').count(), 2, 'the lone update and the new one are a group');
     assert.match(await page.locator('.thv-list details.src-group').nth(1).locator('> summary').innerText(), /^2 task updates/);
-    assert.equal(await page.locator('.thv-list details.src-group').nth(0).evaluate(el => el.open), true);
-    assert.equal(await page.locator('.thv-list details.src-group').nth(1).evaluate(el => el.open), false);
+    assert.equal(await page.locator('.thv-list details.src-group').nth(0).evaluate((el: HTMLDetailsElement) => el.open), true);
+    assert.equal(await page.locator('.thv-list details.src-group').nth(1).evaluate((el: HTMLDetailsElement) => el.open), false);
 
     // An older page read in: a task update before the open group joins it at the top, and it stays open.
-    await page.evaluate(v => {
+    await page.evaluate((v: SysLive) => {
       v.messages.splice(1, 0, {id: 'k0', seq: 1.5, thread_id: 't-home', sender_id: 'keeper', kind: 'notice', body: 'New task: Draft the launch post',
-        created_at: new Date(Date.now() - 55 * 60000).toISOString(), refs: {task: 't-k0'}});
+        created_at: new Date(Date.now() - 55 * 60000).toISOString(), refs: {task: 't-k0'}} as {id: string});
       v.messages.unshift({id: 'k00', seq: 0.5, thread_id: 't-home', sender_id: 'keeper', kind: 'notice', body: 'Open: Plan the launch',
-        created_at: new Date(Date.now() - 70 * 60000).toISOString(), refs: {task: 't-k00'}});
+        created_at: new Date(Date.now() - 70 * 60000).toISOString(), refs: {task: 't-k00'}} as {id: string});
       thvDraw(v);
     }, await view(page));
     assert.match(await page.locator('.thv-list details.src-group').nth(0).locator('> summary').innerText(), /^4 task updates/);
-    assert.equal(await page.locator('.thv-list details.src-group').nth(0).evaluate(el => el.open), true, 'still open');
+    assert.equal(await page.locator('.thv-list details.src-group').nth(0).evaluate((el: HTMLDetailsElement) => el.open), true, 'still open');
     assert.equal(await line(page, 'k00').evaluate(el => !!el.closest('details')), false, 'a person\'s message breaks the run');
 
     // Focusing a message inside a shut group opens it.
-    await page.evaluate(v => { thvUpdateReveal(v, 'k5'); thvDraw(v); }, await view(page));
-    assert.equal(await page.locator('.thv-list details.src-group').nth(1).evaluate(el => el.open), true);
+    await page.evaluate((v: SysLive) => { thvUpdateReveal(v, 'k5'); thvDraw(v); }, await view(page));
+    assert.equal(await page.locator('.thv-list details.src-group').nth(1).evaluate((el: HTMLDetailsElement) => el.open), true);
 
     // The fallback rule, from sender and refs, without the server's `source`.
     const kinds = await page.evaluate(() => [
@@ -175,7 +191,7 @@ let browser = null;
     // The Assistant's chat folds a run of task updates the same way, and names no Assistant for them.
     const chat = await page.evaluate(() => {
       const el = document.createElement('div');
-      const u = (id, n) => ({id, sender_id: 'keeper', recipient_id: 'bot:ops', kind: 'notice', body: 'Done: step ' + n, refs: {task: 't'}, created_at: new Date(Date.now() - (10 - n) * 60000).toISOString()});
+      const u = (id: string, n: number) => ({id, sender_id: 'keeper', recipient_id: 'bot:ops', kind: 'notice', body: 'Done: step ' + n, refs: {task: 't'}, created_at: new Date(Date.now() - (10 - n) * 60000).toISOString()});
       el.innerHTML = v2MessagesHTML([{id: 'h', sender_id: 'human:ana', recipient_id: 'bot:ops', kind: 'say', body: 'Go', created_at: new Date(Date.now() - 20 * 60000).toISOString()},
         u('u1', 1), u('u2', 2), u('u3', 3), {id: 'z', sender_id: 'bot:ops', recipient_id: 'human:ana', kind: 'say', body: 'Done', in_reply_to: 'h', created_at: new Date().toISOString()}], null, 'ops');
       return {summary: el.querySelector('details.chat-side > summary b')?.textContent, text: el.textContent};
@@ -185,7 +201,7 @@ let browser = null;
 
     // A task's thread: two task updates in a row are one shut group; the event the server made has no sender.
     const task = await page.evaluate(() => {
-      const c = (id, n) => ({kind: 'comment', ts: new Date(Date.now() - (10 - n) * 60000).toISOString(),
+      const c = (id: string, n: number) => ({kind: 'comment', ts: new Date(Date.now() - (10 - n) * 60000).toISOString(),
         message: {id, sender_id: 'keeper', kind: 'notice', body: 'Doing: step ' + n, refs: {task: 't'}, created_at: new Date(Date.now() - (10 - n) * 60000).toISOString()}});
       const items = [c('c1', 1), c('c2', 2)];
       const el = document.createElement('div');
@@ -208,7 +224,7 @@ let browser = null;
     await msgRow(page, 'b2').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll');
     const summary = page.locator('.thv-list details.src-group > summary');
-    assert.ok((await summary.boundingBox()).height >= 44, "the group's row is a finger's height");
+    assert.ok((await summary.boundingBox())!.height >= 44, "the group's row is a finger's height");
     await summary.tap();
     await line(page, 'k1').waitFor({state: 'visible'});
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll with it open');

@@ -3,12 +3,18 @@
 // again and changes nothing until Confirm, and Cancel leaves it as it was. Turning the regular checks off saves at
 // once. Only the owner has the card: an admin or a member has none, and nobody has a tab or a chat for it. The card and
 // headings use the bot's name. TICO_UI_SHOTS=<dir> saves its Settings tab dark at 1440 and 390. Fixtures only.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+// Browser-side globals the page defines (ui/app).
+declare global {
+  var renderStrategyBotLog: (host: HTMLElement) => unknown;
+  var ticoTheme: {set(theme: string): unknown};
+}
 
 const LEVELS = [
   {level: 1, name: 'Passive', sentence: 'It keeps the regular checks running and otherwise acts only when asked through your Assistant.', ready: true},
@@ -17,18 +23,21 @@ const LEVELS = [
 ];
 
 const SETTINGS = '#/bot/goal-manager/settings';
-async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETTINGS, viewport = {width: 1440, height: 900}} = {}) {
+type StrategyState = {regular_checks: boolean; level: number; level_chosen: boolean; level_changed_by: string; level_changed_by_name: string;
+  level_changed_at: string; level_history: unknown[]; levels: typeof LEVELS; name: string; asked_today: Record<string, unknown>};
+async function open(browser: import('playwright').Browser, {role = 'owner', name = 'Strategy Bot', hash = SETTINGS, viewport = {width: 1440, height: 900}}:
+  {role?: string; name?: string; hash?: string; viewport?: {width: number; height: number}} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], posted = [];
+  const errors: string[] = [], posted: unknown[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  const state = {regular_checks: true, level: 2, level_chosen: false, level_changed_by: '', level_changed_by_name: '', level_changed_at: '', level_history: [], levels: LEVELS,
+  const state: StrategyState = {regular_checks: true, level: 2, level_chosen: false, level_changed_by: '', level_changed_by_name: '', level_changed_at: '', level_history: [], levels: LEVELS,
     name, asked_today: {}};
   await page.route('**/*', route => {
     const req = route.request(), p = new URL(req.url()).pathname;
-    const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
@@ -41,7 +50,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
     if (p === '/api/v2/models') return json({models: [], harnesses});
     if (p === '/api/v2/strategy-bot' && req.method() === 'GET') return json(state);
     if (p === '/api/v2/strategy-bot/level') {
-      const body = req.postDataJSON();
+      const body = req.postDataJSON() as {level: number};
       posted.push(body);
       state.level_chosen = true;
       // The same level again is only kept as the owner's choice: nothing changed, so no history line.
@@ -52,13 +61,13 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
       return json(state);
     }
     if (p === '/api/v2/strategy-bot/checks') {
-      const body = req.postDataJSON();
+      const body = req.postDataJSON() as {on: boolean};
       posted.push({checks: body.on});
       state.regular_checks = body.on;
       return json(state);
     }
     // The Strategy Bot log, two pages: Undo on an entry of the second page.
-    const entry = (id, over) => ({id, kind: 'decision', reason: 'Reason ' + id, state: 'done', undoable: true, created_at: '2026-10-01T00:00:00Z',
+    const entry = (id: string, over?: Record<string, unknown>) => ({id, kind: 'decision', reason: 'Reason ' + id, state: 'done', undoable: true, created_at: '2026-10-01T00:00:00Z',
       done: [{text: 'Close "Task ' + id + '"'}], left: [], note: '', proposal_task: null, undo: null, ...over});
     if (p === '/api/v2/strategy-bot/log') {
       const before = new URL(req.url()).searchParams.get('before');
@@ -67,8 +76,8 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
     }
     const undo = p.match(/^\/api\/v2\/strategy-bot\/log\/([^/]+)\/undo$/);
     if (undo) {
-      posted.push({undo: undo[1]});
-      return json(entry(undo[1], {state: 'undone', undoable: false, undo: {restored: [], kept: [], text: 'Undone: Task ' + undo[1] + ' put back.'}}));
+      posted.push({undo: undo[1]!});
+      return json(entry(undo[1]!, {state: 'undone', undoable: false, undo: {restored: [], kept: [], text: 'Undone: Task ' + undo[1]! + ' put back.'}}));
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -78,7 +87,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     {
       // Old settings addresses (#/settings/ceo, #/settings/strategy-bot, in links and bookmarks) open its bot's Settings.
@@ -134,8 +143,8 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
       assert.match(await page.locator('#set-strategy-bot').innerText(), /chosen by Ana/);
       // The regular checks go off at once, on the owner's click.
       await page.locator('#set-strategy-bot [data-strategy-checks]').uncheck();
-      await page.waitForFunction(() => document.querySelector('#set-strategy-bot [data-strategy-checks]') && !document.querySelector('#set-strategy-bot [data-strategy-checks]').disabled
-        && !document.querySelector('#set-strategy-bot [data-strategy-checks]').checked);
+      await page.waitForFunction(() => document.querySelector('#set-strategy-bot [data-strategy-checks]') && !document.querySelector<HTMLInputElement>('#set-strategy-bot [data-strategy-checks]')!.disabled
+        && !document.querySelector<HTMLInputElement>('#set-strategy-bot [data-strategy-checks]')!.checked);
       assert.deepEqual(posted, [{level: 1}, {checks: false}]);
       assert.deepEqual(errors, []);
       await page.close();
@@ -167,7 +176,7 @@ async function open(browser, {role = 'owner', name = 'Strategy Bot', hash = SETT
     for (const opts of [{role: 'admin'}, {role: 'viewer'}]) {
       const {page, errors} = await open(browser, opts);
       // Its bot's Settings has no card for them, and its old address leads there too.
-      await page.waitForFunction(() => document.querySelector('#bot-editor') && !/Loading settings/.test(document.querySelector('#bot-editor').textContent));
+      await page.waitForFunction(() => document.querySelector('#bot-editor') && !/Loading settings/.test(document.querySelector('#bot-editor')!.textContent!));
       assert.equal(await page.locator('#set-strategy-bot-card, [data-settings-tab="strategy-bot"]').count(), 0, JSON.stringify(opts));
       await page.evaluate(() => { location.hash = '#/settings/strategy-bot'; });
       await page.waitForFunction(() => !location.hash.endsWith('/strategy-bot'));

@@ -5,21 +5,35 @@
 // task the bot that asked it answers: your message shows the bot chat's pending line (Sent, Queued, "<Bot> is working",
 // then the reply, or Reply failed), and the composer says before sending when no bot will get it. Where a bot gets the
 // comment, Send's icon says how it arrives (steer, queue, defer or goal), and the way is kept per person on the server.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+type Page = import('playwright').Page;
+type Viewport = {width: number; height: number};
+// S is the page's app state. It is declared here, not as a global: other tests declare S with other shapes.
+declare const S: {emps?: unknown[]};
+// Browser-side globals the page defines (ui/app).
+declare global {
+  var TASK_CHAT: {sending: boolean; reading: boolean};
+  var taskChatRead: (chat: {sending: boolean; reading: boolean}) => unknown;
+  var taskModalShow: (task: {id: string; title: string}) => unknown;
+  var SEND_WAY_TIMER: number | null;
+  var liveThrottle: (key: string, fn: () => unknown, ms: number) => unknown;
+  var sendWayPick: (way: string) => unknown;
+}
+
 const SHOTS = process.env.TICO_UI_SHOTS || '';
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 // Reads the task again once no send or read is in flight: taskChatRead skips while one is, and a read that left before
 // the fixture changed paints what the fixture said then.
-async function reread(page) {
+async function reread(page: Page) {
   await page.waitForFunction(() => !TASK_CHAT.sending && !TASK_CHAT.reading);
   await page.evaluate(() => taskChatRead(TASK_CHAT));
 }
 
-const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
+const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOString();
 const task = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
   lane: 'company', version: 2, created_at: at(60), updated_at: at(1), conversation_id: 'r-docs'};
 const comments = [
@@ -34,19 +48,19 @@ const events = [{id: 1, task_id: 't-docs', created_at: at(35), actor: 'bot:botop
 const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
   parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran hub task create', at: at(1)}]};
 
-async function run(viewport, shot) {
+async function run(viewport: Viewport, shot: string) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-    const errors = [], stops = [], stepReads = [];
+    const errors: string[] = [], stops: unknown[] = [], stepReads: string[] = [];
     let running = true, live2 = false;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -60,7 +74,7 @@ async function run(viewport, shot) {
           : live2 ? {...execution, parts: [...execution.parts, {kind: 'tool', text: 'Ran grep', at: at(0)}]} : execution});
       const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
       if (steps) {
-        stepReads.push(steps[1]);
+        stepReads.push(steps[1]!);
         if (steps[1] === 'a3') return json({error: {code: 'forbidden', detail: 'Forbidden'}}, 403);
         if (steps[1] === 'a2') return json({turn_id: 'a2', steps: [{kind: 'tool', tool: 'Grep', text: 'api page', at: at(1)}]});
         return json({turn_id: steps[1], steps: [{kind: 'tool', tool: 'Bash', text: 'make docs', at: at(31)}, {kind: 'said', text: 'Rebuilt the guide.', at: at(30)}]});
@@ -83,7 +97,7 @@ async function run(viewport, shot) {
     assert.equal(await thread.locator('.tcomment.tmsg.bot .bubble.bot', {hasText: 'Rebuilt the guide.'}).count(), 1);
 
     // A status change is a one-line marker between the messages, in time order.
-    const order = await thread.evaluate(t => [...t.children].map(x => x.textContent.replace(/\s+/g, ' ').trim()));
+    const order = await thread.evaluate(t => [...(t.children as HTMLCollection & Iterable<Element>)].map(x => x.textContent!.replace(/\s+/g, ' ').trim()));
     const mark = order.findIndex(x => /moved it to Doing/.test(x));
     assert.ok(mark > order.findIndex(x => /Include the API page/.test(x)) && mark < order.findIndex(x => /Rebuilt the guide/.test(x)), 'the marker sits where it happened');
     assert.equal(await thread.locator('.tcomment.tmark', {hasText: 'moved it to Doing'}).count(), 1);
@@ -111,7 +125,7 @@ async function run(viewport, shot) {
     await live.locator('[data-task-stop]').click();
     await live.locator('[data-task-stop]', {hasText: 'Stopping…'}).waitFor();
     live2 = true;
-    const kept = await page.evaluate(async () => { await taskChatRead(TASK_CHAT); return document.querySelector('#task-modal .task-live .steps-list').textContent; });
+    const kept = await page.evaluate(async () => { await taskChatRead(TASK_CHAT); return document.querySelector('#task-modal .task-live .steps-list')!.textContent!; });
     assert.match(kept, /api page/, 'the open live fold keeps its steps while they are read again');
     assert.match(await live.innerText(), /Ran grep/, 'the redraw drew the new step');
     assert.equal(await live.locator('[data-task-stop]').innerText(), 'Stopping…');
@@ -120,19 +134,19 @@ async function run(viewport, shot) {
     running = false;
     await reread(page);
     await page.waitForFunction(() => !document.querySelector('#task-modal .task-live'));
-    assert.ok(await fold.evaluate(x => x.open), 'an open fold stays open across the redraw');
+    assert.ok(await fold.evaluate(x => (x as HTMLDetailsElement).open), 'an open fold stays open across the redraw');
     // A tab shown again replays what it missed at the caller's pace (the live line's 1.5 s), not the 15 s default.
     const replayed = await page.evaluate(async () => {
       let hidden = false, ran = 0;
       Object.defineProperty(document, 'hidden', {configurable: true, get: () => hidden});
-      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
       liveThrottle('pace-test', () => ran++, 300);
       await wait(50);
       hidden = true; liveThrottle('pace-test', () => ran++, 300);
       hidden = false; document.dispatchEvent(new Event('visibilitychange'));
       const shown = Date.now();
       while (ran < 2 && Date.now() - shown < 3000) await wait(20);
-      delete document.hidden;
+      delete (document as {hidden?: boolean}).hidden;
       return {ran, ms: Date.now() - shown};
     });
     assert.equal(replayed.ran, 2, `the hidden call ran within 3 s of the tab showing (${replayed.ms} ms)`);
@@ -141,11 +155,11 @@ async function run(viewport, shot) {
 }
 
 // Ana owns a task Head of Engineering asked her; her reply goes to that bot, which is not the task's owner.
-async function answered(viewport, shot) {
+async function answered(viewport: Viewport, shot: string) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-    const errors = [];
+    const errors: string[] = [];
     const ask = {id: 't-ask', title: 'Which app is still open?', owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open',
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-ask'};
     const said = [{id: 'q1', conversation_id: 'r-ask', sender_id: 'bot:lead', kind: 'say', body: 'Which app is still open?', created_at: at(20)}];
@@ -160,14 +174,15 @@ async function answered(viewport, shot) {
       failed: {comments: [...said, mine], execution: {...run, state: 'uncertain', label: 'Reply failed — your message is saved'}},
       botToBot: {comments: [...said, mine], execution: {...run, from_person: false, state: 'queued', label: 'Saved — queued'}},
     };
-    let phase = 'idle', to = {bot: 'lead', wakes: true, mention: []}, release = null, sends = 0;
+    let phase: keyof typeof states = 'idle', to: {bot: string | null; wakes: boolean; mention: string[]} = {bot: 'lead', wakes: true, mention: []},
+      release: Promise<unknown> | null = null, sends = 0;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -196,7 +211,7 @@ async function answered(viewport, shot) {
     assert.equal(await live.count(), 0);
 
     // Sent, then queued, then working, then the reply: the bot that asked, not the owner.
-    let open;
+    let open!: (value?: unknown) => void;
     release = new Promise(r => { open = r; });
     await page.locator('#task-modal textarea').fill('The billing one.');
     await page.locator('#task-modal .p-send').click();
@@ -250,33 +265,34 @@ async function answered(viewport, shot) {
 // the server (preference compose.send_way) and read again after a reload; every comment names it. Set as goal is for
 // one comment. A reader who may not steer gets the nearest way they may use, and a task with no bot has a plain Send
 // and no caret.
-async function deliveryChoice(viewport, shot, theme = 'light') {
+async function deliveryChoice(viewport: Viewport, shot: string, theme = 'light') {
   const browser = await launch();
   try {
     const phone = viewport.width < 761;
     const ctx = await browser.newContext({viewport, serviceWorkers: 'block', ...(phone ? {isMobile: true, hasTouch: true} : {})});
     const page = await ctx.newPage();
     await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
-    const errors = [];
+    const errors: string[] = [];
     const plan = {id: 't-plan', title: 'Plan the launch', owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open',
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-plan'};
     const said = [{id: 'p1', conversation_id: 'r-plan', sender_id: 'bot:lead', kind: 'say', body: 'What should launch first?', created_at: at(20)}];
-    const sent = [], posted = [], prefs = {}, prefPosts = [];
+    const sent: unknown[] = [], posted: Record<string, unknown>[] = [], prefs: Record<string, unknown> = {}, prefPosts: [string, unknown][] = [];
     // The send way is saved when the page's timer fires, and that POST reaches this stub a moment later: wait for it
     // (up to 5 s) before the assertion that reads it.
-    const saved = async check => {
+    const saved = async (check: () => boolean) => {
       await page.waitForFunction(() => !SEND_WAY_TIMER);
       for (const end = Date.now() + 5000; !check() && Date.now() < end;) await new Promise(r => setTimeout(r, 25));
     };
-    let to = {bot: 'lead', wakes: true, mention: []};
-    let choices = {default: 'defer', default_for: '24h', steer: true, queue: true, steers: true, goal: true};
+    let to: {bot: string | null; wakes: boolean; mention: string[]} = {bot: 'lead', wakes: true, mention: []};
+    let choices: {default: string; default_for: string; steer: boolean; queue: boolean; steers: boolean; goal: boolean} | null =
+      {default: 'defer', default_for: '24h', steer: true, queue: true, steers: true, goal: true};
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -285,8 +301,8 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
-      if (pref && req.method() === 'POST') { const v = JSON.parse(req.postData() || '{}').value; prefs[pref[1]] = v; prefPosts.push([pref[1], v]); return json({key: pref[1], value: v}); }
-      if (pref) return json({key: pref[1], value: prefs[pref[1]] ?? null});
+      if (pref && req.method() === 'POST') { const v = JSON.parse(req.postData() || '{}').value; prefs[pref[1]!] = v; prefPosts.push([pref[1]!, v]); return json({key: pref[1], value: v}); }
+      if (pref) return json({key: pref[1], value: prefs[pref[1]!] ?? null});
       if (p === '/api/v2/tasks') return json({tasks: [plan]});
       if (p === '/api/v2/tasks/t-plan/comments' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}');
@@ -308,16 +324,16 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
       await page.evaluate(t => taskModalShow(t), plan);
       await modal.locator('.task-comments', {hasText: 'What should launch first?'}).waitFor();
     };
-    const ways = () => menu.locator('[data-deliver]').evaluateAll(xs => xs.map(x => x.dataset.deliver));
+    const ways = () => menu.locator('[data-deliver]').evaluateAll(xs => xs.map(x => (x as HTMLElement).dataset.deliver!));
     const looks = async () => ({shows: await main.getAttribute('data-shows'), label: await main.getAttribute('aria-label'),
       badge: await main.locator('.p-way-badge').count() ? await main.locator('.p-way-badge').innerText() : ''});
-    const pick = async way => { await caret.click(); await menu.locator(`[data-deliver="${way}"]`).last().click(); assert.equal(await menu.isHidden(), true); };
-    const send = async text => {
+    const pick = async (way: string) => { await caret.click(); await menu.locator(`[data-deliver="${way}"]`).last().click(); assert.equal(await menu.isHidden(), true); };
+    const send = async (text: string) => {
       await modal.locator('textarea').fill(text);
       await main.click();
       await modal.locator('.task-comments', {hasText: text}).waitFor();
-      await page.waitForFunction(() => !document.querySelector('#task-modal [data-task-main]').disabled);
-      return posted.at(-1);
+      await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('#task-modal [data-task-main]')!.disabled);
+      return posted.at(-1)!;
     };
     await openTask();
 
@@ -334,7 +350,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(await ways(), ['steer', 'queue', 'defer:24h', 'defer:30m', 'defer:1h', 'defer:4h', 'defer:24h', 'defer:2d', 'defer:7d', 'defer:never', 'goal']);
     assert.equal(await menu.locator('.sep + [data-deliver="goal"]').count(), 1, 'Set as goal sits below a separator');
     assert.equal(await menu.locator('[data-deliver="steer"][aria-checked="true"] .p-way-i svg').count(), 1, 'the kept way is checked, with its icon');
-    const box = await menu.boundingBox(), arrow = await caret.boundingBox();
+    const box = (await menu.boundingBox())!, arrow = (await caret.boundingBox())!;
     assert.ok(box.y + box.height <= arrow.y, 'the menu opens upward, over the thread');
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `the menu fits the ${viewport.width} px width`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
@@ -343,9 +359,9 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual(small, [], 'every menu target is at least 34 px');
     if (shot) await page.screenshot({path: shot});
     // The arrows move through it; Escape closes it, not the task, and puts focus back on the caret.
-    assert.equal(await page.evaluate(() => document.activeElement?.dataset.deliver), 'steer');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.deliver), 'steer');
     await page.keyboard.press('ArrowDown');
-    assert.equal(await page.evaluate(() => document.activeElement?.dataset.deliver), 'queue');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.deliver), 'queue');
     await page.keyboard.press('Escape');
     assert.equal(await menu.isHidden(), true);
     assert.equal(await modal.isVisible(), true, 'Escape in the menu leaves the task open');
@@ -354,7 +370,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     // Queue: the icon changes, the comment names it, and it is kept on the server.
     await pick('queue');
     assert.deepEqual(await looks(), {shows: 'queue:', label: 'Send, queue', badge: ''});
-    if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: await modal.locator('.task-pill').boundingBox()});
+    if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: (await modal.locator('.task-pill').boundingBox())!});
     assert.equal((await send('Billing first, then the docs.')).delivery, 'queue');
     await saved(() => prefPosts.at(-1)?.[1] === 'queue');
     assert.deepEqual(prefPosts.at(-1), ['compose.send_way', 'queue']);
@@ -362,7 +378,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     // Defer 4h: a clock with a 4h badge, and it stays after the send.
     await pick('defer:4h');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
-    if (shot) await page.screenshot({path: shot.replace('.png', '-defer.png'), clip: await modal.locator('.task-pill').boundingBox()});
+    if (shot) await page.screenshot({path: shot.replace('.png', '-defer.png'), clip: (await modal.locator('.task-pill').boundingBox())!});
     assert.deepEqual(await send('After lunch is fine.'), {text: 'After lunch is fine.', public: false, delivery: 'defer', defer_for: '4h'});
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
     // A press outside closes the menu.
@@ -382,7 +398,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     const before = posted.length;
     await modal.locator('textarea').fill('Not yet');
     if (phone) {
-      const at = await main.boundingBox(), x = at.x + at.width / 2, y = at.y + at.height / 2;
+      const at = (await main.boundingBox())!, x = at.x + at.width / 2, y = at.y + at.height / 2;
       const cdp = await ctx.newCDPSession(page);
       await cdp.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x, y}]});
       await menu.waitFor();
@@ -396,7 +412,7 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
 
     // A reload reads the kept way back from the server.
     await openTask(true);
-    await page.waitForFunction(() => document.querySelector('#task-modal [data-task-main]')?.dataset.shows === 'defer:4h');
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal [data-task-main]')?.dataset.shows === 'defer:4h');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
     await pick('steer');
 
@@ -437,13 +453,13 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
 
 // Under a task's box: no Follow (following is the Followers row; posting never follows); the reach line ("To Head of Engineering and Ben") opens who the comment reaches by the way Send
 // shows (GET /v2/threads/{task thread}/reach). A task in a shared chat (no followers list) shows neither.
-async function followReach(viewport, shot, theme) {
+async function followReach(viewport: Viewport, shot: string, theme: string) {
   const browser = await launch();
   try {
     const phone = viewport.width < 761;
     const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(phone ? {isMobile: true, hasTouch: true} : {})});
     await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
-    const errors = [], reads = [], follows = [], posted = [], prefs = {};
+    const errors: string[] = [], reads: Record<string, string>[] = [], follows: unknown[] = [], posted: Record<string, unknown>[] = [], prefs: Record<string, unknown> = {};
     let followers = [{actor: 'bot:lead', notify: 'live', reason: 'owner'}, {actor: 'human:ben', notify: 'live', reason: 'requester'}];
     const rel = {id: 't-rel', title: 'Cut the release', owner_id: 'bot:lead', requester_id: 'human:ben', status: 'doing',
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-rel'};
@@ -451,10 +467,10 @@ async function followReach(viewport, shot, theme) {
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -463,8 +479,8 @@ async function followReach(viewport, shot, theme) {
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
-      if (pref && method === 'POST') { prefs[pref[1]] = JSON.parse(req.postData() || '{}').value; return json({key: pref[1], value: prefs[pref[1]]}); }
-      if (pref) return json({key: pref[1], value: prefs[pref[1]] ?? null});
+      if (pref && method === 'POST') { prefs[pref[1]!] = JSON.parse(req.postData() || '{}').value; return json({key: pref[1], value: prefs[pref[1]!]}); }
+      if (pref) return json({key: pref[1], value: prefs[pref[1]!] ?? null});
       if (p === '/api/v2/threads/r-rel/reach') {
         const q = Object.fromEntries(url.searchParams), way = q.delivery || 'steer';
         reads.push(q);
@@ -495,10 +511,10 @@ async function followReach(viewport, shot, theme) {
     await page.evaluate(t => taskModalShow(t), rel);
     const modal = page.locator('#task-modal'), foot = modal.locator('.task-pill .p-foot'), reach = foot.locator('.p-reach');
     const pop = foot.locator('.p-reach-pop');
-    const rows = () => pop.locator('.p-reach-row').evaluateAll(xs => xs.map(x => [x.querySelector('.p-reach-name').textContent, x.querySelector('.p-reach-mode').textContent]));
-    const pick = async way => { await modal.locator('[data-task-caret]').click(); await modal.locator(`[data-task-menu] [data-deliver="${way}"]`).last().click(); };
+    const rows = () => pop.locator('.p-reach-row').evaluateAll(xs => xs.map(x => [x.querySelector('.p-reach-name')!.textContent!, x.querySelector('.p-reach-mode')!.textContent!] as [string, string]));
+    const pick = async (way: string) => { await modal.locator('[data-task-caret]').click(); await modal.locator(`[data-task-menu] [data-deliver="${way}"]`).last().click(); };
     await reach.filter({hasText: /^To Head of Engineering and /}).waitFor();
-    assert.equal(reads[0].delivery, 'steer', 'the reach asks for the way Send shows');
+    assert.equal(reads[0]!.delivery, 'steer', 'the reach asks for the way Send shows');
     assert.equal(await foot.locator('.p-follow').count(), 0, 'no Follow under the box');
     // The way changes the list: Queue, then Defer never (Ben is not notified, so he is not listed).
     await pick('queue');
@@ -518,12 +534,12 @@ async function followReach(viewport, shot, theme) {
     await reach.click();
     const got = await rows();
     assert.deepEqual(got.map(r => r[1]), ['Now', 'Notified']);
-    assert.equal(got[0][0], 'Head of Engineering'); assert.match(got[1][0], /ben/i);
-    const box = await pop.boundingBox();
+    assert.equal(got[0]![0], 'Head of Engineering'); assert.match(got[1]![0], /ben/i);
+    const box = (await pop.boundingBox())!;
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width && box.y >= 0, 'the list fits');
     const covered = await pop.evaluate(m => {
       const r = m.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + 10), cs = getComputedStyle(m);
-      return m.contains(e) ? '' : JSON.stringify({r: [r.left, r.top, r.width, r.height], hidden: m.hidden, vis: cs.visibility, op: cs.opacity, z: cs.zIndex, pos: cs.position, at: e?.outerHTML?.slice(0, 160)});
+      return m.contains(e) ? '' : JSON.stringify({r: [r.left, r.top, r.width, r.height], hidden: (m as HTMLElement).hidden, vis: cs.visibility, op: cs.opacity, z: cs.zIndex, pos: cs.position, at: e?.outerHTML?.slice(0, 160)});
     });
     assert.equal(covered, '', 'the list is on top');
     await pop.evaluate(m => Promise.all(m.getAnimations().map(a => a.finished)));   // its fade in (base.css)
@@ -541,7 +557,7 @@ async function followReach(viewport, shot, theme) {
 }
 
 (async () => {
-  const shot = name => SHOTS ? require('node:path').join(SHOTS, name) : '';
+  const shot = (name: string): string => SHOTS ? require('node:path').join(SHOTS, name) : '';
   await run({width: 1200, height: 800}, shot('task-session-desktop.png'));
   await run({width: 390, height: 844}, shot('task-session-phone.png'));
   await answered({width: 1200, height: 800}, shot('task-session-answered.png'));

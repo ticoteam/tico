@@ -3,28 +3,36 @@
 // stays on screen in words; a sent one reads "Invited". "Create password" shows only when the issuer makes accounts,
 // shows the password once in a dialog and clears it on close. The welcome says a chosen chart that failed to import was not
 // replaced by a sample team. Fixtures only, no network.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
   assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', github_owner: '', local: false,
   release: '', onboarding_needed: false, providers_configured: true};
+type SetupPerson = {id: string; name: string; title: string; seats: string[]; invited_at: string | null; person?: string};
+type SetupRecord = {names: {company_name: string}; completed: string | null; needed: boolean; bots: unknown[];
+  company_import_failed: {at: string; reason: string} | null; company_import: {seats?: number; deferred?: unknown[]; people: SetupPerson[]} | null};
+// Browser-side function the test calls inside page.evaluate.
+declare global {
+  function agoTick(): void;
+}
+
 const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail couldn't deliver the invite to dana@acme.example. Check the address, then try again."}};
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
-    const calls = [];
-    let config = CONFIG, refuse = true, invites = {}, accountPassword = false, made = 0;
+    const calls: unknown[][] = [];
+    let config = CONFIG, refuse = true, invites: Record<string, string> = {}, accountPassword = false, made = 0;
     const people = [
       {id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'},
       {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example'}];
-    let setupPeople = [{id: 'dana', name: 'Dana Ruiz', title: 'Controller', seats: ['s-1'], invited_at: null}];
-    let record = {names: {company_name: 'Initech'}, completed: '2026-10-20T10:00:00Z', needed: false, bots: [],
+    let setupPeople: SetupPerson[] = [{id: 'dana', name: 'Dana Ruiz', title: 'Controller', seats: ['s-1'], invited_at: null}];
+    let record: SetupRecord = {names: {company_name: 'Initech'}, completed: '2026-10-20T10:00:00Z', needed: false, bots: [],
       company_import_failed: null, company_import: {seats: 1, deferred: [], people: setupPeople}};
     const access = () => ({
       owner_id: {email: 'ana@acme.example', revision: 1, person: 'ana'},
@@ -35,10 +43,10 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
       domain_sign_in: false, directory: '', invites, invite_email: true, account_password: accountPassword});
     await context.route('**/*', async route => {
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (module && fs.existsSync(uiFile(module[1]))) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
+      if (module && fs.existsSync(uiFile(module[1]!))) return route.fulfill({contentType: module[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]!), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@acme.example', config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], recent_runs: []});
@@ -57,24 +65,24 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
         calls.push(['add', body]); people.push({id, name: body.name, email: body.email});
         return json({person: id, email: body.email, name: body.name});
       }
-      let m;
+      let m: RegExpMatchArray | null;
       if ((m = p.match(/^\/api\/v2\/access\/humans\/([^/]+)\/invite$/)) && method === 'POST') {
-        calls.push(['invite', m[1], request.postDataJSON()]);
+        calls.push(['invite', m[1]!, request.postDataJSON()]);
         if (refuse) return json(REFUSED, 422);
-        invites = {...invites, [m[1]]: '2026-10-24T09:00:00Z'};
-        return json({person: m[1], invited_at: invites[m[1]]});
+        invites = {...invites, [m[1]!]: '2026-10-24T09:00:00Z'};
+        return json({person: m[1], invited_at: invites[m[1]!]});
       }
       if ((m = p.match(/^\/api\/v2\/access\/humans\/([^/]+)\/password$/)) && method === 'POST') {
-        calls.push(['password', m[1], request.postDataJSON()]);
+        calls.push(['password', m[1]!, request.postDataJSON()]);
         if (!made++) return json({error: {code: 'password_exists', detail: 'Ben Cole already has a Tico account; use Invite.'}}, 422);
         return json({person: m[1], email: 'ben@acme.example', password: 'abcde-fghjk-mnpqr-stuvw'});
       }
       if ((m = p.match(/^\/api\/v2\/setup\/company\/people\/([^/]+)\/invite$/)) && method === 'POST') {
-        calls.push(['setup-invite', m[1], request.postDataJSON()]);
+        calls.push(['setup-invite', m[1]!, request.postDataJSON()]);
         // Added to the roster either way, so a retry needs no address.
-        setupPeople = setupPeople.map(x => x.id === m[1] ? {...x, person: 'dana'} : x);
+        setupPeople = setupPeople.map(x => x.id === m![1] ? {...x, person: 'dana'} : x);
         if (refuse) { record = {...record, company_import: {...record.company_import, people: setupPeople}}; return json(REFUSED, 422); }
-        setupPeople = setupPeople.map(x => x.id === m[1] ? {...x, invited_at: '2026-10-24T09:00:00Z'} : x);
+        setupPeople = setupPeople.map(x => x.id === m![1] ? {...x, invited_at: '2026-10-24T09:00:00Z'} : x);
         record = {...record, company_import: {...record.company_import, people: setupPeople}};
         return json({...record, home: 'human:ana'});
       }
@@ -87,10 +95,10 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
       return json(unrouted(p));
     });
     const page = await context.newPage();
-    const errors = [];
+    const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
-    const row = id => page.locator(`.people-row[data-person=${id}]`);
-    const menuAct = async (id, act) => {
+    const row = (id: string) => page.locator(`.people-row[data-person=${id}]`);
+    const menuAct = async (id: string, act: string) => {
       await row(id).locator('.people-more').click();
       const item = row(id).locator(`[data-person-act=${act}]`);
       await item.waitFor({state: 'visible'});
@@ -134,7 +142,7 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     assert.deepEqual(calls.shift(), ['invite', 'ben', {}]);
     // The time moves on without a redraw and carries the full date on hover.
     const when = row('ben').locator('[data-invited] [data-ago]');
-    assert.ok((await when.getAttribute('title')).length > 5);
+    assert.ok((await when.getAttribute('title'))!.length > 5);
     await when.evaluate(n => { n.dataset.ago = new Date(Date.now() - 3 * 3600e3).toISOString(); agoTick(); });
     assert.equal(await when.innerText(), '3h ago');
     await when.evaluate(n => { n.dataset.ago = new Date(Date.now() - 5e3).toISOString(); agoTick(); });

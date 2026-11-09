@@ -5,15 +5,17 @@
 //  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
 //    in one color (words shared with another bot's name are not muted), and each row's tooltip has the whole name.
 // TICO_SCREENSHOT_DIR=<dir> saves both screens at desktop and phone width, dark and light.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+type Page = import('playwright').Page;
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!shots) return;
   await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity));
   await page.screenshot({path: path.join(shots, name + '.png')});
@@ -27,7 +29,7 @@ const people = [{id: 'ana', name: 'Ana Rivera', email: 'ana@initech.test', org_p
 const groups = ['Leadership', 'Engineering', 'Finance', 'Marketing', 'Product'].map((name, order) =>
   ({id: name.toLowerCase(), name, parent: '', org_parent: '', order}));
 // What Create leaves from the catalog: a head for each group with one report under it, every one still to set up.
-const bot = (name, display_name, team, reports_to, extra = {}) => ({name, display_name, team, reports_to,
+const bot = (name: string, display_name: string, team: string, reports_to: string, extra: Record<string, unknown> = {}) => ({name, display_name, team, reports_to,
   org_parent: reports_to.startsWith('human:') ? 'p:' + reports_to.slice(6) : 'b:' + reports_to, status: 'planned',
   state: 'planned', onboarding_state: 'needs_setup', harness: 'claude', model: 'claude-opus-5-5', host: 'keeper',
   can_chat: true, can_manage: true, my_access: {see: true, read: true, write: true}, users: [], owner_id: 'ana', revision: 1, ...extra});
@@ -42,27 +44,27 @@ const TEAM = [
   bot('insights', 'Customer Insights Analyst', 'product', 'head-of-product'),
 ];
 
-async function open(browser, {theme, phone, needed, team, route}) {
+async function open(browser: import('playwright').Browser, {theme, phone, needed, team, route}: {theme: string; phone?: boolean; needed: boolean; team?: boolean; route: string}) {
   const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800},
     isMobile: !!phone, hasTouch: !!phone, serviceWorkers: 'block'});
   await context.addInitScript(value => { try { localStorage.setItem('tico.theme', value); } catch {} }, theme);
   const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true, email: 'ana@initech.test'};
-  const config = {...CONFIG, onboarding_needed: needed, ...(needed ? {} : {changelog: {unread_count: 0}})}, notices = [];
+  const config = {...CONFIG, onboarding_needed: needed, ...(needed ? {} : {changelog: {unread_count: 0}})}, notices: string[] = [];
   await context.route('**/*', async r => {
     const request = r.request(), url = new URL(request.url()), p = url.pathname;
-    const json = body => r.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown) => r.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return r.abort();
     if (p === '/') return r.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return r.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return r.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p.startsWith('/vendor/')) {
       const file = path.join(__dirname, '..', p);
       if (fs.existsSync(file)) return r.fulfill({contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript', body: fs.readFileSync(file)});
     }
     if (p === '/api/me') return json({...me, config});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/v2/system/usage-count/notice') { notices.push(JSON.parse(request.postData()).state); return json({ok: true}); }
+    if (p === '/api/v2/system/usage-count/notice') { notices.push(JSON.parse(request.postData()!).state); return json({ok: true}); }
     if (p === '/api/humans') return json(team ? {people, org_groups: groups} : {people: [{...people[0], org_parent: '', team: ''}], org_groups: []});
     if (p === '/api/employees') return json(team ? TEAM : []);
     if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], queued: [], recent_runs: []});
@@ -80,22 +82,22 @@ async function open(browser, {theme, phone, needed, team, route}) {
     if (p.endsWith('/watch')) return r.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  const page = await context.newPage(), errors = [];
+  const page = await context.newPage(), errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/' + route);
   await page.locator('#tree li').first().waitFor();
   return {page, errors, notices, close: () => context.close()};
 }
 
-const shown = (page, selector) => page.locator(selector).evaluateAll(els => els.filter(el => el.checkVisibility()).map(el => el.dataset.nav || el.id));
+const shown = (page: Page, selector: string) => page.locator(selector).evaluateAll(els => els.filter(el => el.checkVisibility()).map(el => (el as HTMLElement).dataset.nav || el.id));
 
 // The anonymous usage count's notice: not over the wizard or the after-Create screen, and not counted as seen there.
-const noNotice = async ({page, notices}) => {
+const noNotice = async ({page, notices}: {page: Page; notices: string[]}) => {
   assert.equal(await page.locator('#usage-notice').isVisible(), false, 'the usage notice waits until setup is left');
   assert.deepEqual(notices, []);
 };
 
-async function wizard(browser, theme) {
+async function wizard(browser: import('playwright').Browser, theme: string) {
   // A new install opens with no page in the address: the boot sends it to the wizard.
   const {page, errors, notices, close} = await open(browser, {theme, needed: true, route: ''});
   await page.locator('#onb-website').waitFor();
@@ -141,20 +143,21 @@ async function wizard(browser, theme) {
 }
 
 // Each bot row: what it shows, whether its name is drawn in more than one piece, and its tooltip.
-const rows = page => page.locator('#tree a.node[data-org^="b:"]').evaluateAll(els => els.map(a => {
-  const nm = a.querySelector('.nm');
-  return {name: nm.textContent, pieces: nm.querySelectorAll('span:not(.proj)').length, title: a.title,
+type Row = {name: string; pieces: number; title: string; setup: boolean; mark: boolean; visible: boolean};
+const rows = (page: Page) => page.locator('#tree a.node[data-org^="b:"]').evaluateAll(els => (els as HTMLElement[]).map((a): Row => {
+  const nm = a.querySelector('.nm')!;
+  return {name: nm.textContent!, pieces: nm.querySelectorAll('span:not(.proj)').length, title: a.title,
           setup: !!a.querySelector('.tree-setup'), mark: !!a.querySelector('.rt'), visible: a.checkVisibility()};
 }));
-const expand = async page => {
+const expand = async (page: Page) => {
   // Each click draws the tree again, so open the first closed one until none is left.
-  for (let left; (left = await page.locator('#tree .chev.col').count());) {
+  for (let left: number; (left = await page.locator('#tree .chev.col').count());) {
     await page.locator('#tree .chev.col').first().click();
-    await page.waitForFunction(n => document.querySelectorAll('#tree .chev.col').length < n, left);
+    await page.waitForFunction((n: number) => document.querySelectorAll('#tree .chev.col').length < n, left);
   }
 };
 // One color per name: words a name shares with another bot's are not muted or split off.
-const readable = (team, where) => {
+const readable = (team: Row[], where: string) => {
   for (const row of team) {
     assert.equal(row.visible, true, `${row.name} ${where}`);
     assert.equal(row.title, row.name, 'the tooltip has the whole name');
@@ -162,7 +165,7 @@ const readable = (team, where) => {
   }
 };
 
-async function created(browser, theme) {
+async function created(browser: import('playwright').Browser, theme: string) {
   const {page, errors, notices, close} = await open(browser, {theme, needed: false, team: true, route: '#/welcome'});
   await page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor();
   await noNotice({page, notices});
@@ -200,7 +203,7 @@ async function created(browser, theme) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     for (const theme of ['dark', 'light']) {
       await wizard(browser, theme);

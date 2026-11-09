@@ -8,23 +8,29 @@
 // in WebKit 26 a dialog's own `flex:1` child had a 0 basis and drew no panel at all, only the dimmed screen.
 // TICO_UI_ENGINES (chromium,webkit) picks the engines for that check.
 // TICO_SCREENSHOT_DIR=<dir> also saves thread-settings-<desktop|phone>-<dark|light>.png.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 // TICO_WEBKIT_PLAYWRIGHT=<path to another playwright package> runs the size check in that one's WebKit (1.55 has WebKit 26).
-const {webkit} = require(process.env.TICO_WEBKIT_PLAYWRIGHT || 'playwright');
+const {webkit} = require(process.env.TICO_WEBKIT_PLAYWRIGHT || 'playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+type Page = import('playwright').Page;
+type Locator = import('playwright').Locator;
+type Me = {member: boolean; following: boolean; notify: string; pinned: boolean; can_manage: boolean; [key: string]: unknown};
+type Thread = {id: string; title: string; audience: string; audience_group_id?: string | null; archived_at?: string | null; last_seq: number;
+  last_unread_seq: number; last_message_at: string; me: Me; members: unknown[]; pinned_for_everyone?: boolean; dm_with?: unknown[]; dm_with_count?: number};
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const engines = (process.env.TICO_UI_ENGINES || 'chromium,webkit').split(',');
-const at = min => new Date(Date.now() - min * 60000).toISOString();
-const me = (extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 4, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
-const thread = (id, title, extra = {}) => ({id, title, audience: 'team', audience_group_id: 'ops', last_seq: 4, last_unread_seq: 0, last_message_at: at(5),
+const at = (min: number) => new Date(Date.now() - min * 60000).toISOString();
+const me = (extra: Record<string, unknown> = {}): Me => ({member: true, following: true, notify: 'live', last_read_seq: 4, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
+const thread = (id: string, title: string, extra: Partial<Thread> = {}): Thread => ({id, title, audience: 'team', audience_group_id: 'ops', last_seq: 4, last_unread_seq: 0, last_message_at: at(5),
   me: me(), members: [], pinned_for_everyone: false, ...extra});
 // Each page gets fresh copies: a PATCH changes the copy the page reads.
-const world = () => ({
+const world = (): Record<string, Thread> => ({
   't-plan': thread('t-plan', 'Launch plan', {me: me({can_manage: true, pinned: true})}),
   't-read': thread('t-read', 'Read only', {me: me({member: false, following: false})}),
   't-muted': thread('t-muted', 'Quiet', {me: me({notify: 'muted'})}),
@@ -35,21 +41,22 @@ const world = () => ({
     dm_with_count: 2},
 });
 
-async function open(browser, {phone = false} = {}) {
+async function open(browser: import('playwright').Browser, {phone = false}: {phone?: boolean} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const threads = world();
-  const seen = {errors: [], patches: [], follows: [], readAll: [], catchUps: [], slack: 0};
+  const seen: {errors: string[]; patches: Record<string, unknown>[]; follows: string[]; readAll: string[]; catchUps: string[]; slack: number} =
+    {errors: [], patches: [], follows: [], readAll: [], catchUps: [], slack: 0};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     const body = () => JSON.parse(req.postData() || '{}');
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
@@ -63,9 +70,9 @@ async function open(browser, {phone = false} = {}) {
     if (p === '/api/v2/threads/rail') return json({pinned: rail().filter(t => t.me.pinned), threads: rail().filter(t => !t.me.pinned), catch_up: 0, next_cursor: null, dms: {}});
     if (p === '/api/v2/threads/catch-up') return json({items: [], count: 0, next_cursor: null});
     const m = p.match(/^\/api\/v2\/threads\/([^/]+)(?:\/([a-z-]+))?$/);
-    const t = m && threads[m[1]];
+    const t = m && threads[m[1]!];
     if (t) {
-      const what = m[2];
+      const what = m![2];
       if (what === 'timeline') return json({thread: t, breadcrumb: [{id: t.id, title: t.title}], next_cursor: null,
         messages: [{id: 'x1-' + t.id, seq: 1, thread_id: t.id, sender_id: 'human:bea', body: 'Morning.', created_at: at(10), depth: 0}]});
       if (what === 'members') return json({members: [{actor: 'human:ana', role: 'owner'}, {actor: 'human:bea'}, {actor: 'bot:ops'}], next_cursor: null});
@@ -93,12 +100,12 @@ async function open(browser, {phone = false} = {}) {
   });
   return {page, seen};
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   fs.mkdirSync(shots, {recursive: true});
   await page.screenshot({path: path.join(shots, `${name}.png`)});
 }
 // The panel in both themes: thread-settings-<desktop|phone>-<dark|light>.png.
-async function themed(page, phone) {
+async function themed(page: Page, phone: boolean) {
   if (!shots) return;
   for (const theme of ['dark', 'light']) {
     await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
@@ -109,8 +116,8 @@ async function themed(page, phone) {
   }
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
 }
-const panel = page => page.locator('#thread-settings[open]');
-async function openPanel(page, id, phone = false) {
+const panel = (page: Page) => page.locator('#thread-settings[open]');
+async function openPanel(page: Page, id: string, phone = false) {
   if (!page.url().endsWith('#/thread/' + id)) {
     await page.goto('https://tico-ui.test/#/thread/' + id);
     await page.getByText('Morning.').waitFor();
@@ -121,34 +128,34 @@ async function openPanel(page, id, phone = false) {
   await panel(page).waitFor();
   return panel(page);
 }
-const labels = dlg => dlg.locator('.ths-lbl').evaluateAll(els => els.filter(e => e.getClientRects().length).map(e => e.textContent.trim()));
-const pressed = dlg => dlg.locator('[data-notify][aria-pressed="true"]').textContent();
-const until = async (page, check, what) => {
+const labels = (dlg: Locator) => dlg.locator('.ths-lbl').evaluateAll(els => els.filter(e => e.getClientRects().length).map(e => e.textContent!.trim()));
+const pressed = (dlg: Locator) => dlg.locator('[data-notify][aria-pressed="true"]').textContent();
+const until = async (page: Page, check: () => boolean, what: string) => {
   for (let i = 0; i < 60; i++) { if (check()) return; await page.waitForTimeout(50); }
   assert.fail('timed out: ' + what);
 };
 
 // The panel has its size in each engine: taller than its head and foot, Notifications and Done on screen, and with a
 // long body the foot stays on screen while the body scrolls (on a phone the panel still fills the screen).
-async function fits(browser, engine, phone) {
+async function fits(browser: import('playwright').Browser, engine: string, phone: boolean) {
   const {page, seen} = await open(browser, {phone});
   const dlg = await openPanel(page, 't-plan', phone);
   const where = phone ? 'phone' : 'desktop';
   const measure = () => dlg.evaluate(d => {
-    const h = e => Math.round(e.getBoundingClientRect().height), body = d.querySelector('.ths');
-    return {dialog: h(d), form: h(d.querySelector('form')), body: h(body), scroll: body.scrollHeight, foot: Math.round(d.querySelector('footer').getBoundingClientRect().bottom),
+    const h = (e: Element) => Math.round(e.getBoundingClientRect().height), body = d.querySelector('.ths')!;
+    return {dialog: h(d), form: h(d.querySelector('form')!), body: h(body), scroll: body.scrollHeight, foot: Math.round(d.querySelector('footer')!.getBoundingClientRect().bottom),
       viewport: innerHeight};
   });
   const sizes = await measure();
   console.log(`${engine} ${where}: ${JSON.stringify(sizes)}`);
   // WebKit 26 (Safari 26, the macOS app's webview) gives a growing child of the content-sized dialog with a 0 basis no
   // height at all; WebKit 27 and Chromium size it. So no growing part of the panel may start from 0.
-  const zero = await dlg.evaluate(d => [d.querySelector('form'), d.querySelector('.ths')].map(e => getComputedStyle(e))
+  const zero = await dlg.evaluate(d => [d.querySelector('form')!, d.querySelector('.ths')!].map(e => getComputedStyle(e))
     .filter(cs => Number(cs.flexGrow) > 0 && parseFloat(cs.flexBasis) === 0).map(cs => cs.flex));
   assert.deepEqual(zero, [], `${engine} ${where}: the panel's form and body grow from their content, not from 0`);
   assert.ok(sizes.dialog > 200 && sizes.form > 200, `${engine} ${where}: the panel has its height: ${JSON.stringify(sizes)}`);
   // On screen: the point in its middle is it (or inside it), not clipped away by a body with no height.
-  const shows = loc => loc.evaluate(e => {
+  const shows = (loc: Locator) => loc.evaluate(e => {
     e.scrollIntoView({block: 'nearest'});
     const b = e.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2;
     return b.height > 0 && b.top >= 0 && b.bottom <= innerHeight && e.contains(document.elementFromPoint(x, y));
@@ -158,18 +165,18 @@ async function fits(browser, engine, phone) {
   assert.ok(await shows(dlg.locator('footer [data-close]')), `${engine} ${where}: Done on screen`);
   if (phone) assert.ok(Math.abs(sizes.dialog - 844) <= 1 && Math.abs(sizes.form - 844) <= 1, `${engine} phone: full screen: ${JSON.stringify(sizes)}`);
   // A long body scrolls inside the panel; the panel stays within the screen and Done stays on it.
-  await dlg.evaluate(d => { const tall = document.createElement('div'); tall.style.cssText = 'flex:none;height:2000px'; tall.dataset.tall = ''; d.querySelector('.ths').append(tall); });
+  await dlg.evaluate(d => { const tall = document.createElement('div'); tall.style.cssText = 'flex:none;height:2000px'; tall.dataset.tall = ''; d.querySelector('.ths')!.append(tall); });
   const long = await measure();
   console.log(`${engine} ${where} long: ${JSON.stringify(long)}`);
   assert.ok(long.scroll > long.body && long.dialog <= long.viewport && long.foot <= long.viewport, `${engine} ${where}: a long body scrolls: ${JSON.stringify(long)}`);
   if (phone) assert.ok(Math.abs(long.dialog - 844) <= 1, `${engine} phone: still full screen: ${JSON.stringify(long)}`);
   assert.ok(await shows(dlg.locator('footer [data-close]')), `${engine} ${where}: Done on screen with a long body`);
-  await dlg.evaluate(d => d.querySelector('[data-tall]').remove());
+  await dlg.evaluate(d => d.querySelector('[data-tall]')!.remove());
   assert.deepEqual(seen.errors, []);
   await page.close();
 }
 
-let browser = null;
+let browser: import('playwright').Browser | null = null;
 (async () => {
   browser = await chromium.launch();
 
@@ -184,7 +191,7 @@ let browser = null;
     assert.equal(await dlg.locator('[data-ths="members"]').count(), 1);
     assert.equal(await dlg.locator('[data-ths="archive"]').textContent(), 'Archive');
     assert.equal(await dlg.locator('[type=submit]').count(), 0, 'nothing to Save');
-    const box = await dlg.boundingBox();
+    const box = (await dlg.boundingBox())!;
     assert.ok(box.width <= 540 && box.x > 300, `a dialog in the middle at desktop: ${JSON.stringify(box)}`);
     await themed(page, false);
 
@@ -281,7 +288,7 @@ let browser = null;
     // Done closes it; open again, it shows what was saved.
     await page.waitForLoadState('networkidle');
     await dlg.locator('footer [data-close]').click();
-    await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-settings')?.open);
     dlg = await openPanel(page, 't-plan');
     assert.equal(await dlg.locator('#ths-keep').inputValue(), '');
     assert.equal(await dlg.locator('#ths-pin').isChecked(), true);
@@ -289,7 +296,7 @@ let browser = null;
 
     // The one-off actions run and close the panel.
     await dlg.locator('[data-ths="read"]').click();
-    await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-settings')?.open);
     assert.deepEqual(seen.readAll, ['t-plan']);
     dlg = await openPanel(page, 't-plan');
     await dlg.locator('[data-ths="catchup"]').click();
@@ -298,7 +305,7 @@ let browser = null;
     assert.equal(await panel(page).count(), 0);
     dlg = await openPanel(page, 't-plan');
     await dlg.locator('[data-ths="archive"]').click();
-    await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-settings')?.open);
     assert.deepEqual(seen.patches, [{archived: true}]);
     dlg = await openPanel(page, 't-plan');
     assert.equal(await dlg.locator('[data-ths="archive"]').textContent(), 'Unarchive');
@@ -351,26 +358,26 @@ let browser = null;
   {
     const {page, seen} = await open(browser, {phone: true});
     const dlg = await openPanel(page, 't-plan', true);
-    const box = await dlg.boundingBox();
+    const box = (await dlg.boundingBox())!;
     assert.ok([box.x, box.y, box.width - 390, box.height - 844].every(v => Math.abs(v) <= 1), `full screen: ${JSON.stringify(box)}`);
-    const wide = await dlg.evaluate(d => [d.scrollWidth, d.clientWidth, d.querySelector('.ths').scrollWidth, d.querySelector('.ths').clientWidth]);
+    const wide = await dlg.evaluate(d => [d.scrollWidth, d.clientWidth, d.querySelector('.ths')!.scrollWidth, d.querySelector('.ths')!.clientWidth]) as [number, number, number, number];
     assert.ok(wide[0] <= wide[1] && wide[2] <= wide[3], `no sideways scroll: ${wide}`);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
     const small = await dlg.locator('.tmodal-x, [data-notify], .ths-acts button, footer button, #ths-name, #ths-keep').evaluateAll(els =>
-      els.map(e => [e.textContent.trim() || e.id || e.className, Math.round(e.getBoundingClientRect().height)]).filter(([, h]) => h < 44));
+      els.map(e => [e.textContent!.trim() || e.id || e.className, Math.round(e.getBoundingClientRect().height)]).filter(([, h]) => h < 44));
     assert.deepEqual(small, [], 'every control is at least 44px tall');
     await themed(page, true);
     await dlg.locator('[data-notify="mentions"]').tap();
     await until(page, () => seen.follows.length === 1, 'mentions on a phone');
     assert.deepEqual(seen.follows, ['PUT:mentions']);
     await dlg.locator('.tmodal-x').tap();
-    await page.waitForFunction(() => !document.querySelector('#thread-settings')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-settings')?.open);
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
 
   for (const engine of engines) {
-    const b = engine === 'chromium' ? browser : await ({webkit}[engine]).launch();
+    const b: import('playwright').Browser = engine === 'chromium' ? browser! : await (({webkit} as Record<string, import('playwright').BrowserType>)[engine]!).launch();
     try { await fits(b, engine, false); await fits(b, engine, true); } finally { if (b !== browser) await b.close(); }
   }
   console.log('PASS: Thread settings: the ⋯ opens one panel; name, who can read, members, notifications (Off mutes, muted reads as Off), a slow rename kept, pin for everyone and keep messages save as they change; Summarize, Mark all read and Archive close it; A team waits for a chosen team; a reader and a one-to-one DM get only their rows, a group DM its name; full screen on a phone; the panel has its height and a long body scrolls in ' + engines.join(' and ') + '');

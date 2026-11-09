@@ -1,23 +1,34 @@
 // All reads are intercepted. Quarantine status changes independently of unchanged tickets and typed drafts.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+
+// Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
+declare global {
+  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+  function liveEmit(topic: string, data: unknown): void;
+  function taskBuilderActors(task: unknown): unknown[];
+  function refresh(force?: boolean): unknown;
+}
+type Status = {bot: string; state: string; bot_state: string;
+  quarantine?: {auto: boolean; resumes_at: string | null; builder_notice: string; why: string}};
+type Held = Status & {quarantine: NonNullable<Status['quarantine']>};
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 900}, timezoneId: 'America/Los_Angeles', serviceWorkers: 'block'});
-    const page = await context.newPage(), errors = [];
+    const page = await context.newPage(), errors: string[] = [];
     page.setDefaultTimeout(10000);
     page.on('pageerror', error => errors.push(error.message));
     const type = {id: 'delivery', name: 'Delivery', role: 'engineering', steps: [
       {id: 'building', name: 'Building', status: 'doing', position: 0},
       {id: 'shipped', name: 'Shipped', status: 'done', position: 1}]};
     const now = '2030-10-26T12:00:00Z';
-    const task = (id, owner, extra = {}) => ({id, title: id, body: 'Build the requested change.', owner_id: owner,
+    const task = (id: string, owner: string, extra: Record<string, unknown> = {}) => ({id, title: id, body: 'Build the requested change.', owner_id: owner,
       requester_id: 'human:ana', type_id: type.id, step_id: 'building', type: {id: type.id, name: type.name}, step: type.steps[0],
       status: 'doing', version: 1, lane: 'company', labels: [], links: [], parts: {total: 0, done: 0},
       rank: 1, created_at: now, updated_at: now, ...extra});
@@ -27,21 +38,21 @@ const {unrouted} = require('./support/routes.cjs');
       task('Completed work', 'bot:builder-a', {status: 'done', step_id: 'shipped', step: type.steps[1]}),
       task('Declined work', 'bot:builder-a', {status: 'declined'}),
       task('Two builders', 'bot:builder-a', {roles: {builder: ['bot:builder-a', 'bot:builder-c']}})];
-    const active = slug => ({bot: slug, state: 'idle', bot_state: 'active'});
-    const held = (slug, notice, auto = true) => ({bot: slug, state: 'quarantined', bot_state: 'quarantined',
+    const active = (slug: string): Status => ({bot: slug, state: 'idle', bot_state: 'active'});
+    const held = (slug: string, notice: string, auto = true): Held => ({bot: slug, state: 'quarantined', bot_state: 'quarantined',
       quarantine: {auto, resumes_at: auto ? '2030-10-26T13:00:00Z' : null, builder_notice: notice,
         why: 'Manager-only private detail must never appear on a ticket.'}});
-    let statuses = [active('builder-a'), active('builder-b'), active('healthy')];
+    let statuses: Status[] = [active('builder-a'), active('builder-b'), active('healthy')];
     const auto = held('builder-a', 'Builder quarantined: resumes 13:00 UTC');
     const manual = held('builder-b', 'Builder quarantined: until a person clears it', false);
     await page.addInitScript(() => localStorage.setItem('tico.tasks.type', 'delivery'));
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;
-      const json = data => route.fulfill({contentType: 'application/json', body: JSON.stringify(data)});
+      const json = (data: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(data)});
       if (url.origin !== 'https://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile(p.slice(1)), 'utf8')});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'human', mover: false, cloud: true});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -56,7 +67,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
       if (p.startsWith('/api/v2/preferences/')) return json({value: {type: 'delivery', view: 'board', views: 2}});
       const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
-      if (one) return json({task: tasks.find(t => t.id === decodeURIComponent(one[1])), children: [], comments: [], events: []});
+      if (one) return json({task: tasks.find(t => t.id === decodeURIComponent(one[1]!)), children: [], comments: [], events: []});
       if (p.endsWith('/tree')) return json([]);
       return json(unrouted(p));
     });
@@ -81,7 +92,7 @@ const {unrouted} = require('./support/routes.cjs');
     if (process.env.DEV595_SHOTS) await page.screenshot({path: path.join(process.env.DEV595_SHOTS, 'board.png'), fullPage: true});
     // Lifting one builder leaves the other visible in its column. This includes already-open cards.
     statuses[0] = active('builder-a');
-    await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), statuses[0]);
+    await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), statuses[0]!);
     await page.waitForFunction(() => !document.querySelector('.bcard[data-task-key="tAutomatic cooldown"] .task-builder-notice'));
     assert.equal(await page.locator('.bcol > .task-builder-notices .task-builder-notice').count(), 2);
     statuses[0] = auto;
@@ -102,7 +113,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => refresh(true));
     assert.equal(await modal.locator('.task-builder-notice').innerText(), overnight.quarantine.builder_notice);
     assert.equal(await draft.inputValue(), 'Keep this unsent draft');
-    const bounds = await modal.locator('.task-builder-notice').boundingBox();
+    const bounds = (await modal.locator('.task-builder-notice').boundingBox())!;
     assert(bounds.width <= 390 && bounds.x >= 0 && bounds.x + bounds.width <= 391, 'phone notice fits');
     if (process.env.DEV595_SHOTS) await page.screenshot({path: path.join(process.env.DEV595_SHOTS, 'ticket-phone.png'), fullPage: true});
     // Manual quarantine on the ticket page, then its lift, use the same notice as cards.

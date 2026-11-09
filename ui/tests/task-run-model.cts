@@ -2,15 +2,21 @@
 // (`can_set_run_model` in GET /v2/tasks/{id}) picks the task's own model, harness and effort and applies it, or clears
 // it back to the bot's task model; anyone else reads what it runs on. Retired and Gateway tier models are not offered.
 // The form fits a phone's width.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
+declare global {
+  var S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
+  var TASK_RUN_ROWS: unknown[] | null;
+  var taskModalShow: (task: {id: string; title: string}) => unknown;
+}
 const SHOTS = process.env.TICO_UI_SHOTS || '';
-const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 
-const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
+const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOString();
 const task = {id: 't-audit', title: 'Audit the billing page', owner_id: 'bot:ops', requester_id: 'human:ana', status: 'open',
   lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-audit'};
 const MODELS = [
@@ -20,19 +26,19 @@ const MODELS = [
   {id: 'tico-fast', label: 'Gateway fast', harnesses: ['claude'], efforts: []}];
 
 // `canSet` is the server's answer for this reader (`can_set_run_model`), whatever their role in the roster says.
-async function run(viewport, shot, me, canSet) {
+async function run(viewport: {width: number; height: number}, shot: string, me: unknown, canSet: boolean) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-    const errors = [], posted = [];
-    let runModel = null;
+    const errors: string[] = [], posted: unknown[] = [];
+    let runModel: {model: string; harness: string; runtime: string; reasoning_effort: string} | null = null;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json(me);
@@ -71,7 +77,7 @@ async function run(viewport, shot, me, canSet) {
     }
     const model = sec.locator('[data-run-model]');
     await model.waitFor();
-    const offered = await model.locator('option').evaluateAll(os => os.map(o => o.value));
+    const offered = await model.locator('option').evaluateAll((os: HTMLOptionElement[]) => os.map(o => o.value));
     assert.deepEqual(offered, ['', 'claude-sonnet-5-5', 'gpt-test'], 'no retired or Gateway tier model');
     // The rendered options: the window follows the name when the catalog gives one, and a model without one shows none.
     assert.deepEqual(await model.locator('option').allInnerTexts(), ["The bot's task model", 'Sonnet 5.5', 'GPT Test · 1.05M'],
@@ -85,7 +91,7 @@ async function run(viewport, shot, me, canSet) {
     assert.equal(await sec.locator('[data-run-effort]').inputValue(), 'low');
     await sec.locator('[data-run-harness]').selectOption('cursor');
     await sec.locator('[data-run-effort]').selectOption('high');
-    const box = await sec.boundingBox();
+    const box = (await sec.boundingBox())!;
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `Runs on fits the ${viewport.width} px width`);
     if (shot) await page.screenshot({path: shot});
     await sec.locator('[data-run-model-apply]').click();
@@ -103,7 +109,7 @@ async function run(viewport, shot, me, canSet) {
 }
 
 (async () => {
-  const shot = name => SHOTS ? require('node:path').join(SHOTS, name) : '';
+  const shot = (name: string) => SHOTS ? require('node:path').join(SHOTS, name) : '';
   const owner = {id: 'ana', name: 'Ana', role: 'owner', cloud: true}, member = {id: 'cara', name: 'Cara', role: 'human', cloud: true};
   const manager = {id: 'ben', name: 'Ben', role: 'human', cloud: true};
   await run({width: 1200, height: 800}, shot('task-run-model-desktop.png'), owner, true);
