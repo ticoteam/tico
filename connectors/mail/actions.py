@@ -1,8 +1,8 @@
 """Mail actions an automation queued in Tico, carried out on the computer that reads the mailbox.
 
 The runner (runner_support/connectors.py) claims them from the hub and runs `mail.sh mail-action` with one action on stdin.
-The hub decided them, its send switch included, so like the owner's own commands they pass no bot policy, lint or
-reviewer. Each is safe to run again after a lost answer or a lost lease:
+The hub decided them, its sending policy included, so like the owner's own commands they pass no lint or reviewer
+here. Each is safe to run again after a lost answer or a lost lease:
   archive, label, leave       Gmail label changes, the same the second time
   draft                       kept in `drafts` under a key made from the action id: a retry finds it
   send, forward               freeze a draft in the server queue; repeating the action returns the same queue row
@@ -21,10 +21,20 @@ from . import DEFAULT_TZ, Failure, Refused, access, compose, db, gmail as gm, la
 from . import unsubscribe as unsub
 from .rules import in_domain
 
-KINDS = {"archive": "archive", "label": "label", "leave": "label", "draft": "draft", "send": "draft",
-         "forward": "draft", "unsubscribe": "unsubscribe", "dispatch_send": "draft"}       # action -> the CLI verb it needs on the mailbox
-FORWARDED = "\n\n---------- Forwarded message ---------\nFrom: {from_header}\nDate: {date}\nSubject: {subject}\n" \
-            "To: {to}\n\n{body}"
+KINDS = {
+    "archive": "archive",
+    "label": "label",
+    "leave": "label",
+    "draft": "draft",
+    "send": "draft",
+    "forward": "draft",
+    "unsubscribe": "unsubscribe",
+    "dispatch_send": "draft",
+}  # action -> the CLI verb it needs on the mailbox
+FORWARDED = (
+    "\n\n---------- Forwarded message ---------\nFrom: {from_header}\nDate: {date}\nSubject: {subject}\n"
+    "To: {to}\n\n{body}"
+)
 
 
 def verb(kind):
@@ -62,9 +72,13 @@ def perform(ctx, action):
         if not to:
             raise Refused("forward needs `to`.")
         subject = "Fwd: " + compose.RE_PREFIX.sub("", original["subject"] or "").strip()
-        body = text + FORWARDED.format(from_header=original["from_header"], date=original["date"],
-                                       subject=original["subject"], to=", ".join(original["to"]),
-                                       body=original["body"])
+        body = text + FORWARDED.format(
+            from_header=original["from_header"],
+            date=original["date"],
+            subject=original["subject"],
+            to=", ".join(original["to"]),
+            body=original["body"],
+        )
         raw, thread = compose.build(to, subject, body, from_addr=ctx.mailbox), ""
     else:
         if not text.strip():
@@ -77,14 +91,23 @@ def perform(ctx, action):
         raw = compose.build(to, subject, text, from_addr=ctx.mailbox, in_reply_to=mid_header, references=refs)
         thread = original["thread_id"]
     draft_id = _draft(ctx, aid, raw, thread, to, subject)
-    if kind == "draft" or args.get("draft_only"):     # draft_only: the inbox's send switch was off at claim
+    if kind == "draft" or args.get("draft_only"):  # draft_only: the inbox's send switch was off at claim
         return {"ok": True, "detail": "drafted", "draft": draft_id, "thread": thread}
     from . import policy
     from . import oauth
+
     oauth.company_allows(ctx.gmail.company, "send", ctx.mailbox, "send mail")
-    queued = policy.queue_send(ctx.mailbox, raw, thread, original["id"] if thread else "", automation_action_id=aid, draft_id=draft_id)
-    return {"ok": queued["state"] in ("pending", "waiting_approval", "sent"), "retry": False,
-            "detail": queued["state"], "send_queue_id": queued["id"], "draft": draft_id, "thread": thread}
+    queued = policy.queue_send(
+        ctx.mailbox, raw, thread, original["id"] if thread else "", automation_action_id=aid, draft_id=draft_id
+    )
+    return {
+        "ok": queued["state"] in ("pending", "waiting_approval", "sent"),
+        "retry": False,
+        "detail": queued["state"],
+        "send_queue_id": queued["id"],
+        "draft": draft_id,
+        "thread": thread,
+    }
 
 
 def label_name(name):
@@ -135,13 +158,14 @@ def _unsubscribe(ctx, mid):
 
 def _keep_reason(ctx, original):
     """Why the owner keeps this mail (no unsubscribe), or '' when it may be unsubscribed from. With no internal domains
-    known on this computer (a Docker install with no registry), nothing can be told apart from a coworker: refused."""
+    known on this computer (Ctx.internal_domains, policy.team_domains), nothing can be told apart from a coworker: refused."""
     sender = original["from"]
-    if not ctx.policy.get("internal_domains"):
+    internal = ctx.internal_domains
+    if not internal:
         return "internal domains unknown on this computer"
     if "STARRED" in original["labels"]:
         return "the message is starred"
-    if in_domain(sender, ctx.policy["internal_domains"]) or sender == ctx.mailbox:
+    if in_domain(sender, internal) or sender == ctx.mailbox:
         return "the mail is internal"
     if sender in {a.lower() for a in access.roster_mailboxes()}:
         return "the sender is on the people roster"
@@ -166,8 +190,11 @@ def _answered_in_thread(ctx, original):
     sender = original["from"].lower()
     for m in ctx.gmail.thread(original["thread_id"]):
         sent = gm.normalize(m)
-        if ("SENT" in sent["labels"] and sent["from"].lower() == ctx.mailbox.lower()
-                and sender in {a.lower() for a in sent["to"] + sent["cc"]}):
+        if (
+            "SENT" in sent["labels"]
+            and sent["from"].lower() == ctx.mailbox.lower()
+            and sender in {a.lower() for a in sent["to"] + sent["cc"]}
+        ):
             return True
     return False
 
@@ -189,30 +216,57 @@ def _draft(ctx, aid, raw, thread, to, subject):
     if row and row["draft_id"]:
         return row["draft_id"]
     made = ctx.gmail.create_draft(raw, thread)
-    db.put_draft(ctx.conn, key, ctx.slug, ctx.mailbox, "automation:" + aid, to, subject, thread,
-                 made.get("id", ""), (made.get("message") or {}).get("id", ""))
+    db.put_draft(
+        ctx.conn,
+        key,
+        ctx.slug,
+        ctx.mailbox,
+        "automation:" + aid,
+        to,
+        subject,
+        thread,
+        made.get("id", ""),
+        (made.get("message") or {}).get("id", ""),
+    )
     return made.get("id", "")
 
 
 def _dispatch(ctx, ident, lease):
     """Only the server's frozen payload can leave; uncertain results are never retried into duplicates."""
     from . import oauth
+
     key = compose.key("email-queue", ctx.mailbox, ident)
     prior = db.get_send(ctx.conn, key)
     if prior:
-        return {"ok": prior["status"] == "sent", "retry": False,
-                "status": "sent" if prior["status"] == "sent" else "unknown",
-                "message": prior.get("message_id", ""), "detail": "This dispatch was already attempted"}
+        return {
+            "ok": prior["status"] == "sent",
+            "retry": False,
+            "status": "sent" if prior["status"] == "sent" else "unknown",
+            "message": prior.get("message_id", ""),
+            "detail": "This dispatch was already attempted",
+        }
     # This final server round trip rechecks permissions, policy and caps immediately before the provider call.
-    permit = oauth.broker(retries=0).post(f"connectors/email/sends/{ident}/dispatch", {"mailbox": ctx.mailbox, "lease_id": lease})
+    permit = oauth.broker(retries=0).post(
+        f"connectors/email/sends/{ident}/dispatch", {"mailbox": ctx.mailbox, "lease_id": lease}
+    )
     action = permit.get("send")
     if not action:
         return {"ok": False, "retry": False, "status": "failed", "detail": "Sending permission was revoked"}
     raw, thread = action["raw"], action.get("thread_id", "")
     draft_id = action.get("draft_id") or ""
-    db.claim_send(ctx.conn, key, str(action["actor"]).partition(":")[2], ctx.mailbox, ident,
-                  action["recipients"], action["subject"], thread, draft_id,
-                  datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d"), source="email-queue")
+    db.claim_send(
+        ctx.conn,
+        key,
+        str(action["actor"]).partition(":")[2],
+        ctx.mailbox,
+        ident,
+        action["recipients"],
+        action["subject"],
+        thread,
+        draft_id,
+        datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d"),
+        source="email-queue",
+    )
     try:
         sent = ctx.gmail.send_raw(raw, thread)
     except Failure:

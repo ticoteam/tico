@@ -3,6 +3,7 @@
 Message rules and built-in step notices retain their existing behavior. This queue is
 request local; the execution ledger, pause state and errors are durable SQL state.
 """
+
 import contextvars
 import logging
 from contextlib import contextmanager
@@ -81,8 +82,15 @@ def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
         return
     state = _PENDING.get()
     facts = {"step_id" if field == "step" else field: new} if field in ("step", "status") else {}
-    item = {"event": event, "task": task, "actor": actor, "revision": str(revision),
-            "chain": _CHAIN.get(), "facts": facts, "row": None}
+    item = {
+        "event": event,
+        "task": task,
+        "actor": actor,
+        "revision": str(revision),
+        "chain": _CHAIN.get(),
+        "facts": facts,
+        "row": None,
+    }
     if state is not None and state["conn"] is conn:
         state["items"].append(item)
     else:
@@ -105,14 +113,18 @@ def created(conn, task, actor):
 def state(conn, rule_id):
     row = conn.execute("SELECT * FROM rule_task_state WHERE rule_id=?", (rule_id,)).fetchone()
     result = dict(row) if row else {}
-    return {"paused": bool(result.get("paused_at")),
-            **{k: result.get(k) for k in ("paused_at", "pause_reason", "last_error", "last_error_at")}}
+    return {
+        "paused": bool(result.get("paused_at")),
+        **{k: result.get(k) for k in ("paused_at", "pause_reason", "last_error", "last_error_at")},
+    }
 
 
 def error(conn, rule_id, detail):
-    conn.execute("INSERT INTO rule_task_state(rule_id,last_error,last_error_at) VALUES(?,?,?) "
-                 "ON CONFLICT(rule_id) DO UPDATE SET last_error=excluded.last_error,last_error_at=excluded.last_error_at",
-                 (rule_id, detail, H.now()))
+    conn.execute(
+        "INSERT INTO rule_task_state(rule_id,last_error,last_error_at) VALUES(?,?,?) "
+        "ON CONFLICT(rule_id) DO UPDATE SET last_error=excluded.last_error,last_error_at=excluded.last_error_at",
+        (rule_id, detail, H.now()),
+    )
 
 
 def webhook_result(conn, event_id, status):
@@ -128,13 +140,19 @@ def webhook_result(conn, event_id, status):
 def _history(conn, item, rule, action, result):
     text = f"Trigger: {item['event']}. Action: {action}. Rule {rule['id']}: {result}"
     H._task_event(conn, item["task"], H.KEEPER, "rule", None, rule["id"], text)
-    H.event(conn, H.KEEPER, "rule.task", item["task"],
-            {"rule": rule["id"], "trigger": item["event"], "action": action, "result": result})
+    H.event(
+        conn,
+        H.KEEPER,
+        "rule.task",
+        item["task"],
+        {"rule": rule["id"], "trigger": item["event"], "action": action, "result": result},
+    )
 
 
 def judge(conn, item):
     """Never let an Action failure undo its triggering change. Each row has its own savepoint."""
     from . import rules as R
+
     try:
         if not H._has_table(conn, "rules"):
             return
@@ -142,34 +160,57 @@ def judge(conn, item):
         if not row:
             return
         ctx = R._Context(conn, item["actor"], row.get("owner_id") or "", {}, None, row)
-        rows = conn.execute("SELECT r.* FROM rules r LEFT JOIN rule_task_state s ON s.rule_id=r.id "
-                            "WHERE r.enabled=1 AND r.event=? AND s.paused_at IS NULL", (item["event"],)).fetchall()
+        rows = conn.execute(
+            "SELECT r.* FROM rules r LEFT JOIN rule_task_state s ON s.rule_id=r.id "
+            "WHERE r.enabled=1 AND r.event=? AND s.paused_at IS NULL",
+            (item["event"],),
+        ).fetchall()
         from . import redesign_migration
+
         paused = {r["rule_id"] for r in conn.execute("SELECT rule_id FROM rule_task_state WHERE paused_at IS NOT NULL")}
-        rows += [r for r in redesign_migration.wake_rows(conn, item["event"])
-                 if r["event"] == item["event"] and r["id"] not in paused]
-        rows = sorted(rows, key=lambda r: (R.PRECEDENCE.index(r["scope_kind"]), r["position"], r["created_at"], r["id"]))
+        rows += [
+            r
+            for r in redesign_migration.wake_rows(conn, item["event"])
+            if r["event"] == item["event"] and r["id"] not in paused
+        ]
+        rows = sorted(
+            rows, key=lambda r: (R.PRECEDENCE.index(r["scope_kind"]), r["position"], r["created_at"], r["id"])
+        )
         for rule in rows:
             if not ctx.in_scope(rule) or not ctx.matches(H._json(rule["condition"], {})):
                 continue
             params = H._json(rule["params"], {}) or {}
             action = params.get("action")
-            if not conn.execute("INSERT OR IGNORE INTO rule_task_runs(rule_id,task_id,event,revision,ran_at) VALUES(?,?,?,?,?)",
-                                (rule["id"], item["task"], item["event"], item["revision"], H.now())).rowcount:
+            if not conn.execute(
+                "INSERT OR IGNORE INTO rule_task_runs(rule_id,task_id,event,revision,ran_at) VALUES(?,?,?,?,?)",
+                (rule["id"], item["task"], item["event"], item["revision"], H.now()),
+            ).rowcount:
                 continue
             if item["chain"]:
-                _history(conn, item, rule, action, "Skipped: an Action already caused this change; maximum chain depth is one")
+                _history(
+                    conn,
+                    item,
+                    rule,
+                    action,
+                    "Skipped: an Action already caused this change; maximum chain depth is one",
+                )
                 continue
-            count = conn.execute("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND ran_at>?",
-                                 (rule["id"], H.shift(H.now(), hours=-1))).fetchone()[0]
+            count = conn.execute(
+                "SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND ran_at>?",
+                (rule["id"], H.shift(H.now(), hours=-1)),
+            ).fetchone()[0]
             if count >= 50:
-                conn.execute("INSERT INTO rule_task_state(rule_id,paused_at,pause_reason) VALUES(?,?,?) "
-                             "ON CONFLICT(rule_id) DO UPDATE SET paused_at=excluded.paused_at,pause_reason=excluded.pause_reason",
-                             (rule["id"], H.now(), "Paused: too many runs"))
+                conn.execute(
+                    "INSERT INTO rule_task_state(rule_id,paused_at,pause_reason) VALUES(?,?,?) "
+                    "ON CONFLICT(rule_id) DO UPDATE SET paused_at=excluded.paused_at,pause_reason=excluded.pause_reason",
+                    (rule["id"], H.now(), "Paused: too many runs"),
+                )
                 _history(conn, item, rule, action, "Paused: too many runs")
                 continue
-            conn.execute("UPDATE rule_task_runs SET fired=1 WHERE rule_id=? AND task_id=? AND event=? AND revision=?",
-                         (rule["id"], item["task"], item["event"], item["revision"]))
+            conn.execute(
+                "UPDATE rule_task_runs SET fired=1 WHERE rule_id=? AND task_id=? AND event=? AND revision=?",
+                (rule["id"], item["task"], item["event"], item["revision"]),
+            )
             _run(conn, item, rule, params)
     except Exception:
         # Malformed legacy rows or unavailable automation storage never reject a task write.
@@ -178,6 +219,7 @@ def judge(conn, item):
 
 def _run(conn, item, rule, params):
     from . import rules as R, templating
+
     by, row, action = rule["action_by"], item["row"], params.get("action")
     queue = _PENDING.get()
     start = len(queue["items"]) if queue else 0
@@ -191,18 +233,41 @@ def _run(conn, item, rule, params):
         row = {**row, "private": int(H.task_private(conn, row) or H.task_private(conn, current))}
         if action not in ACTIONS or rule["then_outcome"] != R.ACTION:
             raise ValueError("unsupported Action")
-        values = {"event": item["event"], "actor": item["actor"], "task": {
-            k: row.get(renames.current_column("tasks", k)) for k in ("id", "title", "body", "note", "status", "owner", "requester", "type_id", "step_id")}}
+        values = {
+            "event": item["event"],
+            "actor": item["actor"],
+            "task": {
+                k: row.get(renames.current_column("tasks", k))
+                for k in ("id", "title", "body", "note", "status", "owner", "requester", "type_id", "step_id")
+            },
+        }
         if action in R.EVENT_RUNNERS:
             revision = f"task-rule:{rule['id']}:{item['event']}:{item['revision']}"
-            result = R.EVENT_RUNNERS[action](conn, rule["id"], by, params, values, event=item["event"],
-                                            subject=row["id"], revision=revision, task=row)
+            result = R.EVENT_RUNNERS[action](
+                conn,
+                rule["id"],
+                by,
+                params,
+                values,
+                event=item["event"],
+                subject=row["id"],
+                revision=revision,
+                task=row,
+            )
             if not result["ok"]:
                 raise ValueError("event Action failed")
             if action == "send_webhook":
-                conn.execute("UPDATE rule_task_runs SET webhook_event_id=? "
-                             "WHERE rule_id=? AND task_id=? AND event=? AND revision=?",
-                             (f"{params['type']}:{row['id']}:{revision}", rule["id"], row["id"], item["event"], item["revision"]))
+                conn.execute(
+                    "UPDATE rule_task_runs SET webhook_event_id=? "
+                    "WHERE rule_id=? AND task_id=? AND event=? AND revision=?",
+                    (
+                        f"{params['type']}:{row['id']}:{revision}",
+                        rule["id"],
+                        row["id"],
+                        item["event"],
+                        item["revision"],
+                    ),
+                )
             detail = "Completed: " + result["detail"]
         else:
             rendered = templating.render_json(params, values)

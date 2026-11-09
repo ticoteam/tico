@@ -24,14 +24,14 @@ LOG = logging.getLogger("tico.thread_rank")
 # The `thread_rankings` table: backend/migrations/0039_thread_rankings.sql.
 QUESTION_SET = "thread-rank"
 LEVELS = 10
-DEFAULT = 5             # a thread no pass has ranked yet
-NOISE = 1               # this level and below never list in Important
+DEFAULT = 5  # a thread no pass has ranked yet
+NOISE = 1  # this level and below never list in Important
 RUN_SECONDS = 300
 CALLS_PER_PASS = 20
 CALLS_PER_HOUR = 40
-DAILY_SHARE = 0.8       # ranking stops once the server's Decide calls today reach this share of the daily cap
-RERANK_SECONDS = 3600   # a thread is ranked again at most this often
-WINDOW_DAYS = 14        # only threads with a message this recent are ranked
+DAILY_SHARE = 0.8  # ranking stops once the server's Decide calls today reach this share of the daily cap
+RERANK_SECONDS = 3600  # a thread is ranked again at most this often
+WINDOW_DAYS = 14  # only threads with a message this recent are ranked
 PASS_SECONDS = 4 * 60
 MESSAGES, MESSAGE_CHARS, TITLE_CHARS, MEMBERS = 6, 300, 200, 8
 FINISHED = ("done", "closed", "declined")
@@ -40,6 +40,7 @@ _RUNNING = threading.Lock()
 
 def _audience(r):
     from .threads import _derived_audience
+
     return f"COALESCE({r}.audience,{_derived_audience(r)})"
 
 
@@ -47,15 +48,19 @@ def noise_sql(r="r"):
     """SQL true for a root that is noise by rule: a task's thread whose task is finished, or that no person owns or
     asked for."""
     finished = ",".join(f"'{s}'" for s in FINISHED)
-    return (f"({_audience(r)}='task' AND EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id AND "
-            f"(t.status IN ({finished}) OR (COALESCE(t.owner_id,'') NOT LIKE 'human:%' "
-            f"AND COALESCE(t.requester_id,'') NOT LIKE 'human:%'))))")
+    return (
+        f"({_audience(r)}='task' AND EXISTS (SELECT 1 FROM tasks t WHERE t.id={r}.task_id AND "
+        f"(t.status IN ({finished}) OR (COALESCE(t.owner_id,'') NOT LIKE 'human:%' "
+        f"AND COALESCE(t.requester_id,'') NOT LIKE 'human:%'))))"
+    )
 
 
 def importance_sql(r="r"):
     """SQL for a root's level: 0 when noise by rule, else its ranking, else DEFAULT."""
-    return (f"(CASE WHEN {noise_sql(r)} THEN 0 ELSE COALESCE((SELECT k.score FROM thread_rankings k "
-            f"WHERE k.thread_id={r}.id),{DEFAULT}) END)")
+    return (
+        f"(CASE WHEN {noise_sql(r)} THEN 0 ELSE COALESCE((SELECT k.score FROM thread_rankings k "
+        f"WHERE k.thread_id={r}.id),{DEFAULT}) END)"
+    )
 
 
 def level_of(score):
@@ -68,14 +73,16 @@ def candidates(c, at, limit=CALLS_PER_PASS):
     """The roots to rank now, newest activity first: open, with a message in the last WINDOW_DAYS, not noise by rule,
     never ranked or with messages since their ranking, and not tried (answered or not) in the last hour."""
     since, again = H.shift(at, days=-WINDOW_DAYS), H.shift(at, seconds=-RERANK_SECONDS)
-    sql = (f"SELECT * FROM (SELECT r.id, (SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id) AS activity, "
-           f"(SELECT MAX(s.last_message_at) FROM conversations s WHERE s.root_id=r.id) AS active_at, "
-           f"k.ranked_seq, k.tried_at FROM conversations r "
-           f"LEFT JOIN thread_rankings k ON k.thread_id=r.id "
-           f"WHERE r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND NOT {noise_sql('r')}) "
-           "WHERE active_at>:since AND activity>0 AND (ranked_seq IS NULL OR activity>ranked_seq) "
-           "AND (tried_at IS NULL OR tried_at<:again) "
-           "ORDER BY active_at DESC, id DESC LIMIT :n")
+    sql = (
+        f"SELECT * FROM (SELECT r.id, (SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id) AS activity, "
+        f"(SELECT MAX(s.last_message_at) FROM conversations s WHERE s.root_id=r.id) AS active_at, "
+        f"k.ranked_seq, k.tried_at FROM conversations r "
+        f"LEFT JOIN thread_rankings k ON k.thread_id=r.id "
+        f"WHERE r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND NOT {noise_sql('r')}) "
+        "WHERE active_at>:since AND activity>0 AND (ranked_seq IS NULL OR activity>ranked_seq) "
+        "AND (tried_at IS NULL OR tried_at<:again) "
+        "ORDER BY active_at DESC, id DESC LIMIT :n"
+    )
     return [dict(row) for row in c.execute(sql, {"since": since, "again": again, "n": limit})]
 
 
@@ -98,51 +105,77 @@ def _from(actor):
 def state_of(c, thread_id):
     """What the model reads of a root: its title, kind, who is in it and its last MESSAGES messages, oldest first."""
     from . import threads
+
     row = threads.thread_row(c, thread_id)
     if row is None:
         return None
     audience = threads.audience_of(row)
-    kind = {"task": "a task's thread", "personal": "a direct chat", "participants": "a direct chat",
-            "home": "a person's home thread", "meeting": "a meeting"}.get(audience, "a chat")
-    members = [r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=? LIMIT ?",
-                                       (thread_id, MEMBERS))]
+    kind = {
+        "task": "a task's thread",
+        "personal": "a direct chat",
+        "participants": "a direct chat",
+        "home": "a person's home thread",
+        "meeting": "a meeting",
+    }.get(audience, "a chat")
+    members = [
+        r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=? LIMIT ?", (thread_id, MEMBERS))
+    ]
     messages = c.execute(
         "SELECT m.sender_id, m.kind, m.body FROM messages m JOIN conversations s ON s.id=m.conversation_id "
         "WHERE s.root_id=? AND m.deleted_at IS NULL ORDER BY m.seq DESC, m.created_at DESC LIMIT ?",
-        (thread_id, MESSAGES)).fetchall()
-    state = {"title": str(row.get("subject") or "")[:TITLE_CHARS], "kind": kind, "members": _names(c, members),
-             "messages": [{"from": _from(m["sender_id"]), "text": str(m["body"] or "").strip()[:MESSAGE_CHARS]}
-                          for m in reversed(messages)]}
+        (thread_id, MESSAGES),
+    ).fetchall()
+    state = {
+        "title": str(row.get("subject") or "")[:TITLE_CHARS],
+        "kind": kind,
+        "members": _names(c, members),
+        "messages": [
+            {"from": _from(m["sender_id"]), "text": str(m["body"] or "").strip()[:MESSAGE_CHARS]}
+            for m in reversed(messages)
+        ],
+    }
     if audience == "task" and row.get("task_id"):
         task = H.task(c, row["task_id"])
         if task:
-            state["task"] = {"status": task.get("status") or "", "owner": _from(task.get("owner_id") or ""),
-                             "requester": _from(task.get("requester_id") or "")}
+            state["task"] = {
+                "status": task.get("status") or "",
+                "owner": _from(task.get("owner_id") or ""),
+                "requester": _from(task.get("requester_id") or ""),
+            }
     return {"thread": state}
 
 
 def calls_this_hour(c, at, label):
-    return c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND created_at>?",
-                     (label, H.shift(at, seconds=-3600))).fetchone()[0]
+    return c.execute(
+        "SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND created_at>?",
+        (label, H.shift(at, seconds=-3600)),
+    ).fetchone()[0]
 
 
 def save(c, thread_id, level, seq, at):
     """Keep a thread's new level as of message `seq`; a level that moved tells the readers' lists (`ranked`)."""
     old = c.execute("SELECT score FROM thread_rankings WHERE thread_id=?", (thread_id,)).fetchone()
-    c.execute("INSERT INTO thread_rankings(thread_id,score,ranked_seq,tried_at,created_at,updated_at) "
-              "VALUES(?,?,?,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET score=excluded.score, "
-              "ranked_seq=excluded.ranked_seq, tried_at=excluded.tried_at, updated_at=excluded.updated_at",
-              (thread_id, int(level), int(seq or 0), at, at, at))
+    c.execute(
+        "INSERT INTO thread_rankings(thread_id,score,ranked_seq,tried_at,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET score=excluded.score, "
+        "ranked_seq=excluded.ranked_seq, tried_at=excluded.tried_at, updated_at=excluded.updated_at",
+        (thread_id, int(level), int(seq or 0), at, at, at),
+    )
     if (old[0] if old else None) != int(level) and (old is not None or int(level) != DEFAULT):
-        c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) VALUES('threads','ranked',?,?,?)",
-                  (thread_id, thread_id, H.now()))
+        c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) VALUES('threads','ranked',?,?,?)",
+            (thread_id, thread_id, H.now()),
+        )
 
 
 def tried(c, thread_id, at):
     """A call that did not answer: the thread keeps its level and waits the hour like any other."""
-    c.execute("INSERT INTO thread_rankings(thread_id,score,ranked_seq,tried_at,created_at,updated_at) "
-              "VALUES(?,NULL,0,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET tried_at=excluded.tried_at, "
-              "updated_at=excluded.updated_at", (thread_id, at, at, at))
+    c.execute(
+        "INSERT INTO thread_rankings(thread_id,score,ranked_seq,tried_at,created_at,updated_at) "
+        "VALUES(?,NULL,0,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET tried_at=excluded.tried_at, "
+        "updated_at=excluded.updated_at",
+        (thread_id, at, at, at),
+    )
 
 
 # ----------------------------------------------------------------------------- the pass
@@ -215,6 +248,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
 
 def route_of(result):
     from .stale_review import route_of as route
+
     return route(result)
 
 
@@ -225,11 +259,16 @@ def tick(store, at=None, engine=None):
 
     def work():
         from . import system_routines as SR
+
         run = SR.Run("thread_rank")
         try:
             summary = run_pass(store, at, engine=engine)
-            run.did(f"Ranked {summary['ranked']} thread{'s' if summary['ranked'] != 1 else ''}"
-                    if summary.get("ranked") else "Nothing to rank", quiet=not summary.get("ranked"))
+            run.did(
+                f"Ranked {summary['ranked']} thread{'s' if summary['ranked'] != 1 else ''}"
+                if summary.get("ranked")
+                else "Nothing to rank",
+                quiet=not summary.get("ranked"),
+            )
             if summary.get("routes") or summary.get("cost_usd"):
                 run.ai(summary.get("routes"), None, summary.get("cost_usd"))
             if summary.get("errors") and not summary.get("ranked"):
@@ -240,6 +279,7 @@ def tick(store, at=None, engine=None):
         finally:
             _RUNNING.release()
         SR.write(store, run)
+
     thread = threading.Thread(target=work, name="thread-rank", daemon=True)
     thread.start()
     return thread

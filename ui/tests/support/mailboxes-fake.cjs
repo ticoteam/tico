@@ -1,4 +1,4 @@
-// A fake of the Google mailboxes routes (backend/mailboxes.py) for the Settings > Inboxes scripts (ui/tests/inboxes.cjs,
+// A fake of the Google mailboxes routes (backend/mailboxes.py) for the inbox pages under Tools (ui/tests/inboxes.cjs,
 // ui/tests/mailbox.cjs).
 // answer(path, method, body) gives the JSON a route answers ({status, body} for a refusal), or undefined for any other
 // path. `fake.state` holds the mailboxes, their accesses and routines; every write is kept in `fake.writes` as
@@ -84,7 +84,7 @@ exports.mailboxesFake = ({admin = true, me = 'ana'} = {}) => {
   return fake;
 };
 
-// Opens `hash` (Settings > Inboxes, one inbox's page or Inboxes > Settings) on a fresh page over `fake` and a google-fake
+// Opens `hash` (Tools, one inbox's page or Tools › Settings) on a fresh page over `fake` and a google-fake
 // hub `google`, signed in as fake.me: an owner when fake.admin, a member otherwise. Waits for `ready`. The other kinds'
 // routes answer empty unless `extra(path, method, body, url)` answers them (undefined passes); `mail` maps a mailbox
 // address to its GET /v2/mail/messages list; `skip` starts with first run skipped; `theme` sets data-theme.
@@ -112,6 +112,7 @@ const EMPTY = {
   '/api/v2/postal/items': () => ({items: [], next: null}),
   '/api/v2/postal/intake': () => ({intake: null}),
   '/api/v2/automations': () => ({automations: []}),
+  '/api/v2/tool-index': () => ({rows: [], counts: {}}),
 };
 // A TICO_SHOTS screenshot once the route's fade has ended, in the theme its name says ('' keeps the page's own).
 exports.shot = async (page, file, theme = '') => {
@@ -121,7 +122,7 @@ exports.shot = async (page, file, theme = '') => {
     .filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: `${process.env.TICO_SHOTS}/${file}`, fullPage: true, animations: 'disabled'});
 };
-exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready, width = 1440, height = 900, automations = {},
+exports.open = async (browser, fake, google, {hash = '#/tools', ready, width = 1440, height = 900, automations = {},
   extra = () => undefined, mail = {}, skip = false, theme = ''} = {}) => {
   const page = await browser.newPage({viewport: {width, height}, serviceWorkers: 'block'});
   const seen = {errors: []};
@@ -132,10 +133,10 @@ exports.open = async (browser, fake, google, {hash = '#/settings/inboxes', ready
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const raw = request.postData(), body = raw ? JSON.parse(raw) : null;
     const more = extra(p, method, body, url);

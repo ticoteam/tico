@@ -6,7 +6,13 @@ Run rows are kept 30 days (`automations.prune` drops only their step detail), so
 `automation_runs` directly. The system jobs Tico runs on its own timers record their runs in `system_runs`
 (backend/system_routines.py), not here; their read-only built-in automations (`tico.builtin.job.<key>`, the
 migration's mirrors) read them from there. A quiet run that repeats its job's last result is folded into that row, so a
-system job counts one run per row, with `count` the runs folded into it."""
+system job counts one run per row, with `count` the runs folded into it. The Maintenance run (backend/maintenance.py)
+keeps its own run log, `maintenance_runs`; anyone signed in sees it, as GET /api/v2/maintenance does, so its runs are
+listed and counted here under the list's Maintenance row (ui/app/automations-maintenance.ts). The Heartbeat
+(backend/heartbeat.py) is treated the same: its mirror is never listed, and its runs (`system_runs` job `heartbeat`,
+quiet beats folded) are listed and counted under the list's Heartbeat row (ui/app/automations-heartbeat.ts), for anyone
+signed in, as GET /api/v2/heartbeat is."""
+
 import json
 from datetime import timedelta
 
@@ -16,21 +22,61 @@ from .store import H, Problem
 # range: (seconds, buckets). 5m is 10 of 30s, 1h 12 of 5 min, 24h 24 of an hour, 7d 28 of 6 hours.
 RANGES = {"5m": (300, 10), "1h": (3600, 12), "24h": (86400, 24), "7d": (7 * 86400, 28)}
 KINDS = ("message", "task_received", "schedule", "webhook", "listening", "event", "due", "system")
-STATUSES = {"done": ("ok", "empty", "skipped"), "ok": ("ok", "empty", "skipped"), "failed": ("failed",),
-            "waiting": ("waiting",), "running": ("queued", "running"), "held": ("held",)}
+STATUSES = {
+    "done": ("ok", "empty", "skipped"),
+    "ok": ("ok", "empty", "skipped"),
+    "failed": ("failed",),
+    "waiting": ("waiting",),
+    "running": ("queued", "running"),
+    "held": ("held",),
+}
 JOB_PREFIX = "tico.builtin.job."
-SYSTEM_RUN = "sys_"          # a system job's run id, so it never meets an automation run's
+TASK_RULE = "tico.builtin.task_rule"  # a task rule's read-only mirror (redesign_migration `_builtins`)
+SYSTEM_RUN = "sys_"  # a system job's run id, so it never meets an automation run's
+MAINT = "maintenance"  # the Maintenance row's id and the run's owner: Tico itself
+MAINT_RUN = "mnt_"  # a Maintenance run's id here
+HEART = "heartbeat"  # the Heartbeat row's id, and its system job's key
+HEART_RUN = "hb_"  # a Heartbeat run's id here
 IDS_MAX = 500
-STEP_WORDS = {"filter": "Filter", "decide": "Decide", "llm": "LLM", "find": "Find", "bot_turn": "Bot turn",
-              "paths": "Paths", "action": "Action"}
-DONE_WORDS = {"archive": "Archived", "leave_for_you": "Left for you", "draft_reply": "Draft reply",
-              "send_reply": "Replied", "create_task": "Task created", "label": "Labeled", "forward": "Forwarded",
-              "wake_bot": "Bot woken", "note": "Noted", "post_update": "Update posted", "call_webhook": "Webhook called",
-              "assign": "Assigned", "unsubscribe": "Unsubscribed"}
-ACTION_WORDS = {"archive": "Archive", "leave_for_you": "Leave for you", "draft_reply": "Draft reply",
-                "send_reply": "Send reply", "create_task": "Create task", "label": "Label", "forward": "Forward",
-                "wake_bot": "Wake a bot", "note": "Note", "post_update": "Post update", "call_webhook": "Call a webhook",
-                "assign": "Assign", "unsubscribe": "Unsubscribe"}
+STEP_WORDS = {
+    "filter": "Filter",
+    "decide": "Decide",
+    "llm": "LLM",
+    "find": "Find",
+    "bot_turn": "Bot turn",
+    "paths": "Paths",
+    "action": "Action",
+}
+DONE_WORDS = {
+    "archive": "Archived",
+    "leave_for_you": "Left for you",
+    "draft_reply": "Draft reply",
+    "send_reply": "Replied",
+    "create_task": "Task created",
+    "label": "Labeled",
+    "forward": "Forwarded",
+    "wake_bot": "Bot woken",
+    "note": "Noted",
+    "post_update": "Update posted",
+    "call_webhook": "Webhook called",
+    "assign": "Assigned",
+    "unsubscribe": "Unsubscribed",
+}
+ACTION_WORDS = {
+    "archive": "Archive",
+    "leave_for_you": "Leave for you",
+    "draft_reply": "Draft reply",
+    "send_reply": "Send reply",
+    "create_task": "Create task",
+    "label": "Label",
+    "forward": "Forward",
+    "wake_bot": "Wake a bot",
+    "note": "Note",
+    "post_update": "Post update",
+    "call_webhook": "Call a webhook",
+    "assign": "Assign",
+    "unsubscribe": "Unsubscribe",
+}
 
 
 def window(rng):
@@ -43,26 +89,55 @@ def window(rng):
 
 
 def system_key(flow):
-    """The system job a read-only built-in shows, else None."""
+    """The `system_runs` job a read-only built-in shows, else None: a system job's key, or a task rule's id (each task
+    rule records its runs under its id, backend/task_rules.py `tick`)."""
+    if not flow.get("readonly"):
+        return None
     name = str((flow.get("trigger") or {}).get("name") or "")
-    return name[len(JOB_PREFIX):] if flow.get("readonly") and name.startswith(JOB_PREFIX) else None
+    if name.startswith(JOB_PREFIX):
+        return name[len(JOB_PREFIX) :]
+    source = flow.get("source") if isinstance(flow.get("source"), dict) else {}
+    if name == TASK_RULE and source.get("kind") == "task_rule" and source.get("id"):
+        return str(source["id"])
+    return None
+
+
+def hidden_jobs(c, settings):
+    """The system jobs that cannot do anything on this install (system_routines `not_applying`): their mirrors are left
+    out of the list, the runs and the counts until the feature they need is set up. None for `settings`: none hidden."""
+    if settings is None:
+        return set()
+    from . import system_routines as SR
+
+    return SR.not_applying(c, settings)
+
+
+def shown(flow, hidden):
+    """Whether an automation is listed: not the Heartbeat's mirror (the list's Heartbeat row stands for it), nor the
+    mirror of a job `hidden_jobs` names."""
+    key = system_key(flow)
+    return key != HEART and (not hidden or key not in hidden)
 
 
 def kind_of(flow):
-    """The trigger as the page groups it: its type, or `system` for Tico's own jobs (their mirrors, the Health
-    Monitor)."""
+    """The trigger as the page groups it: its type, or `system` for Tico's own jobs (their mirrors, the task rules'
+    mirrors, the Health Monitor)."""
     trigger = flow.get("trigger") or {}
-    if flow.get("builtin") and (system_key(flow) or trigger.get("name") == "tico.builtin.health"
-                                or (flow.get("source") or {}).get("kind") == "system_job"):
+    if flow.get("builtin") and (
+        system_key(flow)
+        or trigger.get("name") == "tico.builtin.health"
+        or (flow.get("source") or {}).get("kind") == "system_job"
+    ):
         return "system"
     return trigger.get("type") or ""
 
 
 def system_jobs(c, settings=None):
-    """{job key: {schedule, on, next, last}}: each system job's schedule in words and its newest run, read once for a
-    list of their mirrors."""
+    """{job key: {schedule, on, next, last}}: each system job's and task rule's schedule in words and its newest run,
+    read once for a list of their mirrors."""
     from datetime import datetime, timezone
     from . import system_routines as SR
+
     if not H._has_table(c, "system_runs"):
         return {}
     now = datetime.now(timezone.utc)
@@ -76,9 +151,28 @@ def system_jobs(c, settings=None):
             following = SR.next_at(job, row, now, settings, c, timed) if job.records else None
         except Exception:  # noqa: BLE001 - a job whose source cannot be read just shows no next run
             following = None
-        out[job.key] = {"schedule": SR.schedule_words(job.key, cfg) if timed else job.schedule,
-                        "on": cfg["on"] if cfg else True, "next": SR._stamp(following) if following else None,
-                        "last": _system_last(row) if row else None}
+        out[job.key] = {
+            "schedule": SR.schedule_words(job.key, cfg) if timed else job.schedule,
+            "on": cfg["on"] if cfg else True,
+            "next": SR._stamp(following) if following else None,
+            "last": _system_last(row) if row else None,
+        }
+    if H._has_table(c, "task_rules"):
+        from . import task_rules
+
+        for rule in c.execute("SELECT id, enabled, preset, daily_at FROM task_rules").fetchall():
+            cfg, row = task_rules.config(rule), last.get(rule["id"])
+            try:
+                following = SR.next_due(cfg, H.parse_ts(row["started_at"]) if row else None, now) if cfg["on"] else None
+                schedule = SR.PRESETS[cfg["preset"]][0].format(at=cfg["daily_at"] or "")
+            except Exception:  # noqa: BLE001 - a rule saved with a preset this release does not know
+                following, schedule = None, None
+            out[rule["id"]] = {
+                "schedule": schedule,
+                "on": cfg["on"],
+                "next": SR._stamp(following) if following else None,
+                "last": _system_last(row) if row else None,
+            }
     return out
 
 
@@ -87,18 +181,25 @@ def _system_status(row):
 
 
 def _system_last(row):
-    return {"id": SYSTEM_RUN + row["id"], "status": _system_status(row), "started_at": row["started_at"],
-            "finished_at": row["finished_at"]}
+    return {
+        "id": SYSTEM_RUN + row["id"],
+        "status": _system_status(row),
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+    }
 
 
-def visible(c, who):
-    """(row, flow) of every automation `who` may see, newest first; one org chart for the lot."""
+def visible(c, who, settings=None):
+    """(row, flow) of every automation `who` may see, newest first; one org chart for the lot. With `settings`, the
+    mirror of a system job that cannot run here is left out (`hidden_jobs`)."""
     from . import automations as AU
+
     chart = AU.Chart(c) if who.role in ("human", "bot") else None
+    hidden = hidden_jobs(c, settings)
     out = []
     for r in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created_at DESC").fetchall():
         flow = AU.flow_of(r)
-        if AU.may_change(c, who, {**flow, "readonly": False}, chart):
+        if shown(flow, hidden) and AU.may_change(c, who, {**flow, "readonly": False}, chart):
             out.append((dict(r), flow))
     return out
 
@@ -111,8 +212,13 @@ def _pick(rows, trigger="", owner="", ids=""):
     if len(wanted) > IDS_MAX:
         raise Problem("invalid", f"ids names at most {IDS_MAX} automations", 422)
     owner = F.owner_ref(owner) if owner else ""
-    return [(r, f) for r, f in rows if (not kinds or kind_of(f) in kinds) and (not owner or r["owner_id"] == owner)
-            and (not wanted or r["id"] in wanted)]
+    return [
+        (r, f)
+        for r, f in rows
+        if (not kinds or kind_of(f) in kinds)
+        and (not owner or r["owner_id"] == owner)
+        and (not wanted or r["id"] in wanted)
+    ]
 
 
 # ---------------------------------------------------------------------------------------------------- a run's row
@@ -123,12 +229,16 @@ def _words(name):
 def started_by(payload, trigger_ref="", kind=""):
     """What started the run, in a few words: the sender and subject, the task's title, the webhook's event."""
     p = payload if isinstance(payload, dict) else {}
-    m, t, w, li, e, d = (p.get(k) if isinstance(p.get(k), dict) else None
-                         for k in ("message", "task", "webhook", "listening", "event", "due"))
+    m, t, w, li, e, d = (
+        p.get(k) if isinstance(p.get(k), dict) else None
+        for k in ("message", "task", "webhook", "listening", "event", "due")
+    )
     if m:
         if m.get("source") == "slack":
-            words = [str(m.get("inbox") or "Slack").replace("slack:dm", "Slack DM").replace("slack:#", "Slack #"),
-                     str(m.get("text") or "").split("\n")[0]]
+            words = [
+                str(m.get("inbox") or "Slack").replace("slack:dm", "Slack DM").replace("slack:#", "Slack #"),
+                str(m.get("text") or "").split("\n")[0],
+            ]
         else:
             words = ["From " + str(m.get("from_name") or m.get("from") or "?"), str(m.get("subject") or "")]
     elif t:
@@ -204,45 +314,171 @@ def run_row(run, row, flow):
     except (TypeError, ValueError):
         state = None
     kind = kind_of(flow)
-    return {"id": run["id"], "automation_id": row["id"], "automation_name": row["name"], "trigger": kind,
-            "owner_id": row["owner_id"], "version": run["version"], "trigger_ref": run["trigger_ref"],
-            "started_at": run["started_at"], "finished_at": run["finished_at"], "status": run["status"], "cost": run["cost"],
-            "started_by": started_by((state or {}).get("payload"), run["trigger_ref"], kind),
-            "outcome": outcome(run["status"], state, flow),
-            "step_count": len((state or {}).get("steps") or []) if state else None, "count": 1}
+    return {
+        "id": run["id"],
+        "automation_id": row["id"],
+        "automation_name": row["name"],
+        "trigger": kind,
+        "owner_id": row["owner_id"],
+        "version": run["version"],
+        "trigger_ref": run["trigger_ref"],
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "status": run["status"],
+        "cost": run["cost"],
+        "started_by": started_by((state or {}).get("payload"), run["trigger_ref"], kind),
+        "outcome": outcome(run["status"], state, flow),
+        "step_count": len((state or {}).get("steps") or []) if state else None,
+        "count": 1,
+    }
 
 
 def system_row(run, row):
     status = _system_status(run)
-    return {"id": SYSTEM_RUN + run["id"], "automation_id": row["id"], "automation_name": row["name"],
-            "trigger": "system", "owner_id": row["owner_id"], "version": row["version"], "trigger_ref": "system",
-            "started_at": run["started_at"], "finished_at": run["finished_at"], "status": status, "cost": run["cost_usd"] or 0,
-            "started_by": "Scheduled", "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140],
-            "step_count": None, "count": run["runs"] or 1}
+    return {
+        "id": SYSTEM_RUN + run["id"],
+        "automation_id": row["id"],
+        "automation_name": row["name"],
+        "trigger": "system",
+        "owner_id": row["owner_id"],
+        "version": row["version"],
+        "trigger_ref": "system",
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "status": status,
+        "cost": run["cost_usd"] or 0,
+        "started_by": "Scheduled",
+        "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140],
+        "step_count": None,
+        "count": run["runs"] or 1,
+    }
+
+
+def maint_row(run):
+    status = _system_status(run)
+    return {
+        "id": MAINT_RUN + run["id"],
+        "automation_id": MAINT,
+        "automation_name": "Maintenance",
+        "trigger": "system",
+        "owner_id": "tico",
+        "version": 1,
+        "trigger_ref": run["trigger"],
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "status": status,
+        "cost": run["cost_usd"] or 0,
+        "started_by": "Run now" if run["trigger"] == "run_now" else "Scheduled",
+        "outcome": str(run["result"] or ("Done" if status == "ok" else "Failed" if status == "failed" else "Running"))[
+            :140
+        ],
+        "step_count": None,
+        "count": 1,
+    }
+
+
+def _maint_shown(c, trigger="", owner="", ids=""):
+    """Whether the Maintenance run's log is in a listing narrowed by trigger, owner and ids."""
+    kinds = {k for k in str(trigger or "").split(",") if k}
+    wanted = {i for i in str(ids or "").split(",") if i}
+    return (
+        H._has_table(c, "maintenance_runs")
+        and (not kinds or "system" in kinds)
+        and (not owner or owner == "tico")
+        and (not wanted or MAINT in wanted)
+    )
+
+
+def heart_row(run):
+    status = _system_status(run)
+    return {
+        "id": HEART_RUN + run["id"],
+        "automation_id": HEART,
+        "automation_name": "Heartbeat",
+        "trigger": "system",
+        "owner_id": "tico",
+        "version": 1,
+        "trigger_ref": "system",
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "status": status,
+        "cost": run["cost_usd"] or 0,
+        "started_by": "Scheduled",
+        "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140],
+        "step_count": None,
+        "count": run["runs"] or 1,
+    }
+
+
+def _heart_shown(c, trigger="", owner="", ids=""):
+    """Whether the Heartbeat's runs are in a listing narrowed by trigger, owner and ids."""
+    kinds = {k for k in str(trigger or "").split(",") if k}
+    wanted = {i for i in str(ids or "").split(",") if i}
+    return (
+        H._has_table(c, "system_runs")
+        and (not kinds or "system" in kinds)
+        and (not owner or owner == "tico")
+        and (not wanted or HEART in wanted)
+    )
+
+
+def _spread(r, start, step):
+    """{bucket: runs} of one `system_runs` row inside the range from `start`, and how many runs it stands for. A folded
+    row stands for `runs` quiet repeats between first_started and started (its latest): they are spread evenly over that
+    time and only those inside the range count. A row from before first_started was kept counts once, at started."""
+    at = H.parse_ts(r["started_at"])
+    first, k = H.parse_ts(r["first_started_at"] or ""), max(int(r["runs"] or 1), 1)
+    if not first or first >= at or k == 1:
+        times = [at]
+    else:
+        times = [first + (at - first) * i / (k - 1) for i in range(k)]
+    buckets = {}
+    for t in times:
+        if t >= start:
+            b = int((t - start) / step)
+            buckets[b] = buckets.get(b, 0) + 1
+    return buckets, len(times)
 
 
 def system_runs_of(c, key, limit, before=""):
     """One system job's runs as an automation's run log shows them (GET /{id}/runs on its mirror)."""
     at = None
     if before:
-        at = c.execute("SELECT started_at, id FROM system_runs WHERE id=? AND job=?",
-                       (before.removeprefix(SYSTEM_RUN), key)).fetchone() if H._has_table(c, "system_runs") else None
+        at = (
+            c.execute(
+                "SELECT started_at, id FROM system_runs WHERE id=? AND job=?", (before.removeprefix(SYSTEM_RUN), key)
+            ).fetchone()
+            if H._has_table(c, "system_runs")
+            else None
+        )
         if not at:
             raise Problem("not_found", "No such run", 404)
     if not H._has_table(c, "system_runs"):
         return [], False
-    rows = c.execute("SELECT * FROM system_runs WHERE job=?" + (" AND (started_at<? OR (started_at=? AND id<?))" if at else "")
-                     + " ORDER BY started_at DESC, id DESC LIMIT ?",
-                     (key, *((at["started_at"], at["started_at"], at["id"]) if at else ()), limit + 1)).fetchall()
+    rows = c.execute(
+        "SELECT * FROM system_runs WHERE job=?"
+        + (" AND (started_at<? OR (started_at=? AND id<?))" if at else "")
+        + " ORDER BY started_at DESC, id DESC LIMIT ?",
+        (key, *((at["started_at"], at["started_at"], at["id"]) if at else ()), limit + 1),
+    ).fetchall()
     return rows[:limit], len(rows) > limit
 
 
 def system_run_view(run, aid):
     """A system job's run in the shape of an automation's run (no steps: the job is one block of Tico's code)."""
-    return {"id": SYSTEM_RUN + run["id"], "automation_id": aid, "version": 1, "trigger_ref": "system",
-            "started_at": run["started_at"], "finished_at": run["finished_at"], "status": _system_status(run),
-            "cost": run["cost_usd"] or 0, "summary": str(run["result"] or "")[:140] or None, "steps": [],
-            "count": run["runs"] or 1}
+    return {
+        "id": SYSTEM_RUN + run["id"],
+        "automation_id": aid,
+        "version": 1,
+        "trigger_ref": "system",
+        "started_at": run["started_at"],
+        "finished_at": run["finished_at"],
+        "status": _system_status(run),
+        "cost": run["cost_usd"] or 0,
+        "summary": str(run["result"] or "")[:140] or None,
+        "steps": [],
+        "count": run["runs"] or 1,
+    }
 
 
 # ---------------------------------------------------------------------------------------------------- the routes
@@ -255,14 +491,15 @@ def _cursor(before):
     return started, rid.removeprefix(SYSTEM_RUN)
 
 
-def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, before=""):
+def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, before="", settings=None):
     """Runs across what `who` may see, newest first: `next` is the `before` for the page after."""
     from . import automations as AU
+
     _, since, _, _ = window(rng)
     if status and status not in STATUSES:
         raise Problem("invalid", "status is one of " + ", ".join(STATUSES), 422)
     limit, at = max(1, min(int(limit), 100)), _cursor(before)
-    picked = _pick(visible(c, who), trigger, owner, ids)
+    picked = _pick(visible(c, who, settings), trigger, owner, ids)
     by_id = {r["id"]: (r, f) for r, f in picked}
     jobs = {key: (r, f) for r, f in picked if (key := system_key(f))}
     page_at = " AND (started_at<? OR (started_at=? AND id<?))" if at else ""
@@ -270,22 +507,80 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
     found = []
     if by_id:
         states = STATUSES.get(status)
-        found += [("a", r) for r in c.execute(
-            "SELECT * FROM automation_runs WHERE started_at>=? AND automation_id IN (SELECT value FROM json_each(?))"
-            + (f" AND status IN ({','.join('?' * len(states))})" if states else "") + page_at
-            + " ORDER BY started_at DESC, id DESC LIMIT ?",
-            (since, json.dumps(list(by_id)), *(states or ()), *marks, limit + 1)).fetchall()]
+        found += [
+            ("a", r)
+            for r in c.execute(
+                "SELECT * FROM automation_runs WHERE started_at>=? AND automation_id IN (SELECT value FROM json_each(?))"
+                + (f" AND status IN ({','.join('?' * len(states))})" if states else "")
+                + page_at
+                + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                (since, json.dumps(list(by_id)), *(states or ()), *marks, limit + 1),
+            ).fetchall()
+        ]
     if jobs and status not in ("waiting", "held") and H._has_table(c, "system_runs"):
-        where = {"done": " AND ok=1 AND finished_at IS NOT NULL", "ok": " AND ok=1 AND finished_at IS NOT NULL",
-                 "failed": " AND ok=0", "running": " AND finished_at IS NULL"}.get(status, "")
-        found += [("s", r) for r in c.execute(
-            "SELECT * FROM system_runs WHERE started_at>=? AND job IN (SELECT value FROM json_each(?))" + where + page_at
-            + " ORDER BY started_at DESC, id DESC LIMIT ?", (since, json.dumps(list(jobs)), *marks, limit + 1)).fetchall()]
+        where = {
+            "done": " AND ok=1 AND finished_at IS NOT NULL",
+            "ok": " AND ok=1 AND finished_at IS NOT NULL",
+            "failed": " AND ok=0",
+            "running": " AND finished_at IS NULL",
+        }.get(status, "")
+        found += [
+            ("s", r)
+            for r in c.execute(
+                "SELECT * FROM system_runs WHERE started_at>=? AND job IN (SELECT value FROM json_each(?))"
+                + where
+                + page_at
+                + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                (since, json.dumps(list(jobs)), *marks, limit + 1),
+            ).fetchall()
+        ]
+    if status not in ("waiting", "held") and _maint_shown(c, trigger, owner, ids):
+        where = {
+            "done": " AND ok=1 AND finished_at IS NOT NULL",
+            "ok": " AND ok=1 AND finished_at IS NOT NULL",
+            "failed": " AND finished_at IS NOT NULL AND ok=0",
+            "running": " AND finished_at IS NULL",
+        }.get(status, "")
+        found += [
+            ("m", r)
+            for r in c.execute(
+                "SELECT * FROM maintenance_runs WHERE started_at>=?"
+                + where
+                + page_at
+                + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                (since, *marks, limit + 1),
+            ).fetchall()
+        ]
+    if status not in ("waiting", "held") and _heart_shown(c, trigger, owner, ids):
+        where = {
+            "done": " AND ok=1 AND finished_at IS NOT NULL",
+            "ok": " AND ok=1 AND finished_at IS NOT NULL",
+            "failed": " AND ok=0",
+            "running": " AND finished_at IS NULL",
+        }.get(status, "")
+        found += [
+            ("h", r)
+            for r in c.execute(
+                "SELECT * FROM system_runs WHERE job=? AND started_at>=?"
+                + where
+                + page_at
+                + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                (HEART, since, *marks, limit + 1),
+            ).fetchall()
+        ]
     found.sort(key=lambda x: (x[1]["started_at"], x[1]["id"]), reverse=True)
     more = len(found) > limit
     found = found[:limit]
-    out = [run_row(r, *by_id[r["automation_id"]]) if src == "a" else system_row(r, jobs[r["job"]][0])
-           for src, r in found]
+    out = [
+        run_row(r, *by_id[r["automation_id"]])
+        if src == "a"
+        else system_row(r, jobs[r["job"]][0])
+        if src == "s"
+        else heart_row(r)
+        if src == "h"
+        else maint_row(r)
+        for src, r in found
+    ]
     shown, cut = AU.page(out, limit, 0, AU.RUN_BYTES)
     nxt = None
     if (more or cut is not None) and shown:
@@ -294,18 +589,19 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
     return {"runs": shown, "next": nxt, "since": since}
 
 
-def stats(c, who, rng="1h"):
+def stats(c, who, rng="1h", settings=None):
     """Per automation `who` may see that ran in the range: runs, failed, cost and its buckets oldest first; the
     totals the same way. An automation with no run in the range is left out."""
     now, since, width, n = window(rng)
-    rows = visible(c, who)
+    rows = visible(c, who, settings)
     seen = {r["id"] for r, _ in rows}
     jobs = {key: r["id"] for r, f in rows if (key := system_key(f))}
     per = {}
 
     def add(aid, b, runs, failed, cost):
-        s = per.setdefault(aid, {"id": aid, "runs": 0, "failed": 0, "cost": 0.0,
-                                 "buckets": [{"ok": 0, "failed": 0} for _ in range(n)]})
+        s = per.setdefault(
+            aid, {"id": aid, "runs": 0, "failed": 0, "cost": 0.0, "buckets": [{"ok": 0, "failed": 0} for _ in range(n)]}
+        )
         b = min(max(int(b or 0), 0), n - 1)
         s["runs"] += runs
         s["failed"] += failed
@@ -314,34 +610,47 @@ def stats(c, who, rng="1h"):
         s["buckets"][b]["failed"] += failed
 
     if seen:
-        for r in c.execute("SELECT automation_id, CAST((julianday(substr(started_at,1,23)) - julianday(?)) * 86400.0 / ? "
-                           "AS INTEGER) AS b, COUNT(*) AS n, SUM(status='failed') AS f, SUM(cost) AS cost "
-                           "FROM automation_runs WHERE started_at>=? AND automation_id IN (SELECT value FROM json_each(?)) "
-                           "GROUP BY automation_id, b", (since[:23], width, since, json.dumps(list(seen)))):
+        for r in c.execute(
+            "SELECT automation_id, CAST((julianday(substr(started_at,1,23)) - julianday(?)) * 86400.0 / ? "
+            "AS INTEGER) AS b, COUNT(*) AS n, SUM(status='failed') AS f, SUM(cost) AS cost "
+            "FROM automation_runs WHERE started_at>=? AND automation_id IN (SELECT value FROM json_each(?)) "
+            "GROUP BY automation_id, b",
+            (since[:23], width, since, json.dumps(list(seen))),
+        ):
             add(r["automation_id"], r["b"], r["n"], r["f"] or 0, r["cost"])
     if jobs and H._has_table(c, "system_runs"):
         start, step = H.parse_ts(since), timedelta(seconds=width)
-        for r in c.execute("SELECT job, started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE started_at>=? "
-                           "AND job IN (SELECT value FROM json_each(?))", (since, json.dumps(list(jobs)))):
-            at = H.parse_ts(r["started_at"])
-            if not at:
+        for r in c.execute(
+            "SELECT job, started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE started_at>=? "
+            "AND job IN (SELECT value FROM json_each(?))",
+            (since, json.dumps(list(jobs))),
+        ):
+            if not H.parse_ts(r["started_at"]):
                 add(jobs[r["job"]], n - 1, 1, 0 if r["ok"] else 1, r["cost_usd"])
                 continue
-            # A folded row stands for `runs` quiet repeats between first_started and started (its latest): they are
-            # spread evenly over that time and only those inside the range count. A row from before first_started
-            # was kept counts once, at started.
-            first, k = H.parse_ts(r["first_started_at"] or ""), max(int(r["runs"] or 1), 1)
-            if not first or first >= at or k == 1:
-                times = [at]
-            else:
-                times = [first + (at - first) * i / (k - 1) for i in range(k)]
-            buckets = {}
-            for t in times:
-                if t >= start:
-                    b = int((t - start) / step)
-                    buckets[b] = buckets.get(b, 0) + 1
+            buckets, total = _spread(r, start, step)
             for b, m in buckets.items():
-                add(jobs[r["job"]], b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / len(times))
+                add(jobs[r["job"]], b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / total)
+    if _maint_shown(c):
+        for r in c.execute(
+            "SELECT CAST((julianday(substr(started_at,1,23)) - julianday(?)) * 86400.0 / ? AS INTEGER) AS b, "
+            "COUNT(*) AS n, SUM(finished_at IS NOT NULL AND ok=0) AS f, SUM(cost_usd) AS cost "
+            "FROM maintenance_runs WHERE started_at>=? GROUP BY b",
+            (since[:23], width, since),
+        ):
+            add(MAINT, r["b"], r["n"], r["f"] or 0, r["cost"])
+    if _heart_shown(c):
+        start, step = H.parse_ts(since), timedelta(seconds=width)
+        for r in c.execute(
+            "SELECT started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE job=? AND started_at>=?",
+            (HEART, since),
+        ):
+            if not H.parse_ts(r["started_at"]):
+                add(HEART, n - 1, 1, 0 if r["ok"] else 1, r["cost_usd"])
+                continue
+            buckets, total = _spread(r, start, step)
+            for b, m in buckets.items():
+                add(HEART, b, m, 0 if r["ok"] else m, (r["cost_usd"] or 0) * m / total)
     totals = {"runs": 0, "failed": 0, "cost": 0.0, "buckets": [{"ok": 0, "failed": 0} for _ in range(n)]}
     for s in per.values():
         s["cost"] = round(s["cost"], 6)
@@ -352,8 +661,14 @@ def stats(c, who, rng="1h"):
             totals["buckets"][i]["ok"] += b["ok"]
             totals["buckets"][i]["failed"] += b["failed"]
     totals["cost"] = round(totals["cost"], 6)
-    return {"range": rng, "since": since, "until": now, "bucket_seconds": int(width), "automations": list(per.values()),
-            "totals": totals}
+    return {
+        "range": rng,
+        "since": since,
+        "until": now,
+        "bucket_seconds": int(width),
+        "automations": list(per.values()),
+        "totals": totals,
+    }
 
 
 def install(app, store, auth):
@@ -361,8 +676,16 @@ def install(app, store, auth):
     from fastapi import Request
 
     @app.get("/api/v2/automations/runs")
-    def automations_all_runs(request: Request, range: str = "1h", status: str = "", trigger: str = "",  # noqa: A002
-                             owner: str = "", ids: str = "", limit: int = 50, before: str = ""):
+    def automations_all_runs(
+        request: Request,
+        range: str = "1h",
+        status: str = "",
+        trigger: str = "",
+        owner: str = "",
+        ids: str = "",
+        limit: int = 50,
+        before: str = "",
+    ):
         """Runs across every automation you may see, newest first, in the last `range` (5m, 1h, 24h, 7d): what started
         each, its outcome or failing step, its step count, time and cost; no step detail. `status` (done, failed,
         waiting, running, held), `trigger` (kinds, comma-separated, `system` for Tico's own jobs), `owner` and `ids` narrow
@@ -370,13 +693,13 @@ def install(app, store, auth):
         who = request.state.identity
         with store.read() as c:
             auth.domain(who)
-            return runs(c, who, range, status, trigger, owner, ids, limit, before)
+            return runs(c, who, range, status, trigger, owner, ids, limit, before, store.settings)
 
     @app.get("/api/v2/automations/stats")
-    def automations_stats(request: Request, range: str = "1h"):  # noqa: A002
+    def automations_stats(request: Request, range: str = "1h"):
         """Runs, failures and cost per automation you may see over the last `range` (5m, 1h, 24h, 7d), each split into
         buckets oldest first (10 of 30s, 12 of 5 min, 24 of an hour, 28 of 6 hours), and the totals the same way."""
         who = request.state.identity
         with store.read() as c:
             auth.domain(who)
-            return stats(c, who, range)
+            return stats(c, who, range, store.settings)

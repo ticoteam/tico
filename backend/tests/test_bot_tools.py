@@ -11,10 +11,23 @@ from backend import bot_settings as BS
 
 RUNTIMES = {"codex": {"installed": True, "authenticated": "ready"}}
 TOOLS = [
-    {"service": "posthog", "identity": "PostHog project 12345 (US), personal key", "can": ["read"],
-     "scope": {"project": "12345"}, "env": "POSTHOG_KEY", "note": "funnels only", "credential": "missing"},
-    {"service": "slack", "identity": "Acme workspace", "can": ["read", "post"],
-     "scope": {"channels": ["#ops", "#launch"]}, "env": "SLACK_TOKEN", "credential": "present"},
+    {
+        "service": "posthog",
+        "identity": "PostHog project 12345 (US), personal key",
+        "can": ["read"],
+        "scope": {"project": "12345"},
+        "env": "POSTHOG_KEY",
+        "note": "funnels only",
+        "credential": "missing",
+    },
+    {
+        "service": "slack",
+        "identity": "Acme workspace",
+        "can": ["read", "post"],
+        "scope": {"channels": ["#ops", "#launch"]},
+        "env": "SLACK_TOKEN",
+        "credential": "present",
+    },
     {"service": "meeting-notes", "can": ["use"], "credential": "not-declared"},
 ]
 
@@ -26,11 +39,24 @@ def configure(api, bot="ops"):
 
 
 def report(api, machine, bot, tools):
-    row = {"ready": True, "runtime": "codex", "model": "gpt-6-luna", "repository_present": True,
-           "configuration_valid": True, "problems": [], **({"tools": tools} if tools is not None else {})}
-    return api.post("/api/v2/runners/heartbeat", headers=headers(machine["token"]), json={
-        "version": "test", "platform": "test",
-        "readiness": {"schema_version": 1, "runtimes": RUNTIMES, "bots": {bot: row}}})
+    row = {
+        "ready": True,
+        "runtime": "codex",
+        "model": "gpt-6-luna",
+        "repository_present": True,
+        "configuration_valid": True,
+        "problems": [],
+        **({"tools": tools} if tools is not None else {}),
+    }
+    return api.post(
+        "/api/v2/runners/heartbeat",
+        headers=headers(machine["token"]),
+        json={
+            "version": "test",
+            "platform": "test",
+            "readiness": {"schema_version": 1, "runtimes": RUNTIMES, "bots": {bot: row}},
+        },
+    )
 
 
 def tools_of(api, bot="ops", who="ana-test"):
@@ -47,12 +73,21 @@ def test_the_row_lists_the_model_the_repository_and_each_declared_tool(api):
     assert page["computer"] == "Test Mac" and page["online"] is True
     by_id = {t["id"]: t for t in page["tools"]}
     assert [t["id"] for t in page["tools"]] == ["model", "repo", "posthog", "slack", "meeting-notes"]
-    assert all({"id", "service", "name", "logo_key", "identity", "can", "scope", "note", "status"} <= set(t)
-               for t in page["tools"])
+    assert all(
+        {"id", "service", "name", "logo_key", "identity", "can", "scope", "note", "status"} <= set(t)
+        for t in page["tools"]
+    )
     model = by_id["model"]
-    assert (model["name"], model["identity"], model["logo_key"], model["status"]) == ("Codex", "openai/gpt-6-luna", "openai", "ready")
+    assert (model["name"], model["identity"], model["logo_key"], model["status"]) == (
+        "Codex",
+        "openai/gpt-6-luna",
+        "openai",
+        "ready",
+    )
     assert model["scope"] == {"effort": "high"}
-    assert by_id["repo"]["identity"] == "acme-co/emp-ops" and by_id["repo"]["url"] == "https://github.com/acme-co/emp-ops"
+    assert (
+        by_id["repo"]["identity"] == "acme-co/emp-ops" and by_id["repo"]["url"] == "https://github.com/acme-co/emp-ops"
+    )
     assert by_id["repo"]["status"] == "ready"
     posthog = by_id["posthog"]
     assert (posthog["name"], posthog["logo_key"], posthog["status"]) == ("PostHog", "posthog", "problem")
@@ -70,26 +105,37 @@ def test_no_value_can_reach_the_row(api):
     # A runner reports names and verbs; a field that could carry a value is refused, not stored.
     leaky = [{**TOOLS[1], "value": "xoxb-not-a-real-token"}]
     assert report(api, machine, "ops", leaky).status_code == 422
-    assert report(api, machine, "ops", [{**TOOLS[1], "env": {"SLACK_TOKEN": "xoxb-not-a-real-token"}}]).status_code == 422
+    assert (
+        report(api, machine, "ops", [{**TOOLS[1], "env": {"SLACK_TOKEN": "xoxb-not-a-real-token"}}]).status_code == 422
+    )
     assert report(api, machine, "ops", TOOLS).status_code == 200
     with api.app.state.store.read() as c:
         stored = c.execute("SELECT readiness FROM runners_with_state").fetchone()[0]
-    for text in (api.get("/api/v2/bots/ops/tools", headers=headers()).text, stored,
-                 api.get("/api/v2/operations", headers=headers()).text, api.get("/api/v2/bots", headers=headers()).text):
+    for text in (
+        api.get("/api/v2/bots/ops/tools", headers=headers()).text,
+        stored,
+        api.get("/api/v2/operations", headers=headers()).text,
+        api.get("/api/v2/bots", headers=headers()).text,
+    ):
         assert "xoxb-not-a-real-token" not in text
     # The heartbeat copy other pages read does not carry the list at all.
-    assert "tools" not in json.loads(api.get("/api/v2/operations", headers=headers()).text)["machines"][0]["readiness"]["bots"]["ops"]
+    assert (
+        "tools"
+        not in json.loads(api.get("/api/v2/operations", headers=headers()).text)["machines"][0]["readiness"]["bots"][
+            "ops"
+        ]
+    )
 
 
 def test_a_runner_from_before_the_report_yields_the_model_and_repository_only(api):
     configure(api)
     machine = runner(api)
     assign(api, machine, "ops")
-    ready(api, machine, ["ops"])                            # the oldest heartbeat: a map of booleans
+    ready(api, machine, ["ops"])  # the oldest heartbeat: a map of booleans
     page = tools_of(api)
     assert [t["id"] for t in page["tools"]] == ["model", "repo"]
-    assert page["tools"][0]["status"] == "unknown"          # no runtime report to say
-    assert report(api, machine, "ops", None).status_code == 200      # a structured report with no `tools` key
+    assert page["tools"][0]["status"] == "unknown"  # no runtime report to say
+    assert report(api, machine, "ops", None).status_code == 200  # a structured report with no `tools` key
     assert [t["id"] for t in tools_of(api)["tools"]] == ["model", "repo"]
     assert tools_of(api)["tools"][0]["status"] == "ready"
     # A bot with no computer at all still answers.
@@ -101,18 +147,29 @@ def test_a_computer_whose_plan_signs_the_bots_runtime_in_reads_it_signed_in(api)
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    m = machine(api)                                        # Claude not signed in on the computer itself
+    m = machine(api)  # Claude not signed in on the computer itself
     model = tools_of(api)["tools"][0]
     assert (model["status"], model["problem"]) == ("problem", "Runtime is not signed in on Test Mac")
     sid = add(api)["id"]
-    give(api, m, "claude", sid)                             # the company's plan now signs the runtime in here
+    give(api, m, "claude", sid)  # the company's plan now signs the runtime in here
     model = tools_of(api)["tools"][0]
     assert model["status"] == "ready" and "problem" not in model
     # Not installed is still a problem, plan or not.
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": ["model_subscriptions_v1"],
-                                    "readiness": {"schema_version": 1, "bots": {"ops": {"ready": True, "runtime": "claude"}},
-                                                  "runtimes": {"claude": {"installed": False, "authenticated": "missing"}}}},
-         token=m["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": ["model_subscriptions_v1"],
+            "readiness": {
+                "schema_version": 1,
+                "bots": {"ops": {"ready": True, "runtime": "claude"}},
+                "runtimes": {"claude": {"installed": False, "authenticated": "missing"}},
+            },
+        },
+        token=m["token"],
+    )
     model = tools_of(api)["tools"][0]
     assert model["status"] == "problem" and model["problem"] == "Runtime is not installed on Test Mac"
 
@@ -121,18 +178,26 @@ def test_a_private_bots_tools_stay_with_the_people_who_can_see_it(api):
     machine = runner(api)
     assign(api, machine, "inbox")
     assert report(api, machine, "inbox", TOOLS).status_code == 200
-    assert api.get("/api/v2/bots/inbox/tools", headers=headers("cara-test")).status_code == 404     # cannot even see it
+    assert api.get("/api/v2/bots/inbox/tools", headers=headers("cara-test")).status_code == 404  # cannot even see it
     with api.app.state.store.transaction() as c:
         restrict(c, "inbox", see={"everyone": True}, read=dict(people=["ana"]), write=dict(people=["ana"]))
-    assert api.get("/api/v2/bots/inbox/tools", headers=headers("cara-test")).status_code == 403     # sees it, may not read it
+    assert (
+        api.get("/api/v2/bots/inbox/tools", headers=headers("cara-test")).status_code == 403
+    )  # sees it, may not read it
     assert len(tools_of(api, "inbox")["tools"]) >= 3
-    assert len(tools_of(api, "inbox", "ben-test")["tools"]) >= 3                                     # an Admin has full access
+    assert len(tools_of(api, "inbox", "ben-test")["tools"]) >= 3  # an Admin has full access
     assert api.get("/api/v2/bots/nobody/tools", headers=headers("ana-test")).status_code == 404
 
 
 # ----------------------------------------------------------------------------- registering
-ENTRY = {"service": "PostHog", "identity": "PostHog project 340585 (US), personal key", "can": ["read"],
-         "scope": {"project": "340585"}, "env": "POSTHOG_KEY", "note": "funnels only"}
+ENTRY = {
+    "service": "PostHog",
+    "identity": "PostHog project 340585 (US), personal key",
+    "can": ["read"],
+    "scope": {"project": "340585"},
+    "env": "POSTHOG_KEY",
+    "note": "funnels only",
+}
 
 
 def botops(api, state="active"):
@@ -152,7 +217,7 @@ def botops_tasks(api):
 
 def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):
     botops(api)
-    register(api, who="cara-test", expected=403)                     # a member who does not manage ops
+    register(api, who="cara-test", expected=403)  # a member who does not manage ops
     checked = register(api, entry={**ENTRY, "can": ["qa-custom-verb"], "dry_run": True})
     assert checked["ok"] and "qa-custom-verb" in checked["yaml"] and botops_tasks(api) == []
     made = register(api, entry={**ENTRY, "title_prefix": "QA "})
@@ -170,7 +235,7 @@ def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):
     # It is visible, pending, until the computer reports the entry.
     page = tools_of(api)
     assert [t["status"] for t in page["tools"] if t["id"].startswith("pending-")] == ["pending"]
-    register(api, expected=409)                                       # asking twice does not open a second task
+    register(api, expected=409)  # asking twice does not open a second task
     machine = runner(api)
     assign(api, machine, "ops")
     listed = {**ENTRY, "service": "posthog", "can": ["read"], "credential": "missing", "scope": {"project": "340585"}}
@@ -189,8 +254,11 @@ def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):
 
 def test_a_credential_value_is_refused_and_nothing_is_kept(api):
     botops(api)
-    secrets = [{"env": "sk-proj-1234567890abcdef"}, {"identity": "postgresql://reader:hunter2@db.internal/app"},
-               {"note": "use Zx9Qw3Er7Ty1Ui5Op2As6Df0Gh4Jk8Lm"}]
+    secrets = [
+        {"env": "sk-proj-1234567890abcdef"},
+        {"identity": "postgresql://reader:hunter2@db.internal/app"},
+        {"note": "use Zx9Qw3Er7Ty1Ui5Op2As6Df0Gh4Jk8Lm"},
+    ]
     for extra in secrets:
         answer = register(api, entry={**ENTRY, **extra}, expected=422)
         assert answer["error"]["code"] in ("secret", "entry"), extra
@@ -200,12 +268,22 @@ def test_a_credential_value_is_refused_and_nothing_is_kept(api):
     assert botops_tasks(api) == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM bot_tool_requests").fetchone()[0] == 0
-    assert register(api, entry={**ENTRY, "identity": "Acme workspace, marketing@acme.example", "env": "SLACK_TOKEN"})["task_id"]
+    assert register(api, entry={**ENTRY, "identity": "Acme workspace, marketing@acme.example", "env": "SLACK_TOKEN"})[
+        "task_id"
+    ]
 
 
-MCP_JIRA = {"service": "jira", "can": ["read", "write"], "env": "JIRA_API_TOKEN", "note": "issues only",
-            "mcp": {"url": "https://mcp.atlassian.com/v2/mcp", "transport": "http",
-                    "headers": {"Authorization": "Bearer ${JIRA_API_TOKEN}"}}}
+MCP_JIRA = {
+    "service": "jira",
+    "can": ["read", "write"],
+    "env": "JIRA_API_TOKEN",
+    "note": "issues only",
+    "mcp": {
+        "url": "https://mcp.atlassian.com/v2/mcp",
+        "transport": "http",
+        "headers": {"Authorization": "Bearer ${JIRA_API_TOKEN}"},
+    },
+}
 
 
 def test_an_mcp_tool_shows_its_host_and_the_runners_check_never_its_headers(api):
@@ -224,10 +302,17 @@ def test_an_mcp_tool_shows_its_host_and_the_runners_check_never_its_headers(api)
 
 def test_a_github_gh_token_counts_present_when_the_github_app_mints_it(api):
     from backend.health import _missing_tool_credentials
+
     configure(api)
     machine = runner(api)
     assign(api, machine, "ops")
-    declared = {"service": "github", "identity": "Acme issues", "can": ["read"], "env": "GH_TOKEN", "credential": "missing"}
+    declared = {
+        "service": "github",
+        "identity": "Acme issues",
+        "can": ["read"],
+        "env": "GH_TOKEN",
+        "credential": "missing",
+    }
     assert report(api, machine, "ops", [declared]).status_code == 200
     store = api.app.state.store
 
@@ -239,8 +324,33 @@ def test_a_github_gh_token_counts_present_when_the_github_app_mints_it(api):
 
     assert status() == ("problem", [("GitHub", "Test Mac")])
     with store.transaction() as c:
-        c.execute("INSERT INTO github_app VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')")
+        c.execute(
+            "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,ciphertext,nonce,"
+            "created_at,created_by) VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')"
+        )
     assert status() == ("ready", [])
     with store.transaction() as c:
-        c.execute("UPDATE github_app SET org='elsewhere'")   # the App mints only inside its own org
+        c.execute("UPDATE github_app SET org='elsewhere'")  # the App mints only inside its own org
     assert status() == ("problem", [("GitHub", "Test Mac")])
+
+
+def test_a_bot_repository_is_named_as_not_backed_up_until_github_is_connected(api):
+    configure(api)
+    machine = runner(api)
+    assign(api, machine, "ops")
+    assert report(api, machine, "ops", TOOLS).status_code == 200
+
+    def repo_detail():
+        return next(t for t in tools_of(api)["tools"] if t["id"] == "repo")["detail"]
+
+    assert "not backed up" in repo_detail()
+    with api.app.state.store.transaction() as c:
+        # Connected but never installed: the App reaches no repository, so the bot's repository is still not backed up.
+        c.execute(
+            "INSERT INTO github_app(id, app_id, slug, client_id, org, administration, installation_id, html_url,"
+            " ciphertext, nonce, created_at, created_by) VALUES('app',1,'s','c','Acme-Co',0,NULL,'',x'00',x'00','t','ana')"
+        )
+    assert "not backed up" in repo_detail()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE github_app SET installation_id=77")
+    assert "not backed up" not in repo_detail()

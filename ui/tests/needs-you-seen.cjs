@@ -8,7 +8,10 @@ const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const ask = (id, to, delivered = null) => ({id, recipient_id: to, sender_id: 'bot:writer', body: 'Approve the venue?', delivered_at: delivered, read_at: null});
 const request = (id, title, a) => ({id, kind: 'task', title, body: 'Which venue?', owner: 'human:ana', requester: 'bot:writer', status: 'open',
   version: 1, labels: [], created: at(60), updated: at(60), conversation_id: 'c-' + id, ask: a, open_asks: 1});
-const loose = (id, to) => ({id, kind: 'ask', body: 'Tacos or pizza?', requester: 'bot:writer', created: at(30), ask: ask(id, to)});
+// A question to a person with no message behind it: a question task, read as its task is (never a message ack).
+const loose = (id, to) => ({id, kind: 'question', body: 'Tacos or pizza?', requester: 'bot:writer', created: at(30),
+  ask: {...ask(id, to), body: 'Tacos or pizza?', question_task: true, refs: {questions: [{id: 'food', question: 'Tacos or pizza?',
+    options: [{label: 'Tacos'}, {label: 'Pizza'}]}]}}});
 const items = [request('t-mine', 'Pick the venue', ask('m-mine', 'human:ana')),
   request('t-old', 'Pick the date', ask('m-old', 'human:ana', at(5))),
   request('t-ben', 'Approve the budget', ask('m-ben', 'human:ben')),
@@ -30,9 +33,9 @@ const items = [request('t-mine', 'Pick the venue', ask('m-mine', 'human:ana')),
     await page.evaluate(() => { decideStop(); decideOpen('task:t-ben'); });
     await page.waitForTimeout(200);
     assert.equal(sent.length, 2, 'showing a card that asks someone else reads nothing');
-    await page.evaluate(() => { decideStop(); decideOpen('ask:m-loose'); });
+    await page.evaluate(() => { decideStop(); decideOpen('task:m-loose'); });
     await page.waitForTimeout(200);
-    assert.deepEqual(sent.slice(2), [{p: '/api/v2/messages/m-loose/ack', body: {}}], 'showing my loose question reads it');
+    assert.deepEqual(sent.slice(2), [], 'showing my question task reads nothing here: it is read as its task');
 
     // An option question (two to six choices) on its card: delivered on Needs you, then read when its card shows it,
     // without an answer.

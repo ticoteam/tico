@@ -62,6 +62,32 @@ cloud machine" under Computer).
 - Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
   number of bots on it.
 
+## Size and Grow storage automatically
+
+HQ offers four sizes: Small and Default have a 51 GB disk, Large 111 GB and XLarge 251 GB. Settings shows each size's
+disk. A disk cannot shrink, so a size with less disk than the machine has now is refused (422 `too_small`) and is off
+in Settings; replace the machine to start smaller. HQ resizes a machine only when it starts it, so a size chosen while
+the machine runs (by a person, or by growing) drains it first: its runner takes no new turn ("restarts at a new size
+once its turns finish"), and once no turn is out and no update is under way it stops, Always on too, and starts again
+at the new size. Work queued meanwhile runs after the restart. A turn is never cut; a drain still waiting after 30
+minutes is on Health. A stop HQ refuses is on Health at once ("Stop refused"); after three refused stops the machine
+runs on at its size, takes work again, and the new size is tried again an hour later.
+
+**Grow storage** (Settings, next to Always on) is on by default. The company sets it for the shared machine
+(`grow_storage` on `POST /api/v2/cloud-machines/shared`); an own machine follows the company until its bot chooses
+(`grow_storage` on `POST /api/v2/bots/{bot}/cloud-machine`). When it is on and the runner's newest disk reading shows
+under 15% or under 10 GB free, the machine is set to the next size with more disk (Default to Large to XLarge) and
+restarts at it as above (event `cloud_machine.grew`). Only a reading taken since the machine last started counts (one
+from before a restart is of the old disk), at most 10 minutes old.
+
+It never goes past the largest size or the company's CPU cap at HQ (counting the size other machines are restarting
+at). When it cannot grow (the largest size, over the cap, a size HQ refused, or a disk that did not grow with its size:
+"disk not resized"), the machine is marked **Disk nearly full** with the reason, on Health, until the disk has room
+again (`cloud_machine.grow_blocked`). A size HQ refuses at the start goes back to the size the machine runs at. HQ's
+CPU cap, or HQ starting it at another size, is tried again after an hour; any other refusal waits until a person
+changes the size or the switch (the same value again changes nothing). Settings shows the note only while it needs
+someone. Health's disk check for a cloud machine uses the same reading and says nothing of a stopped machine.
+
 ## Tico support
 
 Each cloud machine comes with a support helper, on by default. Tico staff and the Support Agent can use it to read
@@ -148,7 +174,7 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
 3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
-   runner once with `tico-runner enroll`, and runs `scripts/tico install`, which starts the runner and its helper jobs
+   runner once with `tico-runner enroll`, and runs `scripts/tico-computer install`, which starts the runner and its helper jobs
    as systemd user units.
 4. The server sees a cloud code. For a bot's own machine it names the computer "&lt;bot&gt; (cloud)", closes it to
    every other bot (`accepts_member_bots=0`, and placement never offers one bot's machine to another) and assigns
@@ -207,11 +233,11 @@ keep their own harnesses current ([What's on a machine](#whats-on-a-machine)), o
 The base step (below) installs these, so every machine made from the snapshot has them:
 
 - **Google Chrome stable**, headed (x86_64; arm64 gets the distro's Chromium, since Google ships no Linux arm64 Chrome).
-- **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
+- **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico-computer screen on`),
   so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
   The screen is on by default on a cloud machine, so bots get a display, and the computer's operator and admins can
   open it in Settings > Computers. Screen Off there stops people opening it; the display stays up for bots.
-  `scripts/tico screen off` takes the display down.
+  `scripts/tico-computer screen off` takes the display down.
   A bot whose browser should come from a home connection sets **Browse through** to a computer that shares its internet
   ([Share internet with bots](computers.md#share-internet-with-bots)).
 - **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).

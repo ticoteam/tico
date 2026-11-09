@@ -73,7 +73,7 @@ Always:
 ## Talking to {{app_name}}
 Work arrives as tasks and the weekly routine. Calls: `hub meeting search "<customer>"`, `hub meeting
 transcript <id>`. The team: `hub team show --team sales`. Closed deals: the Account Executive's and the Sales
-Operations Manager's reports, or a CRM read. One question per task with `hub task ask <id>`. Keep `hub bot status set` to one line.
+Operations Manager's reports, or a CRM read. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one line.
 
 ## Quality standards
 - **Answer first.** The notes open with the one thing the team should change or repeat next week.

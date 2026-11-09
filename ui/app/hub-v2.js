@@ -3,10 +3,9 @@
 'use strict';
 
 // ----------------------------------------------------------------- hub v2 (docs/history/hub-v2.md)
-// For the bots the keeper hosts (`host: keeper` in the registry) the record is hub.db, not GitHub:
+// Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
 // chat is `messages`, work is `tasks`, approvals are one tap, and every bot has one status row with
-// its history. The dispatcher's bots keep the Issue path; every surface below branches on `host`,
-// and every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
+// its history. Every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
 const V2_WORD = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
                  waiting_bot: 'Waiting on a bot', blocked: 'Blocked', limited: 'Rate limited',
                  crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
@@ -16,8 +15,6 @@ const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'w
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
 const V2_KIND = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
-const hostOf = slug => String(botRow(slug)?.host || 'dispatcher');
-const isKeeper = slug => hostOf(slug) === 'keeper';
 const v2StatusOf = slug => S.v2.status[slug] || null;
 const actorSlug = a => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
 const actorPerson = a => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
@@ -100,7 +97,7 @@ const sourceCarriesCard = m => { const r = m?.refs || {};
   return m?.kind === 'ask' || !!(r.action || r.credential_request || r.approval || r.questions || r.chat_goal || r.read_back || r.update || r.card || r.reconnect); };
 const isSourceLine = (m, by) => SOURCE_LINES.has(rowSource(m, by).kind) && !sourceCarriesCard(m);
 // Plain words for a gray line: names for actor ids, markdown marks and link targets dropped.
-const sourcePlain = text => plainActors(text).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
+const sourcePlain = text => plainActors(String(text ?? '').replace(/^New task from keeper: /, 'New task: ')).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
 // The name a gray line leads with: bold for a built-in, a link for an automation, nothing for a task update or system.
 function sourceLeadHTML(src) {
   if (!src.name || !['builtin', 'automation'].includes(src.kind)) return '';
@@ -108,10 +105,10 @@ function sourceLeadHTML(src) {
     ? `<a class="src-name" href="${esc(src.link)}">${esc(src.name)}</a> ` : `<b class="src-name">${esc(src.name)}</b> `;
 }
 // One gray line for a row no person or bot wrote. `cls` and `attrs` let each surface keep its own row hooks; the
-// hover says what made it and when.
+// hover says what made it and when, and the whole text when the line may be cut.
 function sourceLineHTML(m, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = ''} = {}) {
   const words = sourcePlain(text || ''), first = words.split('\n').map(s => s.trim()).find(Boolean) || '';
-  const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length ? '\n\n' + words.slice(0, 600) : '');
+  const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length || first.length > 60 ? '\n\n' + words.slice(0, 600) : '');
   const when = at ? `<time class="src-time" data-ago="${esc(at)}">${esc(ago(at))}</time>` : '';
   return `<div class="src-line src-${esc(src.kind)}${cls ? ' ' + cls : ''}"${m.id ? ` data-message="${esc(m.id)}"` : ''}${attrs} title="${esc(tip)}">${
     sourceLeadHTML(src)}<span class="src-text">${esc(first)}</span>${when}${tail}</div>`;
@@ -120,6 +117,10 @@ function sourceLineHTML(m, {src = rowSource(m), at = m.created_at, text = m.body
 // Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
 // the ids of the rows in groups opened (sourceGroupToggle), nothing is stored, and a group stays open when updates join
 // it at either end, live or from an older page.
+/**
+ * @param {any[]} items
+ * @param {{line: (it: any) => string, draw: (it: any, i: number) => string, open?: (run: any[]) => boolean, isUpdate?: (it: any) => boolean}} opts
+ */
 function sourceRunsHTML(items, {line, draw, open = () => false, isUpdate = it => rowSource(it).kind === 'task_update'}) {
   const out = [];
   for (let i = 0; i < items.length;) {
@@ -167,9 +168,8 @@ async function v2Refresh() {
   // when Tico is updating itself, say so at the top of the sidebar
   if (st) { const el = $('#side-update'); if (el) el.hidden = !st.updating; }
   if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
-  if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+  if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT) botNeedsChanged(BOT.slug);
   if (needs && !needs.unchanged && typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // the open Needs you card
-  if (needs && !needs.unchanged && typeof askPeek === 'function') askPeek();   // a peek beside Ask's dot
   if (needs && !needs.unchanged && typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
 }
 // Needs you as the page holds it: a bounded page at a time (GET /v2/needs-you?limit=), in the server's order, with

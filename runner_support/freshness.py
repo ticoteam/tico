@@ -7,6 +7,7 @@ Each helper therefore records the checkout's revision at start and looks again a
 the loop exits with status 0 between jobs and the supervisor (launchd KeepAlive) starts it on the new code. Any new revision
 counts, not only changes under runner/: a helper loads more than that.
 """
+
 import os
 import re
 import subprocess
@@ -21,8 +22,13 @@ CHECK_EVERY_S = 60
 
 def checkout_head(root=None, run=subprocess.run):
     try:
-        done = run(["git", "-C", str(root or ROOT), "rev-parse", "HEAD"], capture_output=True, text=True,
-                   timeout=10, stdin=subprocess.DEVNULL)
+        done = run(
+            ["git", "-C", str(root or ROOT), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+        )
     except (OSError, subprocess.SubprocessError):
         return ""
     head = done.stdout.strip()
@@ -31,16 +37,18 @@ def checkout_head(root=None, run=subprocess.run):
 
 def supervised():
     """Only a supervisor that starts the runner again may let it exit to restart: launchd sets
-    XPC_SERVICE_NAME to the job's label, the systemd user unit `scripts/tico install` writes on Linux sets
+    XPC_SERVICE_NAME to the job's label, the systemd user unit `scripts/tico-computer install` writes on Linux sets
     TICO_SYSTEMD_UNIT (and Restart=always), and TICO_SUPERVISED=1 covers any other supervisor (the Docker
     runner, runit)."""
     env = os.environ
-    return bool(env.get("XPC_SERVICE_NAME", "").startswith("team.tico")
-                or env.get("TICO_SYSTEMD_UNIT", "").startswith("tico-")
-                or env.get("TICO_SUPERVISED") == "1")
+    return bool(
+        env.get("XPC_SERVICE_NAME", "").startswith("team.tico")
+        or env.get("TICO_SYSTEMD_UNIT", "").startswith("tico-")
+        or env.get("TICO_SUPERVISED") == "1"
+    )
 
 
-process_supervised = supervised      # CodeWatch's `supervised` argument shadows the name
+process_supervised = supervised  # CodeWatch's `supervised` argument shadows the name
 
 
 class CodeWatch:
@@ -63,8 +71,10 @@ class CodeWatch:
         head = self.head()
         if not head or head == self.started:
             return False
-        self.say(f"{self.name}: the checkout moved from {self.started[:7]} to {head[:7]}; "
-                 "exiting so the supervisor restarts it on the new code")
+        self.say(
+            f"{self.name}: the checkout moved from {self.started[:7]} to {head[:7]}; "
+            "exiting so the supervisor restarts it on the new code"
+        )
         return True
 
     def wait(self, stop, seconds):

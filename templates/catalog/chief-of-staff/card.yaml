@@ -9,7 +9,7 @@ lead: true
 icon: star
 suggest: niche
 tags: [leadership, weekly-brief, goals, agenda, founder, smb]
-team_templates: [strategy-planning]
+team_templates: [strategy-planning, initiative-owner]
 summary: "Turns the goals, tasks, bot updates and meetings already in Tico into a weekly brief for the owner, chases stalled goals, and drafts Monday's agenda. Internal only."
 pains:
   - "I don't know what is really going on across the team"

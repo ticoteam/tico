@@ -32,7 +32,11 @@ def test_the_manual_is_rebuilt_when_the_release_or_a_file_changes(monkeypatch, t
     monkeypatch.setattr(manual, "DOCS_DIR", tmp_path)
     monkeypatch.setenv("TICO_VERSION", "1.0.0")
     first = manual.search("polish widget")[0]
-    assert first["version"] == "1.0.0" and first["url"].endswith("/v1.0.0/docs/widgets.md#polishing") and first["path"] == "docs/widgets.md"
+    assert (
+        first["version"] == "1.0.0"
+        and first["url"].endswith("/v1.0.0/docs/widgets.md#polishing")
+        and first["path"] == "docs/widgets.md"
+    )
     monkeypatch.setenv("TICO_VERSION", "1.0.1")
     assert manual.search("polish widget")[0]["url"].startswith("https://github.com/ticoteam/tico/blob/v1.0.1/")
     before = widgets.stat()
@@ -43,4 +47,3 @@ def test_the_manual_is_rebuilt_when_the_release_or_a_file_changes(monkeypatch, t
     assert widgets.stat().st_size == before.st_size and widgets.stat().st_mtime_ns == before.st_mtime_ns
     assert manual.search("polish") == [] and manual.search("buff wax")[0]["title"] == "Widgets > Buffing"
     assert manual.read("widgets")["body"] == updated
-

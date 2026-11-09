@@ -29,7 +29,7 @@ async function shot(target, name) {
       return route.fulfill({status: 404, body: '{}'});
     });
     await page.evaluate(async () => { await v2Refresh(); await tasksLoad(TASKS_ST); });
-    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
     await page.evaluate(async () => { await tasksLoad(TASKS_ST); });
 
     const ordinary = page.locator('#task-body [data-group="need:do"]');

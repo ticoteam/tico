@@ -8,17 +8,24 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import restrict
 from backend.tests.test_bot_access import bot, bot_id
-from backend.tests.test_api import api, get, headers   # noqa: F401
+from backend.tests.test_api import api, get, headers  # noqa: F401
 
 
 def record(api, body=None, token="ana-test"):
     """A finished meeting of the caller's, filed through the import API."""
     body = body or {}
     calendar = body.pop("calendar", None)
-    r = api.post("/api/v2/meetings/import",
-                 json={"title": "Pricing call", "transcript": "Dana: We agreed to ship on Friday.", "review": "live",
-                       **({"participants": calendar["attendees"]} if calendar else {}), **body},
-                 headers=headers(token))
+    r = api.post(
+        "/api/v2/meetings/import",
+        json={
+            "title": "Pricing call",
+            "transcript": "Dana: We agreed to ship on Friday.",
+            "review": "live",
+            **({"participants": calendar["attendees"]} if calendar else {}),
+            **body,
+        },
+        headers=headers(token),
+    )
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
@@ -36,14 +43,24 @@ def add(api, rid, body, token="ana-test", expected=200, key=None):
 
 
 def change(api, rid, iid, body, token="ana-test", expected=200, key=None):
-    body = {"version": next(i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid), **body}
+    body = {
+        "version": next(
+            i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid
+        ),
+        **body,
+    }
     r = api.post(f"/api/meetings/{rid}/items/{iid}", json=body, headers=headers(token, key))
     assert r.status_code == expected, r.text
     return r.json()
 
 
 def push(api, rid, iid, body=None, token="ana-test", expected=200, key=None):
-    body = {"version": next(i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid), **(body or {})}
+    body = {
+        "version": next(
+            i["version"] for rows in items(api, rid, token)["sections"].values() for i in rows if i["id"] == iid
+        ),
+        **(body or {}),
+    }
     r = api.post(f"/api/meetings/{rid}/items/{iid}/push", json=body, headers=headers(token, key))
     assert r.status_code == expected, r.text
     return r.json()
@@ -51,23 +68,36 @@ def push(api, rid, iid, body=None, token="ana-test", expected=200, key=None):
 
 def test_a_private_meeting_keeps_its_items_to_the_people_the_invite_names(api):
     """Items inherit the room's visibility; `backend/media.authorized` is the only gate."""
-    rid = record(api, {"title": "Comp review", "private": True,
-                       "calendar": {"event_id": "e1", "title": "Comp review",
-                                    "attendees": ["Ana@Acme.example"]}}, "ben-test")
+    rid = record(
+        api,
+        {
+            "title": "Comp review",
+            "private": True,
+            "calendar": {"event_id": "e1", "title": "Comp review", "attendees": ["Ana@Acme.example"]},
+        },
+        "ben-test",
+    )
     add(api, rid, {"section": "doc", "text": "Write down the band for a senior"}, "ben-test")
-    assert len(items(api, rid, "ana-test")["sections"]["doc"]) == 1         # named, and the owner
-    items(api, rid, "cara-test", expected=403)                             # not on the invite
+    assert len(items(api, rid, "ana-test")["sections"]["doc"]) == 1  # named, and the owner
+    items(api, rid, "cara-test", expected=403)  # not on the invite
     add(api, rid, {"section": "task", "text": "Not mine to add"}, "cara-test", expected=403)
     # Making it a company meeting again opens the items with it.
-    api.post(f"/api/meetings/{rid}/edit", json={"private": False, "version": 1},
-             headers=headers("ben-test"))
+    api.post(f"/api/meetings/{rid}/edit", json={"private": False, "version": 1}, headers=headers("ben-test"))
     assert items(api, rid, "cara-test")["can_send"] is True
 
 
 def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
     rid = record(api, {"title": "Weekly sync"})
-    iid = add(api, rid, {"section": "task", "text": "Send Dana the pricing sheet", "quote": "We agreed to ship on Friday.",
-                         "detail": {"owner": "human:ben", "priority": "p1"}})["item"]["id"]
+    iid = add(
+        api,
+        rid,
+        {
+            "section": "task",
+            "text": "Send Dana the pricing sheet",
+            "quote": "We agreed to ship on Friday.",
+            "detail": {"owner": "human:ben", "priority": "p1"},
+        },
+    )["item"]["id"]
     pushed = push(api, rid, iid)
     assert pushed["pushed"] and pushed["item"]["status"] == "pushed"
     task = get(api, "tasks/" + pushed["item"]["result_ref"])["task"]
@@ -91,8 +121,11 @@ def test_the_v2_aliases_answer_what_the_old_paths_do(api):
 
     detail = {"owner": "human:ben", "priority": "p1"}
     old_item = add(api, rid, {"section": "task", "text": "Send the pricing sheet", "detail": detail})["item"]
-    created = api.post(f"/api/v2/meetings/{rid}/items", json={"section": "task", "text": "Send the pricing deck",
-                                                               "detail": detail}, headers=headers())
+    created = api.post(
+        f"/api/v2/meetings/{rid}/items",
+        json={"section": "task", "text": "Send the pricing deck", "detail": detail},
+        headers=headers(),
+    )
     assert created.status_code == 200, created.text
     new_item = created.json()["item"]
     shape = lambda item: {k: item[k] for k in ("section", "status")}
@@ -102,7 +135,9 @@ def test_the_v2_aliases_answer_what_the_old_paths_do(api):
     new_push = api.post(f"/api/v2/meetings/{rid}/items/{new_item['id']}/push", json={}, headers=headers())
     assert new_push.status_code == 200, new_push.text
     assert old_push["pushed"] is True and new_push.json()["pushed"] is True
-    titles = [get(api, "tasks/" + result["item"]["result_ref"])["task"]["title"] for result in (old_push, new_push.json())]
+    titles = [
+        get(api, "tasks/" + result["item"]["result_ref"])["task"]["title"] for result in (old_push, new_push.json())
+    ]
     assert titles == ["Send the pricing sheet", "Send the pricing deck"]
 
 
@@ -141,8 +176,12 @@ def test_a_doc_update_cannot_be_assigned_to_a_bot_the_sender_cannot_write(api):
         restrict(c, canonical, see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
         before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
     rid = record(api, {"title": "Docs call"}, token="cara-test")
-    iid = add(api, rid, {"section": "doc", "text": "Correct the guide",
-                         "detail": {"owner": "bot:docs-worker"}}, token="cara-test")["item"]["id"]
+    iid = add(
+        api,
+        rid,
+        {"section": "doc", "text": "Correct the guide", "detail": {"owner": "bot:docs-worker"}},
+        token="cara-test",
+    )["item"]["id"]
     refused = push(api, rid, iid, token="cara-test", expected=403)
     assert refused["error"]["code"] == "forbidden"
     assert "Unknown recipient" not in refused["error"]["detail"]
@@ -154,9 +193,13 @@ def test_a_doc_update_cannot_be_assigned_to_a_bot_the_sender_cannot_write(api):
 def test_a_doc_update_goes_to_the_doc_bot_unless_the_push_names_someone_else(api):
     rid = record(api, {"title": "Docs call"})
     default = add(api, rid, {"section": "doc", "text": "Fix the pricing page"})["item"]["id"]
-    named = add(api, rid, {"section": "doc", "text": "Fix the onboarding page", "detail": {"owner": "human:ben"}})["item"]["id"]
-    owners = {iid: get(api, "tasks/" + push(api, rid, iid)["item"]["result_ref"])["task"]["owner_id"]
-              for iid in (default, named)}
+    named = add(api, rid, {"section": "doc", "text": "Fix the onboarding page", "detail": {"owner": "human:ben"}})[
+        "item"
+    ]["id"]
+    owners = {
+        iid: get(api, "tasks/" + push(api, rid, iid)["item"]["result_ref"])["task"]["owner_id"]
+        for iid in (default, named)
+    }
     assert owners == {default: "bot:doc-updater", named: "human:ben"}
 
 
@@ -183,10 +226,17 @@ def test_doc_default_checks_the_canonical_bot_id_for_a_non_admin(api, access):
         task = get(api, "tasks/" + pushed["item"]["result_ref"], token="cara-test")["task"]
         assert task["owner_id"] == "bot:" + canonical
         # Naming the same bot by its label uses the same canonical identity.
-        named = add(api, rid, {"section": "doc", "text": "Correct the FAQ",
-                              "detail": {"owner": "bot:doc-updater"}}, token="cara-test")["item"]["id"]
+        named = add(
+            api,
+            rid,
+            {"section": "doc", "text": "Correct the FAQ", "detail": {"owner": "bot:doc-updater"}},
+            token="cara-test",
+        )["item"]["id"]
         pushed = push(api, rid, named, token="cara-test")
-        assert get(api, "tasks/" + pushed["item"]["result_ref"], token="cara-test")["task"]["owner_id"] == "bot:" + canonical
+        assert (
+            get(api, "tasks/" + pushed["item"]["result_ref"], token="cara-test")["task"]["owner_id"]
+            == "bot:" + canonical
+        )
     else:
         refused = push(api, rid, iid, token="cara-test", expected=422)
         assert refused["error"]["code"] == "owner"

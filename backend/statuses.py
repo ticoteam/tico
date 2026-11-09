@@ -7,7 +7,7 @@ reader goes through here so both are accepted for one release. Migration 45 rewr
 NEEDS_SETUP = "needs_setup"
 OLD_NEEDS_ONBOARDING = "needs_onboarding"
 PARKED = (NEEDS_SETUP, OLD_NEEDS_ONBOARDING)
-PARKED_SQL = "('" + "','".join(PARKED) + "')"          # for `IN {PARKED_SQL}` in a statement
+PARKED_SQL = "('" + "','".join(PARKED) + "')"  # for `IN {PARKED_SQL}` in a statement
 
 
 def is_parked(state):

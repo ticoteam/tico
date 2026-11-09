@@ -1,6 +1,7 @@
 """Quarantine stops preserve their cause. A run is judged as a computer's reported restart is: its work waits in the queue
 until the bot is active, with a note to check what it already did, unless a consumed approval, a fallback's unknown
 work or a named outside action holds it for review, never run again by itself when the quarantine lifts."""
+
 from backend import run_diagnostics
 from backend.store import H
 from backend.tests.test_api import api, claim, expire, get, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
@@ -19,11 +20,22 @@ def working(api, *, start=True, safe=False):
     machine, message, attempt = setup_attempt(api)
     if start:
         post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'quarantined'}, machine['token'])
-        post(api, f"attempts/{attempt['id']}/events", {'events': [
-            {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
-            {'seq': 2, 'kind': 'tool', 'payload': {'name': 'Read' if safe else 'shell'}},
-            {'seq': 3, 'kind': 'message', 'payload': {'text': 'Reading the files.' if safe
-                                                      else 'Opening the pull request.'}}]}, machine['token'])
+        post(
+            api,
+            f"attempts/{attempt['id']}/events",
+            {
+                'events': [
+                    {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+                    {'seq': 2, 'kind': 'tool', 'payload': {'name': 'Read' if safe else 'shell'}},
+                    {
+                        'seq': 3,
+                        'kind': 'message',
+                        'payload': {'text': 'Reading the files.' if safe else 'Opening the pull request.'},
+                    },
+                ]
+            },
+            machine['token'],
+        )
     return machine, message, attempt
 
 
@@ -33,8 +45,7 @@ def review(api):
         task = c.execute("SELECT id,body FROM tasks WHERE title=? AND status='open'", (REVIEW,)).fetchone()
         if not task:
             return None
-        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=?",
-                                        (task['id'],))]
+        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=?", (task['id'],))]
         return "\n".join([task['body'] or '', *said])
 
 
@@ -66,8 +77,12 @@ def test_a_quarantine_stops_a_turn_that_used_a_shell_and_requeues_it_with_a_note
     renewed = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     assert renewed['stop'] is True and renewed['stop_reason'] == line
     # The turn's own calls keep working until it hands in, so nothing reads as a lost lease.
-    post(api, f"attempts/{attempt['id']}/events", {'events': [
-        {'seq': 4, 'kind': 'message', 'payload': {'text': 'Stopping here.'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {'events': [{'seq': 4, 'kind': 'message', 'payload': {'text': 'Stopping here.'}}]},
+        machine['token'],
+    )
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 4}, machine['token'])
     assert end_reason(api, attempt) == line and LOST not in end_reason(api, attempt)
     with api.app.state.store.read() as c:
@@ -96,9 +111,20 @@ def test_a_quarantine_stopped_turn_with_a_named_merge_is_held_for_review(api, ti
     time_machine.move_to("2026-10-26T12:00:00Z", tick=False)
     machine, message, attempt = working(api)
     quarantine(api)
-    post(api, f"attempts/{attempt['id']}/events", {'events': [
-        {'seq': 4, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started',
-                                               'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {
+            'events': [
+                {
+                    'seq': 4,
+                    'kind': 'tool',
+                    'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'},
+                }
+            ]
+        },
+        machine['token'],
+    )
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 4}, machine['token'])
     assert job_state(api, attempt['job_id']) == 'uncertain'
@@ -161,8 +187,12 @@ def test_a_quarantine_stopped_turn_on_a_host_that_does_not_report_its_calls_requ
     lifts (`requeues`)."""
     machine, message, attempt = working(api, start=False)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'quarantined'}, machine['token'])
-    post(api, f"attempts/{attempt['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'message', 'payload': {'text': 'Looking.'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {'events': [{'seq': 1, 'kind': 'message', 'payload': {'text': 'Looking.'}}]},
+        machine['token'],
+    )
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1}, machine['token'])
@@ -173,8 +203,10 @@ def test_a_quarantine_stopped_turn_on_a_host_that_does_not_report_its_calls_requ
 def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
     machine, message, attempt = working(api, safe=True)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
-                  ('quarantine-send', 'send', message['id'], 'bot:ops', H.now(), H.now()))
+        c.execute(
+            "INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
+            ('quarantine-send', 'send', message['id'], 'bot:ops', H.now(), H.now()),
+        )
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3}, machine['token'])
@@ -183,8 +215,11 @@ def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
 
 def test_a_quarantine_only_a_person_lifts_says_so_and_names_no_refused_words(api):
     machine, message, attempt = working(api, safe=True)
-    quarantine(api, "escape: the task note reaches outside the hub: ghp_synthetic",
-               context={"what": "task note", "found": "a GitHub token", "preview": "ghp_[masked]", "task": None})
+    quarantine(
+        api,
+        "escape: the task note reaches outside the hub: ghp_synthetic",
+        context={"what": "task note", "found": "a GitHub token", "preview": "ghp_[masked]", "task": None},
+    )
     renewed = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     assert renewed['stop_reason'] == "Quarantined: the safety check stopped a task note, until a person clears it"
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3}, machine['token'])
@@ -199,15 +234,34 @@ def test_an_answer_finished_after_opening_a_pull_request_is_kept_on_the_run_and_
     machine, message, attempt = working(api)
     quarantine(api)
     assert post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])['stop'] is True
-    post(api, f"attempts/{attempt['id']}/events", {'events': [{'seq': 4, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 4,
-         'text': 'Merged the pull request.'}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {
+            'events': [
+                {
+                    'seq': 4,
+                    'kind': 'tool',
+                    'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'},
+                }
+            ]
+        },
+        machine['token'],
+    )
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {'outcome': 'completed', 'last_seq': 4, 'text': 'Merged the pull request.'},
+        machine['token'],
+    )
     with api.app.state.store.read() as c:
         row = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt['id'],)).fetchone()
     assert tuple(row) == ('interrupted', 'Merged the pull request.')
     assert job_state(api, attempt['job_id']) == 'uncertain'
     assert end_reason(api, attempt).startswith('Quarantined: ')
-    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops']
+    assert not [
+        m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops'
+    ]
     aged(api, attempt['id'])
     assert sweep(api) == [] and attempt['job_id'] in review(api)
     lift(api)
@@ -219,13 +273,19 @@ def test_an_answer_finished_by_a_read_only_turn_is_kept_on_the_run_and_its_job_r
     machine, message, attempt = working(api, safe=True)
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 3,
-         'text': 'Here is the summary.'}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {'outcome': 'completed', 'last_seq': 3, 'text': 'Here is the summary.'},
+        machine['token'],
+    )
     with api.app.state.store.read() as c:
         row = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt['id'],)).fetchone()
     assert tuple(row) == ('interrupted', 'Here is the summary.')
     assert job_state(api, attempt['job_id']) == 'queued'
-    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops']
+    assert not [
+        m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops'
+    ]
 
 
 def test_a_turn_still_waiting_to_start_is_stopped_the_same_way(api):
@@ -240,16 +300,17 @@ def test_a_turn_still_waiting_to_start_is_stopped_the_same_way(api):
 def test_a_stopped_read_only_turn_whose_computer_never_reported_back_goes_back_in_the_queue_not_to_review(api):
     machine, message, attempt = working(api, safe=True)
     quarantine(api)
-    post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])     # it heard, then the computer went away
+    post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])  # it heard, then the computer went away
     expire(api, attempt['id'])
-    assert claim(api, machine) is None                                      # the sweep lets the lease go
+    assert claim(api, machine) is None  # the sweep lets the lease go
     assert job_state(api, attempt['job_id']) == 'queued'
-    assert end_reason(api, attempt).startswith('Quarantined: 10 refusals today') and LOST not in end_reason(api, attempt)
+    assert end_reason(api, attempt).startswith('Quarantined: 10 refusals today') and LOST not in end_reason(
+        api, attempt
+    )
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'queued'
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE title=?",
-                             (H.HELD_REVIEW_TITLE.format(bot='ops'),)).fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE title=?", (H.HELD_REVIEW_TITLE.format(bot='ops'),)).fetchone()
     notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
     assert notice['body'].startswith('Quarantined: 10 refusals today')
 
@@ -258,20 +319,39 @@ def test_a_stopped_turn_that_used_a_shell_and_never_reported_back_is_held_for_re
     """The sweep dismisses a run a person stopped; a quarantine's Stop is not theirs, so its run is held instead."""
     machine, message, attempt = working(api)
     quarantine(api)
-    post(api, f"attempts/{attempt['id']}/events", {'events': [{'seq': 4, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {
+            'events': [
+                {
+                    'seq': 4,
+                    'kind': 'tool',
+                    'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'},
+                }
+            ]
+        },
+        machine['token'],
+    )
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     expire(api, attempt['id'])
     assert claim(api, machine) is None
     assert job_state(api, attempt['job_id']) == 'uncertain'
-    assert end_reason(api, attempt).startswith('Quarantined: 10 refusals today') and LOST not in end_reason(api, attempt)
+    assert end_reason(api, attempt).startswith('Quarantined: 10 refusals today') and LOST not in end_reason(
+        api, attempt
+    )
     assert HELD in get(api, f"conversations/{message['conversation_id']}/messages")[-1]['body']
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     assert attempt['job_id'] in review(api)
     # Its late answer is filed on the run; the job stays held rather than canceled by the Stop.
     lift(api)
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 4,
-         'text': 'Merged the pull request.'}, machine['token'])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {'outcome': 'completed', 'last_seq': 4, 'text': 'Merged the pull request.'},
+        machine['token'],
+    )
     assert job_state(api, attempt['job_id']) == 'uncertain'
 
 
@@ -308,14 +388,26 @@ def test_a_person_stop_is_unchanged(api):
 
 def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_following_their_turn(api):
     from backend.tests.test_task_lanes import new_task, task_bot
+
     machine = task_bot(api, lanes=True)
     task = new_task(api, 'Check the files')
     first = claim(api, machine)
     post(api, f"attempts/{first['id']}/started", {'thread_id': 'files'}, machine['token'])
-    post(api, f"attempts/{first['id']}/events", {'events': [
-        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
-        {'seq': 2, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started',
-                                               'summary': 'gh pr merge 42 --squash'}}]}, machine['token'])
+    post(
+        api,
+        f"attempts/{first['id']}/events",
+        {
+            'events': [
+                {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+                {
+                    'seq': 2,
+                    'kind': 'tool',
+                    'payload': {'name': 'Bash', 'status': 'started', 'summary': 'gh pr merge 42 --squash'},
+                },
+            ]
+        },
+        machine['token'],
+    )
     folded = post(api, f"tasks/{task['id']}/comments", {'text': 'Include the archive.'})['comment']
     inputs = post(api, f"attempts/{first['id']}/inputs", {}, machine['token'])['messages']
     assert [m['id'] for m in inputs] == [folded['id']]
@@ -326,19 +418,32 @@ def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_follow
         attempt = claim(api, machine)
         assert attempt is not None
         post(api, f"attempts/{attempt['id']}/started", {'thread_id': title}, machine['token'])
-        post(api, f"attempts/{attempt['id']}/events", {'events': [
-            {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]}, machine['token'])
+        post(
+            api,
+            f"attempts/{attempt['id']}/events",
+            {'events': [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]},
+            machine['token'],
+        )
         attempts.append(attempt)
     quarantine(api)
     for attempt in attempts:
         response = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
         assert response['stop'] and response['stop_reason'].startswith('Quarantined: ')
-        post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted',
-             'last_seq': 2 if attempt == first else 1}, machine['token'])
+        post(
+            api,
+            f"attempts/{attempt['id']}/complete",
+            {'outcome': 'interrupted', 'last_seq': 2 if attempt == first else 1},
+            machine['token'],
+        )
         assert job_state(api, attempt['job_id']) == ('uncertain' if attempt == first else 'queued')
     with api.app.state.store.read() as c:
         # The comment folded into the turn that used a shell is held with it: that turn may already have acted on it.
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (folded['id'],)).fetchone()[0] == 'uncertain'
         assert not c.execute("SELECT 1 FROM attempts WHERE state IN ('running','leased','expired')").fetchone()
-        assert [r[0] for r in c.execute("SELECT j.id FROM jobs j JOIN attempts a ON a.id=j.attempt_id "
-                                        "WHERE j.state='uncertain' AND a.id<>?", (first['id'],))] == []
+        assert [
+            r[0]
+            for r in c.execute(
+                "SELECT j.id FROM jobs j JOIN attempts a ON a.id=j.attempt_id WHERE j.state='uncertain' AND a.id<>?",
+                (first['id'],),
+            )
+        ] == []

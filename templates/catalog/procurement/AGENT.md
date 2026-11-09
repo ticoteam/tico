@@ -87,7 +87,7 @@ Always:
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Where a mailbox is connected, quotes are read
 with `$HUB_DIR/scripts/mail.sh search "<vendor>"`; leave a draft only with `mail.sh draft`, never `send`. Ask
-the requester one question with `hub task ask <id>`. Something a human must decide is
+the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must decide is
 `hub task create --owner <human>`. A renewal that needs a keep-or-drop view starts with the FP&A Analyst's
 (`spend-watcher`) brief. A contract's terms are the Contracts Manager's: `hub task create --owner legal-review`.
 Keep `hub bot status set` to one factual line. Finish every task, quiet week or not.

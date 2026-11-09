@@ -1,6 +1,7 @@
 """The close and budget gaps from the Finance spec audit (spec v1.2): close snapshots and restatements, budget
 versions in the past and the current period, the Expenses view, cash by account, burn and runway flags, the Gateway
 meter fields, and the run hold average. One small test per gap; each fails before its fix."""
+
 from datetime import date
 
 import pytest
@@ -14,7 +15,20 @@ from backend.finance.context import load
 from clients import hubtools
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, spend, store, sync_once)
+    AT,
+    MERCURY,
+    OWNER,
+    FakeMercury,
+    account,
+    act,
+    books,
+    budget,
+    connect,
+    finance_template,
+    spend,
+    store,
+    sync_once,
+)
 
 OCT = ("2026-10-01", "2026-10-31")
 
@@ -55,8 +69,10 @@ def test_runway_is_withheld_for_a_slice_and_burn_says_it_is_scoped(books):
     scoped; the owner's company runway carries no scoped flag."""
     with books.transaction() as c:
         spend(c, "5100", 1_000, team="sales", day="2026-08-10")
-        for grant in ({"subject": "human:ben", "what": "expenses", "whose": "team", "whose_team": "sales"},
-                      {"subject": "human:ben", "what": "bs_lines", "account_ids": [account(c, "1000")]}):
+        for grant in (
+            {"subject": "human:ben", "what": "expenses", "whose": "team", "whose_team": "sales"},
+            {"subject": "human:ben", "what": "bs_lines", "account_ids": [account(c, "1000")]},
+        ):
             assert act(c, OWNER, "view_grant", grant).status == "committed"
         ben = FR.metric(c, "human:ben", "runway_months", at=AT)
         owner = FR.metric(c, OWNER, "runway_months", at=AT)
@@ -69,15 +85,21 @@ def test_close_checklist_lists_the_money_accounts_behind_up_to_top_n_and_folds_t
     """§7.1: every read takes top_n and folds the rest into "Other · n"; the count stays the whole number."""
     fake = FakeMercury()
     connect(books, fake)
-    for acct in MERCURY["accounts"]["accounts"]:            # one settled bank line on each account, so each has a feed
-        fake.txns[f"txn-{acct['id']}"] = {**MERCURY["txn_bank_fee"], "id": f"txn-{acct['id']}", "accountId": acct["id"],
-                                          "createdAt": "2026-10-14T10:00:00Z", "postedAt": "2026-10-14T10:00:00Z"}
+    for acct in MERCURY["accounts"]["accounts"]:  # one settled bank line on each account, so each has a feed
+        fake.txns[f"txn-{acct['id']}"] = {
+            **MERCURY["txn_bank_fee"],
+            "id": f"txn-{acct['id']}",
+            "accountId": acct["id"],
+            "createdAt": "2026-10-14T10:00:00Z",
+            "postedAt": "2026-10-14T10:00:00Z",
+        }
     sync_once(books, fake)
     with books.read() as c:
         whole = next(k for k in FR.close_checklist(c, OWNER, "2026-10", at=AT)["checks"] if k["key"] == "reconciled")
         assert whole["count"] >= 2
-        cut = next(k for k in FR.close_checklist(c, OWNER, "2026-10", at=AT, top_n=1)["checks"]
-                   if k["key"] == "reconciled")
+        cut = next(
+            k for k in FR.close_checklist(c, OWNER, "2026-10", at=AT, top_n=1)["checks"] if k["key"] == "reconciled"
+        )
         assert cut["count"] == whole["count"] and len(cut["accounts"]) == 2
         assert cut["accounts"][-1]["key"] == FR.OTHER and cut["accounts"][-1]["count"] == whole["count"] - 1
 
@@ -89,6 +111,7 @@ def test_the_hub_close_passes_top_n_and_spend_by_offers_every_group_the_server_h
         def get(self, path, **query):
             calls.append((path, query))
             return {"checks": []}
+
     hubtools.finance_report(Api(), {"kind": "close", "month": "2026-10", "top_n": 5})
     assert calls == [("finance/close/2026-10", {"top_n": 5})]
     report = next(t for t in hubtools.TOOLS if t["name"] == "hub_finance_report")
@@ -110,13 +133,21 @@ def test_the_current_month_shows_its_budget_to_date_beside_the_full_month(books)
 def test_a_past_period_budget_amount_is_refused_on_create_and_update(books):
     """§12: only future periods are editable, so an amount dated into a closed past period is refused."""
     with books.transaction() as c:
-        past = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
-                                               "effective_from": "2026-09-01"})
+        past = act(
+            c,
+            OWNER,
+            "budget_create",
+            {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000, "effective_from": "2026-09-01"},
+        )
         assert past.code == "invalid" and "past period" in past.reason
         made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000})
         assert made.status == "committed", made.reason
-        again = act(c, OWNER, "budget_update", {"budget_id": budget(c, "Software"), "amount": 6_000,
-                                                "effective_from": "2026-09-01"})
+        again = act(
+            c,
+            OWNER,
+            "budget_update",
+            {"budget_id": budget(c, "Software"), "amount": 6_000, "effective_from": "2026-09-01"},
+        )
         assert again.code == "invalid" and "past period" in again.reason
 
 
@@ -136,8 +167,10 @@ def test_a_raise_in_the_current_period_asks_the_budget_owner_and_a_future_one_do
 
 def _turn(c, bot, finished, cost, model="tico-medium", billing="api"):
     tid = f"t{bot}{finished}{model}"
-    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, usage_model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
-              (tid, bot, finished, finished, model, cost, billing))
+    c.execute(
+        "INSERT INTO attempts(id, bot_id, created_at, settled_at, usage_model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+        (tid, bot, finished, finished, model, cost, billing),
+    )
     return tid
 
 
@@ -162,7 +195,7 @@ def test_an_edit_that_lands_in_a_closed_month_is_flagged_on_its_snapshot(books):
         assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
         sep = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
         assert sep["snapshot"] == {"month": "2026-09", "restatements": 0}
-        M._restate(c, load(c, AT), "2026-09-05", "added", None, None, None, "ext-1", AT)     # what a mirror edit does
+        M._restate(c, load(c, AT), "2026-09-05", "added", None, None, None, "ext-1", AT)  # what a mirror edit does
         flagged = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
         assert flagged["snapshot"] == {"month": "2026-09", "restatements": 1}
         assert flagged["expense"] == sep["expense"]
@@ -175,8 +208,10 @@ def test_an_edit_in_a_closed_month_is_one_restatement_even_when_the_totals_check
         spend(c, "5100", 1_000, day="2026-09-05")
         assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
         M._restate(c, load(c, AT), "2026-09-05", "added", None, None, None, "ext-1", AT)
-        c.execute("UPDATE fin_rollups SET amount = amount + 50 WHERE account_id=? AND day=?",
-                  (account(c, "5100"), "2026-09-05"))
+        c.execute(
+            "UPDATE fin_rollups SET amount = amount + 50 WHERE account_id=? AND day=?",
+            (account(c, "5100"), "2026-09-05"),
+        )
         assert CL.restate(c, load(c, AT).book.id, "2026-09") == 1
         sep = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
         assert sep["snapshot"] == {"month": "2026-09", "restatements": 1}
@@ -186,11 +221,23 @@ def test_a_team_budget_at_its_cutoff_pauses_that_teams_bot(books):
     """§9 check: a team's decline budget at its limit holds that team's bot (usage limits read every budget on the bot's
     path). The Gateway key cap is company-wide, so the team budget does not set it (a spec question, see the report)."""
     from datetime import datetime, timezone
+
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
-        act(c, OWNER, "budget_create", {"name": "AI web", "account_id": account(c, "5100"), "team": "web",
-                                        "parent_id": ai, "amount": 50, "at_limit": "decline"})
+        act(
+            c,
+            OWNER,
+            "budget_create",
+            {
+                "name": "AI web",
+                "account_id": account(c, "5100"),
+                "team": "web",
+                "parent_id": ai,
+                "amount": 50,
+                "at_limit": "decline",
+            },
+        )
         spend(c, "5100", 51, team="web")
         cut = usage_limits.budget_cutoff(c, "coder", at=datetime(2026, 10, 15, 12, tzinfo=timezone.utc))
         assert cut is not None and cut["name"] == "AI web"
@@ -205,12 +252,20 @@ def test_a_gateway_key_allocation_reserves_but_pauses_no_bot_until_the_ai_budget
 
     from backend.finance import jobs
     from backend.finance import limits
+
     at = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
-        assert act(c, OWNER, "allocation_set", {"budget_id": ai, "target_kind": "gateway_key", "target_id": "gw-1",
-                                                "amount": 100}).status == "committed"
+        assert (
+            act(
+                c,
+                OWNER,
+                "allocation_set",
+                {"budget_id": ai, "target_kind": "gateway_key", "target_id": "gw-1", "amount": 100},
+            ).status
+            == "committed"
+        )
         assert usage_limits.budget_cutoff(c, "coder", at=at) is None
         assert usage_limits.budget_cutoff(c, "seller", at=at) is None
         assert limits.cutoffs(c, AT).of("coder") is None

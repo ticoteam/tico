@@ -8,7 +8,8 @@ A bot is due when, read from `bot_memory_updates` (the commits its computer repo
 - its last dream of either kind started at least MIN_GAP_HOURS ago (a bot that never dreamed must be that old);
 - its memory since that dream's start (or LOOKBACK_DAYS ago, whichever is later) changed at least MIN_LINES lines over
   at least MIN_TURNS memory turns. Counted: memory/ except memory/state.md, and AGENT.md, AGENTS.md and CLAUDE.md. Not
-  counted: the commits of dreams and of memory tidy passes, which memory_tidy_runs.changed leaves out the same way.
+  counted: the commits of dreams and of the retired Nightly memory tidy pilot's passes (its Keep commits and the runs
+  of its pass tasks, still in bot repositories and in memory_tidy_passes).
 
 The requester is the bot's nearest human manager (org_rule_check.represented), else the company owner. The dream lands
 where that requester's work goes (shared_bots.route, as the dream route files it), and the gates are read on that bot.
@@ -33,24 +34,26 @@ from .updates import ZONE
 
 LOG = logging.getLogger("tico.dream_auto")
 
-MIN_GAP_HOURS = 48          # between dreams of any kind; a bot's first must be this old
-MAX_PER_RUN = 3            # the default "Most bots per run" (backend/maintenance_steps/dream.py)
-MIN_LINES = 200             # changed lines of counted memory since the last dream
-MIN_TURNS = 10              # memory turns (commits that changed a counted file) since the last dream
+MIN_GAP_HOURS = 48  # between dreams of any kind; a bot's first must be this old
+MAX_PER_RUN = 3  # the default "Most bots per run" (backend/maintenance_steps/dream.py)
+MIN_LINES = 200  # changed lines of counted memory since the last dream
+MIN_TURNS = 10  # memory turns (commits that changed a counted file) since the last dream
 INSTRUCTION_FILES = ("AGENT.md", "AGENTS.md", "CLAUDE.md")
-STATE = "memory/state.md"   # rewritten every turn: churn, not memory
-DREAM_SUBJECT = "Dream:"    # a dream's own commits
-TIDY_SUBJECT = "Dreamed "   # a memory tidy pass's commits (memory_tidy_runs.changed)
+STATE = "memory/state.md"  # rewritten every turn: churn, not memory
+DREAM_SUBJECT = "Dream:"  # a dream's own commits
+TIDY_SUBJECT = "Dreamed "  # a Keep commit of the retired Nightly memory tidy pilot
 # The task ids of every dream of one owner, as a subquery: the runs that worked on them are that owner's dream runs.
-DREAM_IDS = (f"SELECT tasks.id FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id JOIN tags g ON g.id=tt.tag_id "
-             f"WHERE g.key=? AND tasks.owner_id=? AND {dream.MARKED}")
+DREAM_IDS = (
+    f"SELECT tasks.id FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id JOIN tags g ON g.id=tt.tag_id "
+    f"WHERE g.key=? AND tasks.owner_id=? AND {dream.MARKED}"
+)
 
 
 @dataclass(frozen=True)
 class Verdict:
     bot: str
     name: str
-    status: str             # "due", or why not: "inactive", "stateless", "busy", "new", "paced", "quiet"
+    status: str  # "due", or why not: "inactive", "stateless", "busy", "new", "paced", "quiet"
     lines: int = 0
     turns: int = 0
     since: datetime | None = None
@@ -72,7 +75,7 @@ def _name(rest, prefix):
     name = rest.rstrip("\t")
     if name == "/dev/null":
         return None
-    return name[len(prefix):] if name.startswith(prefix) else name
+    return name[len(prefix) :] if name.startswith(prefix) else name
 
 
 def changed_lines(diff):
@@ -100,26 +103,37 @@ def _own_runs(c, owner):
     handed one as an input (learnings.run_attempts, for every dream at once). Their commits are the dream's, not memory.
     A run is its attempts row, so its id is the attempt's id."""
     params = (dream.LABEL, owner)
-    return {row[0] for row in c.execute(
-        "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-        f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL} IN ({DREAM_IDS}) UNION "
-        "SELECT i.attempt_id FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-        f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL} IN ({DREAM_IDS})",
-        params + params)}
+    return {
+        row[0]
+        for row in c.execute(
+            "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+            f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL} IN ({DREAM_IDS}) UNION "
+            "SELECT i.attempt_id FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+            f"LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE {H.MESSAGE_TASK_SQL} IN ({DREAM_IDS})",
+            params + params,
+        )
+    }
 
 
 def _tidy_runs(c, bot):
-    """The runs of this bot's memory tidy passes. memory_tidy_runs.changed leaves them out the same way."""
-    return {row[0] for row in c.execute(
-        "SELECT t.id FROM attempts t JOIN memory_tidy_passes p ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id "
-        "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND p.bot=?", (bot,))}
+    """The runs of this bot's passes of the retired Nightly memory tidy pilot (memory_tidy_passes stays as history)."""
+    return {
+        row[0]
+        for row in c.execute(
+            "SELECT t.id FROM attempts t JOIN memory_tidy_passes p ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id "
+            "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND p.bot=?",
+            (bot,),
+        )
+    }
 
 
 def change(c, bot, since, owner=None):
     """(changed lines, memory turns) of the bot's counted memory committed after `since` (a stamp). With no commit since,
     nothing else is looked up: the dream and tidy runs are only needed to tell which commits count."""
-    rows = c.execute("SELECT subject,files,diff,attempt_id FROM bot_memory_updates "
-                     "WHERE bot=? AND shared=1 AND committed_at>?", (bot, since)).fetchall()
+    rows = c.execute(
+        "SELECT subject,files,diff,attempt_id FROM bot_memory_updates WHERE bot=? AND shared=1 AND committed_at>?",
+        (bot, since),
+    ).fetchall()
     if not rows:
         return 0, 0
     skip = _own_runs(c, owner or "bot:" + bot) | _tidy_runs(c, bot)
@@ -166,6 +180,7 @@ def requester(c, bot, auth):
     """The bot's nearest human manager (the first person above it, when on the roster and not left), else the company
     owner. None when there is no owner either."""
     from .org_rule_check import represented
+
     actor = represented(c, "bot:" + bot)
     if actor:
         return actor
@@ -200,7 +215,9 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
     if create is None:
         raise Problem("conflict", "The dream's task path is not wired on this server", 409)
     with store.read() as c:
-        judged = [verdict(c, row["id"], at) for row in c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")]
+        judged = [
+            verdict(c, row["id"], at) for row in c.execute("SELECT id FROM bots WHERE state='active' ORDER BY id")
+        ]
     due = sorted((v for v in judged if v.status == "due"), key=lambda v: (-v.lines, v.bot))
     started, held, limited, over = [], [], [], 0
     for v in due:
@@ -217,10 +234,10 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
                 again = verdict(c, v.bot, at, owner=landing)
                 if again.status != "due":
                     continue
-                if landing != "bot:" + v.bot:      # a branch takes it: this bot's own pass does not start it
+                if landing != "bot:" + v.bot:  # a branch takes it: this bot's own pass does not start it
                     held.append(v.name)
                     continue
-                if not L.allow(c, v.bot):          # the Maintenance wake limits (maintenance_limits.py)
+                if not L.allow(c, v.bot):  # the Maintenance wake limits (maintenance_limits.py)
                     held.append(v.name)
                     limited.append(v.name)
                     continue
@@ -236,6 +253,13 @@ def run(store, auth, at, limit=MAX_PER_RUN, report=None):
             LOG.exception("auto dream for %s failed; the pass goes on", v.bot)
             held.append(v.name)
     if report is not None:
-        report.update(reason=_words(started, held, over, len(judged) - len(due), limit), judged=len(judged),
-                      due=len(due), started=started, held=held, limited=limited, over=over)
+        report.update(
+            reason=_words(started, held, over, len(judged) - len(due), limit),
+            judged=len(judged),
+            due=len(due),
+            started=started,
+            held=held,
+            limited=limited,
+            over=over,
+        )
     return started
