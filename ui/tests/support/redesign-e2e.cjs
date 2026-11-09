@@ -70,7 +70,11 @@ async function journey(name, seeds, pass, {only = null} = {}) {
       try {
         assert.deepEqual(hub.skipped, [], 'every seed ran');
         await pass({hub, browser, phone, tag: phone ? 'phone' : 'desktop'});
-      } finally { await hub.stop(); }
+      } finally {
+        // A page a pass left open keeps its live stream to the hub, and the hub's shutdown would wait for it.
+        for (const context of browser.contexts()) await context.close().catch(() => {});
+        await hub.stop();
+      }
     }
   } finally { await browser.close(); }
   console.log(name + ': ok');

@@ -1,7 +1,8 @@
 // Journey: bot files and pages, and Make page, as Dana and Priya. The Engineering Lead's pages and files (the pages seed) show in
 // Library > Files with their titles; a page opens and draws its title, its version and its status line; a reader links a page to a
 // task (filesPages). Then Make page's task box and progress card, which were make-page.cjs (makePage; the request and pin use a real hub,
-// the authenticated publish and durable status contracts are in backend/tests/test_make_page.py). Runs on a phone and a desktop.
+// the authenticated publish and durable status contracts are in backend/tests/test_make_page.py). Runs on a phone: the
+// desktop row (kind, bot) is redesign-e2e-pages.cjs's, and Make page's fit is checked where it is tightest.
 const assert = require('node:assert/strict');
 const {journey, open, go, call, must, expectFailure, assertClean, drawn, shot, t, SEEDS} = require('./support/e2e.cjs');
 
@@ -215,4 +216,4 @@ journey('e2e-files-pages', async ctx => {
     catch (error) { error.message = `[${name}, ${ctx.phone ? 'phone' : 'desktop'}] ${error.message}`; throw error; }
     finally { for (const context of ctx.browser.contexts()) await context.close().catch(() => {}); }
   }
-}, [...SEEDS, 'pages']);
+}, [...SEEDS, 'pages'], {only: 'phone'});
