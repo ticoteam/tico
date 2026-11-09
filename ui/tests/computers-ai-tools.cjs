@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 // Read shipped capabilities so the browser flow cannot drift from its manifest.
-const manifestCaps = JSON.parse(require('node:child_process').execFileSync('python3', ['-c',
+const manifestCaps = JSON.parse(require('node:child_process').execFileSync(process.env.TICO_PYTHON || 'python3', ['-c',
   'import json; from clients.harness_manifests import load; print(json.dumps({k: v["capabilities"] for k, v in load().items()}))'],
   {cwd: require('node:path').resolve(__dirname, '../..'), encoding: 'utf8'}));
 

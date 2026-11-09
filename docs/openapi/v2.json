@@ -67580,6 +67580,19 @@
             ],
             "title": "Monthly Cap Usd"
           },
+          "rules_monthly_cap_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules Monthly Cap Usd"
+          },
           "steps": {
             "anyOf": [
               {

@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/subscriptions.py": [
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 49,
+                    "endColumn": 108,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 44,
+                    "endColumn": 111,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnusedExpression",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 71,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

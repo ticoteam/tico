@@ -1024,7 +1024,7 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
         )
         F.ensure(c)
         assert not c.execute("SELECT 1 FROM task_types WHERE id='engineering'").fetchone()
-        assert H.type_get(c, dev['id'])['manager'] == 'engineering-lead'
+        assert H.type_get(c, dev['id'])['manager'] is None  # a type with no manager stays with none
     task = post(
         api,
         'tasks',

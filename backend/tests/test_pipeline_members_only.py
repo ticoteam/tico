@@ -394,7 +394,7 @@ def test_a_spawn_from_a_members_only_pipeline_gives_its_child_neutral_content_a_
 
 
 def test_a_spawn_carries_no_restricted_page_its_child_owner_or_readers_may_not_open_through_the_real_spawn(api):
-    """Codex F3: a company-wide Legal ticket holds a page restricted to Ana. Its Engineering child is owned by Cal, who may not
+    """Codex F3: a company-wide Legal ticket holds a page restricted to Ana. Its Engineering child is owned by Ben, who may not
     open the page. Neither the page's version URL nor its title reaches the child; the skip is logged by requirement name only.
     The restriction is the page's audience, which the carry must check through the file policy (files.file_visible)."""
     tag = uuid.uuid4().hex[:8]
@@ -416,7 +416,7 @@ def test_a_spawn_carries_no_restricted_page_its_child_owner_or_readers_may_not_o
                 "reviewer_id": "human:ana",
             },
         )
-    source = ticket(api, legal, "Merger " + tag, owner="human:ana")
+    source = ticket(api, legal, "Merger " + tag, owner="human:ben")
     with api.app.state.store.transaction() as c:
         insert(c, "bots", id="b-memo", slug="memo-bot", display_name="Memo Bot", state="active", created_at=T)
         insert(
@@ -476,7 +476,8 @@ def test_a_spawn_carries_no_restricted_page_its_child_owner_or_readers_may_not_o
         [handoff] = L.handoffs(c, link["id"])
     child = handoff["target_task_id"]
     with api.app.state.store.read() as c:
-        assert H.task(c, child)["owner_id"] == "human:cara"
+        # No stage rule: the filer (the source's owner) owns the child, never the manager.
+        assert H.task(c, child)["owner_id"] == "human:ben"
     listed = json.dumps(get(api, f"tasks/{child}", "cara-test"))
     assert "file-memo-" + tag not in listed and memo not in listed
     with api.app.state.store.read() as c:
