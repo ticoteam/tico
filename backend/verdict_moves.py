@@ -196,6 +196,11 @@ def move(c, row, target, why, *, sources=()):
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
         c.execute("RELEASE verdict_move")
+        if exc.rule == "stage_full":
+            from . import pipeline_engine
+
+            # The stage it moves to is full (D68): it waits where it is, and the manager lists it as waiting for room.
+            pipeline_engine.record_waiting(c, H.KEEPER, row["id"], exc)
         notice = getattr(exc, "review_gate", None)
         if notice:
             review_gate.notify(c, H.KEEPER, notice)

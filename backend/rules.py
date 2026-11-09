@@ -1019,6 +1019,11 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
         conn.execute("ROLLBACK TO rule_carry")
         conn.execute("RELEASE rule_carry")
         log.warning("Rule %s could not %s: %s", decision.rule, decision.outcome, exc)
+        if isinstance(exc, H.Refused) and exc.rule == "stage_full" and exc.task:
+            from . import pipeline_engine
+
+            # The rule's move waited for room (D68): recorded after the rollback, so the manager lists the card waiting.
+            pipeline_engine.record_waiting(conn, H.KEEPER, str(exc.task), exc)
         return Decision(WAKE, FAIL_OPEN)
     finally:
         _CARRYING.reset(token)
@@ -1066,23 +1071,27 @@ def _ask(conn, decision, row, actor, body):
 def _act(conn, decision, row, message=None):
     """Run `params.action` as the keeper: a task action on the message's task, an event action (`wake_bot`,
     `send_webhook`) with or without one. `message` is the message being judged, for the event actions' templates."""
+    from . import pipeline_engine
+
     params = decision.params or {}
     action = params.get("action")
     run = EVENT_RUNNERS.get(action)
     if run:
         values = _message_values(conn, row, message or {})
-        found = run(
-            conn,
-            decision.rule,
-            decision.by,
-            params,
-            values,
-            event=values["event"],
-            subject=row["id"] if row else decision.rule,
-            revision=None,
-            task=row,
-            ctx={},
-        )
+        # An event action is an automation's, whoever wrote the rule: a card it files is held to the caps (D68).
+        with pipeline_engine.automation():
+            found = run(
+                conn,
+                decision.rule,
+                decision.by,
+                params,
+                values,
+                event=values["event"],
+                subject=row["id"] if row else decision.rule,
+                revision=None,
+                task=row,
+                ctx={},
+            )
         if not found["ok"] and action == "wake_bot":
             raise ValueError(found["detail"])  # the bot was not told: open the message instead (fail open)
         H.event(
@@ -1108,12 +1117,18 @@ def _act(conn, decision, row, message=None):
         raise ValueError("the rule's writer cannot read this private task")
     note = str(params.get("note") or params.get("text") or "")[:1000]
     said = f"Rule {decision.rule}: {note}" if note else f"Rule {decision.rule}"
-    done = runner(conn, row["id"], params, said) or {}
+    # The action is an automation's though it writes as Tico: no write of it takes a card out of On ice (D69).
+    with pipeline_engine.automation():
+        done = runner(conn, row["id"], params, said) or {}
     H.event(conn, H.KEEPER, "rule.action", row["id"], {"rule": decision.rule, "action": action, **done})
 
 
 def _close(conn, tid, params, said):
-    H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
+    from . import pipeline_engine
+
+    # An automation acts as Tico but is held as one (_act): it never closes a card, or a subtask with it, out of On ice.
+    with pipeline_engine.automation():
+        H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
 
 
 def _move_step(conn, tid, params, said):
@@ -1644,7 +1659,10 @@ def _judge_event(conn, event, ctx, actor):
         elif outcome == ASK:
             ok, detail = _event_ask(conn, row, name, params, values, ctx)
         elif outcome == ACTION and params.get("action") in EVENT_RUNNERS:
-            with TTR.from_action(row["id"]):
+            from . import pipeline_engine
+
+            # The rule's action is an automation's, whoever wrote it: held to the stage caps and On ice (D68, D69).
+            with TTR.from_action(row["id"]), pipeline_engine.automation():
                 found = EVENT_RUNNERS[params["action"]](
                     conn,
                     row["id"],
@@ -1822,6 +1840,11 @@ def step_entered(conn, actor, row, *, skip=()):
     else hears nothing. Incident tasks also notify their owner and requester without a configured step rule.
     Ordinary step moves need a row naming `step_entered`. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
     Callers can skip recipients already notified by the event that moved the task."""
+    if (
+        row.get("step_id")
+        and conn.execute("SELECT 1 FROM task_steps WHERE id=? AND card_cap=0", (row["step_id"],)).fetchone()
+    ):
+        return  # On ice (D69): a card moved into a stage with cap 0 wakes nobody
     try:
         incident = incident_task(conn, row)
         from . import redesign_migration
