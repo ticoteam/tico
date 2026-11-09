@@ -1,0 +1,19 @@
+name: engineering-team-manager
+display_name: "Engineering Team Manager"
+labels: [owner:engineering-team-manager]
+reads: []
+reasoning_effort: medium
+max_run_minutes: 60
+routines:
+  - id: daily-delivery-check
+    title: Daily delivery check
+    cron: "0 9 * * *"
+    timezone: America/Los_Angeles
+    template: playbooks/daily-delivery-check.md
+    labels: [priority:p2]
+    enabled: false
+tools:
+  - service: github
+    identity: the team's enabled repositories
+    can: [read]
+    note: Read code, pull requests, checks and reviews to coordinate the builders and the Engineering owners.

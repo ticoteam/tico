@@ -166,7 +166,9 @@ async function themed(page, name) {
       assert.match(stats, /Last 7 days/i);
       for (const re of [/6\s*Runs/, /42\s*Read/, /5\s*Sent/, /4\s*Saved/, /1\s*Dropped/, /\$0\.18\s*Cost/]) assert.match(stats, re);
 
-      // The monthly cap: the env's $50 in effect, then $100.
+      // The one monthly cap (rule checks spend from it too): the env's $50 in effect, then $100.
+      assert.equal(await page.locator('[data-mt-rules-cap]').count(), 0);
+      assert.equal(await page.locator('[data-mt-cap] + .mt-hint').innerText(), 'Decision models');
       assert.equal(await page.locator('[data-mt-cap]').inputValue(), '50');
       await page.selectOption('[data-mt-cap]', '100');
       await until(() => writes.length === 8, 'the cap save');

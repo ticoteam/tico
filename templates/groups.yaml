@@ -1,7 +1,8 @@
 # The groups a team builds its team chart from, in the order setup offers them.
 #
 # Each template card names its group (`group:` in templates/catalog/<id>/card.yaml), and exactly one card
-# per group is its head (`lead: true`, the template named in `head:` below). The head's card lists the rest of
+# per group is its head: the template named in `head:` below, which is `lead: true`. A Team Manager is also
+# `lead: true` and does not take the head's seat. The head's card lists the rest of
 # the group in `team_templates:`; a card's `suggest:` says whether it is pre-checked (default), offered (common)
 # or offered only when the briefing asks for it (niche). `icon` is a Material Symbols name in the font the UI ships
 # (ui/vendor/fonts/icons.txt). `software_only: true` groups are offered only when software is the product.
@@ -90,6 +91,24 @@ departments:
     icon: code
     head: engineering-lead
     software_only: true
+
+  - id: success
+    name: Success
+    description: "Keeps existing customers renewing and growing: onboarding, account health, renewals and the support queue, reviewed together each week."
+    goal: "Customers who renew and grow"
+    question: "How do customers get set up and kept after they buy, and who owns renewals and account health today?"
+    placeholder: "An onboarding call for each new account, a renewal reminder list in a spreadsheet, support by email; the founder handles the big accounts"
+    icon: sentiment_satisfied
+    head: success-team-manager
+
+  - id: corporate
+    name: Corporate
+    description: "Keeps the company's legal, financial and partnership obligations on time and visible, with a person signing and approving each one."
+    goal: "Every deadline kept, every deal read first"
+    question: "Which legal, finance and partnership obligations do you carry, and who handles each today?"
+    placeholder: "An outside lawyer for contracts, a bookkeeper who files taxes, two reseller agreements and a yearly partner registration"
+    icon: contract
+    head: corporate-team-manager
 
 # Not a group the picker offers. The built-in Assistant already covers a human's own brief and messages, so these
 # templates are never suggested by default; a team can still add them from a template.

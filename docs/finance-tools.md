@@ -98,6 +98,38 @@ hub finance act categorize --payload '{"feed_id":"fd_1","account_id":"acc_6100"}
 hub finance action fa_123
 ```
 
+## Statement uploads
+
+For a bank or card Tico cannot connect, `statement_post` takes a statement file: CSV, OFX or QFX (OFX 1.x and 2.x),
+base64 in `file`, 1 MB at most. It needs finance.book and acts like `reconcile`: the owner's commits, and a gate rule can
+ask for approval. A mirrored book (QuickBooks, Xero) refuses it, since its rows come from the provider; Tico never writes
+an upload to the provider.
+
+- Add the account first if Tico has none for it: `money_account_add {kind: bank|card_program, name, last4?, subtype?,
+  account_id?}` (finance.admin; a bot's asks the owner). It has no provider and no connection, and maps to `account_id`
+  or to a new line (from 1000 for a bank or debit card, 2100 for a credit card).
+- Review first: `POST /api/v2/finance/statements/preview {money_account_id, file, file_name?, signs?}` returns each row
+  (`id`, `date`, `description`, `amount`, `vendor`, `attribution` from the posting rule that would apply, `status`
+  `new` or `duplicate`), the tie-out `{opening, added, removed, ends, statement_says, off_by}`, how the signs were read
+  (`signs: {flipped, by}`) and a `token`. It stores only that token (30 minutes).
+- Post: `statement_post {money_account_id, file, file_name?, preview_token?, skip?, signs?}`. With `preview_token` the post
+  is refused unless it would insert exactly the New rows that preview showed. `skip` takes row ids to leave out. The
+  result is `{upload_id, new, duplicate, skipped, off_by, statement_id}`.
+- New rows enter the feed (provider id `upload:<FITID or row hash>`) and post exactly as a synced Mercury or Brex row:
+  vendor, posting rules, attribution, and bill, refund and card payment matching. A closing balance in the file becomes a manual
+  statement for `reconcile`.
+- Duplicates are strict and never inserted: a row whose file id is already in, or a feed row or hand-posted journal line
+  on the account with the same amount, a day either side and the same merchant. The same file posted again to the same
+  account is refused whole until its upload is undone.
+- Tie-out: opening (the file's, else the books' balance the day before the file starts) plus what the rows add, against
+  the statement's closing balance. A gap is a warning, never a refusal: the account then reads `off_by` (cents) in Sources
+  until a reconciliation runs through the statement's end.
+- Signs: amounts read money in positive. `signs` is `auto` (default), `as_shown` or `flipped`. Auto takes OFX as the file
+  shows it (the standard's direction, card statements included), else a CSV type column (Sale, Debit, Payment...), else
+  American Express's headers (flipped), else as shown. Pass the same `signs` to the post as to the preview.
+- `statement_undo {upload_id}` takes the upload's rows back out (their entries reversed) while none is reconciled;
+  otherwise it is refused naming the reconciled day.
+
 ## Sizes
 
 A result is kept to about 4,000 tokens. `limit` (search, inbox) or `top_n` (reports) raises that to about 16,000. A

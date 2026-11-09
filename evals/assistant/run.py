@@ -312,10 +312,35 @@ def propose_count(out, argv):
     return out
 
 
+def named_ids(argv):
+    """The task ids a call names: the values of its `--where-id` flags, and the `ids` of an MCP `--filter` JSON. A UUID
+    under any other flag (a pipeline's `--where-type`, say) names no task."""
+    values, filters = [], []
+    for i, arg in enumerate(argv):
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        if arg == "--where-id" and nxt is not None:
+            values.append(nxt)
+        elif arg.startswith("--where-id="):
+            values.append(arg.split("=", 1)[1])
+        elif arg == "--filter" and nxt is not None:
+            filters.append(nxt)
+        elif arg.startswith("--filter="):
+            filters.append(arg.split("=", 1)[1])
+    for text in filters:
+        try:
+            named = json.loads(text).get("ids")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(named, list):
+            values.extend(str(v) for v in named)
+    return set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", " ".join(values)))
+
+
 def bulk_echo(out, argv):
-    """`task bulk close`: matched and changed are the number of distinct task ids the call names (any form of argv)."""
-    ids = set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", " ".join(argv)))
-    if isinstance(out, dict) and "matched" in out:
+    """`task bulk close` by ids: matched and changed are the number of distinct task ids the call names (named_ids). A
+    filter names no ids, so its canned counts stand as the case gives them."""
+    ids = named_ids(argv)
+    if ids and isinstance(out, dict) and "matched" in out:
         out = {**out, "matched": len(ids), "changed": len(ids)}
     return out
 
@@ -932,6 +957,13 @@ def run_sample(case, sample, args, outdir):
             hit = [l for l in lines if visible(rx, l) and re.search(rx, l)]
             if hit:
                 fails.append(f"forbidden call {hit[0][:120]}")
+    # Length limits for the reply, checked here rather than by the judge: words, and non-empty lines (a list is one line
+    # per item, so a long walk-through shows up as lines, not only as words).
+    if case.get("reply_max_words") and len(reply.split()) > int(case["reply_max_words"]):
+        fails.append(f"reply has {len(reply.split())} words, over {case['reply_max_words']}")
+    kept_lines = [l for l in reply.splitlines() if l.strip()]
+    if case.get("reply_max_lines") and len(kept_lines) > int(case["reply_max_lines"]):
+        fails.append(f"reply has {len(kept_lines)} lines, over {case['reply_max_lines']}")
     bad = [c for c in calls if c.get("invalid")]
     if case.get("no_invalid"):
         for c in bad:

@@ -1,0 +1,91 @@
+# Runs scripts/main_red.py for each Release validation run that finishes on main. The alarm job reviews up to three
+# suspect pull requests, or hands a red run with more to the bisect job: that one runs on RunsOn, probes the failing
+# tests at the commits between the last green run and the red one, and reviews only the pull request of the first bad
+# commit. A newer bisect job cancels an older one (its group), and a bisect stops itself once a newer validation run has
+# finished.
+name: Main is red
+run-name: "Main is red: ${{ github.event.workflow_run.display_title }}"
+
+on:
+  workflow_run:
+    workflows: [Release validation]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  alarm:
+    if: github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    concurrency:
+      group: main-red-alarm
+      cancel-in-progress: false
+    outputs:
+      bisect: ${{ steps.alarm.outputs.bisect }}
+      candidate: ${{ steps.alarm.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tell the owners of the run
+        id: alarm
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 scripts/main_red.py --run-id "$RUN_ID" --workdir "$RUNNER_TEMP/red"
+
+  bisect:
+    needs: alarm
+    if: needs.alarm.outputs.bisect == 'true'
+    runs-on: ${{ format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: '1'
+      TICO_BROWSER_CHANNEL: ''
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: write
+    concurrency:
+      # A newer red run's bisect cancels this one. The bisect also stops itself once a newer validation run has finished.
+      group: main-red-bisect
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Check out the red candidate
+        env:
+          CANDIDATE: ${{ needs.alarm.outputs.candidate }}
+        run: git worktree add --detach --force "$RUNNER_TEMP/red" "$CANDIDATE"
+      - name: Install the candidate's dependencies (five minutes per attempt, one retry)
+        timeout-minutes: 11
+        run: cd "$RUNNER_TEMP/red" && bash scripts/ci_install.sh python
+      - name: Bisect the failing tests over the commits since the last green run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 scripts/main_red.py --run-id "$RUN_ID" --workdir "$RUNNER_TEMP/red" --bisect

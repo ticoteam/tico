@@ -167,17 +167,32 @@ function cuUndo() {
   (u.from === 'queue' ? CU.queue : CU.later).unshift(u.it);
   cuDraw({focus: true});
 }
-// A thread read somewhere else (the viewer's own `read` event): its card goes, counted as done. While open, Catch up
-// reads nothing again on events; it pages near the end and reads afresh when opened again.
-function catchUpGone(id) {
+// A thread read somewhere else (the viewer's own `read` event): its card goes, counted as done. An archived one (`leave`,
+// here or in another window) goes too, and is not counted as read. While open, Catch up reads nothing again on events;
+// it pages near the end and reads afresh when opened again.
+function catchUpGone(id, leave = false) {
   if (!CU.open) return;
   if (CU.undo?.it.thread.id === id) cuSettle();
   const it = [...CU.queue, ...CU.later].find(x => x.thread?.id === id);
   if (!it) return;
   CU.queue = CU.queue.filter(x => x !== it); CU.later = CU.later.filter(x => x !== it);
-  CU.done++;
+  if (leave) CU.total = Math.max(0, CU.total - 1); else CU.done++;
   cuDraw();
   cuMore();
+}
+// The Catch up ids of the rail's latest read (THREADS.cu) are what the server counts now. An open card whose task is no
+// longer counted (the task finished, so its thread left the list and Catch up) goes, even when that read brought nothing.
+// Not at the server's cap: the ids stop short of the whole. A card with a reply typed or on its way stays.
+const CU_SHOWN = 99;   // backend/thread_rail.py CATCH_UP_SHOWN
+function cuReconcile() {
+  const cu = THREADS.cu;
+  if (!CU.open || !cu || THREADS.catchUp >= CU_SHOWN) return;
+  const rows: {thread?: {id?: string; task_id?: string | null}}[] = [...CU.queue, ...CU.later];
+  for (const it of rows) {
+    const id = it.thread?.id;
+    if (!id || !it.thread?.task_id || cu.has(id) || CU.sending.has(id) || (CU.drafts.get(id) || '').trim()) continue;
+    catchUpGone(id, true);
+  }
 }
 async function cuReply(form) {
   const it = cuCurrent(), input = form.querySelector('input'), raw = input?.value || '', text = raw.trim();

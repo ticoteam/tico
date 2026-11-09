@@ -539,7 +539,7 @@ function v2StepsHTML(d: {steps?: ChatStep[]}) {
     : `<div class="step${st.kind === 'error' ? ' err' : ''}${st.nested ? ' nested' : ''}" title="${esc(fmt(st.at))}"><span class="step-tool">${esc(st.kind === 'tool' ? (st.label || st.tool) : st.kind)}</span><span class="step-sum">${esc(st.text)}</span></div>`).join('');
 }
 // `root` is where the fold sits when it is not the chat's thread (a thread view).
-async function v2StepsOpen(state: ChatState, el: HTMLDetailsElement, root: Element | null = null) {
+async function v2StepsOpen(state: Pick<ChatState, 'openSteps' | 'steps'>, el: HTMLDetailsElement, root: Element | null = null) {
   const turn = String(el.dataset.turn);
   state.openSteps ||= new Set(); state.steps ||= {};
   if (!el.open) { state.openSteps.delete(turn); return; }

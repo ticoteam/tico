@@ -175,13 +175,13 @@ function tfOpen(d: TfDialog, id: string | undefined, n: string | number | null =
   d.tfOpen = {id: f.id, n: n == null ? null : Number(n), cmp: null};
   tfPaint(d);
   if (opts.scroll) { if (!d.tfEl) throw new Error('The task has no files section'); d.tfEl.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
-  if (opts.focus) $(`.tf-tile[data-tf-file="${CSS.escape(f.id)}"]`, d.tfEl)?.focus({preventScroll: true});
+  if (opts.focus && d.tfEl) $(`.tf-tile[data-tf-file="${CSS.escape(f.id)}"]`, d.tfEl)?.focus({preventScroll: true});
   return true;
 }
 function tfClose(d: TfDialog): void {
   const id = d.tfOpen?.id;
   d.tfOpen = null; tfPaint(d);
-  if (id) $(`.tf-tile[data-tf-file="${CSS.escape(id)}"]`, d.tfEl)?.focus({preventScroll: true});
+  if (id && d.tfEl) $(`.tf-tile[data-tf-file="${CSS.escape(id)}"]`, d.tfEl)?.focus({preventScroll: true});
 }
 
 // ---- adding files: the + on Files, a drop anywhere on the task, or a pasted screenshot. One upload per file; a name
@@ -273,7 +273,9 @@ function tfViewModal(box: HTMLDialogElement | null | undefined): void {
   box.close(); box.showModal();
 }
 function tfViewPaint(d: TfDialog, force = false): void {
-  const box = $('[data-tf-view]', d.tfEl);
+  const el = d.tfEl;
+  if (!el) throw new Error('The task has no files section');
+  const box = $('[data-tf-view]', el);
   if (!box) return;
   const open = d.tfOpen, f = open && tfFiles(d).find(x => x.id === open.id);
   if (!f) { if (box.open || box.dataset.sig) { box.querySelector('video, audio')?.pause(); if (box.open) box.close(); box.innerHTML = ''; box.dataset.sig = ''; } return; }
@@ -301,7 +303,7 @@ function tfViewPaint(d: TfDialog, force = false): void {
     ${tfVersionMetaHTML(d, f, v)}`;
   tfBodyWire(box);
   if (!box.open && box.isConnected && d.open) box.showModal();
-  if (refocus) $(refocus, d.tfEl)?.focus({preventScroll: true});      // the redraw never drops the focus on the page
+  if (refocus) $(refocus, el)?.focus({preventScroll: true});      // the redraw never drops the focus on the page
 }
 function tfBodyHTML(f: TfFile, v: TfVersion, kind: TfKind, d: TfDialog | null | undefined): string {
   const url = esc(v.url), name = esc(f.name);
@@ -380,6 +382,12 @@ function tfBodyWire(box: HTMLElement): void {
   }
   tfLazy(box);
 }
+// An index the loops below bound themselves, so a miss is a bug: it throws rather than reading undefined.
+function tfAt<T>(xs: ArrayLike<T>, i: number): T {
+  const x = xs[i];
+  if (x === undefined) throw new Error('The diff index is out of range');
+  return x;
+}
 // A line diff: common head and tail trimmed, the middle by longest common subsequence (a very long middle shows as
 // replaced). Unchanged runs longer than six lines fold to a count.
 function tfDiff(a: string, b: string): TfDiffLine[] {
@@ -390,15 +398,19 @@ function tfDiff(a: string, b: string): TfDiffLine[] {
   if (a1.length * b1.length > 4e6) { out.push(...a1.map((l): TfDiffLine => ['-', l]), ...b1.map((l): TfDiffLine => ['+', l])); }
   else {
     const n = a1.length, m = b1.length, L = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
-    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a1[i] === b1[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    for (let i = n - 1; i >= 0; i--) {
+      const row = tfAt(L, i), below = tfAt(L, i + 1), x = tfAt(a1, i);
+      for (let j = m - 1; j >= 0; j--) row[j] = x === tfAt(b1, j) ? tfAt(below, j + 1) + 1 : Math.max(tfAt(below, j), tfAt(row, j + 1));
+    }
     let i = 0, j = 0;
     while (i < n && j < m) {
-      if (a1[i] === b1[j]) { out.push([' ', a1[i]]); i++; j++; }
-      else if (L[i + 1][j] >= L[i][j + 1]) out.push(['-', a1[i++]]);
-      else out.push(['+', b1[j++]]);
+      const x = tfAt(a1, i), y = tfAt(b1, j);
+      if (x === y) { out.push([' ', x]); i++; j++; }
+      else if (tfAt(tfAt(L, i + 1), j) >= tfAt(tfAt(L, i), j + 1)) out.push(['-', tfAt(a1, i++)]);
+      else out.push(['+', tfAt(b1, j++)]);
     }
-    while (i < n) out.push(['-', a1[i++]]);
-    while (j < m) out.push(['+', b1[j++]]);
+    while (i < n) out.push(['-', tfAt(a1, i++)]);
+    while (j < m) out.push(['+', tfAt(b1, j++)]);
   }
   out.push(...A.slice(A.length - tail).map((l): TfDiffLine => [' ', l]));
   return out;
@@ -407,8 +419,8 @@ function tfDiffHTML(a: string, b: string): string {
   const lines = tfDiff(a, b), html = [];
   if (!lines.some(([op]) => op !== ' ')) return '<p class="muted">No changes.</p>';
   for (let i = 0; i < lines.length;) {
-    if (lines[i][0] === ' ') {
-      let j = i; while (j < lines.length && lines[j][0] === ' ') j++;
+    if (tfAt(lines, i)[0] === ' ') {
+      let j = i; while (j < lines.length && tfAt(lines, j)[0] === ' ') j++;
       const run = j - i, edge = i === 0 || j === lines.length;
       if (run > 6) {
         const keepA = i === 0 ? 0 : 3, keepB = j === lines.length ? 0 : 3;
@@ -418,7 +430,7 @@ function tfDiffHTML(a: string, b: string): string {
       } else for (const [, l] of lines.slice(i, j)) html.push(`<span class="ctx">  ${esc(l)}</span>`);
       void edge; i = j; continue;
     }
-    const [op, l] = lines[i++];
+    const [op, l] = tfAt(lines, i++);
     html.push(`<span class="${op === '+' ? 'add' : 'del'}">${op} ${esc(l)}</span>`);
   }
   return `<pre class="tf-diff-lines">${html.join('')}</pre>`;
@@ -518,7 +530,7 @@ function tfCommentFiles(m: TfMessage, files: TfFile[]): TfCommentFile[] {
 }
 // The comment's first visuals are cards (ui/app/visual-cards.ts); its other files stay thumbs and chips.
 function tfCommentFilesHTML(m: TfMessage, files: TfFile[]): string {
-  return visualCardsHTML(m.refs?.attachments || [], {key: m.id || '', chips: (rest: unknown, shown: Set<string>) => tfCommentChipsHTML(m, files, shown)});
+  return visualCardsHTML(m.refs?.attachments || [], {key: m.id || '', chips: (_rest, shown) => tfCommentChipsHTML(m, files, shown instanceof Set ? shown : undefined)});
 }
 function tfCommentChipsHTML(m: TfMessage, files: TfFile[], shown: Set<string> = new Set()): string {
   const list = tfCommentFiles(m, files).filter(x => x.loose ? !shown.has(`${x.loose.file_id}@${x.loose.version}`) : !shown.has(`${x.f.id}@${x.v.n}`));

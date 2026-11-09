@@ -1,9 +1,9 @@
 // Strategy › Org (ui/app/redesign-org.ts) against the fake hub in support/strategy-fake.cjs (the
 // Acme example): the chart top down with the owner on top, groups as outlines that fold (and stay folded), helpers off
-// it, pinch, the zoom toolbar above the frame and a first look that fits the width (or centres the owner) with nothing
-// clipped at either end; a teammate's sheet with its group and Move to…; the owner, and a lead inside the
-// groups it leads, move at once (PATCH /api/v2/groups), anyone else sees the group and no Move to…; no proposals and no
-// approvals. A phone first, then a computer.
+// it, the built-ins in a folded Built-in group, pinch, the zoom toolbar above the frame and a first look that fits the
+// width (or centres the owner) with nothing clipped at either end; a teammate's sheet with its group and Move to…; the
+// owner, and a lead inside the groups it leads, move at once (PATCH /api/v2/groups), anyone else sees the group and no
+// Move to…; no proposals and no approvals. A phone first, then a computer.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs');
@@ -27,7 +27,8 @@ async function fitted(page, tag) {
   await settled(page);
   const f = await page.evaluate(() => {
     const box = el => el.getBoundingClientRect(), pane = document.querySelector('#rdo-pane'), p = box(pane);
-    const cards = [...document.querySelectorAll('#rdo-cv .rdo-card')].map(box);
+    // A folded group keeps its cards in the page with no box: only the cards on screen count.
+    const cards = [...document.querySelectorAll('#rdo-cv .rdo-card')].filter(el => el.getClientRects().length).map(box);
     const owner = box(document.querySelector('.rdo-card.top')), row = box(document.querySelector('.rdo-row'));
     const bar = box(document.querySelector('.rdo-bar'));
     return {left: Math.min(...cards.map(r => r.left)) - (p.left + pane.clientLeft), right: p.left + pane.clientLeft + pane.clientWidth - Math.max(...cards.map(r => r.right)),
@@ -43,8 +44,12 @@ async function fitted(page, tag) {
 async function chart(page, tag) {
   await page.locator(card('bot:builder') + ':enabled').waitFor();
   assert.equal(await page.locator('.rdo-card.top').innerText().then(t => t.split('\n')[0]), 'Ana Silva', tag + ': the owner on top');
-  for (const helper of ['bot:botops', 'bot:librarian', 'bot:coo', 'bot:mail-sorter', 'bot:goal-manager'])
-    assert.equal(await page.locator(card(helper)).count(), 0, `${tag}: ${helper} is off the chart`);
+  // Mail Sorter is a helper: off the chart. The built-ins are one Built-in group, folded: drawn, but not seen until it opens.
+  assert.equal(await page.locator(card('bot:mail-sorter')).count(), 0, tag + ': Mail Sorter is off the chart');
+  const tab = '[data-rdo-group="built-in"] > .rdo-tab';
+  assert.match(await page.locator('[data-rdo-group="built-in"]').getAttribute('class'), /folded/, tag + ': Built-in starts folded');
+  assert.equal(await page.locator(tab + ' .rdo-n').textContent(), '4', tag + ': Built-in counts its four');
+  assert.equal(await page.locator(card('bot:botops') + ':visible').count(), 0, tag + ': a folded built-in is not seen');
   assert.ok(await inGroup(page, 'bot:builder', 'eng'), tag + ': Builder in Engineering');
   assert.equal(await page.locator('[data-rdo-group="eng"] [data-rdo-group="web"]').count(), 1, tag + ': Web nests in Engineering');
   assert.equal(await page.locator('[data-rdo-group="eng"] .rdo-card').first().getAttribute('data-rdo-ref'), 'bot:eng-lead', tag + ': the lead first');
@@ -154,6 +159,24 @@ async function chart(page, tag) {
       await page.close();
     }
 
+    // A phone, the owner, a built-in bot: its sheet names the Built-in group and has no Move to… (the server refuses it, 422).
+    {
+      const tag = 'phone owner built-in';
+      const {page, errors, writes} = await openStrategy(browser);
+      await chart(page, tag);
+      await page.locator('[data-rdo-group="built-in"] > .rdo-tab').click();
+      assert.equal(await page.locator(card('bot:botops') + ':visible').count(), 1, tag + ': Built-in opens');
+      await page.locator(card('bot:botops')).click();
+      const sheet = page.locator('dialog.rd-sheet[open]');
+      await sheet.waitFor();
+      assert.equal(await sheet.locator('[data-rdo-home]').innerText(), 'Built-in', tag + ': the group');
+      assert.equal(await sheet.locator('select[name="to"], [type=submit]').count(), 0, tag + ': no Move to…');
+      await sheet.locator('[data-close]').first().click();
+      assert.deepEqual(writes.filter(w => w.path.startsWith('/api/v2/groups')), [], tag + ': nothing written');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+
     // A phone, a lead who is not an admin: Move to… offers the groups he leads, and the move happens at once (PATCH,
     // audited by the hub); a teammate outside them has no Move to….
     {
@@ -234,7 +257,7 @@ async function chart(page, tag) {
       await settled(page);
       const ends = await page.evaluate(() => {
         const pane = document.querySelector('#rdo-pane'), p = pane.getBoundingClientRect(), l = p.left + pane.clientLeft, r = l + pane.clientWidth;
-        const cards = () => [...document.querySelectorAll('#rdo-cv .rdo-card')].map(el => el.getBoundingClientRect());
+        const cards = () => [...document.querySelectorAll('#rdo-cv .rdo-card')].filter(el => el.getClientRects().length).map(el => el.getBoundingClientRect());
         const owner = document.querySelector('.rdo-card.top').getBoundingClientRect();
         const name = parseFloat(getComputedStyle(document.querySelector('.rdo-card b')).fontSize) * RDO.zoom;
         const out = {name, off: Math.abs(owner.left + owner.width / 2 - (l + pane.clientWidth / 2)), wider: pane.scrollWidth > pane.clientWidth};
