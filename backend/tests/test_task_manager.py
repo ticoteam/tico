@@ -317,7 +317,7 @@ def quiet_lead(api, manager, *, bot_state=None):
                 ("bot_pm_" + bot_state, "pm-" + bot_state, "pm-" + bot_state, bot_state),
             )
             manager = "bot_pm_" + bot_state
-        lead = H.type_create(c, "bot:coo", "Lead", [{"name": "Targets", "status": "open"}], mover=True)
+        lead = H.type_create(c, "bot:coo", "Prospects", [{"name": "Targets", "status": "open"}], mover=True)
         c.execute("UPDATE task_types SET manager=? WHERE id=?", (manager, lead["id"]))
         step = c.execute("SELECT id FROM task_steps WHERE type_id=?", (lead["id"],)).fetchone()[0]
         c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (lead["id"], step, quiet))
