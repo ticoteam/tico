@@ -8,30 +8,8 @@ import uuid
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.pipeline_settings_j import make_pipeline, read_settings, send, settings  # noqa: F401
 from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
-
-
-def make_pipeline(api, name, owner="human:ana"):
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(
-            c, H.KEEPER, name, [{"name": "Doing", "status": "doing"}, {"name": "Done", "status": "done"}]
-        )
-        c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (owner, typ["id"]))
-    return typ["id"]
-
-
-def send(api, method, path, body, token="ana-test", expected=200):
-    r = api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def settings(api, pipeline, body, token="ana-test", expected=200):
-    return send(api, "PATCH", f"pipelines/{pipeline}/settings", body, token, expected)
-
-
-def read_settings(api, pipeline, token="ana-test"):
-    return get(api, f"pipelines/{pipeline}/settings", token)
 
 
 def seen_on_overview(api, token):
