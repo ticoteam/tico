@@ -21,6 +21,7 @@ from backend.tests.test_sample_company import (
     OWNER_EMAIL,
     PEOPLE,
     SEED,
+    booted,
     environment,
     machine,
     rows,
