@@ -117,6 +117,32 @@ def test_a_new_hub_starts_with_its_product_and_engineering_pipelines(tmp_path):
     assert again.execute("SELECT COUNT(*) FROM task_types WHERE role IS NOT NULL AND role<>''").fetchone()[0] == 2
 
 
+def test_a_type_with_no_manager_stays_without_one_when_the_roles_are_ensured(tmp_path):
+    """Criterion 2: the legacy slug is written only into a type this creates. An existing role type with no manager
+    stays with none, so the manager column never holds a dangling 'none' or a legacy name it did not have."""
+    c = H.connect(str(tmp_path / "hub.db"))
+    engineering = roadmap_flow.role_type(c, roadmap_flow.ENGINEERING)
+    c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (engineering,))
+    roadmap_flow.ensure(c)
+    assert tuple(c.execute("SELECT manager, role FROM task_types WHERE id=?", (engineering,)).fetchone()) == (
+        None,
+        roadmap_flow.ENGINEERING,
+    )
+    c.close()
+
+
+def test_a_manager_change_on_engineering_keeps_the_role_holder_found(tmp_path):
+    """Criterion 3 (A5): routing finds the role holder through task_types.role, so a changed manager neither moves
+    the role nor adds a second holder, and ensure never overwrites the manager a type has."""
+    c = H.connect(str(tmp_path / "hub.db"))
+    engineering = roadmap_flow.role_type(c, roadmap_flow.ENGINEERING)
+    c.execute("UPDATE task_types SET manager='bot:someone-else' WHERE id=?", (engineering,))
+    roadmap_flow.ensure(c)
+    assert roadmap_flow.role_type(c, roadmap_flow.ENGINEERING) == engineering
+    assert c.execute("SELECT manager FROM task_types WHERE id=?", (engineering,)).fetchone()[0] == 'bot:someone-else'
+    c.close()
+
+
 def test_a_hub_that_deleted_its_product_pipeline_does_not_get_it_back_on_restart(tmp_path):
     """r4 follow-up: the first start was guessed from "no Product pipeline and no managed pipeline", so an existing hub
     that had deleted Product and cleared its managers got both role pipelines back on every start. The migration's own

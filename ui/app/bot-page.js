@@ -162,7 +162,7 @@ async function botGoalLoad(slug) {
   }
   const mine = (r?.goals || []).filter(goalLive).sort(goalRank);
   if (load !== BOT_GOAL_LOAD || BOT?.slug !== slug || !$('#bot-goal')) return;
-  botGoalRender(slug, r ? mine[0] || null : undefined, mine.length);
+  botGoalRender(slug, r ? mine : undefined);
 }
 // The Goals card under More is the bot's goals as plain lines, each edited in
 // place with the link icon for the goal it supports; the same goals the top line shows and the
@@ -195,24 +195,40 @@ async function botGoalAdd(slug) {
   if (BOT?.slug !== slug) return;
   goalSheetOpen({goals}, {owner: 'bot:' + slug});
 }
-function botGoalRender(slug, g, count) {
+// The top line's goal: a target, the first goal cut to fit, and "+N" for the rest. A tap lists them all with
+// Add goal under them; no goal is the target and "Set goal", which opens the goal sheet.
+function botGoalRender(slug, goals) {
   const el = $('#bot-goal');
-  if (g === undefined) {
+  if (goals === undefined) {
     el.removeAttribute('data-status'); el.innerHTML = '';
     setTimeout(() => { if (BOT?.slug === slug && $('#bot-goal') && !$('#bot-goal').innerHTML) botGoalLoad(slug); }, 30000);
     return;
   }
-  if (!g) {
+  const icon = '<span class="nav-icon bot-goal-i" aria-hidden="true">target</span>';
+  if (!goals.length) {
     el.dataset.status = 'none';
-    el.innerHTML = '<a href="#" class="bot-goal-set" id="bot-goal-set">Set goal</a>';
-    $('#bot-goal-set').onclick = e => { e.preventDefault(); void botGoalAdd(slug); };
+    el.innerHTML = `<button type="button" class="bot-goal-main bot-goal-set" id="bot-goal-set">${icon}<span class="bot-goal-title">Set goal</span></button>`;
+    $('#bot-goal-set').onclick = () => void botGoalAdd(slug);
     return;
   }
+  const [g, ...rest] = goals;
   el.dataset.status = 'set';
-  el.innerHTML = `<a class="bot-goal-main" href="${GOALS}/${encodeURIComponent(g.id)}" data-goal-open="${esc(g.id)}" title="${esc(g.title)}${count > 1 ? ` (${count - 1} more under More)` : ''}">
-      <span class="bot-goal-title">${esc(g.title)}</span></a>`;
-  const a = el.querySelector('[data-goal-open]');
-  a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalOpen); };
+  el.innerHTML = `<button type="button" class="bot-goal-main" id="bot-goal-btn" aria-haspopup="menu" aria-expanded="false"
+      aria-label="Goal: ${esc(g.title)}${rest.length ? `, ${rest.length} more` : ''}" title="${esc(goals.map(x => x.title).join('\n'))}">
+      ${icon}<span class="bot-goal-title">${esc(g.title)}</span>${rest.length ? `<span class="bot-goal-n">+${rest.length}</span>` : ''}</button>
+    <div class="tl-pop bot-goal-pop" id="bot-goal-pop" popover><div class="tl-menu" role="menu" aria-label="Goals">
+      ${goals.map(x => `<a class="tl-mi" role="menuitem" href="${GOALS}/${encodeURIComponent(x.id)}" data-goal-open="${esc(x.id)}" title="${esc(x.title)}"><span class="bot-goal-mi">${esc(x.title)}</span></a>`).join('')}
+      <button type="button" class="tl-mi" role="menuitem" data-goal-add><span class="nav-icon" aria-hidden="true">add</span>Add goal</button></div></div>`;
+  const btn = $('#bot-goal-btn'), pop = $('#bot-goal-pop');
+  btn.onclick = () => {
+    if (pop.matches(':popover-open')) { pop.hidePopover(); return; }
+    pop.showPopover(); tasksMenuPlace(pop, btn); pop.querySelector('.tl-mi')?.focus();
+  };
+  pop.ontoggle = ev => btn.setAttribute('aria-expanded', String(ev.newState === 'open'));
+  pop.onkeydown = tasksMenuKeys;
+  for (const a of pop.querySelectorAll('[data-goal-open]'))
+    a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); pop.hidePopover(); openGoal(a.dataset.goalOpen); };
+  pop.querySelector('[data-goal-add]').onclick = () => { pop.hidePopover(); void botGoalAdd(slug); };
 }
 // Why the bot's last run ended without finishing (backend/execution.py last_stop), never a bare "Crashed": one plain
 // line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the

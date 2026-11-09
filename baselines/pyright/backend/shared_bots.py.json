@@ -1,0 +1,38 @@
+{
+    "files": {
+        "./backend/shared_bots.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 36,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 27,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 52,
+                    "endColumn": 66,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 30,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

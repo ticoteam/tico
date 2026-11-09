@@ -11,7 +11,7 @@ function tagSummary(tag) {
   });
   return [tag?.label || tag?.key || '', ...values].join(' · ');
 }
-function tagChips(keys, tags = [], removable = false, interactive = true) {
+function tagChips(keys, tags: import('../types/api').Tag[] = [], removable = false, interactive = true) {
   return (keys || []).map(key => {
     const tag = tags.find(tag => tag.key === key) || {key, label: key};
     return `<span class="tlabel"><span${interactive ? ` role="link" tabindex="0" data-tag-key="${esc(key)}"` : ''} title="${esc(key)}">${esc(tagSummary(tag))}</span>${removable ? `<button type="button" class="x" data-drop-label="${esc(key)}" aria-label="Remove ${esc(tag.label)}">×</button>` : ''}</span>`;
