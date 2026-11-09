@@ -856,7 +856,7 @@ async function decideSend(st: DecState | null, p: DecPending) {
     decideSave();
     if (closing) {
       document.dispatchEvent(new CustomEvent('qcard:closed', {detail: {id: String(p.key).replace(/^task:/, '')}}));
-      if (st) needsSay(p.write.label);
+      if (st) needsSay(p.write.label || 'Closed (declined)');
     }
     if (st && !liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => {
       if (DEC === st) decideRefresh(st, S.v2.needs || []);

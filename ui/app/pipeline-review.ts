@@ -498,12 +498,13 @@ async function pipelineReviewReload(): Promise<void> {
   if (pipelineReviewState) pipelineReviewRender();
 }
 
-document.addEventListener('qcard:answered', (event: Event) => {
-  const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+const pipelineReviewQuestionResultId = (event: Event) => (event as CustomEvent<{ id?: string }>).detail?.id;
+document.addEventListener('qcard:answered', event => {
+  const id = pipelineReviewQuestionResultId(event);
   if (id) pipelineReviewAnswered(id);
 });
-document.addEventListener('qcard:closed', (event: Event) => {
-  const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+document.addEventListener('qcard:closed', event => {
+  const id = pipelineReviewQuestionResultId(event);
   if (id) pipelineReviewAnswered(id);
 });
 document.addEventListener('input', (event: Event) => {
