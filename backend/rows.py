@@ -1430,6 +1430,13 @@ class EntityExternalRefRow(TypedDict):
     status: str
 
 
+class EntityLookupRow(TypedDict):
+    id: str
+    attempt_id: str
+    entity_id: str
+    created_at: str
+
+
 class EntityMentionRow(TypedDict):
     id: str
     mentionable_type: str
@@ -1564,3 +1571,12 @@ class LinkTypeRow(TypedDict):
     created_by_id: str
     created_at: str
     archived_at: str | None
+
+
+class SetupHandoffRow(TypedDict):
+    token_hash: str
+    created_at: str
+    expires_at: str
+    used_at: str | None
+    revoked_at: str | None
+    human_token_id: str | None
