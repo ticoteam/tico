@@ -24,7 +24,7 @@ for its stage (Review 2, 6 cards waiting, the seat is not hired).
 - Card 107 has no next step and no owner since October. Owner asked.
 
 ## Not read
-- Stage counts are read from hub on 2026-11-09. No card in On ice was read beyond its title.
+- Stage counts were read on 2026-11-09. No card in On ice was read beyond its title.
 
 ## Sources
 - hub pipeline --type "Product", read 2026-11-09 09:00 PT
