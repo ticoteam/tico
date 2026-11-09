@@ -78,6 +78,13 @@ Tico's own releases (ticoteam/tico) ship from release windows (one every hour, 1
   the new head, one validation at a time. A red or cancelled head waits for the next push; it is not run again, except
   by a manual run (below), which validates it again (a flaky check). A window still red at the next open carries on.
   The next window that ships closes the issue.
+- **Main is red.** A red Release validation run on main reviews, once per break, each merged pull request that changed
+  a file a failing test uses (a review, so Tico routes it to the pull request's owner). With more than three such
+  pull requests and only pytest tests failing, the bisect job on RunsOn runs the failing tests at the commits between
+  the last green run and the red one, twice each, and reviews only the merge where they first fail. A mix of results is
+  flaky: nothing is reviewed, and the test is a candidate for `ci/quarantine/` (see Quarantined tests). One open `main-red` issue lists
+  the suspects, the verdict and the likely flaky tests. The next green run on main closes it. See
+  `scripts/main_red.py`.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
   keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
 - **Approval.** Stable takes the canary's release only when someone has approved it (see [Approval](#approval)), its
@@ -127,7 +134,8 @@ A window validates a head in one of two ways. A **full** validation is the whole
   main's head in full as it does today. Once that run is a day old, the window may dispatch a full validation again on
   its own. Until then a release can wait up to a day, so a person who needs it sooner runs it by hand.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
-  merge queue's rules, never the full suite), the browser smoke set, the factory part when its inputs changed, the
+  merge queue's rules before its light plan's two-level cut, never the full suite; so it runs the tests a queue group
+  left out), the browser smoke set, the factory part when its inputs changed, the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
   anchor's, and the tests that failed in the open red runs (below). A failed file that marks slow tests also runs in the
   contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
@@ -398,7 +406,7 @@ Python jobs install no npm packages, browsers or apt packages. The browser job c
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
 one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
+finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
@@ -444,9 +452,8 @@ checks on that merge commit, and moves main only when they pass.
 - **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its plan job also runs every
   static check on that commit (`scripts/ci/merge_commit_checks.sh`), in place of a static checks VM. A job the change does
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
-  request's change. Its tests pack toward 6 test jobs of up to 12 minutes each (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in
-  `scripts/pr_checks.py`), since every group shares the organisation's concurrent hosted jobs; a selection too big for
-  that keeps 12-minute VMs.
+  request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
+  `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
 - **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
@@ -467,8 +474,11 @@ GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue;
 
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
 failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
-the pull request's own run first, because a ready pull request runs its selected tests. After a queue failure, fix it and get
-green PR checks before enqueuing again.
+the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
+that import, name or read a changed file, the smoke set, at most ten VMs), and its queue group goes one level further (at
+most nineteen VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
+closure over every change since the last full validation, so a test a queue group left out still runs before a release. After a queue failure, fix it and get green PR
+checks before enqueuing again.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
@@ -501,7 +511,7 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 28 Python shards, desktop and seven factory-sim groups (the sim's own VMs). Every part starts with the candidate and runs its setup while the Linux
+shards, 36 Python shards, desktop and twelve factory-sim groups (the sim's own VMs). Every part starts with the candidate and runs its setup while the Linux
 binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
 immediately. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
@@ -522,7 +532,7 @@ two-minute binary wait rather than adding collection to the critical Python shar
 default collection in `scripts/pr_checks.py`, before affected-file filtering, so the guard adds no collection or job.
 Both guards fail if a collected file is missing from the filesystem plan; extra empty or deselected candidates are
 allowed. The existing no-test-passed check still rejects a release shard that proves nothing.
-Beside the gate, seven `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into seven
+Beside the gate, twelve `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into twelve
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and
@@ -656,7 +666,7 @@ rollback step: it runs on the candidate's updater.
 
 **Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py` on the seeded
 demo for the base tag and the candidate, and shoots each page that a changed `ui/` file draws (its `ui` globs in
-`scripts/screenshots/index.js`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
+`scripts/screenshots/index.cts`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
 shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
 changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
 looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
@@ -691,6 +701,8 @@ hosted gate.
 
 The workflow then:
 
+- generates `openapi-v2.json` from the tag (`python3 -m backend.openapi_v2`, with the runtime requirements the image installs),
+  the same document `GET /api/v2/openapi.json` serves, and attaches it;
 - runs `scripts/build_install_bundle.py`, which attaches the one-line installers: `install.sh` and the Windows
   `install-wsl.ps1` with the tag baked into them, `tico-bundle-vX.Y.Z.tar.gz` (`compose.yaml`, `.env.example`,
   `docker/runner.compose.yaml` and the `setup/` wizard) and `SHA256SUMS` over all three. `install.sh` checks the bundle against `SHA256SUMS` before it unpacks anything;
@@ -836,14 +848,16 @@ directly and sends no ID.
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of
-`idle`, `pulling`, `restarting`, `healthy`, `rolled_back` or `failed`. Both carry
+`idle`, `pulling`, `snapshotting`, `restarting`, `uncertain`, `healthy`, `rolled_back` or `failed`. Both carry
 `Authorization: Bearer <TICO_UPDATER_TOKEN>`. Without an updater, "Update now" shows the command to
 run on the server: `docker compose pull && docker compose up -d`.
 
 ## Publish the release docs
 
-The tagged repository is the source for that release's manual. Run `python -m backend.openapi_v2` and
-`python scripts/build_api_docs.py` after changing API descriptions; check the spec and API guide together.
+The tagged repository is the source for that release's manual. The API spec is generated, not committed: release.yml
+generates `openapi-v2.json` from the tag and attaches it to the release, and the public docs link to
+`https://github.com/ticoteam/tico/releases/latest/download/openapi-v2.json`. Run `python3 scripts/build_api_docs.py` after
+changing API descriptions or tags; check the spec and API guide together.
 
 Publish the public site's docs from the same tag, including the docs landing page's three reader paths and its **Use Tico** and
 **Glossary** links. The website source and publishing process live outside this repository. Check that its install and demo pages

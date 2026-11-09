@@ -2,6 +2,7 @@
 attach at a stage the ticket is not at is refused."""
 
 import hashlib
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,29 @@ from backend import requirement_attachments as A
 from backend import task_privacy as privacy
 from backend.store import Problem
 
-from .test_pipeline_foundation import ANA, T, boot, hub, insert, step_id
+from .test_pipeline_foundation import ANA, T, hub, insert, step_id
+from .test_pipeline_foundation import boot as foundation_boot
+
+TEMPLATE = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def booted(tmp_path_factory):
+    """One booted hub per worker (`test_pipeline_foundation.boot`, the slow part); each test copies it (`boot`)."""
+    TEMPLATE["path"] = tmp_path_factory.mktemp("requirement-attachments") / "hub.sqlite"
+    foundation_boot(TEMPLATE["path"])
+    yield
+    TEMPLATE.clear()
+
+
+def boot(path):
+    """A fresh hub at `path`: a copy of the module's booted one, as `test_pipeline_foundation.boot` would leave it."""
+    source, target = sqlite3.connect(TEMPLATE["path"]), sqlite3.connect(path)
+    try:
+        source.backup(target)
+    finally:
+        source.close()
+        target.close()
 
 
 class Auth:

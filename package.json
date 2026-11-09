@@ -1,12 +1,13 @@
 {
   "name": "tico-observability",
   "private": true,
+  "engines": {"node": ">=22.18"},
   "scripts": {
     "build:ui": "node scripts/build-ui.cjs",
     "watch:ui": "node scripts/build-ui.cjs --watch",
     "build:observability": "esbuild ui/observability-vendors.ts --bundle --format=esm --minify --outfile=ui/assets/observability-vendors.js",
     "check:observability": "npm run build:ui && node --check build/ui/observability.js && node --check ui/assets/observability-vendors.js",
-    "screenshots": "node scripts/screenshots",
+    "screenshots": "node scripts/screenshots/index.cts",
     "test:ui": "node scripts/ui-tests.cjs"
   },
   "dependencies": {

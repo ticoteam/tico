@@ -4,8 +4,9 @@ FastAPI would describe every route, runner and bot endpoint included. A frontend
 resources a person's app is built from, so this module keeps only those (STABLE below), names
 each operation, groups them by resource and describes the answers a person gets. Handlers return
 plain dictionaries rather than response models, so the answer shapes are declared here; a test
-(backend/tests/test_openapi_v2.py) checks them against live responses, and that the committed copy
-`docs/openapi/v2.json` matches. Regenerate it with `python -m backend.openapi_v2`.
+(backend/tests/test_openapi_v2.py) checks them against live responses. The document is generated, not committed:
+`python3 -m backend.openapi_v2 > openapi-v2.json` writes it, `--check` confirms it generates the same bytes twice, and
+the server serves it at `GET /api/v2/openapi.json`.
 
 Anything not listed is internal and may change in any release. See docs/api.md.
 """
@@ -19,7 +20,6 @@ from . import needs_shape
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
-COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 
 TAGS = {
     "Session": "Who is calling, and how a frontend signs in (docs/custom-frontend.md).",
@@ -771,7 +771,7 @@ STABLE = [
         "post",
         "Tasks",
         "bulkChangeTasks",
-        "One change to every task a filter selects (filter takes the listTasks filters, and ids); action is step, status, "
+        "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is step, status, "
         "owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not "
         "change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused "
         "(422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
@@ -4909,6 +4909,15 @@ STABLE.extend(
             "FinanceStatements",
         ),
         (
+            "/api/v2/finance/statements/preview",
+            "post",
+            "Finance",
+            "previewFinanceStatement",
+            "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and "
+            "attribution, and the tie-out. Writes only a short-lived preview token",
+            "FinanceStatementReview",
+        ),
+        (
             "/api/v2/finance/rules",
             "get",
             "Finance",
@@ -5560,6 +5569,46 @@ SCHEMAS.update(
         ),
         "FinanceAction": obj(
             {"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"}, required=["status", "kind"]
+        ),
+        "FinanceStatementReview": obj(
+            {
+                "token": "s",
+                "expires_at": "s",
+                "money_account_id": "s",
+                "file_name": "s",
+                "file_format": "s",
+                "start": "s",
+                "end": "s",
+                "card": "b",
+                "last4": "n",
+                "signs": obj({"flipped": "b", "by": "s"}),
+                "new": "i",
+                "duplicate": "i",
+                "tie": obj(
+                    {
+                        "opening": "i",
+                        "added": "i",
+                        "removed": "i",
+                        "ends": "i",
+                        "statement_says": {"type": ["integer", "null"]},
+                        "off_by": "i",
+                    }
+                ),
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "date": "s",
+                            "description": "s",
+                            "amount": "i",
+                            "vendor": obj({"id": "s", "name": "s"}),
+                            "attribution": {"type": ["object", "null"]},
+                            "status": "s",
+                        }
+                    )
+                ),
+            },
+            required=["token", "expires_at", "tie", "rows"],
         ),
         "FinancePayments": obj(
             {
@@ -8631,7 +8680,7 @@ STABLE.extend(
             'get',
             'Rules',
             'getRuleCheckStats',
-            'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on',
+            'Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on',
             None,
         ),
         (
@@ -11812,7 +11861,7 @@ STABLE.extend(
 
 
 def generate():
-    """The document for a default installation: what docs/openapi/v2.json holds."""
+    """The document for a default installation: what GET /api/v2/openapi.json serves to a signed-in caller."""
     import tempfile
     from .app import create_app
     from .config import Settings
@@ -11825,14 +11874,15 @@ def render(document):
     return json.dumps(document, indent=2, sort_keys=False) + "\n"
 
 
+def determinism_problem():
+    """None when two generations give the same bytes, else the reason they do not (the static PR job runs this)."""
+    first = render(generate())
+    if render(generate()) != first:
+        return "the API spec differs between two generations of the same code: something in it is not deterministic"
+    return None
+
+
 if __name__ == "__main__":
-    text = render(generate())
     if "--check" in sys.argv:
-        sys.exit(
-            0
-            if COPY.exists() and COPY.read_text() == text
-            else "docs/openapi/v2.json is stale: python -m backend.openapi_v2"
-        )
-    COPY.parent.mkdir(parents=True, exist_ok=True)
-    COPY.write_text(text)
-    print("wrote", COPY)
+        sys.exit(determinism_problem() or 0)  # a message exits non-zero; None exits 0
+    sys.stdout.write(render(generate()))
