@@ -7,7 +7,7 @@ import type {Browser} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {install} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
-const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 // What the fake server records for a post: the item's path, and the body the page sent.
 type Post = {path: string; body: {note?: string; work_version?: number; requirement_version?: number; attachment_id?: string; stage_visit_id?: string}};

@@ -7,7 +7,7 @@ import type {Browser, Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {install} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
-const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 // What the fake server records, plus the Late reads this spec counts (not yet in the fixture's d.cts).
 type RailState = PipelineFixtureSupport.PipelineState & {lateReads: number; lateAsks: (string | null)[]};

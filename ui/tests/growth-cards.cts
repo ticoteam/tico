@@ -7,14 +7,14 @@
 // channel; Settings lists the channels with their months; a member reads and arranges nothing; a phone has one
 // column and no sideways scroll, in both themes. TICO_UI_SHOTS=<dir> saves screenshots.
 import type {Browser, Locator, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 // Shapes the tests read from the page and build for the fake server.
 declare const S: {me: Person | null; emps?: unknown[]};
 interface Person {id: string; name: string; email: string; role: string; company_role: string; cloud: boolean; bot_admin?: boolean}

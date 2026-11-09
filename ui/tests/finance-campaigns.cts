@@ -10,7 +10,7 @@ const assert: typeof import('node:assert/strict') = require('node:assert/strict'
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
-const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
+const {googleFake} = require('./support/google-fake.cts') as import('./support/google-fake.cts').Api;
 
 type ActionBody = {kind: string; payload: {campaign_id: string; teammate?: string | undefined; team?: string | undefined}};
 

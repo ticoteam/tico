@@ -1,14 +1,14 @@
 // Synthetic mobile checks on the Assistant's composer (the bot chat's own composer is gone). Viewport movement does not
 // establish physical iPhone keyboard acceptance.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as AssistantChat from './support/assistant-chat.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as AssistantChat from './support/assistant-chat.cts';
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {assistantView} = require('./support/assistant-chat.cts') as AssistantChat.Api;
 declare const V2C: {loaded: boolean};
 declare const ASSISTANT_PILL: {sending: boolean};
 declare const pressSeen: boolean[];

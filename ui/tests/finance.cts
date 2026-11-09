@@ -9,14 +9,14 @@
 // (payment_cancel). Tax (owner only): Sales tax with Exempt, and 1099. The P&L marks imported months. Each tab draws
 // without errors and without sideways scroll on a phone. TICO_UI_SHOTS=<dir> saves screenshots (desktop and phone).
 import type {Browser, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 // Types for the fake hub and its request log, and the browser-side app globals the page.evaluate and waitForFunction
 // bodies read (ui/app/finance*.js). They are declared here only: the page provides them, the test just reads them.
 interface OpenOpts { viewport?: {width: number; height: number}; viewer?: string; hash?: string; noRevenue?: boolean; noCogsProjection?: boolean; apGrant?: boolean; apRights?: string[]; budgetsExcl?: boolean }

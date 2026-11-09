@@ -1,10 +1,10 @@
-import type * as PageSupport from './support/page.cjs';
+import type * as PageSupport from './support/page.cts';
 // A sign-in begins empty and receives its provider instructions on a later poll. Intrinsic dialog sizing must
 // give that content space in WebKit, and keep Cancel reachable when the content must scroll.
 const {webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 
 // Browser-side state the fixture sets on window; the app's model-login script reads and writes the same row.
 interface LoginRow {

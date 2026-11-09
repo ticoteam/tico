@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // Tico Cloud access (ui/app/cloud-access.ts, backend/cloud_access.py) against a fake server. Off cloud nothing shows.
 // Frozen: a slim strip over every page, "Out of credit · Add credit" to the billing page, the page below shortened to
 // fit and still usable, on a desktop and a phone with no sideways scroll. Locked: the whole page is Pay to continue,
@@ -9,8 +9,8 @@ const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 const shots = process.env.TICO_SHOTS || '';
 const BILLING = 'https://app.tico.dev/billing/boatyard';
 

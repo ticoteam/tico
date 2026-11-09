@@ -8,7 +8,7 @@ import type * as PipelineFixtureSupport from './support/pipeline-fixture.cjs';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const {install, type: devType} = require('./support/pipeline-fixture.cjs') as typeof PipelineFixtureSupport;
-const {t} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 
 // Page globals from the Tasks app (the page defines them; this spec reads and pokes them).
 declare const S: {emps: Record<string, unknown>[]};

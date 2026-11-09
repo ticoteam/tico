@@ -15,9 +15,9 @@
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {SLOWDOWN} = require('./support/load.cjs');
+const {html, uiFile} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
+const {SLOWDOWN} = require('./support/load.cts');
 
 const now = new Date().toISOString();
 const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});

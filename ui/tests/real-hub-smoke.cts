@@ -1,12 +1,12 @@
-// The real-hub helper (ui/tests/support/real-hub.cjs) on a real hub seeded with the scenario org:
+// The real-hub helper (ui/tests/support/real-hub.cts) on a real hub seeded with the scenario org:
 // the owner opens the app on a phone and on a desktop and the shell renders, and a non-owner teammate signs in as
 // itself. The reference for writing a real-hub test (ui/README.md).
 import type {Page} from 'playwright';
-import type * as RealHubSupport from './support/real-hub.cjs';
+import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
-const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 const whoami = (page: Page) => page.evaluate(async () => (await fetch('/api/v2/me', {cache: 'no-store'})).json());
 

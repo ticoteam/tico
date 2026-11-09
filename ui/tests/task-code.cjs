@@ -16,9 +16,9 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile, harnesses} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile, harnesses} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
+const {t} = (() => { try { return require('./support/load.cts'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 const SHOTS = process.env.TASK_CODE_SHOTS || '';
 
 const now = new Date().toISOString();

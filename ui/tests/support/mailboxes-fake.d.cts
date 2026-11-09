@@ -1,6 +1,6 @@
 // Types for support/mailboxes-fake.cjs (the helper stays JavaScript: scripts require it by its .cjs path).
 import type {Browser, Page} from 'playwright';
-import type {GoogleFake} from './google-fake.cjs';
+import type {GoogleFake} from './google-fake.cts';
 
 export interface Box {
   id: string;

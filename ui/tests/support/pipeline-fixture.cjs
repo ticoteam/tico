@@ -1,8 +1,8 @@
 // The pipeline views' fake server for the browser tests: one Dev tickets pipeline with requirements on its cards, and the
 // review queue, approve, undo, send-back, message-manager and mark-met routes the UI calls (ui/app/pipeline-api.ts).
 const fs = require('node:fs');
-const {html, uiFile} = require('./page.cjs');
-const {unrouted} = require('./routes.cjs');
+const {html, uiFile} = require('./page.cts');
+const {unrouted} = require('./routes.cts');
 
 const ME = 'human:ana';
 const stamp = '2026-11-07T12:00:00Z';

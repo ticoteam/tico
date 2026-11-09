@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // A bot Tico stopped (backend/bot_stops.py: five fast failed runs, or over its run budget). Guards: the server's words
 // show to everyone, Release only to those who manage the bot; one click posts the release and the button goes once the
 // status says the bot runs again; Health's stuck row for the stop carries the same Release. The run budget fields in the
@@ -7,8 +7,8 @@ import type * as Routes from './support/routes.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 // Requests the page sent to the fixture, in order.
 interface Post {

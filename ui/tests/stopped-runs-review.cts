@@ -6,8 +6,8 @@
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 // The fixture's shapes, as the server returns them.
 interface Body {decision: string; run_id: string; note: string; acknowledge_uncertain_effects: boolean}
 interface Job {
@@ -18,7 +18,7 @@ interface Job {
   reason: string; pending_decision?: {decision: string} | null;
 }
 declare function executionReview(bot: string): void;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();
 
 (async () => {
   const t0 = Date.now();

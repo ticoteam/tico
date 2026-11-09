@@ -1,13 +1,13 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // Offline browser regression: Settings > General (backend/company_storage.py) is the owner's alone; the form sends the
 // bucket and keys once, shows the server's refusal where it was typed, clears the secret after a save and goes back to
 // the server's storage on confirm. Health's "Set up S3" opens it. Every request is intercepted.
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 // The fixture's storage, Tico hosting and move states, as the Settings > General page renders them.
 interface TicoState {state: string; label: string; address?: string; location?: string; error?: string; keep_until?: string}

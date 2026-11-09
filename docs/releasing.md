@@ -645,7 +645,7 @@ at 30% idle, the defaults are three jobs and slowdown 1.67; at 50% idle, four jo
 If CPU counters do not advance or the core count changes during sampling, it conservatively uses
 one job and slowdown four. The selected settings stay fixed for that run.
 Shared browser support applies `30000 * slowdown` milliseconds to context/page action and navigation
-timeouts, including popups. `ui/tests/support/load.cjs` exports `SLOWDOWN`, `t(ms)` (rounded scaled
+timeouts, including popups. `ui/tests/support/load.cts` exports `SLOWDOWN`, `t(ms)` (rounded scaled
 milliseconds), and `applyTimeouts(contextOrPage)` for scripts' explicit waits. Direct script runs
 default to slowdown one unless the environment sets it. Explicit per-script timeout options still
 override the shared defaults; those waits should use `t(...)` and wait on conditions.

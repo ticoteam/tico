@@ -7,9 +7,9 @@
 // automations-list-runs.cjs's. The page's clock starts at the hub's frozen one. TICO_UI_SHOTS=<dir> saves the list and the
 // open editor, dark and light.
 import type {Page} from 'playwright';
-import type * as R from './support/redesign-e2e.cjs';
+import type * as R from './support/redesign-e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {run, open, go, ok, automationNamed, sideways, t} = require('./support/redesign-e2e.cjs') as typeof R;
+const {run, open, go, ok, automationNamed, sideways, t} = require('./support/redesign-e2e.cts') as R.Api;
 // Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
 declare const window: Window & typeof globalThis & {
   ticoTheme: {set(theme: string): void};

@@ -1,4 +1,4 @@
-import type * as PageSupport from './support/page.cjs';
+import type * as PageSupport from './support/page.cts';
 // Video and audio cards in a conversation (Visual replies 3/4): ui/app/visual-media.ts inside the real card frame
 // (visual-cards.js), on a bare page. Neither starts by itself (preload metadata, no autoplay, the isolated address, never a blob or the signed-in file
 // URL); seeking far into a long clip asks for that part by range instead of the whole file; starting one clip pauses
@@ -25,7 +25,7 @@ const SHORT = wav(20);
 const CHUNK = 64 * 1024;                        // the stand-in server answers at most this much per request
 
 const APP = 'https://app.test', VIS = 'https://visuals.test';
-const {uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {uiFile} = require('./support/page.cts') as PageSupport.Api;
 const UI = (f: string) => fs.readFileSync(uiFile(f), 'utf8');   // a .ts file is read as its compiled build/ui JavaScript
 
 // A clip or picture in a card, as the thread's messages carry it.

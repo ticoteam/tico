@@ -1,11 +1,11 @@
-// Offline check, no browser: a script's fake server ends its routes with unrouted(p) (support/routes.cjs), never a
+// Offline check, no browser: a script's fake server ends its routes with unrouted(p) (support/routes.cts), never a
 // bare {}. A {} for /api/issues, where the real server always sends a list, hung bot-needs.cjs whenever it landed
 // before /api/v2/status (v0.3.54 release check).
-import type * as Routes from './support/routes.cjs';
+import type * as Routes from './support/routes.cts';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 assert.deepEqual(unrouted('/api/issues'), []);
 assert.deepEqual(unrouted('/api/runs'), []);

@@ -89,8 +89,8 @@ exports.mailboxesFake = ({admin = true, me = 'ana'} = {}) => {
 // routes answer empty unless `extra(path, method, body, url)` answers them (undefined passes); `mail` maps a mailbox
 // address to its GET /v2/mail/messages list; `skip` starts with first run skipped; `theme` sets data-theme.
 const fs = require('node:fs');
-const {html, uiFile} = require('./page.cjs');
-const {unrouted} = require('./routes.cjs');
+const {html, uiFile} = require('./page.cts');
+const {unrouted} = require('./routes.cts');
 const config = {version: '0.1.0', app_name: 'Tico', local: true};
 const SHELL = {
   '/api/v2/config': config,

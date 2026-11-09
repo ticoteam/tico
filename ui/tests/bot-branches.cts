@@ -10,9 +10,9 @@ declare function settingsEditBot(slug: string, refresh?: boolean): void;
 declare let settingsChoiceFromValue: (value: unknown) => unknown;
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 
 (async () => {
   const browser = await chromium.launch({headless: true});

@@ -7,13 +7,13 @@
 // mailbox Limits card; the old addresses' redirects; 390px with no sideways scroll; light and dark.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each page in each theme and width.
 import type * as MailboxesFake from './support/mailboxes-fake.cjs';
-import type * as GoogleFake from './support/google-fake.cjs';
+import type * as GoogleFake from './support/google-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
-const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
+const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 
 interface Audience {everyone: boolean; people: string[]; teams: string[]; bots: string[]}
 interface ApiAccess {subject: string; kind: string; id: string; name: string; initials: string; level: string; last_used_at: string | null; fixed?: boolean}

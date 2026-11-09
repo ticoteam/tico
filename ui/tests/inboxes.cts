@@ -6,7 +6,7 @@
 // (The one list of every tool is Tools itself: ui/tests/tools.cjs.)
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
+const {googleFake} = require('./support/google-fake.cts') as import('./support/google-fake.cts').Api;
 const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
 type Page = import('playwright').Page;
 type Route = import('playwright').Route;

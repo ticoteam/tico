@@ -3,13 +3,13 @@
 // never shown again (only its preview); a member with no vault access never reads the vault and has nothing to add.
 // The old Credentials address lands here. Fixtures only, no network.
 import type {Browser, LaunchOptions, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium, webkit} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 
 const SECRET = 'jira-token-value-9f8e7d6c5b4a';
 

@@ -4,8 +4,8 @@
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 const MESSAGE = {id: 2, versions: '0.3', body: 'You are on 0.3.52: update for faster boards.', url: 'https://github.com/ticoteam/tico/blob/main/docs/updates.md'};
 const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.50', fixed_in: '0.3.53', url: 'https://github.com/ticoteam/tico/issues/700'},
   {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.3.51', fixed_in: '', url: 'javascript:alert(1)'}] as const;

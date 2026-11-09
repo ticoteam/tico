@@ -1,11 +1,11 @@
-import type * as PageSupport from './support/page.cjs';
+import type * as PageSupport from './support/page.cts';
 // Email sending (ui/app/inboxes-sending.ts) over a fake API: the company policy's writes, a mailbox's Limits card (each
 // bot's sends, what and a day; the caps in one summary; Edit opens the form), inheritance, cancel and phone layout.
 const {chromium}: typeof import('playwright') = require('playwright');
 const fs: typeof import('node:fs') = require('node:fs');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const path: typeof import('node:path') = require('node:path');
-const {uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {uiFile} = require('./support/page.cts') as PageSupport.Api;
 const root = path.resolve(__dirname, '..');
 
 // Browser-side state set by the inline script below and by inboxes-sending.ts.

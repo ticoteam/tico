@@ -4,8 +4,8 @@
 // example) and goals, plus the boot stubs. Writes change what a page reads back and are recorded in `writes`.
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./page.cjs');
-const {unrouted} = require('./routes.cjs');
+const {html, uiFile} = require('./page.cts');
+const {unrouted} = require('./routes.cts');
 const uiDir = path.join(__dirname, '../..');
 const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures', name), 'utf8'));
 

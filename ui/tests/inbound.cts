@@ -5,16 +5,16 @@
 // a changed code drops the shown company, a lost confirmation retries the same submission), asking for a number and
 // accepting or cancelling a quote through Tico's own confirm (never a page dialog), who reads an inbox, a member's
 // read-only view, and desktop and phone fit.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as GoogleFake from './support/google-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as GoogleFake from './support/google-fake.cts';
 import type * as MailboxesFake from './support/mailboxes-fake.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 const {mailboxesFake, shot} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
 interface Body {[k: string]: unknown; action?: string; audience?: string; group_id?: string | null; name?: string}
 interface Call {p: string; query: string; method: string; body: Body; operation: string | undefined}

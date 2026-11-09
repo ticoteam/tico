@@ -7,9 +7,9 @@
 // A press while a page change still fades lands on the new page.
 // TICO_UI_SHIFTS=1 prints each shift of the second lap with the nodes that moved, and each visit's late text.
 import type {Page} from 'playwright';
-import type * as R from './support/redesign-e2e.cjs';
+import type * as R from './support/redesign-e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {run, open, go, t} = require('./support/redesign-e2e.cjs') as typeof R;
+const {run, open, go, t} = require('./support/redesign-e2e.cts') as R.Api;
 
 // The shapes the probe keeps on window (and the page's own globals) for the test to read back.
 interface Shift {at: number; value: number; route: string; nodes: string[]}

@@ -4,21 +4,21 @@
 // Second, the way a person meets it: from another page a hash change opens the Assistant, its stream's snapshots land on
 // their own schedule, the box is clicked after a few seconds and 250 characters are typed; a snapshot the server built
 // before the send (a lagging stream) arrives afterwards and must not take the message off the page.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as AssistantChat from './support/assistant-chat.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as AssistantChat from './support/assistant-chat.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof AssistantChat;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {assistantView} = require('./support/assistant-chat.cts') as AssistantChat.Api;
 declare const V2C: {loaded: boolean; liveOff: boolean};
 declare const applied: string[][];
 declare const v2ChatApply: (state: unknown, d: {messages?: {id: string}[]}) => void;
 declare function route(): void;
 interface PageWin { applied: string[][]; v2ChatApply: (state: unknown, d: {messages?: {id: string}[]}) => void }
-const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const until = async (cond: () => unknown) => { for (const end = Date.now() + t(10000); !cond() && Date.now() < end;) await new Promise(r => setTimeout(r, 50)); };
 const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
 async function whileLoading(browser: import('playwright').Browser) {

@@ -6,6 +6,8 @@ const vm: typeof import('node:vm') = require('node:vm');
 const {spawnSync}: typeof import('node:child_process') = require('node:child_process');
 const os: typeof import('node:os') = require('node:os');
 const {EventEmitter}: typeof import('node:events') = require('node:events');
+// browser.cts is TypeScript: the vm below runs its source with the types stripped (Node's own stripper, as --require does).
+const {stripTypeScriptTypes}: typeof import('node:module') = require('node:module');
 type Emitter = import('node:events').EventEmitter;
 const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport, typeScriptGuard}: typeof import('../ui-tests.cjs') = require('../ui-tests.cjs');
 
@@ -53,7 +55,7 @@ test('one CPU-idle policy, explicit overrides and shared context/page timeouts',
     delete env.TICO_UI_SLOWDOWN;
     if (value !== undefined) env.TICO_UI_SLOWDOWN = value;
     const result = spawnSync(process.execPath, ['-e', `
-      const {SLOWDOWN,t,applyTimeouts}=require(${JSON.stringify(path.join(support, 'load.cjs'))});
+      const {SLOWDOWN,t,applyTimeouts}=require(${JSON.stringify(path.join(support, 'load.cts'))});
       const calls=[]; applyTimeouts({setDefaultTimeout:n=>calls.push(n),setDefaultNavigationTimeout:n=>calls.push(n)});
       console.log(JSON.stringify({SLOWDOWN,rounded:t(101),calls}));`], {env, encoding: 'utf8'});
     assert.equal(result.status, 0, result.stderr);
@@ -75,7 +77,7 @@ test('one CPU-idle policy, explicit overrides and shared context/page timeouts',
                                             newPage: async function (this: {newContext: () => Promise<{newPage: () => Promise<unknown>}>}) { return (await this.newContext()).newPage(); }}),
                         launchPersistentContext: async () => context()});
   const playwright = {chromium: engine(), firefox: engine(), webkit: engine()};
-  vm.runInNewContext(fs.readFileSync(path.join(support, 'browser.cjs'), 'utf8'), {
+  vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(path.join(support, 'browser.cts'), 'utf8'), {mode: 'strip'}), {
     require: (name: string) => name === 'playwright' ? playwright : {
       applyTimeouts: (p: {setDefaultTimeout: (n: number) => void; setDefaultNavigationTimeout: (n: number) => void}) => { p.setDefaultTimeout(60000); p.setDefaultNavigationTimeout(60000); }, t: (ms: number) => ms},
     setTimeout, clearTimeout, console
@@ -158,7 +160,7 @@ test('newPage and page.close fail with their name instead of waiting forever', {
   const engine = () => ({launch: async () => ({newContext: async () => context}), launchPersistentContext: async () => context});
   const playwright = {chromium: engine(), firefox: engine(), webkit: engine()};
   const errors: string[] = [];
-  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../../ui/tests/support/browser.cjs'), 'utf8'), {
+  vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(path.resolve(__dirname, '../../ui/tests/support/browser.cts'), 'utf8'), {mode: 'strip'}), {
     require: (name: string) => name === 'playwright' ? playwright : {applyTimeouts() {}, t: () => 50},
     setTimeout, clearTimeout, console: {error: (message: string) => errors.push(message)}
   });

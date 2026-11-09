@@ -10,11 +10,11 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 interface Tag {id: string; key: string; label: string; metadata: Record<string, string>; markdown: string; is_template: boolean; template_id: string | null; owner_id: string; version: number}
 interface Task {id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string; rank: number; labels: string[]; links: {id: string; kind: string; url: string; title: string; state: string}[]; parts: {total: number; done: number}; version: number; created_at: string; updated_at: string; closed_at?: string; close?: unknown; note?: string; waiting_on?: string; ask?: {recipient_id: string}; tags?: Tag[]; attachments?: {id: string; name: string}[]; relations?: Record<string, {id: string; title: string; status: string; owner_id: string; direction: string}[]>}
 interface Comment {id: string; kind: string; sender_id: string; recipient_id: string; body: string; created_at: string; edited_at?: string; refs: {task: string; comment: boolean; attachments?: {id: string; name: string}[]}}

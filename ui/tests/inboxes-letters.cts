@@ -11,17 +11,17 @@
 // and a read from before a save can't put the old choice back. A member reads only: no grants, Legal mail as text.
 // Without Tico Gateway the addresses card says so, offers no order, and the list shows no error. No sideways scroll on a
 // phone. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as GoogleFake from './support/google-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as GoogleFake from './support/google-fake.cts';
 import type * as MailboxesFake from './support/mailboxes-fake.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {googleFake} = require('./support/google-fake.cjs') as typeof GoogleFake;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 const {mailboxesFake} = require('./support/mailboxes-fake.cjs') as typeof MailboxesFake;
 const shots = process.env.TICO_SHOTS || '';
 const AGO = (m: number) => new Date(Date.now() - m * 60000).toISOString();

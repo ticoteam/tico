@@ -15,7 +15,7 @@ declare var QC_HELD: Map<string, {kind: string; ask: {refs: {questions: {questio
 declare function qcardItem(row: {id: string}): {it?: {ask?: {refs?: {questions?: {question?: string}[]}}}} | null;
 const assert = require('node:assert/strict');
 const {install} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cts'); } catch { return {t: (ms: number) => ms}; } })();
 
 const PHONE = {width: 390, height: 844};
 const QUESTION_TEXT = "Does 'close all' include bot-owned tasks?";

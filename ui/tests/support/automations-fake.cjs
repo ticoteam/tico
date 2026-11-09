@@ -4,8 +4,8 @@
 // A flow save (steps, trigger or destinations) is a new version; a viewer without edit rights gets 403; a built-in's delete gets 409.
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./page.cjs');
-const {unrouted} = require('./routes.cjs');
+const {html, uiFile} = require('./page.cts');
+const {unrouted} = require('./routes.cts');
 const uiDir = path.join(__dirname, '../..');
 const FIXTURE = path.join(__dirname, '../fixtures/redesign-automations.json');
 
