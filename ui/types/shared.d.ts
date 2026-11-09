@@ -143,6 +143,9 @@ interface BotMachine {
   last_seen_at?: string | null;
   platform?: string;
   version?: string;
+  /** The computer's screen: off, view or control, and whether the computer offers it (computer-screen.ts). */
+  screen?: string | null;
+  screen_available?: boolean;
   [key: string]: unknown;
 }
 
