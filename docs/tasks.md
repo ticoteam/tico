@@ -996,8 +996,8 @@ hub task bulk status open --where-label q4 --where-status closed
 
 `POST /api/v2/task-bulk` takes a `filter` with the filters of `GET /api/v2/tasks` (`owner`, `requester`, `status`,
 `lane`, `label`, `type`, `step`, `number`, `updated_since`, `member`, `role`, `snoozed`, and `ids`, a list of up to
-100 task ids or numbers), `exclude_owner` (everything not that owner's, the caller's own included only when it is
-named; `--where-not-owner` in the CLI), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
+100 task ids or numbers), `exclude_owner` (every task not that owner's; in the CLI, `--where-not-owner` takes a bot, a person or `me` for the
+caller), one `action` (`step`, `status`, `owner`, `tags` with `add` and `remove`, or `close`), an
 optional `note` and `dry_run`. `hub_task_bulk` takes the same. The filter must name something: an empty one, or an
 owner, exclude owner or requester who is nobody, is refused rather than read as every task. Each matching task is changed by the
 same update a single change makes, with the caller's own rights: its events, wakes and refusals are that task's.
@@ -1007,7 +1007,7 @@ and skipped. One call changes at most 200 tasks; more matches than that refuse t
 narrow the filter. `dry_run` makes every change, counts it and undoes it: nothing is saved, told or woken. Tasks
 cannot be archived or forked: those are not task actions, in bulk or one at a time.
 
-**Unreleased:** a change that finishes a parent task (a close, a status of done, or a move into a done or closed step) is
+A change that finishes a parent task (a close, a status of done, or a move into a done or closed step) is
 skipped with `subtasks_left_out` when some of the parent's open subtasks do not finish in the same change (left out, held
 or refused). Finishing the parent would end them too. Close those subtasks first, or take the parent out of the change.
 
