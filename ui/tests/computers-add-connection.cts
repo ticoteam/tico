@@ -12,7 +12,7 @@ const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
 declare const S: {config: {hosted?: string}};
 declare function loadSettings(): Promise<void> | void;
-declare global { interface Window { hostedOpened: unknown[][] } }
+interface PageWin { hostedOpened: unknown[][] }
 const SHOTS = process.env.SHOTS;
 const shot = async (locator: Locator, name: string) => { if (SHOTS) await locator.screenshot({path: `${SHOTS}/${name}.png`}); };
 (async () => {
@@ -137,13 +137,13 @@ const shot = async (locator: Locator, name: string) => { if (SHOTS) await locato
     // Hosted enrollment leaves the browser with no code or installer command.
     assert.equal(await page.locator('#machine-kind option[value="hosted"]').count(), 0);
     await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('#machine-add-dialog')!.remove(); return loadSettings(); });
-    await page.evaluate(() => { window.hostedOpened = []; window.open = ((...args: unknown[]) => window.hostedOpened.push(args)) as unknown as typeof window.open; });
+    await page.evaluate(() => { (window as unknown as PageWin).hostedOpened = []; window.open = ((...args: unknown[]) => (window as unknown as PageWin).hostedOpened.push(args)) as unknown as typeof window.open; });
     await page.locator('#machine-add-open').click();
     await page.locator('#machine-kind').selectOption('hosted');
     assert.equal(await page.locator('#machine-label').isVisible(), false);
     const beforeHosted = writes.length;
     await page.locator('#register-machine').click();
-    const opened = await page.evaluate(() => window.hostedOpened);
+    const opened = await page.evaluate(() => (window as unknown as PageWin).hostedOpened);
     assert.match(opened[0]![0] as string, /^https:\/\/app\.tico\.dev\/hosting\?workspace=/);
     assert.equal(opened[0]![2], 'noopener');
     assert.equal(writes.length, beforeHosted);

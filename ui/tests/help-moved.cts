@@ -10,8 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, beta} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
-declare global {
-  interface Window {
+interface PageWin {
     __posted: string[];
     ticoNative: (name: string) => {postMessage: (body: unknown) => void};
     ticoNativeFeatures: string[];
@@ -19,7 +18,6 @@ declare global {
     ticoNativeLog: () => Promise<{version: string; lines: unknown[]}>;
     supportOn?: (on?: boolean) => boolean;
   }
-}
 declare function hlMount(): void;
 const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.2.15', fixed_in: '0.2.18', url: 'https://github.com/ticoteam/tico/issues/700'},
   {id: 6, title: '<img src=x onerror=alert(1)>', since: '0.2.16', fixed_in: '', url: 'javascript:alert(1)'}];
@@ -33,11 +31,11 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
       const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       // The desktop app's bridge (app/src/main.rs BRIDGE_SCRIPT), recording what the page posts to it.
       if (native) await ctx.addInitScript(() => {
-        window.__posted = [];
-        window.ticoNative = (name: string) => ({postMessage: () => window.__posted.push(name)});
-        window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog'];
-        window.ticoNativeVersion = '0.3.48';
-        window.ticoNativeLog = async () => ({version: '0.3.48', lines: []});
+        (window as unknown as PageWin).__posted = [];
+        (window as unknown as PageWin).ticoNative = (name: string) => ({postMessage: () => (window as unknown as PageWin).__posted.push(name)});
+        (window as unknown as PageWin).ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog'];
+        (window as unknown as PageWin).ticoNativeVersion = '0.3.48';
+        (window as unknown as PageWin).ticoNativeLog = async () => ({version: '0.3.48', lines: []});
       });
       const page = await ctx.newPage();
       const errors: string[] = [], calls: string[] = [];
@@ -87,7 +85,7 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     await v.page.locator('#settings-version').waitFor();
     assert.equal(await v.page.locator('#settings-version').innerText(), "Version v0.2.17 · App v0.3.48 · Show the app's log");
     await v.page.locator('#settings-app-log').click();
-    assert.deepEqual(await v.page.evaluate(() => window.__posted), ['showLog']);
+    assert.deepEqual(await v.page.evaluate(() => (window as unknown as PageWin).__posted), ['showLog']);
 
     // Settings > Health: Setup check runs the same checks and shows each result, with the fix only where one is needed.
     await health(v.page);
@@ -120,7 +118,7 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     await v.page.locator('#settings-version').waitFor();
     assert.equal(await v.page.locator('#settings-version').innerText(), 'Version v0.2.17');
     assert.equal(await v.page.locator('#settings-app-log').count(), 0);
-    await v.page.waitForFunction(() => window.supportOn?.(true) === false && window.supportOn?.() === false);
+    await v.page.waitForFunction(() => (window as unknown as PageWin).supportOn?.(true) === false && (window as unknown as PageWin).supportOn?.() === false);
     await health(v.page);
     await v.page.locator('[data-hl-setup-check]').click();
     await v.page.locator('[data-hl-setup-row="bad"]').waitFor();

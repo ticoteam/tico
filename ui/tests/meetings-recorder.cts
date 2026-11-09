@@ -92,7 +92,7 @@ const posted = (page: Page, name: string) => page.evaluate((n: string) => (windo
   const shoot = async (page: Page, name: string) => {
     if (!shots) return;
     for (const theme of ['light', 'dark']) {
-      await page.evaluate((v: string) => window.ticoTheme?.set(v), theme);
+      await page.evaluate((v: string) => (window as unknown as {ticoTheme?: {set(value: string): void}}).ticoTheme?.set(v), theme);
       await page.locator('.meet-review-bar').screenshot({path: require('node:path').join(shots, `${name}-${theme}.png`), animations:'disabled'});
     }
   };

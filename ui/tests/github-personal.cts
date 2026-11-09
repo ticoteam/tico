@@ -32,9 +32,7 @@ const AUTHORIZED = {...PERSONAL, authorized: true};
 type AppState = typeof PERSONAL | {connected: false};
 
 // The Tico page's theme switch (ui/app/theme.ts), run in the page.
-declare global {
-  interface Window {ticoTheme: {set(value: string): void}}
-}
+interface PageWin {ticoTheme: {set(value: string): void}}
 
 // The routes the Tools page needs; the GitHub App's answer is read from `state.app` so one page can change it.
 async function serve(page: Page, state: {app: AppState}) {
@@ -78,10 +76,10 @@ const words = async (locator: Locator) => (await locator.textContent())!.replace
 async function themed(page: Page, locator: Locator, name: string) {
   if (!SHOTS) return;
   for (const theme of ['dark', 'light']) {
-    await page.evaluate((v: string) => window.ticoTheme.set(v), theme);
+    await page.evaluate((v: string) => (window as unknown as PageWin).ticoTheme.set(v), theme);
     await locator.screenshot({path: path.join(SHOTS, `${name}-${theme}.png`), animations: 'disabled'});
   }
-  await page.evaluate(() => window.ticoTheme.set('dark'));
+  await page.evaluate(() => (window as unknown as PageWin).ticoTheme.set('dark'));
 }
 
 (async () => {

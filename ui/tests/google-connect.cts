@@ -14,7 +14,7 @@ interface GoogleState {
   configured?: boolean; mailbox: string; syncing?: boolean; status: string; kind?: string | null; message?: string | null;
   hint?: string | null; can?: string[]; app?: string; acts?: {mail: boolean; calendar: boolean}; stalled?: boolean;
 }
-declare global { interface Window { mountGoogleConnect: (el: Element) => void } }
+interface PageWin { mountGoogleConnect: (el: Element) => void }
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
@@ -88,20 +88,20 @@ declare global { interface Window { mountGoogleConnect: (el: Element) => void } 
     // A read-only connection made with the company's own app is offered the write access on a reconnect, never forced.
     const upgrade = 'Connect Google again to let Tico also label, archive and draft mail, and add calendar events.';
     google = {...google, app: 'own', acts: {mail: false, calendar: false}, message: 'This connection only reads your mail and calendar.', hint: upgrade};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
+    await page.evaluate(() => (window as unknown as PageWin).mountGoogleConnect(document.querySelector('#set-google')!));
     await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), upgrade);
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 1);
     assert.equal(await page.locator('#set-google [data-google-disconnect]').count(), 1);
     // A grant with the mail write access only says so, and is offered just the calendar one.
     const calendarUpgrade = 'Connect Google again to let Tico also add calendar events.';
     google = {...google, acts: {mail: true, calendar: false}, message: 'This connection can label, archive and draft mail, but only reads your calendar.', hint: calendarUpgrade, can: ['read mail', 'label and archive mail']};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
+    await page.evaluate(() => (window as unknown as PageWin).mountGoogleConnect(document.querySelector('#set-google')!));
     await page.waitForFunction(hint => (document.querySelector('#set-google')?.textContent || '').includes(hint), calendarUpgrade);
     const connectedLine = () => page.locator('#set-google p', {hasText: 'Connected:'}).innerText();
     assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail.");
     // Once the grant holds the write access, the offer is gone and the connected line names all of it.
     google = {...google, acts: {mail: true, calendar: true}, message: null, hint: null, can: ['read', 'label and archive mail', 'add calendar events']};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
+    await page.evaluate(() => (window as unknown as PageWin).mountGoogleConnect(document.querySelector('#set-google')!));
     await page.locator('#set-google [data-google-disconnect]').waitFor();
     assert.equal(await connectedLine(), "Connected: Tico reads cara@acme.example's mail and calendar, and can also label, archive and draft mail, and add calendar events.");
     assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
@@ -113,7 +113,7 @@ declare global { interface Window { mountGoogleConnect: (el: Element) => void } 
     // A disconnect the holding computer never takes says so, and points to Google's own page to revoke now.
     google = {...google, status: 'disconnecting', stalled: true,
       message: "The computer that holds your Google access hasn't come online, so Tico hasn't revoked it yet."};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
+    await page.evaluate(() => (window as unknown as PageWin).mountGoogleConnect(document.querySelector('#set-google')!));
     await page.locator('#set-google [role=alert]').waitFor();
     assert.match(await page.locator('#set-google').innerText(), /hasn't come online/);
     assert.doesNotMatch(await page.locator('#set-google').innerText(), /within two minutes/);
@@ -121,7 +121,7 @@ declare global { interface Window { mountGoogleConnect: (el: Element) => void } 
 
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
-    await page.evaluate(() => window.mountGoogleConnect(document.querySelector('#set-google')!));
+    await page.evaluate(() => (window as unknown as PageWin).mountGoogleConnect(document.querySelector('#set-google')!));
     await page.waitForFunction(() => /Ask an admin to connect Google in Tools › Settings/.test(document.querySelector('#set-google')?.textContent || ''));
     assert.equal(await page.locator('#set-google [data-google-connect]').count(), 0);
     assert.deepEqual(errors, []);

@@ -42,9 +42,7 @@ declare function loadSettings(tab?: string): Promise<void>;
 declare function settingsMachinesWatch(): void;
 declare function settingsMachinesRefresh(): Promise<void>;
 declare function renderSettingsMachines(): void;
-declare global {
-  interface Window { computerClosed?: Promise<void>; presenceDraft?: HTMLTextAreaElement; addDraft?: HTMLTextAreaElement; initialSettingsLoad?: Promise<void> }
-}
+interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextAreaElement; addDraft?: HTMLTextAreaElement; initialSettingsLoad?: Promise<void> }
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
@@ -401,33 +399,33 @@ declare global {
     await online();
     assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'popup control keeps focus across polling');
     await dialog.evaluate(node => {
-      window.computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+      (window as unknown as PageWin).computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
     });
     await page.keyboard.press('Escape');
     await page.clock.runFor(100);
-    await page.evaluate(() => window.computerClosed);
+    await page.evaluate(() => (window as unknown as PageWin).computerClosed);
     assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail opener');
     // A row-area click has no focused button; close still returns to the computer name.
     await row('empty').locator('.machine-name').focus();
     await row('box').locator('[data-machine-status]').click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await dialog.evaluate(node => {
-      window.computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+      (window as unknown as PageWin).computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
     });
     await page.keyboard.press('Escape');
     await page.clock.runFor(100);
-    await page.evaluate(() => window.computerClosed);
+    await page.evaluate(() => (window as unknown as PageWin).computerClosed);
     assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'row-area Escape returns to the computer name');
     // Dispatching click without focus also covers browsers that do not focus clicked buttons.
     await row('empty').locator('.machine-name').focus();
     await rowButton.dispatchEvent('click');
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await dialog.evaluate(node => {
-      window.computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+      (window as unknown as PageWin).computerClosed = new Promise<void>(resolve => node.addEventListener('close', () => resolve(), {once: true}));
     });
     await page.keyboard.press('Escape');
     await page.clock.runFor(100);
-    await page.evaluate(() => window.computerClosed);
+    await page.evaluate(() => (window as unknown as PageWin).computerClosed);
     assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'unfocused name click returns to the computer name');
     // Add connection opens from the pop-up; polling replaces its opener and Escape returns to it.
     await rowButton.click();
@@ -448,12 +446,12 @@ declare global {
     await dialog.locator('[data-connection="own:codex"]').evaluate(node => {
       const field = document.createElement('textarea'); field.dataset.presenceDraft = ''; node.appendChild(field);
       field.value = 'unfinished connection'; field.focus(); field.setSelectionRange(3, 8);
-      window.presenceDraft = field;
+      (window as unknown as PageWin).presenceDraft = field;
     });
     await page.evaluate(() => settingsMachinesRefresh());
     assert.deepEqual(await page.evaluate(() => {
       const field = document.querySelector('[data-presence-draft]') as HTMLTextAreaElement;
-      return [field === window.presenceDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
+      return [field === (window as unknown as PageWin).presenceDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
     }), [true, 'unfinished connection', true, 3, 8]);
 
     await dialog.locator('[data-add-connection=box]').click();
@@ -461,12 +459,12 @@ declare global {
     await add.locator('[data-add-step=kind]').evaluate(node => {
       const field = document.createElement('textarea'); field.dataset.addDraft = ''; node.appendChild(field);
       field.value = 'unfinished add connection'; field.focus(); field.setSelectionRange(2, 7);
-      window.addDraft = field;
+      (window as unknown as PageWin).addDraft = field;
     });
     await page.evaluate(() => settingsMachinesRefresh());
     assert.deepEqual(await page.evaluate(() => {
       const field = document.querySelector('[data-add-draft]') as HTMLTextAreaElement;
-      return [field === window.addDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
+      return [field === (window as unknown as PageWin).addDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
     }), [true, 'unfinished add connection', true, 2, 7]);
     await add.locator('[data-add-close]').first().click();
     await add.waitFor({state: 'detached'});
@@ -516,10 +514,10 @@ declare global {
     presenceMode = 'slow';
     await page.evaluate(() => {
       SETTINGS_DATA.loaded = false; SETTINGS_DATA.machines = []; SETTINGS_PRESENCE.at = 0;
-      window.initialSettingsLoad = loadSettings();
+      (window as unknown as PageWin).initialSettingsLoad = loadSettings();
     });
     await page.clock.fastForward(10001);
-    await page.evaluate(() => window.initialSettingsLoad);
+    await page.evaluate(() => (window as unknown as PageWin).initialSettingsLoad);
     assert.equal(await page.evaluate(() => SETTINGS_DATA.loaded && SETTINGS_DATA.people.length > 0), true);
     assert.equal(await page.locator('#machine-operator').count(), 1);
     assert.match(await page.locator('[data-machines-list]').innerText(), /presence unavailable.*checking/);

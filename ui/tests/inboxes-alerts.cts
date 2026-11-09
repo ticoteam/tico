@@ -11,12 +11,10 @@ interface AlertCtx {admin: boolean; me: {id: string} | null; live: () => boolean
 interface Write {path: string; body: Record<string, unknown>; operation: string | undefined}
 declare const S: {me: {id: string} | null};
 declare function inboxesAlerts(host: HTMLElement, ctx: AlertCtx): void | Promise<void>;
-declare global {
-  interface Window {
+interface PageWin {
     ALERT_CTX: AlertCtx;
     ALERT_PWNED?: number;
   }
-}
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
   try {
@@ -71,8 +69,8 @@ declare global {
     const draw = (admin: boolean) => page.evaluate(async (admin: boolean) => {
       let host = document.querySelector<HTMLElement>('#alerts-test-host');
       if (!host) { document.querySelector('#main')!.innerHTML = '<div id="alerts-test-host"></div>'; host = document.querySelector<HTMLElement>('#alerts-test-host')!; }
-      window.ALERT_CTX = {admin, me: S.me, live: () => true};
-      await inboxesAlerts(host, window.ALERT_CTX);
+      (window as unknown as PageWin).ALERT_CTX = {admin, me: S.me, live: () => true};
+      await inboxesAlerts(host, (window as unknown as PageWin).ALERT_CTX);
     }, admin);
     await draw(true);
     const card = page.locator('#inboxes-alerts');
@@ -106,11 +104,11 @@ declare global {
     await page.waitForFunction(() => [...(document.querySelectorAll('.toast') as unknown as Iterable<HTMLElement>)].some(el => el.textContent!.includes('Test accepted')));
     const tests = writes.filter(w => w.path.endsWith('/test'));
     assert.equal(tests.length, 3); assert.equal(new Set(tests.map(w => w.operation)).size, 1); assert.equal(receipts.size, 1);
-    state.status = 'opted_out'; state.phone = '<img src=x onerror="window.ALERT_PWNED=1">';
+    state.status = 'opted_out'; state.phone = '<img src=x onerror="(window as unknown as PageWin).ALERT_PWNED=1">';
     await draw(true);
     assert(await card.locator('[data-alert-test]').isDisabled());
     assert.match(await card.innerText(), /Opted out/);
-    assert.equal(await card.locator('img').count(), 0); assert.equal(await page.evaluate(() => window.ALERT_PWNED), undefined);
+    assert.equal(await card.locator('img').count(), 0); assert.equal(await page.evaluate(() => (window as unknown as PageWin).ALERT_PWNED), undefined);
     for (const width of [320, 390, 1440]) {
       await page.setViewportSize({width, height: 900});
       for (const dark of [false, true]) {

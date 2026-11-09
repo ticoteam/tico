@@ -44,9 +44,7 @@ declare function finSrcRail(): void;
 declare function finSyncWhy(s: string): string;
 declare function finToday(): string;
 declare function finWho(id: string): string;
-declare global {
-  interface Window { __fetch?: typeof fetch }
-}
+interface PageWin { __fetch?: typeof fetch }
 const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
@@ -1400,14 +1398,14 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator(READY.transactions).first().waitFor();
       await page.waitForFunction(() => Array.isArray(FIN.tx.chart) && document.querySelector('select[data-fin-tx-line="feed:f1"]'));
       const save = '#fin-rail [data-fin-tag] [type=submit]';
-      await page.evaluate(() => { const f = window.fetch; window.__fetch = f; window.fetch = (u, o) => String(u).endsWith('/finance/actions')
+      await page.evaluate(() => { const f = window.fetch; (window as unknown as PageWin).__fetch = f; window.fetch = (u, o) => String(u).endsWith('/finance/actions')
         ? new Promise(r => setTimeout(r, 300)).then(() => new Response('{"detail":"no"}', {status: 400, headers: {'content-type': 'application/json'}})) : f(u, o); });
       await page.locator('select[data-fin-tx-line="feed:f1"]').selectOption('a-5100');
       await page.locator('[data-fin-tx="entry:l9"] td').first().click();
       assert.equal(await page.locator(save).isDisabled(), true, 'tags: Save is off while a line save is out');
       await page.waitForFunction(() => !FIN.tx.busy);
       assert.equal(await page.locator(save).isDisabled(), false, 'tags: Save comes back when the line save fails');
-      await page.evaluate(() => { window.fetch = window.__fetch!; FIN.tx.busy = true; finTxRail(); FIN.tx.busy = false; });
+      await page.evaluate(() => { window.fetch = (window as unknown as PageWin).__fetch!; FIN.tx.busy = true; finTxRail(); FIN.tx.busy = false; });
       assert.equal(await page.locator(save).isDisabled(), true, 'tags: a rail drawn busy has Save off');
       await page.locator('#fin-rail [data-fin-tag] select[name="teammate"]').selectOption('human:cara');
       assert.equal(await page.locator(save).isDisabled(), false, 'tags: picking a teammate turns Save on');
