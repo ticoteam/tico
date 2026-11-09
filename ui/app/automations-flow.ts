@@ -7,10 +7,10 @@
 const AU_STEP_WORDS = {filter: 'Filter', decide: 'Decide', llm: 'LLM', find: 'Find', bot_turn: 'Bot turn', paths: 'Paths', action: 'Action'};
 const AU_STEP_ICONS = {filter: 'filter_list', decide: 'account_tree', llm: 'auto_awesome', find: 'manage_search', bot_turn: 'smart_toy',
   paths: 'alt_route', action: 'arrow_forward'};
-const AU_ACTIONS = {archive: 'Archive', leave_for_you: 'Leave for you', draft_reply: 'Draft reply', send_reply: 'Send reply',
+const AU_ACTIONS: Record<string, string> = {archive: 'Archive', leave_for_you: 'Leave for you', draft_reply: 'Draft reply', send_reply: 'Send reply',
   create_task: 'Create task', label: 'Label', forward: 'Forward', wake_bot: 'Wake a bot', note: 'Note', post_update: 'Post update',
   call_webhook: 'Call a webhook', assign: 'Assign', unsubscribe: 'Unsubscribe'};
-const AU_FIND = {mail: 'Mail', tasks: 'Tasks', prs: 'Pull requests', listening: 'Listening', docs: 'Docs'};
+const AU_FIND: Record<string, string> = {mail: 'Mail', tasks: 'Tasks', prs: 'Pull requests', listening: 'Listening', docs: 'Docs'};
 const AU_OPS = {is: '=', is_not: '≠', '>=': '≥', '<=': '≤', contains: 'has', matches: 'matches'};
 const AU_MAX_PATHS = 10, AU_MAX_DEPTH = 3;
 // A Filter rule's action: the hub keeps {do, args} (CONTRACT §2 ACTIONS); older copies said just the name.
@@ -42,7 +42,7 @@ function auQuestionIds(s) {
 // An action's text under each name the hub reads, first to last (backend/automation_actions.py and
 // connectors/mail/actions.py): the first one set runs. An edit writes `key` and drops the others, so what the editor
 // shows is what runs (a task's label reads tag, then name; name works for mail and tasks alike).
-const AU_ARG_NAMES = {label: {keys: ['label', 'tag', 'name'], key: 'name'}, draft_reply: {keys: ['body', 'text'], key: 'body'},
+const AU_ARG_NAMES: Record<string, { keys: string[]; key: string; drop?: string[] }> = {label: {keys: ['label', 'tag', 'name'], key: 'name'}, draft_reply: {keys: ['body', 'text'], key: 'body'},
   send_reply: {keys: ['body', 'text'], key: 'body'}, wake_bot: {keys: ['text', 'prompt'], key: 'text'},
   note: {keys: ['text', 'note'], key: 'text'}, post_update: {keys: ['text', 'body'], key: 'text'},
   call_webhook: {keys: ['webhook'], key: 'webhook', drop: ['endpoint']},
@@ -239,12 +239,12 @@ function auCleanSteps(steps) {
    routes each answer) or an llm step with `choose` (draft or reply); and the flow's destinations. auBoardShape reads
    those parts out of a flow, or null for any other flow, which keeps its step list; auBoardFlow writes them back. */
 const AU_DEST_COLORS = ['amber', 'orange', 'violet', 'green', 'blue', 'teal', 'pink', 'gray', 'red'];
-const AU_ACTION_ICONS = {create_task: 'task_alt', wake_bot: 'chat', leave_for_you: 'inbox', archive: 'archive', label: 'label',
+const AU_ACTION_ICONS: Record<string, string> = {create_task: 'task_alt', wake_bot: 'chat', leave_for_you: 'inbox', archive: 'archive', label: 'label',
   star: 'star', forward: 'forward_to_inbox', draft_reply: 'reply', send_reply: 'reply', unsubscribe: 'unsubscribe',
   call_webhook: 'webhook', post_update: 'dynamic_feed', note: 'sticky_note_2', assign: 'person', end: 'block', move: 'south'};
 // The board's action words, mail actions first: they queue on the message, the rest run at once.
 const AU_MAIL_ACTS = ['archive', 'label', 'star', 'leave_for_you', 'forward', 'draft_reply', 'send_reply', 'unsubscribe'];
-const AU_BOARD_ACTS = {archive: 'Archive', label: 'Label', star: 'Star', leave_for_you: 'Leave in inbox', forward: 'Forward',
+const AU_BOARD_ACTS: Record<string, string> = {archive: 'Archive', label: 'Label', star: 'Star', leave_for_you: 'Leave in inbox', forward: 'Forward',
   draft_reply: 'Draft reply', send_reply: 'Reply', unsubscribe: 'Unsubscribe', create_task: 'Create a task', wake_bot: 'Message a bot',
   assign: 'Assign', note: 'Note', post_update: 'Post update', call_webhook: 'Call webhook'};
 const AU_BOARD_OPS = {is: 'is', is_not: 'is not', contains: 'contains', matches: 'matches', '>=': '≥', '<=': '≤'};
@@ -283,7 +283,7 @@ function auBoardShape(flow) {
   // Sort with one destination: a last filter whose one rule, with no conditions or actions, goes there (no LLM call).
   const sortOne = s => s?.type === 'filter' && (s.rules || []).length === 1 && !(s.rules[0]?.when || []).length
     && !(s.rules[0]?.then || []).length && ids.has(s.rules[0]?.to);
-  const b = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}, mail: flow.trigger?.type === 'message'};
+  const b: AuBoard = {rules: [], questions: [], llm: null, dests: copy(dests), src: {}, mail: flow.trigger?.type === 'message'};
   let i = 0;
   if (steps[i]?.type === 'filter' && !(steps.length === 1 && sortOne(steps[0]))) {
     const rules = steps[i].rules || [];

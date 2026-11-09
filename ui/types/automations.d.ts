@@ -18,7 +18,7 @@ interface AuRunList<R> {
   id?: string;
 }
 
-/** The editor open in the side panel (automations-editors.js auEdOpen): its kind, and what that kind needs. */
+/** The editor open in the side panel (automations-editors.ts auEdOpen): its kind, and what that kind needs. */
 interface AuEditor {
   kind: 'board' | 'run' | 'spend' | 'step' | 'trigger' | 'versions';
   [field: string]: unknown;
@@ -61,7 +61,7 @@ interface AutomationsState {
   listError?: string;
   /** Teams from /v2/groups (automations.js auLoadList). */
   groups: Array<import('./api').Group>;
-  /** Question sets for the decide step (automations-editors.js); [] until read. */
+  /** Question sets for the decide step (automations-editors.ts); [] until read. */
   sets: import('./api').QuestionSets['sets'] | null;
   /** Templates for Apply template (automations-new.js). */
   templates?: import('./api').AutomationTemplates['templates'];
@@ -73,7 +73,7 @@ interface AutomationsState {
   view: AuView;
   /** The open automation as the server sent it, with steps and trigger present (automations.js auNormal). null until read. */
   cur: import('./api').Automation | null;
-  /** The editor open in the side panel (automations-editors.js auEdOpen). */
+  /** The editor open in the side panel (automations-editors.ts auEdOpen). */
   ed: AuEditor | null;
   /** The ⋯ or + menu open over the page (automations.js auMenuOpen). */
   menu: { kind: 'add' | 'more'; at: string } | null;
@@ -81,9 +81,9 @@ interface AutomationsState {
   root: HTMLElement | null;
   /** The open automation's run log (automations-runs.js auRunsLoad); null until the Runs tab is loaded. */
   runs: AuRunList<import('./api').AutomationRun> | null;
-  /** The last run, for the flow's bars; set undefined on a new visit (automations.js), null or a run (automations-editors.js, runs). */
+  /** The last run, for the flow's bars; set undefined on a new visit (automations.js), null or a run (automations-editors.ts, runs). */
   lastRun?: import('./api').AutomationRun | null;
-  /** A run to open once its list is read (automations-overview.js, automations-editors.js; read in automations-runs.js). */
+  /** A run to open once its list is read (automations-overview.js, automations-editors.ts; read in automations-runs.js). */
   openRun?: string | null;
   /** The flow's branch resize watcher (automations-flow.js); automations.js disconnects it on the Runs tab. */
   branchRO?: ResizeObserver;

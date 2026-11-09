@@ -1,7 +1,7 @@
 /* ui/app/automations.js — Automations (redesign): routing, the page's state and an open automation's header
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    The list of every automation, its filters and the Runs tab are automations-overview.js; the flow and its "+" menu
-   automations-flow.js, the step editors automations-editors.js, the run log automations-runs.js, and New inbox and Apply
+   automations-flow.js, the step editors automations-editors.ts, the run log automations-runs.js, and New inbox and Apply
    template automations-new.js. Ask (the Ask panel) has the Assistant build or change one. Payloads: redesign CONTRACT
    §2 (/api/v2/automations).
    #/automations?q=<words> opens the list searched (a bot's or a webhook's automations, linked from their pages). */
@@ -47,8 +47,10 @@ function auActorName(a) {
 }
 const auGroupName = g => (AU?.groups || []).find(x => x.id === g || 'group:' + x.id === g)?.name || titleCase(String(g || '').replace(/^group:/, ''));
 
+/** @type {Record<string, string>} */
 const AU_TRIGGER_ICONS = {message: 'mail', task_received: 'task_alt', schedule: 'schedule', webhook: 'api', listening: 'travel_explore', event: 'campaign',
   due: 'event'};
+/** @type {Record<string, string>} */
 const AU_TRIGGER_WORDS = {message: 'Message received', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
   listening: 'Listening match', event: 'Event', due: 'Before a due date'};
 // The triggers + New and the trigger editor offer; the others (a message, a webhook...) are made where they come from.
@@ -57,6 +59,7 @@ const AU_REPEATS = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly
 const auCap = s => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
 // An event trigger's event in a few words: the catalog's (backend/event_catalog.py, old spellings too) and the
 // built-ins' tico.builtin.* (backend/redesign_migration.py). The dotted name is only ever a chip's tooltip.
+/** @type {Record<string, string>} */
 const AU_EVENTS = {'task.created': 'Task created', 'task.assigned': 'Task assigned', 'task.step_changed': 'Task step changed',
   'task.state_changed': 'Task state changed', 'task.commented': 'Task comment', 'task.done': 'Task finished',
   'task.declined': 'Task declined', 'task.blocked': 'Task waiting', 'task.closed': 'Task closed', 'task.reopened': 'Task reopened',
@@ -66,6 +69,7 @@ const AU_EVENTS = {'task.created': 'Task created', 'task.assigned': 'Task assign
   'strategy.published': 'Strategy published', 'market.insight.urgent': 'Urgent insight', 'market.briefing': 'Market briefing',
   'inbound.received': 'Message received', 'health.finding': 'Health finding', 'webhook.received': 'Webhook received',
   'tico.notice': 'Notice'};
+/** @type {Record<string, string>} */
 const AU_EVENT_MORE = {release_published: 'Release published', 'recording.ready': 'Meeting ready',
   'tico.builtin.wakes': 'Every event', 'tico.builtin.task_rule': 'Task rule', 'tico.builtin.health': 'Health check'};
 function auEventWords(name) {
