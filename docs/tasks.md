@@ -1008,8 +1008,8 @@ narrow the filter. `dry_run` makes every change, counts it and undoes it: nothin
 cannot be archived or forked: those are not task actions, in bulk or one at a time.
 
 **Unreleased:** a change that finishes a parent task (a close, a status of done, or a move into a done or closed step) is
-skipped with `subtasks_left_out` when some of the parent's open subtasks do not finish in the same change. Finishing the
-parent would end them too. Close those subtasks first, or take the parent out of the change.
+skipped with `subtasks_left_out` when some of the parent's open subtasks do not finish in the same change (left out, held
+or refused). Finishing the parent would end them too. Close those subtasks first, or take the parent out of the change.
 
 ## Types bots work on
 
