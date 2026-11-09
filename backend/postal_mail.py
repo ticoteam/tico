@@ -843,7 +843,6 @@ class PostalMail:
                 "lint": False,
                 "deduplicate": False,
                 "private": private,
-                "requester_actor": None if inform_owner else requester,
                 "follow_actors": [requester] if inform_owner and requester else [],
             }
             if inform_owner:
