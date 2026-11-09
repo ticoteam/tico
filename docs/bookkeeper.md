@@ -38,7 +38,7 @@ rules; it never approves its own action. The owner approves a month's close and 
 [System routines](system-routines.md). With nothing new it is a quiet run: no task and no model call. An item listed
 in the last day is not news unless its facts changed. A still-open Books check task takes the next check's list
 instead of a second task opening. The task is private to the Bookkeeper. It opens nothing while the Bookkeeper is
-paused. Its Finance writes (categorize, receipt matches) are made from that private task, and the task stays
+paused. From that private task it may only categorize rows and attach receipts (its Finance writes); a bill approval, a payment, a card or a close is refused there, and the task stays
 private. A write Finance refuses is one plain sentence on the task; its row stays for the next check, and no person is
 asked to reissue or publish it.
 

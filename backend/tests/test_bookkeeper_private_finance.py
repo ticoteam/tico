@@ -190,25 +190,22 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
     assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
 
 
-def test_a_month_close_from_its_own_private_run_waits_for_the_owner(api):
-    token, made, _ = private_run(
-        api, feed=False
-    )  # as in the close turn: a close is asked for, nothing else is in the books
-    err, asked = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
-    assert not err and asked["status"] == "needs_approval", asked
-    assert asked["approver"] == OWNER, asked
-    decided = api.post(
-        f"/api/v2/approvals/{asked['approval_id']}",
-        json={"decision": "approved"},
-        headers=headers(token),
-    )
-    assert decided.status_code == 403, decided.text  # a bot never decides an approval
+def test_a_month_close_from_its_own_private_run_is_refused_and_no_approval_is_asked(api):
+    """A close is the month-ready task's work, not the Books check's: from a private run it is refused like the other
+    money kinds, so no approval is asked and the Bookkeeper never decides one (the owner approves a close the close turn
+    asks for, covered by test_close_turn)."""
+    token, made, _ = private_run(api, feed=False)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT status, approval_id FROM fin_actions WHERE id=?", (asked["action_id"],)).fetchone()
-    assert tuple(row) == ("needs_approval", asked["approval_id"]), tuple(row)
+        approvals = c.execute("SELECT COUNT(*) FROM approvals").fetchone()[0]
+    refused = post_finance(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
+    assert refused.status_code == 403 and BK.PRIVATE_FINANCE_REFUSAL in refused.text, refused.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == approvals
+        assert c.execute("SELECT COUNT(*) FROM fin_actions WHERE kind='close_period'").fetchone()[0] == 0
 
 
-def test_other_finance_writes_from_the_books_check_stay_refused(api):
+def test_the_bills_address_write_from_the_books_check_stays_refused(api):
+    """Another Finance route (not the action route) keeps the privacy refusal from a private Books check run."""
     token, made, _ = private_run(api)
     refused = api.put(
         "/api/v2/finance/bills-address",
@@ -216,6 +213,29 @@ def test_other_finance_writes_from_the_books_check_stay_refused(api):
         headers=headers(token),
     )
     assert refused.status_code == 403 and PRIVACY in refused.text, refused.text
+
+
+MONEY_KINDS = [
+    ("bill_approve", {"bill_id": "bill-x"}),  # a bill goes to payables and spends its budget
+    ("payment_create", {"bill_id": "bill-x", "amount": 100}),  # a payment out, approval only above a limit
+    ("card_create", {"amount": 100}),  # a single-use card for a bot
+]
+
+
+@pytest.mark.parametrize("carried", [("books",), ("watch",), ("books", "watch")])
+@pytest.mark.parametrize("kind,payload", MONEY_KINDS)
+def test_a_private_run_makes_no_money_action_and_no_row_is_written(api, carried, kind, payload):
+    """The exemption admits categorize and attach only: a money kind from the Books check or Watch is refused on the
+    action route, with the one plain sentence, and writes no action row."""
+    token, made, _ = private_run(api, carried=carried)
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COUNT(*) FROM fin_actions").fetchone()[0]
+    refused = post_finance(api, token, kind, payload, f"money:{kind}")
+    assert refused.status_code == 403 and BK.PRIVATE_FINANCE_REFUSAL in refused.text, (kind, refused.text)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_actions").fetchone()[0] == before, kind
+        for tid in made.values():
+            assert H.task_private(c, H.task(c, tid)), tid
 
 
 @pytest.mark.parametrize(

@@ -1437,7 +1437,7 @@ def guard_write(c, who, path, auth):
         from . import bookkeeper
 
         if bookkeeper.private_finance_run(c, who):
-            return  # the Bookkeeper's Finance actions from its own Books check or Watch task (bookkeeper.py)
+            return  # the Bookkeeper's Finance actions from its own Books check or Watch task; the act route checks the kind
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
 
 

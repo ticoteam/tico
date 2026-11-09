@@ -340,6 +340,22 @@ def private_finance_run(c, who) -> bool:
     return bool(carried) and all(_own_private_work(c, tid) for tid in carried)
 
 
+# The Finance actions a private Books check or Watch run may make: the categorize and receipt-match writes its checks
+# need. Every other kind is refused from there, money included (a bill approval, a payment, a card): the Bookkeeper
+# does not spend or approve from work no person filed (Chris, Nov 8).
+PRIVATE_FINANCE_KINDS = frozenset({"categorize", "attach"})
+PRIVATE_FINANCE_REFUSAL = (
+    "The Books check and Watch may only categorize rows and attach receipts from their private task; "
+    "this action is refused there."
+)
+
+
+def private_finance_kind_allowed(c, who, kind: str) -> bool:
+    """Whether this action kind may run for `who`: any kind outside a private Books check or Watch run, and only
+    PRIVATE_FINANCE_KINDS inside one."""
+    return kind in PRIVATE_FINANCE_KINDS or not private_finance_run(c, who)
+
+
 def _own_private_work(c, task_id: str) -> bool:
     row = H.task(c, task_id)
     return bool(
