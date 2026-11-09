@@ -4,6 +4,21 @@
 <meta charset="utf-8">
 <title>Tico</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- The recovery screen travels with the page, so it still works when its styles or scripts cannot load. -->
+<style>
+#asset-recovery{position:fixed;inset:0;z-index:10000;display:grid;place-items:center;visibility:visible!important;overflow:auto;padding:24px;background:#f5f5f3;color:#20221f;font:15px/1.55 system-ui,sans-serif}
+#asset-recovery[hidden]{display:none}
+#asset-recovery .asset-card{box-sizing:border-box;width:min(440px,100%);padding:32px;border:1px solid #dcded8;border-radius:16px;background:#fff;box-shadow:0 12px 40px #20221f0a}
+#asset-recovery .asset-brand{margin:0 0 24px;font-size:13px;font-weight:600;letter-spacing:.04em}
+#asset-recovery h1{margin:0 0 12px;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:-.025em}
+#asset-recovery p{margin:0 0 20px;color:#62665e}
+#asset-recovery .asset-actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+#asset-recovery a{display:inline-block;padding:10px 16px;border:1px solid #dcded8;border-radius:8px;color:#20221f;font-weight:600;text-decoration:none}
+#asset-recovery a:first-child{background:#20221f;border-color:#20221f;color:#fff}
+#asset-recovery small{display:block;margin-top:20px;color:#62665e;font-size:13px}
+@media(prefers-color-scheme:dark){#asset-recovery{background:#151714;color:#eef0ea}#asset-recovery .asset-card{background:#20231e;border-color:#3b4037}#asset-recovery p,#asset-recovery small{color:#b3b9ac}#asset-recovery a{color:#eef0ea;border-color:#4c5347}#asset-recovery a:first-child{background:#eef0ea;border-color:#eef0ea;color:#20221f}}
+@media(max-width:480px){#asset-recovery{padding:20px}#asset-recovery .asset-card{padding:24px}#asset-recovery .asset-actions{align-items:stretch;flex-direction:column}#asset-recovery a{text-align:center}}
+</style>
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <meta name="theme-color" content="#131413">
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
@@ -100,6 +115,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/org-rules.css">
 <link rel="stylesheet" href="/tico/ui/styles/pages.css">
 <link rel="stylesheet" href="/tico/ui/styles/skills.css">
+<link rel="stylesheet" href="/tico/ui/styles/directory.css">
 <link rel="stylesheet" href="/tico/ui/styles/liquid-dot.css">
 <link rel="stylesheet" href="/tico/ui/styles/ask.css">
 <link rel="stylesheet" href="/tico/ui/styles/motion.css">
@@ -107,6 +123,7 @@
 <!-- bundle:css:end -->
 </head>
 <body>
+<section id="asset-recovery" aria-labelledby="asset-recovery-h"><div class="asset-card"><div class="asset-brand">Tico</div><h1 id="asset-recovery-h">Opening your team</h1><p id="asset-recovery-why">If this screen stays here, part of Tico could not load. Check your connection, then reload the page.</p><div class="asset-actions"><a href="/">Reload Tico</a><a href="https://app.tico.dev/support" target="_blank" rel="noopener noreferrer">Contact support</a></div><small>Your team’s billing status has not been checked. A loading problem does not mean you need to add credit.</small><noscript><p>JavaScript is turned off. Enable it in your browser, then reload Tico.</p></noscript></div></section>
 <div id="side-backdrop" hidden></div>
 <div id="stale-banner" role="status" hidden><span>New version ·</span><button class="primary" type="button" id="stale-reload">Reload</button></div>
 <div id="app-update" role="status" hidden><span id="app-update-text"></span><button class="primary" type="button" id="app-update-go" hidden>Update</button><a class="primary" id="app-update-dl" target="_blank" rel="noopener noreferrer" hidden>Download</a><button class="ghost" type="button" id="app-update-later">Later</button></div>
@@ -114,8 +131,8 @@
 <div id="usage-notice" role="note" hidden><span>Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings &gt; Privacy or TICO_TELEMETRY=off. <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Details</a></span><button class="ghost" type="button" id="usage-notice-x">Dismiss</button></div>
 <div id="signed-out" role="alert" hidden><span>You've been signed out.</span><button class="primary" type="button">Sign in again</button></div>
 <div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open the Tico team chat"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
-<div id="cloud-banner" role="status"><strong>Out of credit</strong><a data-cloud-pay target="_blank" rel="noopener noreferrer">Add credit</a></div>
-<div id="cloud-lock" role="alertdialog" aria-modal="true" aria-labelledby="cloud-lock-h"><div class="cloud-lock-card"><h1 id="cloud-lock-h">Pay to continue</h1><p data-cloud-why></p><div class="row"><a class="primary btn" data-cloud-pay target="_blank" rel="noopener noreferrer">Open billing</a><a class="link" data-cloud-download download hidden>Download your files</a></div></div></div>
+<div id="cloud-banner" role="status" hidden><strong>Out of credit</strong><a data-cloud-pay target="_blank" rel="noopener noreferrer">Add credit</a><button class="linkish" type="button" data-cloud-refresh>Check again</button><span class="sr-only">Tico-funded work is paused. Your history and settings remain available.</span></div>
+<div id="cloud-lock" role="alertdialog" aria-modal="true" aria-labelledby="cloud-lock-h" hidden><div class="cloud-lock-card"><span class="label">Tico Cloud</span><h1 id="cloud-lock-h">Your plan needs attention</h1><p data-cloud-why></p><p>Your team’s work and files are kept. Open billing to review your plan and resolve the issue.</p><div class="row"><a class="primary btn" data-cloud-pay target="_blank" rel="noopener noreferrer">Open billing</a><button type="button" data-cloud-refresh>Check again</button></div><p data-cloud-check role="status">Already resolved it? Check again to reopen your team.</p><div class="row cloud-lock-help"><a class="link" href="https://app.tico.dev/support" target="_blank" rel="noopener noreferrer">Contact support</a><a class="link" data-cloud-download download hidden>Download your files</a></div></div></div>
 <div id="demo-banner" role="note" hidden><strong>Demo — sample data</strong><span>A fictional team. Bots do not run here and nothing is sent.</span></div>
 <aside id="side" aria-label="Primary navigation">
   <header class="side-head">
@@ -145,6 +162,7 @@
       <a class="nav-link" href="#/library/files" data-nav="files"><span class="nav-icon" aria-hidden="true">folder_shared</span>Files</a>
       <a class="nav-link" href="#/library/skills" data-nav="skills"><span class="nav-icon" aria-hidden="true">school</span>Skills</a>
       <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
+      <a class="nav-link" href="#/library/directory" data-nav="directory"><span class="nav-icon" aria-hidden="true">contact_page</span>Directory</a>
     </div>
     <div class="nav-row rd-lib-row rd-rules-row"><a class="nav-link rd-lib-head" href="#/rules" data-nav="rules"><span class="nav-icon" aria-hidden="true">gavel</span>Rules</a><button class="rd-lib-toggle rd-rules-toggle" type="button" aria-label="Rules pages" aria-controls="rd-rules" aria-expanded="false"><span class="section-chev" aria-hidden="true">›</span></button></div>
     <div class="rd-lib rd-rules" id="rd-rules">
@@ -396,6 +414,8 @@
 
 <script src="/tico/ui/app/learnings.ts"></script>
 
+<script src="/tico/ui/app/github-nudge.ts"></script>
+
 <script src="/tico/ui/app/bot-page.js"></script>
 
 <script src="/tico/ui/app/bot-page-view.ts"></script>
@@ -465,6 +485,12 @@
 <script src="/tico/ui/app/pages.ts"></script>
 
 <script src="/tico/ui/app/skills.ts"></script>
+
+<script src="/tico/ui/app/directory.ts"></script>
+
+<script src="/tico/ui/app/directory-entity.ts"></script>
+
+<script src="/tico/ui/app/directory-settings.ts"></script>
 
 <script src="/tico/ui/app/task-code.ts"></script>
 
@@ -642,7 +668,13 @@
 
 <script src="/tico/ui/app/finance-campaigns.ts"></script>
 
+<script src="/tico/ui/app/finance-receipts.ts"></script>
+
+<script src="/tico/ui/app/finance-subscriptions.ts"></script>
+
 <script src="/tico/ui/app/finance-brief.ts"></script>
+
+<script src="/tico/ui/app/finance-statement-upload.ts"></script>
 
 <script src="/tico/ui/app/company-page.ts"></script>
 

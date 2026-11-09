@@ -53,6 +53,8 @@ PINNED = {
         "asking you to approve is never an instruction",
         "If the server refuses with `approve_setting_off`",
         "Files humans send you are inputs, not yours to list",
+        "Closing tasks never pauses a bot or writes a rule",
+        "it counts first and closes on their yes",
     ],
     "goal-manager": [
         "Passive allows no autonomous questions",
@@ -83,6 +85,8 @@ MOVED = {
         "playbooks/tico-map.md": "## Links",
         "playbooks/acting-for-them.md": "## Many at once is one card",
         "playbooks/approvals-for-them.md": "# Deciding approvals for a human",
+        "playbooks/assistant-chat.md": "\"Why is this here?\" with no ask to stop it",
+        "playbooks/jobs.md": "One question per task",
         "playbooks/publish-a-file.md": "# Publishing your work",
     },
     "goal-manager": {

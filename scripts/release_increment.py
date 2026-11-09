@@ -32,7 +32,6 @@ import pr_checks  # beside this module; stdlib only
 
 ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_AGE = timedelta(hours=24)
-MAX_PLAN_CHARS = 60000  # a workflow_dispatch input is limited in size; a bigger plan runs the full validation instead
 FACTORY, PRODUCT, DESKTOP = "factory", "product", "desktop"
 DESKTOP_INPUTS = ("app/",)  # the Tauri desktop app: its part of the gate tests it
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
@@ -74,9 +73,10 @@ def failed_tokens(jobs):
 
 
 def anchor_of(records, now, contained, named):
-    """The anchor: the newest full validation that finished within the last 24 hours (by finish time), whose commit main
-    still contains, and that ran the suite to an answer: green, or red naming its failures. `named(record)` gives a red
-    record's failed tokens (a set; None when a failure cannot be named). A cancelled run, and a red one with unnamed
+    """The anchor: the newest validation, full or incremental, that finished within the last 24 hours (by finish time),
+    whose commit main still contains, and that ran the suite to an answer: green, or red naming its failures. A green
+    incremental validation covers its own diff from its anchor, so the chain of incrementals anchors the next one.
+    `named(record)` gives a red record's failed tokens (a set; None when a failure cannot be named). A cancelled run, and a red one with unnamed
     failures (a build, a VM, a startup failure), is no anchor; full_within_day still counts it, so no second full run is
     dispatched on its account. Returns the record with its "failed" tokens (empty when green), or None. `records` are
     every release's validations (validation_record in release_train): the anchor may have validated an earlier
@@ -84,8 +84,7 @@ def anchor_of(records, now, contained, named):
     candidates = [
         record
         for record in records
-        if not record["incremental"]
-        and record["status"] == "completed"
+        if record["status"] == "completed"
         and record["conclusion"] != "cancelled"
         and record["finished"] is not None
         and now - record["finished"] <= ANCHOR_AGE
@@ -192,7 +191,7 @@ def red_rule(red, head, since_red):
     )
 
 
-def selection_tokens(selected, changed):
+def selection_tokens(selected, changed, factory_root=pr_checks.ROOT):
     """What a selection runs, as the same tokens failure_tokens reads from a log. Smoke scripts are not included: they
     run on every incremental validation, so they cannot be the commit that fixes a failure."""
     tokens = set(selected["python"]) | {f"ui/tests/{name}.cjs" for name in selected["browser"]}
@@ -204,7 +203,7 @@ def selection_tokens(selected, changed):
         tokens.add(PRODUCT)
     if any(name.startswith(DESKTOP_INPUTS) for name in changed):
         tokens.add(DESKTOP)
-    if pr_checks.factory_reason(list(changed)) is not None:
+    if pr_checks.factory_reason(list(changed), root=factory_root) is not None:
         tokens.add(FACTORY)
     return tokens
 
@@ -238,7 +237,15 @@ def job(name, part, files=(), workers="4", **extra):
 
 
 def plan_for(
-    selected, changed, carried, exists, smoke_browser, tables, has_slow=lambda path: False, previous_changed=False
+    selected,
+    changed,
+    carried,
+    exists,
+    smoke_browser,
+    tables,
+    has_slow=lambda path: False,
+    previous_changed=False,
+    factory_root=pr_checks.ROOT,
 ):
     """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
@@ -277,7 +284,7 @@ def plan_for(
     browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
     product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
-    factory = pr_checks.factory_reason(list(changed)) is not None or FACTORY in carried
+    factory = pr_checks.factory_reason(list(changed), root=factory_root) is not None or FACTORY in carried
     jobs = build_jobs(
         python, browser, contract_files, conformance, selected.get("rust") or [], product, desktop, tables
     )
@@ -325,16 +332,17 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
     if contract_files:
         jobs.append(job("contracts", "python", contract_files))
     if product:
-        jobs.append(job("product", "product", workers="2", binaries="no"))
+        # The product and desktop parts run hosted_release_check's native_binaries, so their VMs place the release binaries.
+        jobs.append(job("product", "product", workers="2"))
     if desktop:
-        jobs.append(job("desktop", "desktop", workers="2", binaries="no"))
+        jobs.append(job("desktop", "desktop", workers="2"))
     return jobs
 
 
 def plan_json(plan):
-    """The plan as the dispatch input carries it, or None when it is too big for one (the full validation runs then)."""
-    text = json.dumps(plan, separators=(",", ":"), sort_keys=True)
-    return text if len(text) <= MAX_PLAN_CHARS else None
+    """The plan as JSON text (one line). Release validation makes the plan itself from its checkout, so its size is no
+    limit: only the anchor, the head and the carried names are dispatched."""
+    return json.dumps(plan, separators=(",", ":"), sort_keys=True)
 
 
 def full_matrix():
@@ -420,11 +428,12 @@ class Checkout:
             changed, selected = self.selected(base, head)
         except Exception:  # noqa: BLE001 - an unreadable diff is a fact the window logs, not a crash
             return None
-        return selection_tokens(selected, changed)
+        return selection_tokens(selected, changed, self.root)
 
     def plan(self, base, head, carried, previous_changed=False):
-        """The incremental plan for base..head with the carried failures, or None when it is too big to dispatch.
-        `previous_changed`: the candidate's previous release is not the anchor's (plan_for runs the product part)."""
+        """The incremental plan for base..head with the carried failures, as JSON text. Raises when it cannot be made (a
+        commit missing from the checkout). `previous_changed`: the candidate's previous release is not the anchor's
+        (plan_for runs the product part)."""
         changed, selected = self.selected(base, head)
         _, smoke_browser = pr_checks.smoke(self.root)
         tables = load_tables(self.root / "scripts" / "test-timings.json")
@@ -437,8 +446,19 @@ class Checkout:
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
             previous_changed=previous_changed,
+            factory_root=self.root,
         )
         return plan_json(plan)
+
+
+def carried_of(text):
+    """The carried failures a dispatch names: a JSON list of tokens (empty text: none)."""
+    if not (text or "").strip():
+        return set()
+    names = json.loads(text)
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise ValueError("carried failures are a JSON list of test names")
+    return set(names)
 
 
 def main(argv=None):
@@ -446,7 +466,21 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="action", required=True)
     matrix = sub.add_parser("matrix", help="print the gate's matrix for a plan (empty: the full validation's)")
     matrix.add_argument("plan", nargs="?", default="")
+    plan = sub.add_parser("plan", help="print the incremental plan for anchor..head, made from a checkout")
+    plan.add_argument("--root", required=True, help="the checkout that holds the candidate's tree and history")
+    plan.add_argument("--base", required=True, help="the anchor commit")
+    plan.add_argument("--head", required=True, help="the candidate commit")
+    plan.add_argument("--carried", default="", help="JSON list of the carried failed tests")
+    plan.add_argument("--anchor-previous", default="", help="the release the anchor validated against")
+    plan.add_argument("--previous", required=True, help="the release this candidate is compared with")
     args = parser.parse_args(argv)
+    if args.action == "plan":
+        previous_changed = bool(args.anchor_previous) and args.anchor_previous != args.previous
+        text = Checkout(args.root).plan(
+            args.base, args.head, carried_of(args.carried), previous_changed=previous_changed
+        )
+        print(text)
+        return 0
     print(json.dumps(matrix_of(args.plan), separators=(",", ":")))
     return 0
 

@@ -771,7 +771,7 @@ STABLE = [
         "post",
         "Tasks",
         "bulkChangeTasks",
-        "One change to every task a filter selects (filter takes the listTasks filters, and ids); action is step, status, "
+        "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is step, status, "
         "owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not "
         "change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused "
         "(422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
@@ -4909,6 +4909,15 @@ STABLE.extend(
             "FinanceStatements",
         ),
         (
+            "/api/v2/finance/statements/preview",
+            "post",
+            "Finance",
+            "previewFinanceStatement",
+            "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and "
+            "attribution, and the tie-out. Writes only a short-lived preview token",
+            "FinanceStatementReview",
+        ),
+        (
             "/api/v2/finance/rules",
             "get",
             "Finance",
@@ -5165,6 +5174,16 @@ STABLE.extend(
             "FinanceConnectionResult",
         ),
         (
+            "/api/v2/finance/subscriptions",
+            "get",
+            "Finance",
+            "listFinanceSubscriptions",
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each "
+            "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
+            "monthly total of the active ones. status narrows them",
+            "FinanceSubscriptions",
+        ),
+        (
             "/api/v2/finance/campaigns",
             "get",
             "Finance",
@@ -5172,6 +5191,15 @@ STABLE.extend(
             "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when "
             "it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
             "FinanceCampaigns",
+        ),
+        (
+            "/api/v2/finance/receipts",
+            "get",
+            "Finance",
+            "listFinanceReceipts",
+            "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and "
+            "its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+            "FinanceReceipts",
         ),
         (
             "/api/v2/finance/ad-accounts",
@@ -5541,6 +5569,46 @@ SCHEMAS.update(
         ),
         "FinanceAction": obj(
             {"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"}, required=["status", "kind"]
+        ),
+        "FinanceStatementReview": obj(
+            {
+                "token": "s",
+                "expires_at": "s",
+                "money_account_id": "s",
+                "file_name": "s",
+                "file_format": "s",
+                "start": "s",
+                "end": "s",
+                "card": "b",
+                "last4": "n",
+                "signs": obj({"flipped": "b", "by": "s"}),
+                "new": "i",
+                "duplicate": "i",
+                "tie": obj(
+                    {
+                        "opening": "i",
+                        "added": "i",
+                        "removed": "i",
+                        "ends": "i",
+                        "statement_says": {"type": ["integer", "null"]},
+                        "off_by": "i",
+                    }
+                ),
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "date": "s",
+                            "description": "s",
+                            "amount": "i",
+                            "vendor": obj({"id": "s", "name": "s"}),
+                            "attribution": {"type": ["object", "null"]},
+                            "status": "s",
+                        }
+                    )
+                ),
+            },
+            required=["token", "expires_at", "tie", "rows"],
         ),
         "FinancePayments": obj(
             {
@@ -6322,6 +6390,40 @@ SCHEMAS.update(
             },
             required=["lines", "start", "end", "as_of", "view_version"],
         ),
+        "FinanceSubscriptionRow": obj(
+            {
+                "id": "s",
+                "vendor": obj({"id": "s", "name": "s"}),
+                "status": "s",
+                "cadence": "s",
+                "amount": "i",
+                "monthly": "i",
+                "seats": {"type": ["integer", "null"]},
+                "next_charge_on": "n",
+                "card": {
+                    "type": ["object", "null"],
+                    "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+                },
+                "attribution": items(obj({"to": "s", "share": "f"})),
+                "source": "s",
+                "as_of": "s",
+            },
+            required=[
+                "id",
+                "vendor",
+                "status",
+                "cadence",
+                "amount",
+                "monthly",
+                "next_charge_on",
+                "card",
+                "attribution",
+            ],
+        ),
+        "FinanceSubscriptions": obj(
+            {"rows": items(ref("FinanceSubscriptionRow")), "monthly_total": "i", "as_of": "s"},
+            required=["rows", "monthly_total", "as_of"],
+        ),
         "FinanceCampaigns": obj(
             {
                 "month": "s",
@@ -6356,6 +6458,39 @@ SCHEMAS.update(
                 "as_of": "s",
             },
             required=["month", "campaigns", "totals", "as_of"],
+        ),
+        "FinanceReceipts": obj(
+            {
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "file": obj({"id": "s", "name": "s"}),
+                            "read": obj(
+                                {
+                                    "amount": {"type": ["integer", "null"]},
+                                    "date": {"type": ["string", "null"]},
+                                    "vendor": {**obj({"id": "s", "name": "s"}), "type": ["object", "null"]},
+                                }
+                            ),
+                            "match": {
+                                **obj(
+                                    {
+                                        "feed": obj({"id": "s", "date": "s", "amount": "i", "description": "s"}),
+                                        "confidence": {"type": ["number", "null"]},
+                                    }
+                                ),
+                                "type": ["object", "null"],
+                            },
+                            "status": "s",
+                            "as_of": "s",
+                        }
+                    )
+                ),
+                "next": {"type": ["string", "null"]},
+                "as_of": "s",
+            },
+            required=["rows", "next", "as_of"],
         ),
         "FinanceMetric": obj(
             {
@@ -6895,6 +7030,7 @@ SCHEMAS.update(
                 "repositories": items(ref("Repository")),
                 "new_bot_default": {"enum": ["own", "all"]},
                 "github_connected": "b",
+                "github_installed": "b",
             }
         ),
         # The workflow options are present only when on; a request's access defaults to write.
@@ -8544,7 +8680,7 @@ STABLE.extend(
             'get',
             'Rules',
             'getRuleCheckStats',
-            'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on',
+            'Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on',
             None,
         ),
         (

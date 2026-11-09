@@ -17,6 +17,16 @@ function qcardQuestion(it) {
   if (n < 2 || n > QC_MAX_OPTIONS || ask.recipient_id !== myActor() || ask.sender_id === myActor()) return null;
   return q;
 }
+// A question with no picks (no options, one, or more than six): this person's one question, answered in words.
+function qcardPlain(it: {ask?: unknown} | null | undefined) {
+  const ask = it?.ask as {recipient_id?: unknown; sender_id?: unknown; refs?: {questions?: {options?: unknown[]; question?: string}[] | null} | null} | null | undefined;
+  const qs = ask?.refs?.questions;
+  if (!ask || !Array.isArray(qs) || qs.length !== 1 || ask.recipient_id !== myActor() || ask.sender_id === myActor()) return null;
+  const q = qs[0];
+  if (!q) return null;
+  const n = (q.options || []).length;
+  return n < 2 || n > QC_MAX_OPTIONS ? q : null;
+}
 // Who really asks: the bot by its name, or Tico for its own checks. Never the assistant's name or "You asked".
 const qcardAsker = actor => !actor || actor === 'keeper' || !/^(bot|human):/.test(actor) ? KEEPER_LABEL : actorLabel(actor);
 function qcardAge(iso) {
@@ -33,7 +43,7 @@ function qcardSub(it) {
   return [qcardAge(it.ask?.created_at || it.created_at), held].filter(Boolean).join(' · ');
 }
 // The picks ticked when the card opens: the recommended ones.
-const qcardRecommended = q => new Set((q.options || []).map((o, i) => o.recommended ? i : -1).filter(i => i >= 0));
+const qcardRecommended = (q): Set<number> => new Set((q.options || []).map((o, i) => o.recommended ? i : -1).filter(i => i >= 0));
 const qcardThen = text => text ? `<span class="qc-then">${esc(text)}</span>` : '';
 // A button's "what happens" line: the asker's own, else what is true of every answer, that the asker hears it (a
 // Yes / No asked with no options, or a person's question, has none of its own).
@@ -90,7 +100,7 @@ function qcardSpendHTML(it) {
 
 // The question, its why line and its picks. `attr` names the data attribute its buttons carry (Decide's `dc`, the
 // task page's `qc`); `ticked` is the set of ticked picks; `pic(o)` draws an option's picture, when the page has one.
-function qcardBodyHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), pic = () => ''} = {}) {
+function qcardBodyHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), pic = () => ''}: {attr?: string; ticked?: Set<number>; pic?: (o: unknown) => string} = {}) {
   const why = String(it.why || q.why || '').trim(), review = qcardReview(it);
   let picks = '';
   if (review?.pick) picks = qcardReviewPicksHTML(it, q, review, attr);
@@ -172,7 +182,7 @@ function qcardSaid(it, q, labels) {
   return labels.length === q.options.length ? `Yes to all · sent to ${to}` : `Sent ${labels.length} ticked · sent to ${to}`;
 }
 // The labels a card's action says yes to: one pick, all of them, or the ticked ones.
-function qcardLabels(q, what, i, ticked) {
+function qcardLabels(q, what, i, ticked?) {
   if (what === 'pick') return [q.options[i].label];
   if (what === 'all') return q.options.map(o => o.label);
   return q.options.filter((o, n) => ticked.has(n)).map(o => o.label);
@@ -213,10 +223,29 @@ function qcardShown(box) {
 function qcardRedraw(box) {
   box.outerHTML = qcardBoxHTML({id: box.dataset.qcard});
 }
+// Questions shown outside Needs you (the pipeline review's ▶ queue) are held here by id, so the same box and answer
+// serve them. The holds belong to the open ▶: closing it drops them (qcardReleaseHeld). Fresh Needs you data that has
+// the question wins over a hold. An answered one is dropped and "qcard:answered" tells the view that drew it.
+const QC_HELD = new Map();
+function qcardHold(it: { id: unknown; [key: string]: unknown }): void { QC_HELD.set(String(it.id), it); }
+function qcardReleaseHeld(): void { QC_HELD.clear(); }
 function qcardItem(t) {
-  const it = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
+  const id = String(t?.id);
+  const fresh = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === id && ['question', 'waiting', 'task'].includes(x.kind));
+  const it = fresh || QC_HELD.get(id);
   const q = it && qcardQuestion(it);
   return q ? {it, q} : null;
+}
+// A plain question's answer from ▶: the words go as Other, the same answer call the task page makes for a plain question
+// (qcardWrites with no picks). The question leaves the queue through "qcard:answered", as an answered card does.
+async function qcardAnswerPlain(it: {id: unknown; ask: {sender_id?: unknown} | null | undefined}, text: string) {
+  const q = qcardPlain(it);
+  if (!q) throw new Error('This question has picks: answer it on its card.');
+  for (const w of qcardWrites(it, q, [], text)) await post(w.path, w.body, newRequestId());
+  QC_HELD.delete(String(it.id));
+  toast(`Sent to ${qcardAsker(it.ask?.sender_id)}`);
+  document.dispatchEvent(new CustomEvent('qcard:answered', {detail: {id: String(it.id)}}));
+  void v2Refresh();
 }
 function qcardBoxHTML(t) {
   const found = qcardItem(t);
@@ -276,6 +305,8 @@ document.addEventListener('click', async ev => {
     for (const w of qcardWrites(it, q, labels, note)) await post(w.path, w.body, newRequestId());
     QC_DRAFTS.delete(qcardDraftKey(it, q));
     toast(qcardSaid(it, q, labels));
+    QC_HELD.delete(String(it.id));
+    document.dispatchEvent(new CustomEvent('qcard:answered', {detail: {id: String(it.id)}}));
     void v2Refresh();
   } catch (e) {
     box.querySelectorAll('button, input, textarea').forEach(x => { x.disabled = false; });

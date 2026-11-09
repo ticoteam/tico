@@ -17,7 +17,6 @@ start it; the question it asks that person goes through the same exemption.
 """
 
 import json
-import weakref
 
 from fastapi import Request
 
@@ -275,13 +274,11 @@ def view(c, who, row):
     }
 
 
-# The app's task_create (its closure in backend/app.py) per store, so the nightly run files a dream the same way a
-# person's POST does; install sets it.
-_CREATE = weakref.WeakKeyDictionary()
-
-
 def creator(store):
-    return _CREATE.get(store)
+    """The app's task_create (its closure in backend/app.py), so the nightly run files a dream the same way a person's
+    POST does; install sets it. It lives on the store, not in a table here keyed by it: the closure holds the store, so
+    a weak key never let go and every app built in the process stayed alive."""
+    return getattr(store, "dream_create", None)
 
 
 def start(c, who, owner, task_create, reason=None):
@@ -305,7 +302,7 @@ def start(c, who, owner, task_create, reason=None):
 
 
 def install(app, store, auth, mutate, task_create, cap_before_preflight):
-    _CREATE[store] = task_create
+    store.dream_create = task_create
 
     @app.get("/api/v2/bots/{bot}/dream")
     def dream_get(request: Request, bot: str):

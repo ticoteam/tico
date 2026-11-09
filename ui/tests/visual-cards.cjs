@@ -13,7 +13,7 @@ const fs = require('node:fs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 // The server's own page treatment: cleaned, the height reporter added, and its content policy.
-const server = JSON.parse(execFileSync('python3', ['-I', '-c', `
+const server = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-I', '-c', `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(ROOT)})
 from backend import visuals

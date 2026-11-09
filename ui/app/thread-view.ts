@@ -51,7 +51,7 @@ interface ThvRefs {
   read_back?: unknown;
   earlier_messages?: { thread_id?: string };
   files?: ThvFileRef[];
-  attachments?: unknown[];
+  attachments?: ChatFile[];
   warnings?: unknown[];
   turn_id?: string | null;
   [key: string]: unknown;
@@ -183,7 +183,7 @@ interface ThvComposer {
   mention: ThvMentionState | null;
   slug: string | null;
   thread: boolean;
-  running: { run_id?: string } | null;
+  running: { run_id?: string | null } | null;
   stopping: boolean;
   ways: boolean;
   label: () => void;
@@ -205,7 +205,7 @@ interface ThvConv {
   messages: ThvMessage[];
   next: string | null;
   state: 'loading' | 'empty' | 'ready' | 'gone' | 'error';
-  execution: unknown;
+  execution: ChatExecution | null | undefined;
   readAt: number;
   openSeq: number;
   readSent: Map<string, number>;
@@ -220,7 +220,7 @@ interface ThvConv {
   error: string;
   memberList: { actor: string }[] | null;
   memberMore: boolean;
-  run: { openSteps: Set<string>; steps: Record<string, unknown>; openFolds: Set<string> };
+  run: { openSteps: Set<string>; steps: Record<string, string>; openFolds: Set<string> };
 }
 interface ThvView extends ThvConv {
   key: number;
@@ -392,6 +392,9 @@ async function thvLoad(view: ThvView): Promise<void> {
 // if it was not there yet.
 function threadsReloadDM(actor: string) {
   for (const v of THV_VIEWS) if (v.opts.dm === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
+}
+function threadsReloadHome(actor: string) {
+  for (const v of THV_VIEWS) if (v.opts.home === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
 }
 // The viewer's own held messages in this thread come back after a reload, still with Edit and Discard. A held edit (made
 // through the API) is not shown here: this view does not edit messages.

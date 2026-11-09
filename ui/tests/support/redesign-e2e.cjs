@@ -18,7 +18,9 @@ async function open(browser, hub, who, {phone = false, hash = '', time = null, t
   if (time) await page.clock.install({time});
   await page.reload();
   page.errors = [];
-  page.on('pageerror', e => page.errors.push(e.message));
+  // A page's preview is a sandboxed frame: Chrome refuses its navigator.serviceWorker read (Playwright's serviceWorkers
+  // 'block' stub makes that read), and the app already guards its own read (boot.js). Not an app error.
+  page.on('pageerror', e => { if (!/serviceWorker.*sandboxed/.test(e.message)) page.errors.push(e.message); });
   await page.waitForFunction(() => {
     const me = document.querySelector('#account .account-email')?.textContent || '';
     return me !== '' && me !== 'Signing in…' && document.querySelector('#main')?.children.length > 0;
@@ -31,7 +33,7 @@ const go = (page, hash) => page.evaluate(h => { location.hash = h; }, hash);
 // The API as the page's teammate calls it (its Bearer rides on every request); a write carries an Idempotency-Key.
 async function api(page, method, p, body) {
   const out = await page.evaluate(async ([method, p, body]) => {
-    const r = await fetch('/api/v2/' + p, {method, cache: 'no-store', headers: {'Content-Type': 'application/json',
+    const r = await fetch('/api/v2/' + p, {method, cache: 'no-store', signal: AbortSignal.timeout(15000), headers: {'Content-Type': 'application/json',
       ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})}, body: body === undefined ? undefined : JSON.stringify(body)});
     return {status: r.status, body: await r.json().catch(() => null)};
   }, [method, p, body]);
@@ -50,7 +52,10 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
-  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
+  // Finite animations end first, but not past a second: a paused one never finishes, and its `finished` would hold the shot.
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))),
+    new Promise(r => setTimeout(r, 1000))]));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 
@@ -65,7 +70,11 @@ async function journey(name, seeds, pass, {only = null} = {}) {
       try {
         assert.deepEqual(hub.skipped, [], 'every seed ran');
         await pass({hub, browser, phone, tag: phone ? 'phone' : 'desktop'});
-      } finally { await hub.stop(); }
+      } finally {
+        // A page a pass left open keeps its live stream to the hub, and the hub's shutdown would wait for it.
+        for (const context of browser.contexts()) await context.close().catch(() => {});
+        await hub.stop();
+      }
     }
   } finally { await browser.close(); }
   console.log(name + ': ok');

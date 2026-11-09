@@ -86,6 +86,12 @@ DROPPED_INDEXES = {
     "idempotency_by_created",
     # learning_runs drops its night UNIQUE in 20261105010100_learn_beta: Learn can run more than once a day.
     "sqlite_autoindex_learning_runs_2",
+    # 20261108203140_finance_fold_in makes fin_contacts and fin_vendor_aliases views over the Directory: their tables
+    # go, and their indexes with them.
+    "fin_contacts_name",
+    "fin_vendor_aliases_contact",
+    "sqlite_autoindex_fin_contacts_1",
+    "sqlite_autoindex_fin_vendor_aliases_1",
 }
 # Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
@@ -155,6 +161,8 @@ DROPPED_INDEXES |= {
     "messages_superseded_asks_to",
 }
 DROPPED_TRIGGERS |= {"changes_task_asks_insert", "changes_task_asks_update"}
+# Dropped by backend/migrations/20261108044824_directory_rules.py: rule sources are organization entities now.
+DROPPED_INDEXES |= {"org_rules_source", "rule_sources_name", "sqlite_autoindex_rule_sources_1"}
 
 
 @pytest.fixture(scope="module")

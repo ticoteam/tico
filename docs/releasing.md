@@ -54,10 +54,11 @@ manages the Dev tickets type run `hub release now`. Routines can run `on: releas
 
 ## Release windows
 
-Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays, two at weekends), run by
+Tico's own releases (ticoteam/tico) ship from release windows (one every hour, 15 a day), run by
 `.github/workflows/train.yml` and `scripts/release_train.py`. No one tags by hand.
 
-- **When.** Windows open at 07:30, 11:00, 14:00 and 20:30 Los Angeles time on weekdays, and at 07:30 and 15:00 on weekends.
+- **When.** Windows open every hour on the hour, 07:00 to 21:00 Los Angeles time, every day. A window releases only when
+  main has moved since the newest release and the candidate's validation is green: no new commit, no release.
   A window stays open until a `vX.Y.Z` release is published after it opened. Nothing is stored: every run works this
   out from GitHub, so a late schedule or a missed event costs time, never a wrong release.
 - **At the open**, the canary's release is promoted to stable once it is approved and nothing holds it (see
@@ -77,6 +78,13 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   the new head, one validation at a time. A red or cancelled head waits for the next push; it is not run again, except
   by a manual run (below), which validates it again (a flaky check). A window still red at the next open carries on.
   The next window that ships closes the issue.
+- **Main is red.** A red Release validation run on main reviews, once per break, each merged pull request that changed
+  a file a failing test uses (a review, so Tico routes it to the pull request's owner). With more than three such
+  pull requests and only pytest tests failing, the bisect job on RunsOn runs the failing tests at the commits between
+  the last green run and the red one, twice each, and reviews only the merge where they first fail. A mix of results is
+  flaky: nothing is reviewed, and the test is a candidate for `ci/quarantine/` (see Quarantined tests). One open `main-red` issue lists
+  the suspects, the verdict and the likely flaky tests. The next green run on main closes it. See
+  `scripts/main_red.py`.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
   keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
 - **Approval.** Stable takes the canary's release only when someone has approved it (see [Approval](#approval)), its
@@ -90,7 +98,8 @@ Tico's own releases (ticoteam/tico) ship from release windows (four on weekdays,
   validating a red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with `GITHUB_TOKEN`, and the install
   variables to see them) shows the window, the next step and what each install runs.
 
-Triggers: the window schedules (one UTC cron per window start under either offset), every push to main, every
+Triggers: the window schedules (one UTC cron per hour that a window can start at under either offset, 14 to 23 and 0 to
+5 UTC), every push to main, every
 finished Release validation run, a manual run, and a backstop schedule every 20 minutes
 (at :05, :25 and :45, never a window's minute) that takes a step in an open window
 if an event was missed (it never opens a window; it promotes an approved release). A small read-only job decides first, so a push with
@@ -111,11 +120,13 @@ A window validates a head in one of two ways. A **full** validation is the whole
 
 - **One full validation a day.** At most one full validation is dispatched automatically in any 24 hours, whatever its
   outcome (a cancelled one, and a red one with unnamed failures, count too). The window dispatches a full validation
-  only when no full validation finished in the last 24 hours (by finish time).
-- **Anchor.** The anchor is the newest full validation of the last 24 hours that ran the suite to an answer: a green
-  one, or a red one that names its failed tests, of a commit main still contains. It is the anchor whichever release it
-  validated, and the candidates after it are incremental from it. A plan too big to dispatch (or one that cannot be
-  made) waits until the anchor is a day old rather than running a second full validation.
+  only when no full validation finished in the last 24 hours (by finish time), even when an incremental one anchors the chain.
+- **Anchor.** The anchor is the newest validation, full or incremental, of the last 24 hours that ran the suite to an
+  answer: a green one, or a red one that names its failed tests, of a commit main still contains. It is the anchor
+  whichever release it validated, so each incremental validation covers only its own diff from the previous green one
+  and its carried failures. The window dispatches only the anchor, the carried failed tests and the anchor's release;
+  Release validation makes the plan from its own checkout. If the plan cannot be made (a commit missing from the
+  checkout), the window waits and says why.
 - **A cancelled or unnamed full run holds the day.** A cancelled full validation, and a red one whose failures no log
   names (a build, a VM, a startup failure), is no anchor, and no second full validation follows it. The window waits
   and says so on the release-train issue: `a full validation already ran in the last 24h (<run>, <conclusion>): a person
@@ -123,7 +134,8 @@ A window validates a head in one of two ways. A **full** validation is the whole
   main's head in full as it does today. Once that run is a day old, the window may dispatch a full validation again on
   its own. Until then a release can wait up to a day, so a person who needs it sooner runs it by hand.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
-  merge queue's rules, never the full suite), the browser smoke set, the factory part when its inputs changed, the
+  merge queue's rules before its light plan's two-level cut, never the full suite; so it runs the tests a queue group
+  left out), the browser smoke set, the factory part when its inputs changed, the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
   anchor's, and the tests that failed in the open red runs (below). A failed file that marks slow tests also runs in the
   contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
@@ -381,7 +393,7 @@ a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependenc
 run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`). A conftest runs the tests below it
 while there are at most 25; a test that reaches a changed file only through a conftest fixture adds the smoke set. Runner/harness changes also run slow conformance on
 the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
-changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run in the queue when a
+changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run on a ready pull request and in the queue when a
 crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each
@@ -430,18 +442,29 @@ Main takes changes only through its merge queue. Mark the pull request ready for
 then enqueue it with `gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
-- **Each push to a pull request** (GitHub-hosted, free): plan, static checks, recorder change detection, and the `checks`
-  gate. A draft runs nothing.
-- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests and
-  the factory sim, on each push. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's
-  pull request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): plan, static checks again on the merge commit, the selected Python and
-  browser tests, the Caddy image when the change reaches it, Rust lint and the desktop app when those changed, the macOS
-  recorder tests when `recorder/` changed, and the `checks` gate. The group selects from its own base and head.
+- **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
+- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, the factory
+  sim, and every other job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
+  the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
+  The plan decides which of those the change reaches, so a job it does not reach starts no VM. Only the cosmetic timing
+  receipt is queue-only. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's pull
+  request runs none of them.
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its plan job also runs every
+  static check on that commit (`scripts/ci/merge_commit_checks.sh`), in place of a static checks VM. A job the change does
+  not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
+  request's change. Its tests pack toward 6 test jobs of up to 12 minutes each (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in
+  `scripts/pr_checks.py`), since every group shares the organisation's concurrent hosted jobs; a selection too big for
+  that keeps 12-minute VMs.
 - **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
   check fails the group. Release validation runs seeds 1-3 as before.
+- **Quarantined tests**: a test that failed and passed on the same commit (a rerun attempt, or two runs of one commit)
+  is flaky. Its entry in `ci/quarantine/` (one JSON file per test: test id, first seen, run urls, ticket) makes PR checks
+  and queue groups run it as a non-strict xfail (`scripts/pr_checks.py run --quarantine`), so it cannot fail them.
+  Release validation never passes the flag and still fails on it. `.github/workflows/flaky-tests.yml` reads PR-check runs
+  daily and proposes entries (`python3 scripts/flake_quarantine.py detect --write ci/quarantine` writes them), and its
+  weekly report fails when an entry is older than 14 days. The fix deletes the entry file.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents run the tests they touched with `scripts/remote.py` before they mark a PR ready; the queue runs the selected set
@@ -452,8 +475,11 @@ GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue;
 
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
 failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
-the pull request's own run first, because a ready pull request runs its selected tests. After a queue failure, fix it and get
-green PR checks before enqueuing again.
+the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
+that import, name or read a changed file, the smoke set, at most four VMs), and its queue group goes one level further (at
+most eight VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
+closure over every change since the last full validation, so a test a queue group left out still runs before a release. After a queue failure, fix it and get green PR
+checks before enqueuing again.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
@@ -641,7 +667,7 @@ rollback step: it runs on the candidate's updater.
 
 **Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py` on the seeded
 demo for the base tag and the candidate, and shoots each page that a changed `ui/` file draws (its `ui` globs in
-`scripts/screenshots/index.js`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
+`scripts/screenshots/index.cts`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
 shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
 changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
 looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
@@ -821,7 +847,7 @@ directly and sends no ID.
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of
-`idle`, `pulling`, `restarting`, `healthy`, `rolled_back` or `failed`. Both carry
+`idle`, `pulling`, `snapshotting`, `restarting`, `uncertain`, `healthy`, `rolled_back` or `failed`. Both carry
 `Authorization: Bearer <TICO_UPDATER_TOKEN>`. Without an updater, "Update now" shows the command to
 run on the server: `docker compose pull && docker compose up -d`.
 

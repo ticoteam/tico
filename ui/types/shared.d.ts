@@ -155,6 +155,15 @@ interface BotAgent {
   [key: string]: unknown;
 }
 
+/** One row of a bot's access list (`access` on a roster row): a service the bot can reach, as which identity, with what verbs. */
+interface BotAccess {
+  service: string;
+  identity?: string | null;
+  can: string[];
+  connected?: boolean;
+  note?: string | null;
+}
+
 /** One bot on the roster (GET /api/employees). A person is a Person; a bot is one of these. */
 interface Employee {
   id: string;
@@ -170,6 +179,7 @@ interface Employee {
   is_branch?: boolean;
   can_chat?: boolean;
   my_access?: AccessLevel;
+  access?: BotAccess[] | null;
   machine?: BotMachine | null;
   agent?: BotAgent | null;
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
@@ -187,11 +197,28 @@ interface Employee {
 interface OrgGroup {
   id: string;
   name?: string;
+  lead?: string;   // the lead's ref (person:<id> or bot:<slug>), "" for none (backend/groups.py)
   order?: number;
   parent?: string;
   org_parent?: string;
   root?: string;
 }
+
+/** A person on the chart: the roster row plus the fields the server sends that the generated type leaves out. */
+type OrgPerson = AppState['people'][number] & {role?: string; inbox_bot?: string; report_position?: number};
+// A node of the team chart, as the sidebar builds it (orgTreeByParent, orgTreeWithHelpers in ui/app/sidebar.ts) and
+// other pages draw it (Company > Graph, Budget, goals). A bot node is its roster row; a seat node is its seat row (its
+// own `kind` is the node's). `kind` tells them apart, so a check on it narrows the node.
+type OrgGroupNode = { kind: 'group'; helpers?: boolean; id: string; name?: string | undefined; order: number };
+type OrgPersonNode = { kind: 'person'; id: string; person: OrgPerson };
+type OrgBotNode = Employee & {kind: 'bot'};
+type OrgSeatRow = Omit<import('./api').Seat, 'kind'>;
+type OrgSeatNode = OrgSeatRow & {kind: 'seat'; seat: OrgSeatRow};
+type OrgNode = OrgGroupNode | OrgPersonNode | OrgBotNode | OrgSeatNode;
+/** A teammate on the chart (a group, a person or a bot): a node without the recruiting seats. */
+type OrgChartRow = Exclude<OrgNode, OrgSeatNode>;
+/** The chart's nodes by their parent's key ('' for the top, `g:`/`p:`/`b:` + id). */
+type OrgByParent = Record<string, OrgNode[]>;
 
 // ---------------------------------------------------------------- the server's status (S.status, GET /api/status)
 
@@ -283,9 +310,21 @@ interface V2State {
   wentAway?: WentAway | null;
 }
 
+/** One week of GET /api/v2/overview/bot-hours (backend/bot_hours.py), the Overview's bot-hours card. */
+interface BotHoursWeek { week: string; bot_hours: number; people: number; human_hours: number; ratio: number | null; so_far: boolean }
+/** A week the card can plot: one with a ratio. */
+type BotHoursPoint = BotHoursWeek & { ratio: number };
+interface BotHours {
+  zone: string; now: string; first_run: string | null; people: number; hours_per_person: number; gap_minutes: number;
+  last_7_days: { bot_hours: number; human_hours: number; ratio: number | null; full: boolean };
+  weeks: BotHoursWeek[];
+}
+
 /** The copies each page keeps for its next visit (S.lastRead). Pages not listed here keep their own shape. */
 interface LastRead {
   automations?: { list?: unknown[]; groups?: unknown; stats?: unknown; range?: string; maint?: unknown; heart?: unknown };
+  /** The Overview's bot-hours answer (overview-hours.ts). */
+  hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
   places?: Record<string, unknown>;
   [page: string]: unknown;
@@ -295,7 +334,7 @@ interface LastRead {
 
 interface AppState {
   emps: Employee[];
-  people: (import('./api').Person & { hidden?: boolean })[];
+  people: (import('./api').Person & { hidden?: boolean; left?: boolean })[];
   orgGroups: OrgGroup[];
   status: ServerStatus | null;
   statusPending: boolean;
@@ -317,4 +356,12 @@ interface AppState {
  *  motion.ts reads it to grow the menu from that side). Absent on everything else. */
 interface HTMLElement {
   anchor?: Element | null;
+}
+
+// ---------------------------------------------------------------- moving a node without taking it out of the page
+
+/** Element.moveBefore (Chromium 133+), shaped as lib.dom declares it from TypeScript 6. Older engines lack it: callers
+ *  check for it first (visual-cards.ts visualSwap, overview.ts). */
+interface ParentNode {
+  moveBefore(node: Node, child: Node | null): void;
 }

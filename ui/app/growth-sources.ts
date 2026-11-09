@@ -5,21 +5,26 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const GT_REACH = [['mcp', 'MCP'], ['credential', 'Credential'], ['url', 'URL'], ['person', 'Person']];
-const GT_MAY = [['read', 'Read'], ['write', 'Write notes'], ['act', 'Act within rules']];
-const gtMayList = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
-const gtMayText = s => gtMayList(s).map(x => GT_MAY.find(m => m[0] === x)?.[1] || x).join(' · ');
+interface GrSourcesResponse { sources?: GrSource[]; conflicts?: string[]; may_edit?: boolean | null }
+interface GrToolsResponse { integrations?: Array<{ service?: string | null; title?: string | null }> }
+interface GrCredentialsResponse { credentials?: Array<{ name?: string | null }> }
+interface GrSourceControls { truth_for: HTMLInputElement; system: HTMLInputElement; reach_kind: HTMLSelectElement; reach_ref: HTMLInputElement; owner_ref: HTMLSelectElement }
 
-function pageGrowthSources(state) { void gsrcRead(state); }
-async function gsrcRead(state) {
-  let r;
-  try { r = await get('/v2/growth/sources', {fresh: true}); }
+const GT_REACH: Array<[string, string]> = [['mcp', 'MCP'], ['credential', 'Credential'], ['url', 'URL'], ['person', 'Person']];
+const GT_MAY: Array<[string, string]> = [['read', 'Read'], ['write', 'Write notes'], ['act', 'Act within rules']];
+const gtMayList = (s: string | null | undefined): string[] => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+const gtMayText = (s: string | null | undefined) => gtMayList(s).map(x => GT_MAY.find(m => m[0] === x)?.[1] || x).join(' · ');
+
+function pageGrowthSources(state: GrState) { void gsrcRead(state); }
+async function gsrcRead(state: GrState) {
+  let r: GrSourcesResponse;
+  try { r = await get<GrSourcesResponse>('/v2/growth/sources', {fresh: true}); }
   catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (GR !== state) return;
   state.data = {src: r.sources || [], conflicts: r.conflicts || [], may: r.may_edit ?? grAdmin()};
   gsrcDraw(state);
 }
-function gsrcDraw(state) {
+function gsrcDraw(state: GrState) {
   const body = $('#gr-body'), d = state.data;
   if (!body || !d) return;
   const may = d.may, list = d.src.filter(s => !s.retired_at).sort((a, b) => String(a.truth_for).localeCompare(String(b.truth_for)));
@@ -29,8 +34,8 @@ function gsrcDraw(state) {
     return `<div class="gr-banner gr-amber" data-clash="${esc(t)}"><span><b>${esc(t)}</b> · ${esc(rows.map(s => s.system).join(', '))}</span><span class="spacer"></span>
       ${may ? rows.map(s => `<button class="ghost small" type="button" data-use="${esc(s.id)}">Use ${esc(s.system)}</button>`).join('') : ''}</div>`;
   }).join('');
-  const reach = s => `${esc(GT_REACH.find(r => r[0] === s.reach_kind)?.[1] || s.reach_kind || '')}${s.reach_ref ? ` <code>${esc(s.reach_ref)}</code>` : ''}`;
-  const row = s => {
+  const reach = (s: GrSource) => `${esc(GT_REACH.find(r => r[0] === s.reach_kind)?.[1] || s.reach_kind || '')}${s.reach_ref ? ` <code>${esc(s.reach_ref)}</code>` : ''}`;
+  const row = (s: GrSource) => {
     const inner = `<span class="gsrc-t">${esc(s.truth_for)}</span><span class="gsrc-s">${esc(s.system)}</span><span class="muted gsrc-r">${reach(s)}</span>
       <span class="muted gsrc-m">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o">${esc(grWho(s.owner_ref))}</span>`;
     return `<li>${may
@@ -39,26 +44,30 @@ function gsrcDraw(state) {
   body.innerHTML = banners + (list.length ? `<section class="card gsrc-list" aria-label="Sources"><ul class="gsrc-ul">${list.map(row).join('')}</ul></section>` : '');
   const add = $('#strat-actions [data-src-add]');
   if (add) add.onclick = () => void gsrcDialog(state);
-  body.querySelectorAll('[data-src-edit]').forEach(b => { b.onclick = () => void gsrcDialog(state, d.src.find(s => s.id === b.dataset.srcEdit)); });
+  body.querySelectorAll('[data-src-edit]').forEach((b: HTMLElement) => { b.onclick = () => void gsrcDialog(state, d.src.find(s => s.id === b.dataset.srcEdit)); });
   // "Use X" keeps X and retires the other sources for that truth.
-  body.querySelectorAll('[data-use]').forEach(b => {
+  body.querySelectorAll('[data-use]').forEach((b: HTMLElement) => {
     b.onclick = async () => {
-      const t = b.closest('[data-clash]').dataset.clash.toLowerCase();
+      const clash = b.closest<HTMLElement>('[data-clash]');
+      if (!clash) return;
+      const t = String(clash.dataset.clash).toLowerCase();
       const others = d.src.filter(s => !s.retired_at && s.id !== b.dataset.use && String(s.truth_for).toLowerCase() === t);
-      b.closest('[data-clash]').querySelectorAll('button').forEach(x => { x.disabled = true; });
+      clash.querySelectorAll<HTMLButtonElement>('button').forEach(x => { x.disabled = true; });
       try { for (const s of others) await post(`/v2/growth/sources/${encodeURIComponent(s.id)}/retire`, {}); toast('Fixed'); }
-      catch (e) { toast(e.message || 'Not fixed', true); }
+      catch (e) { toast(errorMessage(e, 'Not fixed'), true); }
       void gsrcRead(state);
     };
   });
 }
-async function gsrcDialog(state, s = null) {
+async function gsrcDialog(state: GrState, s: GrSource | null | undefined = null) {
   // What reach_ref can name: connected MCP tools and stored credentials, else free text.
-  const [tools, creds] = await Promise.all([get('/v2/tools').then(r => r.integrations || []).catch(() => []),
-    S.me?.credential_access ? get('/v2/credentials').then(r => r.credentials || []).catch(() => []) : []]);
+  const [tools, creds] = await Promise.all([get<GrToolsResponse>('/v2/tools').then(r => r.integrations || []).catch(() => []),
+    S.me?.credential_access ? get<GrCredentialsResponse>('/v2/credentials').then(r => r.credentials || []).catch(() => []) : []]);
   if (GR !== state) return;
+  const data = state.data;
+  if (!data) return;
   const opts = [...tools.map(t => t.service || t.title).filter(Boolean), ...creds.map(c => c.name).filter(Boolean)];
-  const truths = [...new Set(state.data.src.map(x => x.truth_for))];
+  const truths = [...new Set(data.src.map(x => x.truth_for))];
   const may = gtMayList(s?.may || 'read');
   const body = `${grField('Truth for', `<input name="truth_for" maxlength="80" required list="gt-truths" value="${esc(s?.truth_for || '')}"><datalist id="gt-truths">${truths.map(t => `<option value="${esc(t)}">`).join('')}</datalist>`)}
     ${grField('Source', `<input name="system" maxlength="80" required value="${esc(s?.system || '')}">`)}
@@ -68,12 +77,12 @@ async function gsrcDialog(state, s = null) {
     ${grField('Owner', `<select name="owner_ref">${grOwnerOpts(s?.owner_ref)}</select>`)}
     ${s ? '<button type="button" class="ghost danger gr-retire" data-retire>Retire</button>' : ''}`;
   const dlg = grDialog(s ? `${s.truth_for} · ${s.system}` : 'New source', body, s ? 'Save' : 'Add', async form => {
-    const v = n => form.elements[n].value.trim();
+    const v = (n: keyof GrSourceControls) => (form.elements as HTMLFormControlsCollection & GrSourceControls)[n].value.trim();
     const out = {truth_for: v('truth_for'), system: v('system'), reach_kind: v('reach_kind'), reach_ref: v('reach_ref'), may: grChecked(form, 'may').join(','), owner_ref: v('owner_ref') || null};
     if (!out.truth_for || !out.system) throw new Error('Truth for and source');
     if (s) await patch(`/v2/growth/sources/${encodeURIComponent(s.id)}`, out); else await post('/v2/growth/sources', out);
     toast('Saved'); void gsrcRead(state);
   });
   const retire = dlg.querySelector('[data-retire]');
-  if (retire) grRetireButton(retire, dlg, `/v2/growth/sources/${encodeURIComponent(s.id)}/retire`, () => void gsrcRead(state));
+  if (retire && s) grRetireButton(retire, dlg, `/v2/growth/sources/${encodeURIComponent(s.id)}/retire`, () => void gsrcRead(state));
 }

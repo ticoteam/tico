@@ -28,6 +28,7 @@ interface ThreadMe {
 interface ThreadRow {
   id: string;
   title?: string | null | undefined;
+  name?: string | null | undefined;   // the server's name for an untitled thread (backend _thread_name)
   audience: string;
   parent_id?: string | null | undefined;
   archived_at?: string | null | undefined;
@@ -145,7 +146,7 @@ const threadIsDm = (t: ThreadRow | null | undefined): t is ThreadRow => t?.audie
 // A DM with one bot and no one else: its bot's page holds it, so lists leave it to the Team list's count.
 const threadIsBotDm = (t: ThreadRow) => threadIsDm(t) && !t.parent_id && Number(t.dm_with_count) === 1 && String(t.dm_with?.[0]?.actor || '').startsWith('bot:');
 const threadIsGroupDm = (t: ThreadRow | null | undefined) => threadIsDm(t) && !t?.parent_id && (Number(t.dm_with_count) || threadOthers(t).length) >= 2;
-const threadPrivate = (t: ThreadRow | null | undefined) => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
+const threadPrivate = (t: ThreadRow | null | undefined) => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience ?? '');
 // What the rail lists (and what may be pinned): a root that is a public, team or members thread, or a group DM.
 const threadOnRail = (t: ThreadRow | null | undefined) => !!t && !t.parent_id && !t.archived_at && !t.task_hidden && (['company', 'team', 'members'].includes(t.audience) || threadIsGroupDm(t));
 // The other people in a DM: `dm_with` on a thread view, or a members list read for it. The viewer is left out.
@@ -162,8 +163,10 @@ function actorAvatar(a: string | null | undefined, size = 22) {
   if (pid) return personAvatar((S.people || []).find(p => p.id === pid) || {id: pid, name: personDisplay(pid)}, size);
   return personCircle(actorName(a), size);
 }
-// A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from before threads read as
-// "BotOps"); a group chat by the name it was given, else by its people; any other thread by its title.
+// The one name a thread shows. A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from
+// before threads read as "BotOps"). Any other thread is its title, else the `name` the server gives it (the people in
+// it, viewer left out, "You" when alone: backend `_thread_name`), so every surface agrees. Only a server with no `name`
+// gets the people from the thread's members here. Nothing is stored.
 // `messages`: what is loaded of it, which names a DM the server sends with no title and no people (a notice thread).
 function threadTitle(t: ThreadRow | null | undefined, messages?: { sender_id?: string | null | undefined }[] | null): string {
   if (!t) return '';
@@ -171,16 +174,17 @@ function threadTitle(t: ThreadRow | null | undefined, messages?: { sender_id?: s
   // The server's name, for someone in this DM the viewer's people list leaves out.
   const name = (a: string | undefined) => t.dm_with?.find(m => m.actor === a)?.name || actorName(a);
   const people = others.length ? others.slice(0, 3).map(name).join(', ') + (total > 3 ? ` +${total - 3}` : '') : '';
-  const own = String(t.title || '').trim();
+  const own = String(t.title || '').trim(), named = String(t.name || '');
   if (threadIsDm(t) && !t.parent_id && people && !(total >= 2 && own && !/^(chat with|private\b)/i.test(own))) return people;
   if (own) return own;
   if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
+  if (named && !threadIsDm(t)) return named;
   if (people) return people;
   if (threadIsDm(t) && !t.parent_id) {
     const authors = [...new Set((messages || []).map(m => m?.sender_id).filter(a => a && a !== myActor()))];
     if (authors.length) return authors.slice(0, 3).map(actorName).join(', ') + (authors.length > 3 ? ` +${authors.length - 3}` : '');
   }
-  return t.parent_id ? 'Sub-thread' : threadIsDm(t) ? 'Direct message' : 'Untitled';
+  return named || 'Thread';
 }
 // Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).
 const threadRowHref = (t: ThreadRow | null | undefined) => !t?.new_at?.thread_id ? threadHref(t)
@@ -197,7 +201,7 @@ const threadUnread = (t: ThreadRow | null | undefined) => Number(t?.me?.unread) 
 const threadActivity = (t: ThreadRow | null | undefined) => !threadUnread(t) && !!t?.me?.activity;
 const threadsCountText = (n: number) => n > 99 ? '99+' : String(n);
 // The server's order (contract §10.1): by title, case-insensitively, unnamed last, then id.
-const threadsByTitle = (a: ThreadRow, b: ThreadRow) => (!a.title - !b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
+const threadsByTitle = (a: ThreadRow, b: ThreadRow) => (Number(!a.title) - Number(!b.title)) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
   || String(a.id).localeCompare(String(b.id));
 
 // ----------------------------------------------------------------- loading
@@ -455,7 +459,7 @@ function threadsSync() {
     // open Catch up goes.
     else if (d.kind === 'read' && d.read) {
       const root = d.root_id || d.thread_id;
-      threadsAllRead(root);
+      threadsAllRead(root ?? '');
       if (typeof catchUpGone === 'function') catchUpGone(root);
     }
     else if (d.kind === 'pinned' && d.thread_id) void threadsPinned(d);

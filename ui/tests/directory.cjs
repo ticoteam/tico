@@ -1,0 +1,113 @@
+// Library › Directory on a real hub seeded with the scenario org and the Directory's rows (evals/redesign/seeds.py
+// "directory", the same rows as the demo): the list → a person → their organization → a place, on a desktop and a
+// phone. Set TICO_DIRECTORY_SHOTS to a folder to keep a screenshot of each page.
+const {chromium} = require('playwright');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const {startHub, pageAs} = require('./support/real-hub.cjs');
+const {t} = require('./support/load.cjs');
+
+const SHOTS = process.env.TICO_DIRECTORY_SHOTS || '';
+const shot = async (page, name) => { if (!SHOTS) return; await page.waitForTimeout(600); await page.screenshot({path: path.join(SHOTS, `directory-${name}.png`), fullPage: true}); };
+
+async function flow(page, tag) {
+  await page.goto(page.url().split('#')[0] + '#/library/directory');
+  // The list: People first, the seeded people with their organization, relationship and where they are known from.
+  const jane = page.locator('[data-dir-row="person/jane-ortiz"]');
+  await jane.waitFor({timeout: t(20000)});
+  assert.equal(await page.locator('[data-dir-tab].cur').getAttribute('data-dir-tab'), 'person');
+  assert.deepEqual(await page.locator('[data-dir-tab]').evaluateAll(tabs => tabs.slice(0, 4).map(a => a.dataset.dirTab)),
+    ['person', 'organization', 'place', 'document']);
+  assert.match(await jane.innerText(), /Bright Homes Retail/);
+  assert.match(await jane.locator('[data-dir-rel]').innerText(), /Customer/);
+  assert.match(await page.locator('[data-dir-count]').innerText(), /^4 people$/);
+  // Prefix search narrows the rows; the relationship menu narrows by a link to us, through the person's organization.
+  await page.locator('[data-dir-search-toggle]').click();
+  await page.locator('[data-dir-q]').fill('Ra');
+  await page.waitForFunction(() => document.querySelectorAll('[data-dir-row]').length === 1, null, {timeout: t(10000)});
+  assert.equal(await page.locator('[data-dir-row]').getAttribute('data-dir-row'), 'person/raj-patel');
+  assert.match(page.url(), /q=Ra/);
+  await page.goto(page.url().split('#')[0] + '#/library/directory?link=customer_of');
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-dir-row]')].map(r => r.dataset.dirRow).join() === 'person/jane-ortiz,person/sam-brooks', null, {timeout: t(10000)});
+  await page.goto(page.url().split('#')[0] + '#/library/directory');
+  await jane.waitFor({timeout: t(10000)});
+  await shot(page, `list-${tag}`);
+
+  // The person: title at organization, the Customer chip, rules (none yet), a value's history, links, notes.
+  await jane.locator('a').first().click();
+  await page.locator('[data-dir-name]').waitFor({timeout: t(10000)});
+  assert.equal(await page.locator('[data-dir-name]').innerText(), 'Jane Ortiz');
+  assert.match(await page.locator('[data-dir-sub]').innerText(), /CFO at Bright Homes Retail · Austin/);
+  await page.locator('[data-dir-rules-empty]').waitFor({timeout: t(10000)});
+  assert.match(await page.locator('[data-dir-field="title"]').innerText(), /CFO/);
+  await page.locator('[data-dir-history="title"]').click();
+  await page.locator('[data-dir-history-row]').nth(1).waitFor({timeout: t(10000)});
+  assert.deepEqual(await page.locator('[data-dir-history-row] strong').allInnerTexts(), ['CFO', 'Controller']);
+  await shot(page, `history-${tag}`);
+  await page.locator('.dir-drawer [data-dir-close]').click();
+  assert.match(await page.locator('[data-dir-note-list]').innerText(), /sell-through/);
+  // A note for the company shows at once.
+  await page.locator('[data-dir-note-form] textarea').fill(`Prefers mail over calls (${tag}).`);
+  await page.locator('[data-dir-note-form] button[type=submit]').click();
+  await page.locator('[data-dir-note-list] li', {hasText: `(${tag})`}).waitFor({timeout: t(10000)});
+  await shot(page, `person-${tag}`);
+
+  // The organization: domain and place under the name, its people among the links.
+  await page.locator('[data-dir-sub] a', {hasText: 'Bright Homes Retail'}).click();
+  await page.waitForFunction(() => document.querySelector('[data-dir-name]')?.textContent === 'Bright Homes Retail', null, {timeout: t(10000)});
+  assert.match(await page.locator('[data-dir-sub]').innerText(), /brighthomes\.example · Company · Austin/);
+  assert.match(await page.locator('[data-dir-rel]').innerText(), /Customer/);
+  assert.match(await page.locator('[data-dir-link-group="People"]').innerText(), /Jane Ortiz.*Sam Brooks/);
+  await page.locator('[data-dir-rules-empty]').waitFor({timeout: t(10000)});
+  await shot(page, `org-${tag}`);
+
+  // A place from the shared tree: Austin, inside Texas, which we operate in.
+  await page.locator('[data-dir-sub] a', {hasText: 'Austin'}).click();
+  await page.waitForFunction(() => document.querySelector('[data-dir-name]')?.textContent === 'Austin', null, {timeout: t(10000)});
+  await page.locator('[data-dir-shared]').waitFor({timeout: t(10000)});
+  await page.locator('.dir-crumb a', {hasText: 'Texas'}).click();
+  await page.waitForFunction(() => document.querySelector('[data-dir-name]')?.textContent === 'Texas', null, {timeout: t(10000)});
+  await page.locator('[data-dir-operate]').waitFor({timeout: t(10000)});
+  await page.locator('[data-dir-rules-empty]').waitFor({timeout: t(10000)});
+  assert.match(await page.locator('[data-dir-inside]').innerText(), /Austin/);
+  assert.match(await page.locator('[data-dir-why]').innerText(), /operates in/);
+  await shot(page, `place-${tag}`);
+  // Never the word the spec retired, on any page here.
+  assert.doesNotMatch(await page.locator('#main').innerText(), /\bworld\b/i);
+}
+
+(async () => {
+  const hub = await startHub({seeds: ['org', 'toured', 'directory']});
+  let browser;
+  try {
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    for (const phone of [false, true]) {
+      const page = await pageAs(browser, hub, 'dana', {phone});
+      try {
+        await page.waitForFunction(() => document.querySelector('#main')?.children.length > 0, null, {timeout: t(20000)});
+        await flow(page, phone ? 'phone' : 'desktop');
+        if (phone) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
+        else {
+          // Settings › Directory: the types with their counts, and the shared places.
+          await page.goto(page.url().split('#')[0] + '#/settings/directory');
+          await page.locator('[data-dirs-type="person"]').waitFor({timeout: t(20000)});
+          assert.match(await page.locator('[data-dirs-type="person"]').innerText(), /4/);
+          await page.locator('[data-dirs-field="title"]').count();
+          await page.locator('[data-dirs-places-on]').waitFor({timeout: t(10000)});
+          await shot(page, 'settings-desktop');
+          // Light theme too: the page uses theme tokens only.
+          await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+          await page.goto(page.url().split('#')[0] + '#/library/directory/' + encodeURIComponent('organization/bright-homes-retail'));
+          await page.locator('[data-dir-rules-empty]').waitFor({timeout: t(10000)});
+          await shot(page, 'org-light');
+        }
+      } finally {
+        await page.context().close();
+      }
+    }
+    console.log('directory: ok');
+  } finally {
+    await browser?.close();
+    await hub.stop();
+  }
+})().catch(error => { console.error(error); process.exit(1); });

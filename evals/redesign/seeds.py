@@ -457,6 +457,24 @@ def finance(world):
             raise RuntimeError("finance setup found no owner on the scenario org")
 
 
+@seed("directory")
+def directory(world):
+    """The Directory's people, organizations and places, as the demo has them (backend/demo_sections/directory.py): Dana
+    makes them through the Directory's API, and the shared places tree writes the places they refer to."""
+    from backend.demo_sections.directory import fill
+
+    from .harness import DANA, DANA_ID
+
+    def call(method, path, body=None):
+        return _ok(world.api(method.lower(), "/api/v2/" + path, body, who=DANA), f"{method} {path}")
+
+    def write(work):
+        with world.store.transaction() as c:
+            return work(c)
+
+    fill(call, write, reviewer=f"human:{DANA_ID}")
+
+
 @seed("priya-leads")
 def priya_leads(world):
     """Priya is the engineering manager on the chart: engineering-lead reports to her, so she is above the bots under it

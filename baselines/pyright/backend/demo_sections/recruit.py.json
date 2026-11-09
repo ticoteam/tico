@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/demo_sections/recruit.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 77,
+                    "endColumn": 106,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/bot_seats_routes.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 32,
+                    "endColumn": 65,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

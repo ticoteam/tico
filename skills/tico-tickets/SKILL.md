@@ -48,7 +48,9 @@ Loop until nothing is left that you can move:
    then the order in its project's plan, then oldest. Label it `in-progress`.
 2. **Build** in its own worktree and branch `<who>/<topic>` (one ticket per PR) from the target repo's
    `origin/main` (`git worktree add`), so two tickets never share a checkout. For a bot repo,
-   work in a fresh clone or worktree, never in the live bot checkout the runner uses.
+   work in a fresh clone or worktree, never in the live bot checkout the runner uses. In `ticoteam/tico`, run
+   `git config core.hooksPath .githooks` once in the clone (every worktree shares it): each push then runs
+   `scripts/check.sh` and the branch conflict check first. Other repos keep their own hook settings.
 3. **Test** locally, and only what you changed. Write unit tests while you build and run them as you
    go, as many as the change needs. Keep each test that guards a real failure (a privacy or permission
    boundary, data safety, a core task/run flow, a regression); drop tests of wording, docs or trivial

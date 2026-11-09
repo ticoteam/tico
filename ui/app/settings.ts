@@ -10,7 +10,7 @@ type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_a
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
-type SettingsHistory = {changes: Record<string, unknown>[]; transitions: Record<string, unknown>[]; transitions_truncated?: boolean; next_before?: string | null};
+type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
 type HarnessCaps = {api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string};
 type HarnessRow = {id: string; name?: string; external?: boolean; capabilities?: HarnessCaps};
@@ -110,7 +110,7 @@ let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 // Health has no tab: General's Health line opens it (Details), and its address still works.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'security', 'history',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'directory', 'security', 'history',
   'health', 'billing'];
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
@@ -267,6 +267,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
+      <button type="button" data-settings-tab="directory" role="tab">Directory</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="security" role="tab">Security</button>' : ''}
       <button type="button" data-settings-tab="history" role="tab">History</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
@@ -323,6 +324,7 @@ function pageSettings() {
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-security" role="tabpanel" hidden>
       <section class="card" id="set-screening-card"><header><h2>Screening</h2></header><div id="set-screening">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>` : ''}
+    <div class="settings-pane" id="settings-directory" role="tabpanel" hidden><div id="set-directory"></div></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
       <div id="settings-types"></div>
@@ -477,6 +479,8 @@ function settingsShow(tab: string) {
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
+  const directoryPane = document.getElementById('settings-directory'), directoryBody = document.getElementById('set-directory');
+  if (directoryPane && directoryBody) { directoryPane.hidden = SETTINGS_TAB !== 'directory'; if (SETTINGS_TAB === 'directory') void directorySettingsShow(directoryBody); }
   const securityPane = $('#settings-security');
   if (securityPane) { securityPane.hidden = SETTINGS_TAB !== 'security'; if (SETTINGS_TAB === 'security') void renderScreeningCard(); }
   // Once route() has put a newly opened page at its top, which would undo a scroll to a card already drawn.

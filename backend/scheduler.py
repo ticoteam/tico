@@ -637,6 +637,8 @@ class Scheduler:
                 steps.append(("finance_documents", lambda c: finance.watch_documents(c, stamp(at))))
             if self.finance_due("period", at, timedelta(days=1)):
                 steps.append(("finance_period", lambda c: finance.open_next_period(c, stamp(at))))
+            if self.finance_due("subscriptions", at, timedelta(days=1)):  # suggests and cancels (subscriptions.py)
+                steps.append(("finance_subscriptions", lambda c: finance.detect_subscriptions(c, stamp(at))))
         failed = 0
         for name, step in steps:
             try:

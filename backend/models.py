@@ -353,6 +353,9 @@ class TaskFilter(Contract):
     """The tasks a bulk change applies to: the filters `GET /api/v2/tasks` takes, with the same meanings."""
 
     owner: ID | None = None
+    # Everything not this one's: the tasks whose owner is anyone else (a bot or a person), the caller's own included
+    # only when named here. Refused when it names nobody (task_bulk_routes.bulk_select).
+    exclude_owner: ID | None = None
     requester: ID | None = None
     status: str | None = Field(default=None, max_length=200)  # comma-separated, as the list takes it
     lane: Lane | None = None
@@ -3049,6 +3052,10 @@ class LimitRetry(Contract):
     pass
 
 
+class CompanyPause(Contract):
+    """Pause or resume every bot on the team. No fields: the one company pause on record is the whole state."""
+
+
 class StopTurn(Contract):
     run_id: ID | None = None  # the run the person saw; a newer one is not stopped by mistake
     redirect: ID | None = None  # the caller's queued message the next turn starts with (Stop and redirect)
@@ -3352,6 +3359,13 @@ class PersonalTokenCreate(Contract):
     expires_in_days: int = Field(default=90, ge=1, le=365)
 
 
+class SetupHandoff(Contract):
+    """The one-time secret of the setup handoff (backend/setup_handoff.py). It is checked against the pattern a secret
+    has in the handler, so a wrong one is refused like a spent one, and no validation message repeats it."""
+
+    secret: str = Field(default="", max_length=512, repr=False)
+
+
 class ServiceKeyCreate(Contract):
     """A service key (backend/service_keys.py): the label names the system that holds it, on every
     task it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."""
@@ -3605,3 +3619,7 @@ class MailboxAccessCreate(Contract):
 
 class MailboxAccessUpdate(Contract):
     level: MailboxLevel
+
+
+class MailboxDirectoryUpdate(Contract):
+    on: StrictBool

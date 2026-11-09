@@ -203,7 +203,7 @@ def app_build_decision(tmp_path, monkeypatch):
         (
             "recorder",
             [
-                "recorder/tests/updates.cjs",
+                "recorder/tests/updates.cts",
                 "recorder/tests/nested/fixture.json",
                 "recorder/src/network_tests.rs",
                 "recorder/src/stream_tests.rs",
@@ -301,7 +301,7 @@ def test_validation_is_dispatch_only_and_keeps_the_title_release_yml_finds():
     assert (
         ci["run-name"]
         == "Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}"
-        "${{ inputs.plan != '' && format(' (incremental on {0})', inputs.anchor) || '' }}"
+        "${{ inputs.anchor != '' && format(' (incremental on {0})', inputs.anchor) || '' }}"
     )
     assert release_train.title("s", "v", "p") == "Validate s as v from p"
     assert ci["concurrency"] == {"group": "manual-release-validation", "cancel-in-progress": False}
@@ -310,19 +310,51 @@ def test_validation_is_dispatch_only_and_keeps_the_title_release_yml_finds():
 def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only_what_it_lists():
     ci, on = _workflow("ci.yml")
     inputs = on["workflow_dispatch"]["inputs"]
-    # Both inputs are optional: an empty plan is the full validation, unchanged.
-    assert inputs["anchor"]["default"] == "" and inputs["anchor"].get("required") is not True
-    assert inputs["plan"]["default"] == "" and inputs["plan"].get("required") is not True
+    # The inputs are optional: an empty anchor is the full validation, unchanged. The dispatch stays small: the anchor,
+    # the carried failed tests and the anchor's release; the candidate job makes the plan from its own checkout.
+    for name in ("anchor", "carried", "anchor_previous"):
+        assert inputs[name]["default"] == "" and inputs[name].get("required") is not True
+    assert "plan" not in inputs
     jobs = ci["jobs"]
-    assert "matrix" in jobs["candidate"]["outputs"]
+    assert "matrix" in jobs["candidate"]["outputs"] and "plan" in jobs["candidate"]["outputs"]
+    plan_step = next(step for step in jobs["candidate"]["steps"] if step.get("id") == "plan")
+    assert plan_step["if"] == "inputs.anchor != ''" and "release_increment.py plan" in plan_step["run"]
+    assert "--root candidate" in plan_step["run"] and "--carried" in plan_step["run"]
     # The gate's VMs come from the candidate's plan (release_increment.matrix): the full matrix when the plan is empty.
     assert jobs["gate"]["strategy"]["matrix"] == "${{ fromJSON(needs.candidate.outputs.matrix) }}"
     assert jobs["gate"]["strategy"]["fail-fast"] is False
     # The full default factory sim and the measured timings run only in a full validation.
-    assert jobs["factory-sim"]["if"] == "inputs.plan == '' || fromJSON(inputs.plan).factory"
-    assert jobs["test-timings"]["if"] == "inputs.plan == ''"
+    assert (
+        jobs["factory-sim"]["if"]
+        == "needs.candidate.outputs.plan == '' || fromJSON(needs.candidate.outputs.plan).factory"
+    )
+    assert jobs["test-timings"]["if"] == "inputs.anchor == ''"
+    assert "candidate" in jobs["release-check"]["needs"]
     steps = {step.get("name"): step for step in jobs["gate"]["steps"] if step.get("name")}
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
+
+
+def test_an_incremental_validation_runs_hosted_except_its_product_and_desktop_parts():
+    """An incremental validation's jobs run on GitHub-hosted runners; its product and desktop VMs need the 35 GiB disk
+    and the Docker images, so they stay on RunsOn. A full validation keeps the configured runners."""
+    ci, _ = _workflow("ci.yml")
+    jobs = ci["jobs"]
+    for name in ("candidate", "native-linux", "images", "factory-sim"):
+        assert "inputs.anchor != ''" in str(jobs[name]["runs-on"]), name
+        assert "runs-on=" in str(jobs[name]["runs-on"]), name  # a full validation still runs on RunsOn
+    gate = str(jobs["gate"]["runs-on"])
+    assert "inputs.anchor != ''" in gate and "matrix.part != 'product'" in gate and "matrix.part != 'desktop'" in gate
+    assert "runs-on=" in gate
+    # The hosted disk clean-up step is reused, gated on the same mode: no new step text.
+    for name in ("native-linux", "images", "factory-sim"):
+        step = next(step for step in jobs[name]["steps"] if step.get("name", "").startswith("Free disk"))
+        assert step["if"] == "vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''", name
+    # The gate's hosted parts are the same mode as its runs-on: its clean-up step follows that condition.
+    gate_step = next(step for step in jobs["gate"]["steps"] if step.get("name", "").startswith("Free disk"))
+    assert gate_step["run"] == "sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc"
+    assert gate_step["if"] == (
+        "vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')"
+    )
 
 
 def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it():
@@ -333,7 +365,7 @@ def test_the_full_validation_ceiling_is_hosted_and_every_runson_job_waits_for_it
     assert jobs["ceiling"]["runs-on"] == "ubuntu-24.04"
     assert jobs["ceiling"]["permissions"] == {"actions": "read"}
     step = next(step for step in jobs["ceiling"]["steps"] if "ceiling reached" in step.get("run", ""))
-    assert step["if"] == "inputs.plan == ''" and step["env"]["CAP"] == "10"
+    assert step["if"] == "inputs.anchor == ''" and step["env"]["CAP"] == "10"
     assert "$CAP full runs today; ceiling reached" in step["run"] and "created=$today" in step["run"]
 
     def waits_for_ceiling(name):

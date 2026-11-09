@@ -9,10 +9,10 @@ const TR_SVG = {
   catchUp: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M6 6h12M8 3h8"/></svg>',
   browse: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   lock: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
-  pin: on => `<svg width="15" height="15" viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${on ? 0 : 1.6}" stroke-linejoin="round" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 .5 5-1.5 1.5-4-4-5 5-1-1 5-5-4-4L5 10l5 .5 4-4z"/></svg>`,
+  pin: (on: boolean) => `<svg width="15" height="15" viewBox="0 0 24 24" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="${on ? 0 : 1.6}" stroke-linejoin="round" aria-hidden="true"><path d="M15 3l6 6-3 1-4 4 .5 5-1.5 1.5-4-4-5 5-1-1 5-5-4-4L5 10l5 .5 4-4z"/></svg>`,
 };
 // `#` before a thread's name, a lock for a private one.
-const threadHashHTML = t => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
+const threadHashHTML = (t: ThreadRow | null | undefined) => `<span class="tr-mark" aria-hidden="true">${threadPrivate(t) ? TR_SVG.lock : '#'}</span>`;
 const TR_PHONE = matchMedia('(max-width:760px)'), trPhone = () => TR_PHONE.matches;
 // #/threads first drawn at phone width has an empty pane: grown past the phone's width it opens what the computer does.
 TR_PHONE.addEventListener('change', () => { if (!TR_PHONE.matches && S.route === THREADS_ROUTE) void pageThreads(); });
@@ -20,10 +20,12 @@ TR_PHONE.addEventListener('change', () => { if (!TR_PHONE.matches && S.route ===
 // The thread last opened here, which #/threads opens again.
 const THREADS_LAST_KEY = 'tico.threads.last';
 function threadsLastGet() { try { return localStorage.getItem(THREADS_LAST_KEY) || ''; } catch { return ''; } }
-function threadsLastSet(id) { try { localStorage.setItem(THREADS_LAST_KEY, id); } catch { /* not kept */ } }
+function threadsLastSet(id: string) { try { localStorage.setItem(THREADS_LAST_KEY, id); } catch { /* not kept */ } }
 
 // ----------------------------------------------------------------- the page
-let THREAD_PAGE = null;
+// The thread the pane shows, and the element and view that hold it.
+interface TrThreadPage {id: string; host: HTMLElement; view: ThvView}
+let THREAD_PAGE: TrThreadPage | null = null;
 // The rail and the pane beside it, drawn once and kept while one thread gives way to another.
 function threadsShell() {
   const main = $('#main');
@@ -48,17 +50,39 @@ function threadsShell() {
   shell = $('#threads-shell');
   const rail = shell.querySelector('.tr-rail');
   rail.querySelector('#tr-find').oninput = () => railRender();
-  rail.onclick = ev => {
-    const b = ev.target.closest('button'); if (!b) return;
+  rail.onclick = (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLButtonElement>('button'); if (!b) return;
     if (b.matches('[data-tr-new]')) threadNewOpen();
-    else if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch).catch(e => { b.disabled = false; toast(e.message, true); }); }
+    else if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch ?? '').catch(e => { b.disabled = false; toast(errorMessage(e, ''), true); }); }
     else if (b.matches('[data-tr-catch]')) void catchUpOpen();
     else if (b.matches('[data-tr-browse]')) void threadBrowseOpen();
     else if (b.matches('[data-tr-more]')) { b.disabled = true; threadsMore().catch(e => toast(e.message, true)).finally(() => { b.disabled = false; }); }
   };
-  shell.querySelector('.tr-pane').addEventListener('click', ev => { if (ev.target.closest('[data-tr-new]')) threadNewOpen(); });
+  shell.querySelector('.tr-pane').addEventListener('click', (ev: MouseEvent) => { if (eventElement(ev)?.closest('[data-tr-new]')) threadNewOpen(); });
   return shell;
 }
+// The pane with no thread open: a picture of how a thread works, one heading and one sentence, then New thread (the
+// pane's click handler in threadsShell answers its data-tr-new). The picture's colours are classes in thread-rail.css.
+const TR_EMPTY_HTML = `<div class="tr-empty"><div class="empty-state">
+  <svg class="tr-diagram" viewBox="7 0 360 176" aria-hidden="true">
+    <rect class="td-card" x="112" y="10" width="240" height="156" rx="14"/>
+    <text class="td-title" x="130" y="35"># Launch plan</text>
+    <path class="td-line" d="M112 46H352"/>
+    <path class="td-line" d="M58 44H112M58 88H112M58 132H112"/>
+    <circle class="td-face" cx="40" cy="44" r="18"/><circle class="td-ink" cx="40" cy="39" r="6"/><path class="td-ink" d="M29.5 57a10.5 9 0 0 1 21 0z"/>
+    <rect class="td-face" x="22" y="70" width="36" height="36" rx="10"/><rect class="td-ink" x="31" y="84" width="5" height="6" rx="2.5"/><rect class="td-ink" x="44" y="84" width="5" height="6" rx="2.5"/><path class="td-stroke" d="M35 97h10"/>
+    <rect class="td-face" x="22" y="114" width="36" height="36" rx="10"/><rect class="td-ink" x="31" y="128" width="5" height="6" rx="2.5"/><rect class="td-ink" x="44" y="128" width="5" height="6" rx="2.5"/><path class="td-stroke" d="M35 141h10"/>
+    <circle class="td-face" cx="134" cy="73" r="8"/><circle class="td-ink" cx="134" cy="70.5" r="2.6"/><path class="td-ink" d="M129.8 79a4.2 4 0 0 1 8.4 0z"/>
+    <rect class="td-bar" x="152" y="69" width="118" height="8" rx="4"/>
+    <rect class="td-face" x="127" y="97" width="14" height="14" rx="4"/><circle class="td-ink" cx="131" cy="103.5" r="1.3"/><circle class="td-ink" cx="137" cy="103.5" r="1.3"/>
+    <rect class="td-bar" x="152" y="100" width="150" height="8" rx="4"/>
+    <rect class="td-face" x="127" y="128" width="14" height="14" rx="4"/><circle class="td-ink" cx="131" cy="134.5" r="1.3"/><circle class="td-ink" cx="137" cy="134.5" r="1.3"/>
+    <rect class="td-bar" x="152" y="131" width="124" height="8" rx="4"/>
+  </svg>
+  <h2>Talk with your team here</h2>
+  <p>Share conversations with your bots and anything else the team should see.</p>
+  <button type="button" class="primary" data-tr-new>New thread</button>
+</div></div>`;
 // #/threads: the rail; on a desktop the thread last opened (else the first pinned) beside it. `?view=inbox` (Inbox's
 // old address) opens Catch up; `?view=dms` and `?with=` were the old list's filters.
 async function pageThreads() {
@@ -78,10 +102,10 @@ async function pageThreads() {
   const id = (last && (listed.some(t => t.id === last) || THREADS.next) ? last : '') || THREADS.pinned[0]?.id || '';
   if (id) { location.replace(threadHref(id)); return; }
   threadUnmount(THREAD_PAGE?.view); THREAD_PAGE = null;
-  pane.innerHTML = '<div class="tr-empty"><button type="button" class="primary" data-tr-new>New thread</button></div>';
+  pane.innerHTML = TR_EMPTY_HTML;
 }
 // #/thread/<id>: that thread beside the rail. `?m=<message id>` (a search hit, a quote; `?focus=` too) opens it at that message.
-function pageThread(id) {
+function pageThread(id: string) {
   const q = new URLSearchParams(S.route.split('?')[1] || ''), focus = q.get('m') || q.get('focus') || '';
   const shell = threadsShell(), pane = shell.querySelector('.tr-pane');
   shell.dataset.mode = 'thread';
@@ -99,8 +123,8 @@ function pageThread(id) {
 }
 
 // ----------------------------------------------------------------- the rail
-const railCurrent = () => S.route.startsWith(THREAD_ROUTE) ? decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0]) : '';
-function railRowHTML(t, cur) {
+const railCurrent = () => S.route.startsWith(THREAD_ROUTE) ? decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0] ?? '') : '';
+function railRowHTML(t: ThreadRow, cur: string) {
   const n = threadUnread(t), bold = n > 0 || !!t.me?.activity, here = t.id === cur;
   const arch = t.me?.can_manage ? `<button type="button" class="tr-arch" data-tr-arch="${esc(t.id)}" aria-label="Archive" title="Archive"><span class="nav-icon" aria-hidden="true">archive</span></button>` : '';
   return `<li class="tr-item"><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
@@ -109,7 +133,7 @@ function railRowHTML(t, cur) {
 function railRender() {
   const rail = $('#thread-rail'); if (!rail?.isConnected) return;
   const words = (rail.querySelector('#tr-find')?.value || '').trim().toLowerCase(), cur = railCurrent();
-  const shown = list => words ? list.filter(t => threadTitle(t).toLowerCase().includes(words)) : list;
+  const shown = (list: ThreadRow[]) => words ? list.filter(t => threadTitle(t).toLowerCase().includes(words)) : list;
   const lists = {pinned: shown(THREADS.pinned), threads: shown(THREADS.threads)};
   for (const [key, list] of Object.entries(lists)) {
     rail.querySelector(`[data-sec="${key}"]`).hidden = !list.length;
@@ -169,7 +193,7 @@ function threadBrowseOpen(): void {
   q.oninput = () => { clearTimeout(timer); timer = window.setTimeout(() => load(), 200); };
   more.onclick = () => load(true);
   form.addEventListener('click', (ev: MouseEvent) => {
-    const tab = (ev.target as Element | null)?.closest<HTMLElement>('[data-tab]');
+    const tab = eventElement(ev)?.closest<HTMLElement>('[data-tab]');
     if (!tab) return;
     mode = tab.dataset.tab === 'archived' ? 'archived' : 'threads';
     form.querySelectorAll<HTMLElement>('[data-tab]').forEach(b => { const on = b === tab; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
@@ -177,7 +201,7 @@ function threadBrowseOpen(): void {
     void load();
   });
   list.onclick = async (ev: MouseEvent): Promise<void> => {
-    const target = ev.target as Element | null;
+    const target = eventElement(ev);
     if (target?.closest('[data-close]')) { dlg.close(); return; }
     const u = target?.closest<HTMLButtonElement>('[data-unarchive]');
     if (u) {

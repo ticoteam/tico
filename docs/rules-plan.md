@@ -6,7 +6,7 @@ pass). Plan only, no code. Read against ticoteam/tico `origin/main` c15ff9b04. M
 ## The idea in one line
 
 A rule is one sentence, **Internal** (how teammates, bots and people, treat each other) or **External** (what someone
-outside requires of us). It says **Who** follows it; an internal rule can also say **With** whom. From then on the bots
+outside requires of us). Its **Followed by** line says who follows it; an internal rule can also say **With** whom. From then on the bots
 it applies to know it. Counsel reads contracts and suggests external rules. A rule can have a **due date** with a status (Upcoming, Due soon, Overdue, Satisfied); a routine that
 opens a task before it is optional.
 
@@ -23,13 +23,13 @@ opens a task before it is optional.
 ## The model
 
 **Rules** are the one new thing, in two kinds. Internal comes first: it's what Chris will start adding.
-- **Internal:** between teammates. "Never tell anyone what color you like" (Who: Everyone). "Ask Chris before
-  assigning him a task" (Who: all bots, With: Chris). "Don't ask Bookkeeper to pay anything" (Who: Marketing, With:
+- **Internal:** between teammates. "Never tell anyone what color you like" (Followed by: Everyone). "Ask Chris before
+  assigning him a task" (Followed by: all bots, With: Chris). "Don't ask Bookkeeper to pay anything" (Followed by: Marketing, With:
   Bookkeeper).
 - **External:** someone outside requires it, with a **From** (Twilio, Acme Corp, City of Austin, FTC) of kind
   Vendor, Customer, Government or Other.
 - Each is one sentence (up to 1000 characters) plus an optional description.
-- **Who** follows it: Everyone (every teammate), all bots, departments, bots or people. Only owners and admins can
+- **Followed by** (who follows it): Everyone (every teammate), all bots, departments, bots or people. Only owners and admins can
   add or edit an Everyone rule.
 - **With** (internal, optional): the teammates it's about: departments, bots or people. Empty means any output.
 - Status is suggested, active or retired.
@@ -62,7 +62,7 @@ How a rule is used:
 |---|---|
 | Rules (Internal, External) | `org_rules` with `kind internal\|external` |
 | Who / With | `who`, `with` |
-| From | `rule_sources` |
+| From | `org_rules.source_entity_id` (an organization entity) |
 | Suggested | status `suggested` |
 | Due | `rule_due_dates` + `rule_due_status`; routine optional |
 | Decide | `judge.py`'s default engine; not "Jev" |
@@ -73,23 +73,23 @@ lives on other pages; on this page the button is **+ Add document**.
 
 ## Screens
 
-1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is in Who, then its settings as
+1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is under Followed by, then its settings as
    sentences, each opening the setting), then **External**.
-2. **Rules › Internal** (board 2): list with Rule | Who | With | Due; filters Who, With, and "Settings too" (off).
-   Clicking a rule opens a side panel: rule, description, Who, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
+2. **Rules › Internal** (board 2): list with Rule | Followed by | With | Due; filters Followed by, With, and "Settings too" (off).
+   Clicking a rule opens a side panel: rule, description, Followed by, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
    Who may reach whom, how often, and the lines between teammates (each line's rule an internal rule): see
    [reach.md](reach.md).
 3. **Blocked** (board 3): what a blocked bot gets back and does next (Block, the default), and an Escalate review task
    for the bot's manager (Keep blocked / Send anyway / Edit rule). **Nav:** Rules is a top-level item under Automations and Library, collapsed by default.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
-   is a flat list with filters for From, Who and Due. Buttons: **+ Add document**, **+ Add rule**. The From filter's list replaces a Sources tab. Clicking a
-   rule opens a side panel: edit the rule, a description, Who (company, departments or bots; + add), From;
+   is a flat list with filters for From, Followed by and Due. Buttons: **+ Add document**, **+ Add rule**. The From filter's list replaces a Sources tab. Clicking a
+   rule opens a side panel: edit the rule, a description, Followed by (company, departments or bots; + add), From;
    see its due date and the cited quote; Retire / Save. No "Counsel is reading" banner.
 5. **Add document** (board 5): one file or link, a short description ("We just closed our deal with Twilio"), and
    From (or a new one plus a kind). It starts a Counsel review. (Finding public terms on its own is Later #1.)
-6. **Suggested** (board 6): grouped by From ("Twilio"). Each row is the sentence, Who, and Skip / Add.
+6. **Suggested** (board 6): grouped by From ("Twilio"). Each row is the sentence, Followed by, and Skip / Add.
    **Add all** adds the group with the scopes shown. The quote is stored and shows in the rule's side panel, not here.
-7. **Add rule** (board 7): Internal or External first; Internal asks Who and With, External asks Who and From.
+7. **Add rule** (board 7): Internal or External first; Internal asks Followed by and With, External asks Followed by and From.
 8. **Due** (board 8), for both kinds: columns Due | Rule | Repeats | Routine | Owner | Status. Repeats is the frequency; Routine is
    optional ("30 days before" or —). Status is Overdue / Due soon / Upcoming / Satisfied. Clicking a row opens a
    side panel: Due, Repeats, Owner, Routine, the status with **Mark satisfied**, and a history of past due dates
@@ -104,9 +104,10 @@ The shape follows `strategy_bets` (`backend/strategy.py`): a statement, cites, p
 events.
 
 ```
-rule_sources(id, name, kind vendor|customer|government|other, created_by, created_at)
+Rule sources are organization entities, not a table (migration 20261108044824 retired `rule_sources`): an entity's
+`properties.rule_source` holds {id, kind vendor|customer|government|other, created_by, created_at}.
 
-org_rules(id, kind internal|external, text, description?, source_id (external only),
+org_rules(id, kind internal|external, text, description?, source_entity_id (external only; the From),
           cite {file_id+version, section, quote} (external only),
           who  {everyone: bool, all_bots: bool, groups: [], bots: [], people: []},
           with {groups: [], bots: [], people: []} (internal only, optional; empty = any output),
@@ -260,7 +261,7 @@ ahead of time so it doesn't try.
     no longer shows or sets a place, so `where:` is set through the API and CLI, where a thread is named by its id.
     The API and CLI take several terms. A rule with no `where:` applies wherever its Who matches. Mail and drafts have
     no place, so a `where:` rule never matches them.
-  - People's checks are charged to the same monthly budget as bots' (`rules_monthly_usd`) and counted on the Rules
+  - People's checks are charged to the same monthly budget as bots' (Decide's one monthly cap) and counted on the Rules
     page next to its spend ("$3 on people"). A person has a daily cap of their own (`decisions_daily_calls_human`).
 - **What's judged:** the whole output, short or long. Screening's 200-character minimum, 20k cut and `free_text`
   extraction are injection heuristics and aren't reused ("My favorite color is blue" must be checked). One output is
@@ -287,7 +288,9 @@ ahead of time so it doesn't try.
     someone who left or whose sign-in is off is skipped. Never a bot. With no person at all, an Escalate stays a Block.
     The owner can always read, keep or send a bot's hold, its reviewer named or not (whoever can change a block's
     source can waive it). An admin does the same once the reviewer is missing or gone. The review task's hold list
-    shows it to them.
+    shows it to them. App-only Tico support does not read a hold once its reviewer is missing or gone: the owner and
+    Admins do, for a bot's hold and a person's (Chris, Nov 6, 2026: "Owner and admins only"; PR 2004 follow-up).
+    With the reviewer present nothing changes. Full-access Tico support has the owner's rights and is unchanged.
   - The held output lives in its own `org_rule_holds` row (operation, payload, author, destinations, rules, verdict),
     readable by the author bot, the reviewer and the person it is held for (who may withdraw it, not release it). It is
     never a message or task row: an undelivered message is
@@ -315,9 +318,9 @@ ahead of time so it doesn't try.
     is a Health finding.
   - Model text: "Block holds what Decide catches. When Decide is off or over budget, the output goes through and is
     marked unchecked."
-- **Cost and cache:** one call per output with matching rules. Rule checks have their own monthly budget
-  (`TICO_RULES_MONTHLY_USD`, new, separate from the shared $50 `decisions_monthly_usd`, so rules can't starve
-  screening or ask ingest, nor the reverse) and the keeper pays. `hub rules check` has a per-bot daily cap; hitting
+- **Cost and cache:** one call per output with matching rules. Rule checks spend from Decide's one monthly budget
+  (`monthly_cap_usd` in Automations > Maintenance, else `TICO_DECISIONS_MONTHLY_USD`, $50) and the keeper pays.
+  Nov 8: the separate rules budget was removed. `hub rules check` has a per-bot daily cap; hitting
   it stops that bot's drafts only. The Rules header shows dollars left, and says so when it's gone.
   Verdicts are cached by a digest of the full check input (operation, author bot, resolved recipients, exact content
   or change, the object's version) plus the matched rule ids and versions, the question-set version and the Decide
@@ -506,7 +509,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
   - A clean task then a forbidden body edit / close note is held and the task is unchanged; a note to a bot and an
     automation `_wake_bot` text are checked; a BotOps write as a person is checked.
   - An output over 120k is held; Send anyway with the nonce delivers once without a second Decide call.
-  - Rules' monthly budget running out doesn't change screening's or ask ingest's.
+  - Rule checks spend from Decide's one monthly cap; once it is spent they go through unchecked (`budget`).
   - An all-bots rule covers a bot created later; a Warn rule with a named reviewer round-trips.
   - Block: not delivered, the bot gets the rule, nobody is pinged, and the bot isn't quarantined (no refusal row).
   - A completion reply that breaks a rule is held, and the thread gets the one-line note.

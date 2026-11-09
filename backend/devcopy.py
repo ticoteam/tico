@@ -165,6 +165,7 @@ EMPTY = (
     "service_keys",
     "service_key_tasks",
     "owner_links",
+    "setup_handoffs",
     # credentials
     "credentials",
     "credential_keys",
@@ -208,6 +209,9 @@ EMPTY = (
     "connector_reports",
     "github_app",
     "github_app_states",
+    # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.
+    "github_user_token",
+    "github_user_states",
     "granola_connections",
     "meeting_importers",
     "live_meeting_bots",
@@ -331,6 +335,8 @@ HISTORY = {
     "entity_value_history": "active_from",
     "entity_activities": "occurred_at",
     "entity_mentions": "created_at",
+    # The linker's run trace: the entities a bot run looked up.
+    "entity_lookups": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
@@ -526,7 +532,6 @@ KEEP = (
             "rule_due_dates",
             "rule_due_status",
             "rule_reads",
-            "rule_sources",
             "rule_suggestions",
             "rules",
             "run_backoff",

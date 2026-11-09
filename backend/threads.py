@@ -3191,6 +3191,7 @@ def search(c, v, query, *, limit=20, before=None):
         if found["hits"]
         else {}
     )
+    named = shown_names(c, v, [h["thread_id"] for h in found["hits"] if not h["title"]])
     hits = []
     for hit in found["hits"]:  # the sender's `source` needs the message's refs (a keeper line's kind)
         shown = known.message(
@@ -3201,6 +3202,8 @@ def search(c, v, query, *, limit=20, before=None):
             }
         )
         hits.append({**hit, "sender_id": shown["sender_id"], "source": shown["source"]})
+    # A hit in a thread with no title is named as the thread is (`shown_names`).
+    hits = [{**h, "title": h["title"] or named.get(h["thread_id"], "")} for h in hits]
     return {**found, "hits": hits}
 
 
@@ -4411,6 +4414,72 @@ def dm_with(c, v, rows):
     }
 
 
+# ----------------------------------------------------------------------------- names
+# A thread's name is its title. A thread with none (a group chat, a members thread, a sub-thread, a DM with one other
+# person) is named by the people in it: their display names, the viewer left out, at most NAME_SHOWN of them and "+N"
+# for the rest; "You" when nobody else is in it. Nothing is stored, so a rename wins and a change of members changes the
+# name. Every name a person reads comes from here (the thread view's `name`, a breadcrumb, a search hit, Needs you).
+NAME_SHOWN = 3
+
+
+def _group_names(c):
+    from . import views
+
+    groups = views.roster(c, shared=True).get("org_groups") or {}
+    return {gid: (g or {}).get("name") or gid for gid, g in groups.items()}
+
+
+def _name_of_actors(c, actors):
+    """{actor: display name} for people, bots and groups; one the store does not know is named by its id."""
+    from . import names as display
+
+    found = display.lookup(c, [a for a in actors if a.startswith(("human:", "bot:"))])
+    groups = _group_names(c) if any(a.startswith("group:") for a in actors) else {}
+    return {a: found.get(a) or groups.get(a[6:]) or a for a in actors}
+
+
+def _thread_name(c, v, root, stored):
+    """The name of a root with no title, from its member rows `stored`: the people and bots in it and its groups, the
+    viewer left out. A reader who is not in the thread is told only of the people they may see (`dm_with`'s rule)."""
+    member = v is not None and bool(set(v.member_names(c)) & set(stored))
+    actors = list(dict.fromkeys(_dm_members(c, root, stored) + [a for a in stored if str(a).startswith("group:")]))
+    if v is not None:
+        actors = [a for a in actors if a != v.actor]
+        if not member and actors:
+            actors = v.known(c).seen(actors)
+    if not actors:
+        return "You" if member else "Thread"
+    label = _name_of_actors(c, actors)
+    listed = sorted(actors, key=lambda a: label[a].casefold())
+    text = ", ".join(label[a] for a in listed[:NAME_SHOWN])
+    more = len(listed) - NAME_SHOWN
+    return text + (f" +{more}" if more > 0 else "")
+
+
+def _name(c, v, root, title):
+    """A thread's name as `v` (a Viewer, or None for the system) reads it: its `title`, else a home's owner's name, else
+    the people in its root (`_thread_name`)."""
+    if title:
+        return title
+    if audience_of(root) == "home":
+        owner = home_owner(root)
+        return (_name_of_actors(c, [owner]).get(owner) if owner else "") or "Home"
+    return _thread_name(c, v, root, _member_rows(c, v, [root["id"]])[root["id"]])
+
+
+def shown_names(c, v, threads_):
+    """{thread id: its name as `v` reads it} for these threads (rows or ids), with one member read for all of them."""
+    rows = [r for r in (thread_row(c, t) for t in threads_) if r]
+    roots = {r["id"]: root_of(c, r) for r in rows}
+    _member_rows(c, v, [root["id"] for root in roots.values() if root and audience_of(root) != "home"])
+    return {r["id"]: _name(c, v, roots[r["id"]], _shown_title(c, v, r)) for r in rows}
+
+
+def shown_name(c, v, thread):
+    """One thread's name as `v` reads it (`shown_names`); "" for a thread that is not there."""
+    return shown_names(c, v, [thread]).get(thread["id"] if isinstance(thread, dict) else thread, "")
+
+
 def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
     """A thread as `principal` reads it. `summary` (subtree_summaries) makes `me.unread` and `me.activity` the whole
     subtree's, as a root row in a list shows them, in place of this thread's own, and adds `new_at`. `dm` is this row's
@@ -4440,6 +4509,8 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
         "retention_days": root.get("retention_days"),
         "pinned_for_everyone": bool(root.get("pinned_for_everyone_at")),
     }
+    # What the thread is called: its title, or the name its people give it (`_name`). Never stored.
+    out["name"] = _name(c, v, root, out["title"])
     if out["audience"] == "home":
         out["home"] = {"actor": home_owner(root)}
     elif v is not None:
@@ -4524,10 +4595,11 @@ def pinned(for_everyone, own):
 
 
 def breadcrumb(c, v, row):
-    """The thread's path from its root, each title as `v` may read it (`_shown_title`)."""
+    """The thread's path from its root, each title as `v` may read it (`_shown_title`), or its name (`shown_names`) when
+    it has no title."""
     v = _as_viewer(v)
     ids = [p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]
-    names = (
+    titles = (
         {
             r["id"]: _shown_title(c, v, dict(r))
             for r in c.execute(
@@ -4538,7 +4610,8 @@ def breadcrumb(c, v, row):
         if ids
         else {}
     )
-    return [{"id": i, "title": names.get(i, "")} for i in ids]
+    named = shown_names(c, v, [i for i in ids if not titles.get(i)])
+    return [{"id": i, "title": titles.get(i) or named.get(i, "")} for i in ids]
 
 
 def get(c, v, thread_id):

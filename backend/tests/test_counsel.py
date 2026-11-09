@@ -15,6 +15,7 @@ from backend import assistant as A
 from backend import files as F
 from backend import org_rules as O
 from backend import shared_bots as SB
+from backend.entities import store as ES
 from backend.auth import Identity
 from backend.blobs import register
 from backend.store import H
@@ -158,7 +159,7 @@ def test_a_quote_not_in_the_file_is_dropped_and_counted_not_stored(api):
     assert all(item["text"] != "Pay within ten days." for item in listing["rules"])
 
 
-def test_a_quote_matches_across_case_quote_marks_and_spacing(api):
+def test_a_quote_matches_across_case_quote_marks_and_spacing():
     text = "Keep a record of the “consent”   for five years."
     assert counsel.quote_in(text, 'keep a record of the "consent" for five years.')
     assert not counsel.quote_in(text, "Keep a record of the consent for six years.")
@@ -1396,7 +1397,7 @@ def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, m
                 task = c.execute(
                     "SELECT title, body, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)
                 ).fetchone()
-                source_row = c.execute("SELECT name, kind FROM rule_sources WHERE id=?", (sid,)).fetchone()
+                source_row = next(r for r in ES.rule_sources(c) if r["id"] == sid)
             assert receipt["source"]["id"] == persisted["source_id"] == sid
             assert f"source {sid})" in task["title"]
             assert receipt["file"]["id"] == persisted["file_id"]
