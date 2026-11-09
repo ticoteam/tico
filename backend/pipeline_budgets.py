@@ -12,6 +12,7 @@ from . import hubdb, pipeline_rights, read_cache, usage_limits, usage_records
 from .store import Problem
 
 H: Any = hubdb  # hubdb is untyped; the pipeline settings module uses the same boundary.
+RC: Any = read_cache  # read_cache is untyped; its helpers keep database reads within the current snapshot.
 UL: Any = usage_limits
 
 NANO = 10**9
@@ -76,7 +77,7 @@ def read(c: sqlite3.Connection, actor: str, pipeline_id: str, at: datetime | Non
 
 
 def _target(c: sqlite3.Connection, pipeline_id: str) -> dict[str, Any] | None:
-    row = read_cache.one(
+    row = RC.one(
         c,
         "SELECT id,name,manager,pipeline_visibility,daily_cap_nano,monthly_cap_nano FROM task_types WHERE id=?",
         (pipeline_id,),
