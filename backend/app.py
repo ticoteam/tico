@@ -4615,7 +4615,26 @@ def create_app(settings=None):
                     H.VIA.set("botops")
                     return acting_as(auth.identity_for_actor(c, person["person"]), person["message_id"], "carried")
                 return acting_as(Identity(requester, "bot"))
-            if not initial or requester == H.KEEPER or requester == who.actor:
+            if requester == who.actor:
+                if (
+                    task
+                    and requester == "bot:" + H.FLEET_MAINTAINER
+                    and task["owner_id"] == who.actor
+                    and not task.get("request_id")
+                ):
+                    # Inspect the separate human origin before BotOps returns under its own requester identity.
+                    origin = c.execute(
+                        "SELECT actor FROM events WHERE action='botops.task_requested' AND target=? "
+                        "AND actor LIKE 'human:%' LIMIT 1",
+                        (task_id,),
+                    ).fetchone()
+                    if origin and H.is_human(origin["actor"]):
+                        auth.conversation(c, who, task["conversation_id"])
+                        person = auth.identity_for_actor(c, origin["actor"])
+                        H.VIA.set("botops")
+                        return acting_as(person, task["id"])
+                return who
+            if not initial or requester == H.KEEPER:
                 return who
             if task and task["owner_id"] == who.actor and not task.get("request_id"):
                 if str(task["requester_id"]).startswith("human:"):
