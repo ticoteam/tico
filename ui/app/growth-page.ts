@@ -21,7 +21,7 @@ interface GrState { load: number; sub: string; month: string; data: GrSourcesDat
 let GR: GrState | null = null;            // the open Growth page: {load, sub, month}, and Sources' {data}
 let GR_LOAD = 0;
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
-const GR_CH_STAGE = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
+const GR_CH_STAGE: Record<string, string> = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
 // A marketing task's step, by its stage (backend/cards.py growth_board; the step names of backend/marketing_tasks.py).
 const GR_TASK_STAGE = {idea: 'On deck', building: 'In development', testing: 'Live', scaling: 'Working'};
 
@@ -85,7 +85,7 @@ function grRetireButton(btn, dlg, path, after) {
 
 // A small dialog: a title, a form, Cancel and the primary button (none, and Close, with no `saveLabel`). `onSave(form)`
 // throws to show an error.
-function grDialog(title: string, body: string, saveLabel: string | null | undefined, onSave: (form: HTMLFormElement) => unknown) {
+function grDialog(title: string, body: string, saveLabel: string | null | undefined, onSave: ((form: HTMLFormElement) => unknown) | null) {
   document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal gr-dlg';
@@ -100,7 +100,7 @@ function grDialog(title: string, body: string, saveLabel: string | null | undefi
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
   form.onsubmit = async ev => {
     ev.preventDefault();
-    if (!save) return;
+    if (!save || !onSave) return;
     err.hidden = true; save.disabled = true;
     try { if (await onSave(form) === false) save.disabled = false; else dlg.close(); }
     catch (e) { err.textContent = e.message || 'Not saved'; err.hidden = false; save.disabled = false; }

@@ -4,78 +4,121 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The server's call, as the thread lists it (a Start answer may wrap it in {call}).
+interface CallRecord { id: string; title?: string; state?: string; connector?: string; call?: CallRecord; }
+interface CallListReply { calls?: CallRecord[]; available?: boolean; }
+interface CallJoinReply { call?: CallRecord; token: string; url: string; }
+// Per thread: {call} (the live call, or null), {off} when the server has calls switched off, {removed} after a removal,
+// {none} when the server has no calls at all.
+interface CallThreadInfo { call?: CallRecord | null; none?: boolean; off?: boolean; removed?: boolean; }
+// The parts of LiveKit's room, participants and tracks this file reads.
+interface CallPublication { source?: unknown; track?: { stop?: () => void; mediaStreamTrack?: { stop?: () => void } } | null; }
+interface CallParticipant { identity: string; }
+interface CallTrack { kind: string; source: unknown; attach(): HTMLMediaElement; detach(): HTMLMediaElement[]; }
+interface CallLocal {
+  setMicrophoneEnabled(on: boolean): Promise<unknown>;
+  setScreenShareEnabled(on: boolean, options: {audio: boolean}): Promise<unknown>;
+  trackPublications?: Map<string, CallPublication>;
+}
+interface CallRoom {
+  localParticipant: CallLocal;
+  remoteParticipants?: Map<string, CallParticipant>;
+  on(event: string, listener: (...args: never[]) => void): unknown;
+  connect(url: string, token: string, options: {autoSubscribe: boolean}): Promise<unknown>;
+  disconnect(): void;
+}
+interface LivekitNamespace {
+  Room: new (options: {adaptiveStream: boolean; dynacast: boolean}) => CallRoom;
+  RoomEvent: {
+    TrackSubscribed: string; TrackUnsubscribed: string; ParticipantConnected: string;
+    ParticipantDisconnected: string; LocalTrackUnpublished: string; Disconnected: string;
+  };
+  Track: {Source: {ScreenShare: unknown}};
+  DisconnectReason?: {PARTICIPANT_REMOVED: unknown};
+}
+// The call this tab is in.
+interface CallState {
+  id: string; threadId: string; title: string; connector: string | undefined; room: CallRoom;
+  token: string; url: string; muted: boolean; sharing: boolean; leaving: boolean; timer: number; gen: number;
+}
+
 const CALL_LIB = '/vendor/livekit-client.umd.min.js';
 // Tokens last five minutes; a fresh one a minute early keeps a slow answer from dropping the call.
 const CALL_REFRESH_MS = 4 * 60 * 1000;
 // A stalled leave must give up so a later Join can take its turn.
 const CALL_LEAVE_TIMEOUT_MS = 5000;
-// Per thread: {call} (the live call, or null), {off} when the server has calls switched off, {removed} after a removal,
-// {none} when the server has no calls at all.
-const CALL_THREADS = new Map();
-let CALL = null;           // the call this tab is in: {id, threadId, title, connector, room, token, url, timer, muted, sharing}
-let CALL_LIB_LOAD = null;
+const CALL_THREADS = new Map<string, CallThreadInfo>();
+let CALL: CallState | null = null;
+let CALL_LIB_LOAD: Promise<LivekitNamespace> | null = null;
 // Each join takes the next number; a join that a newer one overtook stops before it turns the microphone on.
 let CALL_GEN = 0;
 // Joins on their way (asked for, not yet in the call or given up).
 let CALL_JOINS = 0;
 // Call id -> joins of it still on their way, so a cancelled Start call never gives back a seat a Join has taken.
-const CALL_JOINING = new Map();
+const CALL_JOINING = new Map<string, number>();
 // Call id -> all leaves still on their way, so a rejoin cannot get ahead of cleanup of its previous seat.
-const CALL_LEAVING = new Map();
+const CALL_LEAVING = new Map<string, Promise<void>>();
 // Start's seat waits for the last Join to settle: a cancelled or failed Join still owes it back.
 // Any leave settles it too, so the last Join cannot give it back twice.
-const CALL_OWED = new Set();
+const CALL_OWED = new Set<string>();
 // A leave stays settled until the last Join finishes, including for a Start response still on its way.
-const CALL_SETTLED = new Set();
+const CALL_SETTLED = new Set<string>();
 // Named here so scripts/build-icon-font.py keeps them in the icon subset.
 const CALL_ICONS = {mic: 'mic', muted: 'mic_off', share: 'screen_share', stop: 'stop_screen_share', bot: 'smart_toy', leave: 'call_end'};
 
-const callCode = e => (typeof e?.body?.error === 'object' ? e.body.error?.code : e?.body?.error) || '';
-const callPath = id => '/v2/calls/' + encodeURIComponent(id);
+// body.error of a failed call request: its code when it is an object, or the message string itself. '' when there is none.
+function callCode(e: unknown): string {
+  if (!isErrorRecord(e) || !isErrorRecord(e.body)) return '';
+  const detail = e.body.error;
+  if (isErrorRecord(detail)) return typeof detail.code === 'string' ? detail.code : '';
+  return typeof detail === 'string' ? detail : '';
+}
+const callPath = (id: string) => '/v2/calls/' + encodeURIComponent(id);
 const callShareable = () => !!navigator.mediaDevices?.getDisplayMedia;
-function callSeatSettled(id) {
+function callSeatSettled(id: string): void {
   CALL_OWED.delete(id);
   if (CALL_JOINING.has(id)) CALL_SETTLED.add(id);
 }
-function callPostLeave(id, opts) {
-  const leave = post(callPath(id) + '/leave', {}, undefined,
-    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch(e => {
+function callPostLeave(id: string, opts: {keepalive?: boolean} = {}): Promise<void> {
+  const leave: Promise<unknown> = post(callPath(id) + '/leave', {}, undefined,
+    {...opts, timeout: window.__callLeaveTimeoutMs ?? CALL_LEAVE_TIMEOUT_MS}).catch((e: unknown) => {
     // Every leave is a new one: a kept request id would make the next leave (after a rejoin) replay this one.
-    if (e?.signature) pendingWrites.delete(e.signature);
+    const signature = isErrorRecord(e) ? e.signature : undefined;
+    if (typeof signature === 'string') pendingWrites.delete(signature);
   });
-  const pending = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
+  const pending: Promise<void> = Promise.all([CALL_LEAVING.get(id), leave]).then(() => {
     if (CALL_LEAVING.get(id) === pending) CALL_LEAVING.delete(id);
   });
   CALL_LEAVING.set(id, pending);
   return pending;
 }
-function callSeatLeave(id) {
+function callSeatLeave(id: string): void {
   callSeatSettled(id);
   void callPostLeave(id, {keepalive: true});
 }
-function callViewsDraw(threadId) { for (const v of THV_VIEWS) if (v.id === threadId && !v.gone) thvDraw(v); }
-function callNoted(threadId, e) {
-  if (e?.status === 503) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), off: true});
-  else if (e?.status === 403 || callCode(e) === 'call_access_removed') CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), removed: true});
-  else { toast(e?.message || 'Could not join the call'); return; }
+function callViewsDraw(threadId: string): void { for (const v of THV_VIEWS) if (v.id === threadId && !v.gone) thvDraw(v); }
+function callNoted(threadId: string, e: unknown): void {
+  if (errorStatus(e) === 503) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), off: true});
+  else if (errorStatus(e) === 403 || callCode(e) === 'call_access_removed') CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), removed: true});
+  else { toast(errorMessage(e, 'Could not join the call')); return; }
   callViewsDraw(threadId);
 }
 
 // ----------------------------------------------------------------- the header
-async function callLoad(view) {
+async function callLoad(view: ThvView): Promise<void> {
   const t = view.thread;
   if (!t || view.opts.header === false || !view.id) return;
   try {
-    const r = await get(`/v2/threads/${encodeURIComponent(view.id)}/calls?limit=1`, {fresh: true});
+    const r = await get<CallListReply>(`/v2/threads/${encodeURIComponent(view.id)}/calls?limit=1`, {fresh: true});
     const live = (r.calls || []).find(c => c.state === 'live') || null;
     CALL_THREADS.set(view.id, {...CALL_THREADS.get(view.id), call: live, none: false, off: r.available === false});
   } catch (e) {
     // 404 from a server without calls; a call the viewer cannot read is the same answer.
-    CALL_THREADS.set(view.id, e?.status === 503 ? {off: true} : {none: true});
+    CALL_THREADS.set(view.id, errorStatus(e) === 503 ? {off: true} : {none: true});
   }
   callViewsDraw(view.id);
 }
-function callHeadHTML(view) {
+function callHeadHTML(view: ThvView): string {
   const t = view.thread, info = CALL_THREADS.get(view.id);
   if (!t || !info || info.none) return '';
   if (CALL?.threadId === view.id) return '<span class="thv-call-note thv-call-on" role="status">In call</span>';
@@ -85,17 +128,17 @@ function callHeadHTML(view) {
   if (info.call) return `<button type="button" class="ghost small thv-call" data-call="join" aria-label="Join call">${icon}<span class="thv-call-word">Join</span></button>`;
   return t.me?.can_post ? `<button type="button" class="ghost small thv-call" data-call="start" aria-label="Start call">${icon}<span class="thv-call-word">Start call</span></button>` : '';
 }
-async function callAction(view, kind) {
-  const id = view.id, info = CALL_THREADS.get(id) || {};
+async function callAction(view: ThvView, kind: string | undefined): Promise<void> {
+  const id = view.id, info: CallThreadInfo = CALL_THREADS.get(id) || {};
   // Counted as a join on its way from the click, so a page hidden while the call is being made says it is in one,
   // and never joins the call once it is made.
   const gen = ++CALL_GEN;
   CALL_JOINS++;
   try {
-    let call = info.call;
+    let call: CallRecord | null | undefined = info.call;
     if (kind === 'start') {
-      call = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {});
-      call = call?.call || call;
+      const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {});
+      call = made?.call || made;
     }
     if (gen !== CALL_GEN) {
       // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
@@ -118,9 +161,9 @@ async function callAction(view, kind) {
 }
 
 // ----------------------------------------------------------------- in a call
-function callLib() {
+function callLib(): Promise<LivekitNamespace> {
   if (window.LivekitClient) return Promise.resolve(window.LivekitClient);
-  CALL_LIB_LOAD ||= new Promise((ok, fail) => {
+  CALL_LIB_LOAD ||= new Promise<LivekitNamespace>((ok, fail) => {
     const s = document.createElement('script');
     s.src = CALL_LIB; s.onload = () => ok(window.LivekitClient); s.onerror = () => { CALL_LIB_LOAD = null; fail(new Error('Could not load calls')); };
     document.head.append(s);
@@ -128,12 +171,12 @@ function callLib() {
   return CALL_LIB_LOAD;
 }
 // `gen` is the join's number: Start call takes it at the click, so the one number runs through the whole join.
-async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
+async function callJoin(threadId: string, call: CallRecord, title: string, gen = ++CALL_GEN): Promise<void> {
   CALL_JOINS++;
   CALL_JOINING.set(call.id, (CALL_JOINING.get(call.id) || 0) + 1);
   try { await callJoinNow(threadId, call, title, gen); } finally {
     CALL_JOINS--;
-    const left = CALL_JOINING.get(call.id) - 1;
+    const left = (CALL_JOINING.get(call.id) ?? 1) - 1;
     if (left) CALL_JOINING.set(call.id, left);
     else {
       CALL_JOINING.delete(call.id);
@@ -142,16 +185,16 @@ async function callJoin(threadId, call, title, gen = ++CALL_GEN) {
     }
   }
 }
-async function callJoinNow(threadId, call, title, gen) {
+async function callJoinNow(threadId: string, call: CallRecord, title: string, gen: number): Promise<void> {
   if (CALL) await callLeave();
   if (gen !== CALL_GEN) return;
   while (CALL_LEAVING.has(call.id)) {
     await CALL_LEAVING.get(call.id);
     if (gen !== CALL_GEN) return;
   }
-  const j = await post(callPath(call.id) + '/join', {});
+  const j: CallJoinReply = await post(callPath(call.id) + '/join', {});
   // Overtaken while joining: this seat is given back and the newer join goes on.
-  const stale = () => { if (gen === CALL_GEN) return false; callSeatLeave(call.id); return true; };
+  const stale = (): boolean => { if (gen === CALL_GEN) return false; callSeatLeave(call.id); return true; };
   if (stale()) return;
   const LK = await callLib();
   if (stale()) return;
@@ -159,12 +202,12 @@ async function callJoinNow(threadId, call, title, gen) {
   CALL = {id: call.id, threadId, title: title || call.title || 'Call', connector: (j.call || call).connector, room,
           token: j.token, url: j.url, muted: false, sharing: false, leaving: false, timer: 0, gen};
   const here = CALL;
-  room.on(LK.RoomEvent.TrackSubscribed, (track, pub, who) => { if (CALL === here) callTrackOn(track, who); });
-  room.on(LK.RoomEvent.TrackUnsubscribed, track => { track.detach().forEach(el => el.remove()); callScreenSync(); });
+  room.on(LK.RoomEvent.TrackSubscribed, (track: CallTrack, _pub: unknown, who: CallParticipant | undefined) => { if (CALL === here) callTrackOn(track, who); });
+  room.on(LK.RoomEvent.TrackUnsubscribed, (track: CallTrack) => { track.detach().forEach(el => el.remove()); callScreenSync(); });
   room.on(LK.RoomEvent.ParticipantConnected, callBarDraw);
   room.on(LK.RoomEvent.ParticipantDisconnected, callBarDraw);
-  room.on(LK.RoomEvent.LocalTrackUnpublished, pub => { if (pub.source === LK.Track.Source.ScreenShare && CALL === here) { here.sharing = false; callBarDraw(); } });
-  room.on(LK.RoomEvent.Disconnected, reason => {
+  room.on(LK.RoomEvent.LocalTrackUnpublished, (pub: CallPublication) => { if (pub.source === LK.Track.Source.ScreenShare && CALL === here) { here.sharing = false; callBarDraw(); } });
+  room.on(LK.RoomEvent.Disconnected, (reason: unknown) => {
     if (CALL !== here || here.leaving) return;
     if (reason === LK.DisconnectReason?.PARTICIPANT_REMOVED) CALL_THREADS.set(threadId, {...CALL_THREADS.get(threadId), removed: true});
     callDone(here);
@@ -186,20 +229,20 @@ async function callJoinNow(threadId, call, title, gen) {
   callBarDraw();
   callViewsDraw(threadId);
 }
-async function callRefresh(here) {
+async function callRefresh(here: CallState): Promise<void> {
   if (CALL !== here) return;
   try {
-    const r = await post(callPath(here.id) + '/token', {});
+    const r: {token?: string} | undefined = await post(callPath(here.id) + '/token', {});
     if (r?.token) here.token = r.token;
   } catch (e) {
     if (CALL !== here) return;
-    if (e?.status === 403 || callCode(e) === 'call_access_removed') {
+    if (errorStatus(e) === 403 || callCode(e) === 'call_access_removed') {
       CALL_THREADS.set(here.threadId, {...CALL_THREADS.get(here.threadId), removed: true});
       callDone(here);
     } else if (['call_ended', 'not_joined'].includes(callCode(e))) callDone(here);
   }
 }
-function callTrackOn(track, who) {
+function callTrackOn(track: CallTrack, who: CallParticipant | undefined): void {
   const LK = window.LivekitClient;
   if (track.kind === 'audio') { $('#call-bar .call-audio')?.append(track.attach()); return; }
   // Video arrives only as someone's shared screen: nobody publishes a camera.
@@ -211,9 +254,9 @@ function callTrackOn(track, who) {
   box.append(el);
   callScreenSync();
 }
-function callScreenSync() { const box = $('#call-bar .call-screen'); if (box) box.hidden = !box.querySelector('video'); }
+function callScreenSync(): void { const box = $('#call-bar .call-screen'); if (box) box.hidden = !box.querySelector('video'); }
 // Leave always leaves. End must reach the server: when it does not, the call goes on, End stays and the error shows.
-async function callLeave({end = false} = {}) {
+async function callLeave({end = false}: {end?: boolean} = {}): Promise<void> {
   const here = CALL; if (!here) return;
   here.leaving = true;
   if (end) {
@@ -221,7 +264,7 @@ async function callLeave({end = false} = {}) {
     catch (e) {
       if (CALL !== here) return;
       here.leaving = false;
-      toast(e?.message || 'Could not end the call', true);
+      toast(errorMessage(e, 'Could not end the call'), true);
       callBarDraw();
       return;
     }
@@ -231,7 +274,7 @@ async function callLeave({end = false} = {}) {
   callSeatSettled(here.id);
   callDone(here);
 }
-function callDone(here) {
+function callDone(here: CallState): void {
   clearInterval(here.timer);
   try { here.room?.disconnect(); } catch {}
   if (CALL === here) CALL = null;
@@ -242,27 +285,31 @@ function callDone(here) {
 }
 
 // ----------------------------------------------------------------- the bar
-function callBarDraw() {
-  let bar = $('#call-bar');
+function callBarDraw(): void {
+  let bar: HTMLElement | null = $('#call-bar');
   document.body.classList.toggle('in-call', !!CALL);
   if (!CALL) { bar?.remove(); return; }
   if (!bar) {
     bar = document.createElement('div');
     bar.id = 'call-bar'; bar.className = 'call-bar'; bar.setAttribute('role', 'region'); bar.setAttribute('aria-label', 'Call');
     bar.innerHTML = '<div class="call-screen" hidden></div><div class="call-row"></div><div class="call-audio" hidden></div>';
-    bar.addEventListener('click', ev => { const b = ev.target.closest('[data-cb]'); if (b) void callBarAct(b.dataset.cb, b); });
+    bar.addEventListener('click', ev => {
+      const b = eventElement(ev)?.closest<HTMLElement>('[data-cb]');
+      if (b) void callBarAct(b.dataset.cb ?? '', b);
+    });
     document.body.append(bar);
   }
   const n = (CALL.room?.remoteParticipants?.size || 0) + 1, mine = CALL.connector === myActor();
-  const btn = (k, icon, label, extra = '') => `<button type="button" class="ghost small call-btn${extra}" data-cb="${k}" aria-label="${esc(label)}" title="${esc(label)}"><span class="nav-icon" aria-hidden="true">${icon}</span><span class="call-lbl">${esc(label)}</span></button>`;
-  patchHTML(bar.querySelector('.call-row'), `<a class="call-title" href="${threadHref(CALL.threadId)}">${esc(CALL.title)}</a>
+  const btn = (k: string, icon: string, label: string, extra = '') => `<button type="button" class="ghost small call-btn${extra}" data-cb="${k}" aria-label="${esc(label)}" title="${esc(label)}"><span class="nav-icon" aria-hidden="true">${icon}</span><span class="call-lbl">${esc(label)}</span></button>`;
+  const row = bar.querySelector<HTMLElement>('.call-row');
+  if (row) patchHTML(row, `<a class="call-title" href="${threadHref(CALL.threadId)}">${esc(CALL.title)}</a>
     <span class="call-n muted tnum" title="In the call">${n}</span><span class="spacer"></span>
     ${btn('mute', CALL.muted ? CALL_ICONS.muted : CALL_ICONS.mic, CALL.muted ? 'Unmute' : 'Mute', CALL.muted ? ' on' : '')}
     ${callShareable() ? btn('share', CALL.sharing ? CALL_ICONS.stop : CALL_ICONS.share, CALL.sharing ? 'Stop sharing' : 'Share screen', CALL.sharing ? ' on' : '') : ''}
     ${btn('bot', CALL_ICONS.bot, 'Add bot')}
     ${btn('leave', CALL_ICONS.leave, 'Leave', ' danger')}${mine ? '<button type="button" class="ghost small call-btn danger" data-cb="end">End</button>' : ''}`);
 }
-async function callBarAct(k, button) {
+async function callBarAct(k: string, button: HTMLElement): Promise<void> {
   const here = CALL; if (!here) return;
   const lp = here.room?.localParticipant;
   try {
@@ -274,30 +321,31 @@ async function callBarAct(k, button) {
   } catch (e) {
     if (k === 'share') here.sharing = false;
     if (k === 'mute') here.muted = !here.muted;
-    if (e?.name !== 'NotAllowedError') toast(e?.message || 'Could not change that');
+    if ((isErrorRecord(e) ? e.name : undefined) !== 'NotAllowedError') toast(errorMessage(e, 'Could not change that'));
   }
   callBarDraw();
 }
 // Bots the viewer can write to; the server checks again.
-function callBotPick(button) {
+function callBotPick(button: HTMLElement): void {
   const bots = shownEmps().filter(e => e.status === 'active' && e.can_chat !== false && (!e.my_access || e.my_access.write) && !isAssistantHelper(e.name))
-    .map(e => [e.id, e.display_name || e.slug]);
+    .map((e): [string, string] => [e.id, e.display_name || e.slug || '']);
   if (!bots.length) { toast('No bots to add'); return; }
   thvMenuShow(button, bots, async slug => {
+    if (!CALL) return;
     try { await post(callPath(CALL.id) + '/bots', {bots: [slug]}); toast(`${actorName('bot:' + slug)} joined`); }
-    catch (e) { toast(e?.message || 'Could not add the bot'); }
+    catch (e) { toast(errorMessage(e, 'Could not add the bot')); }
   });
 }
 // Every track this tab sends (microphone, screen; never a camera) stops now, before the room is told.
-function callStopLocal(here) {
-  for (const pub of here.room?.localParticipant?.trackPublications?.values?.() || []) {
+function callStopLocal(here: CallState): void {
+  for (const pub of here.room?.localParticipant?.trackPublications?.values() ?? []) {
     try { pub.track?.stop?.(); } catch {}
     try { pub.track?.mediaStreamTrack?.stop?.(); } catch {}
   }
 }
 // The page goes out of sight: the call ends for this tab at once (its microphone and screen stop, its seat is given
 // back), and a join still on its way stops before it turns anything on. Answers whether a call was on or on its way.
-function callHidden() {
+function callHidden(): {inCall: boolean} {
   const inCall = !!CALL || CALL_JOINS > 0;
   CALL_GEN++;
   const here = CALL;
