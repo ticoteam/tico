@@ -77,6 +77,8 @@ EMPTY = (
     "pipeline_links",
     "pipeline_handoffs",
     "review_claims",
+    # Alert dedupe rows point at live decision/request tasks; a rehearsal starts without them.
+    "pipeline_budget_alerts",
     # GitHub checks: a check run is one post the copy could make, the cursor a pass's lease. The copy starts with none.
     "pipeline_check_runs",
     "pipeline_check_cursor",
