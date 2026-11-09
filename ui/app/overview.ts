@@ -18,7 +18,7 @@ interface OverviewReplayRow {
   new?: string; task?: { title?: string }; goal?: { title?: string }; text?: string;
 }
 interface OverviewReplayAnswer {
-  from: string; to: string; truncated?: boolean; next?: string | null; items?: OverviewReplayRow[];
+  from: string; to: string; truncated?: boolean; next?: string | null; items?: OverviewReplayRow[]; names?: Record<string, string>;
   start?: { bots?: Record<string, { state?: string }> };
 }
 
@@ -202,7 +202,7 @@ function overviewDrop(kept: OverviewKept | null) {
 }
 // Bots with queued work that is not starting, or left in setup for a day, from the Health answer the app already
 // polls (ui/health.ts).
-const overviewStuck = (): HealthStuckRow[] => (typeof HL !== 'undefined' && HL?.stuck) || [];
+const overviewStuck = (): HlStuck[] => (typeof HL !== 'undefined' && HL?.stuck) || [];
 // "3 bots running on fallback since 10:04, 2 limited": bots whose plan ran out, from the same answer.
 function overviewFallbackLine(): string {
   const on = (typeof HL !== 'undefined' && HL?.on_fallback) || [], limited = (typeof HL !== 'undefined' && HL?.limited) || [];

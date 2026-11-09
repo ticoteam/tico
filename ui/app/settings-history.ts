@@ -26,7 +26,7 @@ function settingsValue(field: string, value: SettingsValue) {
   if (field === 'access') return accessSummary(value as SaPolicy | null | undefined);
   if (field === 'model') return settingsChoiceLabel(obj.harness || obj.runtime, obj.model, obj.effort);
   if (field === 'fallback') return value ? settingsChoiceLabel(obj.harness, obj.model, obj.reasoning_effort || obj.effort) : 'None (fail)';
-  if (field === 'profile') return profileHistoryWords(value);
+  if (field === 'profile') return profileHistoryWords(value as BpHistoryValue | null | undefined);
   if (field === 'wake_preset') return SETTINGS_WAKE_PRESETS.find(([preset]) => preset === value)?.[1] || String(value);
   if (field === 'keep_tasks_going') return value == null ? 'No limit' : value === 0 ? 'Off' : `${value} tasks`;
   if (field === 'turns_at_once') return value == null ? 'No limit' : `${value} ${value === 1 ? 'turn' : 'turns'}`;
@@ -210,7 +210,7 @@ interface HistoryRun {
   failure_reason?: string | null;
   cost_usd?: number | null;
   output_tokens?: number | null;
-  ran_on?: unknown;
+  ran_on?: RanOn | null;
   fallback?: string | null;
   resumed?: boolean;
   duration_s?: number | null;

@@ -207,6 +207,15 @@ interface BotAgent {
   [key: string]: unknown;
 }
 
+/** One row of a bot's access list (`access` on a roster row): a service the bot can reach, as which identity, with what verbs. */
+interface BotAccess {
+  service: string;
+  identity?: string | null;
+  can: string[];
+  connected?: boolean;
+  note?: string | null;
+}
+
 /** One bot on the roster (GET /api/employees). A person is a Person; a bot is one of these. */
 interface Employee {
   id: string;
@@ -232,6 +241,7 @@ interface Employee {
   my_access?: AccessLevel;
   /** The bot's access policy (settings-access.ts reads it): see, read and write; null or absent when it is not set. */
   access_policy?: {see: import('./api').AccessAudience; read: import('./api').AccessAudience; write: import('./api').AccessAudience} | null;
+  access?: BotAccess[] | null;
   machine?: BotMachine | null;
   /** The computer a bot is placed on (`assignments` row), when the server sends it. */
   assignment?: { runner_id?: string } | null;
@@ -386,9 +396,31 @@ interface LastRead {
 
 // ---------------------------------------------------------------- S, the page's shared state (ui/app/state.ts)
 
+/** A roster person as S.people holds them: the Person row plus the profile, Slack and notice fields the human page reads. */
+type RosterPerson = import('./api').Person & {
+  hidden?: boolean;
+  left?: boolean;
+  about?: string | null;
+  goals?: string;
+  notes?: string | null;
+  github?: string | null;
+  phone?: string | null;
+  slack?: string | null;
+  /** The bot a "Notes go to" line names (a slug). */
+  bot?: string | null;
+  bots?: string[];
+  my_access?: AccessLevel;
+  slack_muted_bots?: string[] | null;
+  notify_slack_task_done?: boolean;
+  notify_slack_bot_messages?: boolean;
+  notify_browser?: boolean;
+  email_digest?: boolean;
+  update_draft?: boolean;
+};
+
 interface AppState {
   emps: Employee[];
-  people: (import('./api').Person & { hidden?: boolean; left?: boolean })[];
+  people: RosterPerson[];
   orgGroups: OrgGroup[];
   status: ServerStatus | null;
   statusPending: boolean;

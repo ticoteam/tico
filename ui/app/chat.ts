@@ -539,7 +539,7 @@ function v2StepsHTML(d: {steps?: ChatStep[]}) {
     : `<div class="step${st.kind === 'error' ? ' err' : ''}${st.nested ? ' nested' : ''}" title="${esc(fmt(st.at))}"><span class="step-tool">${esc(st.kind === 'tool' ? (st.label || st.tool) : st.kind)}</span><span class="step-sum">${esc(st.text)}</span></div>`).join('');
 }
 // `root` is where the fold sits when it is not the chat's thread (a thread view).
-async function v2StepsOpen(state: ChatState, el: HTMLDetailsElement, root: Element | null = null) {
+async function v2StepsOpen(state: Pick<ChatState, 'openSteps' | 'steps'>, el: HTMLDetailsElement, root: Element | null = null) {
   const turn = String(el.dataset.turn);
   state.openSteps ||= new Set(); state.steps ||= {};
   if (!el.open) { state.openSteps.delete(turn); return; }
@@ -801,7 +801,7 @@ function v2PendingText(state: ChatState) {
 }
 // The words for one run, wherever a message waits on it (this chat, a task's chat): Sent, Queued and why, Starting,
 // "<Bot> is working", or how it ended (Reply failed).
-function pendingRunText(x: ChatExecution | null | undefined, slug: string) {
+function pendingRunText(x: ChatExecution | null | undefined, slug: string | undefined) {
   const name = botDisplayName(slug);
   if (!x) return {word: 'Sent', tip: 'Sent', mode: 'wait'};
   if (x.state === 'queued') {
@@ -1289,7 +1289,7 @@ const taskConversationButton = (task: string) => `<button class="chat-btn" type=
 document.addEventListener('click', async ev => {
   const button = eventElement(ev)?.closest<HTMLElement>('[data-task-conversation]'); if (!button) return;
   ev.preventDefault(); ev.stopPropagation();
-  await taskThreadOpen(button.dataset.taskConversation);       // the task's own thread (ui/app/task-modal.js)
+  await taskThreadOpen(button.dataset.taskConversation!);       // the task's own thread (ui/app/task-modal.js)
 });
 // Bots link a task as <hub>/tasks/<id>, an address the server does not serve, or as #/task/<id>,
 // which leaves the chat. Either opens the task pop-up in place.
@@ -1309,7 +1309,7 @@ document.addEventListener('click', async ev => {
   if (!id || (a.getAttribute('href')?.startsWith('#') && !a.closest('.md, .bubble, .conv-run, .upd-card, .upd-msg'))) return;
   ev.preventDefault();
   try {
-    const data = await get<{task: unknown}>('/v2/tasks/' + encodeURIComponent(id));
+    const data = await get<{task: ModalTask}>('/v2/tasks/' + encodeURIComponent(id));
     void taskModalShow(data.task);
   } catch (error) { toast(errorMessage(error, ''), true); }
 });

@@ -95,7 +95,7 @@ interface HlHealth {
   storage?: HlStorage;
   update?: ConfigUpdate | null;
   limited?: Record<string, unknown>[];
-  on_fallback?: Record<string, unknown>[];
+  on_fallback?: HealthFallbackRow[];
 }
 
 /** GET /api/v2/health/findings: Check health's open findings and the team rule. */
