@@ -12,7 +12,7 @@ with totals, the recommendation and why, the policy result, the entry documents 
 picks, the booking request.
 
 Done when: every option has a total and a policy result; the recommendation says why; the traveller is asked to pick
-with `hub task ask`; the entry documents are listed with their sources; and the task note says what is still open.
+with `hub task question "<question>" --on <person> --parent <id>`; the entry documents are listed with their sources; and the task note says what is still open.
 
 ---
 
@@ -39,7 +39,7 @@ traveller confirms their own documents.
 
 ## 4. Recommend and ask
 
-Write `reports/trip-<traveller>-<date>.md`. Ask the traveller to pick with `hub task ask <id>`. Record the option, its
+Write `reports/trip-<traveller>-<date>.md`. Ask the traveller to pick with `hub task question "<question>" --on <person> --parent <id>`. Record the option, its
 total, its fare rules and its policy fit in `knowledge/trips.md`.
 
 A booking follows the traveller's pick, and only with a granted Tool. If a fact or a Tool is missing, name it in the

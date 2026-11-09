@@ -38,6 +38,7 @@
     ],
     "participants_json": "[\"human:ana\", \"bot:ops\"]",
     "path": "/00000000-0000-4000-8000-000000000003/",
+    "pinned_for_everyone_at": null,
     "retention_days": null,
     "room_key": "ops",
     "root_id": "00000000-0000-4000-8000-000000000003",
@@ -48,6 +49,7 @@
    },
    "credential_vault": false,
    "deferred": "",
+   "finance": null,
    "gateway": false,
    "generation": 1,
    "history": [
@@ -89,6 +91,7 @@
    "lease_seconds": 90,
    "lease_until": "2026-01-01T00:00:00.000000Z",
    "login_class": "review",
+   "mailbox_levels": {},
    "mailboxes": [],
    "message": {
     "answered_by": null,
@@ -133,6 +136,10 @@
    "session_epoch": 0,
    "start_reservation_seconds": 180,
    "task": null,
+   "task_context": {
+    "meetings": [],
+    "pages": []
+   },
    "token": "turn-token",
    "updates": null,
    "worktrees": []

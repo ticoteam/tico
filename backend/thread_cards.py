@@ -11,8 +11,15 @@ Home's audience decides who reads it (threads.post checks it on every read).
 def post_card(c, uid, author, kind, day):
     """The card for a new update `uid` by `author` (a bot slug or `human:<id>`), in the author's Home."""
     from . import threads, updates
+
     actor = updates.author_actor(author)
     home = threads.home(c, actor, create=True)
     label = ("Week in review" if kind == "weekly" else "Daily update") + ", " + day
-    return threads.post(c, actor, home["id"], label, kind="notice",
-                        refs={"card": "update", "update": {"id": uid, "kind": kind, "day": day, "author": actor}})
+    return threads.post(
+        c,
+        actor,
+        home["id"],
+        label,
+        kind="notice",
+        refs={"card": "update", "update": {"id": uid, "kind": kind, "day": day, "author": actor}},
+    )

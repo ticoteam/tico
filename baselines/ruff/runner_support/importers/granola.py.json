@@ -1,0 +1,6 @@
+{
+  "runner_support/importers/granola.py": {
+    "B905": 1,
+    "F401": 1
+  }
+}

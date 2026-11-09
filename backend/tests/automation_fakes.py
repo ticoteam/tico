@@ -1,8 +1,9 @@
 """Fake services for the automation executor (backend/automation_engine.py): each records what it was asked."""
 
-ANSWERS = {"bucket": {"type": "choice", "choice": "reply", "confidence": 0.8,
-                      "probabilities": {"archive": 0.2, "reply": 0.8}},
-           "is_ask": {"type": "noul", "noul": 0.9}}
+ANSWERS = {
+    "bucket": {"type": "choice", "choice": "reply", "confidence": 0.8, "probabilities": {"archive": 0.2, "reply": 0.8}},
+    "is_ask": {"type": "noul", "noul": 0.9},
+}
 
 
 class Services:
@@ -37,7 +38,7 @@ class Services:
     def judge(self, values, questions, label, level):
         if "judge" in self.fail:
             raise RuntimeError("the judge is down")
-        if "decide" in self.fail:   # Decide is off
+        if "decide" in self.fail:  # Decide is off
             return None
         self.judged.append({"values": values, "questions": questions, "label": label, "level": level})
         return {"answers": {k: v for k, v in self.answers.items()}, "cost_usd": self.judge_cost}
@@ -45,6 +46,7 @@ class Services:
     def act(self, do, args, ctx):
         self.acted.append((do, args))
         self.keys = [*getattr(self, "keys", []), ctx["key"]]
+        self.producers = [*getattr(self, "producers", []), ctx["producer"]]
         if do in self.fail:
             return {"ok": False, "detail": f"{do} failed"}
         return {"ok": True, "detail": f"{do} done"}
@@ -54,6 +56,8 @@ class Services:
             raise RuntimeError("no such bot")
         if ctx.get("cap") is not None and self.spent_30m() + ctx["cost"] >= ctx["cap"]:
             return None
+        if "held" in self.fail:  # a webhook's screening held the text for a person: no turn is started
+            return {"ref": f"held_{len(self.turns) + 1}", "held": True}
         self.turns.append({"who": who, "prompt": prompt, "wait": wait})
         return {"ref": f"msg_{len(self.turns)}"}
 

@@ -1,4 +1,5 @@
 """s3:// URIs in what a bot writes become view URLs before sending (clients/s3links.py), for the CLI and the MCP tools."""
+
 import json
 import logging
 from pathlib import Path
@@ -15,9 +16,11 @@ VECTORS = json.loads((Path(__file__).resolve().parents[2] / "ui/tests/support/s3
 
 def test_the_setting_maps_buckets_to_https_bases_and_ignores_bad_entries_with_a_log_line(caplog):
     with caplog.at_level(logging.WARNING, logger="tico.config"):
-        parsed = s3links.parse(" acme-files=https://d1234example.cloudfront.net/ , media.acme=https://cdn.acme.example/files,"
-                               "Bad_Bucket=https://x.example, plain-http=http://x.example, creds=https://u:p@x.example,"
-                               "query-base=https://x.example/?a=1, acme-files=https://other.example, no-base, ,ab=https://x.example")
+        parsed = s3links.parse(
+            " acme-files=https://d1234example.cloudfront.net/ , media.acme=https://cdn.acme.example/files,"
+            "Bad_Bucket=https://x.example, plain-http=http://x.example, creds=https://u:p@x.example,"
+            "query-base=https://x.example/?a=1, acme-files=https://other.example, no-base, ,ab=https://x.example"
+        )
     assert parsed == {"acme-files": VIEW, "media.acme": "https://cdn.acme.example/files"}
     ignored = [r.getMessage() for r in caplog.records]
     assert len(ignored) == 7 and all(m.startswith("TICO_S3_VIEW_URLS: ignored") for m in ignored)
@@ -27,18 +30,27 @@ def test_the_setting_maps_buckets_to_https_bases_and_ignores_bad_entries_with_a_
 
 def test_a_key_is_encoded_segment_by_segment_under_the_base_and_its_prefix():
     mapping = s3links.parse("media.acme=https://cdn.acme.example/files")
-    assert s3links.view_url("media.acme", "a b/c#1?(x).md", mapping) == "https://cdn.acme.example/files/a%20b/c%231%3F%28x%29.md"
+    assert (
+        s3links.view_url("media.acme", "a b/c#1?(x).md", mapping)
+        == "https://cdn.acme.example/files/a%20b/c%231%3F%28x%29.md"
+    )
     assert s3links.view_url("other", "k.md", mapping) == ""
 
 
 def test_mapped_uris_are_rewritten_outside_code_and_unmapped_ones_are_reported():
-    text = ("Drafts: s3://acme-files/email/deliverables/u-1/2026-09-09-launch.md, and s3://other-bucket/x/y.md.\n"
-            "[hero](s3://acme-files/img/hero.png) `s3://acme-files/in-code.md`\n```\ns3://acme-files/fenced.md\n```\n")
+    text = (
+        "Drafts: s3://acme-files/email/deliverables/u-1/2026-09-09-launch.md, and s3://other-bucket/x/y.md.\n"
+        "[hero](s3://acme-files/img/hero.png) `s3://acme-files/in-code.md`\n```\ns3://acme-files/fenced.md\n```\n"
+    )
     out, rewritten, unmapped = s3links.rewrite(text, MAPPING)
-    assert out == ("Drafts: " + VIEW + "/email/deliverables/u-1/2026-09-09-launch.md, and s3://other-bucket/x/y.md.\n"
-                   "[hero](" + VIEW + "/img/hero.png) `s3://acme-files/in-code.md`\n```\ns3://acme-files/fenced.md\n```\n")
-    assert [r["from"] for r in rewritten] == ["s3://acme-files/email/deliverables/u-1/2026-09-09-launch.md",
-                                              "s3://acme-files/img/hero.png"]
+    assert out == (
+        "Drafts: " + VIEW + "/email/deliverables/u-1/2026-09-09-launch.md, and s3://other-bucket/x/y.md.\n"
+        "[hero](" + VIEW + "/img/hero.png) `s3://acme-files/in-code.md`\n```\ns3://acme-files/fenced.md\n```\n"
+    )
+    assert [r["from"] for r in rewritten] == [
+        "s3://acme-files/email/deliverables/u-1/2026-09-09-launch.md",
+        "s3://acme-files/img/hero.png",
+    ]
     assert unmapped == ["s3://other-bucket/x/y.md"]
 
 
@@ -60,14 +72,18 @@ def test_a_rewrite_keeps_the_text_around_each_uri():
 
 def test_tico_s_own_file_bucket_is_never_mapped(caplog):
     with caplog.at_level(logging.WARNING, logger="tico.config"):
-        parsed = s3links.parse("acme-files=https://d1.example, tico-blobs=https://d2.example", private_bucket="tico-blobs")
+        parsed = s3links.parse(
+            "acme-files=https://d1.example, tico-blobs=https://d2.example", private_bucket="tico-blobs"
+        )
     assert parsed == {"acme-files": "https://d1.example"}
     assert [r.getMessage() for r in caplog.records] == [
-        "TICO_S3_VIEW_URLS: ignored the entry for tico-blobs: it is TICO_BLOB_BUCKET, Tico's private file store"]
+        "TICO_S3_VIEW_URLS: ignored the entry for tico-blobs: it is TICO_BLOB_BUCKET, Tico's private file store"
+    ]
 
 
 class Api:
     """The server: `config` carries the mapping; each write is recorded and echoed."""
+
     def __init__(self, mapping=MAPPING):
         self.mapping, self.calls = mapping, []
 
@@ -88,8 +104,9 @@ class Api:
 
 def test_the_tools_rewrite_text_before_sending_and_say_so():
     api = Api()
-    made = hubtools.BY_NAME["hub_task_create"]["fn"](api, {"owner": "human:ana", "title": "Review the drafts",
-                                                          "body": "Draft: s3://acme-files/d/launch.md"})
+    made = hubtools.BY_NAME["hub_task_create"]["fn"](
+        api, {"owner": "human:ana", "title": "Review the drafts", "body": "Draft: s3://acme-files/d/launch.md"}
+    )
     assert made["sent"]["body"] == "Draft: " + VIEW + "/d/launch.md"
     assert made["s3_links"]["rewritten"] == [{"from": "s3://acme-files/d/launch.md", "to": VIEW + "/d/launch.md"}]
     assert "rewritten" in made["s3_links"]["note"]
@@ -97,9 +114,13 @@ def test_the_tools_rewrite_text_before_sending_and_say_so():
     assert said["sent"]["text"] == "See s3://other-bucket/k.md"
     assert said["s3_links"]["unmapped"] == ["s3://other-bucket/k.md"]
     assert "hub file import s3://" in said["s3_links"]["hint"]
-    commented = hubtools.BY_NAME["hub_task_comment"]["fn"](api, {"id": "t1", "text": "`s3://acme-files/a.md` s3://acme-files/b.md"})
+    commented = hubtools.BY_NAME["hub_task_comment"]["fn"](
+        api, {"id": "t1", "text": "`s3://acme-files/a.md` s3://acme-files/b.md"}
+    )
     assert commented["sent"]["text"] == "`s3://acme-files/a.md` " + VIEW + "/b.md"
-    updated = hubtools.BY_NAME["hub_task_update"]["fn"](api, {"id": "t1", "status": "done", "note": "s3://acme-files/r.pdf"})
+    updated = hubtools.BY_NAME["hub_task_update"]["fn"](
+        api, {"id": "t1", "status": "done", "note": "s3://acme-files/r.pdf"}
+    )
     assert updated["sent"]["note"] == VIEW + "/r.pdf"
     chat = hubtools.BY_NAME["hub_chat_send"]["fn"](api, {"to": "finance", "text": "s3://acme-files/c.png"})
     assert chat["sent"]["text"] == VIEW + "/c.png"
@@ -111,15 +132,35 @@ def test_the_tools_rewrite_text_before_sending_and_say_so():
 
 def test_a_server_without_the_mapping_leaves_text_alone_with_the_hint():
     api = Api(mapping=None)
-    made = hubtools.BY_NAME["hub_task_create"]["fn"](api, {"owner": "human:ana", "title": "T", "body": "s3://acme-files/d.md"})
+    made = hubtools.BY_NAME["hub_task_create"]["fn"](
+        api, {"owner": "human:ana", "title": "T", "body": "s3://acme-files/d.md"}
+    )
     assert made["sent"]["body"] == "s3://acme-files/d.md" and made["s3_links"]["unmapped"] == ["s3://acme-files/d.md"]
 
 
-@pytest.mark.parametrize("argv, field", [
-    (["task", "create", "--owner", "ana", "--title", "Review", "--body", "s3://acme-files/d.md and s3://other-bucket/e.md"], "body"),
-    (["task", "comment", "t1", "s3://acme-files/d.md and s3://other-bucket/e.md"], "text"),
-    (["task", "update", "t1", "--status", "done", "--note", "s3://acme-files/d.md and s3://other-bucket/e.md"], "note"),
-])
+@pytest.mark.parametrize(
+    "argv, field",
+    [
+        (
+            [
+                "task",
+                "create",
+                "--owner",
+                "ana",
+                "--title",
+                "Review",
+                "--body",
+                "s3://acme-files/d.md and s3://other-bucket/e.md",
+            ],
+            "body",
+        ),
+        (["task", "comment", "t1", "s3://acme-files/d.md and s3://other-bucket/e.md"], "text"),
+        (
+            ["task", "update", "t1", "--status", "done", "--note", "s3://acme-files/d.md and s3://other-bucket/e.md"],
+            "note",
+        ),
+    ],
+)
 def test_the_cli_rewrites_before_sending(monkeypatch, argv, field):
     api = Api()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **k: api)

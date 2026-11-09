@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/company.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 47,
+                    "endColumn": 50,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

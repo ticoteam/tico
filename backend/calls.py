@@ -13,6 +13,7 @@ call ends with its transcript kept.
 The thread checks and posts are core's (backend/threads.py, docs/dev/threads-contract.md). A bot's rights on a teammate
 are teammate_access's, as they are everywhere else.
 """
+
 import json
 import logging
 import threading
@@ -24,8 +25,16 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 from pydantic import Field
 
-from . import (audit_log, call_items, call_media, gateway_connection, live_meetings, recorder_relay, teammate_access,
-               threads)
+from . import (
+    audit_log,
+    call_items,
+    call_media,
+    gateway_connection,
+    live_meetings,
+    recorder_relay,
+    teammate_access,
+    threads,
+)
 from .models import Contract
 from .store import H, Problem
 from .views import human_only
@@ -33,16 +42,16 @@ from .views import human_only
 log = logging.getLogger("tico.calls")
 
 ROOM_PREFIX = "tico-call-"
-FLUSH_SECONDS = 8        # speech from one person that goes to the Gateway at once
-IDLE_SECONDS = 3         # a person quiet this long has what they said sent
+FLUSH_SECONDS = 8  # speech from one person that goes to the Gateway at once
+IDLE_SECONDS = 3  # a person quiet this long has what they said sent
 TRANSCRIPT_BYTES = 12_000
 LIST_LIMIT = 50
 PARTICIPANT_LIMIT = 200
 PCM_BYTES_PER_SECOND = call_media.SAMPLE_RATE * 2
-WORKERS = 4                  # clips transcribed at once: the Gateway waits on them, the recorder's audio must not
-DRAIN_SECONDS = 150          # the longest a call's end waits for its last clips (the Gateway itself stops at 120 s)
-CALL_LIST_BYTES = 262_144    # as the audit list: a page stays under 256 KB (backend/audit_log.py)
-START_GRACE_SECONDS = 120    # a call whose room never appeared this long after it started has failed to start
+WORKERS = 4  # clips transcribed at once: the Gateway waits on them, the recorder's audio must not
+DRAIN_SECONDS = 150  # the longest a call's end waits for its last clips (the Gateway itself stops at 120 s)
+CALL_LIST_BYTES = 262_144  # as the audit list: a page stays under 256 KB (backend/audit_log.py)
+START_GRACE_SECONDS = 120  # a call whose room never appeared this long after it started has failed to start
 
 # A Gateway that does not answer at a call's end leaves its action items owed. The sweep tries again: the first retry
 # two minutes on, each wait twice the last, never more than an hour. A day after the first failure the call says so in
@@ -50,7 +59,7 @@ START_GRACE_SECONDS = 120    # a call whose room never appeared this long after 
 ACTION_ITEMS_RETRY_SECONDS = 60
 ACTION_ITEMS_RETRY_MAX_SECONDS = 3600
 ACTION_ITEMS_GIVE_UP_SECONDS = 24 * 3600
-HOLDS_LIMIT = 20          # a call's holds, as its connector sees them: a page, not an archive
+HOLDS_LIMIT = 20  # a call's holds, as its connector sees them: a page, not an archive
 
 # The auth module, set by install_calls: an actor becomes the identity that the thread rules read.
 AUTH = None
@@ -79,8 +88,10 @@ def attachment_standing(c, joined_by, thread_id, slug):
 
 def cancel_bot_turns(c, meeting_id, slug, reason):
     """A bot that leaves a call answers none of its open turns in it."""
-    for turn in c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
-                          "AND status IN ('pending','claimed')", (meeting_id, slug)).fetchall():
+    for turn in c.execute(
+        "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND status IN ('pending','claimed')",
+        (meeting_id, slug),
+    ).fetchall():
         live_meetings._finish_pass(c, meeting_id, turn, reason)
 
 
@@ -95,24 +106,36 @@ def project_reply(c, rid, reply, who):
     live_meetings reply hook, so it commits with the reply: the thread gets the reply or nothing. The bot may write there
     only while its attacher still reads the thread and may write to the bot, and only through the run that answered: that
     run's grant is the one thread it is given, so the reply goes through the thread's own rules."""
-    row = c.execute("SELECT id,thread_id,connector_actor,speak_replies FROM calls WHERE live_meeting_id=?",
-                    (rid,)).fetchone()
+    row = c.execute(
+        "SELECT id,thread_id,connector_actor,speak_replies FROM calls WHERE live_meeting_id=?", (rid,)
+    ).fetchone()
     if not row:
         return
     bot = H.actor_id(who.actor)
     attached = c.execute("SELECT joined_by FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot)).fetchone()
     if not attached or not attachment_standing(c, attached[0], row["thread_id"], bot):
         raise Problem("forbidden", "The person who attached this bot can no longer read the call's thread", 403)
-    if not who.attempt_id or not c.execute("SELECT 1 FROM attempts WHERE id=? AND bot_id=?",
-                                           (who.attempt_id, bot)).fetchone():
+    if (
+        not who.attempt_id
+        or not c.execute("SELECT 1 FROM attempts WHERE id=? AND bot_id=?", (who.attempt_id, bot)).fetchone()
+    ):
         raise Problem("forbidden", "This bot's reply has no run of its own to post it in the call's thread", 403)
     c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (who.attempt_id, row["thread_id"]))
-    threads.post(c, threads.viewer(AUTH, who), row["thread_id"], reply["text"], kind="say",
-                 to_actor=row["connector_actor"],
-                 refs={"call": {"id": row["id"], "meeting_id": rid},
-                       "live_meeting": {"meeting_id": rid, "chat_id": reply["id"]}})
+    threads.post(
+        c,
+        threads.viewer(AUTH, who),
+        row["thread_id"],
+        reply["text"],
+        kind="say",
+        to_actor=row["connector_actor"],
+        refs={
+            "call": {"id": row["id"], "meeting_id": rid},
+            "live_meeting": {"meeting_id": rid, "chat_id": reply["id"]},
+        },
+    )
     if row["speak_replies"]:
         speak(c, row["id"], reply["text"])
+
 
 class Empty(Contract):
     pass
@@ -120,7 +143,7 @@ class Empty(Contract):
 
 class StartCall(Contract):
     title: str = Field(default="Call", min_length=1, max_length=200)
-    speak_replies: bool = False      # a bot's reply read aloud: refused until the Gateway has text-to-speech
+    speak_replies: bool = False  # a bot's reply read aloud: refused until the Gateway has text-to-speech
 
 
 class CallBots(Contract):
@@ -160,9 +183,16 @@ def _clock(ms):
 
 
 def _summary(row):
-    return {"id": row["id"], "thread_id": row["thread_id"], "title": row["title"], "state": row["state"],
-            "connector": row["connector_actor"], "started_at": row["started_at"], "ended_at": row["ended_at"],
-            "end_reason": row["end_reason"]}
+    return {
+        "id": row["id"],
+        "thread_id": row["thread_id"],
+        "title": row["title"],
+        "state": row["state"],
+        "connector": row["connector_actor"],
+        "started_at": row["started_at"],
+        "ended_at": row["ended_at"],
+        "end_reason": row["end_reason"],
+    }
 
 
 class Calls:
@@ -171,9 +201,9 @@ class Calls:
 
     def __init__(self, app, store, auth):
         self.app, self.store, self.auth = app, store, auth
-        self.buffers = {}            # (call_id, identity) -> {"pcm": bytearray, "start_ms": int, "at": float}
+        self.buffers = {}  # (call_id, identity) -> {"pcm": bytearray, "start_ms": int, "at": float}
         self.lock = threading.Lock()
-        self.pending = {}            # call_id -> the clips it is still transcribing
+        self.pending = {}  # call_id -> the clips it is still transcribing
         self.workers = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="tico-meet-stt")
 
     @property
@@ -186,21 +216,49 @@ class Calls:
         """The call as `who` may see it: their own place in it always, and everyone else only where `who` may see them
         (the teammate See level, as everywhere else)."""
         row = _call(c, call_id)
-        people = [dict(r) for r in c.execute(
-            "SELECT actor,joined_at,left_at,removed_at FROM call_participants WHERE call_id=? "
-            "ORDER BY joined_at,actor LIMIT ?", (call_id, PARTICIPANT_LIMIT))
-            if r["actor"] == who.actor or self._sees(c, who, r["actor"])]
-        bots = [r["bot"] for r in c.execute(
-            "SELECT bot FROM live_meeting_bots WHERE meeting_id=? ORDER BY bot LIMIT ?",
-            (row["live_meeting_id"], PARTICIPANT_LIMIT)) if self._sees(c, who, f"bot:{r['bot']}")]
-        holds = [dict(r) for r in c.execute(
-            "SELECT kind,reason,detail,created_at FROM call_holds WHERE call_id=? ORDER BY created_at LIMIT ?",
-            (call_id, HOLDS_LIMIT))] if who.actor == row["connector_actor"] else []
-        return {"id": row["id"], "thread_id": row["thread_id"], "title": row["title"], "state": row["state"],
-                "connector": row["connector_actor"], "meeting_id": row["live_meeting_id"],
-                "started_at": row["started_at"], "ended_at": row["ended_at"], "end_reason": row["end_reason"],
-                "participants": people, "bots": bots, "speak_replies": bool(row["speak_replies"]),
-                "holds": holds}
+        people = [
+            dict(r)
+            for r in c.execute(
+                "SELECT actor,joined_at,left_at,removed_at FROM call_participants WHERE call_id=? "
+                "ORDER BY joined_at,actor LIMIT ?",
+                (call_id, PARTICIPANT_LIMIT),
+            )
+            if r["actor"] == who.actor or self._sees(c, who, r["actor"])
+        ]
+        bots = [
+            r["bot"]
+            for r in c.execute(
+                "SELECT bot FROM live_meeting_bots WHERE meeting_id=? ORDER BY bot LIMIT ?",
+                (row["live_meeting_id"], PARTICIPANT_LIMIT),
+            )
+            if self._sees(c, who, f"bot:{r['bot']}")
+        ]
+        holds = (
+            [
+                dict(r)
+                for r in c.execute(
+                    "SELECT kind,reason,detail,created_at FROM call_holds WHERE call_id=? ORDER BY created_at LIMIT ?",
+                    (call_id, HOLDS_LIMIT),
+                )
+            ]
+            if who.actor == row["connector_actor"]
+            else []
+        )
+        return {
+            "id": row["id"],
+            "thread_id": row["thread_id"],
+            "title": row["title"],
+            "state": row["state"],
+            "connector": row["connector_actor"],
+            "meeting_id": row["live_meeting_id"],
+            "started_at": row["started_at"],
+            "ended_at": row["ended_at"],
+            "end_reason": row["end_reason"],
+            "participants": people,
+            "bots": bots,
+            "speak_replies": bool(row["speak_replies"]),
+            "holds": holds,
+        }
 
     def _sees(self, c, who, target):
         try:
@@ -218,16 +276,21 @@ class Calls:
 
     def token_payload(self, row, actor):
         room = row["room_name"]
-        return {"url": self.media.url, "expires_in": call_media.TOKEN_TTL_SECONDS,
-                "token": self.media.person_token(room, actor, H.actor_id(actor))}
+        return {
+            "url": self.media.url,
+            "expires_in": call_media.TOKEN_TTL_SECONDS,
+            "token": self.media.person_token(room, actor, H.actor_id(actor)),
+        }
 
     # --- writes
 
     def _record(self, c, actor, call_id, thread_id, kind, detail=None):
         """The audit row and the threads change for one call write."""
         audit_log.write(c, actor, f"call:{call_id}", None, {"kind": kind, **(detail or {})})
-        c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,actor,created_at) VALUES('threads',?,?,?,?,?)",
-                  (kind, call_id, thread_id, actor, H.now()))
+        c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,conversation_id,actor,created_at) VALUES('threads',?,?,?,?,?)",
+            (kind, call_id, thread_id, actor, H.now()),
+        )
 
     def _connector(self, c, who, call_id):
         human_only(who)
@@ -245,30 +308,66 @@ class Calls:
         if speak_replies:
             # The Gateway offers no text-to-speech yet (docs/ai-gateway.md lists voice as coming soon), so the flag is
             # refused rather than kept and ignored.
-            raise Problem("unavailable", "Spoken replies are not available yet: the Gateway has no text-to-speech. "
-                          "Start the call without speak_replies.", 422)
+            raise Problem(
+                "unavailable",
+                "Spoken replies are not available yet: the Gateway has no text-to-speech. "
+                "Start the call without speak_replies.",
+                422,
+            )
         threads.require(c, threads.viewer(self.auth, who), thread_id, write=True)
         if self.media is None:
             raise Problem("meet_unavailable", "Tico Meet is not set up on this server", 503)
         live = c.execute("SELECT id FROM calls WHERE thread_id=? AND state='live'", (thread_id,)).fetchone()
         if live:
-            raise Problem("call_in_progress", "This thread already has a call going", 409,
-                          extra={"call_id": live["id"]})
+            raise Problem(
+                "call_in_progress", "This thread already has a call going", 409, extra={"call_id": live["id"]}
+            )
         meeting = live_meetings.Connect(title=title, visibility="private")
         meeting_id, call_id, stamp = str(uuid.uuid4()), str(uuid.uuid4()), H.now()
-        c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,reply_cap,"
-                  "threshold,created_at,updated_at,started_at,visibility,client,meeting_model,thread_id) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (meeting_id, who.actor, meeting.title, "live", None, live_meetings._window_ms(self.app, meeting),
-                   meeting.cooldown_seconds * 1000, meeting.reply_cap, meeting.threshold, stamp, stamp, stamp,
-                   "private", None, None, thread_id))
+        c.execute(
+            "INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,reply_cap,"
+            "threshold,created_at,updated_at,started_at,visibility,client,meeting_model,thread_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                meeting_id,
+                who.actor,
+                meeting.title,
+                "live",
+                None,
+                live_meetings._window_ms(self.app, meeting),
+                meeting.cooldown_seconds * 1000,
+                meeting.reply_cap,
+                meeting.threshold,
+                stamp,
+                stamp,
+                stamp,
+                "private",
+                None,
+                None,
+                thread_id,
+            ),
+        )
         c.execute("INSERT INTO live_meeting_humans VALUES(?,?,?)", (meeting_id, who.actor, stamp))
-        live_meetings._event(c, meeting_id, "meeting.state", {"state": "live", "connected_by": who.actor,
-                                                              "visibility": "private"})
-        c.execute("INSERT INTO calls(id,thread_id,live_meeting_id,connector_actor,title,state,room_name,started_at,"
-                  "created_at,updated_at,speak_replies) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                  (call_id, thread_id, meeting_id, who.actor, meeting.title, "live", ROOM_PREFIX + call_id,
-                   stamp, stamp, stamp, int(bool(speak_replies))))
+        live_meetings._event(
+            c, meeting_id, "meeting.state", {"state": "live", "connected_by": who.actor, "visibility": "private"}
+        )
+        c.execute(
+            "INSERT INTO calls(id,thread_id,live_meeting_id,connector_actor,title,state,room_name,started_at,"
+            "created_at,updated_at,speak_replies) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                call_id,
+                thread_id,
+                meeting_id,
+                who.actor,
+                meeting.title,
+                "live",
+                ROOM_PREFIX + call_id,
+                stamp,
+                stamp,
+                stamp,
+                int(bool(speak_replies)),
+            ),
+        )
         c.execute("INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?)", (call_id, who.actor, stamp))
         self._record(c, who.actor, call_id, thread_id, "call.started", {"meeting_id": meeting_id})
         return self.view(c, call_id, who)
@@ -294,10 +393,12 @@ class Calls:
         if row["state"] != "live":
             raise Problem("call_ended", "This call has ended", 409)
         stamp = H.now()
-        c.execute("INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?) "
-                  "ON CONFLICT(call_id,actor) DO UPDATE SET joined_at=excluded.joined_at,left_at=NULL,removed_at=NULL,"
-                  "media_removed_at=NULL",
-                  (call_id, who.actor, stamp))
+        c.execute(
+            "INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?) "
+            "ON CONFLICT(call_id,actor) DO UPDATE SET joined_at=excluded.joined_at,left_at=NULL,removed_at=NULL,"
+            "media_removed_at=NULL",
+            (call_id, who.actor, stamp),
+        )
         c.execute("INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (row["live_meeting_id"], who.actor, stamp))
         self._record(c, who.actor, call_id, row["thread_id"], "call.joined", {"actor": who.actor})
         return self.view(c, call_id, who)
@@ -315,8 +416,10 @@ class Calls:
         if not participant:
             raise Problem("not_joined", "You are not in this call", 409)
         if participant["left_at"] is None:
-            c.execute("UPDATE call_participants SET left_at=?,media_removed_at=NULL WHERE call_id=? AND actor=?",
-                      (H.now(), call_id, who.actor))
+            c.execute(
+                "UPDATE call_participants SET left_at=?,media_removed_at=NULL WHERE call_id=? AND actor=?",
+                (H.now(), call_id, who.actor),
+            )
             self._record(c, who.actor, call_id, row["thread_id"], "call.left", {"actor": who.actor})
         if not current:
             return {"id": call_id, "left": True}
@@ -337,8 +440,11 @@ class Calls:
             raise Problem("call_live", "The call is still live: its action items are made once it ends", 409)
         if row["action_items_posted_at"]:
             return self.view(c, call_id, who)
-        c.execute("UPDATE calls SET action_items_failed_at=NULL,action_items_attempts=0,action_items_retry_at=NULL,"
-                  "action_items_given_up_at=NULL,finalized_at=NULL,updated_at=? WHERE id=?", (H.now(), call_id))
+        c.execute(
+            "UPDATE calls SET action_items_failed_at=NULL,action_items_attempts=0,action_items_retry_at=NULL,"
+            "action_items_given_up_at=NULL,finalized_at=NULL,updated_at=? WHERE id=?",
+            (H.now(), call_id),
+        )
         self._record(c, who.actor, call_id, row["thread_id"], "call.action_items_retry", {})
         return self.view(c, call_id, who)
 
@@ -349,14 +455,21 @@ class Calls:
             return False
         stamp = H.now()
         actor = by or row["connector_actor"]
-        c.execute("UPDATE calls SET state='ended',end_reason=?,ended_at=?,updated_at=? WHERE id=?",
-                  (reason, stamp, stamp, call_id))
-        c.execute("UPDATE call_participants SET left_at=? WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
-                  (stamp, call_id))
-        c.execute("UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
-                  (stamp, stamp, row["live_meeting_id"]))
-        live_meetings._event(c, row["live_meeting_id"], "meeting.state", {"state": "ended", "by": actor,
-                                                                          "action": reason})
+        c.execute(
+            "UPDATE calls SET state='ended',end_reason=?,ended_at=?,updated_at=? WHERE id=?",
+            (reason, stamp, stamp, call_id),
+        )
+        c.execute(
+            "UPDATE call_participants SET left_at=? WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
+            (stamp, call_id),
+        )
+        c.execute(
+            "UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
+            (stamp, stamp, row["live_meeting_id"]),
+        )
+        live_meetings._event(
+            c, row["live_meeting_id"], "meeting.state", {"state": "ended", "by": actor, "action": reason}
+        )
         live_meetings._end_open_turns(c, row["live_meeting_id"])
         self._record(c, actor, call_id, row["thread_id"], "call.ended", {"reason": reason})
         return True
@@ -370,8 +483,9 @@ class Calls:
         meeting = live_meetings._meeting(c, row["live_meeting_id"])
         if row["state"] != "live" or meeting["state"] not in ("live", "paused"):
             raise Problem("meeting_state", "Bots can only join a live call", 409)
-        if not c.execute("SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?",
-                         (meeting["id"], who.actor)).fetchone():
+        if not c.execute(
+            "SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?", (meeting["id"], who.actor)
+        ).fetchone():
             raise Problem("forbidden", "Join this call before attaching bots", 403)
         for slug in slugs:
             live_meetings._active_bot(c, slug)
@@ -380,13 +494,20 @@ class Calls:
                 raise Problem("forbidden", f"You cannot see org-chart bot {slug}", 403)
             if not access["write"]:
                 raise Problem("forbidden", f"You can see {slug} but do not have Write access to contact it", 403)
-            cursor = c.execute("INSERT OR IGNORE INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) "
-                               "VALUES(?,?,?,?)", (meeting["id"], slug, who.actor, H.now()))
+            cursor = c.execute(
+                "INSERT OR IGNORE INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,?,?,?)",
+                (meeting["id"], slug, who.actor, H.now()),
+            )
             if cursor.rowcount:
-                live_meetings._event(c, meeting["id"], "meeting.bot_joined", {
-                    "bots": [slug], "joined_by": who.actor, "rights": "meeting_read_and_reply"})
-                self._record(c, who.actor, call_id, row["thread_id"], "call.bot_attached",
-                             {"bot": slug, "joined_by": who.actor})
+                live_meetings._event(
+                    c,
+                    meeting["id"],
+                    "meeting.bot_joined",
+                    {"bots": [slug], "joined_by": who.actor, "rights": "meeting_read_and_reply"},
+                )
+                self._record(
+                    c, who.actor, call_id, row["thread_id"], "call.bot_attached", {"bot": slug, "joined_by": who.actor}
+                )
         return self.view(c, call_id, who)
 
     def detach_bot(self, c, who, call_id, slug):
@@ -395,9 +516,13 @@ class Calls:
         row = _call(c, call_id)
         if not readable(c, who.actor, row["thread_id"]):
             raise Problem("not_found", "Call not found", 404)
-        if who.actor != row["connector_actor"] and not c.execute(
+        if (
+            who.actor != row["connector_actor"]
+            and not c.execute(
                 "SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=? AND joined_by=?",
-                (row["live_meeting_id"], slug, who.actor)).fetchone():
+                (row["live_meeting_id"], slug, who.actor),
+            ).fetchone()
+        ):
             raise Problem("forbidden", "Only the person who attached this bot can remove it", 403)
         cursor = c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (row["live_meeting_id"], slug))
         if cursor.rowcount:
@@ -418,7 +543,7 @@ class Calls:
         except call_media.MediaUnavailable:
             with self.store.transaction() as c:
                 self.finish(c, call_id, "meet_unavailable")
-                c.execute("UPDATE calls SET finalized_at=? WHERE id=?", (H.now(), call_id))   # nothing was said
+                c.execute("UPDATE calls SET finalized_at=? WHERE id=?", (H.now(), call_id))  # nothing was said
             raise Problem("meet_unavailable", "Tico Meet's media server could not start this call", 503) from None
         with self.store.transaction() as c:
             c.execute("UPDATE calls SET media_seen_at=? WHERE id=? AND media_seen_at IS NULL", (H.now(), call_id))
@@ -426,6 +551,7 @@ class Calls:
     def _audio_for(self, call_id):
         def on_audio(identity, pcm, start_ms):
             self.ingest(call_id, identity, pcm, start_ms)
+
         return on_audio
 
     def ingest(self, call_id, identity, pcm, start_ms):
@@ -445,8 +571,11 @@ class Calls:
         IDLE_SECONDS."""
         now = time.monotonic()
         with self.lock:
-            keys = [key for key, buffer in self.buffers.items()
-                    if (call_id is None or key[0] == call_id) and (not idle or now - buffer["at"] >= IDLE_SECONDS)]
+            keys = [
+                key
+                for key, buffer in self.buffers.items()
+                if (call_id is None or key[0] == call_id) and (not idle or now - buffer["at"] >= IDLE_SECONDS)
+            ]
             taken = [(key, self.buffers.pop(key)) for key in keys]
         for (cid, identity), buffer in taken:
             self._submit(cid, identity, buffer)
@@ -473,6 +602,7 @@ class Calls:
             self._transcribe(call_id, identity, buffer)
         except Exception as exc:  # noqa: BLE001 - a failed transcription is reported, the call goes on
             from .batch_work import report
+
             report("calls_transcribe", call_id, exc, logger="tico.calls")
 
     def _transcribe(self, call_id, identity, buffer):
@@ -482,7 +612,7 @@ class Calls:
         with self.store.read() as c:
             state = c.execute("SELECT state FROM calls WHERE id=?", (call_id,)).fetchone()
             if not state or state["state"] != "live":
-                return      # the call has ended: its speech was sent at the end, and nothing after it is kept
+                return  # the call has ended: its speech was sent at the end, and nothing after it is kept
             key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
         if not key:
             log.warning("A call's speech was not transcribed: no Gateway connection is set")
@@ -490,7 +620,7 @@ class Calls:
         try:
             text = call_media.transcribe(base, key, call_media.wav_bytes(pcm))
         except call_media.MediaUnavailable:
-            return      # this clip is lost and the call goes on; the Gateway's refusal is in its own log
+            return  # this clip is lost and the call goes on; the Gateway's refusal is in its own log
         if not text:
             return
         duration_ms = len(pcm) * 1000 // PCM_BYTES_PER_SECOND
@@ -499,12 +629,25 @@ class Calls:
             meeting = live_meetings._meeting(c, row["live_meeting_id"])
             if row["state"] != "live" or meeting["state"] != "live":
                 return
-            previous = c.execute("SELECT COALESCE(MAX(start_ms),0) FROM live_meeting_chunks WHERE meeting_id=?",
-                                 (meeting["id"],)).fetchone()[0]
+            previous = c.execute(
+                "SELECT COALESCE(MAX(start_ms),0) FROM live_meeting_chunks WHERE meeting_id=?", (meeting["id"],)
+            ).fetchone()[0]
             start = max(buffer["start_ms"], previous)
-            live_meetings.append_chunks(c, meeting["id"], meeting, identity, [{
-                "seq": meeting["seq"] + 1, "speaker": H.actor_id(identity), "start_ms": start,
-                "end_ms": start + duration_ms, "text": text}])
+            live_meetings.append_chunks(
+                c,
+                meeting["id"],
+                meeting,
+                identity,
+                [
+                    {
+                        "seq": meeting["seq"] + 1,
+                        "speaker": H.actor_id(identity),
+                        "start_ms": start,
+                        "end_ms": start + duration_ms,
+                        "text": text,
+                    }
+                ],
+            )
         self.app.state.live_meeting_routing.later(meeting["id"])
 
     def after_end(self, call_id):
@@ -528,6 +671,7 @@ class Calls:
                 live_meetings._run_windows(self.app, row["live_meeting_id"], final=True)
             except Exception as exc:  # noqa: BLE001 - a failed final window is reported; the transcript is still posted
                 from .batch_work import report
+
                 report("calls_final_windows", call_id, exc, logger="tico.calls")
             self.post_transcript(call_id)
             with self.store.transaction() as c:
@@ -542,9 +686,17 @@ class Calls:
         """One message in the call's thread, from its connector, naming the call and its meeting as the source. The
         live_meeting reference makes the meeting's own rules decide who reads the message."""
         who = self.auth.identity_for_actor(c, row["connector_actor"])
-        threads.post(c, who, row["thread_id"], body, kind="say", refs={
-            "call": {"id": row["id"], "meeting_id": row["live_meeting_id"]},
-            "live_meeting": {"meeting_id": row["live_meeting_id"]}})
+        threads.post(
+            c,
+            who,
+            row["thread_id"],
+            body,
+            kind="say",
+            refs={
+                "call": {"id": row["id"], "meeting_id": row["live_meeting_id"]},
+                "live_meeting": {"meeting_id": row["live_meeting_id"]},
+            },
+        )
 
     def post_transcript(self, call_id):
         """The call's transcript, bounded, as one message in its thread, with the meeting it came from. Once only. A
@@ -555,8 +707,10 @@ class Calls:
                 if row["transcript_posted_at"]:
                     return
                 lines, size, cut = [], 0, False
-                for chunk in c.execute("SELECT speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
-                                       (row["live_meeting_id"],)):
+                for chunk in c.execute(
+                    "SELECT speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
+                    (row["live_meeting_id"],),
+                ):
                     line = f"{chunk['speaker']}: {chunk['text']}"
                     if size + len(line) > TRANSCRIPT_BYTES:
                         cut = True
@@ -570,6 +724,7 @@ class Calls:
                 c.execute("UPDATE calls SET transcript_posted_at=? WHERE id=?", (H.now(), call_id))
         except Problem as exc:
             from .batch_work import report
+
             report("calls_transcript", call_id, exc, logger="tico.calls")
             self._hold(call_id, "transcript", exc)
 
@@ -583,9 +738,13 @@ class Calls:
                 return True
             if row["action_items_retry_at"] and row["action_items_retry_at"] > H.now():
                 return False
-            rows = [{"t": _clock(r["start_ms"]), "speaker": r["speaker"], "text": r["text"]} for r in c.execute(
-                "SELECT start_ms,speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
-                (row["live_meeting_id"],))]
+            rows = [
+                {"t": _clock(r["start_ms"]), "speaker": r["speaker"], "text": r["text"]}
+                for r in c.execute(
+                    "SELECT start_ms,speaker,text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq",
+                    (row["live_meeting_id"],),
+                )
+            ]
             key, base, _fingerprint = gateway_connection.target(c, self.app.state.vault, self.store.settings)
             model = recorder_relay.chat_model(c, self.store.settings)
         if not rows or not key:
@@ -603,10 +762,13 @@ class Calls:
                 if row["action_items_posted_at"]:
                     return True
                 self._post_in_thread(c, row, body)
-                c.execute("UPDATE calls SET action_items_posted_at=?,action_items_retry_at=NULL,updated_at=? "
-                          "WHERE id=?", (H.now(), H.now(), call_id))
+                c.execute(
+                    "UPDATE calls SET action_items_posted_at=?,action_items_retry_at=NULL,updated_at=? WHERE id=?",
+                    (H.now(), H.now(), call_id),
+                )
         except Problem as exc:
             from .batch_work import report
+
             report("calls_action_items", call_id, exc, logger="tico.calls")
             self._hold(call_id, "action_items", exc)
         return True
@@ -620,10 +782,13 @@ class Calls:
             failed_at = row["action_items_failed_at"] or now
             if _seconds_since(failed_at) < ACTION_ITEMS_GIVE_UP_SECONDS:
                 attempts = row["action_items_attempts"] + 1
-                wait = min(ACTION_ITEMS_RETRY_MAX_SECONDS, ACTION_ITEMS_RETRY_SECONDS * 2 ** attempts)
+                wait = min(ACTION_ITEMS_RETRY_MAX_SECONDS, ACTION_ITEMS_RETRY_SECONDS * 2**attempts)
                 retry_at = _stamp(datetime.now(timezone.utc) + timedelta(seconds=wait))
-                c.execute("UPDATE calls SET action_items_failed_at=?,action_items_attempts=?,action_items_retry_at=?,"
-                          "updated_at=? WHERE id=?", (failed_at, attempts, retry_at, now, call_id))
+                c.execute(
+                    "UPDATE calls SET action_items_failed_at=?,action_items_attempts=?,action_items_retry_at=?,"
+                    "updated_at=? WHERE id=?",
+                    (failed_at, attempts, retry_at, now, call_id),
+                )
                 return False
         self._give_up(call_id)
         return True
@@ -633,8 +798,10 @@ class Calls:
         that line leaves a hold, as any refused post does."""
         with self.store.read() as c:
             title = _call(c, call_id)["title"]
-        body = (f"Action items for {title} could not be made: the Gateway did not answer for a day. The connector "
-                f"can retry them with `hub call retry {call_id}` or POST /api/v2/calls/{call_id}/action-items/retry.")
+        body = (
+            f"Action items for {title} could not be made: the Gateway did not answer for a day. The connector "
+            f"can retry them with `hub call retry {call_id}` or POST /api/v2/calls/{call_id}/action-items/retry."
+        )
         try:
             with self.store.transaction() as c:
                 row = _call(c, call_id)
@@ -642,21 +809,31 @@ class Calls:
                 self._record(c, row["connector_actor"], call_id, row["thread_id"], "call.action_items_given_up", {})
         except Problem as exc:
             from .batch_work import report
+
             report("calls_action_items", call_id, exc, logger="tico.calls")
             self._hold(call_id, "action_items", exc)
         with self.store.transaction() as c:
-            c.execute("UPDATE calls SET action_items_given_up_at=?,updated_at=? WHERE id=?",
-                      (H.now(), H.now(), call_id))
+            c.execute(
+                "UPDATE calls SET action_items_given_up_at=?,updated_at=? WHERE id=?", (H.now(), H.now(), call_id)
+            )
 
     def _hold(self, call_id, kind, exc):
         """A post the thread refused: a hold the call's connector sees on the call, and an audit row. It is final, since the
         thread's own rule said no, so nothing retries it."""
         with self.store.transaction() as c:
             row = _call(c, call_id)
-            c.execute("INSERT INTO call_holds(id,call_id,kind,reason,detail,created_at) VALUES(?,?,?,?,?,?)",
-                      (str(uuid.uuid4()), call_id, kind, exc.code, exc.detail, H.now()))
-            self._record(c, row["connector_actor"], call_id, row["thread_id"], "call.post_refused",
-                         {"post": kind, "reason": exc.code})
+            c.execute(
+                "INSERT INTO call_holds(id,call_id,kind,reason,detail,created_at) VALUES(?,?,?,?,?,?)",
+                (str(uuid.uuid4()), call_id, kind, exc.code, exc.detail, H.now()),
+            )
+            self._record(
+                c,
+                row["connector_actor"],
+                call_id,
+                row["thread_id"],
+                "call.post_refused",
+                {"post": kind, "reason": exc.code},
+            )
 
     # --- the sweep: access that ended, bots whose attacher lost the thread, LiveKit drops, and a LiveKit that restarted
 
@@ -666,9 +843,13 @@ class Calls:
         LiveKit has dropped everyone who left."""
         self.flush(idle=True)
         with self.store.read() as c:
-            ids = [r["id"] for r in c.execute(
-                "SELECT id FROM calls WHERE state='live' OR finalized_at IS NULL OR id IN (SELECT call_id FROM "
-                "call_participants WHERE media_removed_at IS NULL AND (left_at IS NOT NULL OR removed_at IS NOT NULL))")]
+            ids = [
+                r["id"]
+                for r in c.execute(
+                    "SELECT id FROM calls WHERE state='live' OR finalized_at IS NULL OR id IN (SELECT call_id FROM "
+                    "call_participants WHERE media_removed_at IS NULL AND (left_at IS NOT NULL OR removed_at IS NOT NULL))"
+                )
+            ]
         for call_id in ids:
             try:
                 self._sweep_call(call_id)
@@ -676,6 +857,7 @@ class Calls:
                 continue
             except Exception as exc:  # noqa: BLE001 - one call's sweep failing must not stop the others
                 from .batch_work import report
+
                 report("calls_sweep", call_id, exc, logger="tico.calls")
 
     def _sweep_call(self, call_id):
@@ -687,13 +869,21 @@ class Calls:
                 self.after_end(call_id)
             return
         with self.store.read() as c:
-            people = [r["actor"] for r in c.execute(
-                "SELECT actor FROM call_participants WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
-                (call_id,))]
+            people = [
+                r["actor"]
+                for r in c.execute(
+                    "SELECT actor FROM call_participants WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
+                    (call_id,),
+                )
+            ]
             revoked = [actor for actor in people if not readable(c, actor, row["thread_id"])]
-            stale_bots = [r["bot"] for r in c.execute(
-                "SELECT bot,joined_by FROM live_meeting_bots WHERE meeting_id=?", (row["live_meeting_id"],))
-                if not attachment_standing(c, r["joined_by"], row["thread_id"], r["bot"])]
+            stale_bots = [
+                r["bot"]
+                for r in c.execute(
+                    "SELECT bot,joined_by FROM live_meeting_bots WHERE meeting_id=?", (row["live_meeting_id"],)
+                )
+                if not attachment_standing(c, r["joined_by"], row["thread_id"], r["bot"])
+            ]
         room = row["room_name"]
         exists = self.media.room_exists(room)
         if not exists and (row["media_seen_at"] or _started_long_ago(row["started_at"])):
@@ -707,17 +897,25 @@ class Calls:
             if exists and row["media_seen_at"] is None:
                 c.execute("UPDATE calls SET media_seen_at=? WHERE id=?", (H.now(), call_id))
             for actor in revoked:
-                cursor = c.execute("UPDATE call_participants SET removed_at=? WHERE call_id=? AND actor=? "
-                                   "AND left_at IS NULL AND removed_at IS NULL", (H.now(), call_id, actor))
+                cursor = c.execute(
+                    "UPDATE call_participants SET removed_at=? WHERE call_id=? AND actor=? "
+                    "AND left_at IS NULL AND removed_at IS NULL",
+                    (H.now(), call_id, actor),
+                )
                 if cursor.rowcount:
                     self._record(c, actor, call_id, row["thread_id"], "call.participant_removed", {"actor": actor})
             for slug in stale_bots:
                 cancel_bot_turns(c, row["live_meeting_id"], slug, "attacher_lost_thread")
                 c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (row["live_meeting_id"], slug))
-                live_meetings._event(c, row["live_meeting_id"], "meeting.bot_left",
-                                     {"bot": slug, "by": "access_ended"})
-                self._record(c, row["connector_actor"], call_id, row["thread_id"], "call.bot_detached",
-                             {"bot": slug, "reason": "attacher_lost_thread"})
+                live_meetings._event(c, row["live_meeting_id"], "meeting.bot_left", {"bot": slug, "by": "access_ended"})
+                self._record(
+                    c,
+                    row["connector_actor"],
+                    call_id,
+                    row["thread_id"],
+                    "call.bot_detached",
+                    {"bot": slug, "reason": "attacher_lost_thread"},
+                )
         self.drop_pending(call_id)
         if exists and not self.media.running(call_id):
             self.media.start_recorder(call_id, room, self._audio_for(call_id))
@@ -727,9 +925,14 @@ class Calls:
         it, so a person who is still connected is not left in the room because one request failed."""
         with self.store.read() as c:
             room = _call(c, call_id)["room_name"]
-            pending = [r["actor"] for r in c.execute(
-                "SELECT actor FROM call_participants WHERE call_id=? AND media_removed_at IS NULL "
-                "AND (left_at IS NOT NULL OR removed_at IS NOT NULL)", (call_id,))]
+            pending = [
+                r["actor"]
+                for r in c.execute(
+                    "SELECT actor FROM call_participants WHERE call_id=? AND media_removed_at IS NULL "
+                    "AND (left_at IS NOT NULL OR removed_at IS NOT NULL)",
+                    (call_id,),
+                )
+            ]
         for actor in pending:
             if not self._remove_from_room(call_id, room, actor):
                 return
@@ -742,6 +945,7 @@ class Calls:
             return self._remove_from_room(call_id, room, actor)
         except Exception as exc:  # noqa: BLE001 - a failed removal is reported and left pending for the sweep
             from .batch_work import report
+
             report("calls_leave", call_id, exc, logger="tico.calls")
             return False
 
@@ -753,8 +957,9 @@ class Calls:
         except call_media.MediaUnavailable:
             return False
         with self.store.transaction() as c:
-            c.execute("UPDATE call_participants SET media_removed_at=? WHERE call_id=? AND actor=?",
-                      (H.now(), call_id, actor))
+            c.execute(
+                "UPDATE call_participants SET media_removed_at=? WHERE call_id=? AND actor=?", (H.now(), call_id, actor)
+            )
         return True
 
 
@@ -781,19 +986,27 @@ def install_calls(app, store, auth, write):
         at, _, call_id = before.partition("|")
         with store.read() as c:
             threads.require(c, threads.viewer(auth, who), thread_id)
-            found = [_summary(r) for r in c.execute(
-                "SELECT * FROM calls WHERE thread_id=? AND (?='' OR started_at<? OR (started_at=? AND id<?)) "
-                "ORDER BY started_at DESC, id DESC LIMIT ?", (thread_id, before, at, at, call_id, size + 1))]
+            found = [
+                _summary(r)
+                for r in c.execute(
+                    "SELECT * FROM calls WHERE thread_id=? AND (?='' OR started_at<? OR (started_at=? AND id<?)) "
+                    "ORDER BY started_at DESC, id DESC LIMIT ?",
+                    (thread_id, before, at, at, call_id, size + 1),
+                )
+            ]
         shown, used = [], 256
         for item in found[:size]:
             cost = len(json.dumps(item).encode()) + 1
             if shown and used + cost > CALL_LIST_BYTES:
-                break               # the first call of a page always fits
+                break  # the first call of a page always fits
             used += cost
             shown.append(item)
         more = len(found) > len(shown)
-        return {"calls": shown, "next_before": f"{shown[-1]['started_at']}|{shown[-1]['id']}" if more else None,
-                "available": calls.media is not None}
+        return {
+            "calls": shown,
+            "next_before": f"{shown[-1]['started_at']}|{shown[-1]['id']}" if more else None,
+            "available": calls.media is not None,
+        }
 
     @app.post("/api/v2/threads/{thread_id}/calls")
     def start_call(request: Request, thread_id: str, body: StartCall):
@@ -811,10 +1024,11 @@ def install_calls(app, store, auth, write):
     @app.post("/api/v2/calls/{call_id}/join")
     def join_call(request: Request, call_id: str, body: Empty):
         who = request.state.identity
-        result = write(request, body, lambda c: calls.join(c, who, call_id),
-                       check=lambda c: calls.check_join(c, who, call_id))
+        result = write(
+            request, body, lambda c: calls.join(c, who, call_id), check=lambda c: calls.check_join(c, who, call_id)
+        )
         with store.read() as c:
-            row = calls.check_join(c, who, call_id)      # a token is minted only for a person who may still join
+            row = calls.check_join(c, who, call_id)  # a token is minted only for a person who may still join
         return {"call": result, **calls.token_payload(row, who.actor)}
 
     @app.post("/api/v2/calls/{call_id}/token")
@@ -839,14 +1053,14 @@ def install_calls(app, store, auth, write):
     def leave_call(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         result = write(request, body, lambda c: calls.leave(c, who, call_id))
-        calls.drop_from_media(call_id, who.actor)      # LiveKit drops the person now; a failure is retried by the sweep
+        calls.drop_from_media(call_id, who.actor)  # LiveKit drops the person now; a failure is retried by the sweep
         return result
 
     @app.post("/api/v2/calls/{call_id}/end")
     def end_call(request: Request, call_id: str, body: Empty):
         who = request.state.identity
         with store.read() as c:
-            calls._connector(c, who, call_id)      # refuses before any speech is sent on the call's behalf
+            calls._connector(c, who, call_id)  # refuses before any speech is sent on the call's behalf
         calls.finish_speech(call_id)
         result = write(request, body, lambda c: calls.end(c, who, call_id))
         calls.after_end(call_id)

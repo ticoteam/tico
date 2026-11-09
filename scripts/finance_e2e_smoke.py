@@ -18,6 +18,7 @@ seen, sizes, texts) go to smoke-results.json under "notes". Nothing here contact
 Options: --base (default http://localhost:18766), --fake (default http://127.0.0.1:18790), --no-rehearsal,
 --shots (default /Volumes/PNYRP60PSSD/orca/workspaces/tico/_finance-e2e-shots).
 """
+
 import argparse
 import json
 import os
@@ -62,8 +63,12 @@ class Run:
 
 def fake_call(fake: str, path: str, body: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(fake + path, data=data, method="POST" if body is not None else "GET",
-                                     headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(
+        fake + path,
+        data=data,
+        method="POST" if body is not None else "GET",
+        headers={"Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(request, timeout=10) as answer:
         return json.loads(answer.read() or b"{}")
 
@@ -112,19 +117,38 @@ def main() -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 900})
-        page.on("console", lambda m: run.tab_errors.setdefault(run.current, []).append(f"console.error: {m.text}")
-                if m.type == "error" else None)
+        page.on(
+            "console",
+            lambda m: (
+                run.tab_errors.setdefault(run.current, []).append(f"console.error: {m.text}")
+                if m.type == "error"
+                else None
+            ),
+        )
         page.on("pageerror", lambda e: run.tab_errors.setdefault(run.current, []).append(f"pageerror: {e}"))
-        page.on("response", lambda r: failed_http.append(f"{r.status} {r.url}")
-                if r.status >= 400 and "/api/v2/finance/" in r.url else None)
-        page.on("response", lambda r: connect_status.append(r.status)
-                if r.request.method == "POST" and r.url.endswith("/api/v2/finance/connections") else None)
+        page.on(
+            "response",
+            lambda r: (
+                failed_http.append(f"{r.status} {r.url}") if r.status >= 400 and "/api/v2/finance/" in r.url else None
+            ),
+        )
+        page.on(
+            "response",
+            lambda r: (
+                connect_status.append(r.status)
+                if r.request.method == "POST" and r.url.endswith("/api/v2/finance/connections")
+                else None
+            ),
+        )
 
         # 1. Sign in (the first visit does it) and open Finance; the demo sets Finance up when it starts.
         go(page, args.base, "")
         go(page, args.base, "#/finance/pnl")
-        tabs_ok = run.check("finance is set up and its tabs show", page.locator("[data-fin-tab]").count() == len(TABS),
-                            f"{page.locator('[data-fin-tab]').count()} tabs")
+        tabs_ok = run.check(
+            "finance is set up and its tabs show",
+            page.locator("[data-fin-tab]").count() == len(TABS),
+            f"{page.locator('[data-fin-tab]').count()} tabs",
+        )
         connected = False
         if tabs_ok:
             # 2. Connect Mercury with a fake token (Finance > Sources > + Source > Mercury).
@@ -143,8 +167,11 @@ def main() -> int:
                     error = ""
                 except PlaywrightError:
                     error = page.locator("dialog.fin-dlg [data-error]").first.inner_text()
-                run.check("Mercury connects with the fake token", connected,
-                          f"POST /api/v2/finance/connections -> {connect_status[-1:] or 'no answer'}; {error}"[:300])
+                run.check(
+                    "Mercury connects with the fake token",
+                    connected,
+                    f"POST /api/v2/finance/connections -> {connect_status[-1:] or 'no answer'}; {error}"[:300],
+                )
             except STEP_FAILURES as e:
                 run.check("Mercury connects with the fake token", False, f"{type(e).__name__}: {str(e)[:200]}")
 
@@ -155,16 +182,25 @@ def main() -> int:
                 go(page, args.base, "#/finance/sources")
                 run.check("the Mercury source lists", wait_for_text(page, "Mercury", 20))
                 calls = [c["path"] for c in fake_call(args.fake, "/_fake/calls")["calls"]]
-                run.check("the bank worker read accounts from Mercury", "/accounts" in calls, f"{len(calls)} calls so far")
+                run.check(
+                    "the bank worker read accounts from Mercury", "/accounts" in calls, f"{len(calls)} calls so far"
+                )
                 run.current = "transactions"
                 go(page, args.base, "#/finance/transactions")
-                run.check("seeded transactions load", wait_for_text(page, SEEDED_BANK_ROW, 90),
-                          f"{SEEDED_BANK_ROW} (bank deposit) from the fake")
+                run.check(
+                    "seeded transactions load",
+                    wait_for_text(page, SEEDED_BANK_ROW, 90),
+                    f"{SEEDED_BANK_ROW} (bank deposit) from the fake",
+                )
                 today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                added = fake_call(args.fake, "/_fake/txn", {"amount": -77.31, "counterparty": SMOKE_VENDOR,
-                                                            "date": today, "kind": "bank"})
-                run.check("fake transaction added", bool(added.get("transaction")),
-                          added.get("transaction", {}).get("id", ""))
+                added = fake_call(
+                    args.fake,
+                    "/_fake/txn",
+                    {"amount": -77.31, "counterparty": SMOKE_VENDOR, "date": today, "kind": "bank"},
+                )
+                run.check(
+                    "fake transaction added", bool(added.get("transaction")), added.get("transaction", {}).get("id", "")
+                )
                 run.current = "sources"
                 go(page, args.base, "#/finance/sources")
                 # Source groups start collapsed; open each one so the Mercury row is rendered.
@@ -187,13 +223,20 @@ def main() -> int:
                         page.wait_for_timeout(4000)
                         page.reload(wait_until="networkidle")
                         page.wait_for_timeout(800)
-                run.check("the fake transaction shows after Sync now", shown,
-                          "found" if shown else f"not within {SYNC_WAIT_SECONDS} s")
+                run.check(
+                    "the fake transaction shows after Sync now",
+                    shown,
+                    "found" if shown else f"not within {SYNC_WAIT_SECONDS} s",
+                )
             except STEP_FAILURES as e:
                 run.check("accounts, transactions and sync", False, f"{type(e).__name__}: {str(e)[:200]}")
         elif tabs_ok:
-            for name in ("the Mercury source lists", "seeded transactions load", "fake transaction added",
-                         "the fake transaction shows after Sync now"):
+            for name in (
+                "the Mercury source lists",
+                "seeded transactions load",
+                "fake transaction added",
+                "the fake transaction shows after Sync now",
+            ):
                 run.check(name, False, "blocked: no Mercury connection (the connect step failed)")
 
         # 5. Every tab: no console or page errors, a screenshot. Errors from the steps above do not count here.
@@ -205,8 +248,11 @@ def main() -> int:
                     go(page, args.base, f"#/finance/{tab}")
                     page.screenshot(path=os.path.join(args.shots, f"{tab}.png"), full_page=True)
                     errors = run.tab_errors.get(tab, [])
-                    run.check(f"tab {tab} opens with no console errors",
-                              not errors and page.locator("#fin-body").count() > 0, "; ".join(errors)[:300])
+                    run.check(
+                        f"tab {tab} opens with no console errors",
+                        not errors and page.locator("#fin-body").count() > 0,
+                        "; ".join(errors)[:300],
+                    )
                 except STEP_FAILURES as e:
                     run.check(f"tab {tab} opens with no console errors", False, f"{type(e).__name__}: {str(e)[:200]}")
         run.current = "http"
@@ -221,7 +267,11 @@ def main() -> int:
 # It runs on the demo above; the writes are new rows with a stamp in their numbers (REH-<time>), so a run can repeat.
 WIDTHS = {"desktop": (1440, 900), "phone": (390, 844)}
 ROUTES = TABS + ["pnl?view=expenses"]
-DIALOGS_PHONE = [("payables", "[data-fin-doc-add]"), ("receivables", "[data-fin-doc-add]"), ("cards", "[data-fin-card-add]")]
+DIALOGS_PHONE = [
+    ("payables", "[data-fin-doc-add]"),
+    ("receivables", "[data-fin-doc-add]"),
+    ("cards", "[data-fin-card-add]"),
+]
 STAMP = datetime.now(timezone.utc).strftime("%H%M%S")
 NUMBER = f"REH-{STAMP}"
 JS_SCROLL = "() => ({sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth})"
@@ -266,8 +316,11 @@ def rows_of(value: object) -> list[dict]:
 
 def act(page: Page, base: str, kind: str, payload: dict) -> tuple[int, object]:
     """A Finance action as the UI sends it: POST /api/v2/finance/actions with a fresh Idempotency-Key."""
-    answer = page.request.post(base + "/api/v2/finance/actions", data=json.dumps({"kind": kind, "payload": payload}),
-                               headers={"Content-Type": "application/json", "Idempotency-Key": uuid.uuid4().hex})
+    answer = page.request.post(
+        base + "/api/v2/finance/actions",
+        data=json.dumps({"kind": kind, "payload": payload}),
+        headers={"Content-Type": "application/json", "Idempotency-Key": uuid.uuid4().hex},
+    )
     try:
         return answer.status, answer.json()
     except ValueError:
@@ -342,10 +395,16 @@ def layout_pass(browser, run: Run, base: str, shots: str) -> None:
         ctx = browser.new_context(viewport={"width": w, "height": h})
         pg = ctx.new_page()
         errors: list[str] = []
-        pg.on("console", lambda m, errors=errors: errors.append(f"console.error: {m.text}") if m.type == "error" else None)
+        pg.on(
+            "console", lambda m, errors=errors: errors.append(f"console.error: {m.text}") if m.type == "error" else None
+        )
         pg.on("pageerror", lambda e, errors=errors: errors.append(f"pageerror: {e}"))
-        pg.on("response", lambda r, errors=errors: errors.append(f"{r.status} {r.url}")
-              if r.status >= 400 and "/api/v2/finance/" in r.url else None)
+        pg.on(
+            "response",
+            lambda r, errors=errors: (
+                errors.append(f"{r.status} {r.url}") if r.status >= 400 and "/api/v2/finance/" in r.url else None
+            ),
+        )
         run.current = f"layout {wname}"
         try:
             go(pg, base, "")
@@ -355,15 +414,21 @@ def layout_pass(browser, run: Run, base: str, shots: str) -> None:
                 scroll = pg.evaluate(JS_SCROLL)
                 name = route.replace("?", "_").replace("=", "-")
                 pg.screenshot(path=os.path.join(shots, f"{wname}-{name}.png"), full_page=True)
-                run.check(f"{wname} {route}: the page does not scroll sideways", scroll["sw"] <= scroll["cw"] + 1,
-                          str(scroll))
-                run.check(f"{wname} {route}: no console errors or failed Finance requests", not errors,
-                          "; ".join(errors)[:300])
+                run.check(
+                    f"{wname} {route}: the page does not scroll sideways", scroll["sw"] <= scroll["cw"] + 1, str(scroll)
+                )
+                run.check(
+                    f"{wname} {route}: no console errors or failed Finance requests",
+                    not errors,
+                    "; ".join(errors)[:300],
+                )
                 if wname == "phone":
                     small = pg.evaluate(JS_SMALL)
                     run.note(f"phone {route}: controls shorter than 44 px", f"{small['n']} e.g. {small['sample']}")
                 if wname == "phone" and route == "pnl":
-                    boxes = pg.evaluate("() => [...document.querySelectorAll('.fin-scroll')].map(e => [e.scrollWidth, e.clientWidth])")
+                    boxes = pg.evaluate(
+                        "() => [...document.querySelectorAll('.fin-scroll')].map(e => [e.scrollWidth, e.clientWidth])"
+                    )
                     run.note("phone P&L: scroll boxes as [content width, box width]", str(boxes))
             if wname == "phone":
                 for route, selector in DIALOGS_PHONE:
@@ -371,8 +436,11 @@ def layout_pass(browser, run: Run, base: str, shots: str) -> None:
                     open_dialog(pg, selector)
                     box = pg.evaluate(JS_DLG)
                     pg.screenshot(path=os.path.join(shots, f"phone-dialog-{route}.png"))
-                    run.check(f"phone {route}: the dialog fits the screen",
-                              bool(box) and box["left"] >= 0 and box["right"] <= box["cw"] + 1, str(box))
+                    run.check(
+                        f"phone {route}: the dialog fits the screen",
+                        bool(box) and box["left"] >= 0 and box["right"] <= box["cw"] + 1,
+                        str(box),
+                    )
                     pg.keyboard.press("Escape")
                     pg.wait_for_timeout(300)
         except STEP_FAILURES as e:
@@ -405,10 +473,14 @@ def flow_pnl(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     run.note("P&L budget cells: columns that open for editing", f"{yes or 'none'}; columns that do not: {no}")
     first = next((t for t in tried if t[2]), None)
     if first:
+
         def budgets_for(account: str | None) -> list[object]:
-            return [(b.get("state") or {}).get("amount")
-                    for b in rows_of(api(page, base, "/api/v2/finance/budgets?at=2026-12-01"))
-                    if b.get("account_id") == account]
+            return [
+                (b.get("state") or {}).get("amount")
+                for b in rows_of(api(page, base, "/api/v2/finance/budgets?at=2026-12-01"))
+                if b.get("account_id") == account
+            ]
+
         td = cells.nth(first[0])
         td.dblclick()
         page.wait_for_timeout(150)
@@ -417,8 +489,11 @@ def flow_pnl(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
         page.wait_for_timeout(1500)
         page.wait_for_load_state("networkidle")
         amounts = budgets_for(first[3])
-        run.check(f"a future budget cell saves on Enter ({first[1]})", 123400 in amounts,
-                  f"budget amounts on that line now {amounts}")
+        run.check(
+            f"a future budget cell saves on Enter ({first[1]})",
+            123400 in amounts,
+            f"budget amounts on that line now {amounts}",
+        )
         second = next((t for t in tried if t[2] and t is not first), None)
         if second:
             before = budgets_for(second[3])
@@ -428,8 +503,11 @@ def flow_pnl(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
             td2.locator("input").fill("999")
             td2.locator("input").press("Escape")
             page.wait_for_timeout(1200)
-            run.check(f"Escape creates no budget on another line ({second[1]})", budgets_for(second[3]) == before,
-                      f"{before} before, {budgets_for(second[3])} after")
+            run.check(
+                f"Escape creates no budget on another line ({second[1]})",
+                budgets_for(second[3]) == before,
+                f"{before} before, {budgets_for(second[3])} after",
+            )
     else:
         run.check("some budget cell opens for editing", False, "no future-month budget cell opened on double-click")
     # The budget column follows the last cell clicked: a past or current month's budget cell does not open for editing.
@@ -439,18 +517,23 @@ def flow_pnl(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     if current.count():
         current.first.dblclick()
         page.wait_for_timeout(200)
-        run.check("a current-month budget cell does not open for editing", current.first.locator("input").count() == 0,
-                  str(current.first.get_attribute("aria-label")))
+        run.check(
+            "a current-month budget cell does not open for editing",
+            current.first.locator("input").count() == 0,
+            str(current.first.get_attribute("aria-label")),
+        )
     else:
         run.note("current-month budget cells", "none shown for a past or current month")
     go(page, base, "#/finance/pnl")
     subtotals = page.locator("#fin-pl tbody tr td:first-child").evaluate_all(
-        "els => els.map(e => e.textContent.trim()).filter(t => /^(Total|Gross|Net )/.test(t))")
+        "els => els.map(e => e.textContent.trim()).filter(t => /^(Total|Gross|Net )/.test(t))"
+    )
     run.note("P&L Company: in-table subtotal rows", " | ".join(subtotals) or "none")
     with page.expect_download(timeout=15000) as download:
         page.locator("[data-fin-export]").first.click()
-    run.check("P&L exports a CSV file", download.value.suggested_filename.endswith(".csv"),
-              download.value.suggested_filename)
+    run.check(
+        "P&L exports a CSV file", download.value.suggested_filename.endswith(".csv"), download.value.suggested_filename
+    )
 
 
 def open_draft(page: Page, number: str, status: str = "Draft") -> Locator:
@@ -468,7 +551,9 @@ def flow_bill(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     dlg = open_dialog(page, "[data-fin-doc-add]")
     contact = pick_contact(dlg, "Rehearsal vendor")
     dlg.locator("input[name=number]").fill(NUMBER)
-    labels = dlg.locator("select[name=line] option").evaluate_all("els => els.map(e => e.textContent.trim()).filter(Boolean)")
+    labels = dlg.locator("select[name=line] option").evaluate_all(
+        "els => els.map(e => e.textContent.trim()).filter(Boolean)"
+    )
     run.note("bill dialog, Line choices", " | ".join(labels))
     dlg.locator("select[name=line]").select_option(label="Software")
     dlg.locator("input[name=amount]").fill("250")
@@ -476,7 +561,9 @@ def flow_bill(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     problem = submit(page, dlg)
     run.check("a bill saves from + Bill", not problem, problem or f"contact {contact}")
     page.wait_for_timeout(600)
-    run.note("a new bill in the default Open list", f"{page.locator('tr[data-fin-doc]', has_text=NUMBER).count()} row(s)")
+    run.note(
+        "a new bill in the default Open list", f"{page.locator('tr[data-fin-doc]', has_text=NUMBER).count()} row(s)"
+    )
 
     def status_of(kind: str) -> object:
         made = [r for r in rows_of(api(page, base, f"/api/v2/finance/{kind}")) if r.get("number") == NUMBER]
@@ -491,8 +578,11 @@ def flow_bill(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     dlg = open_dialog(page, "[data-fin-do=paid]")
     problem = submit(page, dlg)
     page.wait_for_timeout(800)
-    run.check("Mark paid settles the bill", not problem and status_of("bills") == "paid",
-              problem or f"status {status_of('bills')}")
+    run.check(
+        "Mark paid settles the bill",
+        not problem and status_of("bills") == "paid",
+        problem or f"status {status_of('bills')}",
+    )
 
 
 def flow_invoice(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
@@ -519,8 +609,9 @@ def flow_invoice(page: Page, run: Run, base: str, fake: str, shots: str) -> None
     dlg = open_dialog(page, "[data-fin-do=paid]")
     problem = submit(page, dlg)
     page.wait_for_timeout(800)
-    run.check("Mark paid settles the invoice", not problem and status_of() == "paid",
-              problem or f"status {status_of()}")
+    run.check(
+        "Mark paid settles the invoice", not problem and status_of() == "paid", problem or f"status {status_of()}"
+    )
 
 
 def flow_void(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
@@ -542,8 +633,11 @@ def flow_void(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     problem = submit(page, dlg)
     page.wait_for_timeout(800)
     made = [r for r in rows_of(api(page, base, "/api/v2/finance/bills")) if r.get("number") == number]
-    run.check("Void with a reason voids the bill", not problem and made and made[0].get("status") == "void",
-              problem or f"status {made[0].get('status') if made else None}")
+    run.check(
+        "Void with a reason voids the bill",
+        not problem and made and made[0].get("status") == "void",
+        problem or f"status {made[0].get('status') if made else None}",
+    )
     go(page, base, "#/finance/receivables")
     dlg = open_dialog(page, "[data-fin-doc-add]")
     pick_contact(dlg, "Rehearsal customer")
@@ -561,8 +655,11 @@ def flow_void(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     page.wait_for_timeout(800)
     made = [r for r in rows_of(api(page, base, "/api/v2/finance/invoices")) if r.get("number") == f"WO-{STAMP}"]
     status = made[0].get("status") if made else None
-    run.check("Write off closes the invoice", not problem and status not in (None, "sent", "draft", "partial"),
-              problem or f"status {status}")
+    run.check(
+        "Write off closes the invoice",
+        not problem and status not in (None, "sent", "draft", "partial"),
+        problem or f"status {status}",
+    )
 
 
 def flow_access(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
@@ -571,8 +668,11 @@ def flow_access(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     page.locator("button", has_text="Edit defaults").first.click()
     page.wait_for_timeout(500)
     text = re.sub(r"\s+", " ", page.locator("dialog[open]").inner_text())
-    run.check("Edit defaults opens with the owner, manager and everyone-else defaults",
-              all(w in text for w in ("Owners", "Managers", "Everyone else")), text[:160])
+    run.check(
+        "Edit defaults opens with the owner, manager and everyone-else defaults",
+        all(w in text for w in ("Owners", "Managers", "Everyone else")),
+        text[:160],
+    )
     page.locator("dialog[open] button", has_text="Cancel").first.click()
     page.wait_for_timeout(300)
     page.locator("tr[data-fin-mate='human:cara']").first.click()
@@ -584,7 +684,9 @@ def flow_access(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     page.locator("button", has_text="Grant").first.click()
     page.wait_for_timeout(1200)
     granted = json.dumps(api(page, base, "/api/v2/finance/access"), sort_keys=True)
-    run.check("a grant to a teammate is recorded", granted != before, f"{len(granted) - len(before)} characters changed")
+    run.check(
+        "a grant to a teammate is recorded", granted != before, f"{len(granted) - len(before)} characters changed"
+    )
     revoke = page.locator("[data-fin-revoke]")
     run.check("the grant shows a revoke control", revoke.count() > 0, f"{revoke.count()} control(s)")
     if revoke.count():
@@ -602,8 +704,11 @@ def flow_pnl_periods(page: Page, run: Run, base: str, fake: str, shots: str) -> 
         page.locator("#fin-body button", has_text=re.compile(rf"^{label}$")).first.click()
         page.wait_for_timeout(900)
         run.note(f"P&L period {label}: header cells", str(page.locator("#fin-pl thead th").count()))
-    run.check("switching the period back to Month restores the columns", page.locator("#fin-pl thead th").count() == month,
-              f"{month} cells at start")
+    run.check(
+        "switching the period back to Month restores the columns",
+        page.locator("#fin-pl thead th").count() == month,
+        f"{month} cells at start",
+    )
 
 
 def flow_card(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
@@ -621,7 +726,7 @@ def flow_card(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
     page.wait_for_timeout(1000)
     row = page.locator("[data-fin-card]", has_text=nickname).first
     run.check("the new card lists", row.count() > 0)
-    row.click()                                  # the card's rail holds Freeze and the limit
+    row.click()  # the card's rail holds Freeze and the limit
     page.wait_for_timeout(700)
     freeze = page.locator("[data-fin-freeze]").first
     before = freeze.inner_text().strip()
@@ -646,8 +751,11 @@ def flow_transactions(page: Page, run: Run, base: str, fake: str, shots: str) ->
     page.reload(wait_until="networkidle")
     page.wait_for_timeout(800)
     row = page.locator("tr", has_text=SMOKE_VENDOR).first.inner_text()
-    run.check("a teammate tag saved from the rail shows on the row", teammate.split()[0] in row,
-              f"{teammate!r}; row: {row[:160]!r}")
+    run.check(
+        "a teammate tag saved from the rail shows on the row",
+        teammate.split()[0] in row,
+        f"{teammate!r}; row: {row[:160]!r}",
+    )
 
 
 def flow_roles(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
@@ -662,8 +770,12 @@ def flow_roles(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
         run.note(f"viewing as {who}: tabs", ", ".join(tabs))
         run.note(f"viewing as {who}: write controls on the P&L", str(writes))
         go(page, base, f"#/finance/payables?view_as={who}")
-        run.note(f"viewing as {who}: Payables body", re.sub(r"\s+", " ", page.locator("#fin-body").inner_text())[:200]
-                 if page.locator("#fin-body").count() else "no Finance body")
+        run.note(
+            f"viewing as {who}: Payables body",
+            re.sub(r"\s+", " ", page.locator("#fin-body").inner_text())[:200]
+            if page.locator("#fin-body").count()
+            else "no Finance body",
+        )
 
 
 def flow_closed_month(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
@@ -689,11 +801,17 @@ def flow_closed_month(page: Page, run: Run, base: str, fake: str, shots: str) ->
     made = [r for r in rows_of(api(page, base, "/api/v2/finance/bills")) if r.get("number") == number]
     status_after = made[0].get("status") if made else None
     run.note("approving the bill dated in the closed month", f"status {status_after}")
-    entries = [r for r in rows_of(api(page, base, f"/api/v2/finance/transactions?q={number}&limit=10"))
-               if r.get("kind") == "entry"]
+    entries = [
+        r
+        for r in rows_of(api(page, base, f"/api/v2/finance/transactions?q={number}&limit=10"))
+        if r.get("kind") == "entry"
+    ]
     dates = sorted({str(r.get("date")) for r in entries})
-    run.check("the approval posts no entry dated in the closed month", bool(entries) and not any(d.startswith("2026-10") for d in dates),
-              f"entry dates {dates}; memo {[r.get('memo') for r in entries][:1]}")
+    run.check(
+        "the approval posts no entry dated in the closed month",
+        bool(entries) and not any(d.startswith("2026-10") for d in dates),
+        f"entry dates {dates}; memo {[r.get('memo') for r in entries][:1]}",
+    )
     reopened, answer = act(page, base, "reopen_period", {"month": "2026-10"})
     run.note("October reopened after the check", f"{reopened} {str(answer)[:120]}")
 
@@ -718,9 +836,14 @@ def flow_expenses(page: Page, run: Run, base: str, fake: str, shots: str) -> Non
         return
     heads = page.locator("#main table thead th").evaluate_all("els => els.map(e => e.textContent.trim())")
     run.note("line drill-down columns", " | ".join(h for h in heads if h))
-    run.check("a line opens into its vendors", page.locator("#main table tbody tr").count() > 0, f"{picked}: {page.url}")
-    run.check("the drill-down has no vs-budget column", not any("vs budget" in h.lower() for h in heads),
-              " | ".join(h for h in heads if h))
+    run.check(
+        "a line opens into its vendors", page.locator("#main table tbody tr").count() > 0, f"{picked}: {page.url}"
+    )
+    run.check(
+        "the drill-down has no vs-budget column",
+        not any("vs budget" in h.lower() for h in heads),
+        " | ".join(h for h in heads if h),
+    )
     run.note("drill-down: add-budget controls", str(page.locator("[data-fin-vendor-add], [data-fin-line-add]").count()))
 
 
@@ -733,7 +856,8 @@ def flow_balance(page: Page, run: Run, base: str, fake: str, shots: str) -> None
     page.locator("[data-fin-add]").first.click()
     page.wait_for_timeout(500)
     choices = page.locator(".fin-pop button, [role=menu] button, [role=menuitem]").evaluate_all(
-        "els => els.map(e => e.textContent.trim()).filter(Boolean)")
+        "els => els.map(e => e.textContent.trim()).filter(Boolean)"
+    )
     run.note("balance sheet + Add choices", " | ".join(choices))
     page.keyboard.press("Escape")
 
@@ -756,8 +880,11 @@ def flow_token(page: Page, run: Run, base: str, fake: str, shots: str) -> None:
         whole = re.sub(r"\s+", " ", page.locator("#main").inner_text())
         run.note("Sources with an expired token", text[:400])
         run.check("the Mercury rows say the sync failed", bool(re.search(r"\bError\b", text)), text[:120])
-        run.check("an expired token is named with a way to fix it",
-                  bool(re.search(r"expired|token|reconnect|sign in|unauthori|401", whole, re.I)), whole[:160])
+        run.check(
+            "an expired token is named with a way to fix it",
+            bool(re.search(r"expired|token|reconnect|sign in|unauthori|401", whole, re.I)),
+            whole[:160],
+        )
     finally:
         fake_call(fake, "/_fake/renew", {})
     page.locator("[data-fin-sync]").first.click()
@@ -786,10 +913,13 @@ def dark_and_light(browser, run: Run, base: str, shots: str) -> None:
             ctx = browser.new_context(viewport={"width": w, "height": h}, color_scheme=scheme)
             pg = ctx.new_page()
             errors: list[str] = []
-            pg.on("console", lambda m, errors=errors: errors.append(f"console.error: {m.text}") if m.type == "error" else None)
+            pg.on(
+                "console",
+                lambda m, errors=errors: errors.append(f"console.error: {m.text}") if m.type == "error" else None,
+            )
             pg.on("pageerror", lambda e, errors=errors: errors.append(f"pageerror: {e}"))
             go(pg, base, "")
-            # The theme is dark unless this browser saved another choice (ui/theme.js), so set it explicitly.
+            # The theme is dark unless this browser saved another choice (ui/theme.ts), so set it explicitly.
             pg.evaluate(f"() => window.ticoTheme.set('{scheme}')")
             go(pg, base, "#/finance/pnl")
             applied = pg.evaluate("() => document.documentElement.dataset.theme")
@@ -798,21 +928,42 @@ def dark_and_light(browser, run: Run, base: str, shots: str) -> None:
             pg.screenshot(path=os.path.join(shots, f"{scheme}-{wname}-pnl.png"), full_page=True)
             run.check(f"{scheme} {wname}: P&L renders with no console errors", not errors, "; ".join(errors)[:300])
             ctx.close()
-        run.check(f"{wname}: the dark background differs from the light one", backgrounds["dark"] != backgrounds["light"],
-                  f"light {backgrounds['light']}, dark {backgrounds['dark']}")
+        run.check(
+            f"{wname}: the dark background differs from the light one",
+            backgrounds["dark"] != backgrounds["light"],
+            f"light {backgrounds['light']}, dark {backgrounds['dark']}",
+        )
 
 
 def rehearse(browser, run: Run, base: str, fake: str, shots: str) -> None:
     layout_pass(browser, run, base, shots)
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     page = ctx.new_page()
-    page.on("dialog", lambda d: d.accept())      # the Freeze and Void confirmations
-    page.on("console", lambda m: run.tab_errors.setdefault(run.current, []).append(f"console.error: {m.text}")
-            if m.type == "error" else None)
+    page.on("dialog", lambda d: d.accept())  # the Freeze and Void confirmations
+    page.on(
+        "console",
+        lambda m: (
+            run.tab_errors.setdefault(run.current, []).append(f"console.error: {m.text}") if m.type == "error" else None
+        ),
+    )
     page.on("pageerror", lambda e: run.tab_errors.setdefault(run.current, []).append(f"pageerror: {e}"))
     go(page, base, "")
-    flows = (flow_pnl, flow_pnl_periods, flow_expenses, flow_balance, flow_bill, flow_invoice, flow_void, flow_card,
-             flow_transactions, flow_access, flow_roles, flow_closed_month, flow_token, flow_tax)
+    flows = (
+        flow_pnl,
+        flow_pnl_periods,
+        flow_expenses,
+        flow_balance,
+        flow_bill,
+        flow_invoice,
+        flow_void,
+        flow_card,
+        flow_transactions,
+        flow_access,
+        flow_roles,
+        flow_closed_month,
+        flow_token,
+        flow_tax,
+    )
     for flow in flows:
         name = flow.__name__.removeprefix("flow_")
         run.current = name
@@ -834,8 +985,11 @@ def finish(run: Run, shots: str) -> int:
     ok = all(c["ok"] for c in run.checks)
     with open(os.path.join(shots, "smoke-results.json"), "w") as out:
         json.dump({"checks": run.checks, "notes": run.notes, "ok": ok}, out, indent=2)
-    print(f"\n{sum(1 for c in run.checks if c['ok'])}/{len(run.checks)} checks passed; results in "
-          f"{os.path.join(shots, 'smoke-results.json')}", flush=True)
+    print(
+        f"\n{sum(1 for c in run.checks if c['ok'])}/{len(run.checks)} checks passed; results in "
+        f"{os.path.join(shots, 'smoke-results.json')}",
+        flush=True,
+    )
     return 0 if ok else 1
 
 
@@ -847,9 +1001,9 @@ def finish(run: Run, shots: str) -> int:
 # the only bank here; nothing reaches a real provider, and Sources never clicks QuickBooks, Xero or Stripe.
 P2_ORDER = ["6", "1", "7", "2", "3", "4", "5", "8", "9", "10", "11", "12"]
 P2_MONTH = "start=2026-10-01&end=2026-10-31&period=month&basis=accrual"
-P2_NOV = "start=2026-11-01&end=2026-11-30&period=month&basis=accrual"   # today's month: the unattributed rows and bills dated today
-P2_DAY =datetime.now(timezone.utc).strftime("%Y-%m-%d")
-P2_LIVE = f"LIVE {STAMP}"                  # the unattributed fake row for this run (live refresh, then spec 7.5 hides it)
+P2_NOV = "start=2026-11-01&end=2026-11-30&period=month&basis=accrual"  # today's month: the unattributed rows and bills dated today
+P2_DAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+P2_LIVE = f"LIVE {STAMP}"  # the unattributed fake row for this run (live refresh, then spec 7.5 hides it)
 # The teammates a manager (Ben) sees under §7.5: his own, Support's bot, and Ops (Ana, under Support). Not Cara's line.
 BEN_SEES = ["bot:support", "human:ana", "human:cara", "human:ben"]
 
@@ -914,8 +1068,12 @@ def p2_open(browser, run: Run, base: str, width: str):
     ctx = browser.new_context(viewport={"width": w, "height": h})
     page = ctx.new_page()
     page.on("dialog", lambda d: d.accept())
-    page.on("console", lambda m: run.tab_errors.setdefault(run.current, []).append(f"console.error: {m.text}")
-            if m.type == "error" else None)
+    page.on(
+        "console",
+        lambda m: (
+            run.tab_errors.setdefault(run.current, []).append(f"console.error: {m.text}") if m.type == "error" else None
+        ),
+    )
     page.on("pageerror", lambda e: run.tab_errors.setdefault(run.current, []).append(f"pageerror: {e}"))
     go(page, base, "")
     return ctx, page
@@ -975,8 +1133,11 @@ def scroll_fit(page: Page, run: Run, label: str, shots: str, file: str) -> None:
 def dialog_fit(page: Page, run: Run, label: str, shots: str, file: str) -> None:
     box = page.evaluate(JS_DLG)
     page.screenshot(path=os.path.join(shots, file))
-    run.check(f"{label}: the dialog fits the screen", bool(box) and box["left"] >= 0 and box["right"] <= box["cw"] + 1,
-              str(box))
+    run.check(
+        f"{label}: the dialog fits the screen",
+        bool(box) and box["left"] >= 0 and box["right"] <= box["cw"] + 1,
+        str(box),
+    )
 
 
 def p2_bill(page: Page, run: Run, base: str, line_text: str, number: str, amount: str, label: str) -> dict:
@@ -1023,8 +1184,11 @@ def live_refresh(page: Page, run: Run, base: str, fake: str) -> None:
         while time.time() - started < 90 and not seen:
             page.wait_for_timeout(3000)
             seen = live in body_text(page)
-        run.check("6 live refresh: a synced row shows on the open Transactions page with no reload", seen,
-                  f"after {round(time.time() - started)} s; the spec does not require live refresh")
+        run.check(
+            "6 live refresh: a synced row shows on the open Transactions page with no reload",
+            seen,
+            f"after {round(time.time() - started)} s; the spec does not require live refresh",
+        )
         if not seen:
             page.reload(wait_until="networkidle")
             page.wait_for_timeout(800)
@@ -1056,9 +1220,14 @@ def categorize(page: Page, run: Run, base: str, counterparty: str, line_text: st
     _, data = get_json(page, base, f"/api/v2/finance/transactions?q={counterparty.replace(' ', '%20')}&limit=20")
     feed = [r for r in rows_of(data) if r.get("counterparty") == counterparty]
     status = feed[0].get("status") if feed else None
-    run.check(f"6 inline categorize of {counterparty} to {choice!r} saves", bool(feed) and status != "new",
-              f"status {status}; entry {feed[0].get('entry_id') if feed else None}")
-    page.screenshot(path=os.path.join(shots, f"item6-categorized-{counterparty.split()[0].lower()}.png"), full_page=True)
+    run.check(
+        f"6 inline categorize of {counterparty} to {choice!r} saves",
+        bool(feed) and status != "new",
+        f"status {status}; entry {feed[0].get('entry_id') if feed else None}",
+    )
+    page.screenshot(
+        path=os.path.join(shots, f"item6-categorized-{counterparty.split()[0].lower()}.png"), full_page=True
+    )
 
 
 def tag_row(page: Page, run: Run, base: str, counterparty: str, teammate: str, expect: str) -> None:
@@ -1067,7 +1236,7 @@ def tag_row(page: Page, run: Run, base: str, counterparty: str, teammate: str, e
     if not row.count():
         run.check(f"6 tag {counterparty}: the row is on the page", False)
         return
-    row.locator("td").first.click()        # the date cell: a click on the line select would not select the row
+    row.locator("td").first.click()  # the date cell: a click on the line select would not select the row
     page.wait_for_timeout(700)
     # A posted feed row's rail is the categorize form (data-fin-cat) with a Teammate select; a row with no P&L line
     # (an internal transfer) has no tag form at all, so it is noted, not failed.
@@ -1082,14 +1251,15 @@ def tag_row(page: Page, run: Run, base: str, counterparty: str, teammate: str, e
     page.wait_for_timeout(900)
     yes = page.locator("#fin-rail [data-fin-cat-yes]")
     if yes.count() and yes.first.is_visible():
-        yes.first.click()                  # an approval prompt for the teammate: send it
+        yes.first.click()  # an approval prompt for the teammate: send it
     page.wait_for_timeout(1500)
     page.wait_for_load_state("networkidle")
     _, data = get_json(page, base, f"/api/v2/finance/transactions?q={counterparty.replace(' ', '%20')}&limit=20")
     feed = [r for r in rows_of(data) if r.get("counterparty") == counterparty]
     tagged = [(l.get("tags") or {}).get("teammate") for r in feed for l in (r.get("lines") or [])]
-    run.check(f"6 tag {chosen!r} on {counterparty} reads back on its lines", expect in tagged,
-              f"line teammates {tagged}")
+    run.check(
+        f"6 tag {chosen!r} on {counterparty} reads back on its lines", expect in tagged, f"line teammates {tagged}"
+    )
 
 
 # ---- item 6: Transactions (desktop writes, both widths for the filters).
@@ -1107,10 +1277,15 @@ def item6(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         _, data = get_json(page, base, f"/api/v2/finance/transactions?status={status}&limit=200")
         api_rows = rows_of(data)
         same = ui == len(api_rows) and all(r.get("status") == status for r in api_rows)
-        run.check(f"6 {width}: Status {status} lists the matching rows (API agrees)", same,
-                  f"UI {ui} rows, API {len(api_rows)}")
+        run.check(
+            f"6 {width}: Status {status} lists the matching rows (API agrees)",
+            same,
+            f"UI {ui} rows, API {len(api_rows)}",
+        )
         if ui == 0:
-            run.check(f"6 {width}: Status {status} with no rows shows an empty state", "No transactions." in body_text(page))
+            run.check(
+                f"6 {width}: Status {status} with no rows shows an empty state", "No transactions." in body_text(page)
+            )
     page.select_option("select[data-fin-status]", "")
     page.wait_for_timeout(700)
     if width == "desktop":
@@ -1120,10 +1295,10 @@ def item6(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         categorize(page, run, base, "OPS VENDOR", "Software", shots)
         categorize(page, run, base, P2_LIVE, "Software", shots)
         categorize(page, run, base, "Acme Customer", "Revenue", shots)
-        tag_row(page, run, base, "Mercury IO", "support", "bot:support")   # an internal transfer: no tag form (noted)
+        tag_row(page, run, base, "Mercury IO", "support", "bot:support")  # an internal transfer: no tag form (noted)
         tag_row(page, run, base, "Acme Cloud", "support", "bot:support")
         tag_row(page, run, base, "Mercury", "cara", "human:cara")
-        tag_row(page, run, base, "OPS VENDOR", "Ana Rivera", "human:ana")   # "ana" alone also matches "Manager"
+        tag_row(page, run, base, "OPS VENDOR", "Ana Rivera", "human:ana")  # "ana" alone also matches "Manager"
     go(page, base, "#/finance/transactions")
     lines = p2_options(page, "select[data-fin-account]")
     run.note(f"6 {width}: Line filter choices", " | ".join(lines[:12]) or "none")
@@ -1133,8 +1308,11 @@ def item6(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         account = page.locator("select[data-fin-account]").input_value()
         ui = page.locator("tr[data-fin-tx]").count()
         _, data = get_json(page, base, f"/api/v2/finance/transactions?account_id={account}&limit=200")
-        run.check(f"6 {width}: the Line filter ({lines[1]!r}) narrows the rows (API agrees)", ui == len(rows_of(data)),
-                  f"UI {ui}, API {len(rows_of(data))}")
+        run.check(
+            f"6 {width}: the Line filter ({lines[1]!r}) narrows the rows (API agrees)",
+            ui == len(rows_of(data)),
+            f"UI {ui}, API {len(rows_of(data))}",
+        )
         page.select_option("select[data-fin-account]", "")
         page.wait_for_timeout(700)
     else:
@@ -1152,35 +1330,52 @@ def item1(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     _, owner = get_json(page, base, f"/api/v2/finance/pnl?view=expenses&{P2_NOV}")
     _, ben = get_json(page, base, f"/api/v2/finance/pnl?view=expenses&{P2_NOV}&view_as=human:ben")
     _, mine = get_json(page, base, f"/api/v2/finance/pnl?view=expenses&{P2_NOV}{qs}")
-    run.note("1 expense totals (cents): owner all, owner for Ben's teammates, Ben's view",
-             f"{cents(owner.get('expense'))}, {cents(mine.get('expense'))}, {cents(ben.get('expense'))}")
-    run.check("1 Ben's expense total equals the owner's total for Ben's teammates (no hidden spend)",
-              cents(ben.get("expense")) == cents(mine.get("expense")) and ben.get("expense") is not None,
-              f"Ben {ben.get('expense')}, owner for his teammates {mine.get('expense')}")
-    run.check("1 the owner sees more expense than Ben (hidden spend exists to test)",
-              cents(owner.get("expense")) > cents(ben.get("expense")),
-              f"owner {cents(owner.get('expense'))} vs Ben {cents(ben.get('expense'))}")
+    run.note(
+        "1 expense totals (cents): owner all, owner for Ben's teammates, Ben's view",
+        f"{cents(owner.get('expense'))}, {cents(mine.get('expense'))}, {cents(ben.get('expense'))}",
+    )
+    run.check(
+        "1 Ben's expense total equals the owner's total for Ben's teammates (no hidden spend)",
+        cents(ben.get("expense")) == cents(mine.get("expense")) and ben.get("expense") is not None,
+        f"Ben {ben.get('expense')}, owner for his teammates {mine.get('expense')}",
+    )
+    run.check(
+        "1 the owner sees more expense than Ben (hidden spend exists to test)",
+        cents(owner.get("expense")) > cents(ben.get("expense")),
+        f"owner {cents(owner.get('expense'))} vs Ben {cents(ben.get('expense'))}",
+    )
     _, tx = get_json(page, base, "/api/v2/finance/transactions?limit=200&view_as=human:ben")
     seen_names = sorted({str(r.get("counterparty")) for r in rows_of(tx)})
     leaked = [n for n in ("Mercury", "Acme Customer", P2_LIVE) if n in seen_names]
-    run.check("1 Ben's transactions show no hidden rows (bot:inbox, revenue, unattributed)", not leaked,
-              f"Ben sees {seen_names}; leaked {leaked}")
+    run.check(
+        "1 Ben's transactions show no hidden rows (bot:inbox, revenue, unattributed)",
+        not leaked,
+        f"Ben sees {seen_names}; leaked {leaked}",
+    )
     # Tagged spend shows as entries with no counterparty name, so the check reads amounts: Acme Cloud 4500 (Support's
     # card spend) and Mercury 1500 (Cara's wire fee) were tagged in item 6 and should both be on Ben's list.
     ben_amounts = {abs(int(r.get("amount") or 0)) for r in rows_of(tx)}
     run.note("1 Ben's transactions: amounts he sees (cents)", str(sorted(ben_amounts))[:200])
-    run.check("1 Ben's transactions show his teammates' tagged spend (4500 Support, 1500 Cara)",
-              {4500, 1500} <= ben_amounts, f"amounts {sorted(ben_amounts)}")
+    run.check(
+        "1 Ben's transactions show his teammates' tagged spend (4500 Support, 1500 Cara)",
+        {4500, 1500} <= ben_amounts,
+        f"amounts {sorted(ben_amounts)}",
+    )
     _, company = get_json(page, base, f"/api/v2/finance/pnl?view=company&{P2_NOV}&view_as=human:ben")
-    run.check("1 Ben's company P&L expense is his own expense, not the company total (spec 7.5)",
-              cents(company.get("expense")) == cents(ben.get("expense")),
-              f"company view {company.get('expense')}, Ben's expenses view {ben.get('expense')}, owner {owner.get('expense')}")
+    run.check(
+        "1 Ben's company P&L expense is his own expense, not the company total (spec 7.5)",
+        cents(company.get("expense")) == cents(ben.get("expense")),
+        f"company view {company.get('expense')}, Ben's expenses view {ben.get('expense')}, owner {owner.get('expense')}",
+    )
     # "Mercury" is left out: Cara's wire fee is tagged to her, so Ben's search rightly finds it.
     for needle in (P2_LIVE, "Acme Customer"):
         _, hits = get_json(page, base, f"/api/v2/finance/search?q={needle.replace(' ', '%20')}&view_as=human:ben")
         _, owner_hits = get_json(page, base, f"/api/v2/finance/search?q={needle.replace(' ', '%20')}")
-        run.check(f"1 search for {needle!r} as Ben does not return the hidden row", not has_text(hits, needle),
-                  f"owner search has it: {has_text(owner_hits, needle)}")
+        run.check(
+            f"1 search for {needle!r} as Ben does not return the hidden row",
+            not has_text(hits, needle),
+            f"owner search has it: {has_text(owner_hits, needle)}",
+        )
     for path, passes in (
         ("balance-sheet", lambda s, d: s != 200 or not rows_of(d)),
         ("bills?limit=5", lambda s, d: s != 200 or not rows_of(d)),
@@ -1190,15 +1385,20 @@ def item1(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     ):
         sep = "&" if "?" in path else "?"
         status, data = get_json(page, base, f"/api/v2/finance/{path}{sep}view_as=human:ben")
-        run.check(f"1 Ben (view_as) gets no owner-only {path.split('?')[0]} data (spec 7.5)", passes(status, data),
-                  f"status {status}")
+        run.check(
+            f"1 Ben (view_as) gets no owner-only {path.split('?')[0]} data (spec 7.5)",
+            passes(status, data),
+            f"status {status}",
+        )
     go(page, base, "#/finance/pnl?view=expenses&view_as=human:ben")
     text = body_text(page)
     tabs = page.locator("[data-fin-tab]").evaluate_all("els => els.map(e => e.textContent.trim())")
     run.note("1 Ben's tabs", ", ".join(tabs))
-    run.check("1 Ben's expenses page shows no unattributed or revenue row",
-              not any(s in text for s in (P2_LIVE, "Acme Customer", "Unattributed")),
-              " ".join(text.split())[:160])
+    run.check(
+        "1 Ben's expenses page shows no unattributed or revenue row",
+        not any(s in text for s in (P2_LIVE, "Acme Customer", "Unattributed")),
+        " ".join(text.split())[:160],
+    )
     page.screenshot(path=os.path.join(shots, "item1-ben-expenses-desktop.png"), full_page=True)
 
 
@@ -1209,7 +1409,8 @@ def item7(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         page.locator("[data-fin-filter]").first.click()
         page.wait_for_timeout(500)
     picks = page.locator("[data-fin-pick]").evaluate_all(
-        "els => els.map(e => (e.getAttribute('data-fin-pick') || '') + ' = ' + ((e.closest('label') || e.parentElement || e).textContent || '').trim())")
+        "els => els.map(e => (e.getAttribute('data-fin-pick') || '') + ' = ' + ((e.closest('label') || e.parentElement || e).textContent || '').trim())"
+    )
     run.note(f"7 {width}: picker values as the owner (value = label)", " | ".join(dict.fromkeys(picks)))
     # The checkbox is visually hidden; pick the one in the tree that is showing (desktop: the side column, phone: the popover).
     page.locator("[data-fin-pick='mate:bot:support']:visible").first.check(force=True)
@@ -1221,21 +1422,36 @@ def item7(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
             run.check("7 phone: the chip's remove (x) is tappable while the Filter popover is open", True)
         except Exception as e:  # noqa: BLE001 - a click that cannot land is the check's recorded result
             covered = "intercepts pointer events" in str(e)
-            run.check("7 phone: the chip's remove (x) is tappable while the Filter popover is open", False,
-                      "covered by the open popover" if covered else str(e).splitlines()[0][:160])
+            run.check(
+                "7 phone: the chip's remove (x) is tappable while the Filter popover is open",
+                False,
+                "covered by the open popover" if covered else str(e).splitlines()[0][:160],
+            )
         page.locator("[data-fin-filter]").first.click()
         page.wait_for_timeout(500)
     chips = page.locator("#fin-chips .fin-chip").all_inner_texts()
-    run.check(f"7 {width}: picking Support adds a filter chip", any("support" in c.lower() for c in chips),
-              " | ".join(chips))
+    run.check(
+        f"7 {width}: picking Support adds a filter chip", any("support" in c.lower() for c in chips), " | ".join(chips)
+    )
     _, api = get_json(page, base, f"/api/v2/finance/pnl?view=expenses&{P2_MONTH}&teammates=bot:support")
-    want = sorted(r["name"] for r in api.get("rows", []) if cents(r.get("total")) and r.get("code")) if isinstance(api, dict) else []
+    want = (
+        sorted(r["name"] for r in api.get("rows", []) if cents(r.get("total")) and r.get("code"))
+        if isinstance(api, dict)
+        else []
+    )
     # A collapsed group carries a disclosure mark (▸) after its name; the name is what is compared.
-    ui = page.locator("#fin-pl tbody tr td:first-child").evaluate_all("els => els.map(e => e.textContent.replace('▸', '').trim())")
+    ui = page.locator("#fin-pl tbody tr td:first-child").evaluate_all(
+        "els => els.map(e => e.textContent.replace('▸', '').trim())"
+    )
     missing = [n for n in want if n not in ui]
-    run.check(f"7 {width}: the filtered table shows every line with Support spend (API agrees)", not missing,
-              f"API lines {want}; missing in UI {missing}")
-    run.note(f"7 {width}: side panel with Support picked", " ".join(page.locator("#fin-rail").inner_text().split())[:300])
+    run.check(
+        f"7 {width}: the filtered table shows every line with Support spend (API agrees)",
+        not missing,
+        f"API lines {want}; missing in UI {missing}",
+    )
+    run.note(
+        f"7 {width}: side panel with Support picked", " ".join(page.locator("#fin-rail").inner_text().split())[:300]
+    )
     page.screenshot(path=os.path.join(shots, f"item7-expenses-support-{width}.png"), full_page=True)
     if width == "phone":
         scroll_fit(page, run, "7 phone: Expenses", shots, "item7-expenses-phone-fit.png")
@@ -1245,11 +1461,16 @@ def item7(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     if width == "desktop":
         go(page, base, "#/finance/pnl?view=expenses&view_as=human:ben")
         ben = page.locator("[data-fin-pick]").evaluate_all(
-            "els => els.map(e => ((e.getAttribute('data-fin-pick') || '') + ' ' + ((e.closest('label') || e.parentElement || e).textContent || '')).trim())")
-        values = page.locator("[data-fin-pick]").evaluate_all("els => els.map(e => e.getAttribute('data-fin-pick') || '')")
-        run.check("7 Ben's picker does not offer Unattributed (spec 7.5: company-wide viewers only)",
-                  not any(v.startswith("none") for v in values) and not any("unattributed" in p.lower() for p in ben),
-                  " | ".join(dict.fromkeys(ben))[:200])
+            "els => els.map(e => ((e.getAttribute('data-fin-pick') || '') + ' ' + ((e.closest('label') || e.parentElement || e).textContent || '')).trim())"
+        )
+        values = page.locator("[data-fin-pick]").evaluate_all(
+            "els => els.map(e => e.getAttribute('data-fin-pick') || '')"
+        )
+        run.check(
+            "7 Ben's picker does not offer Unattributed (spec 7.5: company-wide viewers only)",
+            not any(v.startswith("none") for v in values) and not any("unattributed" in p.lower() for p in ben),
+            " | ".join(dict.fromkeys(ben))[:200],
+        )
 
 
 # ---- item 2: Access, View as (owner only, read only, audited per spec 7.5).
@@ -1296,16 +1517,24 @@ def item3(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     p2_bill(page, run, base, "Bank", f"BANK-{STAMP}", "100", "3 Bank line")
     _, bs1 = get_json(page, base, "/api/v2/finance/balance-sheet")
     run.note("3 Bank line: bank balance before and after the approved bill (cents)", f"{bank0} -> {bank_of(bs1)}")
-    run.check("3 Bank line: the bank balance moves by the bill amount (asset line, Dr Bank Cr AP)",
-              bank_of(bs1) - bank0 == 10000, f"{bank0} -> {bank_of(bs1)}")
+    run.check(
+        "3 Bank line: the bank balance moves by the bill amount (asset line, Dr Bank Cr AP)",
+        bank_of(bs1) - bank0 == 10000,
+        f"{bank0} -> {bank_of(bs1)}",
+    )
     p2_bill(page, run, base, "Operating expenses", f"PARENT-{STAMP}", "100", "3 group parent")
     _, pl1 = get_json(page, base, f"/api/v2/finance/pnl?{P2_NOV}")
     rows0, rows1 = pnl_rows(pl0), pnl_rows(pl1)
-    run.note("3 group parent: the 6000 row total before and after (cents)",
-             f"{cents(rows0.get('6000', {}).get('total'))} -> {cents(rows1.get('6000', {}).get('total'))}")
+    run.note(
+        "3 group parent: the 6000 row total before and after (cents)",
+        f"{cents(rows0.get('6000', {}).get('total'))} -> {cents(rows1.get('6000', {}).get('total'))}",
+    )
     run.note("3 group parent: P&L expense total before and after (cents)", f"{expense0} -> {cents(pl1.get('expense'))}")
-    run.check("3 group parent: the P&L expense total rises by the bill once", cents(pl1.get("expense")) - expense0 == 10000,
-              f"delta {cents(pl1.get('expense')) - expense0}")
+    run.check(
+        "3 group parent: the P&L expense total rises by the bill once",
+        cents(pl1.get("expense")) - expense0 == 10000,
+        f"delta {cents(pl1.get('expense')) - expense0}",
+    )
     page.screenshot(path=os.path.join(shots, "item3-bills-desktop.png"), full_page=True)
 
 
@@ -1334,31 +1563,45 @@ def item4(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     problem = submit(page, dlg)
     run.check("4 journal entry saves (Dr Bank, Cr Gateway credit)", not problem, problem or "saved")
     _, bs1 = get_json(page, base, "/api/v2/finance/balance-sheet")
-    run.check("4 journal: the balance sheet's Bank moves by 300 (cents 30000)", bank_of(bs1) - bank0 == 30000,
-              f"{bank0} -> {bank_of(bs1)}")
+    run.check(
+        "4 journal: the balance sheet's Bank moves by 300 (cents 30000)",
+        bank_of(bs1) - bank0 == 30000,
+        f"{bank0} -> {bank_of(bs1)}",
+    )
 
     dlg = add("asset")
-    run.note("4 asset: form fields", ", ".join(dlg.locator("input, select").evaluate_all("els => els.map(e => e.name).filter(Boolean)")))
+    run.note(
+        "4 asset: form fields",
+        ", ".join(dlg.locator("input, select").evaluate_all("els => els.map(e => e.name).filter(Boolean)")),
+    )
     p2_fill(dlg, ("name", "label", "title"), "Rehearsal laptop")
     used = p2_fill(dlg, ("cost", "amount", "value", "price"), "1200")
     dlg.screenshot(path=os.path.join(shots, "item4-asset-dialog.png"))
     problem = submit(page, dlg)
     run.check("4 asset saves", not problem, problem or f"amount field {used!r}")
     _, bs2 = get_json(page, base, "/api/v2/finance/balance-sheet")
-    run.check("4 asset is on the balance sheet at its cost (120000 cents)", cents(named(bs2, "Rehearsal laptop").get("balance")) == 120000,
-              json.dumps(named(bs2, "Rehearsal laptop"), default=str)[:160])
+    run.check(
+        "4 asset is on the balance sheet at its cost (120000 cents)",
+        cents(named(bs2, "Rehearsal laptop").get("balance")) == 120000,
+        json.dumps(named(bs2, "Rehearsal laptop"), default=str)[:160],
+    )
 
     dlg = add("loan")
-    run.note("4 loan: form fields", ", ".join(dlg.locator("input, select").evaluate_all("els => els.map(e => e.name).filter(Boolean)")))
+    run.note(
+        "4 loan: form fields",
+        ", ".join(dlg.locator("input, select").evaluate_all("els => els.map(e => e.name).filter(Boolean)")),
+    )
     p2_fill(dlg, ("name", "label", "title"), "Rehearsal credit line")
     used = p2_fill(dlg, ("amount", "balance", "limit", "principal"), "5000")
     dlg.screenshot(path=os.path.join(shots, "item4-loan-dialog.png"))
     problem = submit(page, dlg)
     run.check("4 loan or credit line saves", not problem, problem or f"amount field {used!r}")
     _, bs3 = get_json(page, base, "/api/v2/finance/balance-sheet")
-    run.check("4 loan is on the balance sheet at 500000 cents (sign may be negative)",
-              abs(cents(named(bs3, "Rehearsal credit line").get("balance"))) == 500000,
-              json.dumps(named(bs3, "Rehearsal credit line"), default=str)[:160])
+    run.check(
+        "4 loan is on the balance sheet at 500000 cents (sign may be negative)",
+        abs(cents(named(bs3, "Rehearsal credit line").get("balance"))) == 500000,
+        json.dumps(named(bs3, "Rehearsal credit line"), default=str)[:160],
+    )
 
     dlg = add("import")
     run.note("4 import: dialog text", " ".join(dlg.inner_text().split())[:300])
@@ -1376,8 +1619,7 @@ def item4(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     problem = submit(page, dlg)
     run.note("4 import: after Save", problem or "dialog closed")
     go(page, base, "#/finance/balance")
-    run.note("4 import history: text on the Balance page after the import",
-             re.sub(r"\s+", " ", body_text(page))[:200])
+    run.note("4 import history: text on the Balance page after the import", re.sub(r"\s+", " ", body_text(page))[:200])
 
 
 # ---- item 5: Receivables (Late filter, reminders) and Payables (schedule, reschedule, bills address, direct send).
@@ -1387,14 +1629,18 @@ def late_invoice(page: Page, run: Run, base: str, shots: str) -> None:
     dlg = open_dialog(page, "[data-fin-doc-add]")
     pick_contact(dlg, "Rehearsal customer")
     dlg.locator("input[name=number]").fill(number)
-    run.note("5 invoice dialog fields", ", ".join(dlg.locator("input").evaluate_all("els => els.map(e => e.name).filter(Boolean)")))
+    run.note(
+        "5 invoice dialog fields",
+        ", ".join(dlg.locator("input").evaluate_all("els => els.map(e => e.name).filter(Boolean)")),
+    )
     p2_fill(dlg, ("date", "issued", "invoice_date"), "2026-09-01")
     due_used = p2_fill(dlg, ("due", "due_date"), "2026-09-30")
     pick_first(dlg, "acct")
     dlg.locator("input[name=amt]").first.fill("210")
     problem = submit(page, dlg)
-    run.check("5 an invoice dated in September, due 30 September, saves", not problem,
-              problem or f"due field {due_used!r}")
+    run.check(
+        "5 an invoice dated in September, due 30 September, saves", not problem, problem or f"due field {due_used!r}"
+    )
     open_draft(page, number)
     page.locator("[data-fin-do=send]").first.click()
     page.wait_for_timeout(1500)
@@ -1407,15 +1653,21 @@ def late_invoice(page: Page, run: Run, base: str, shots: str) -> None:
     run.check("5 the Late filter lists the overdue invoice", listed == 1, f"{listed} row(s); due {inv.get('due_date')}")
     page.screenshot(path=os.path.join(shots, "item5-late-desktop.png"), full_page=True)
     reminders = page.locator("button", has_text=re.compile("remind", re.I)).count()
-    run.check("5 no reminder control on Receivables (spec 12: reminders are the Bookkeeper's, not a page control)",
-              reminders == 0, f"{reminders} control(s)")
+    run.check(
+        "5 no reminder control on Receivables (spec 12: reminders are the Bookkeeper's, not a page control)",
+        reminders == 0,
+        f"{reminders} control(s)",
+    )
 
 
 def schedule_and_address(page: Page, run: Run, base: str, shots: str) -> None:
     number = f"SCH-{STAMP}"
     open_draft(page, number, "Open")
     dlg = open_dialog(page, "[data-fin-do=schedule]")
-    run.note("5 schedule dialog fields", ", ".join(dlg.locator("input").evaluate_all("els => els.map(e => e.name || e.type).filter(Boolean)")))
+    run.note(
+        "5 schedule dialog fields",
+        ", ".join(dlg.locator("input").evaluate_all("els => els.map(e => e.name || e.type).filter(Boolean)")),
+    )
     used = p2_fill(dlg, ("date", "when", "scheduled_for", "pay_on", "run_on", "on"), "2026-11-20")
     if not used and dlg.locator("input[type=date]").count():
         dlg.locator("input[type=date]").first.fill("2026-11-20")
@@ -1424,8 +1676,11 @@ def schedule_and_address(page: Page, run: Run, base: str, shots: str) -> None:
     run.check("5 Schedule saves a payment date", not problem, problem or f"field {used!r}")
     _, data = get_json(page, base, "/api/v2/finance/bills?limit=200")
     bill = next((r for r in rows_of(data) if r.get("number") == number), {})
-    run.check("5 the bill reads back with 2026-11-20 on it", "2026-11-20" in json.dumps(bill, default=str),
-              f"status {bill.get('status')}")
+    run.check(
+        "5 the bill reads back with 2026-11-20 on it",
+        "2026-11-20" in json.dumps(bill, default=str),
+        f"status {bill.get('status')}",
+    )
     run.note("5 bill after Schedule", json.dumps(bill, default=str)[:400])
     page.reload(wait_until="networkidle")
     page.wait_for_timeout(800)
@@ -1436,8 +1691,11 @@ def schedule_and_address(page: Page, run: Run, base: str, shots: str) -> None:
     problem = submit(page, dlg)
     _, data = get_json(page, base, "/api/v2/finance/bills?limit=200")
     bill = next((r for r in rows_of(data) if r.get("number") == number), {})
-    run.check("5 Reschedule moves it to 2026-11-25 (read back)", not problem and "2026-11-25" in json.dumps(bill, default=str),
-              problem or f"bill {json.dumps(bill, default=str)[:160]}")
+    run.check(
+        "5 Reschedule moves it to 2026-11-25 (read back)",
+        not problem and "2026-11-25" in json.dumps(bill, default=str),
+        problem or f"bill {json.dumps(bill, default=str)[:160]}",
+    )
     page.reload(wait_until="networkidle")
     page.wait_for_timeout(800)
     dlg = open_dialog(page, "[data-fin-email-set]")
@@ -1456,8 +1714,11 @@ def schedule_and_address(page: Page, run: Run, base: str, shots: str) -> None:
     page.reload(wait_until="networkidle")
     page.wait_for_timeout(800)
     after = page.locator("[data-fin-direct]").first.evaluate("el => el.checked ?? el.getAttribute('aria-checked')")
-    run.check("5 the direct send switch changes and stays changed after a reload (owner only, spec 9)", after != before,
-              f"{before} -> {after}")
+    run.check(
+        "5 the direct send switch changes and stays changed after a reload (owner only, spec 9)",
+        after != before,
+        f"{before} -> {after}",
+    )
     page.locator("[data-fin-direct]").first.click()
     page.wait_for_timeout(1200)
 
@@ -1489,12 +1750,17 @@ def item8(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     # (income 0, expense 1500 in the demo) against the whole month (expense 6000).
     shown_labels = ["Oct" if l == "2026-10" else l for l in labels]
     _, narrow = get_json(page, base, "/api/v2/finance/pnl?start=2026-10-01&end=2026-10-12&period=month&basis=accrual")
-    run.check(f"8 {width}: the range is applied by the API (Oct 1-12 expense is not the month's)",
-              cents(narrow.get("expense")) != cents(data.get("expense")) if isinstance(data, dict) else False,
-              f"Oct 1-12 expense {narrow.get('expense')}, Oct 1-15 expense {data.get('expense') if isinstance(data, dict) else None}")
+    run.check(
+        f"8 {width}: the range is applied by the API (Oct 1-12 expense is not the month's)",
+        cents(narrow.get("expense")) != cents(data.get("expense")) if isinstance(data, dict) else False,
+        f"Oct 1-12 expense {narrow.get('expense')}, Oct 1-15 expense {data.get('expense') if isinstance(data, dict) else None}",
+    )
     run.note(f"8 {width}: range label on the page", page.locator("[data-fin-range]").first.inner_text().strip())
-    run.check(f"8 {width}: the range Oct 1 to 15 reaches the table (API agrees)", bool(labels) and any(l in " ".join(head) for l in shown_labels),
-              f"API columns {labels}; UI head {head}")
+    run.check(
+        f"8 {width}: the range Oct 1 to 15 reaches the table (API agrees)",
+        bool(labels) and any(l in " ".join(head) for l in shown_labels),
+        f"API columns {labels}; UI head {head}",
+    )
     page.screenshot(path=os.path.join(shots, f"item8-range-{width}.png"), full_page=True)
     if width == "phone":
         scroll_fit(page, run, "8 phone: P&L with a range", shots, "item8-range-phone-fit.png")
@@ -1514,8 +1780,11 @@ def item8(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
                 page.wait_for_timeout(1000)
                 changed[version] = page.locator("#fin-pl").inner_text() != base_body
             run.note("8 compare: does the table text change with each version", str(changed))
-            run.check("8 compare to a budget version changes the table (some version)", any(changed.values()),
-                      f"headers before {len(before)} cells; {changed}")
+            run.check(
+                "8 compare to a budget version changes the table (some version)",
+                any(changed.values()),
+                f"headers before {len(before)} cells; {changed}",
+            )
             page.select_option("select[data-fin-compare]", "")
             page.wait_for_timeout(700)
         else:
@@ -1524,23 +1793,36 @@ def item8(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         _, cash = get_json(page, base, f"/api/v2/finance/pnl?{P2_MONTH.replace('basis=accrual', 'basis=cash')}")
         p2_toggle(page, "Cash")
         run.check("8 Cash basis shows Cash on the page", "Cash" in body_text(page))
-        run.note("8 Oct expense total: accrual vs cash (cents)", f"{cents(acc.get('expense'))} vs {cents(cash.get('expense'))}")
+        run.note(
+            "8 Oct expense total: accrual vs cash (cents)",
+            f"{cents(acc.get('expense'))} vs {cents(cash.get('expense'))}",
+        )
         p2_toggle(page, "Accrual")
     go(page, base, "#/finance/pnl")
     p2_range(page, "2026-10-01", "2026-10-31")
     for label in ("Day", "Week"):
         p2_toggle(page, label)
-        _, data = get_json(page, base, f"/api/v2/finance/pnl?{P2_MONTH.replace('period=month', 'period=' + label.lower())}")
-        cols = [c.get("label") for c in data.get("columns", []) if isinstance(c, dict)] if isinstance(data, dict) else []
+        _, data = get_json(
+            page, base, f"/api/v2/finance/pnl?{P2_MONTH.replace('period=month', 'period=' + label.lower())}"
+        )
+        cols = (
+            [c.get("label") for c in data.get("columns", []) if isinstance(c, dict)] if isinstance(data, dict) else []
+        )
         head = page.locator("#fin-pl thead th").evaluate_all("els => els.map(e => e.textContent.trim())")
         if label == "Day":
             # The API returns a column per day in the range (31 for October). The table's day headers read "Oct 26" form.
             day_heads = [h for h in head if re.match(r"^[A-Z][a-z]{2} \d{1,2}$", h)]
             run.note(f"8 {width}: Day header labels on the page", " | ".join(head)[:300])
-            run.check(f"8 {width}: Day shows a column for each day of the range (API {len(cols)})", len(day_heads) >= len(cols),
-                      f"UI shows {len(day_heads)} day columns: {day_heads[:1]}..{day_heads[-1:]}; API {len(cols)} from {cols[:1]}")
+            run.check(
+                f"8 {width}: Day shows a column for each day of the range (API {len(cols)})",
+                len(day_heads) >= len(cols),
+                f"UI shows {len(day_heads)} day columns: {day_heads[:1]}..{day_heads[-1:]}; API {len(cols)} from {cols[:1]}",
+            )
         else:
-            run.note(f"8 {width}: Week header labels on the page (API {len(cols)} columns from {cols[:1]})", " | ".join(head)[:300])
+            run.note(
+                f"8 {width}: Week header labels on the page (API {len(cols)} columns from {cols[:1]})",
+                " | ".join(head)[:300],
+            )
     if width == "phone":
         scroll_fit(page, run, "8 phone: P&L Week", shots, "item8-week-phone-fit.png")
     p2_toggle(page, "Month")
@@ -1579,8 +1861,11 @@ def item9(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     _, data = get_json(page, base, "/api/v2/finance/cards")
     made = find_all(data, lambda d: d.get("nickname") == nickname)
     limits = {k: v for k, v in (made[0].items() if made else []) if "limit" in k}
-    run.check(f"9 {width}: the limit saves to {want} (read back)", any(v in (int(want) * 100, int(want)) for v in limits.values()),
-              f"limit fields {limits}")
+    run.check(
+        f"9 {width}: the limit saves to {want} (read back)",
+        any(v in (int(want) * 100, int(want)) for v in limits.values()),
+        f"limit fields {limits}",
+    )
     empties = re.findall(r"No [a-z ]+\.", body_text(page))
     run.note(f"9 {width}: empty-state texts on Cards", " | ".join(sorted(set(empties))) or "none")
     if width == "phone":
@@ -1619,15 +1904,21 @@ def item10(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
     bill = next((r for r in rows_of(bills) if r.get("number") == number), {})
     _, feed = get_json(page, base, f"/api/v2/finance/transactions?q={number}&limit=20")
     dates = sorted({str(r.get("date")) for r in rows_of(feed) if r.get("kind") == "entry"})
-    run.check("10 approving the September bill posts no entry dated in September",
-              not any(d.startswith("2026-09") for d in dates), f"bill status {bill.get('status')}; entry dates {dates}")
+    run.check(
+        "10 approving the September bill posts no entry dated in September",
+        not any(d.startswith("2026-09") for d in dates),
+        f"bill status {bill.get('status')}; entry dates {dates}",
+    )
     st2, body2 = act(page, base, "reopen_period", {"month": "2026-09"})
     run.check("10 reopen_period reopens September (owner)", st2 < 300, f"{st2} {str(body2)[:160]}")
     go(page, base, "#/finance/pnl")
     p2_range(page, "2026-09-01", "2026-09-30")
     run.check("10 after reopen, September no longer shows Closed", "Closed" not in marks(), marks()[:120] or "no marks")
-    run.note("10 not exercised", "a non-owner close attempt needs a second sign-in: the action takes the signed-in person, not view_as; "
-             "there is no close or reopen control in the Finance tab")
+    run.note(
+        "10 not exercised",
+        "a non-owner close attempt needs a second sign-in: the action takes the signed-in person, not view_as; "
+        "there is no close or reopen control in the Finance tab",
+    )
 
 
 # ---- item 11: vendor drill-down (spend bar, budget, warn level, paid-by, seats, renewal).
@@ -1638,7 +1929,9 @@ def item11(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
         if vendor is None:
             run.check("11 the Rehearsal vendor contact exists", False, "no such contact")
             return
-        status, body = act(page, base, "contact_update", {"contact_id": vendor.get("id"), "seats": 12, "renewal_on": "2026-12-15"})
+        status, body = act(
+            page, base, "contact_update", {"contact_id": vendor.get("id"), "seats": 12, "renewal_on": "2026-12-15"}
+        )
         run.check("11 contact_update sets seats and a renewal date", status < 300, f"{status} {str(body)[:160]}")
         _, contacts = get_json(page, base, "/api/v2/finance/contacts")
         after = next((r for r in rows_of(contacts) if r.get("name") == "Rehearsal vendor"), {})
@@ -1655,17 +1948,32 @@ def item11(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
     heads = page.locator("#main table thead th").evaluate_all("els => els.map(e => e.textContent.trim())")
     run.note(f"11 {width}: drill-down columns", " | ".join(h for h in heads if h))
     vendor_rows = page.locator("#main table tbody tr", has_text="Rehearsal vendor")
-    run.check(f"11 {width}: the Rehearsal vendor row shows in the drill-down", vendor_rows.count() > 0,
-              f"{vendor_rows.count()} row(s) at {href}")
+    run.check(
+        f"11 {width}: the Rehearsal vendor row shows in the drill-down",
+        vendor_rows.count() > 0,
+        f"{vendor_rows.count()} row(s) at {href}",
+    )
     head_text = " ".join(heads).lower()
-    run.check(f"11 {width}: the drill-down table has a budget column", "budget" in head_text, " | ".join(h for h in heads if h))
+    run.check(
+        f"11 {width}: the drill-down table has a budget column",
+        "budget" in head_text,
+        " | ".join(h for h in heads if h),
+    )
     if vendor_rows.count():
         # Seats, renewal, paid-by and team spend are in the vendor's side panel (spec 12), not table columns.
         vendor_rows.first.locator("td").first.click()
         page.wait_for_timeout(900)
         rail = " ".join(page.locator("#fin-rail").inner_text().split())
-        run.check(f"11 {width}: the vendor's side panel shows seats and renewal", "Seats 12" in rail and "Renews Dec 15" in rail, rail[:200])
-        run.check(f"11 {width}: the side panel shows paid-by and spend by team", "PAID BY" in rail.upper() and "BY TEAM" in rail.upper(), rail[:200])
+        run.check(
+            f"11 {width}: the vendor's side panel shows seats and renewal",
+            "Seats 12" in rail and "Renews Dec 15" in rail,
+            rail[:200],
+        )
+        run.check(
+            f"11 {width}: the side panel shows paid-by and spend by team",
+            "PAID BY" in rail.upper() and "BY TEAM" in rail.upper(),
+            rail[:200],
+        )
     run.note(f"11 {width}: spend-bar elements", str(page.locator("#main [class*=bar]").count()))
     if width == "desktop" and vendor_rows.count():
         field = vendor_rows.first.locator("input[data-fin-vb]")
@@ -1680,7 +1988,9 @@ def item11(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
             _, budget_data = get_json(page, base, "/api/v2/finance/budgets?include_inactive=true")
             budget_rows = (budget_data.get("budgets") if isinstance(budget_data, dict) else budget_data) or []
             amounts = [(r.get("state") or {}).get("amount") for r in budget_rows if r.get("vendor") == vendor.get("id")]
-            run.check("11 the vendor budget reads back (100 dollars = 10000 cents)", 10000 in amounts, f"amounts {amounts}")
+            run.check(
+                "11 the vendor budget reads back (100 dollars = 10000 cents)", 10000 in amounts, f"amounts {amounts}"
+            )
         else:
             run.note("11 vendor budget", "no budget field on the vendor row")
     if width == "phone":
@@ -1694,8 +2004,11 @@ def item12(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
     go(page, base, "#/finance/sources")
     expand_sources(page)
     _, before_data = get_json(page, base, "/api/v2/finance/sources")
-    run.check("12 the separate demo starts with no Mercury connection", not has_text(before_data, "Mercury") and
-               "Mercury" not in json.dumps(before_data, default=str), json.dumps(before_data, default=str)[:120])
+    run.check(
+        "12 the separate demo starts with no Mercury connection",
+        not has_text(before_data, "Mercury") and "Mercury" not in json.dumps(before_data, default=str),
+        json.dumps(before_data, default=str)[:120],
+    )
     page.locator("[data-fin-connect]").first.click()
     page.locator("[data-fin-connect-item=mercury]").first.click()
     page.wait_for_selector("dialog.fin-dlg")
@@ -1711,11 +2024,16 @@ def item12(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
     go(page, base, "#/finance/sources")
     expand_sources(page)
     _, after_data = get_json(page, base, "/api/v2/finance/sources")
-    run.check("12 the connection reads back from the API", "Mercury" in json.dumps(after_data, default=str),
-              json.dumps(after_data, default=str)[:160])
+    run.check(
+        "12 the connection reads back from the API",
+        "Mercury" in json.dumps(after_data, default=str),
+        json.dumps(after_data, default=str)[:160],
+    )
     page.screenshot(path=os.path.join(shots, "item12-sources-connected.png"), full_page=True)
     # The connection row is named exactly "Mercury"; "Mercury IO" is one of its accounts (a feed row with no Disconnect).
-    conn = page.locator("tr[data-fin-src]").filter(has=page.locator("button.fin-src-name", has_text=re.compile(r"^Mercury$")))
+    conn = page.locator("tr[data-fin-src]").filter(
+        has=page.locator("button.fin-src-name", has_text=re.compile(r"^Mercury$"))
+    )
     run.check("12 the Mercury connection row is on Sources", conn.count() >= 1, f"{conn.count()} rows")
     conn.first.click()
     page.wait_for_timeout(700)
@@ -1725,11 +2043,15 @@ def item12(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
         submit(page, page.locator("dialog.fin-dlg[open]"))
     page.wait_for_load_state("networkidle")
     _, gone_data = get_json(page, base, "/api/v2/finance/sources")
-    mercury = find_all(gone_data, lambda d: "Mercury" in str(d.get("name", "")) or "Mercury" in str(d.get("provider", "")))
+    mercury = find_all(
+        gone_data, lambda d: "Mercury" in str(d.get("name", "")) or "Mercury" in str(d.get("provider", ""))
+    )
     statuses = [str(d.get("status")) for d in mercury]
-    run.check("12 Disconnect ends the Mercury connection (read back)",
-              not mercury or all(s in ("disconnected", "None", "revoked", "removed") for s in statuses),
-              f"Mercury rows {statuses or 'none'}")
+    run.check(
+        "12 Disconnect ends the Mercury connection (read back)",
+        not mercury or all(s in ("disconnected", "None", "revoked", "removed") for s in statuses),
+        f"Mercury rows {statuses or 'none'}",
+    )
     page.screenshot(path=os.path.join(shots, "item12-sources-disconnected.png"), full_page=True)
 
 
@@ -1757,8 +2079,11 @@ def pass2(browser, run: Run, args) -> None:
         fn, widths = P2[name]
         if name == "12":
             if not args.sources_base or not args.sources_fake:
-                run.check("12: a separate demo is given (--sources-base, --sources-fake)", False,
-                          "not run; item 12 must never touch the stack demo's Mercury connection")
+                run.check(
+                    "12: a separate demo is given (--sources-base, --sources-fake)",
+                    False,
+                    "not run; item 12 must never touch the stack demo's Mercury connection",
+                )
                 continue
             base, fake = args.sources_base, args.sources_fake
         else:

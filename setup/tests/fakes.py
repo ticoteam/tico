@@ -1,4 +1,5 @@
 """Stand-ins for every outside dependency: no test here touches the network or a cloud."""
+
 from __future__ import annotations
 
 from setup import dns as dnsmod
@@ -63,8 +64,14 @@ class FakeShell:
 
 def deps(ns=None, records=None, **kw) -> Deps:
     r = FakeResolver(records, ns or {"example.com": NETLIFY_NS})
-    return Deps(resolver=r, public_resolvers=lambda: [("Google", r), ("Cloudflare", r)],
-                resolve_host=lambda h: "203.0.113.7", sleep=lambda s: None, compose_local=lambda: b"name: tico\n", **kw)
+    return Deps(
+        resolver=r,
+        public_resolvers=lambda: [("Google", r), ("Cloudflare", r)],
+        resolve_host=lambda h: "203.0.113.7",
+        sleep=lambda s: None,
+        compose_local=lambda: b"name: tico\n",
+        **kw,
+    )
 
 
 class _Exc:
@@ -111,7 +118,9 @@ class FakeEC2:
         return {"Vpcs": [{"VpcId": "vpc-1"}]}
 
     subnets = [{"SubnetId": "subnet-pub", "DefaultForAz": True}]
-    route_tables = [{"Associations": [{"Main": True}], "Routes": [{"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1"}]}]
+    route_tables = [
+        {"Associations": [{"Main": True}], "Routes": [{"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1"}]}
+    ]
 
     def describe_subnets(self, Filters):
         return {"Subnets": self.subnets}
@@ -129,13 +138,20 @@ class FakeEC2:
 
     def allocate_address(self, **kw):
         self._rec("allocate_address", **kw)
-        self.eips.append({"AllocationId": "eipalloc-1", "PublicIp": "203.0.113.9", "Tags": kw["TagSpecifications"][0]["Tags"]})
+        self.eips.append(
+            {"AllocationId": "eipalloc-1", "PublicIp": "203.0.113.9", "Tags": kw["TagSpecifications"][0]["Tags"]}
+        )
         return self.eips[-1]
 
     def associate_address(self, **kw):
         self._rec("associate_address", **kw)
 
     def run_instances(self, **kw):
+        self.raw_user_data = kw.get("UserData")
+        if isinstance(self.raw_user_data, bytes):  # gzipped (aws.fit_user_data): record what cloud-init runs
+            import gzip
+
+            kw = {**kw, "UserData": gzip.decompress(self.raw_user_data).decode()}
         self._rec("run_instances", **kw)
         self.instances.append({"InstanceId": "i-1", "Tags": kw["TagSpecifications"][0]["Tags"]})
         return {"Instances": [{"InstanceId": "i-1"}]}
@@ -239,7 +255,11 @@ class FakeRoute53:
 
     def list_resource_record_sets(self, HostedZoneId, StartRecordName, StartRecordType, MaxItems):
         rows = sorted(self.records, key=lambda r: (r["Name"].rstrip("."), r["Type"]))
-        return {"ResourceRecordSets": [r for r in rows if (r["Name"].rstrip("."), r["Type"]) >= (StartRecordName, StartRecordType)]}
+        return {
+            "ResourceRecordSets": [
+                r for r in rows if (r["Name"].rstrip("."), r["Type"]) >= (StartRecordName, StartRecordType)
+            ]
+        }
 
     def change_resource_record_sets(self, HostedZoneId, ChangeBatch):
         self.calls.append(("change_resource_record_sets", {"HostedZoneId": HostedZoneId, "ChangeBatch": ChangeBatch}))

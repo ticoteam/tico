@@ -10,7 +10,7 @@ Schedule: the 3rd of each month at 09:00 team time (routine `month-end-close-rev
 
 ## 1. Inputs
 
-- On the task: the trial balance, the reconciliation exports, and the bank and card statements for the period. If any is missing, ask once with `hub task ask <id>`, list what is missing, and carry on. Mark the parts that need it as open.
+- On the task: the trial balance, the reconciliation exports, and the bank and card statements for the period. If any is missing, ask once with `hub task question "<question>" --on <person> --parent <id>`, list what is missing, and carry on. Mark the parts that need it as open.
 - `knowledge/close-checklist.md` (steps, owners, tolerance, review limits), `knowledge/reconciliations.md`, and last month's review.
 
 ## 2. Steps
