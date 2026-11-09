@@ -8,15 +8,8 @@ from pathlib import Path
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_hubdb import with_legacy_run_tables
-from backend.config import Settings
-from backend.store import Store
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def boot(path, **kw):
-    Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False, **kw)
+from backend.tests.helpers.hubdb import with_legacy_run_tables
+from backend.tests.helpers.upgrade import FIXTURES, boot
 
 
 def state(path):

@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 
 from backend import replay
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
 
 
 def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, monkeypatch):

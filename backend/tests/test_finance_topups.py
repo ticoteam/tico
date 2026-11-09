@@ -8,7 +8,7 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.store import ledger as SL
 from backend.finance.store import banking as SK
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -22,7 +22,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_finance_payments import _checking
+from backend.tests.helpers.finance_payments import _checking
 
 PLAIN = "human:eve"  # a web teammate with no grants or rights
 

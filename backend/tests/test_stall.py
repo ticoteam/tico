@@ -3,7 +3,6 @@ stalled, and BotOps's stuck list takes the ones that quiet subtasks hold. Tico w
 blocked and routine-covered work is left alone."""
 
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
 
 
 def aged(c, task_id, minutes):
@@ -79,7 +78,7 @@ def test_closing_what_the_bot_already_finished_does_not_wake_it_unless_the_note_
 def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_the_stalled_list(api):
     """A parked bot starts only a person's chat (execution.py claim). Work a bot or Tico sends it waits for its
     setup: Run now says why, its never-starting job is not "busy", and the stalled list marks its task held."""
-    from backend.tests.test_api import headers
+    from backend.tests.helpers.api import headers
 
     store = api.app.state.store
     # Work it held from before an upgrade, when "Set up" bots still took tasks; onboarding bots take none now.
@@ -88,7 +87,7 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
         json={"owner": "finance", "title": "Reconcile the October invoices", "body": "Before the close."},
         headers=headers(),
     ).json()["task"]
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -117,7 +116,7 @@ def test_a_task_held_only_by_its_own_quiet_subtask_is_listed_stuck_even_while_wa
     """A hold kept open until its parent's window is released, set as that parent's blocker, never clears. Once both
     are quiet, BotOps's stuck list shows the parent even while it is `waiting`. A question for a person in a subtask
     still holds its task as before."""
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     store = api.app.state.store
     with store.transaction() as c:
@@ -179,7 +178,7 @@ def test_botops_stuck_list_skips_an_own_blocked_parent_while_its_bot_is_busy_or_
 
 
 def test_creating_a_task_that_blocks_two_of_its_ancestors_returns_both_warnings(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     root = post(api, "tasks", {"owner": "ops", "title": "Ship the release", "body": "x"})
     window = post(

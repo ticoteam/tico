@@ -7,10 +7,9 @@ import uuid
 
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
-from backend.tests.test_api import assign, headers, post, runner
-from backend.tests.test_claim_statements import seed, traced
-from backend.tests.test_getting_started import heartbeat
+from backend.tests.helpers.api import assign, headers, post, runner
+from backend.tests.helpers.claim_statements import seed, traced
+from backend.tests.helpers.getting_started import heartbeat
 
 OLD = H.shift(H.now(), hours=-5)
 PR_OLD = H.shift(H.now(), hours=-13)

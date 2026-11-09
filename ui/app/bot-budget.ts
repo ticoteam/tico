@@ -3,7 +3,7 @@
 'use strict';
 
 // A bot's run budget (backend/turn_budgets.py): blank follows the team, 0 is no limit. A bot over it is stopped
-// until someone who manages it releases it (botRelease, hub-v2.js) or raises the budget, which releases it too.
+// until someone who manages it releases it (botRelease, hub-v2.ts) or raises the budget, which releases it too.
 // Read for the people who manage the bot; anyone else gets no row.
 type BotBudgetKey = 'turns_per_hour' | 'turns_per_day';
 // The fields one save sends: a number, or null for blank (follow the team). A field that is not sent keeps its value.

@@ -1,7 +1,6 @@
 """hub health check / GET /api/v2/fleet/check: spend checks share one company Default."""
 
 from backend import fleet_check, usage_limits
-from backend.tests.test_api import api  # noqa: F401
 
 
 def test_fleet_check_builds_company_default_once(api, monkeypatch):

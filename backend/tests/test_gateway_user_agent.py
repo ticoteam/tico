@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.test_decide_gateway import answer_all
-from backend.tests.test_judge import QUESTIONS
+from backend.tests.helpers.decide_gateway import answer_all
+from backend.tests.helpers.judge import QUESTIONS
 from clients import gateway as G
 from clients import judge as J
 

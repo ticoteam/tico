@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
-from backend.tests import test_demo_finance as finance
+from backend.tests.helpers import demo_finance as finance
 
 # 00:30 Pacific on the 15th, in another year and mid-month: tonight's schedule (02:00) and Learnings night (03:00) have
 # not happened yet.

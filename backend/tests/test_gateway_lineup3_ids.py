@@ -9,7 +9,6 @@ import pytest
 
 from backend import gateway_tiers as T
 from backend import providers
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 MIGRATION = importlib.import_module("backend.migrations.20261106173719_gateway_lineup3_ids")
 

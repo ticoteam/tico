@@ -4,20 +4,12 @@ confirmed with the person's own target; and the Strategy Bot's Needs you task us
 reject"."""
 
 from backend import strategy_bot
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_goal_asks import asks, goal_manager, sync
-from backend.tests.test_kpis import goal_with_kpi
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.goal_asks import asks, goal_manager, sync
+from backend.tests.helpers.kpis import goal_with_kpi
+from backend.tests.helpers.goal_cards import inbox_measure, leaks, propose
 
 IMPROVE = {"kind": "improve", "baseline": 10, "target": 25, "deadline": "2099-12-31"}
-
-
-def propose(api, kind, payload, goal_id=None, kpi_id=None, token="ana-test"):
-    return post(
-        api,
-        "goal-proposals",
-        {"kind": kind, "goal_id": goal_id, "kpi_id": kpi_id, "payload": payload, "reason": "No measure yet"},
-        token=token,
-    )["proposal"]
 
 
 def tree_card(api, proposal_id, token="ana-test"):
@@ -214,33 +206,6 @@ def test_an_empty_body_in_new_wording_shows_the_description_it_clears(api):
     ]
     post(api, f"goal-proposals/{wording['id']}/decide", {"decision": "confirm"})
     assert get(api, f"goals/{goal['id']}")["goal"]["body"] == ""  # what the card said yes does
-
-
-# A member may not read the inbox bot (the base fixture: it is Ana's alone), so nothing of its goals or measures reaches
-# her through a suggestion: not its name, what it counts, its source, its unit, nor the target it has now.
-SECRETS = ("NDAs waiting", "Unsigned NDAs in the mail", "Mailbox count", "Close all NDAs")
-
-
-def inbox_measure(api):
-    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:inbox", "top": True})["goal"]
-    kpi = post(
-        api,
-        "kpis",
-        {
-            "name": "NDAs waiting",
-            "unit": "docs",
-            "direction": "down",
-            "cadence": "daily",
-            "definition": "Unsigned NDAs in the mail",
-            "source_note": "Mailbox count",
-            "goal_id": hidden["id"],
-        },
-    )["kpi"]
-    return hidden, kpi
-
-
-def leaks(response):
-    return [s for s in SECRETS if s in str(response)]
 
 
 def test_a_suggestion_about_a_hidden_bots_measure_or_goal_shows_none_of_it(api):

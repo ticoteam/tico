@@ -19,51 +19,16 @@ from backend.entities import store as ES
 from backend.auth import Identity
 from backend.blobs import register
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_org_rules import as_bot, org
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.org_rules import as_bot, org
 from backend import bot_settings as BS
+from backend.tests.helpers.counsel import counsel_on, counsel_run, source, store_file
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 CONTRACT = (
     "Acme Vendor Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every send. "
     "Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days."
 )
-
-
-def counsel_on(api):
-    """Counsel is built in and active, as onboarding makes it: a bot row, a config, and its own token."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')"
-        )
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('tico-counsel','','ana')")
-        BS.write(c, 'tico-counsel', {})
-    as_bot(api, "tico-counsel", "counsel-test")
-
-
-def store_file(api, text, title="Acme Vendor Terms", bot="ops"):
-    """A document in Files, as a person's upload: its current version holds `text`."""
-    data = text.encode("utf-8")
-    with api.app.state.store.transaction() as c:
-        digest = api.app.state.blobs.put(data, "text/plain")
-        item = register(c, Identity("human:ana", "human"), digest, len(data), title + ".txt", "text/plain")
-        row, _, _ = api.app.state.files.add_version(
-            c,
-            bot=bot,
-            actor="human:ana",
-            scope="bot",
-            task=None,
-            conversation=None,
-            attempt="",
-            identity="upload:" + title,
-            title=title,
-            name=title + ".txt",
-            mime="text/plain",
-            blob_id=item["id"],
-            digest=digest,
-            size=len(data),
-        )
-        return row["id"], row["current_version"]
 
 
 def restrict_bot(api, slug, people=("ana",)):
@@ -73,10 +38,6 @@ def restrict_bot(api, slug, people=("ana",)):
     doc = {level: audience for level in ("see", "read", "write")}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET access=? WHERE bot=?", (json.dumps(doc), slug))
-
-
-def source(api, name="Acme Vendor", kind="vendor"):
-    return post(api, "rule-sources", {"name": name, "kind": kind})["source"]["id"]
 
 
 def fetched(text, title="Vendor policy"):
@@ -538,8 +499,8 @@ def test_counsel_outside_a_run_calls_nothing_but_me(api):
 
 
 def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monkeypatch):
-    from backend.tests.test_automation_cli import Client
-    from backend.tests.test_org_rules_surfaces import mcp
+    from backend.tests.helpers.automation_cli import Client
+    from backend.tests.helpers.org_rules_surfaces import mcp
     from clients import hubtools
 
     class Turn(Client):
@@ -1438,7 +1399,7 @@ def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_
 
 
 def test_counsel_still_completes_its_own_attempt(api):
-    from backend.tests.test_api import post as api_post, setup_attempt
+    from backend.tests.helpers.api import post as api_post, setup_attempt
 
     org(api)
     counsel_on(api)
@@ -1466,19 +1427,6 @@ def test_counsel_still_completes_its_own_attempt(api):
 def task_state(api, task_id):
     with api.app.state.store.read() as c:
         return dict(c.execute("SELECT status, private FROM tasks WHERE id=?", (task_id,)).fetchone())
-
-
-def counsel_run(api):
-    """Counsel's runner claims its next job: the run on the read task a person just opened. Its token is the run's own,
-    so every call it makes goes through the API's private-run guard (backend/task_privacy.py guard_write)."""
-    from backend.tests.test_api import assign, claim, ready, runner
-
-    r = runner(api, "ana")
-    assign(api, r, "tico-counsel")
-    ready(api, r, ["tico-counsel"])
-    attempt = claim(api, r)
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
-    return r, attempt
 
 
 def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(api):
@@ -1691,7 +1639,7 @@ def test_two_people_reading_one_version_each_suggest_and_each_finish(api):
 def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on_session_bot(api):
     """`session: bot` keys a turn on the bot's one thread, but a stateless bot's task keeps its own session: the server
     gives the turn its task's lane, links its session and accepts its checkpoint, as the runner keys it."""
-    from backend.tests.test_api import assign, claim, runner
+    from backend.tests.helpers.api import assign, claim, runner
 
     with api.app.state.store.transaction() as c:
         c.execute(

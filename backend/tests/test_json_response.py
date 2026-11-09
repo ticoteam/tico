@@ -2,7 +2,7 @@
 
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from backend.tests.test_api import api, headers, post
+from backend.tests.helpers.api import headers, post
 
 
 def test_task_json_compression_preserves_privacy_and_display_names(api):

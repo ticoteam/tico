@@ -1,8 +1,8 @@
 """Keeping a computer's model CLIs current from Settings: owner-only, audited, and relayed to the
 runner the way the browser sign-in is."""
 
-from backend.tests.test_api import api, assign, get, post, put, runner  # noqa: F401
-from backend.tests.test_model_login import stored  # noqa: F401  (a row reader shared with the sign-in tests)
+from backend.tests.helpers.api import assign, get, post, put, runner  # noqa: F401
+from backend.tests.helpers.model_login import stored  # noqa: F401  (a row reader shared with the sign-in tests)
 from backend import bot_settings as BS
 
 HARNESS = {
@@ -193,7 +193,7 @@ def test_a_computer_with_no_bots_needs_only_the_one_default_it_installs(api):
 
 def test_a_move_to_a_computer_without_the_harness_is_not_refused_it_installs_there(api):
     from backend.readiness import can_run
-    from backend.tests.test_settings_transitions import _company_default
+    from backend.tests.helpers.settings_transitions import _company_default
 
     _company_default(api, "cpo")
     there = runner(api, "ben", "Ben Mac")

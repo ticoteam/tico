@@ -46,18 +46,8 @@ interface AskInfo {
 interface AskExecution {
   text?: string;
 }
-// A bot's question to this person (Needs you), and the body of its ask. Its refs are the question card's
-// (ui/app/question-card.ts), and may be null.
-interface AskBody {
-  sender_id: string;
-  recipient_id: string;
-  body?: string;
-  created_at?: string;
-  refs?: QcRefs | null;
-}
-// Needs you: a bot's question carries its ask here; the panel reads these fields of each item.
+// Needs you: a bot's question carries its ask (NeedsAsk, ui/types/shared.d.ts); the panel reads these fields of each item.
 interface NeedsItem {
-  ask?: AskBody;
   created_at?: string;
 }
 // The reply forms: a choice of options has a named select, a free answer a named text box.

@@ -8,24 +8,9 @@ import pytest
 
 from backend import github_app, hubdb as H, repositories as R
 from backend.store import Store
-from backend.tests.test_github_app import api, gh, auth, connect, runner_token, turn_token, put_extras  # noqa: F401
+from backend.tests.helpers.github_app import api, gh, auth, connect, runner_token, turn_token, put_extras  # noqa: F401
 from backend import bot_settings as BS
-
-
-def put(api, path, body, token='owner-test'):
-    response = api.put('/api/v2/' + path, json=body, headers={**auth(token), 'Idempotency-Key': uuid.uuid4().hex})
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def catalog(api, gh):
-    connect(api)
-    gh.repositories = [
-        {'full_name': 'Acme/' + name, 'default_branch': 'main'} for name in ('product', 'docs', 'bot-sales', 'emp-cpo')
-    ]
-    response = api.post('/api/v2/repositories/refresh', headers=auth())
-    assert response.status_code == 200, response.text
-    return response.json()
+from backend.tests.helpers.repositories import catalog, put
 
 
 def test_sync_bot_repos_setup_overrides_and_unreachable(api, gh):
@@ -258,7 +243,7 @@ def test_computer_union_token_and_old_heartbeat(api, gh):
 
 @pytest.mark.slow
 def test_missing_repo_does_not_take_own_or_computer_tokens_down(api, gh):
-    from backend.tests.test_github_app import token_health
+    from backend.tests.helpers.github_app import token_health
 
     catalog(api, gh)
     runner_token(api, 'cpo')
@@ -318,7 +303,7 @@ def test_member_manager_cannot_retick_team_repos_or_choose_bot_instructions(api,
 
 
 def test_built_in_repository_grants_are_owner_only_and_hidden_bots_stay_hidden(api, gh):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     catalog(api, gh)
     who = api.app_state.store.settings.test_identities['person-test']

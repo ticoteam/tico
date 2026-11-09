@@ -8,8 +8,8 @@ import pytest
 from backend import hubdb as H
 from backend import mailbox_access as MA
 from backend.entities import store as ES
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import hubcli, remotecli
 from clients.tico import APIError
 

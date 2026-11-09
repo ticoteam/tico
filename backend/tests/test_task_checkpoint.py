@@ -4,7 +4,7 @@ person. A "Still wanted?" question put before that change is withdrawn by migrat
 
 from backend import still_wanted, task_roundup
 from backend.store import H
-from backend.tests.test_api import api, post, get, runner, assign, ready, claim  # noqa: F401
+from backend.tests.helpers.api import post, get, runner, assign, ready, claim  # noqa: F401
 
 
 def test_a_completed_task_turn_leaves_its_checkpoint_on_the_task(api):

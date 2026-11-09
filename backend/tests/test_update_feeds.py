@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from backend import update_feeds as F
-from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
 
 SNAPSHOT = "a" * 40

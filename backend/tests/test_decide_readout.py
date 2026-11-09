@@ -5,10 +5,10 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_judge import QUESTIONS, FakeJudge, fake
-from backend.tests.test_mcp import call
-from backend.tests.test_judge_spend import DOWN
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.judge import QUESTIONS, FakeJudge, fake
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.judge_spend import DOWN
 from backend import judge as B
 from backend.decide_readout import readout
 

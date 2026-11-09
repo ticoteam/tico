@@ -2,7 +2,6 @@
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401
 from backend import start_places
 
 

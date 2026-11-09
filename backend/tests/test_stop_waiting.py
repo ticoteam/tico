@@ -4,15 +4,8 @@ import pytest
 
 from backend import wake_presets as W
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, expire, post, ready, runner  # noqa: F401
-
-
-def task_attempt(api):
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})
-    return machine, task, claim(api, machine)
+from backend.tests.helpers.api import claim, expire, post
+from backend.tests.helpers.stop_waiting import task_attempt
 
 
 @pytest.mark.parametrize("outcome", ["failed", "interrupted"])

@@ -7,9 +7,10 @@ import pytest
 
 from backend import task_privacy
 from backend.store import H
-from backend.tests import test_api as T
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_bot_list_reads import add_bots
+from backend.tests.helpers import api as T
+from backend.tests.helpers.api_app import api_client
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.bot_list_reads import add_bots
 
 # Tool calls each run streams. Every step names its own call id, so a run of N steps used to cost about N queries.
 STEPS = 10
@@ -95,7 +96,7 @@ def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(t
     counted = {}
     for name, scale in (("small", small), ("big", big)):
         (tmp_path / name).mkdir()
-        install = T.api.__wrapped__(tmp_path / name, None)
+        install = api_client(tmp_path / name, None)
         api = next(install)
         try:
             tid = build(api, **scale)

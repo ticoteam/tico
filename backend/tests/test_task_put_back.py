@@ -4,9 +4,9 @@ import pytest
 
 from backend import auto_tasks
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_auto_tasks import deck, take
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.auto_tasks import deck, take
+from backend.tests.helpers.task_lanes import task_bot
 
 
 def update(api, task, token, status, note=None, expected=200):

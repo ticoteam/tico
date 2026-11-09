@@ -20,7 +20,7 @@ from backend.finance.store import ledger as SL
 from backend.finance.store import tico as FT
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     open_views,
     ACME_ADDRESS,
     AT,
@@ -36,9 +36,8 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-
-HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.finance_payments import HOURS, _checking, _debit, _lost_send, _payee, _reconcile
 
 
 def _budget_and_card(store, amount=30_000, card=20_000, holder="human:eve"):
@@ -178,33 +177,6 @@ def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books, monkeyp
         assert _card(c, eve)["status"] == "frozen"  # a pause freezes the budget's cards, keeping allocations
         rule_of = c.execute("SELECT on_behalf_of, actor FROM fin_actions WHERE kind='budget_update'").fetchone()
         assert tuple(rule_of)[1] == OWNER
-
-
-def _payee(store, fake, *, at=AT):
-    """Acme Supplies by ACH, synced to Mercury."""
-    with store.transaction() as c:
-        made = act(
-            c,
-            OWNER,
-            "recipient_add",
-            {
-                "name": "Acme Supplies",
-                "method": "ach",
-                "account_number": "000099998888",
-                "routing_number": "000000000",
-                "address": ACME_ADDRESS,
-            },
-        )
-        assert made.status == "committed", made
-    sync_once(store, fake, at)
-    with store.read() as c:
-        payload = c.execute("SELECT payload FROM fin_outbox WHERE op='recipient_create'").fetchone()[0]
-        assert "000099998888" not in payload  # erased once Mercury has it
-    return str(made.result["recipient_id"])
-
-
-def _checking(c):
-    return str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
 
 
 def _holds(c, source="payment"):
@@ -2022,55 +1994,6 @@ def _lines(c, source="bank"):
     )
 
 
-def _lost_send(books, fake, at=HOURS[1]):
-    """A 500.00 payment on 6100 whose send Mercury accepted but whose answer never came back: unknown."""
-    rid = _payee(books, fake)
-    with books.transaction() as c:
-        made = act(
-            c,
-            OWNER,
-            "payment_create",
-            {
-                "recipient_id": rid,
-                "amount": 50_000,
-                "account_id": account(c, "6100"),
-                "tags": {"team": "eng"},
-                "money_account_id": _checking(c),
-            },
-        )
-        pid = str(made.result["payment_id"])
-    fake.queue["request_send_money"] = [Answer(None, {})]
-    sync_once(books, fake, at)
-    with books.read() as c:
-        key = c.execute("SELECT idempotency_key FROM fin_payments WHERE id=?", (pid,)).fetchone()[0]
-    return pid, key
-
-
-def _debit(fake, txn_id, request_id, event_id, **extra):
-    fake.txns[txn_id] = {
-        **MERCURY["txn_bank_fee"],
-        "id": txn_id,
-        "amount": -500.0,
-        "kind": "outgoingPayment",
-        "counterpartyName": "Acme Supplies",
-        "requestId": request_id,
-        "postedAt": "2026-10-16T10:00:00Z",
-        **extra,
-    }
-    fake.events_list.append(
-        {
-            "id": event_id,
-            "resourceType": "transaction",
-            "resourceId": txn_id,
-            "operationType": "create",
-            "resourceVersion": 1,
-        }
-    )
-    # Mercury's balance moves with the debit it posts: the books carry the row, so the balance they reconcile to does too.
-    recorded = next(a["currentBalance"] for a in MERCURY["accounts"]["accounts"] if a["id"] == "acct-chk")
-    fake.balances["acct-chk"] = fake.balances.get("acct-chk", recorded) - 500.0
-
-
 def test_a_lost_send_whose_debit_posts_before_it_is_found_settles_on_its_line_once(books):
     """PR review P1-a: an accepted send whose answer was lost, its request approved and its debit posted before the
     recovery found it. The debit first posts as an unknown spend (6900); once found, it posts again as the payment
@@ -2160,18 +2083,6 @@ def test_a_debit_returned_before_its_lost_payment_is_found_ends_the_payment(book
         ) == ("returned", "req-9")
         assert _holds(c) == [(50_000, "released")]
         assert _net(c) == {}
-
-
-def _reconcile(c, provider_id):
-    """Reconcile checking through Oct 16 with this feed row cleared; its id."""
-    fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id=?", (provider_id,)).fetchone()[0])
-    args = {"money_account_id": _checking(c), "statement_end": "2026-10-16", "cleared": [fid]}
-    off = act(c, OWNER, "reconcile", {**args, "statement_balance": 0})
-    if off.result["status"] != "done":
-        c.execute("DELETE FROM fin_reconciliations")
-        done = act(c, OWNER, "reconcile", {**args, "statement_balance": -int(off.result["difference"])})
-        assert done.result["status"] == "done", done
-    return fid
 
 
 def test_a_reconciled_debit_on_the_payments_line_under_another_vendor_still_moves_to_its_vendor(books):

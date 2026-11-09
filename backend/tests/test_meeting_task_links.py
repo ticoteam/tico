@@ -4,23 +4,9 @@ from urllib.parse import urlencode
 
 from backend import hubdb as H, task_references
 from backend.auth import Identity
-from backend.tests.test_api import api, as_member, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_meeting_items import add, change, items, record
-
-
-def task(api, title='Review the plan', requester='human:ana', owner='human:ben', **kw):
-    with api.app.state.store.transaction() as c:
-        return H.task_create(c, requester, title, 'Review the plan and report back.', owner, lint=False, **kw)
-
-
-def link(api, rid, ids, token='ana-test', kind='linked', expected=200, key=None):
-    return post(api, f'meetings/{rid}/tasks', {'task_ids': ids, 'kind': kind}, token, key, expected)
-
-
-def remove(api, rid, tid, token='ana-test', expected=200):
-    response = api.delete(f'/api/v2/meetings/{rid}/tasks/{tid}', headers=headers(token))
-    assert response.status_code == expected, response.text
-    return response.json()
+from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.meeting_items import add, change, items, record
+from backend.tests.helpers.meeting_task_links import link, remove, task
 
 
 def test_links_are_bidirectional_idempotent_and_emit_task_changes(api):
@@ -67,7 +53,7 @@ def test_sent_links_require_the_requester_and_batches_are_atomic(api):
 
 
 def test_an_assistant_links_as_its_person(api):
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.assistant import assistant_turn
 
     rid = record(api, token='ben-test')
     mine = task(api, requester='human:cara', private=False)
@@ -339,7 +325,7 @@ def test_task_trash_restores_links_and_skips_a_meeting_deleted_while_trashed(api
 
 
 def test_recorder_participant_audiences_keep_the_current_media_read_boundary(api):
-    from backend.tests.test_recorder_audience import live_meeting
+    from backend.tests.helpers.recorder_audience import live_meeting
 
     mid = live_meeting(api, visibility='team', joiner='cara')
     post(api, f'live-meetings/{mid}/control', {'action': 'end'}, 'ben-test')

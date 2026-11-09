@@ -15,16 +15,16 @@ from backend import strategy as S
 from backend import strategy_prompt as SP
 from backend import strategy_setup as SS
 from backend.store import H
-from backend.tests.test_api import api, get, post, put  # noqa: F401
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.api import get, post, put  # noqa: F401
+from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
     BOTOPS_CARD,
-    LIBRARIAN_CARD,  # noqa: F401
+    LIBRARIAN_CARD,
     environment,
     signed_in,
 )
-from backend.tests.test_org_builder import CARDS, DEPARTMENTS
+from backend.tests.helpers.org_builder import CARDS, DEPARTMENTS
 
 PUBLIC = "93.184.216.34"
 HOME = (
@@ -392,7 +392,7 @@ def test_finishing_setup_without_a_website_files_no_market_task(environment):
 def test_a_bot_administrator_recruits_from_the_published_bets_never_the_draft(api):
     from backend import recruit
     from backend.auth import Identity
-    from backend.tests.test_strategy import publish, ready
+    from backend.tests.helpers.strategy import publish, ready
 
     ready(api, statement="Small landlords pay for bots")
     publish(api)

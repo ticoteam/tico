@@ -3,8 +3,8 @@
 import sqlite3
 from hashlib import sha256
 
-from backend.tests.test_api import api, post, runner  # noqa: F401
-from backend.tests.test_migrations import boot, fresh, snapshot
+from backend.tests.helpers.api import post, runner  # noqa: F401
+from backend.tests.helpers.migrations import boot, fresh, snapshot
 
 DEVICE_ID = sha256(b"acme-device-one").hexdigest()
 

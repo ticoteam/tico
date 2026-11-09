@@ -8,7 +8,7 @@ import pytest
 import threading
 from PIL import Image
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
 
 
 def upload(api, path, fields, token="ana-test", key=None, data=b"Original material", expected=200):
@@ -104,7 +104,7 @@ def test_chat_and_task_attachments_survive_full_backup_restore(api, tmp_path):
     from fastapi.testclient import TestClient
     from backend.app import create_app
     from backend.backup import restore_bundle
-    from backend.tests.test_backup_bundle import ObjectStore, bundle, target
+    from backend.tests.helpers.backup_bundle import ObjectStore, bundle, target
 
     chat = upload(api, 'chat/cpo', {'text': 'Private attachment'}, 'ben-test')
     task = upload(

@@ -7,8 +7,9 @@ import pytest
 
 from backend import threads
 from backend.store import H
-from backend.tests import test_api as T
-from backend.tests.test_api import api, as_member, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers import api as T
+from backend.tests.helpers.api_app import api_client
+from backend.tests.helpers.api import as_member, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
 
 # Tool calls each run streams, as a runner reports them.
 STEPS = 10
@@ -85,7 +86,7 @@ def test_the_turns_list_takes_the_same_statements_however_many_turns_it_reads(tm
     counted = {}
     for name, count in (("small", 3), ("big", 20)):
         (tmp_path / name).mkdir()
-        install = T.api.__wrapped__(tmp_path / name, None)
+        install = api_client(tmp_path / name, None)
         api = next(install)
         try:
             machine = None

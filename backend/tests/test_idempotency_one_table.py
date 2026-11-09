@@ -4,16 +4,16 @@ The migration that moves an older file's rows across is tested in test_migration
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
 from backend import invites
 from backend.store import sweep_idempotency
-from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_invites import owner  # noqa: F401
-from backend.tests.test_oidc import provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.invites import owner  # noqa: F401
+from backend.tests.helpers.oidc import provider, signin  # noqa: F401  (the fixtures)
 
 
 def test_a_repeat_returns_the_stored_answer_and_a_reused_key_with_other_content_is_refused(api):  # noqa: F811
-    from backend.tests.test_storage_delivery import task
+    from backend.tests.helpers.storage_delivery import task
 
     url = f"/api/v2/tasks/{task(api)}/files"
     h = headers("ana-test")

@@ -11,9 +11,9 @@ from backend import feedback
 from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, as_member, headers, post  # noqa: F401
-from backend.tests.test_threads_note_boundaries import bot_runner, bot_says, drain, finish, new_thread, say
-from backend.tests.test_assistant import assistant_turn
+from backend.tests.helpers.api import as_member, headers, post  # noqa: F401
+from backend.tests.helpers.threads_note_boundaries import bot_runner, bot_says, drain, finish, new_thread, say
+from backend.tests.helpers.assistant import assistant_turn
 
 
 def give(api, subject_id, rating="down", token="ana-test", expected=200, subject_type="message", **more):
@@ -217,7 +217,7 @@ def test_a_rule_from_a_thumbs_down_is_active_for_the_bots_manager_and_suggested_
 
 
 def test_the_mcp_tools_give_list_and_remove_feedback_as_the_caller(api):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     thread = new_thread(api)
     mid = bot_message(api, thread)

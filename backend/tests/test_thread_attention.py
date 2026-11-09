@@ -7,17 +7,8 @@ from backend import question_tasks as QT, threads
 from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.old_asks import old_ask
-from backend.tests.test_api import api, as_member, get, post, setup_attempt  # noqa: F401
-
-
-def members_thread(api, members=("human:ana",), title="Launch"):
-    with api.app.state.store.transaction() as c:
-        return threads.create(c, "human:cara", title=title, audience="members", members=list(members))["id"]
-
-
-def say(api, thread_id, text, *, actor="human:cara", **kw):
-    with api.app.state.store.transaction() as c:
-        return threads.post(c, actor, thread_id, text, **kw)
+from backend.tests.helpers.api import as_member, get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.thread_attention import hold, members_thread, say
 
 
 def old_question(api, thread_id, text, *, actor="human:cara", to="human:ana"):
@@ -116,18 +107,6 @@ def test_an_unread_dm_is_listed_until_it_is_read(api):
     with api.app.state.store.transaction() as c:
         threads.mark_all_read(c, ana_viewer(api), dm)
     assert needs(api, "thread_dm") == []
-
-
-def hold(api, reviewer="human:ana", author="bot:finance", operation="reply", state="held"):
-    """A held write as org_rule_check stores it (its verdict and payload are not read by the list)."""
-    with api.app.state.store.transaction() as c:
-        hid = H.new_id()
-        c.execute(
-            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
-            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (hid, operation, "{}", author, "[]", "[]", "{}", "nonce", state, reviewer, None, H.now()),
-        )
-    return hid
 
 
 def test_a_held_message_is_listed_to_its_reviewer_until_it_is_released(api):
@@ -314,7 +293,7 @@ def test_a_bot_dms_count_takes_its_sub_threads(api):
 def test_the_thread_items_take_the_same_statements_however_many_threads_name_the_person(api, monkeypatch):
     # Each item's message, thread and membership are read together: one read each an item made Needs you and Home take
     # ~2,300 statements for a person named in a thousand open threads.
-    from backend.tests.test_health_queries import counted
+    from backend.tests.helpers.health_queries import counted
 
     def mention_in(n):
         for k in range(n):

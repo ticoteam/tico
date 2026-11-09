@@ -5,48 +5,14 @@ the older `team` and `department` fields follow group membership, and access lis
 nested in it.
 """
 
-import json
-
 from backend import groups as Groups
 from backend import people as P
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import get, post
 from backend import bot_settings as BS
+from backend.tests.helpers.groups import add_bots, group, roster_of, send, set_roster
 
 EVERYONE = {"everyone": True, "people": [], "teams": [], "bots": []}
-
-
-def send(api, method, path, body=None, token="ana-test", expected=200):
-    r = api.request(method, "/api/v2/" + path, json=body, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def group(api, gid, token="ana-test"):
-    return next(row for row in get(api, "groups", token=token) if row["id"] == gid)
-
-
-def roster_of(api):
-    with api.app.state.store.read() as c:
-        return json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-
-
-def set_roster(api, doc):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
-
-
-def add_bots(c, **bots):
-    """{slug: (config, reports_to)}: bots straight into the database."""
-    for slug, (config, reports_to) in bots.items():
-        if not H.bot(c, slug):
-            c.execute(
-                "INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,'active',?)",
-                (slug, slug, slug, "", H.now()),
-            )
-        c.execute("DELETE FROM bot_config WHERE bot=?", (slug,))
-        c.execute("INSERT INTO bot_config(bot,owner_id,reports_to) VALUES(?,?,?)", (slug, "ana", reports_to))
-        BS.write(c, slug, {"name": slug, "runtime": "fake", "model": "m", "host": "keeper", **config})
 
 
 def teams_now(api):

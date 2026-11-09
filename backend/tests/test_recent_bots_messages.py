@@ -1,7 +1,7 @@
 """recent_bots finds its bots with one batched privacy pass and still shows each bot's newest readable line."""
 
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
 from backend import views
 from backend import task_privacy as privacy
 

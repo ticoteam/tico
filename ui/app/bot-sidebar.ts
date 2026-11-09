@@ -94,7 +94,8 @@ async function botSidebarLoad(slug: string) {
 
 // ---- the widgets as the page shows them
 // One widget: its edit bar (move, name, hide), what it shows, and its bottom edge for the height.
-function botWidgetHTML(id: string, inner: string, slug = BOT?.slug) {
+// Every caller passes the slug; the default is the open bot page's.
+function botWidgetHTML(id: string, inner: string, slug = BOT?.slug as string) {
   const name = esc(botWidgetLabel(slug, id));
   return `<div class="bot-w" data-widget="${esc(id)}">
     <div class="bot-w-bar"><button type="button" class="bot-w-grip" data-w-grip aria-label="Move ${name}" title="Move">${BOT_SVG.grip}</button>

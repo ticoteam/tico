@@ -12,10 +12,10 @@ import pytest
 from backend.credentials import effective_grant
 from backend import built_on
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, restrict, runner  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act, bot_id
-from backend.tests.test_credential_sharing import jira, local
-from backend.tests.test_member_bots import botops, call, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.api import get, headers, post, restrict, runner  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act, bot_id
+from backend.tests.helpers.credential_sharing import jira, local
+from backend.tests.helpers.member_bots import botops, call, turn  # noqa: F401  (fixture)
 from clients import botcopy, hubtools
 from clients.tico import APIError
 from backend import bot_settings as BS

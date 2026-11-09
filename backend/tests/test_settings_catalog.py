@@ -14,9 +14,9 @@ from backend import botops_act, settings_catalog, team_rules
 from backend.assistant import valid_operation
 from backend.settings_entries import ALIASES, ENTRIES, NO_CARD_YET, NOT_SETTINGS, SETTINGS_FILES
 from backend.store import H, Problem
-from backend.tests.test_api import api, get, post  # noqa: F401  (fixture)
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
 UI = Path(__file__).resolve().parents[2] / "ui" / "app"
 # post('/v2/x', ...), put(`/v2/bots/${slug}/model`, ...), patch('/v2/a/' + id, ...), writeRequest('DELETE', '/v2/x')
@@ -205,8 +205,8 @@ def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_di
 
 
 def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
-    from backend.tests.test_api import as_member
-    from backend.tests.test_member_bots import register
+    from backend.tests.helpers.api import as_member
+    from backend.tests.helpers.member_bots import register
 
     ana = turn(api, botops, person="cara-test", text="Make me a bot")
     made = register(api, ana, "routine-owner")
@@ -237,7 +237,7 @@ def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_
     """Settings stage 3, acceptance 13: a group's pool is `groups/<id>`, two segments of its route, so the card names
     the route Settings uses and the admin's tap sets it. Before, the id was one escaped segment and no card could be
     made, so BotOps sent the admin to Settings."""
-    from backend.tests.test_usage_limits import groups
+    from backend.tests.helpers.usage_limits import groups
 
     groups(api, "product")
     ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")

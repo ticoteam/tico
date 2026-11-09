@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_tasks_board import api, bot_token, headers, post  # noqa: F401 (fixture)
+from backend.tests.helpers.tasks_board import api, bot_token, headers, post  # noqa: F401 (fixture)
 from backend import bot_settings as BS
 
 

@@ -34,7 +34,7 @@ const finTaxYear = (view: FinTaxView): number => { const d = new Date(); return 
 function finTaxPage() {
   const t = FIN_TAX;
   if (!t.year) t.year = finTaxYear(t.view);
-  FIN.tax = {data: null, load: 0};
+  finNeed(FIN, 'the Finance page').tax = {data: null, load: 0};
   const now = new Date().getFullYear(), years = Array.from({length: 6}, (_, i) => now - i);
   $('#fin-body').innerHTML = `<div class="fin-bar">${finSeg('tax', 'Workpaper', [['sales', 'Sales tax'], ['1099', '1099']], t.view)}
       <select data-fin-year aria-label="Year">${years.map(y => `<option value="${y}"${y === t.year ? ' selected' : ''}>${y}</option>`).join('')}</select>
@@ -52,9 +52,10 @@ function finTaxPage() {
   };
   void finTaxLoad();
 }
+interface FinPage { tax?: FinTaxState }
 const finTaxPath = (view: FinTaxView): string => view === '1099' ? '/v2/finance/tax/1099' : '/v2/finance/tax/sales-tax';
 async function finTaxLoad() {
-  const state: FinTaxState = FIN.tax, t = FIN_TAX, load = ++state.load;
+  const state: FinTaxState = finNeed(FIN?.tax, 'the tax page'), t = FIN_TAX, load = ++state.load;
   let d: FinTaxPage;
   try { d = await get<FinTaxPage>(`${finTaxPath(t.view)}?year=${t.year}${finAs()}`, {fresh: true}); }
   catch (e) { if (FIN?.tax === state && state.load === load && $('#fin-tax')) { $('#fin-tax').innerHTML = finFail(e); finRail(''); } return; }
@@ -73,7 +74,7 @@ function finTaxCsv() {
 }
 const finTaxKey = (r: FinTaxRow): string => FIN_TAX.view === '1099' ? String(r.vendor_id || r.vendor) : `${r.period}|${r.code || r.jurisdiction}`;
 function finTaxDraw() {
-  const state: FinTaxState = FIN.tax, t = FIN_TAX, box = $('#fin-tax'); if (!box || !state.data) return;
+  const state = FIN?.tax, t = FIN_TAX, box = $('#fin-tax'); if (!box || !state?.data) return;
   const rows = state.data.rows || [];
   if (!rows.length) { box.innerHTML = finNote(t.view === '1099' ? 'No 1099 vendors.' : 'No sales tax.'); return; }
   const on = (r: FinTaxRow) => t.sel === finTaxKey(r) ? ' class="fin-on"' : '';
@@ -92,7 +93,7 @@ function finTaxDraw() {
 // "2026-Q3" → "Q3 2026".
 const finQuarter = (p: string | undefined): string => { const m = /^(\d{4})-Q([1-4])$/.exec(String(p || '')); return m ? `Q${m[2]} ${m[1]}` : String(p || ''); };
 function finTaxRail() {
-  const state: FinTaxState = FIN.tax, t = FIN_TAX, d = state?.data; if (!d) return;
+  const state = FIN?.tax, t = FIN_TAX, d = state?.data; if (!d) return;
   const r = (d.rows || []).find(x => finTaxKey(x) === t.sel);
   if (!r) { finRail(''); return; }
   if (t.view === '1099') {
@@ -115,7 +116,7 @@ interface FinSheet { csv: string; names: string[]; rows: number }
 // The import dialog's named controls (its markup is in finImportOpen).
 interface FinImportControls { file: HTMLInputElement; units: HTMLSelectElement; basis: HTMLSelectElement; source: HTMLInputElement }
 // The dry run's impact: what would post. The generated action reply leaves it out, so it is typed here.
-interface FinDryImpact { already_imported?: string; months?: number; rows?: number; zero_rows?: number; accounts?: {code: string; name: string; total: number}[] }
+interface FinDryImpact { budgets?: FinImpactBudget[]; already_imported?: string; months?: number; rows?: number; zero_rows?: number; accounts?: {code: string; name: string; total: number}[] }
 // The import's reply: the action's status and reason, with the dry run's impact and the approver for a send.
 type FinDryRun = import('../types/api').FinanceAction & {impact?: FinDryImpact; approver?: string};
 // A CSV's rows, quoted fields and all: [[cell, …], …], blank lines dropped.

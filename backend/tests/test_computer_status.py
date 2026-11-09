@@ -11,10 +11,10 @@ from backend import bot_settings as BS
 from backend.getting_started import ONLINE_SECONDS
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_cloud_machines import cloud, employee, enrolled, shared_enrolled  # noqa: F401
-from backend.tests.test_credentials import setup
-from backend.tests.test_model_subscriptions import add, give
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.cloud_machines import cloud, employee, enrolled, shared_enrolled  # noqa: F401
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.model_subscriptions import add, give
 
 DEVICE_ID = sha256(b"acme-device-one").hexdigest()
 

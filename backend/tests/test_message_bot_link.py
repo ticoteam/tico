@@ -6,7 +6,7 @@ the bot is made, and once at start for bots made before that when there is no do
 
 from backend import message_bots, routines
 from backend.store import H, encode
-from backend.tests.test_api import api, post  # noqa: F401  (fixture)
+from backend.tests.helpers.api import post  # noqa: F401  (fixture)
 from backend import bot_settings as BS
 
 MODEL = {"model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None}

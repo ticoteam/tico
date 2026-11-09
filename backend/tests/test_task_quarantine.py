@@ -3,26 +3,11 @@
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_api import api, claim, get, headers, post, ready, settled  # noqa: F401 (fixture)
-from backend.tests.test_execution_review import job_state
-from backend.tests.test_held_runs import botops
-from backend.tests.test_task_lanes import new_task, task_bot
-
-
-def started(api, machine):
-    attempt = claim(api, machine)
-    assert attempt is not None
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])
-    return attempt
-
-
-def refusals(api, attempt, task, count=H.QUARANTINE_AT + 1):
-    for _ in range(count):
-        row = get(api, "tasks/" + task["id"])["task"]
-        result = post(
-            api, "tasks/" + task["id"], {"version": row["version"], "number": 993}, attempt["token"], expected=403
-        )
-        assert result["error"]["code"] == "identity"
+from backend.tests.helpers.api import claim, get, headers, post, ready, settled  # noqa: F401 (fixture)
+from backend.tests.helpers.execution_review import job_state
+from backend.tests.helpers.held_runs import botops
+from backend.tests.helpers.task_lanes import new_task, task_bot
+from backend.tests.helpers.task_quarantine import refusals, started
 
 
 def holds(api):
@@ -32,7 +17,7 @@ def holds(api):
 
 @pytest.fixture
 def external_work(api):
-    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.helpers.agents import credential, hermes_bot
 
     hermes_bot(api)
     token = credential(api)["token"]
@@ -273,7 +258,7 @@ def test_external_status_fences_the_task_it_keeps_without_blocking_a_switch_to_o
 
 
 def test_external_direct_file_reviews_check_both_the_review_task_and_the_files_stored_task(api, external_work):
-    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.helpers.agents import credential, hermes_bot
 
     token, task, other = external_work
     hermes_bot(api, slug="publisher")
@@ -425,7 +410,7 @@ def test_external_requester_add_and_message_backed_note_cancel_respect_the_task_
 
 
 def test_external_page_pins_check_the_files_task_even_at_an_unheld_place(api, external_work):
-    from backend.tests.test_cards import page
+    from backend.tests.helpers.cards import page
 
     token, task, other = external_work
     fid = page(api, H.actor_id(task["owner_id"]), task=task["id"])
@@ -639,8 +624,8 @@ def test_unattributed_refusals_after_a_task_hold_still_quarantine_the_bot(api):
 
 
 def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_mcp(api):
-    from backend.tests.test_agents import credential, hermes_bot
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.agents import credential, hermes_bot
+    from backend.tests.helpers.mcp import call
 
     hermes_bot(api)
     token = credential(api)["token"]
@@ -664,7 +649,7 @@ def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_m
 
 @pytest.mark.parametrize("mutation", ["snooze", "relations"])
 def test_external_validation_refusals_keep_the_task_scope_through_rollback(api, mutation):
-    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.helpers.agents import credential, hermes_bot
 
     hermes_bot(api)
     token = credential(api)["token"]
@@ -691,7 +676,7 @@ def test_external_validation_refusals_keep_the_task_scope_through_rollback(api, 
 @pytest.mark.parametrize("mutation", ["thread", "upload", "import", "link"])
 def test_external_native_posts_and_file_publishing_fence_the_resolved_task(api, mutation):
     from backend import task_quarantine as Q
-    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.helpers.agents import credential, hermes_bot
 
     hermes_bot(api)
     token = credential(api)["token"]
@@ -734,7 +719,7 @@ def test_external_native_posts_and_file_publishing_fence_the_resolved_task(api, 
 @pytest.mark.parametrize("mutation", ["upload", "failed_sync", "link"])
 def test_file_publishing_checks_the_stored_task_when_the_request_omits_it(api, mutation):
     from backend import task_quarantine as Q
-    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.helpers.agents import credential, hermes_bot
 
     hermes_bot(api)
     token = credential(api)["token"]
@@ -1129,7 +1114,7 @@ def _held_notes(api, machine, source, n):
 
 
 def test_a_held_task_does_not_use_the_bots_only_automatic_task_place(api):
-    from backend.tests.test_auto_tasks import set_cap
+    from backend.tests.helpers.auto_tasks import set_cap
 
     machine = task_bot(api, lanes=True)
     task = new_task(api, "Check the export")
@@ -1198,7 +1183,7 @@ def test_external_task_pins_and_cards_check_their_stored_place(api, external_wor
 
 def test_external_task_mutations_fence_the_explicit_task_and_allow_an_unheld_task(api):
     """Every task route is fenced for a held task, one fresh trio of tasks and one hold per route."""
-    from backend.tests.test_agents import credential, hermes_bot
+    from backend.tests.helpers.agents import credential, hermes_bot
 
     hermes_bot(api)
     token = credential(api)["token"]

@@ -15,7 +15,7 @@ const helpBubble = (text: string, attrs = ''): string => `<span class="rd-help"$
 // ----------------------------------------------------------------- the sidebar
 // The rail is drawn whole in index.html, so the first paint is the one that stays: nothing here adds or moves a row.
 // What waits on an answer starts as this browser last heard it (ui/theme.ts marks <html> before the paint) and is set
-// right here once the answer is in: Finance (finance.js finNavSync) and Finish setup (notices.js renderOnboardingNav).
+// right here once the answer is in: Finance (finance.ts finNavSync) and Finish setup (notices.js renderOnboardingNav).
 // The answers are kept for whoever signed in here last (snapWho: this server, its owner, the person); /me answering as
 // anyone else drops them before the config is applied (boot.js), and so does a sign-out (boot-snap.js bootSnapDrop).
 // A kept answer only stands in until this visit's own arrives.
@@ -192,7 +192,7 @@ function redesignRoute(r: string): boolean {
   if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
   if (rdUnder(r, RD_BUDGET)) { pageBudget(); return true; }
-  if (rdUnder(r, FIN_ROUTE)) { pageFinance(); return true; }   // ui/app/finance.js
+  if (rdUnder(r, FIN_ROUTE)) { pageFinance(); return true; }   // ui/app/finance.ts
   if (rdUnder(r, CP_ROUTE)) { pageCompanyPage(); return true; }   // ui/app/company-page.ts
   return false;
 }

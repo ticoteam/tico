@@ -1,7 +1,6 @@
 """Company subscriptions: saved once in Settings > Models, given to computers one per runtime, and signing in every turn
 on that computer (backend/model_subscriptions.py)."""
 
-import base64
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -11,12 +10,11 @@ from backend import login_holds
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, runner  # noqa: F401
-from backend.tests.test_credentials import setup
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner
+from backend.tests.helpers.credentials import setup
 from backend import bot_settings as BS
+from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, machine, on
 
-TOKEN = "sk-ant-oat01-" + "a" * 24
-OTHER = "sk-ant-oat01-" + "b" * 24
 CLAUDE_LIMIT = "You've hit your limit · resets 2:40am (UTC)"
 NO_COMPUTER = {"window": None, "used_pct": None, "cost_usd_month": None, "reason": "Not on a computer yet"}
 
@@ -25,80 +23,6 @@ def limit_notice_soon():
     # Relative to the clock: a date-less reset more than 20 hours away is not believed (login_holds.reset_from_text).
     soon = datetime.now(timezone.utc) + timedelta(hours=2)
     return f"You've hit your limit · resets {soon:%-I:%M}{soon:%p} (UTC)".replace("AM", "am").replace("PM", "pm")
-
-
-def codex_file(account="acct-1", refresh="r-1", email="ana@acme.example"):
-    claims = base64.urlsafe_b64encode(json.dumps({"email": email}).encode()).decode().rstrip("=")
-    return json.dumps(
-        {
-            "tokens": {
-                "id_token": f"h.{claims}.s",
-                "access_token": "a-" + refresh,
-                "refresh_token": refresh,
-                "account_id": account,
-            }
-        }
-    )
-
-
-def company(api, enabled=("anthropic", "openai")):
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='providers'")
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('providers',?)",
-            (encode({"revision": 1, "enabled": list(enabled), "runtime": "claude", "model": "claude-sonnet-5-5"}),),
-        )
-
-
-def on(api, bot, runtime, model):
-    with api.app.state.store.transaction() as c:
-        config = BS.read(c, bot)
-        config.update(runtime=runtime, harness=runtime, model=model)
-        BS.write(c, bot, config)
-
-
-def add(api, kind="claude_token", secret=TOKEN, name="Company Max", token="ana-test", expected=200):
-    return post(
-        api,
-        "model-subscriptions",
-        {"kind": kind, "secret": secret, **({"name": name} if name else {})},
-        token,
-        expected=expected,
-    )
-
-
-def give(api, m, runtime, sid, confirm=False, token="ana-test", expected=200):
-    return put(
-        api,
-        "computer-subscriptions",
-        {"runner_id": m["runner_id"], "runtime": runtime, "subscription": sid, "confirm": confirm},
-        token,
-        expected=expected,
-    )
-
-
-def machine(api, signed_in=False, takes=True, bot="ops", claude=None, label="Test Mac"):
-    m = runner(api, label=label)
-    assign(api, m, bot)
-    post(
-        api,
-        "runners/heartbeat",
-        {
-            "version": "test",
-            "platform": "test",
-            "capabilities": [MS.CAPABILITY] if takes else [],
-            "readiness": {
-                "schema_version": 1,
-                "runtimes": {
-                    "claude": {"installed": True, "authenticated": claude or ("ready" if signed_in else "missing")},
-                    "codex": {"installed": True, "authenticated": "missing"},
-                },
-                "bots": {bot: {"runtime": "claude", "ready": True}},
-            },
-        },
-        token=m["token"],
-    )
-    return m
 
 
 def effect(api, m, runtime="claude"):
@@ -343,9 +267,9 @@ def test_a_limit_met_on_a_subscription_holds_every_computer_given_it(api):
 
 def test_a_held_subscription_falls_to_the_gateway_under_the_gateway_choice_and_waits_without_it(api, monkeypatch):
     from backend import models_preset
-    from backend.tests.test_gateway_connection import KEY, fake_gateway, save
-    from backend.tests.test_gateway_connection import setup as gateway_setup
-    from backend.tests.test_models_preset import choose
+    from backend.tests.helpers.gateway_connection import KEY, fake_gateway, save
+    from backend.tests.helpers.gateway_connection import setup as gateway_setup
+    from backend.tests.helpers.models_preset import choose
 
     gateway_setup(api, monkeypatch)
     api.app.state.store.settings.credential_admins = ("ana@acme.example", "ben@acme.example")
@@ -1195,8 +1119,8 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
 
 def test_automatic_subscription_fallback_precedes_gateway(api, monkeypatch):
     from backend import execution, models_preset, providers
-    from backend.tests.test_gateway_connection import KEY, fake_gateway, save, setup as gateway_setup
-    from backend.tests.test_models_preset import choose
+    from backend.tests.helpers.gateway_connection import KEY, fake_gateway, save, setup as gateway_setup
+    from backend.tests.helpers.models_preset import choose
 
     gateway_setup(api, monkeypatch)
     with fake_gateway() as fake:

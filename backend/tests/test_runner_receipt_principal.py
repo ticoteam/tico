@@ -5,10 +5,10 @@ import importlib
 import pytest
 
 from backend import bot_settings as BS, store as S
-from backend.tests.test_api import api, as_member, assign, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_files import turn
-from backend.tests.test_make_page import start
-from backend.tests.test_meeting_task_links import task
+from backend.tests.helpers.api import as_member, assign, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.make_page import start
+from backend.tests.helpers.meeting_task_links import task
 
 
 ATTEMPT_RECEIPTS = (

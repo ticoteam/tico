@@ -1,7 +1,7 @@
 """Maintenance foundation (docs/maintenance.md; plan 1-3 and Amendment v2 A, B, G, H, I): the fixed step order, each
 "How often" on its own clock, Run now and the schedule as one run, the abandoned-run recovery, cursors that move only on
 `ran`, a failing step that does not stop the run, the switch migration, the wake limiter and the API rights.
-Synthetic fixtures: the api fixture's people (backend/tests/test_api.py; Ana owns the company, Ben is an admin, Cara is a
+Synthetic fixtures: the api fixture's people (backend/tests/helpers/api_app.py; Ana owns the company, Ben is an admin, Cara is a
 member)."""
 
 import importlib
@@ -13,7 +13,7 @@ from backend import hubdb as H
 from backend import maintenance as M
 from backend import maintenance_limits as L
 from backend.maintenance_steps import collect
-from backend.tests.test_api import api, get, headers  # noqa: F401  (fixtures and helpers)
+from backend.tests.helpers.api import get, headers  # noqa: F401  (fixtures and helpers)
 
 mig = importlib.import_module("backend.migrations.0090_maintenance")
 

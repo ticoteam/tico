@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from backend.tests.test_updater_runner import load
+from backend.tests.helpers.updater_runner import load
 
 
 class FrontDoorDocker:

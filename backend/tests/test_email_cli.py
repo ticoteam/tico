@@ -5,12 +5,11 @@ import shlex
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_automation_cli import Client
-from backend.tests.test_gmail_live import BOX, NEXT, gmail_http  # noqa: F401
-from backend.tests.test_google_workspace_authz import workspace_key  # noqa: F401
-from backend.tests.test_mail_live import SHARED, assistant_token, live, no_cached_tokens  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.automation_cli import Client
+from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
+from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
+from backend.tests.helpers.mail_live import SHARED, assistant_token, live, no_cached_tokens  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import hubcli, hubtools, remotecli
 
 

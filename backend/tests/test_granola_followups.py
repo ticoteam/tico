@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from backend.auth import Identity
-from backend.tests.test_granola_mcp import Provider, api, headers  # noqa: F401
+from backend.tests.helpers.granola_mcp import Provider, headers  # noqa: F401
 
 
 def metadata(provider, **changes):

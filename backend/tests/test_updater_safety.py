@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend.tests.test_updater_runner import Moby, load
+from backend.tests.helpers.updater_runner import Moby, load
 
 
 class Fake:

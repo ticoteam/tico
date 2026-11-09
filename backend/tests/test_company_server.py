@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from backend import company_server as CS
-from backend.tests.test_api import api, as_member, headers  # noqa: F401
+from backend.tests.helpers.api import as_member, headers  # noqa: F401
 
 CODE = "synthetic_" + "s" * 33
 INSTALL_ID = "cc4a8541-2661-4eb8-a1d3-a34e913571c0"
@@ -373,7 +373,7 @@ GATEWAY_KEY = "tgw_synthetic_company_gateway_key_0123456789ab"
 
 def gateway_setup(api, hq, monkeypatch):
     """The vault and an HQ that enrolls the install for the company: `hq.gateway` keeps each request's body."""
-    from backend.tests.test_gateway_connection import setup as connection_setup
+    from backend.tests.helpers.gateway_connection import setup as connection_setup
 
     connection_setup(api, monkeypatch)
     from backend import gateway_connection

@@ -2,7 +2,7 @@
 memory changed a lot since its last dream, under the gates, up to "Most bots per run"; a run claims its schedule bucket
 once; Run now ignores the schedule only; the requester is the bot's manager, else the owner; a question from the dream
 reaches the requester without ask ingest.
-Synthetic fixtures: the api fixture's bots (backend/tests/test_api.py; Ana owns the company, Ben is an admin). Memory is
+Synthetic fixtures: the api fixture's bots (backend/tests/helpers/api_app.py; Ana owns the company, Ben is an admin). Memory is
 written as memory_history.record stores it, except the one test that reports through the route."""
 
 import json
@@ -20,8 +20,8 @@ from backend import maintenance as M
 from backend import maintenance_limits as L
 from backend.maintenance_steps import dream as dream_step
 from backend.scheduler import Scheduler
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
-from backend.tests.test_ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
 QUESTIONS = "1. Should weekly reports go to Ana or the team? Suggested: the team"
 LEARNINGS = "memory/learnings.md"
@@ -502,7 +502,7 @@ def test_a_bot_no_longer_due_at_its_start_does_not_use_up_a_slot(api, monkeypatc
 def test_a_dream_that_lands_on_a_branch_is_judged_on_the_branch(api):
     """Cara's own dream lands on her branch of cpo and is open there. cpo's night must not file a second dream on that
     branch: the busy check reads the bot the dream lands on, not the original it was judged as."""
-    from backend.tests.test_shared_bots import branch, share
+    from backend.tests.helpers.shared_bots import branch, share
 
     share(api)
     branch(api, runner(api, "cara"))

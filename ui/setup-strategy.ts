@@ -1,4 +1,4 @@
-/* ui/setup-strategy.ts — Setup's first two steps (#/welcome, ui/app/welcome.js): What are you building, then Your bets.
+/* ui/setup-strategy.ts — Setup's first two steps (#/welcome, ui/app/welcome.ts): What are you building, then Your bets.
    Next on the first saves the website and the line (PUT /api/v2/setup) and starts the research
    (POST /api/v2/strategy/draft-from, backend/strategy_setup.py). The second polls it, then shows the bets it proposed as
    claims to keep, edit or strike, with the draft filling in beside them. The bet form and its rules are the Strategy
@@ -84,7 +84,7 @@ interface SsStrat {
   saving: Promise<boolean> | null;
 }
 
-/** The Setup wizard's state (welcome.js pageWelcome): the step, the record it saves, and this step's state under `strat`. */
+/** The Setup wizard's state (welcome.ts pageWelcome): the step, the record it saves, and this step's state under `strat`. */
 interface SsWizard {
   step: number;
   steps: string[];
@@ -109,8 +109,7 @@ function ssEl<T extends Element>(selector: string, root: ParentNode = document):
   return el;
 }
 
-// welcome.js's open wizard: `let ONB`, null until the page opens. welcome.js types it as any (see its JSDoc on that line),
-// so this one place gives it the wizard shape.
+// welcome.ts's open wizard: `let ONB`, null until the page opens, as this step reads it.
 const ssOpen = (): SsWizard | null => ONB;
 
 // `not` is What we won't do as typed and not yet saved (null: untouched); `asked` the website and words the last run

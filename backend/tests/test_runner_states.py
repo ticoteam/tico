@@ -6,8 +6,8 @@ import sqlite3
 import pytest
 
 from backend import runner_states
-from backend.tests.test_api import api, post, runner  # noqa: F401
-from backend.tests.test_migrations import boot, fresh, snapshot
+from backend.tests.helpers.api import post, runner  # noqa: F401
+from backend.tests.helpers.migrations import boot, fresh, snapshot
 
 OLD_STATE = (
     ("last_seen_at", "TEXT"),

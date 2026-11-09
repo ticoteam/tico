@@ -400,7 +400,7 @@ function taskSessionsHTML(t: ModalTask) {
 // Runs on (POST /v2/tasks/{id}/model, backend/task_run_models.py): the model this task's runs use, or the bot's task model
 // until one is set on it. The model list is GET /v2/models, read once here and by the automation step editor, which offers
 // the same models. Gateway tier picks (tico-*) are made in the bot's settings, so they stay out of both.
-let TASK_RUN_ROWS = null, TASK_RUN_LOADING: Promise<ModalModelRow[]> | null = null;
+let TASK_RUN_ROWS: TaskRunRow[] | null = null, TASK_RUN_LOADING: Promise<ModalModelRow[]> | null = null;
 function taskRunCatalog() {
   TASK_RUN_LOADING ||= get<{models?: ModalModelRow[]}>('/v2/models').then(d => {
     TASK_RUN_ROWS = (d.models || []).filter(m => !m.deprecated && !m.meeting && !/^tico-/.test(m.id || ''));
@@ -947,11 +947,11 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
-  // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.js sourceRunsHTML).
+  // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
   const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id, can));
   const isUpdate = (x: ModalLine) => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
   state.openLines ||= new Set();
-  const html = (sourceRunsHTML(said, {isUpdate, open: (run: {message: ModalComment}[]) => run.some(x => state.openLines!.has(x.message.id)),
+  const html = (sourceRunsHTML(said, {isUpdate, open: (run: ModalLine[]) => run.some(x => state.openLines!.has(x.message!.id)),
     line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can)}) || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
   if (!can) d.askDrafts?.clear();

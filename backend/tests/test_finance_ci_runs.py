@@ -9,7 +9,7 @@ from backend.finance import setup as FS
 from backend.finance.store import budgets as SB
 from backend.finance.store import ledger as SL
 from backend.store import H, Problem
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, budget, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, budget, books, finance_template, store  # noqa: F401
 
 RUN = "a1b2c3d4e5f6"
 CI_BOT = "bot:coder"

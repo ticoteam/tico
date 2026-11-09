@@ -1,7 +1,7 @@
 """A builder hand-off from Tico is the first of the bot's queued jobs a claim gives out (backend/verdict_moves.py)."""
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
 from backend import verdict_moves as V
 from backend import bot_settings as BS
 

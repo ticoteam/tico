@@ -1,11 +1,11 @@
 """Org changes by request (backend/assistant.py `instructed_org`): the Strategy Bot suggests them in words and makes one
 only when the person in its chat asks, citing their message, with exactly their rights. On its own it changes nothing."""
 
-from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_strategy_bot_chat import strategy_bot, turn
-from backend.tests.test_groups import group
-from backend.tests.test_groups_leads import as_bot
+from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.strategy_bot_chat import strategy_bot, turn
+from backend.tests.helpers.groups import group
+from backend.tests.helpers.groups_leads import as_bot
 
 
 def cited(api, method, path, body, token, ref="turn", expected=200):

@@ -3,68 +3,9 @@
 import pytest
 
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner, restrict  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner, restrict  # noqa: F401
 from backend import bot_settings as BS
-
-
-def setup(api, supported=True, runtime='codex'):
-    machine = runner(api)
-    assign(api, machine, 'ops')
-    with api.app.state.store.transaction() as c:
-        BS.write(c, 'ops', {'runtime': runtime})
-    post(
-        api,
-        'runners/heartbeat',
-        {
-            'version': 'test',
-            'platform': 'test',
-            'readiness': {
-                'schema_version': 1,
-                'bots': {
-                    'ops': {
-                        'ready': True,
-                        'runtime': runtime,
-                        'goals': supported,
-                        'commands': [
-                            {'name': 'compact', 'help': 'Compact this conversation', 'kind': 'harness'},
-                            {
-                                'name': 'docs:publish',
-                                'args': '[target]',
-                                'help': 'Publish the Acme docs',
-                                'kind': 'harness',
-                            },
-                        ],
-                    }
-                },
-            },
-        },
-        machine['token'],
-    )
-    conv = post(api, 'conversations', {'participants': ['bot:ops']})
-    return machine, conv['id']
-
-
-def action(api, cid, name='set', objective=None, **kwargs):
-    return post(
-        api,
-        f'conversations/{cid}/goal',
-        {'action': name, **({'objective': objective} if objective is not None else {})},
-        **kwargs,
-    )
-
-
-def goal_event(api, machine, attempt, status, note='', started=True):
-    """What the runner reports when the harness says the attempt's goal changed (runner-rs/src/goals.rs)."""
-    goal = attempt['chat_goal']
-    if started:
-        post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'fake-thread'}, machine['token'])
-    payload = {'goal_id': goal['id'], 'revision': goal['updated_at'], 'status': status, 'note': note}
-    post(
-        api,
-        f"attempts/{attempt['id']}/events",
-        {'events': [{'seq': 1, 'kind': 'goal', 'payload': payload}]},
-        machine['token'],
-    )
+from backend.tests.helpers.chat_goals import action, goal_event, setup, task_goal_world
 
 
 def test_a_met_goal_leaves_one_notice_that_wakes_nobody(api):
@@ -217,25 +158,6 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
     assert done['status'] == 'done' and done['note'] == 'The summary is in Docs.'
 
 
-def task_goal_world(api):
-    machine = runner(api)
-    assign(api, machine, 'ops')
-    with api.app.state.store.transaction() as c:
-        BS.write(c, 'ops', {'runtime': 'codex', 'task_goal': 'on'})
-    post(
-        api,
-        'runners/heartbeat',
-        {
-            'version': 'test',
-            'platform': 'test',
-            'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'],
-            'readiness': {'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}},
-        },
-        machine['token'],
-    )
-    return machine, post(api, 'tasks', {'owner': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.'})
-
-
 def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_completes_the_task(api):
     from backend import chat_goals
 
@@ -269,7 +191,7 @@ def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_com
 
 
 def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(api):
-    from backend.tests.test_member_bots import finish
+    from backend.tests.helpers.member_bots import finish
 
     machine, task = task_goal_world(api)
     first = claim(api, machine)
@@ -319,7 +241,7 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
 
 
 def test_handing_the_task_to_a_person_ends_the_old_owners_task_goal(api):
-    from backend.tests.test_member_bots import finish
+    from backend.tests.helpers.member_bots import finish
 
     machine, task = task_goal_world(api)
     first = claim(api, machine)
@@ -344,7 +266,7 @@ def test_a_done_tasks_goal_is_met_even_when_the_bot_signs_off_waiting(api):
 
 
 def test_a_persons_clear_of_a_task_goal_stands_while_task_goals_stay_on(api):
-    from backend.tests.test_member_bots import finish
+    from backend.tests.helpers.member_bots import finish
 
     machine, task = task_goal_world(api)
     first = claim(api, machine)
@@ -358,7 +280,7 @@ def test_a_persons_clear_of_a_task_goal_stands_while_task_goals_stay_on(api):
 
 
 def test_a_persons_edit_of_a_task_goal_survives_task_goals_turning_off(api):
-    from backend.tests.test_member_bots import finish
+    from backend.tests.helpers.member_bots import finish
 
     machine, task = task_goal_world(api)
     finish(api, machine, claim(api, machine))

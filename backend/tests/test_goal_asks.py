@@ -4,62 +4,16 @@ and person, in Tasks and Decide, closed by itself once resolved. Only above Pass
 
 from datetime import datetime, timedelta, timezone
 
-from backend import strategy_bot
 from backend import goal_asks as GA
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_kpis import goal_with_kpi, log
-from backend import bot_settings as BS
-
-MANAGER = "bot:goal-manager"
-
-
-def goal_manager(api, level=1):
-    """The Strategy Bot at `level`, chosen by the owner (Passive unless asked otherwise); None leaves it as built, at
-    the default level."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
-            (H.now(),),
-        )
-        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
-        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
-    raise_level(api, level)
-
-
-def raise_level(api, level):
-    """The owner chooses `level` (`strategy_bot.set_level`); None chooses nothing."""
-    if level is not None:
-        with api.app.state.store.transaction() as c:
-            strategy_bot.set_level(c, "human:ana", level)
-
-
-def asks(api, owner=None):
-    with api.app.state.store.read() as c:
-        return [
-            dict(r)
-            for r in c.execute(
-                "SELECT t.id, t.title, t.body, t.owner_id, t.status, a.kind, a.ref FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
-                "WHERE t.requester_id=?" + (" AND t.owner_id=?" if owner else "") + " ORDER BY t.created_at",
-                (MANAGER, owner) if owner else (MANAGER,),
-            )
-        ]
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.kpis import goal_with_kpi, log
+from backend.tests.helpers.goal_asks import MANAGER, asks, goal_manager, needs_tasks, raise_level, sync
 
 
 def manager_tasks(api, status):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester_id=? AND status=?", (MANAGER, status))]
-
-
-def sync(api, at=None):
-    with api.app.state.store.transaction() as c:
-        return GA.sync(c, api.app.state.auth.owner_id(c), at)
-
-
-def needs_tasks(api, token):
-    page = get(api, "needs-you", token)
-    return {str(i["id"]) for i in page["items"] + page["older"]}
 
 
 def stale_asks(api, owner="human:ana"):

@@ -10,10 +10,10 @@ import pytest
 from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import question_tasks as QT
-from backend.tests.test_api import api, assign, get, headers, post, runner, setup_attempt  # noqa: F401
-from backend.tests.test_assistant import assistant_turn, say
-from backend.tests.test_automation_access import flow
-from backend.tests.test_batch import approval_for_ana
+from backend.tests.helpers.api import assign, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn, say
+from backend.tests.helpers.automation_access import flow
+from backend.tests.helpers.batch import approval_for_ana
 
 
 def turn(api, text="Please do it"):

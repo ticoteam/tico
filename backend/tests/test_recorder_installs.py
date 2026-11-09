@@ -4,8 +4,8 @@ import httpx
 import pytest
 
 from backend import hubdb as H, recorder_installs as R, releases
-from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_openapi_v2 import conforms
+from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.openapi_v2 import conforms
 
 MAC = "a" * 32
 LAPTOP = "b" * 32

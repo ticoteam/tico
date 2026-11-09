@@ -3,7 +3,7 @@
 import asyncio
 
 from backend.store import encode
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
 from backend import bot_settings as BS
 
 
@@ -85,7 +85,7 @@ def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
 
 
 def test_a_server_runner_credential_does_not_read_as_its_operator(api):
-    from backend.tests.test_api import headers, runner
+    from backend.tests.helpers.api import headers, runner
 
     machine = runner(api)  # enrolled as "test", i.e. not a Mac
     reply = api.post(
@@ -151,7 +151,7 @@ def test_a_quarantine_is_not_lifted_through_the_bot_definition(api):
 
 
 def test_an_importer_machine_cannot_send_work_in_a_persons_name(api):
-    from backend.tests.test_api import headers, runner
+    from backend.tests.helpers.api import headers, runner
 
     machine = runner(api)
     body = {
@@ -185,7 +185,7 @@ def test_a_quarantined_bots_status_says_when_it_resumes_and_a_persons_message_wa
 
 def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resumes_it(api):
     from backend import hubdb as H
-    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner
 
     computer = runner(api)  # placed on a computer, not the keeper
     assign(api, computer, "ops")

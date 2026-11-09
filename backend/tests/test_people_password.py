@@ -5,9 +5,8 @@ import logging
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
-from backend.tests.test_invites import owner
-from backend.tests.test_oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.invites import owner
+from backend.tests.helpers.oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
 
 PASSWORD = "abcde-fghjk-mnpqr-stuvw"
 

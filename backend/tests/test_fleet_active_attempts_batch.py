@@ -1,8 +1,8 @@
 """fleet_snapshot loads live attempts once, not once per writable bot."""
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_views import as_member
-from backend.tests.test_task_privacy_reads import traced
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.views import as_member
+from backend.tests.helpers.task_privacy_reads import traced
 
 
 def test_fleet_snapshot_reports_active_attempt_from_batched_live_map(api):

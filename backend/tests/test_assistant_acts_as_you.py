@@ -13,11 +13,11 @@ import pytest
 from backend import assistant
 from clients import hubtools
 from backend import hubdb as H
-from backend.tests.test_api import api, as_member, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_assistant import assistant_turn, say
-from backend.tests.test_automation_access import flow
+from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn, say
+from backend.tests.helpers.automation_access import flow
 from backend.store import Problem
-from backend.tests.test_batch import approval_for_ana
+from backend.tests.helpers.batch import approval_for_ana
 
 
 def set_rule(api, **rules):

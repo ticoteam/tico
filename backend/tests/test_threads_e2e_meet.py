@@ -2,9 +2,9 @@
 message in the thread, read by the thread's people and by nobody else. Synthetic names only (Acme, acme.example)."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_calls import PCM_EIGHT_SECONDS, SYNTHETIC_SPEECH, join, meet, start_call, thread  # noqa: F401
-from backend.tests.test_live_meetings import live, settle  # noqa: F401
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.calls import PCM_EIGHT_SECONDS, SYNTHETIC_SPEECH, join, meet, start_call, thread  # noqa: F401
+from backend.tests.helpers.live_meetings import live, settle  # noqa: F401
 
 
 def test_the_call_transcript_is_read_by_the_thread_members_and_by_no_one_else(meet):
