@@ -12,28 +12,40 @@
 const GRANOLA = '/v2/meetings/granola';
 const GRANOLA_POLL_FIRST_MS = 3000, GRANOLA_POLL_MAX_MS = 15000, GRANOLA_LEGACY_POLLS = 5;
 
-function granolaStop(state) {
+// The sign-in dialog's flow (MeetSourcesState.gflow in meetings-sources.ts) and the two timers this file adds.
+type GranolaFlow = {phase: 'starting'; code?: undefined; uri?: undefined; host?: undefined; until?: undefined; every?: undefined}
+  | {phase: 'code'; code: string; uri: string; host: string; until: number; every: number};
+interface GranolaState extends MeetSourcesState { gTimer?: number; gSyncTimer?: number }
+// The fields of GET /v2/meetings/granola this file reads (MeetGranola in meetings.ts has the rest); api.d.ts is a module, so the
+// shapes are declared here. GranolaDevice is the answer to POST .../connect; GranolaSyncReply is the answer to POST .../sync.
+interface MeetGranola { mode?: string; last_synced_at?: string | null; imported_count?: number; syncing?: boolean; skipped?: number; plan_hint?: string | null }
+interface GranolaDevice { user_code: string; interval: number; expires_in: number; verification_uri: string; verification_uri_complete?: string }
+interface GranolaSyncReply { state?: string; last_synced_at?: string | null }
+// What GET .../connect/status answers while a sign-in waits: `pending` until it connects, expires or is denied.
+interface GranolaPoll { state: string; email?: string | null }
+
+function granolaStop(state: GranolaState) {
   if (!state) return;
   if (state.gflow) { state.gflow = null; $('#mg-dialog')?.remove(); }
   clearTimeout(state.gTimer); clearTimeout(state.gSyncTimer);
   state.gTimer = state.gSyncTimer = 0;
 }
 // A sentence for screen readers; the Sources row re-renders, so announcements go through one steady live region.
-function granolaSay(text) {
-  const live = $('#mg-live'); if (!live) return;
+function granolaSay(text: string) {
+  const live = $('#mg-live') as HTMLElement | null; if (!live) return;
   live.textContent = '';
   setTimeout(() => { live.textContent = text; }, 30);
 }
-async function granolaStatus(state) {
-  let s;
-  try { s = await get(GRANOLA); } catch { s = null; }
+async function granolaStatus(state: GranolaState): Promise<MeetGranola | null> {
+  let s: MeetGranola | null;
+  try { s = await get<MeetGranola>(GRANOLA); } catch { s = null; }
   if (MEET !== state) return null;
   state.granola = s && typeof s.mode === 'string' ? s : null;
   granolaPaint(state);
   meetPaintTiles(state);
   return state.granola;
 }
-async function granolaInit(state) {
+async function granolaInit(state: GranolaState) {
   const s = await granolaStatus(state);
   // Tools > Granola links here with ?connect=granola: open the sign-in straight away.
   if (state.connectGranola && s && !granolaReady(s)) {
@@ -45,18 +57,18 @@ async function granolaInit(state) {
   else if (granolaReady(s)) granolaSync(state);
 }
 // Signed out is `needs_signin`, whatever `connected` says (the server sends connected:false then).
-const granolaReady = s => !!(s?.connected && !s.needs_signin);
+const granolaReady = (s: MeetGranola | null | undefined) => !!(s?.connected && !s.needs_signin);
 
 // Ask for one sync, then follow it.
-async function granolaSync(state, now = false) {
+async function granolaSync(state: GranolaState, now = false) {
   if (state.gSyncing) return;
   state.gSyncing = true; state.gmsg = '';
   granolaPaint(state);
-  let r;
+  let r: GranolaSyncReply | undefined;
   try { r = await post(GRANOLA + '/sync' + (now ? '?now=true' : ''), {}); }
   catch (e) {
     if (MEET !== state) return;
-    state.gSyncing = false; state.gmsg = e.message;
+    state.gSyncing = false; state.gmsg = errorMessage(e, '');
     granolaPaint(state);
     return;
   }
@@ -68,13 +80,13 @@ async function granolaSync(state, now = false) {
 // Re-read the status while the server says `syncing`: every 3 s, backing off to 15 s, until it stops (or the page
 // closes: granolaStop clears the timer). Then reload the meeting list if anything came in. A server that does not
 // send `syncing` is followed a few times until last_synced_at moves.
-function granolaWatch(state, asked) {
+function granolaWatch(state: GranolaState, asked?: boolean) {
   clearTimeout(state.gSyncTimer);
   const before = {last: state.granola?.last_synced_at || '', count: Number(state.granola?.imported_count) || 0};
   state.gSyncing = true;
   granolaPaint(state);
   let wait = GRANOLA_POLL_FIRST_MS, tries = 0;
-  const done = changed => {
+  const done = (changed: boolean) => {
     state.gSyncing = false; state.gSyncTimer = 0;
     granolaPaint(state); meetPaintTiles(state);
     if (changed && !state.editing && !state.open) meetLoad(state, false);
@@ -97,13 +109,13 @@ function granolaWatch(state, asked) {
   state.gSyncTimer = setTimeout(check, wait);
 }
 
-async function granolaConnect(state) {
+async function granolaConnect(state: GranolaState) {
   granolaStop(state);
   state.gmsg = ''; state.gflow = {phase: 'starting'};
   granolaPaint(state);
-  let r;
+  let r: GranolaDevice | undefined;
   try { r = await post(GRANOLA + '/connect', {}); }
-  catch (e) { if (MEET !== state) return; state.gflow = null; state.gmsg = e.message; granolaPaint(state, 'connect'); return; }
+  catch (e) { if (MEET !== state) return; state.gflow = null; state.gmsg = errorMessage(e, ''); granolaPaint(state, 'connect'); return; }
   if (MEET !== state) return;
   if (!r?.user_code) { state.gflow = null; state.gmsg = 'Granola did not send a code. Try again.'; granolaPaint(state, 'connect'); return; }
   const every = Math.max(0.1, Number(r.interval) || 5) * 1000;
@@ -115,18 +127,18 @@ async function granolaConnect(state) {
   state.gTimer = setTimeout(() => granolaPoll(state), every);
 }
 // Only a https link on Granola's own host becomes "Open Granola"; anything else is shown as plain host text.
-function granolaSafeUri(value) {
+function granolaSafeUri(value: unknown): string {
   try {
     const u = new URL(String(value));
     return u.protocol === 'https:' && (u.hostname === 'granola.ai' || u.hostname.endsWith('.granola.ai')) ? u.href : '';
   } catch { return ''; }
 }
-function granolaHost(value) { try { const u = new URL(String(value)); return /^https?:$/.test(u.protocol) ? u.host : ''; } catch { return ''; } }
-async function granolaPoll(state) {
+function granolaHost(value: unknown): string { try { const u = new URL(String(value)); return /^https?:$/.test(u.protocol) ? u.host : ''; } catch { return ''; } }
+async function granolaPoll(state: GranolaState) {
   const flow = state.gflow;
   if (MEET !== state || flow?.phase !== 'code') return;
-  let r;
-  try { r = await get(GRANOLA + '/connect/status'); } catch { r = {state: 'pending'}; }
+  let r: GranolaPoll;
+  try { r = await get<GranolaPoll>(GRANOLA + '/connect/status'); } catch { r = {state: 'pending'}; }
   if (MEET !== state || state.gflow !== flow) return;
   if (r.state === 'connected') {
     state.gflow = null;
@@ -152,23 +164,23 @@ async function granolaPoll(state) {
   }
   state.gTimer = setTimeout(() => granolaPoll(state), flow.every);
 }
-function granolaCancel(state) {
+function granolaCancel(state: GranolaState) {
   granolaStop(state);
   state.gflow = null; state.gmsg = '';
   granolaPaint(state, 'connect');
 }
-async function granolaDisconnect(state) {
+async function granolaDisconnect(state: GranolaState) {
   granolaStop(state);
   state.gSyncing = false; state.gmsg = '';
   try { await writeRequest('DELETE', GRANOLA + '/connect'); }
-  catch (e) { if (MEET === state) { state.gmsg = e.message; granolaPaint(state, 'more'); } return; }
+  catch (e) { if (MEET === state) { state.gmsg = errorMessage(e, ''); granolaPaint(state, 'more'); } return; }
   if (MEET !== state) return;
   if (state.granola) Object.assign(state.granola, {connected: false, needs_signin: false, syncing: false, email: '', mode: 'off'});
   granolaPaint(state, 'connect');
   granolaSay('Granola disconnected.');
   granolaStatus(state);
 }
-function granolaTileState(state) {
+function granolaTileState(state: GranolaState) {
   const s = state.granola;
   if (!s) return null;
   if (s.needs_signin) return {key: 'error', word: 'Sign in', when: ''};
@@ -176,7 +188,7 @@ function granolaTileState(state) {
   return null;
 }
 
-function granolaFacts(s, syncing) {
+function granolaFacts(s: MeetGranola, syncing?: boolean) {
   const n = Number(s.imported_count) || 0, skipped = Math.max(0, Number(s.skipped) || 0);
   const free = s.plan_hint === 'free' ? ' title="Free plan: notes from the last 30 days"' : '';
   return [s.email ? `<span class="mg-email" title="${esc(s.email)}">${esc(s.email)}</span>` : '',
@@ -186,8 +198,8 @@ function granolaFacts(s, syncing) {
     skipped ? `<span class="mg-skip" title="${skipped} ${skipped === 1 ? 'note' : 'notes'} from Granola could not be imported">${skipped} skipped</span>` : ''].filter(Boolean).join('');
 }
 // The Sources row says how the account is doing; signing in happens in a dialog (granolaDialog) on top of it.
-function granolaPaint(state, focus) {
-  const busy = $('#meet-syncing'); if (busy) busy.hidden = !(state.gSyncing && granolaReady(state.granola));
+function granolaPaint(state: GranolaState, focus?: string) {
+  const busy = $('#meet-syncing') as HTMLElement | null; if (busy) busy.hidden = !(state.gSyncing && granolaReady(state.granola));
   meetSourcesDot(state);
   // The sign-in dialog first: Sources under it can take focus only once it has closed.
   granolaDialog(state, focus);
@@ -196,9 +208,9 @@ function granolaPaint(state, focus) {
   else meetSourcesPaint(state, focus);
 }
 // Connect Granola: three short steps around the code, open while a code is being fetched or waited on.
-function granolaDialog(state, focus) {
+function granolaDialog(state: GranolaState, focus?: string) {
   const flow = state.gflow;
-  let dialog = $('#mg-dialog');
+  let dialog = $('#mg-dialog') as HTMLDialogElement | null;
   if (!flow) { dialog?.remove(); return; }
   if (!dialog) {
     dialog = document.createElement('dialog');
@@ -222,10 +234,10 @@ function granolaDialog(state, focus) {
     <footer class="mg-dfoot">${key}<span class="spacer"></span><button type="button" class="ghost" data-g="cancel">Cancel</button></footer>`;
   granolaWire(state, dialog);
   if (!dialog.open) dialog.showModal();
-  if (focus === 'open') (dialog.querySelector('[data-g=open]') || dialog.querySelector('[data-g=copy]'))?.focus();
+  if (focus === 'open') ((dialog.querySelector('[data-g=open]') || dialog.querySelector('[data-g=copy]')) as HTMLElement | null)?.focus();
 }
-function granolaWire(state, row) {
-  row.querySelectorAll('[data-g]').forEach(b => {
+function granolaWire(state: GranolaState, row: HTMLElement) {
+  row.querySelectorAll<HTMLElement>('[data-g]').forEach(b => {
     const act = b.dataset.g;
     if (act === 'open') return;
     b.onclick = () => {
@@ -239,10 +251,10 @@ function granolaWire(state, row) {
 
 // Tools > Granola: the viewer's own account, any plan (free included). Connecting happens on Meetings, where the
 // notes land, so the button links there with the sign-in open.
-window.mountGranolaTool = async function (host) {
+window.mountGranolaTool = async function (host: HTMLElement | null) {
   if (!host) return;
-  let s;
-  try { s = await get(GRANOLA); } catch { s = null; }
+  let s: MeetGranola | null;
+  try { s = await get<MeetGranola>(GRANOLA); } catch { s = null; }
   if (!host.isConnected) return;
   if (!s || typeof s.mode !== 'string') { host.closest('section')?.remove(); return; }
   const go = MEETINGS + '?connect=granola';
@@ -251,5 +263,5 @@ window.mountGranolaTool = async function (host) {
   const [word, cls, to] = s.needs_signin ? ['Sign in again', 'primary', go] : s.connected ? ['Open Meetings', 'ghost', MEETINGS] : ['Connect', 'primary', go];
   host.innerHTML = `<div class="mg-row mg-flat">${meetLogo('granola', 22)}<div class="mg-body"><div class="mg-line">${line}</div></div>
     <div class="mg-actions"><button type="button" class="${cls} small">${word}</button></div></div>`;
-  host.querySelector('button').onclick = () => { location.hash = to; };
+  (host.querySelector('button') as HTMLButtonElement).onclick = () => { location.hash = to; };
 };

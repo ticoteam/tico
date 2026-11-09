@@ -1,15 +1,19 @@
 # PR checks and the merge queue run on GitHub-hosted Ubuntu runners (free for this public repository), so they cost no
 # RunsOn minutes. RunsOn runs only release validation (ci.yml) and remote-run.yml.
 # Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
-# also runs the plan's selected tests and factory simulation, so its `checks` passes only when they pass. A fork's pull
-# request keeps the cheap checks only, and a draft runs nothing.
+# also runs a light plan's tests (scripts/pr_checks.py NARROW, `plan --light`): the Python tests its change reaches
+# directly, the smoke set when that drops any, capped at four VMs; the browser scripts, the factory simulation and the
+# Caddy job only when it touches their own inputs. Its `checks` passes only when they pass. The merge queue group is the
+# gate: its plan goes one level further (two, at most eight Python VMs) and keeps every other job's condition. A fork's
+# pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
 # a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
 # no VM, on a pull request and in a group alike. Only the cosmetic timing receipt is queue-only.
 # A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
-# the group's merged change selects, the factory simulation when the change reaches what it runs (scripts/pr_checks.py
-# factory_reason), and the same Rust lint, desktop, recorder and Caddy jobs. The group's base is the head of the group
+# the group's merged change reaches within two levels (release validation runs the rest), the factory simulation when
+# the change reaches what it runs (scripts/pr_checks.py factory_reason), and the same Rust lint, desktop, recorder and
+# Caddy jobs. The group's base is the head of the group
 # queued ahead of it (main for the first), so it selects from its own pull request's change, tested on top of everything
 # ahead of it. The static checks job runs on the pull request only; the group's plan job runs every static check again
 # on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), since a change queued ahead can break one
@@ -67,11 +71,18 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
+      # The installed venv pr-cache.yml saves on main: a hit turns Install's pip step into a check that every pin is
+      # already satisfied. Restore only: a pull request or queue group never saves one (its scope helps no other run).
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/venv
+          key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -129,10 +140,13 @@ jobs:
             echo "$?" > "$RUNNER_TEMP/merge-checks.status" ) > "$RUNNER_TEMP/merge-checks.log" 2>&1 &
       - name: Select affected tests and size measured Python and browser groups
         id: plan
+        # Both tiers plan light (scripts/pr_checks.py NARROW): a pull request the tests its change reaches directly, at
+        # most four VMs; a queue group two levels, at most eight; each with the smoke set when it drops any. Release
+        # validation's incremental and daily full runs cover what a group leaves out.
         env:
           EVENT: ${{ github.event_name }}
           CHECK_HEAD: ${{ github.event.merge_group.head_sha || 'HEAD' }}
-        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json'
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json --light'
       - name: Merge commit checks
         if: github.event_name == 'merge_group'
         timeout-minutes: 8
@@ -168,20 +182,27 @@ jobs:
       PYTHONUNBUFFERED: '1'
       TICO_BROWSER_CHANNEL: ''
     steps:
-      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Free disk only when under 30 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
+        run: bash scripts/ci/free_disk.sh 30
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: pr-check-plan
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
+      # The installed venv pr-cache.yml saves on main: a hit turns Install's pip step into a check that every pin is
+      # already satisfied. Restore only: a pull request or queue group never saves one (its scope helps no other run).
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/venv
+          key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       # Every suite compiles the UI's TypeScript (scripts/ci_install.sh); only browser suites install Playwright.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -262,11 +283,18 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
+      # The installed venv pr-cache.yml saves on main: a hit turns Install's pip step into a check that every pin is
+      # already satisfied. Restore only: a pull request or queue group never saves one (its scope helps no other run).
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/venv
+          key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -318,11 +346,18 @@ jobs:
           # Checkout has full history; refresh the base tip because the PR event's base SHA can be stale.
           git fetch --no-tags origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
           python3 scripts/check_migration_order.py --base "refs/remotes/origin/$BASE_BRANCH" --head "$PR_HEAD" --base-name "$BASE_BRANCH"
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
+      # The installed venv pr-cache.yml saves on main: a hit turns Install's pip step into a check that every pin is
+      # already satisfied. Restore only: a pull request or queue group never saves one (its scope helps no other run).
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/venv
+          key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -366,12 +401,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Free disk only when under 30 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
+        run: bash scripts/ci/free_disk.sh 30
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: |
@@ -392,12 +427,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
+        run: bash scripts/ci/free_disk.sh 40
       - name: Rust 1.92.0 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
         run: rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
       - name: Linux build dependencies (the ones app.yml installs)
@@ -480,16 +515,23 @@ jobs:
       TICO_CADDY_TEST_IMAGE: tico-caddy-qa:current
       DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
-      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
+        run: bash scripts/ci/free_disk.sh 40
+      - id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.15'
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
+      # The installed venv pr-cache.yml saves on main: a hit turns Install's pip step into a check that every pin is
+      # already satisfied. Restore only: a pull request or queue group never saves one (its scope helps no other run).
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/venv
+          key: venv-ubuntu24-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('backend/requirements-dev.txt', 'scripts/ci_install.sh') }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'

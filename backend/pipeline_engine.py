@@ -260,6 +260,8 @@ class _Facts:
     children: dict[str, list[Row]]  # a ticket's subtasks: id, status, type_id, cascaded (closed with its parent)
     spawns: dict[str, set[str]]  # a pipeline id -> the pipelines its spawn links file tickets into
     shipped: set[str] = field(default_factory=set)  # subtask ids that visited their pipeline's output stage
+    # A ticket id -> its work digest now, for the tickets with a judge's verdict (_judged_current).
+    work_digests: dict[str, str] = field(default_factory=dict)
 
 
 def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[str], kinds: set[str]) -> _Facts:
@@ -328,7 +330,13 @@ def _facts(conn: sqlite3.Connection, task_ids: list[str], requirement_ids: list[
         ):
             spawns.setdefault(str(record["from_pipeline_id"]), set()).add(str(record["to_pipeline_id"]))
     shipped = set(_shipments(conn, [str(child['id']) for rows in children.values() for child in rows]))
-    return _Facts(tasks, labels, decisions, attachments, links, children, spawns, shipped)
+    judged = [task for (task, _), decision in decisions.items() if _judge_bound(decision)]
+    digests: dict[str, str] = {}
+    if judged:
+        from . import pipeline_judges
+
+        digests = pipeline_judges.work_digests(conn, judged)
+    return _Facts(tasks, labels, decisions, attachments, links, children, spawns, shipped, digests)
 
 
 def output_stage(conn: sqlite3.Connection, pipeline_id: str) -> str | None:
@@ -554,6 +562,22 @@ def _rule_source(conn: sqlite3.Connection, task_id: str, requirement: Row, facts
     return _run_state(task_id, requirement, facts, conn)
 
 
+def _judge_bound(decision: Row) -> bool:
+    """Whether a verdict is the requirement judge's on an attachment (backend/pipeline_judges.py writes every one with the
+    work digest it saw), and so stands only for that work."""
+    return decision.get("judge") == "llm" and bool(decision.get("requirement_attachment_id"))
+
+
+def _judged_current(task_id: str, decision: Row, facts: _Facts) -> bool:
+    """Whether a judge's verdict is about the ticket's work as it is now: the title, spec, PR and PR author it was told
+    (stage_decisions.work_digest). One from before the digest (NULL) was judged without the work, so it does not stand
+    either; the judge reads the evidence again (pipeline_judges._waiting). Other verdicts are not bound to a digest."""
+    if not _judge_bound(decision):
+        return True
+    digest = decision.get("work_digest")
+    return bool(digest) and facts.work_digests.get(task_id) == str(digest)
+
+
 def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _Facts) -> Standing:
     task = facts.tasks.get(task_id) or {"id": task_id, "work_revision": 0}
     revision = int(task.get("work_revision") or 0)
@@ -561,6 +585,9 @@ def _standing(conn: sqlite3.Connection, task_id: str, requirement: Row, facts: _
     decision, attachment = facts.decisions.get(key), facts.attachments.get(key)
     if decision is not None and not verdict_binds_attachment(decision, attachment):
         decision = None  # the evidence it judged was replaced or taken away
+    if decision is not None and not _judged_current(task_id, decision, facts):
+        # A judge's verdict on another title, spec or PR says nothing about this work; it is judged again.
+        decision = None
     if decision is not None and requirement["kind"] == "approval" and decision["verdict"] == "override":
         decision = None  # no override stands in for a named person's approval (D10, D34)
     if decision is not None and requirement["kind"] in ("field", "run") and decision["verdict"] == "met":
@@ -1140,6 +1167,27 @@ def _room(conn: sqlite3.Connection, actor: str, task_id: str, here: Row | None, 
     return True
 
 
+def check_clear(conn: sqlite3.Connection, actor: str, row: Row) -> None:
+    """A bot may not take a card out of its stage (step ""), as it may not move one back a stage. The card keeps its stage; a
+    person's clear is unchanged, and a pipeline editor's override applies when the card next enters a stage."""
+    task_id = str(row.get("id") or "")
+    if not task_id or not row.get("step_id") or not H.is_bot(actor):
+        return
+    if on_ice(conn, row):  # an On ice card is refused by may_clear_stage (D69), so its refusal names On ice
+        return
+    if str(row.get("type_id") or H.GENERAL_TYPE) == H.GENERAL_TYPE:  # a General ticket is in no pipeline
+        return
+    if stage(conn, str(row["step_id"])) is None:
+        return
+    H.refuse(
+        conn,
+        actor,
+        "requirement",
+        "A bot can't take a ticket out of its stage; move it to a stage instead",
+        task=task_id,
+    )
+
+
 def check_move(
     conn: sqlite3.Connection,
     actor: str,
@@ -1147,6 +1195,8 @@ def check_move(
     step_id: str | None,
     override: bool = False,
     override_note: str | None = None,
+    *,
+    entering: bool = False,
 ) -> bool:
     """Before a ticket changes to `step_id`: refuse the move (rule "requirement") when the requirements that count do not
     allow it, unless a rule editor overrides them (logged). A pipeline with no requirements allows every move. A stage's
@@ -1167,11 +1217,23 @@ def check_move(
         return False
     here, target = stage(conn, str(now["step_id"]) if now["step_id"] else None), stage(conn, step_id)
     over = _room(conn, actor, task_id, here, target)
-    if here is None:
-        return over
     pipeline_id = str(now["type_id"])
+    # Entering (task_update only): a type change, or a card with no stage, enters the pipeline at `target` and is held to
+    # every stage before it. A status write (check_forward) and a create keep the move gate they always had.
+    entering = (
+        entering
+        and target is not None
+        and (str(target["type_id"]) != str(now["type_id"] or "") or now["step_id"] is None)
+    )
+    if here is None and not entering:
+        return over
     editor = pipeline_rights.may_edit_rules(conn, actor, pipeline_id)
-    if target is not None and target["type_id"] == here["type_id"] and target["position"] < here["position"]:
+    if (
+        here is not None
+        and target is not None
+        and target["type_id"] == here["type_id"]
+        and target["position"] < here["position"]
+    ):
         if (
             has_requirements(conn, pipeline_id) and actor != H.KEEPER and not editor and _DECIDED_MOVE.get() != actor
         ):  # the off switch: no rules, no gate
@@ -1183,6 +1245,31 @@ def check_move(
                 task=task_id,
             )
         return over
+    if entering and target is not None:
+        # A card that enters a pipeline at a stage is held to the exit requirements of every stage of that pipeline before
+        # it, as a move inside the pipeline would be, and to the stages it came from (its visits, and its stage if any).
+        scope: dict[str, str | None] = {}
+        if here is not None:
+            scope.update(_forward_scope(conn, task_id, here, None))
+        else:
+            scope.update(_visited(conn, [task_id]).get(task_id, {}))
+        for before in stages(conn, str(target["type_id"])):
+            if before["position"] < target["position"]:
+                scope.setdefault(str(before["id"]), None)
+        if not scope:
+            return over
+        _hold(
+            conn,
+            actor,
+            task_id,
+            str(target["type_id"]),
+            f"Can't enter {target['name']} yet",
+            scope,
+            override,
+            override_note,
+        )
+        return over
+    assert here is not None
     scope = _forward_scope(conn, task_id, here, target)
     _hold(conn, actor, task_id, pipeline_id, f"Can't leave {here['name']} yet", scope, override, override_note)
     return over
@@ -1191,8 +1278,10 @@ def check_move(
 def may_clear_stage(conn: sqlite3.Connection, actor: str, row: Row) -> None:
     """Taking a ticket out of its stage without putting it in another (step "") is a person's move (D69): a bot or
     automation may not do it, so a card On ice cannot slip out of it, nor a stage's requirements be skipped. Tico itself
-    (the keeper's legacy flows) and a person may."""
+    (the keeper's legacy flows) and a person may. A General ticket is in no pipeline and is not affected."""
     if not row.get("step_id") or actor == H.KEEPER or (H.is_human(actor) and not H.VIA.get()):
+        return
+    if str(row.get("type_id") or H.GENERAL_TYPE) == H.GENERAL_TYPE:
         return
     H.refuse(
         conn,

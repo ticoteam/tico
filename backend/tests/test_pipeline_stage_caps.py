@@ -1121,7 +1121,7 @@ def test_a_parked_card_wakes_no_bot_through_a_backlog_or_a_blocker(api):
                 (blocker, tid, ANA, H.now()),
             )
             ids[stage] = tid
-        listed = {row["id"] for row, _ in RD._blocked_waits(c, H.now()).get("ops", [])}
+        listed = {row["id"] for row, *_ in RD._blocked_waits(c, H.now()).get("ops", [])}
     assert ids["Backlog"] in listed  # the control
     assert ids["On ice"] not in listed
 

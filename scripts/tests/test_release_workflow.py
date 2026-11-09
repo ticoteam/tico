@@ -203,7 +203,7 @@ def app_build_decision(tmp_path, monkeypatch):
         (
             "recorder",
             [
-                "recorder/tests/updates.cjs",
+                "recorder/tests/updates.cts",
                 "recorder/tests/nested/fixture.json",
                 "recorder/src/network_tests.rs",
                 "recorder/src/stream_tests.rs",

@@ -7211,7 +7211,7 @@ def task_create(
         if value:  # written public text leaves a record, as a later publication's does
             _task_event(conn, row['id'], actor, field, None, value, '')
     if step is not None:
-        task_update(conn, actor, row["id"], step=step)
+        task_update(conn, actor, row["id"], step=step, enter_gate=is_bot(actor))
     if top:
         placed = task(conn, row["id"])
         if placed["step_id"]:
@@ -7462,6 +7462,7 @@ def task_update(
     strict=True,
     heard=(),
     override_requirements=False,
+    enter_gate=True,
 ):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
@@ -7479,6 +7480,7 @@ def task_update(
     `verdict` and `verdict_head` record a review or QA subtask's verdict and the head it judged (record_verdict).
     Finishing it (done, or a closed step) closes its open descendants under the same close permissions.
     Automatic callers use `strict=False`: descendants they cannot close stay open and their requesters hear once.
+    `enter_gate` holds a card that enters a pipeline to its earlier stages' requirements; a create holds only a bot's.
     `heard` names bots that already have the news (a person's chat reply that closed their question task): they get
     no notice of it as well.
     """
@@ -7713,15 +7715,17 @@ def task_update(
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
         from . import pipeline_engine, step_flow
 
-        # A bot takes no card out of its stage (D69): a step move to nothing, or a type or status that finds the card no
-        # stage, while it sits On ice (a card On ice has no stage to fall back on).
-        if row and (step == "" or step_id is None and pipeline_engine.on_ice(conn, row)):
-            pipeline_engine.may_clear_stage(conn, actor, row)
-
         # A stage's requirements (backend/pipeline_engine.py) may refuse the move before the review gate does.
         # A cancellation (a Close or a Decline) is not progress: it is never held to completion requirements. A move into a
         # closed stage such as Engineering's Done is progress, so it is held (pipeline_engine.is_cancellation).
         # A status done with no step is held as a move into the completion stage (pipeline_engine.completion_target).
+        if step == "" and row and row.get("step_id"):
+            pipeline_engine.check_clear(conn, actor, row)
+
+        # A bot takes no card out of its stage (D69): a step move to nothing, or a type or status that finds the card no
+        # stage, while it sits On ice (a card On ice has no stage to fall back on).
+        if row and (step == "" or step_id is None and pipeline_engine.on_ice(conn, row)):
+            pipeline_engine.may_clear_stage(conn, actor, row)
         held_to = (
             pipeline_engine.completion_target(conn, row, type_id, step_id, effective, explicit_step=step is not None)
             if row
@@ -7730,7 +7734,13 @@ def task_update(
         if held_to and row and held_to != row.get("step_id"):
             # A person's move into a full stage stands and comes back as over_cap (pipeline_engine._room).
             over_cap = pipeline_engine.check_move(
-                conn, actor, {**row, "type_id": type_id}, held_to, override_requirements, override_note=note
+                conn,
+                actor,
+                {**row, "type_id": type_id},
+                held_to,
+                override_requirements,
+                override_note=note,
+                entering=enter_gate,
             )
         elif row and pipeline_engine.is_completion(row, effective):
             pipeline_engine.check_completion(conn, actor, row, override_requirements, override_note=note)
@@ -8388,6 +8398,10 @@ def task_update(
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner_id")}}
     if over_cap:
         after = {**after, "over_cap": True}
+    if status in ("closed", "declined") and (row or {}).get("status") != status:
+        # Last, so a wake this update queued after the status (a new owner's assignment) is stopped too. A close with a
+        # step already stopped the work in task_close; this then cancels only what was queued since.
+        stop_ended_work(conn, actor, task_id, status)
     return {**after, "warnings": plain} if plain else after
 
 
@@ -8877,6 +8891,30 @@ def _children_kept_closed(conn, task_id):
         )
 
 
+def _work_said(stopped, canceled):
+    """The history line a close writes about the bot work it stopped (`stop_ended_work`), or None when none was in flight."""
+    parts = []
+    if stopped:
+        parts.append(f"stopped {stopped} running {'turn' if stopped == 1 else 'turns'}")
+    if canceled:
+        parts.append(f"canceled {canceled} queued {'run' if canceled == 1 else 'runs'}")
+    return ("; ".join(parts) + ".").capitalize() if parts else None
+
+
+def stop_ended_work(conn, actor, task_id, status):
+    """A task closed or declined: the bot work on it stops (execution.end_task_work). Its queued runs are canceled and its
+    running turns asked to stop, never the turn that makes the close. One history event on the task counts them."""
+    from . import execution
+
+    stopped, canceled = execution.end_task_work(conn, actor, task_id, status)
+    said = _work_said(stopped, canceled)
+    if said:
+        _task_event(
+            conn, task_id, actor, "work", None, said, data={"stopped": stopped, "canceled": canceled, "ended": status}
+        )
+    return stopped, canceled
+
+
 @private_task_write
 def task_close(
     conn,
@@ -9015,6 +9053,8 @@ def task_close(
         )
     _recount(conn, after["owner_id"])
     _recount(conn, after["requester_id"])
+    # Last, after the close's own wakes are queued, so none of them is left running on the closed task.
+    stop_ended_work(conn, actor, task_id, "closed")
     return after
 
 
@@ -11335,7 +11375,7 @@ def tasks(
     owner=None,
     requester=None,
     status=None,
-    limit=500,
+    limit: int | None = 500,
     lane=None,
     label=None,
     offset=0,
@@ -11351,6 +11391,7 @@ def tasks(
     ids=None,
     snoozed=None,
     q=None,
+    exclude_owner=None,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `order="step"` is
@@ -11358,7 +11399,7 @@ def tasks(
     `tickets=False` leaves out the tasks on a numbered type. `member` keeps the tasks that actor is on
     in some role (task_roles), or in `role` when given. `ids` limits it to those tasks (a delta
     read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
-    `limit=None` reads every match."""
+    `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match."""
     sql, args, where = "SELECT * FROM tasks", [], []
     if q and q.strip():
         query = q.strip()[:1000]
@@ -11377,6 +11418,9 @@ def tasks(
     if owner:
         where.append("owner_id=?")
         args.append(owner)
+    if exclude_owner:
+        where.append("owner_id IS NOT ?")  # NULL-safe: a task with no owner is not that owner's either
+        args.append(exclude_owner)
     if requester:
         where.append("requester_id=?")
         args.append(requester)
@@ -11705,10 +11749,15 @@ def needs_you(conn, who):
     # The same goes for a numbered type's tickets, a board of its own.
     # A snoozed task is nobody's to act on before its date (backend/task_snooze.py).
     # Every one: a person's list does not stop at a page of their tasks (the caller pages the items).
+    # A question task is on the list whatever its lane or type: the board that holds it does not hide a question the
+    # person has to answer. Without a question, a product-lane or numbered-type task stays off.
+    from . import question_tasks
+
+    numbered = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE numbered=1")}
     owned = [
         t
-        for t in tasks(conn, owner=actor, status=ACTIVE_STATUSES, tickets=False, snoozed="hide", limit=None)
-        if (t.get("lane") or "company") != "product"
+        for t in tasks(conn, owner=actor, status=ACTIVE_STATUSES, snoozed="hide", limit=None)
+        if question_tasks.is_open(t) or ((t.get("lane") or "company") != "product" and t.get("type_id") not in numbered)
     ]
     seen = {t["id"] for t in owned}
     # A bot's task stopped on an account this person fixes (backend/reconnects.py): its card, as a wait on them. A

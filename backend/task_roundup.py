@@ -543,8 +543,8 @@ def _person_held(c, row):
 
 
 def _blocked_waits(c, at):
-    """{bot id: [(task row, what)]}: each waiting task a bot owns, of an active bot, whose every hold is on a bot
-    (backend/task_holds.py), under the bot it waits on. The owner and active-bot filters are in the query, so a person's
+    """{bot id: [(task row, what, held task ids)]}: each waiting task a bot owns, of an active bot, whose every hold is on
+    a bot (backend/task_holds.py), under the bot it waits on, with the child or blocker tasks that bot holds it by. The owner and active-bot filters are in the query, so a person's
     task never reaches task_holds. Each recipient's mark suppresses only that recipient's line for this update.
     Read once per run (the shared reads of discover and of each send). A task On ice (D69) waits on no one, and no one
     is asked about a hold that is On ice."""
@@ -567,27 +567,33 @@ def _blocked_waits(c, at):
         # A subtask or blocker On ice waits on the person who parked it, so its owner is not asked about it.
         parked = H.on_ice_ids(c, [h.get("task") for h in found])
         found = [h for h in found if h.get("task") not in parked]
-        whats = {}
+        whats, held = {}, {}
         for hold in found:
-            whats.setdefault(H.actor_id(hold["on"]), hold["what"])
+            slug = H.actor_id(hold["on"])
+            whats.setdefault(slug, hold["what"])
+            if hold.get("task"):
+                held.setdefault(slug, []).append(hold["task"])
         for slug, what in whats.items():
             if _mark(c, _key("blocked", slug, f"{row['id']}:{row['updated_at']}")) is None:
-                out.setdefault(slug, []).append((row, what))
+                out.setdefault(slug, []).append((row, what, held.get(slug, [])))
     return out
 
 
 def _blocked_by(c, slug, actor, at, shared):
     """A waiting task that the bot's own work holds, on this bot's list (the bot it waits on), not its owner's: listed once per
     update of the task, since its key carries the task's updated_at. A task the bot cannot read (its privacy, or
-    H.bot_reads_task), or one it is already running for, is named nowhere."""
+    H.bot_reads_task), or one it is already running for, is named nowhere. Nor is one whose holding child or blocker the
+    bot is already running or has queued: an architect mid-turn on a ticket's Plan is not told the ticket waits on it.
+    The line is not marked then, so a hold still there after that turn is listed on a later run."""
     out = []
-    for row, what in _shared(shared, "blocked", lambda: _blocked_waits(c, at)).get(slug, []):
+    for row, what, held in _shared(shared, "blocked", lambda: _blocked_waits(c, at)).get(slug, []):
         key = _key("blocked", slug, f"{row['id']}:{row['updated_at']}")
         if (
             _mark(c, key) is not None
             or not H.task_private_readable(c, actor, row)
             or not H.bot_reads_task(c, actor, row)
             or _running(c, slug, row)
+            or any((other := H.task(c, tid)) and _running(c, slug, other) for tid in held)
         ):
             continue
         private = H.task_private(c, row)

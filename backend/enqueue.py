@@ -130,6 +130,9 @@ def enqueue(conn, message):
         "INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)",
         (message["id"], message["id"], recipient[4:], message["created_at"]),
     )
+    from . import company_pause
+
+    company_pause.hold_new_job(conn, message)  # the company pause's held line on the task, once per pause
     return message["id"]
 
 

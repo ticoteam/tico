@@ -10,6 +10,9 @@ evals.factory.cases.freezes before anything imported scenarios): scenarios.SCENA
 from evals.factory.scenarios import SCENARIOS  # the built-ins: scenarios.py defines them before it imports this package
 
 # One line per case, in name order:  from .<name> import SCENARIOS as _<name>; SCENARIOS += _<name>
+from .close_stops_work import SCENARIOS as _close_stops_work
+
+SCENARIOS += _close_stops_work
 from .freezes import SCENARIOS as _freezes
 
 SCENARIOS += _freezes
@@ -25,6 +28,9 @@ SCENARIOS += _receipt_wording
 from .recovery import SCENARIOS as _recovery
 
 SCENARIOS += _recovery
+from .review_pages import SCENARIOS as _review_pages
+
+SCENARIOS += _review_pages
 from .snoozed_ticket import SCENARIOS as _snoozed_ticket
 
 SCENARIOS += _snoozed_ticket

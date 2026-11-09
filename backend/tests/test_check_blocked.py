@@ -410,7 +410,7 @@ def test_a_check_waiting_on_a_task_on_ice_asks_no_bot_about_the_ticket(api, chec
         assert [(h["kind"], h["task"]) for h in task_holds.holds(c, row)] == [("check", dependency["id"])]
         waits = task_roundup._blocked_waits(c, H.now())
         # The control: the ticket is on the dependency's bot's list (and a waiting check is too, on its own blocker).
-        assert ticket["id"] in [r["id"] for r, _ in waits.get("devops-engineer", [])]
+        assert ticket["id"] in [r["id"] for r, *_ in waits.get("devops-engineer", [])]
         ice = H.type_create(c, H.KEEPER, "Ice", [{"name": "On ice", "status": "open"}])
         stage = c.execute("SELECT id FROM task_steps WHERE type_id=?", (ice["id"],)).fetchone()[0]
         c.execute("UPDATE task_steps SET card_cap=0 WHERE id=?", (stage,))

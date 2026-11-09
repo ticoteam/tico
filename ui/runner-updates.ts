@@ -20,7 +20,7 @@ interface Window {
 
 // `version`: what the computer itself reported; with one, "Release not reported" would contradict it, so an unknown state
 // that is not outdated says nothing.
-window.runnerUpdateHtml = function runnerUpdateHtml(update, version) {
+window.runnerUpdateHtml = function runnerUpdateHtml(update: RunnerUpdate | null | undefined, version?: string | null) {
   if (!update || !update.state || (update.state === 'unknown' && version && !update.outdated)) return '';
   const tones: Record<string, string> = {current: 'ok', updating: 'waiting', needs_update: 'waiting', incompatible: 'fail'};
   const tone = tones[update.state] || '';
@@ -38,7 +38,7 @@ window.runnerUpdateHtml = function runnerUpdateHtml(update, version) {
 };
 
 // The Computers page's banner: the online computers on older code than the server, and whose they are to update.
-window.runnerOutdatedBanner = function runnerOutdatedBanner(machines, me, name, online) {
+window.runnerOutdatedBanner = function runnerOutdatedBanner(machines: RunnerMachine[] | null | undefined, me: string | null | undefined, name: (id: string) => string, online: (machine: RunnerMachine) => boolean) {
   const stale = (machines || []).filter(machine => machine.update?.outdated && online(machine));
   if (!stale.length) return '';
   const server = stale[0]?.update?.server_release;
