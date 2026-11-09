@@ -77,7 +77,7 @@ async function gsrcDialog(state: GrState, s: GrSource | null | undefined = null)
     ${grField('Owner', `<select name="owner_ref">${grOwnerOpts(s?.owner_ref)}</select>`)}
     ${s ? '<button type="button" class="ghost danger gr-retire" data-retire>Retire</button>' : ''}`;
   const dlg = grDialog(s ? `${s.truth_for} · ${s.system}` : 'New source', body, s ? 'Save' : 'Add', async form => {
-    const v = (n: keyof GrSourceControls) => (form.elements as unknown as GrSourceControls)[n].value.trim();
+    const v = (n: keyof GrSourceControls) => (form.elements as HTMLFormControlsCollection & GrSourceControls)[n].value.trim();
     const out = {truth_for: v('truth_for'), system: v('system'), reach_kind: v('reach_kind'), reach_ref: v('reach_ref'), may: grChecked(form, 'may').join(','), owner_ref: v('owner_ref') || null};
     if (!out.truth_for || !out.system) throw new Error('Truth for and source');
     if (s) await patch(`/v2/growth/sources/${encodeURIComponent(s.id)}`, out); else await post('/v2/growth/sources', out);
