@@ -13,10 +13,10 @@ maximumCacheBufferSize), and the one 4.3 MB script went past that: the desktop a
 (366-893 ms of its boot). Every part carries the hash of its whole bundle, so the page and the config's `ui_build`
 name one build as before.
 
-The scripts the page loads on their own (theme.js in the head, marked) are named by their content too: the page's tag
+The scripts the page loads on their own (theme.ts in the head, marked) are named by their content too: the page's tag
 gets `?v=<hash of the file>`, and the server keeps that URL for a year (backend/app.py, `versioned`), so an open
 needs no round trip to revalidate them. The bundle's first statement marks `tico:bundle-start` for the boot timing
-(ui/app/boot-timing.js).
+(ui/app/boot-timing.ts).
 
 A file the page lists as TypeScript (`/tico/ui/app/a.ts`) is bundled as its compiled JavaScript (backend/ui_build.py):
 when that is missing or older than the source, the bundle is not built (StaleBuild), and nothing older is served.
@@ -43,8 +43,8 @@ IMMUTABLE = "public, max-age=31536000, immutable"
 REGION = re.compile(r"[ \t]*<!-- bundle:(js|css):start -->\n(.*?)[ \t]*<!-- bundle:\1:end -->\n?", re.S)
 REF = re.compile(r'(?:src|href)="([^"]+)"')
 # The scripts outside the bundle, by the URL path the page names them with: the file under ui/ each one serves.
-STANDALONE = {"/tico/ui/theme.js": "theme.js", "/vendor/marked.min.js": "vendor/marked.min.js"}
-# Where the boot timing starts counting the bundle's own run (ui/app/boot-timing.js).
+STANDALONE = {"/tico/ui/theme.ts": "theme.ts", "/vendor/marked.min.js": "vendor/marked.min.js"}
+# Where the boot timing starts counting the bundle's own run (ui/app/boot-timing.ts).
 BUNDLE_MARK = "try { performance.mark('tico:bundle-start'); } catch { /* no User Timing */ }\n"
 
 
@@ -165,7 +165,11 @@ def build(ui_dir):
         path, tag = ui_dir / name, f'src="{url}"'
         if tag not in page or not path.is_file():
             continue
-        versions[url] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        served = path
+        if name.endswith(".ts"):  # served as its compiled output, so the hash names those bytes (as for a bundled file)
+            typed.append(path)
+            served = ui_build.compiled(ui_dir, name)  # StaleBuild, not the source
+        versions[url] = hashlib.sha256(served.read_bytes()).hexdigest()[:16]
         page = page.replace(tag, f'src="{url}?v={versions[url]}"')
         standalone.append(path)
     listed = [p for kind in files.values() for _, p in kind] + standalone + [ui_dir / "index.html"]

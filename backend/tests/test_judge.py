@@ -96,6 +96,18 @@ def test_rehearsal_decisions_never_reach_a_configured_or_fallback_provider(api, 
     assert engine.calls == [] and events(api, "human:ana") == []
 
 
+def test_a_demo_never_asks_a_model_with_its_made_up_keys(api, monkeypatch):
+    store = api.app.state.store
+    store.settings.demo = True
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("A demo must not resolve a provider")
+
+    monkeypatch.setattr(B, "fallback_engine", forbidden)
+    with store.transaction() as c:
+        assert B.server_engine(store, c, fake(api)) is None
+
+
 def test_a_slow_or_down_typesafe_falls_back_to_the_companys_model_instead_of_a_503(api, monkeypatch):
     from clients import judge as J
 

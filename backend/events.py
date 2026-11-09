@@ -189,7 +189,7 @@ _MEETING_ACCESS = "OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT 
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
 # change (and on a delete), so a delta read says `gone` only to someone who could have seen it.
-_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers)"  # task_reads._could_read
+_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers,OLD.type_id)"  # task_reads._could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = (
     "SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
@@ -378,7 +378,8 @@ TRIGGERS = [
             "tasks",
             "update",
             "NEW.id",
-            ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers')} THEN {_WAS} END",
+            # A pipeline move is a change of who reads the ticket too (a members-only pipeline's rule), so it keeps a snapshot.
+            ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers', 'type_id')} THEN {_WAS} END",
         )
         + _needs(
             "task",
@@ -1919,14 +1920,23 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
 
 def _trashed_visible(c, who, task_id):
     """A deleted task is reported gone only to someone who could have seen it."""
+    from . import pipeline_rights
+
     try:
         row = c.execute(
-            "SELECT owner, requester, private, readers FROM task_trash WHERE task_id=? AND purged_at IS NULL",
+            "SELECT owner, requester, private, readers, json_extract(rows,'$.rows.tasks[0].type_id') AS type_id "
+            "FROM task_trash WHERE task_id=? AND purged_at IS NULL",
             (task_id,),
         ).fetchone()
     except sqlite3.OperationalError:
         return False
     if not row:
+        return False
+    # A ticket on a members-only pipeline the viewer is not on is left out as it is on the lists (pipeline_rights.left_out).
+    hidden = pipeline_rights.hidden_pipeline_ids(c, who.actor)
+    if pipeline_rights.left_out(
+        hidden, who.actor, {"type_id": row["type_id"], "owner_id": row["owner"], "requester_id": row["requester"]}
+    ):
         return False
     return (
         not row["private"]
@@ -2025,27 +2035,36 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
-    from . import meeting_task_links, task_reads
+    from . import meeting_task_links, pipeline_rights, task_reads
 
     c, who = view.c, view.who
     rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
-    last, kinds, public_before = {}, {}, {}
+    last, kinds, public_before, first_was = {}, {}, {}, {}
     for row in rows:
         if row["kind"] != "bulk":
             last[row["subject_id"]] = row
             kinds.setdefault(row["subject_id"], set()).add(row["kind"])
+            # The batch's first snapshot of the task is the state the reader last had; later ones are intermediate states
+            # (one write may move a ticket twice), which no reader saw.
             was = H._json(row["ref"], None) if row["kind"] in ("update", "delete") else None
-            if isinstance(was, list) and len(was) >= 3 and not was[2]:
-                public_before.setdefault(row["subject_id"], []).append(row["ref"])
+            if isinstance(was, list) and len(was) >= 3:
+                first_was.setdefault(row["subject_id"], (row["ref"], was))
+    for subject, (ref, was) in first_was.items():
+        if not was[2]:
+            public_before[subject] = [ref]
     ids = list(last)
     if not ids:
         return out
     # The viewer's own bot access, read once for the whole read (task_sql would read it again): the same answer.
     unreadable = {slug for slug, level in view.bots().items() if not level["read"]} if who.role == "human" else None
-    visible_sql = view.auth.task_sql(c, who, unreadable=unreadable)
+    # The members-only pipeline rule too (pipeline_rights.list_sql), as the task lists apply it: a non-member's stream
+    # sends nothing about a ticket on a pipeline it may not see, or about one it saw there before.
+    visible_sql = pipeline_rights.list_sql(
+        c, who.task_actor or who.actor, view.auth.task_sql(c, who, unreadable=unreadable)
+    )
     marks = ",".join("?" * len(ids))
     found = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
     if tasks or parties:
@@ -2072,6 +2091,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
         found = [task for task in found if task["id"] in last]
     views = {item["id"]: item for item in task_views(found, c, who, visible_sql)}
     present = {r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({marks})", ids)}
+    visible = {task["id"] for task in found}
     for task_id, row in last.items():
         entry = {"id": task_id, "kind": row["kind"], "kinds": sorted(kinds[task_id])}
         if task_id in views:
@@ -2080,8 +2100,11 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
                 entry["meeting_links"] = list(meeting_links[task_id].values())
         elif task_id not in present and _trashed_visible(c, who, task_id):
             entry["gone"] = True
-        # A formerly public row can be removed; revoked private work stays completely silent.
-        elif any(task_reads._could_read(c, visible_sql, task_id, ref) for ref in public_before.get(task_id, ())):
+        # A formerly public row can be removed; revoked private work stays completely silent. A ticket the viewer can read
+        # now is never gone, whatever it was before.
+        elif task_id not in visible and any(
+            task_reads._could_read(c, visible_sql, task_id, ref) for ref in public_before.get(task_id, ())
+        ):
             entry["gone"] = True
         else:
             continue

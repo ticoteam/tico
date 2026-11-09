@@ -353,7 +353,7 @@ def _own_company(c, actor, name, evidence):
         MK.create_entity(
             c,
             actor,
-            type="company",
+            type="organization",
             name=name,
             summary=name + ".",
             evidence_ids=[evidence],
@@ -474,7 +474,7 @@ def _players(c, actor, players, segments, company, skipped):
             entity, _ = MK.create_entity(
                 c,
                 actor,
-                type="company",
+                type="organization",
                 name=player["name"],
                 external_ids={"domain": host} if host else None,
                 evidence_ids=[evidence["id"]],

@@ -20,13 +20,13 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
-// Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.js, settingsShow).
+// Names the router or settingsShow takes besides the tabs and their aliases (ui/app/router.ts, settingsShow).
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
-// Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.js; redesign-shell.cjs checks it),
-// the old Strategy Bot address only redirects to its tab (ui/app/router.js), so no link is drawn to it, and Inboxes'
+// Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.ts; redesign-shell.cjs checks it),
+// the old Strategy Bot address only redirects to its tab (ui/app/router.ts), so no link is drawn to it, and Inboxes'
 // old addresses redirect to Tools (ui/app/tools.ts toolsRoute; checked below), System's (Rules and Routines before it)
-// leave for Automations (ui/app/settings.js settingsMovedOut; checked below), and Webhooks (once Triggers) went to
+// leave for Automations (ui/app/settings.ts settingsMovedOut; checked below), and Webhooks (once Triggers) went to
 // Automations, Tools and Models (ui/app/settings-webhooks.js whOldAddress; settings-webhooks.cjs checks them).
 const MOVED = ['listening', 'ceo', 'inboxes', 'rules', 'routines', 'webhooks', 'triggers'];
 
@@ -55,10 +55,10 @@ async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: admin ? 'ana' : 'cara', role: admin ? 'owner' : 'human', name: admin ? 'Ana' : 'Cara',

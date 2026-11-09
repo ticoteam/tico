@@ -1,4 +1,4 @@
-// Growth and Brand on a real hub. The Growth page is a grid of cards (place `growth`, ui/app/dashboard.js): with
+// Growth and Brand on a real hub. The Growth page is a grid of cards (place `growth`, ui/app/dashboard.ts): with
 // nothing set up, each default card says it has nothing yet and Settings links to Sources; with one month of only new
 // customers, the New customers and Channels cards show it; then Dana, Acme's owner, has a North Star, stage KPIs and a
 // guardrail with readings, eight channels and Unknown, months with gaps and marketing tasks, all seeded through the

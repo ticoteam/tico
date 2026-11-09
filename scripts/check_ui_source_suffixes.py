@@ -34,11 +34,8 @@ LISTING = re.compile(r"readdirSync|readdir\(|listdir|scandir|iterdir|glob\(|walk
 # Naming .ts as well: a *.ts glob, a ".ts" suffix literal, or the js|ts alternation a regex builds from both.
 COVERS = [re.compile(r"""\*\.ts\b"""), re.compile(r"""["'`]\.ts["'`]"""), re.compile(r"""js\|ts""")]
 
-# Files that read .js on purpose. The demo coverage map and the support bundle's browser file list are PR #2988's to widen:
-# drop their entries when it merges.
+# Files that read .js on purpose. The UI scripts are TypeScript now (the kept .js files are read alongside them).
 ALLOWED = {
-    "backend/tests/test_demo_coverage.py": "maps pages to ui/app/*.js; PR #2988 widens it to .ts",
-    "backend/support.py": "the browser file names a diagnostics bundle keeps; PR #2988 widens them to .ts",
     "backend/tests/test_ui_bundle.py": "reads the compiled build/ui files the bundle is made of (a .ts source's output is .js)",
     "scripts/tests/test_pr_checks.py": "fixtures: it writes ui/app/*.js into temporary trees, and does not scan this repo's UI",
 }

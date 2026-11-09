@@ -1,5 +1,5 @@
 /* The weekly market briefing read in full, in a side panel: the bets it touches, then the briefing's page
-   (backend/market_briefing.py, docs/market-briefing.md). Read under Market's What changed? opens it (ui/app/redesign-market.js). */
+   (backend/market_briefing.py, docs/market-briefing.md). Read under Market's What changed? opens it (ui/app/redesign-market.ts). */
 'use strict';
 interface MarketBriefingTouch { n: number | string; statement: string; }
 interface MarketBriefing { title: string; body?: string; touched?: MarketBriefingTouch[]; }

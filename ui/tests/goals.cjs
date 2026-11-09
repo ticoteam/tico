@@ -1,4 +1,4 @@
-// The Goals page (ui/goals-kpis.js): one tree of every person and bot, nested as the org chart nests them, a line each
+// The Goals page (ui/goals-kpis.ts): one tree of every person and bot, nested as the org chart nests them, a line each
 // with the goal to the right (cut short, whole in its tooltip) and KPI chips; helper bots off it; tapping a line opens
 // that owner's panel, where goals and KPIs are added and edited. No helper chat sits beside it; Ask is the way in.
 // Fixtures only, no network.
@@ -61,7 +61,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/api/v2/events') { liveStreams.push(route); return; }   // held until the test sends a change

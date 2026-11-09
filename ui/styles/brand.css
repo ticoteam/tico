@@ -1,6 +1,6 @@
 /* ui/styles/brand.css — Wordmark on light and dark.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* The wordmark: the reversed one on the dark default, dark ink when the theme is light (ui/theme.js). */
+/* The wordmark: the reversed one on the dark default, dark ink when the theme is light (ui/theme.ts). */
 .brand-logo{display:block;height:30px;width:auto}
 .brand-logo.on-light{display:none}
 .brand-name{font-size:var(--t-xl);font-weight:700;letter-spacing:var(--track-tight)}

@@ -1,4 +1,4 @@
-// Letters in (ui/app/inboxes-letters.js) under Tools against a fake server. Guards: Tools › Settings › Letters
+// Letters in (ui/app/inboxes-letters.ts) under Tools against a fake server. Guards: Tools › Settings › Letters
 // in (where the old Mail address lands) lists each address's state, kind, the full address only once active, registered
 // agent and Form 1583 status, with open orders as Pending, each linking to its page; Get an address shows shared and
 // private, each with its price and line, and the scan price (Tico Gateway's `prices` win, else Tico's own), and sends
@@ -64,12 +64,12 @@ async function open(browser, {viewport = {width: 1280, height: 860}, state = ser
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
       contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.5.14', app_name: 'Tico', company_name: 'Acme Inc'};
     const body = req.postData() ? req.postDataJSON() : null;
