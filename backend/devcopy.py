@@ -554,6 +554,7 @@ KEEP = (
             "strategy_bets",
             "strategy_versions",
             "stuck_spells",
+            "stuck_alarms",  # the stuck alarm's ledger (backend/stuck_alarm.py): a copy files no alarm twice
             "system_runs",
             "tags",
             "task_assets",
