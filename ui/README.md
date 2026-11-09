@@ -114,12 +114,12 @@ app bundle so it loads only when the person opens Overview.
 
 ## Browser tests on a real hub
 
-Most browser tests answer the API from fixtures (`support/page.cjs`, `support/routes.cjs`). A test that needs the real
-API shapes starts a hub instead: `support/real-hub.cjs` runs `support/real_hub_server.py`, which boots the scenario org
+Most browser tests answer the API from fixtures (`support/page.cts`, `support/routes.cts`). A test that needs the real
+API shapes starts a hub instead: `support/real-hub.cts` runs `support/real_hub_server.py`, which boots the scenario org
 (`evals/redesign/harness.py`) on a fresh temporary database and applies the named seeds in `evals/redesign/seeds.py`.
 
 ```js
-const {startHub, pageAs} = require('./support/real-hub.cjs');
+const {startHub, pageAs} = require('./support/real-hub.cts');
 const hub = await startHub({seeds: ['org']});
 const page = await pageAs(browser, hub, 'ana', {phone: true});   // 390×844 with touch; the default is 1440×900
 await page.context().close();
