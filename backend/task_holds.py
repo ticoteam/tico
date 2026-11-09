@@ -54,7 +54,8 @@ def _line(text, limit=160):
 
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
-    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject."""
+    actor holding it (None for an external hold or an approval with nobody named), `what` a short subject. A child or
+    blocker hold also names its task (`task`)."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
 
     out = []
@@ -109,7 +110,7 @@ def _task_hold(conn, row, kind, other):
 
     if H.task_private(conn, other) and not H.subtask_flows_up(conn, other, row):
         return {"kind": "private", "on": None, "what": "a private task"}
-    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"])}
+    return {"kind": kind, "on": other["owner_id"], "what": _line(other["title"]), "task": other["id"]}
 
 
 def words(conn, found):
