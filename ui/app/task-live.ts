@@ -66,6 +66,7 @@ interface TaskLive {
   again?: boolean;
   titleEditing?: boolean;
   focus?: TaskFocus | null;
+  shared?: SharedPlaceHandle | null | undefined;
 }
 // One control as taskFormCapture saved it, one fold (a form or details element), and the whole capture.
 interface TaskFormSaved {
@@ -118,7 +119,7 @@ function taskLiveForget(id: string, identity: string = sessionIdentity()) {
   if (!identity) return;
   try { for (const key of TASK_EDIT_FIELDS) localStorage.removeItem(taskLiveStorageKey(id, key, identity)); } catch {}
 }
-function taskLiveAcknowledge(live: TaskLive, patch: Record<string, TaskFieldValue>) {
+function taskLiveAcknowledge(live: TaskLive, patch: SharedValues) {
   // Another window may have newer unsaved words. Only a confirmed save of the stored text consumes them.
   try {
     for (const [key, value] of Object.entries(patch)) {
@@ -366,7 +367,8 @@ function taskLiveSchedule(d: TaskDialog, live: TaskLive) {
   clearTimeout(live.draft.timer); live.draft.timer = 0;
   if (!live.draft.error && !SESSION.out) live.draft.timer = setTimeout(() => taskLiveSave(d, live), 700);
 }
-const taskLiveValue = (task: PropTask | undefined, key: string) => sharedDraftValue(task, key === 'due' ? 'due_at' : key);
+// A task field's value as the field shows it (sharedDraftValue reads it untyped; missing reads as '').
+const taskLiveValue = (task: PropTask | undefined, key: string): TaskFieldValue => sharedDraftValue(task, key === 'due' ? 'due_at' : key) as TaskFieldValue;
 function taskLiveDisplay(value: TaskFieldValue, key: string, task: PropTask | null | undefined) {
   if (key !== 'due' || !value) return value ?? '';
   const at = new Date(occurrenceDay(task) || value);
@@ -468,7 +470,7 @@ async function taskLiveSave(d: TaskDialog, live: TaskLive) {
   if (live.revoked || SESSION.out || live.identity !== sessionIdentity()) return;
   clearTimeout(live.draft.timer); live.draft.timer = 0;
   return sharedDraftSave(live.draft, {
-    write: (patch: Record<string, TaskFieldValue>) => {
+    write: (patch: SharedValues) => {
       const run = async () => {
         if (live.revoked || SESSION.out || live.identity !== sessionIdentity()) throw new Error('Access lost');
         // Every field carries the revision its displayed text came from. Mixing revisions takes the oldest,
