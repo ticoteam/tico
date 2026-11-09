@@ -26,7 +26,7 @@ declare function taskNeedsViewer(it: Item): boolean;
 declare function decideLive(d: unknown): string[];
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as {open: (browser: Browser, opts: Record<string, unknown>) => Promise<{page: Page; errors: string[]}>};
+const {open} = require('./tasks-page.cts') as {open: (browser: Browser, opts: Record<string, unknown>) => Promise<{page: Page; errors: string[]}>};
 const {t} = require('./support/load.cjs') as typeof import('./support/load.cjs');
 const now = new Date().toISOString();
 const task = (id: string, over: Record<string, unknown> = {}): Item => ({id, kind: 'task', title: 'Review the launch plan ' + id, body: 'Please review.',
