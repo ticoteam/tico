@@ -6,9 +6,8 @@
 // Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
@@ -68,11 +67,8 @@ async function open(browser, viewport, state, theme) {
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (isUiPath(p)) return serveUi(route, p);
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    // The icon font (ui/vendor/fonts): without it every icon is its ligature word.
-    if (p.startsWith('/vendor/fonts/') && fs.existsSync(path.join(__dirname, '..', p))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: TEAMS});
     if (p === '/api/issues') return json([]);

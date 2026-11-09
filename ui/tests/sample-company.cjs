@@ -3,8 +3,7 @@
 // saved; the offer is gone from the second screen on. Fixtures only - no server, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
@@ -29,11 +28,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
       const request = route.request(), p = new URL(request.url()).pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (module) {
-        const file = uiFile(module[1]);
-        if (fs.existsSync(file)) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
-      }
+      if (isUiPath(p)) return serveUi(route, p);
       const config = {...CONFIG, ...record.names, onboarding_needed: record.needed, providers_configured: !!record.sample};
       if (p === '/api/me') return json({id: 'owner', name: 'Owner Person', role: 'owner', cloud: true, email: 'owner@initech.test', config});
       if (p === '/api/v2/config') return json(config);

@@ -5,9 +5,8 @@
 // network. TICO_SCREENSHOT_DIR keeps the bot page and the task at desktop and phone width, light and dark.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
@@ -40,9 +39,7 @@ async function open(browser, {viewport = {width: 1280, height: 900}, colorScheme
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (isUiPath(p)) return serveUi(route, p);
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico', ...(ownerName ? {owner_name: ownerName} : {})};

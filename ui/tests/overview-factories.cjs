@@ -9,8 +9,7 @@
 //    opens chat as a full-screen sheet, with no sideways scroll.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const map = {
@@ -35,11 +34,7 @@ async function open(browser, {viewport = {width: 1280, height: 820}, hash = '#/o
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    if (p.startsWith('/tico/ui/')) {
-      const name = p.slice('/tico/ui/'.length), file = uiFile(name);
-      if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
-    }
-    if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
+    if (isUiPath(p)) return serveUi(route, p);
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json([{name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}}]);
