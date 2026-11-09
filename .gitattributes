@@ -1,5 +1,0 @@
-# The three generated baselines merge by scripts/baseline_merge.py, which applies both sides' changes to their base.
-# Git's text merge conflicts on neighbouring lines; the drivers do not. CONTRIBUTING.md registers them per clone.
-ruff-baseline-counts.json merge=tico-baseline-counts
-ruff-baseline.toml merge=tico-baseline-toml
-.basedpyright/baseline.json merge=tico-baseline-pyright

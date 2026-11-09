@@ -1,0 +1,62 @@
+{
+    "files": {
+        "./backend/teammate_access.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 52,
+                    "endColumn": 62,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 51,
+                    "endColumn": 61,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 38,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 36,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalIterable",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 36,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalIterable",
+                "range": {
+                    "startColumn": 39,
+                    "endColumn": 46,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
