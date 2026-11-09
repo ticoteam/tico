@@ -60,7 +60,7 @@ interface GkStrategy {
 }
 interface GkGoal {
   id: string; title: string; body?: string; why?: string; owner_id: string; parent_id?: string | null; status?: string | null;
-  status_source?: string | null; status_by_id?: string; status_note?: string; bet_id?: string | null; rank?: number;
+  status_source?: string | null; status_by_id?: string; status_note?: string; bet_id?: string | null; rank?: number | null;
   kpis?: GkKpi[]; checkin?: GkCheckin | null; [field: string]: unknown;
 }
 /** What a panel is showing (opened by goalPanelOpen); ui/app/goals.ts keeps the state it sits in. */

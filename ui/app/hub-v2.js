@@ -422,7 +422,7 @@ function agentQuiet(slug) {
   return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!botRow(slug)?.agent?.credential;
 }
 function pausedRender() {
-  // The Assistant's chat (V2C), or a bot page, whose Home and DM are threads (ui/app/bot-page.js).
+  // The Assistant's chat (V2C), or a bot page, whose Home and DM are threads (ui/app/bot-page.ts).
   const el = $('#conv-paused'), slug = V2C?.slug || (typeof BOT !== 'undefined' && BOT?.slug); if (!el || !slug) return;
   const text = pausedNotice(slug);
   const agent = text ? '' : agentNotice(slug);

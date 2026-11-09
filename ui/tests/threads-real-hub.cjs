@@ -143,7 +143,7 @@ async function restrictPerson(hub) {
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
     await omar.goto(hub.url + '/#/bot/' + BOT + '/dm');
-    // A peer who may only see the bot gets Info and Rules (bot-page.js botTabs): the DM route falls back to Info, with
+    // A peer who may only see the bot gets Info and Rules (bot-page.ts botTabs): the DM route falls back to Info, with
     // no Home, DM or Tasks tab and no work pane.
     await omar.locator('#pane-more').waitFor({timeout: t(15000)});
     await omar.waitForLoadState('networkidle');

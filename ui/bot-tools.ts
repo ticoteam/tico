@@ -7,7 +7,7 @@
    The full list is the Tools card under More: one line a tool (icon, name, key values, status) that opens to
    what it acts as, what it may do, its scope, note, credential name and status; two or more GitHub
    repositories share one line ("N repositories", their access added up) that opens to a short line each.
-   ui/app/bot-page.js calls window.botTools.mountStrip(host, deps) once per bot page and mountList(host,
+   ui/app/bot-page.ts calls window.botTools.mountStrip(host, deps) once per bot page and mountList(host,
    deps) when More opens; deps keeps this file free of the page's globals (get, esc). Nothing here reads
    a secret: the server sends names, never values. */
 'use strict';
@@ -31,7 +31,7 @@ interface BtIcons {
   markup: (tool: BtTool) => string;
   hue: (name: string) => number;
 }
-// What mountList needs from the page: the bot's slug, and the page's get and esc (ui/app/bot-page.js passes them).
+// What mountList needs from the page: the bot's slug, and the page's get and esc (ui/app/bot-page.ts passes them).
 interface BtListDeps {
   slug: string;
   get: BtGet;
@@ -42,7 +42,7 @@ interface BtStripDeps extends BtListDeps {
   href: string;
   skipModel?: boolean;
 }
-// window.botTools, which ui/app/bot-page.js calls once a bot page is drawn.
+// window.botTools, which ui/app/bot-page.ts calls once a bot page is drawn.
 interface BtApi {
   mountStrip(hostEl: Element | null, deps: BtStripDeps): void;
   mountList(hostEl: Element | null, deps: BtListDeps): void;
