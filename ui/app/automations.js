@@ -167,7 +167,7 @@ async function pageAutomations() {
     } else if (id === AU_SYSJOBS) {
       // System jobs is its own screen too (automations-maintenance.js), read from /v2/system-routines.
     } else if (id === AU_HOOKS) {
-      // Incoming webhooks are their own screen too (ui/app/settings-webhooks.js), read from /v2/triggers.
+      // Incoming webhooks are their own screen too (ui/app/settings-webhooks.ts), read from /v2/triggers.
     } else if (id) {
       auDrawHead(); auDrawPane();
       // A slow answer for an automation left behind must not land on the one now open.
@@ -250,7 +250,9 @@ async function auBlank(type) {
   finally { if (button.isConnected) button.disabled = false; }
 }
 
-// Every automation the viewer may see: the list pages by cursor, up to 500 a page.
+// Every automation the viewer may see: the list pages by cursor, up to 500 a page. A failed read is {error} in its place
+// (auLoadList), so the list says it has none.
+/** @returns {Promise<import('../types/api').Automation[] & {error?: undefined}>} */
 async function auAllAutomations() {
   let out = [], cursor = 0;
   for (let i = 0; i < 20; i++) {
@@ -263,10 +265,10 @@ async function auAllAutomations() {
 }
 async function auLoadList(state) {
   // Maintenance, the Heartbeat and the incoming webhooks are read alongside: their rows lead the list
-  // (automations-maintenance.js, automations-heartbeat.js, settings-webhooks.js); an older hub has none.
+  // (automations-maintenance.js, automations-heartbeat.js, settings-webhooks.ts); an older hub has none.
   const gen = state.mtGen, hbGen = state.hbGen;
   const [found, groups, maint, hooks, heart] = await Promise.all([
-    auAllAutomations().catch(e => ({error: e})),
+    auAllAutomations().catch(e => ({error: /** @type {Error} */ (e)})),
     get('/v2/groups').catch(() => ({groups: []})),
     get('/v2/maintenance').catch(() => null),
     get('/v2/triggers').catch(() => null),

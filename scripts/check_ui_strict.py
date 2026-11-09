@@ -78,7 +78,6 @@ KEPT_JS = {
     "ui/app/automations-editors.js": "auAnswer: strict .ts files call it with its JSDoc signature, and its arguments become required",
     "ui/app/bot-page.js": "the global BOT: as .ts it is implicit any where a strict .ts file reads it",
     "ui/app/welcome.js": "the global ONB: as .ts it is implicit any where a strict .ts file reads it",
-    "ui/app/settings-webhooks.js": "the global WH_TRIGGERS: as .ts it is implicit any where a strict .ts file reads it",
 }
 SKIP_TS = ("ui/vendor/", "ui/assets/", "ui/node_modules/")
 DIRECTIVE = re.compile(r"@ts-(nocheck|ignore)\b")
