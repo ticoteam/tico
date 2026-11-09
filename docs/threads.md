@@ -65,8 +65,8 @@ you change it, so there is no Save button. A row you may not use is left out. On
 - **Summarize**: posts a summary of what is new in the thread and its sub-threads to your DM with **Assistant**.
 - **Mark all read**: marks the thread and every sub-thread under it read.
 - **Open earlier messages to Read**: on a Home with earlier messages. See [Who can read a thread](#who-can-read-a-thread).
-- **Archive** or **Unarchive**: a manager sees it, except on a Home. Archive takes the thread off the Threads list.
-  Unarchive puts it back.
+- **Archive** or **Unarchive**: a manager sees it on a top-level thread that is not a Home. Archive takes the thread off the
+  Threads list and Catch up. Unarchive puts it back. See [Archive and delete a thread](#archive-and-delete-a-thread).
 
 ## Replies
 
@@ -118,6 +118,10 @@ A task's own thread is listed only while it has something unread for you. Being 
 posted in it, is no reason to list it, and neither is a bot's activity there. Read it and it leaves the list; the Threads
 page, the Tasks page and search still find it. A task you make is not unread for you: its first notice is your own action.
 
+A thread whose task is done, closed or declined leaves the Threads page, [Browse threads](#browse-threads) and Catch up,
+even when it is unread. It comes back when the task reopens, or when someone posts in it after the task finished and you
+may read that post.
+
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
 a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you list: a mention or
 ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you
@@ -125,6 +129,19 @@ are in where the loop guard paused the bots' wakes; posting there lets them all 
 themselves, as many as the thread's hour has room for. Unread threads come next, then the rest, newest first. A thread's
 row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
+
+## Browse threads
+
+**Unreleased:** **Browse threads** has an **Archived** tab, where you can unarchive threads you archived.
+
+**Browse threads** opens from the Threads page's rail. The dialog has two tabs under **Which threads**:
+
+- **Threads**: the company and team threads you can read but are not in. Type in **Find a thread** to narrow the list.
+  **Join** follows the thread.
+- **Archived**: the threads you archived that you may still manage, newest activity first. **Unarchive** on a row puts the
+  thread back on the Threads list. **Find a thread** is not shown on this tab.
+
+Each tab loads 50 threads at a time. **More** loads the next page.
 
 ## Update requests
 
@@ -238,6 +255,39 @@ attached to the message goes with it, its bytes within a minute or so, unless an
 Library still holds it. Two kinds of copy stay: a linked Slack channel or another install keeps what it received, and a
 bot's run keeps what it read in its transcript.
 
+## Archive and delete a thread
+
+**Unreleased:** a manager can archive a thread from its row or its header, and delete a thread from its header once it can be deleted.
+
+**Archive** takes a thread off the Threads list and Catch up. Its messages stay. A manager can archive a thread from two
+places:
+
+- The **Archive** button on its row in the Threads list.
+- The **Archive** button in its header, on a top-level thread that is not a Home.
+
+After an archive, a short **Archived** message appears with **Undo**. Click **Undo** to put the thread back. To unarchive
+later, click **Unarchive** in the header, or **Unarchive** on its row in [Browse threads](#browse-threads).
+
+### Delete a thread
+
+**Delete thread** in the header deletes a thread. A manager sees the button only when the thread can be deleted now. Click
+it, then confirm. A confirm box asks "Delete this thread? It can't be undone."
+
+A thread can be deleted when all of these hold:
+
+- It is a top-level thread, not a sub-thread. A Home can't be deleted.
+- Every message in it is deleted, replies included. Delete each message first ([Editing and deleting](#editing-and-deleting)).
+- No one else is a member of it or follows it.
+
+Only a manager can delete a thread. Anyone else gets `403`. If a rule fails, the API answers `409 not_deletable` with the
+reason, and nothing is removed.
+
+Deleting is final. The thread:
+
+- leaves every list at once and reads as not found;
+- is archived and loses its title;
+- loses the earlier revisions and attached files of its messages.
+
 ## Commands and tools
 
 Each command is also an MCP tool with the same name and arguments ([Connect an agent](connect-an-agent.md)).
@@ -285,6 +335,12 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
   `file`), under the chat upload size caps: `hub thread upload`.
 - `DELETE /api/v2/messages/{id}`: delete your message (`hub thread delete`).
+- `GET /api/v2/threads/archived?limit=&cursor=`: the threads you archived and may still manage (the **Archived** tab in
+  [Browse threads](#browse-threads)).
+- `PATCH /api/v2/threads/{id}` with `archived`: `true` archives the thread, `false` unarchives it (`hub thread update
+  --archive` or `--unarchive`).
+- `DELETE /api/v2/threads/{id}`: deletes the thread when [its rules](#archive-and-delete-a-thread) allow it. Otherwise it
+  answers `409 not_deletable`.
 - `POST /api/v2/slack/links/{id}/resume`: check a suspended or refused link again (`hub thread slack-resume`).
 - `POST /api/v2/threads/messages/{id}/task` with `title` and `owner`: a task made from a message you can read. The server
   copies the message and a link back, and the task stays private unless the thread is company-wide
