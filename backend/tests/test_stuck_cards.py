@@ -238,3 +238,25 @@ def test_a_parent_moves_with_its_open_children_and_is_not_woken_when_a_child_is_
         # The child finishes and the parent sits: now the parent is stuck on its own.
         H.task_update(c, ANA, ticket["id"], status="done", note="Shipped")
         assert stuck_cards.sweep(c, later(5))["woken"] == [epic["id"]]
+
+
+def test_a_parent_whose_child_waits_on_a_person_is_not_stuck(api):
+    with api.app.state.store.transaction() as c:
+        product, dev = pipeline(c, "Launch plans", manager="cpo"), pipeline(c, "Launch builds")
+        epic = card(c, product, "Design the launch")
+        ticket = H.task_create(
+            c, ANA, "Build the launch page", "", "bot:ops", parent_id=epic["id"], type=dev, step="Building", lint=False
+        )
+        for row in (epic, ticket):
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (later(-10), row["id"]))
+            c.execute(
+                "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
+                (later(-10), row["id"]),
+            )
+        H.task_update(c, "bot:ops", ticket["id"], status="waiting", waiting_on=ANA, note="Which hero image?")
+        # Five hours on, the child still waits on Ana (under a day): neither the child nor its parent is stuck.
+        assert stuck_cards.sweep(c, later(5))["woken"] == []
+        assert wakes(c, epic["id"], "bot:cpo") == []
+        # Past a day the child is stuck and its own manager hears it; the parent is still not woken.
+        assert stuck_cards.sweep(c, later(25))["woken"] == [ticket["id"]]
+        assert wakes(c, epic["id"], "bot:cpo") == []

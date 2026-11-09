@@ -215,6 +215,9 @@ def stuck(c: "sqlite3.Connection", card: Row, last: str | None, at: str, after_h
         return None
     if _running(c, card):
         return None
+    # A child that waits on a named person is a wait for the card too: the person's clock runs on the child.
+    if any(_waits_on_person(c, child, at) for child in _children(c, [card["id"]])):
+        return None
     return last or card.get("created_at")
 
 
