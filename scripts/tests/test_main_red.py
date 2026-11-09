@@ -157,9 +157,11 @@ def chain(tmp_path, changed, count):
 
 
 def failing_from(shas, first_bad):
-    """A probe for the bisect: the tests fail at shas[first_bad] and after it, and pass before it."""
+    """A probe for the bisect: the tests fail at shas[first_bad] and after it, and pass before it. It stands in for
+    probe_commit(workdir, git, sha, tests) and for bisect()'s own probe(sha, tests): the last two arguments are used."""
 
-    def probe(workdir, git_, sha, tests):
+    def probe(*args):
+        sha, tests = args[-2:]
         return ("bad" if shas.index(sha) >= first_bad else "good"), [], "scripted"
 
     return probe
@@ -238,6 +240,11 @@ def test_failing_tests_come_from_pytest_lines_and_the_ui_scripts_line():
         "google-tab.cjs",
         "support.cjs",
     ]
+    # The line scripts/ui-tests.cjs prints today names the total run time as "(all M took Ss)".
+    assert mr.failing_tests("2 of 60 UI scripts failed: chat.cjs, docs.cjs (all 60 took 253s)\n") == [
+        "chat.cjs",
+        "docs.cjs",
+    ]
     assert mr.test_file("backend/tests/test_page_audience_review3.py::test_leak[stored]") == (
         "backend/tests/test_page_audience_review3.py"
     )
@@ -291,6 +298,42 @@ def test_a_ui_change_reaches_the_scripts_it_maps_and_every_script_when_it_maps_n
     unmapped = mr.reach(graph, ["ui/app/other.js"], {})
     assert mr.hit("chat.cjs", unmapped) and mr.hit("google-tab.cjs", unmapped)
     assert not mr.hit("backend/tests/test_b.py::test_b", unmapped)
+
+
+def test_a_gone_file_or_a_pin_may_reach_any_test(two_runs):
+    root, _, _ = two_runs
+    graph = checks.DependencyMap(root)
+
+    assert mr.reach(graph, ["backend/removed.py"], {}) is None
+    assert mr.reach(graph, ["backend/requirements.txt"], {}) is None
+    assert mr.hit("backend/tests/test_b.py::test_b", mr.reach(graph, ["backend/removed.py", "ui/app/other.js"], {}))
+
+
+def test_a_ui_file_a_conftest_fixture_reads_may_reach_any_test(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    files = dict(BASE_FILES)
+    files["backend/tests/conftest.py"] = (
+        "from pathlib import Path\n\nimport pytest\n\n\n@pytest.fixture\ndef page():\n"
+        '    return Path("ui/app/other.js").read_text()\n'
+    )
+    files["backend/tests/test_page.py"] = "def test_page(page):\n    assert page\n"
+    commit(tmp_path, "green", files)
+    graph = checks.DependencyMap(tmp_path)
+
+    assert mr.reach(graph, ["ui/app/other.js"], {}) is None
+
+
+def test_a_ui_file_an_autouse_fixture_reads_may_reach_any_test(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "main")
+    files = dict(BASE_FILES)
+    files["backend/tests/conftest.py"] = (
+        "from pathlib import Path\n\nimport pytest\n\n\n@pytest.fixture(autouse=True)\ndef page():\n"
+        '    return Path("ui/app/other.js").read_text()\n'
+    )
+    commit(tmp_path, "green", files)
+    graph = checks.DependencyMap(tmp_path)
+
+    assert mr.reach(graph, ["ui/app/other.js"], {}) is None
 
 
 def test_a_red_run_tells_each_suspect_once_and_leaves_the_others_alone(two_runs, monkeypatch):

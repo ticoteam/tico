@@ -66,7 +66,8 @@ UI_TEST = "ui/tests/%s.cjs"  # a browser script that UI_MAP names for a UI file
 ALL_UI = "ui/tests/*"  # any browser script: a UI file UI_MAP does not name
 PYTEST_FAILED = re.compile(r"\bFAILED (\S+::\S+)")
 PYTEST_NODE = re.compile(r"\S+\.py::\S+$")
-UI_FAILED = re.compile(r"\d+ of \d+ UI scripts failed: (.+?)(?: \(\d+s\))?\s*$")
+# scripts/ui-tests.cjs ends a red run with "N of M UI scripts failed: a.cjs, b.cjs (all M took Ss)".
+UI_FAILED = re.compile(r"\d+ of \d+ UI scripts failed: (.+?)(?: \((?:all \d+ took )?\d+s\))?\s*$")
 MESSAGE_PR = re.compile(r"Merge pull request #(\d+)\b|\(#(\d+)\)\s*$")
 STATE = re.compile(r"<!-- main-red-state (\{[^\n]*\}) -->")
 
@@ -219,18 +220,35 @@ def reach(graph, changed, cache):
 
 
 def _reach(graph, changed):
-    if "uncertain" in checks.selection(changed, "pull_request", root=graph.root, graph=graph, core=()):
+    # A UI file (or the browser runner) that UI_MAP does not name may break any browser script, and no Python test
+    # beyond what the map measures. selection() counts it uncertain (its rule 4), so it is judged here, not there.
+    unmapped = {
+        name
+        for name in changed
+        if (name.startswith("ui/") or name == checks.UI_RUNNER)
+        and checks.ui_map_key(name) not in checks.UI_MAP
+        and (graph.root / name).is_file()
+    }
+    rest = [name for name in changed if name not in unmapped]
+    try:
+        if rest and checks.selection(rest, "pull_request", root=graph.root, graph=graph, core=())["uncertain"]:
+            return None
+    except (OSError, ValueError, KeyError):  # selection could not read what it needs: say nothing about the change
         return None
     data = [name for name in changed if checks.read_only(name) and not graph.code(name)]
-    found = set(graph.affected([name for name in changed if name not in data]))
+    via = set()  # files that reach tests only through a conftest fixture, which the map does not follow
+    found = set(graph.affected([name for name in changed if name not in data], via=via))
     if data:
-        found |= set(graph.read_by_tests(data))
-    # A UI file runs the browser scripts that UI_MAP names for it. One it does not map runs every script, as CI does.
+        found |= set(graph.read_by_tests(data, via=via))
+    # A conftest the change reaches (an autouse fixture reads or runs it) may change any test below it.
+    if via or any(Path(name).name == "conftest.py" for name in found):
+        return None
+    # A UI file runs the browser scripts that UI_MAP names for it. One it does not map runs every script.
     for name in changed:
-        if name in checks.UI_MAP:
-            found |= {UI_TEST % script for script in checks.UI_MAP[name]}
-        elif name.startswith("ui/"):
-            found.add(ALL_UI)
+        if checks.ui_map_key(name) in checks.UI_MAP:
+            found |= {UI_TEST % script for script in checks.UI_MAP[checks.ui_map_key(name)]}
+    if unmapped:
+        found.add(ALL_UI)
     return found
 
 
@@ -336,7 +354,8 @@ def describe(run):
 def run_tests(workdir, tests):
     """One pytest run of the tests, the way the python suite runs them (scripts/pr_checks.py): the node ids that
     failed, or None when the run cannot say, because it ran past RUN_LIMIT or pytest stopped before the tests ran."""
-    command = [sys.executable, "-m", "pytest", "-q", "-n", str(checks.WORKERS), *checks.PYTEST_FLAGS, *tests]
+    # -m "" undoes pytest.ini's -m "not slow": release validation runs the slow tests too, and a probe names them.
+    command = [sys.executable, "-m", "pytest", "-q", "-n", str(checks.WORKERS), *checks.PYTEST_FLAGS, "-m", "", *tests]
     try:
         done = subprocess.run(command, cwd=workdir, capture_output=True, text=True, timeout=RUN_LIMIT, check=False)
     except subprocess.TimeoutExpired:
@@ -499,7 +518,7 @@ def bisect_lines(report):
         text = ["Not bisected: %s. No pull request was reviewed." % found["reason"]]
     else:
         text = ["The bisect did not finish: %s. No pull request was reviewed." % found["reason"]]
-    probes = ["- `%s` %s (%s)" % (short(step["sha"]), step["result"], step["note"]) for step in found["steps"]]
+    probes = ["- `%s` %s (%s)" % (short(step["sha"]), step["result"], step["note"]) for step in found.get("steps", ())]
     return ["", "### Bisect"] + text + ([""] + probes if probes else [])
 
 
