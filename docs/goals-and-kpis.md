@@ -306,8 +306,8 @@ plain yes. Colour, done or dropped and archive stay clicks on this page, not agr
 suggestions come to you as proposals under **Needs you**. You confirm or reject each one on its card, or agree it in your [Assistant](assistant.md#goals-agreed-in-words) chat: your plain yes confirms it, and it leaves **Needs you**. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
 /api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 
-One tree, built like the team chart: the team on top, then every human and every bot that is not archived, indented
-under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's
+One tree, built like the team chart: the team on top, then each group and every human and every bot that is not archived.
+A group sits under whoever runs it, and each person or bot under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's
 colour dot and its title (cut short; the whole title is in the tooltip) and its KPIs as small chips, a dot and the latest
 value each (a count when there is no room). More goals follow on lines of their own under the first. The built-in bots (the
 Assistant, BotOps and the Librarian) stay out of this tree and its goal owner choices; the Strategy Bot is in the tree, under the owner.
@@ -329,9 +329,9 @@ and a colour, and the update is kept as your words. Tapping a KPI shows its hist
 evidence), its definition and version, its owner, its targets and the Strategy Bot's latest check-in, with a way back.
 **Add goal** and **Add KPI** (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. Each goal in a panel shows its
-[Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is a short strip at the
-top, shown only when something waits: red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
-waiting for your confirmation. Each line links to its task. Initial page load makes two requests, the tree and Needs you; the Strategy Bot panel and
+[Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is one quiet line at the
+top, shown only when something waits. Its items include Strategy Bot suggestions and recoveries, waiting Why lines, red KPIs,
+stale KPI readings, and definitions and targets awaiting confirmation. **Review** opens them in a sheet, where each is answered as it would be in the Ask panel or the Needs you queue. Initial page load makes two requests, the tree and Needs you; the Strategy Bot panel and
 the historical KPI view load only when opened.
 People who may edit an owner's KPIs can open **Archived KPIs** in that owner's panel. The historical list is separate
 from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to active lists and freshness checks.
