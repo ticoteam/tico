@@ -64,7 +64,6 @@ ALLOWED_JS = {"ui/assets/observability-vendors.js"}
 # reader stops type-checking. Typing these by hand is the follow-up. scripts/ui_flip.py keeps them as they are.
 KEPT_JS = {
     "ui/app/finance.js": "the globals FIN and FIN_ACCESS: as .ts they are implicit any where finance-attribution.ts reads them",
-    "ui/app/automations.js": "the global AU: as .ts it is implicit any where the automations files read it",
     "ui/app/bot-page.js": "the global BOT: as .ts it is implicit any where a strict .ts file reads it",
     "ui/app/welcome.js": "the global ONB: as .ts it is implicit any where a strict .ts file reads it",
     "ui/app/settings-webhooks.js": "the global WH_TRIGGERS: as .ts it is implicit any where a strict .ts file reads it",

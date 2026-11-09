@@ -372,7 +372,11 @@ interface BotHours {
 
 /** The copies each page keeps for its next visit (S.lastRead). Pages not listed here keep their own shape. */
 interface LastRead {
-  automations?: { list?: unknown[]; groups?: unknown; stats?: unknown; range?: string; maint?: unknown; heart?: unknown };
+  /** The Automations list, its teams and its counts (automations.ts automationsStop, auLoadList). */
+  automations?: {
+    list: AuRow[]; groups: Array<import('./api').Group>; stats?: AuStats | null; range?: string;
+    maint: MaintView | null; heart: import('./api').HeartbeatView | null;
+  };
   /** The Overview's bot-hours answer (overview-hours.ts). */
   hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
