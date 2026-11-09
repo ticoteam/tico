@@ -52,15 +52,6 @@ DOC_BOT = "doc-updater"  # the documentation agent: docs questions and doc PR re
 STRATEGY_BOT = "goal-manager"
 
 
-def __getattr__(name):
-    # local: keeps execution out of the selector's fan-in; app.py reads views.AWAKE_GAP
-    if name == "AWAKE_GAP":
-        from .execution import AWAKE_GAP
-
-        return AWAKE_GAP
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 def runner_version_supported(value):
     match = re.search(r"(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)", str(value or ""))
     return bool(match and tuple(map(int, match.groups())) >= MIN_RUNNER_VERSION)
