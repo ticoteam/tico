@@ -121,13 +121,14 @@ def same_department(c, a, b):
 
 
 # ----------------------------------------------------------------------------- the items
-def _item(kind, row, why, fix, owner=None, stamp=None):
+def _item(kind, row, why, fix, owner=None, stamp=None, about=()):
     """One line of a report. `stamp` is what changes when the item does (the task's last update), so a changed task is
-    reported again at once and an unchanged one only after REPEAT_HOURS."""
+    reported again at once and an unchanged one only after REPEAT_HOURS. `about` are the other tasks its line names."""
     owner = owner or (row or {}).get("owner_id") or ""
     return {
         "kind": kind,
         "task": row["id"] if row else "",
+        "about": [str(t) for t in about if t],
         "title": (row or {}).get("title") or "",
         "owner_id": owner,
         "why": why,
@@ -162,10 +163,26 @@ def _decide_words(c, row):
     }.get(cls, "")
 
 
+def _managed_pipelines(c):
+    """The pipelines (type ids) whose manager is an active bot. Their quiet tasks are the manager's to tidy, so the
+    Task Manager leaves them out. A pipeline with no manager, or one whose manager is missing, paused or archived, stays
+    covered, and so does one whose manager seat is still open (its hire sets the manager)."""
+    from . import pipeline_manager
+
+    return {
+        row["id"]
+        for row in H._rows(c.execute("SELECT id, manager FROM task_types WHERE manager IS NOT NULL AND manager <> ''"))
+        if pipeline_manager.manager_bot(c, row) is not None
+    }
+
+
 def _quiet(c, at):
     out = []
+    managed = _managed_pipelines(c)
     for row in H.stalled_tasks(c, at):
         if row["quiet_minutes"] < QUIET_MINUTES or not _readable(c, row):
+            continue
+        if row.get("type_id") in managed:
             continue
         if row.get("own_blockers"):
             blockers = ", ".join(row["own_blockers"])
@@ -177,6 +194,7 @@ def _quiet(c, at):
                     f"hub task get {row['id']}; if a subtask is finished: hub task close {blockers.split(', ')[0]} "
                     f"--note \"<why>\"; if it is not needed: hub task relate {row['id']} "
                     f"{blockers.split(', ')[0]} --kind blocked_by --remove",
+                    about=row["own_blockers"],
                 )
             )
         else:
@@ -264,6 +282,7 @@ def _reviews(c):
                     f"{match[0]} ticket for {parent_id} with no linked pull request",
                     f"hub task get {parent_id}; if its pull request is gone: hub task close {row['id']} "
                     f"--note \"No pull request to review\"",
+                    about=(parent_id,),
                 )
             )
             continue
@@ -284,6 +303,7 @@ def _reviews(c):
                     extra,
                     f"a second open {name} ticket for {parent_id}; {first['id']} came first",
                     f"hub task close {extra['id']} --note \"Duplicate of {first['id']}\"",
+                    about=(parent_id, first["id"]),
                 )
             )
     return out
@@ -401,8 +421,11 @@ def _duplicates(c):
         c.execute(
             f"SELECT * FROM {H.TASKS} tasks WHERE coalesce(private,1)=0 AND status IN ('open','doing','waiting','review','ready') AND id IN ("
             "SELECT id FROM tasks t WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
+            # A card On ice (D69) is no one's to tidy: it is neither listed nor the first of a pair.
+            f"AND NOT {H.ON_ICE % 't'} "
             "AND EXISTS(SELECT 1 FROM tasks o WHERE o.id<>t.id AND o.requester_id=t.requester_id AND o.owner_id=t.owner_id "
-            "AND coalesce(o.private,1)=0 AND o.status IN ('open','doing','waiting','review','ready'))) ORDER BY created_at, id"
+            f"AND coalesce(o.private,1)=0 AND o.status IN ('open','doing','waiting','review','ready') AND NOT {H.ON_ICE % 'o'})) "
+            "ORDER BY created_at, id"
         )
     )
     seen, out = {}, []
@@ -417,6 +440,7 @@ def _duplicates(c):
                         f"same title, requester and owner as {seen[key]['id']}",
                         f"hub task relate {row['id']} {seen[key]['id']} --kind duplicate_of; then "
                         f"hub task close {row['id']} --note \"Duplicate of {seen[key]['id']}\"",
+                        about=(seen[key]["id"],),
                     )
                 )
         else:
@@ -437,7 +461,11 @@ def collect(c, settings, at):
         *_duplicates(c),
     ]
     seen, by = set(), {}
+    # A card On ice (D69) is no one's to tidy, nor a wake: no item is about one, nor names one.
+    parked = H.on_ice_ids(c, {t for item in found for t in (item["task"], *item["about"])})
     for item in found:
+        if parked.intersection((item["task"], *item["about"])):
+            continue
         key = f"{item['kind']}:{item['task'] or item['owner_id']}"
         if key in seen:
             continue

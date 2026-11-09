@@ -4,16 +4,9 @@ A release is a version tag. Everything it ships is built once, by the Release va
 version, and that same build is what the gate tests. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, which
 builds nothing: it takes that run's runner binaries and image digests, builds the installer bundle and publishes the
 GitHub release. Running installations look for that release and offer it as
-"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit,
-and once the release is published it files one task for the Technical Writer to write that version's section of
-[CHANGELOG.md](../CHANGELOG.md). The installed `CHANGELOG.md` supplies the in-app, API and MCP product changelog,
-so a release's notes reach users with the next build that contains them. No separate product announcement is required.
-Don't edit CHANGELOG.md in a PR. The notes land as a CHANGELOG-only pull request that needs review at its final head,
-and each notes commit needs a `Changelog-Release: vX.Y.Z` trailer for each version section it changes; preserve the
-trailers in the merged commit. PR checks reject ordinary changelog edits before selecting tests. A pull request that
-corrects a shipped section needs the same trailers. Keep the versioned sections on `main`, so later builds retain the
-complete history and do not announce already shipped work again. A released section is held to its tag, or, for a
-release tagged before its notes were written, to the section as first written on `main`: a later difference fails the tests.
+"Update to vX" in the sidebar. A release is not held for its notes: the release command tags the validated commit, and the notes are on the
+release's approval issue (label `release-approval`), built from the pull requests it ships. No separate product
+announcement is required.
 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
@@ -230,7 +223,8 @@ hotfix's approval issue decides stable, as for any canary release.
    command waits for that run and checks its title and candidate commit. The 8-minute target is report-only.
 4. **Tag that commit.** The command checks main again and pushes the version tag at the validated commit.
    The GitHub release is published about a minute later: the version tags are pointed at the tested images.
-5. **Notes follow.** Once the release is published, the command files one Technical Writer task for its notes.
+5. **Notes task.** Once the release is published, the command files one Technical Writer task. The notes are already
+   on the release's approval issue.
 6. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 7. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
 
@@ -371,7 +365,7 @@ back to a different validation automatically.
 
 Any change to main after the freeze, however small, requires a fix pull request, a new freeze and a new **full**
 gate on the new commit. This includes test fixes, main re-merges and docs edits: a green run for the old commit cannot
-be reused. The notes pull request lands after publication, so it does not affect the release it describes. An admin
+be reused. An admin
 merge is allowed only on that fix-PR/new-full-gate path; it does not waive review or exact-commit validation. Do not move the tag to a
 new commit to borrow an old run. Roll back this tooling change by reverting it; the manual steps below still work.
 
@@ -386,7 +380,7 @@ it selects them from the group's merged change (base to group head) with the mea
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
 files, folders it lists or globs). The Caddy image job runs only when a change reaches the image inputs or
 `backend/caddy_assets.py`; otherwise the plan compiles the changed files and runs the Dockerfile's import check itself.
-A `docs/` page, CHANGELOG.md or a GitHub file runs the tests that read it (by path, folder or listing) and the tests of
+A `docs/` page or a GitHub file runs the tests that read it (by path, folder or listing) and the tests of
 the code that reads it, not everything that imports that code. A change to how the checks run (the PR checks workflow,
 `scripts/ci_install.sh`, the browser system packages) runs the tests that read it and one short core browser script, and
 a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependency pins and deleted or unparsable files
@@ -406,7 +400,7 @@ Python jobs install no npm packages, browsers or apt packages. The browser job c
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
 one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (300, five minutes) including setup, using JUnit per-file and browser per-script timings
+finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script timings
 from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
 included), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
@@ -452,9 +446,8 @@ checks on that merge commit, and moves main only when they pass.
 - **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its plan job also runs every
   static check on that commit (`scripts/ci/merge_commit_checks.sh`), in place of a static checks VM. A job the change does
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
-  request's change. Its tests pack toward 6 test jobs of up to 12 minutes each (`CEILING`, `QUEUE_MAX_JOB_SECONDS` in
-  `scripts/pr_checks.py`), since every group shares the organisation's concurrent hosted jobs; a selection too big for
-  that keeps 12-minute VMs.
+  request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
+  `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
 - **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
   pull request, only when the change
   reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
@@ -476,8 +469,8 @@ GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue;
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
 failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
 the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
-that import, name or read a changed file, the smoke set, at most four VMs), and its queue group goes one level further (at
-most eight VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
+that import, name or read a changed file, the smoke set, at most ten VMs), and its queue group goes one level further (at
+most nineteen VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
 closure over every change since the last full validation, so a test a queue group left out still runs before a release. After a queue failure, fix it and get green PR
 checks before enqueuing again.
 
@@ -512,7 +505,7 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 28 Python shards, desktop and seven factory-sim groups (the sim's own VMs). Every part starts with the candidate and runs its setup while the Linux
+shards, 36 Python shards, desktop and twelve factory-sim groups (the sim's own VMs). Every part starts with the candidate and runs its setup while the Linux
 binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
 immediately. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
@@ -533,7 +526,7 @@ two-minute binary wait rather than adding collection to the critical Python shar
 default collection in `scripts/pr_checks.py`, before affected-file filtering, so the guard adds no collection or job.
 Both guards fail if a collected file is missing from the filesystem plan; extra empty or deselected candidates are
 allowed. The existing no-test-passed check still rejects a release shard that proves nothing.
-Beside the gate, seven `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into seven
+Beside the gate, twelve `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into twelve
 groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
 (tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and
@@ -587,7 +580,7 @@ python scripts/freeze_guard.py --head <candidate> --receipts receipts.json
 ```
 
 It names every change that undoes a pull request an earlier release shipped (a stale tree committed over newer work,
-or a reverted fix put back): all of it, however small, or most of its meaningful product lines; tests and release notes
+or a reverted fix put back): all of it, however small, or most of its meaningful product lines; tests
 don't count. It compares against all history unless `--releases N` limits it (about 15 seconds for a release of 60
 pull requests). It also names every merged pull request whose final head has no approving GitHub review or ticket
 review receipt at that commit (an approval of an earlier head counts only when the change is the same line for line),
@@ -697,11 +690,13 @@ hosted gate.
    version you will tag, dispatched from main: the tag publishes only a validation run of ci.yml from main.
 2. Once it is green, check main still equals that commit, then the Release Manager tags it and pushes:
    `git tag vX.Y.Z <validated-commit> && git push origin vX.Y.Z`.
-3. Once the release is published, file the Technical Writer's notes task. The notes go in `CHANGELOG.md` under
-   `## [X.Y.Z] - YYYY-MM-DD`, below a fresh empty `## [Unreleased]`, with the link references at the bottom updated.
+3. Once the release is published, file the Technical Writer's notes task. The notes are already on the release's
+   approval issue.
 
 The workflow then:
 
+- generates `openapi-v2.json` from the tag (`python3 -m backend.openapi_v2`, with the runtime requirements the image installs),
+  the same document `GET /api/v2/openapi.json` serves, and attaches it;
 - runs `scripts/build_install_bundle.py`, which attaches the one-line installers: `install.sh` and the Windows
   `install-wsl.ps1` with the tag baked into them, `tico-bundle-vX.Y.Z.tar.gz` (`compose.yaml`, `.env.example`,
   `docker/runner.compose.yaml` and the `setup/` wizard) and `SHA256SUMS` over all three. `install.sh` checks the bundle against `SHA256SUMS` before it unpacks anything;
@@ -717,8 +712,7 @@ The workflow then:
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
   (and `latest` for a stable version) at those digests before publishing, so no installer runs against missing images;
 - marks a tag with a suffix such as `v0.2.0-rc.1` a prerelease, which the update check ignores;
-- publishes the release with those four files and the runner binaries, with no notes: the notes are written
-  afterwards in `CHANGELOG.md`. That is everything the installer, the server's update
+- publishes the release with those four files and the runner binaries, with no notes: the notes are on the release's approval issue. That is everything the installer, the server's update
   check and the updater read (`install.sh`, the bundle and `SHA256SUMS`), so the server rollout can start at once.
 
 The images set `TICO_VERSION` in the image, which is how the running app
@@ -853,8 +847,10 @@ run on the server: `docker compose pull && docker compose up -d`.
 
 ## Publish the release docs
 
-The tagged repository is the source for that release's manual. Run `python -m backend.openapi_v2` and
-`python scripts/build_api_docs.py` after changing API descriptions; check the spec and API guide together.
+The tagged repository is the source for that release's manual. The API spec is generated, not committed: release.yml
+generates `openapi-v2.json` from the tag and attaches it to the release, and the public docs link to
+`https://github.com/ticoteam/tico/releases/latest/download/openapi-v2.json`. Run `python3 scripts/build_api_docs.py` after
+changing API descriptions or tags; check the spec and API guide together.
 
 Publish the public site's docs from the same tag, including the docs landing page's three reader paths and its **Use Tico** and
 **Glossary** links. The website source and publishing process live outside this repository. Check that its install and demo pages

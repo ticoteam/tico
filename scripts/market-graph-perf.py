@@ -143,7 +143,7 @@ def main():
     }
     if not args.api_only:
         browser = subprocess.check_output(
-            ['node', str(ROOT / 'scripts/market-graph-perf.cjs'), *(['--after-only'] if args.after_only else [])],
+            ['node', str(ROOT / 'scripts/market-graph-perf.cts'), *(['--after-only'] if args.after_only else [])],
             cwd=ROOT,
             text=True,
         )

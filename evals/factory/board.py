@@ -16,7 +16,10 @@ class Check:
     passed: str  # where a pass goes: a step name, or MERGE (the builder merges next)
     other: str  # where changes, a fail or a reply with no verdict goes
     different_checker_from: tuple = ()  # steps whose checker may not take this one (a second opinion)
-    timeout_hours: float = 1.0  # an unanswered check is skipped after this long
+    timeout_hours: float = 1.0  # an unanswered check is handled after this long: passed on, or filed again (on_timeout)
+    on_timeout: str | None = (
+        None  # "refile" files an unanswered check again to another reviewer instead of passing it on
+    )
     skip_tag: str | None = None  # a ticket with this tag skips the step (the skip is recorded)
     gate: bool = False  # entering needs green CI and a test receipt at the head
     kind: str | None = None  # what the server's rules know the check as: "review", "qa" or "release_qa"
@@ -74,10 +77,13 @@ class Board:
         return bool(s) and s.status in ("done", "closed")
 
 
-def dev_board(qa=True, review_timeout=1.0):
+def dev_board(qa=False, review_timeout=1.0):
     """The engineering board. A review is feedback, not a gate: whatever it says, the ticket goes back to its builder,
-    who moves it on once the feedback is in (only the builder knows when). QA passes or fails; its pass makes the merge
-    next. Then the release."""
+    who moves it on once the feedback is in (only the builder knows when). Review 2 always runs; its approval makes the
+    merge next, and a fix made after it merges once CI is green on the new head. On this board an unanswered review is
+    filed again to another reviewer after its hour, and is never passed on. With `qa`, the board keeps its QA steps
+    instead: Review 2's changes go to In QA, which passes or fails, and its pass makes the merge next."""
+    refile = "refile" if not qa else None
     steps = [
         Step("On Deck", "open", assign="builder", backlog={"over": 10, "per": "step", "notify": ["manager"]}),
         Step("In Progress", "doing", work=True, next="Review 1"),
@@ -85,7 +91,13 @@ def dev_board(qa=True, review_timeout=1.0):
             "Review 1",
             "review",
             check=Check(
-                "reviewer", "Review 1 Fixes", "Review 1 Fixes", timeout_hours=review_timeout, gate=True, kind="review"
+                "reviewer",
+                "Review 1 Fixes",
+                "Review 1 Fixes",
+                timeout_hours=review_timeout,
+                on_timeout=refile,
+                gate=True,
+                kind="review",
             ),
         ),
         Step("Review 1 Fixes", "doing", work=True, next="Review 2", wake_after_hours=2),
@@ -94,30 +106,39 @@ def dev_board(qa=True, review_timeout=1.0):
             "review",
             check=Check(
                 "reviewer",
-                "Review 2 Fixes",
+                "Review 2 Fixes" if qa else MERGE,
                 "Review 2 Fixes",
                 different_checker_from=("Review 1",),
                 timeout_hours=review_timeout,
+                on_timeout=refile,
                 gate=True,
                 kind="review",
             ),
         ),
-        Step("Review 2 Fixes", "doing", work=True, next="In QA" if qa else MERGE, wake_after_hours=2),
     ]
     if qa:
         steps += [
+            Step("Review 2 Fixes", "doing", work=True, next="In QA", wake_after_hours=2),
             Step(
                 "In QA", "review", check=Check("qa", MERGE, "QA Fixes", timeout_hours=2, skip_tag="skip-qa", kind="qa")
             ),
             Step("QA Fixes", "doing", work=True, next="In QA", wake_after_hours=2),
         ]
+    else:
+        steps.append(Step("Review 2 Fixes", "doing", work=True, after_green=MERGE, wake_after_hours=2))
+    steps.append(Step("Pending Release", "review", can_hold=False, merged=True, release=True))
+    if qa:
+        steps.append(Step("Post Release QA", "review", can_hold=False, merged=True, release=True))
     steps += [
-        Step("Pending Release", "review", can_hold=False, merged=True, release=True),
-        Step("Post Release QA", "review", can_hold=False, merged=True, release=True),
         Step("Done", "done", can_hold=False, merged=True),
         Step("Closed", "closed", can_hold=False),
     ]
     return Board("Dev tickets", steps, on_merge="Pending Release")
+
+
+def qa_board():
+    """The engineering board with its QA steps, for the scenarios of a team that still runs QA."""
+    return dev_board(qa=True)
 
 
 def design_board():
@@ -145,9 +166,11 @@ def flows(board, bots):
             flow.update(
                 on_pass="merge" if s.check.passed == MERGE else s.check.passed,
                 on_fail=s.check.other,
-                timeout_hours=s.check.timeout_hours,
                 gate=s.check.gate,
             )
+            flow["timeout_hours"] = s.check.timeout_hours
+            if s.check.on_timeout:
+                flow["on_timeout"] = s.check.on_timeout
             if s.check.skip_tag:
                 flow["skip_tag"] = s.check.skip_tag
             if s.check.kind:

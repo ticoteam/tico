@@ -240,7 +240,7 @@ def tico_item(release):
         "published_at": published,
         "summary": summary,
         "files": "",
-        "source_url": f"{REPO}/blob/v{version}/CHANGELOG.md",
+        "source_url": f"{REPO}/releases/tag/v{version}",
         "version_url": f"{REPO}/releases/tag/v{version}",
         "action": action,
         "reason": reason,

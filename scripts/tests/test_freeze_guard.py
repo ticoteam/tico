@@ -30,7 +30,6 @@ def repo(tmp_path, monkeypatch):
     write(
         path, "app/tests/test_worktrees.py", "".join(f"def test_step_{i}():\n    assert step({i})\n" for i in range(6))
     )
-    write(path, "CHANGELOG.md", "# Changelog\n")
     commit(path, "Start")
     return path
 
@@ -148,11 +147,9 @@ def test_each_merged_pr_needs_an_approval_of_its_final_head(repo):
     commit(repo, "D (#13)")
     write(repo, "app/e.py", "E = 1\n")
     commit(repo, "E (#14)")
-    # A direct push needs a receipt; release notes don't.
+    # A direct push needs a receipt.
     write(repo, "app/f.py", "F = 1\n")
     direct = commit(repo, "Hotfix straight on main")
-    write(repo, "CHANGELOG.md", "# Changelog\n## 1.1.0\n")
-    commit(repo, "Release 1.1.0")
 
     receipts = [
         {"pr": 10, "head": reviewed_10, "source": "ticket 10"},
@@ -205,7 +202,7 @@ def test_a_one_line_fix_and_a_fix_many_releases_old_are_named_when_reverted(repo
 def test_an_untagged_older_candidate_is_checked_against_the_release_before_it(repo):
     git(repo, "tag", "v1.0.0")
     git(repo, "checkout", "-q", "-b", "release-1.0.1", "v1.0.0")  # a release branch never merged back
-    write(repo, "CHANGELOG.md", "# Changelog\n## 1.0.1\n")
+    write(repo, "VERSION", "1.0.1\n")
     commit(repo, "Release 1.0.1")
     git(repo, "tag", "v1.0.1")
     git(repo, "checkout", "-q", "main")
