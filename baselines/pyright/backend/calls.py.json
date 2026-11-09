@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/calls.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 37,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 37,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

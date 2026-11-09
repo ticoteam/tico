@@ -42,6 +42,12 @@ a local server, with no Open link.
 - The Gateway is enrolled from an invite whoever runs the install puts in the environment, `TICO_GATEWAY_INVITE`; you
   never type it, and the installer never prints it. With one, the Gateway connects on Tico's first start; without one
   the install still runs, on your subscriptions, and says the Gateway is not set up.
+- A server Tico hosts can be finished by the owner's own coding agent with no one signed in. Whoever runs the install
+  puts a one-time setup secret in the environment, `TICO_SETUP_HANDOFF` (32 to 128 letters, digits, `-` and `_`); like
+  the Gateway invite it is never typed, never printed and never saved: the server gets only its sha256 as
+  `TICO_SETUP_HANDOFF_HASH`, and it needs the https domain and `TICO_OWNER_EMAIL`. Tico's team, which runs these installs,
+  passes the secret to the customer's agent, which trades it once for a personal token of the owner
+  ([Handed over from setup](connect-an-agent.md#handed-over-from-setup)). Without the variable, nothing changes.
 - If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
   Computers > Add computer**.
 - It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
@@ -103,8 +109,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Seven built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
-   Bookkeeper and Counsel. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Eight built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
+   Bookkeeper, Counsel and Brand Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -144,7 +150,7 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
    `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
 5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
-   press **Close task** at the top of the task (it is also in its **…** menu).
+   press **Close** at the top of the task (it is also in its **…** menu).
 
 Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
 Health issue.
@@ -410,7 +416,7 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 |---|---|---|
 | `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) and `TICO_OIDC_LABEL` (the provider's name: a signed-out browser then gets a page with one "Sign in with <label>" button instead of going straight to the provider) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. The setup wizard's `--auth oidc --issuer <url> --client-id <id>` takes any issuer, with the secret from `TICO_OIDC_CLIENT_SECRET` in the environment and `--signin-label` for the button. On a server Tico hosts (`--hosted`), the owner sign-in link below stays as break-glass beside it (`TICO_OWNER_LINK_HASH`): it never calls the issuer, so the owner gets in while the issuer is down, and people already signed in stay signed in. |
 | `cloudflare` | `TICO_ACCESS_ISSUER`, `TICO_ACCESS_AUDIENCE` | Cloudflare Access in front of the tunnel |
-| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. |
+| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. The same holds for the setup handoff: `TICO_SETUP_HANDOFF` in the installer's environment (Tico's team passes it) reaches the server only as its hash, `TICO_SETUP_HANDOFF_HASH`, and the owner's agent trades the secret once for a token ([connect-an-agent.md](connect-an-agent.md#handed-over-from-setup)). |
 | unset (or `none`) | nothing; leave `TICO_DOMAIN` unset | The quick start. The server answers on `http://127.0.0.1:8765` and the owner signs in with the token from `docker compose exec server cat /data/local-owner.token` (`Authorization: Bearer <token>`, or `GET /api/v2/local-signin?token=...`). With `TICO_DOMAIN` set, the server refuses to start. |
 
 The owner is the first human on the roster; add the others in the app. The wizard writes these settings; to change

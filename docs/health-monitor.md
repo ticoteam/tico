@@ -54,6 +54,15 @@ review status check instead of recommending a merge or move on. These clocks sta
 first observes the condition, survive repeated refreshes, and clear when it resolves. A new head starts a new
 review wait. Older links acquire a clock on their next sync; Health performs no extra GitHub polling.
 
+**Needs you plate** names each person whose Needs you count is over 10 items (the number the Tasks page's You tab
+shows): a warning over 10, bad over 25. It names the three bots asking most of that plate. An administrator sees
+everyone's plate; anyone else sees only their own. A plate of 10 or fewer shows nothing.
+
+**Dev board moving** names open Dev tickets (numbered tickets on the Dev tickets board) that a bot owns, where nothing
+has changed for over 24 hours and no run is live or queued on them. It is a warning, and bad at five or more. Each names
+the ticket, its step, its bot and the hours it has been idle. A ticket with a run live or queued is left out, and so is
+one that changed within the day.
+
 ## What it checks
 
 Check health runs the plain-code checks below and the Health page's own checks: the queue (Stuck bots), refused queue
@@ -107,6 +116,8 @@ The team rule `health_monitor_reports` (on by default; in Settings > General > H
 tickets without a Needs you card. When it is off, each report is an **Ask before reporting** approval that a person
 reads first, sent with `hub support send --approval <id>` once approved. A declined or withdrawn approval clears the
 report, so the next report of that problem asks again. `TICO_SUPPORT=off` turns reporting off with the rest of support.
+A copy run from source (version `dev`: a checkout, a test, the factory simulation) files nothing unless
+`TICO_HQ_URL` is set; Maintenance's run details say `source_copy`.
 
 ## On the Tico team's side
 

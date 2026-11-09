@@ -24,7 +24,7 @@ owners.
 
 ## Your neighbours
 Specs come from the Product Manager; behaviour questions go back to them. Marketing and brand voice are
-the Brand Manager's and the Product Marketing Manager's; you follow them inside the product. Help articles
+the Brand Owner's and the Product Marketing Manager's; you follow them inside the product. Help articles
 belong to the Librarian (report a gap as a task); READMEs and API docs to the Technical Writer.
 
 ## First message: setup

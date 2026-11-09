@@ -8,6 +8,8 @@ call also carries the result it just made, and a retry (the saved answer, or onc
 the action) reads the rest afresh through the caller's current view: a reason that names amounts shows only while that
 view still covers them."""
 
+import contextvars
+import json
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
@@ -18,7 +20,10 @@ from pydantic import Field
 from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
+from .finance import brief as finance_brief_mod
+from .finance import receipts as finance_receipts_mod
 from .finance import reads as finance_reads
+from .finance import subscriptions as finance_subscriptions
 from .models import ID, Contract
 from .store import Problem
 
@@ -48,7 +53,18 @@ Group = Literal[
 ]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal[
+    "pnl",
+    "pnl_by",
+    "balance_sheet",
+    "cash_flow",
+    "budget_vs_actual",
+    "ap_aging",
+    "ar_aging",
+    "spend_by",
+    "campaigns",
+    "subscriptions",
+]
 Metric = Literal[
     "cash",
     "burn",
@@ -63,6 +79,10 @@ Metric = Literal[
     "unreconciled_days",
     "duplicate_charges",
     "price_increases",
+    "unattributed",
+    "ad_spend",
+    "per_conversion",
+    "subscriptions_monthly",
 ]
 
 
@@ -88,6 +108,12 @@ class FinanceActionRequest(Contract):
     kind: str = Field(min_length=1, max_length=80)
     payload: dict[str, Any] = Field(default_factory=dict)
     dry_run: bool = False
+
+
+# The payload field of each action kind that names Library files to attach (backend/finance/documents.py).
+FILE_FIELDS = {"attach": "file_ids", "bill_create": "attachments", "bill_update": "attachments"}
+# Actions on a receipt act on the Library file the receipt holds: the asker must be able to read that file.
+RECEIPT_FILE_KINDS = ("receipt_read", "receipt_match")
 
 
 class FinanceBooksRequest(Contract):
@@ -130,17 +156,44 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
 
 
 def install(app, store, auth, mutate):
+    # The private-line audit a request has armed (spec §7.5): its reader, the private accounts that reader sees in full,
+    # and the ids the request names. `viewer` clears it at the start of every request, so it never outlives one.
+    armed: contextvars.ContextVar[tuple[str, tuple[str, ...], frozenset[str]] | None] = contextvars.ContextVar(
+        "finance_private_read", default=None
+    )
+
     def viewer(request):
         who = request.state.identity
         auth.domain(who)
+        armed.set(None)
         return who
+
+    def audited(result):
+        """`result`, after writing the armed audit when it carries a private line the reader sees in full: one row per
+        request, naming those lines alone. A request that names the line (a line's detail, a metric on it) reads it
+        too. Ids are UUIDs, so finding one in the result's text is exact."""
+        pending = armed.get()
+        if pending is None:
+            return result
+        actor, lines, named = pending
+        text = result if isinstance(result, str) else json.dumps(result, default=str)
+        found = [a for a in lines if a in named or a in text]
+        if found:
+            armed.set(None)
+            try:
+                with store.transaction() as c:
+                    finance.note_full_read(c, actor, found)
+            except finance.FinanceError as e:
+                raise problem(e) from None
+        return result
 
     def read(fn):
         try:
             with store.read() as c:
-                return fn(c)
+                result = fn(c)
         except finance.FinanceError as e:
             raise problem(e) from None
+        return audited(result)
 
     def record_export(actor, kind, year):
         """A CSV export is recorded in events for whoever it was made for (spec §7.5)."""
@@ -150,21 +203,22 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
-    def audit_private_read(actor):
-        """A request by someone other than the owner who reads private lines in full is written to events (spec §7.5),
-        once per request, whatever the route answers. The owner's own reads are not logged."""
+    def audit_private_read(request, actor):
+        """Arm the private-line audit (spec §7.5) for a reader other than the owner who sees private lines in full. The
+        row is written only when what the request returns carries one of those lines (`audited`): a read that touches
+        none writes nothing. The owner's own reads are not logged."""
         try:
             with store.read() as c:
                 lines = finance.full_read_lines(c, actor)
-            if lines:
-                with store.transaction() as c:
-                    finance.note_full_read(c, actor, lines)
         except finance.FinanceError as e:
             raise problem(e) from None
+        if lines:
+            named = frozenset(str(v) for v in (*request.path_params.values(), *request.query_params.values()))
+            armed.set((actor, tuple(lines), named))
 
     def as_viewer(request, view_as):
         """The caller, or for the owner the teammate they view Finance as (audited). A request by someone other than
-        the owner who reads private lines in full is written to events (spec §7.5), once per request."""
+        the owner that returns private lines in full is written to events (spec §7.5), once per request."""
         who = viewer(request)
         if not view_as or view_as == who.actor:
             actor = who.actor
@@ -175,7 +229,7 @@ def install(app, store, auth, mutate):
                     finance.note_view_as(c, who.actor, actor)
             except finance.FinanceError as e:
                 raise problem(e) from None
-        audit_private_read(actor)
+        audit_private_read(request, actor)
         return actor
 
     @app.get("/api/v2/finance/budgets")
@@ -190,6 +244,30 @@ def install(app, store, auth, mutate):
         `at` in the period holding that day: the amount of the version in effect then."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
+
+    @app.get("/api/v2/finance/subscriptions")
+    def finance_subscriptions_list(
+        request: Request,
+        status: Literal["suggested", "active", "ignored", "cancelled"] | None = None,
+        view_as: str | None = None,
+    ):
+        """The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each
+        with its cadence, expected amount, monthly cost, next charge, card, seats and attribution, and the monthly total of
+        the active ones. `status` narrows them."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_subscriptions.read(c, actor, status))
+
+    @app.get("/api/v2/finance/brief")
+    def finance_brief(request: Request, view_as: str | None = None):
+        """What changed in Finance for the caller: a few short lines about the money they may see (their budgets, their
+        team's, cash and burn where they see the company), with `as_of` when those numbers last moved and `changed_since`
+        the `as_of` before. Empty `lines` when there is nothing to say (backend/finance/brief.py)."""
+        actor = as_viewer(request, view_as)
+        try:
+            with store.transaction() as c:
+                return finance_brief_mod.brief(c, actor)
+        except finance.FinanceError as e:
+            raise problem(e) from None
 
     @app.get("/api/v2/finance/pnl")
     def finance_pnl(
@@ -314,7 +392,7 @@ def install(app, store, auth, mutate):
         """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
         sees sources. The ordinary trigger routes never show these bodies."""
         who = viewer(request)
-        audit_private_read(who.actor)
+        audit_private_read(request, who.actor)
         return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
 
     @app.get("/api/v2/finance/access")
@@ -397,6 +475,27 @@ def install(app, store, auth, mutate):
         """Finance gate rules for teammates who may write them; `external_rule_id` lists those linked to one."""
         who = viewer(request)
         return read(lambda c: finance_reads.rules(c, who.actor, external_rule_id=external_rule_id))
+
+    @app.get("/api/v2/finance/attribution-rules")
+    def finance_attribution_rules(request: Request):
+        """The book's attribution rules (vendor, P&L account or money account, and their shares); needs the attribution
+        right or admin."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.attribution_rules(c, who.actor))
+
+    @app.get("/api/v2/finance/attribution/dimensions")
+    def finance_attribution_dimensions(request: Request):
+        """The classes, locations and projects on the P&L lines of the last 12 months, with their rules; needs the
+        attribution right or admin."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.attribution_dimensions(c, who.actor))
+
+    @app.get("/api/v2/finance/lines/{line_id}/attribution")
+    def finance_line_attribution(request: Request, line_id: str, view_as: str | None = None):
+        """One posted P&L line's attribution: the shares in force, their amounts and the line's history, as far as the
+        caller sees the line. The owner may pass view_as."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.line_attribution(c, actor, line_id))
 
     @app.get("/api/v2/finance/bills")
     def finance_bills(
@@ -747,6 +846,9 @@ def install(app, store, auth, mutate):
             "po",
             "estimate",
             "account",
+            "vendor",
+            "campaign",
+            "subscription",
         ]
         | None = None,
         q: str = Query("", max_length=100),
@@ -761,6 +863,7 @@ def install(app, store, auth, mutate):
         contact_kind: Literal["vendor", "customer", "both"] | None = None,
         active: bool | None = None,
         rule_kind: Literal["gate", "posting"] | None = None,
+        month: str | None = Query(None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
         cursor: str | None = Query(None, max_length=600),
         limit: int = Query(50, ge=1, le=200),
         view_as: str | None = None,
@@ -777,6 +880,7 @@ def install(app, store, auth, mutate):
             "start": start,
             "end": end,
             "aging": aging,
+            "month": month,
             "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
             "active": None if active is None else ("1" if active else "0"),
         }
@@ -817,12 +921,26 @@ def install(app, store, auth, mutate):
             )
         )
 
+    @app.get("/api/v2/finance/unattributed")
+    def finance_unattributed(
+        request: Request,
+        start: str | None = Query(None, pattern=DAY),
+        end: str | None = Query(None, pattern=DAY),
+        cursor: str | None = Query(None, max_length=600),
+        limit: int = Query(50, ge=1, le=200),
+        view_as: str | None = None,
+    ):
+        """The Unattributed queue (backend/finance/visible.py's rule, cut to the caller): the P&L lines in the period
+        (this month by default) with no team, no teammate and no attribution in force, newest first, paged by cursor."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.unattributed(c, actor, start=start, end=end, cursor=cursor, limit=limit))
+
     @app.get("/api/v2/finance/close/{month}")
     def finance_close(request: Request, month: str, top_n: int = Query(20, ge=1, le=200)):
         """A month's close checklist, for teammates who do the books. The money accounts still behind are listed up to
         `top_n`; the rest fold into "Other · n"."""
         who = viewer(request)
-        audit_private_read(who.actor)
+        audit_private_read(request, who.actor)
         return read(lambda c: finance_reads.close_checklist(c, who.actor, month, top_n=top_n))
 
     @app.get("/api/v2/finance/action-kinds")
@@ -1030,19 +1148,57 @@ def install(app, store, auth, mutate):
             )
         )
 
+    @app.get("/api/v2/finance/receipts")
+    def finance_receipts(
+        request: Request,
+        status: Literal["unread", "suggested", "unmatched", "attached", "rejected"] | None = None,
+        cursor: str | None = Query(None, max_length=600),
+        limit: int = Query(50, ge=1, le=200),
+        view_as: str | None = None,
+    ):
+        """Receipts the caller sees, newest first: the file, what it reads as (amount, date, vendor), and its suggested or
+        filed match. A cursor pages them; a status narrows them."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_receipts_mod.read(c, actor, status=status, cursor=cursor, limit=limit))
+
+    def readable_files(request, who, body):
+        """The Library files an action files (attach's `file_ids`, a bill's `attachments`) must exist and be ones the
+        asker may read (files.file_visible, the check every file read makes), before anything is attached: Finance's
+        own records hold only the ids. A deleted file is gone. The refusal names the first id that fails."""
+        field = FILE_FIELDS.get(body.kind)
+        ids = body.payload.get(field) if field else None
+        if body.kind in RECEIPT_FILE_KINDS:
+            rid = body.payload.get("receipt_id")
+            with store.read() as c:
+                held = finance_receipts_mod.file_of(c, rid) if isinstance(rid, str) else None
+            ids = [held] if held else []
+        if not isinstance(ids, list):
+            return  # absent or malformed: the action's own checks answer
+        files, cache = request.app.state.files, {}
+        with store.read() as c:
+            for fid in ids:
+                if not isinstance(fid, str):
+                    continue
+                row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+                if row is None or row["state"] == "deleted" or not files.visible(c, who, row, cache):
+                    raise Problem("not_found", f"No such file in the Library: {fid[:80]}", 404)
+
     @app.post("/api/v2/finance/actions")
     def finance_act(request: Request, body: FinanceActionRequest):
         """Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key
-        is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen."""
+        is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen. Files it
+        attaches must be Library files the asker may read."""
         who = viewer(request)
-        audit_private_read(who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
+        readable_files(request, who, body)
+        audit_private_read(request, who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
         key = (request.headers.get("idempotency-key") or "").strip()
         if body.dry_run:
             try:
                 with store.transaction() as c:
-                    return finance.act(c, who.actor, body.kind, body.payload, key or "dry-run", dry_run=True).as_dict()
+                    tried = finance.act(c, who.actor, body.kind, body.payload, key or "dry-run", dry_run=True).as_dict()
             except finance.FinanceError as e:
                 raise problem(e) from None
+            return audited(tried)
         first = {}
 
         def work(c):
@@ -1061,30 +1217,32 @@ def install(app, store, auth, mutate):
             finance.banking_ring()  # after the commit: the worker syncs it now
         done = first.get("result")
         if done is not None and not done.replayed and done.action_id == saved.get("action_id"):
-            return {
-                **saved,
-                "code": done.code,
-                "reason": done.reason,
-                "approval_id": done.approval_id,
-                "approver": done.approver,
-                "rule": done.rule,
-                "result": dict(done.result),
-                "impact": dict(done.impact),
-            }
+            return audited(
+                {
+                    **saved,
+                    "code": done.code,
+                    "reason": done.reason,
+                    "approval_id": done.approval_id,
+                    "approver": done.approver,
+                    "rule": done.rule,
+                    "result": dict(done.result),
+                    "impact": dict(done.impact),
+                }
+            )
         if not saved.get("action_id"):
-            return saved
+            return audited(saved)
         with store.read() as c:
             now = finance_reads.action_for(c, who.actor, saved["action_id"])
-        return {**saved, **now} if now else saved
+        return audited({**saved, **now} if now else saved)
 
     @app.get("/api/v2/finance/actions/{action_id}")
     def finance_action(request: Request, action_id: ID):
         """An action's status, for whoever asked for it, the person named to decide its approval, or whoever's current
         view covers what it is about. Its reason shows to the approver, and to others only while their view covers it."""
         who = viewer(request)
-        audit_private_read(who.actor)
+        audit_private_read(request, who.actor)
         with store.read() as c:
             found = finance_reads.action_for(c, who.actor, action_id)
         if found is None:
             raise Problem("not_found", "No such Finance action", 404)
-        return found
+        return audited(found)

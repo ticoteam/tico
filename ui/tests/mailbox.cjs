@@ -1,4 +1,4 @@
-// Offline browser regression: one Google mailbox's page under Tools (ui/app/inboxes-email.js,
+// Offline browser regression: one Google mailbox's page under Tools (ui/app/inboxes-email.ts,
 // #/tools/mailbox/<id>) over a fake GET /v2/mailboxes/<id> (ui/tests/support/mailboxes-fake.cjs). Whoever
 // manages it (an admin for a shared inbox, the owner for a personal mailbox) adds access, switches Read / Read and write
 // and removes it; the implicit row (Admins, or the owner) has no controls. Automations switch on and off from here.

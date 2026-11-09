@@ -69,10 +69,13 @@ EMPTY_ANSWERS = {
     "software_product": "",
     "departments": [],
     "briefings": {},
+    # Where the company serves (a company file's company.regions); [] is none given.
+    "regions": [],
 }
 ANSWER_LABELS = (
     ("building", "What we're building"),
     ("what_we_do", "What we do"),
+    ("regions", "Serves"),
     ("customers", "Customers"),
     ("team_size", "Team size"),
     ("work_arrives", "Work arrives by"),
@@ -335,6 +338,11 @@ def load(c):
     }
 
 
+def regions(c):
+    """Where the company serves (a company file's company.regions, or the setup page's): [] when none is given."""
+    return list(load(c)["answers"].get("regions") or [])
+
+
 def display_names(settings, record):
     """The environment's configured names, with whatever onboarding saved on top."""
     configured = {
@@ -423,7 +431,7 @@ def config_view(c, settings, who=None):
         value["visual_files"] = "" if settings.visual_origin else tico_storage.visual_address(c)[0]
     value["in_docker"] = running_in_docker()  # the first run offers a Linux computer first when the server is one
     value["version"] = releases.version()
-    value["ui_build"] = ui_bundle.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.js)
+    value["ui_build"] = ui_bundle.build_id(settings.ui_dir)  # an open page compares it with its own (ui/app/notices.ts)
     value["update"] = hosted_updates.notice(c, settings)  # with the release Tico support scheduled, if any
     if who is not None and who.role in ("owner", "human"):
         value["changelog"] = changelog.summary(c, settings, who.actor)
@@ -433,7 +441,7 @@ def config_view(c, settings, who=None):
     value["support_on"] = support_asks.support_on(settings)  # the page hides "Want help setting up?" without it
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
-    value["beta"] = beta.listing()  # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
+    value["beta"] = beta.listing()  # the Beta pill and Help's Beta list (ui/app/state.ts betaPill)
     from . import update_feeds
 
     value["update_feeds"] = update_feeds.status()  # what Subscribe to updates can send (settings-bot-editor.js)
@@ -444,7 +452,10 @@ def _answer_lines(answers):
     lines = []
     for key, label in ANSWER_LABELS:
         value = answers.get(key)
-        text = ", ".join(str(item) for item in value) if isinstance(value, list) else str(value or "")
+        if key == "regions" and not value:
+            continue  # a team that names no places gets the setup text it always had
+        joiner = "; " if key == "regions" else ", "  # places are free text, so they are split by a semicolon
+        text = joiner.join(str(item) for item in value) if isinstance(value, list) else str(value or "")
         lines.append("- " + label + ": " + (text or "not answered"))
     # What the owner said about each department in the org builder, so a bot starts from their own words.
     for department, text in (answers.get("briefings") or {}).items():
@@ -701,6 +712,8 @@ class Onboarding:
             if "building" in body.answers.model_fields_set
             else record["answers"].get("building") or ""
         )
+        if "regions" not in body.answers.model_fields_set:  # a client that never asks keeps where the company serves
+            answers["regions"] = record["answers"].get("regions") or []
         if (
             not names["website"]
             and not answers["building"]
@@ -850,7 +863,7 @@ class Onboarding:
                 who,
                 LIBRARIAN,
                 GS._market_title(c, "bot:" + LIBRARIAN, who.actor),
-                LS.market_text(answers),
+                LS.market_text(answers, record["answers"].get("regions") or []),
             )
         except (H.Refused, Problem):
             c.execute("ROLLBACK TO setup_market_task")
@@ -950,6 +963,7 @@ class Onboarding:
                     "onboarding_state": row["onboarding_state"] or "",
                     "stage": lifecycle.ACTIVE,
                     "changed": False,
+                    "routine": self._arm_built_in_starter(c, who, slug),
                 }
             return {
                 **lifecycle.ready(c, who, slug, summary),
@@ -969,6 +983,7 @@ class Onboarding:
                 "onboarding_state": row["onboarding_state"] or "",
                 "stage": lifecycle.ACTIVE,
                 "changed": False,
+                "routine": self._arm_built_in_starter(c, who, slug),
             }
         if self.auth.member_bot(c, slug):
             limit = Access.load_access(c, self.settings)["member_bot_limit"]
@@ -995,6 +1010,16 @@ class Onboarding:
             "changed": True,
             "routine": routine,
         }
+
+    def _arm_built_in_starter(self, c, who, slug):
+        """A starter card that is also built in (`bootstrap`, the Brand Owner) is never parked, so no Start setup arms its
+        first routine: its setup-done does, once (`arm_first_routine`; one a person turned off stays off). Its routine
+        stays off until then, so it runs only once the setup it needs (the brand book) exists. Returns the key or None."""
+        template = self._declared(c, slug).get("template")
+        card = next((card for card in read_cards(self.settings) if card["template"] == template), None)
+        if not template or not card or not (card.get("bootstrap") and card.get("starter")):
+            return None
+        return self.arm_first_routine(c, who, slug)
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""
@@ -1121,6 +1146,13 @@ class Onboarding:
         was built in gets it once it can run it, and it is outside the org chart."""
         return self._ensure_builtin(c, H.COUNSEL, "Counsel", "counsel.turned_on")
 
+    def ensure_brand_owner(self, c):
+        """The same for the Brand Owner: a company from before it was built in gets it once it can run it. It sits outside
+        the org chart like the other built-ins. A company that already hired a bot
+        under its slug (a Brand Manager) keeps that bot as it is and gets no second one (`_ensure_builtin`). Its monthly
+        audit starts off and goes on when its setup is done (`onboarded`)."""
+        return self._ensure_builtin(c, H.BRAND_OWNER, "Brand Owner", "brand_owner.turned_on")
+
     def turn_on_task_manager(self, c, who):
         """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
         keeps running either way, but the tasks it opens need the bot to be active)."""
@@ -1130,6 +1162,10 @@ class Onboarding:
         if not load(c)["completed"] or not providers.configured(providers.load(c, self.settings)):
             return None
         if not c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL").fetchone():
+            return None
+        found = H.resolve_bot(c, slug)
+        if found and found["id"] != slug:
+            # The company's own bot answers to this slug (one hired before it was built in): it stays theirs.
             return None
         row = H.bot(c, slug)
         if row and (
@@ -1369,6 +1405,7 @@ class Onboarding:
 
         bookkeeper.ensure(c, self, self.auth)
         self.ensure_counsel(c)
+        self.ensure_brand_owner(c)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         return branches + placed

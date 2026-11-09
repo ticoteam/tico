@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/server.py": [
+            {
+                "code": "reportOptionalIterable",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 34,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -14,7 +14,7 @@ What a beat did is stored small (migration 20261106094503_heartbeat): each beat 
 (also the server's liveness, `liveness`); a `heartbeat_beats` row only for a beat where a step did something or failed
 (repeated failures fold); a step's `heartbeat_steps` row only when it did something, failed, changed its result or is
 timed from its last run, else every 5 minutes, its counts kept in memory between (`_Memory`). The Heartbeat is one System job (system_routines.JOBS `heartbeat`): one run per beat,
-quiet repeats folded. Its screen is ui/app/automations-heartbeat.js (GET/PUT /api/v2/heartbeat)."""
+quiet repeats folded. Its screen is ui/app/automations-heartbeat.ts (GET/PUT /api/v2/heartbeat)."""
 
 import json
 import logging
@@ -146,6 +146,7 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
         flush_wakes,
         reconcile_worktree_prs,
         refresh_deployed_tasks,
+        refresh_conflicts,
         refresh_pending_checks,
         refresh_queue_removals,
     )
@@ -157,6 +158,8 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     refresh_pending_checks(github_app)
     # A merge-queue removal that was not a merge is read afresh before its owner is woken (github.refresh_queue_removals).
     refresh_queue_removals(github_app)
+    # An open pull request's conflict with a moved base sends no event: read the unknown and stale ones (github.refresh_conflicts).
+    refresh_conflicts(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
     reconcile_worktree_prs(github_app)
     # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
@@ -167,6 +170,11 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     from . import move_retry
 
     move_retry.tick(github_app)
+    # A merged Dev ticket's review page: built, published on the ticket, and its link written to the pull request.
+    from . import review_pages
+
+    if ctx.app is not None:
+        review_pages.tick(github_app, pages=ctx.app.state.pages, blobs=ctx.app.state.blobs, paced=True)
     # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
     from . import task_blocked
 
@@ -199,6 +207,17 @@ def repository_waits(ctx: Context) -> tuple[str, bool]:
 
     setup_stuck.tick(ctx.store)
     return "Done", True
+
+
+def entity_links(ctx: Context) -> tuple[str | None, bool]:
+    # The Directory's linker (backend/entities/linker.py) reads the texts written since its cursors and writes their
+    # mentions in one short transaction of its own, so no text's write waits for it.
+    from .entities import linker
+
+    done = linker.run_pass(ctx.store, lambda: ctx.locked("entity_links"))
+    if not done["texts"]:
+        return None, True
+    return f"Linked {done['texts']} texts", False
 
 
 def call_sweeps(ctx: Context) -> tuple[str, bool]:
@@ -300,6 +319,15 @@ STEPS = [
     Step("approval_expiry", "Approval expiry", "due", HOUR, S.step_approval_expiry, failure="approval_expiry"),
     Step(
         "repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True
+    ),
+    Step(
+        "entity_links",
+        "Directory links",
+        "recovery",
+        None,
+        entity_links,
+        failure="entity_links",
+        capture="entity_links",
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),

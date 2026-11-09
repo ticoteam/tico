@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Rehearse Tico Finance's bot tools and rules on a local stack with simulated services.
 
-The eight checks drive the spec's bot tools (section 7.1: the seven `hub_finance_*` tools, on the hub's MCP endpoint and
-on the local stdio MCP, plus the `hub finance` CLI) against a running demo and the fake Mercury. This is a rehearsal,
+The eight checks drive the spec's bot tools (section 7.1: the six offered `hub_finance_*` tools, on the hub's MCP endpoint
+and on the local stdio MCP, plus the `hub finance` CLI) against a running demo and the fake Mercury. This is a rehearsal,
 not the proof: real Mercury credentials are never used, and a pass here does not show that the real bank run works.
 Exit 0 only when every check passes.
 
@@ -82,8 +82,9 @@ SPEC_KINDS = (
     "account_create",
     "account_update",
 )
-# spec 7.1: the seven tools. The CLI subcommand is the tool name without `hub_finance_`, with dashes.
-SPEC_TOOLS = ("search", "report", "metric", "act", "action", "inbox", "card-fill")
+# spec 7.1: the tools offered (card fill is unlisted: hubtools.UNLISTED). The CLI subcommand is the tool name without
+# `hub_finance_`, with dashes.
+SPEC_TOOLS = ("search", "report", "metric", "act", "action", "inbox")
 RIGHTS = ("finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards")
 # business tables a refused or retried action must not change (counted, read-only)
 BUSINESS = ("entries", "bills", "payments", "cards", "contacts", "recipients", "budgets")
@@ -666,8 +667,8 @@ def check1_surface(d, run, fx):
     hub_names = sorted(t["name"] for t in hub if t["name"].startswith("hub_finance_"))
     local_names = sorted(t["name"] for t in local if t["name"].startswith("hub_finance_"))
     run.check(
-        "the hub's MCP and the local MCP together list the seven hub_finance_* tools (card fill is local, spec 7.1)",
-        sorted(set(hub_names) | set(local_names)) == spec_names and set(local_names) == set(spec_names),
+        "the hub's MCP and the local MCP each list the six hub_finance_* tools and not card fill (spec 7.1)",
+        hub_names == spec_names and local_names == spec_names,
         {"hub": hub_names, "local": local_names},
     )
     replies = d.local_mcp(
@@ -686,7 +687,7 @@ def check1_surface(d, run, fx):
     )
     text = json.dumps(replies[1]) if len(replies) > 1 else ""
     run.check(
-        "card fill on the local MCP is refused as not available yet (spec 8.3)",
+        "card fill, called by name on the local MCP, is refused as not available yet (spec 8.3)",
         "not_available" in text or "not available" in text.lower(),
         text[:200],
     )
@@ -700,7 +701,7 @@ def check1_surface(d, run, fx):
     )
     shown = helptext.stdout + helptext.stderr
     run.check(
-        "the CLI `finance` command lists all seven subcommands",
+        "the CLI `finance` command lists all six subcommands",
         all(f" {s} " in shown or f"{{{s}" in shown or f",{s}" in shown or f" {s}," in shown for s in SPEC_TOOLS),
         shown[:300],
     )

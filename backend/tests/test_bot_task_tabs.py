@@ -11,7 +11,7 @@ from backend.tests.hold_rows import set_holds
 
 ACTIVE = ["open", "doing", "waiting"]
 OTHERS = {
-    "name": "Assigned to Others",
+    "name": "Assigned to others",
     "show_count": True,
     "conditions": [
         {"field": "asked_by", "value": "this_bot"},
@@ -20,7 +20,7 @@ OTHERS = {
     ],
 }
 DEFAULT = [
-    {"builtin": "needs", "name": "Needs You", "show_count": True},
+    {"builtin": "needs", "name": "Needs you", "show_count": True},
     {"builtin": "active", "name": "Doing", "show_count": True},
     {"builtin": "blocked", "name": "Blocked", "show_count": True},
     OTHERS,
@@ -262,9 +262,9 @@ def test_me_and_others_are_the_person_looking(api):
     ):
         seen = shown(api, "ops", token)
         assert seen["Mine"] == (len(me), me), token
-        assert seen["Assigned to Others"] == (len(others), others), token
+        assert seen["Assigned to others"] == (len(others), others), token
     # Ana is neither: everything ops asked of someone else is "others" to her.
-    assert shown(api, "ops")["Assigned to Others"] == (3, ["For Ben", "For Cara", "For cpo"])
+    assert shown(api, "ops")["Assigned to others"] == (3, ["For Ben", "For Cara", "For cpo"])
     assert shown(api, "ops")["Mine"] == (0, [])
 
 
@@ -346,7 +346,7 @@ def test_each_field_filters(api):
 def test_a_layout_saved_before_filters_had_rows_keeps_working(api):
     # Rows stored by Task-list tabs 2/3: a filter of types, states and whom it waits on, and no widgets column value.
     old = [
-        {"builtin": "done", "name": "Done Recently"},
+        {"builtin": "done", "name": "Done recently"},
         {"builtin": "active", "name": "Doing"},
         {"name": "Waiting on bots", "types": [], "states": ["waiting"], "waiting_on": "bot"},
         {"name": "Product", "types": ["general"], "states": ["open", "doing"], "waiting_on": ""},
@@ -360,8 +360,8 @@ def test_a_layout_saved_before_filters_had_rows_keeps_working(api):
     bot_wait(api, "Asked of cpo, waiting", "bot:cpo", "bot:ops", prerequisite_owner="bot:finance")
     layout = tabs(api, "ops")
     assert layout["saved"] is True and layout["widgets"] == WIDGETS
-    assert [t["name"] for t in layout["tabs"]] == ["Done Recently", "Doing", "Waiting on bots", "Product"]
-    assert layout["tabs"][0] == {"builtin": "done", "name": "Done Recently", "show_count": True}
+    assert [t["name"] for t in layout["tabs"]] == ["Done recently", "Doing", "Waiting on bots", "Product"]
+    assert layout["tabs"][0] == {"builtin": "done", "name": "Done recently", "show_count": True}
     assert layout["tabs"][2]["conditions"] == [
         {"field": "assigned_to", "value": "this_bot"},
         {"field": "status", "value": ["waiting"]},
@@ -388,7 +388,7 @@ def test_default_filters_are_disjoint_and_viewer_relative(api):
     seen = shown(api, "ops")
     assert seen["Doing"] == (2, ["Doing", "Open"])
     assert seen["Blocked"] == (2, ["Unspecified wait", "Waits on bot"])
-    assert seen["Needs You"] == (2, ["Viewer owns open", "Waits on Ana"])
+    assert seen["Needs you"] == (2, ["Viewer owns open", "Waits on Ana"])
     assert shown(api, "ops", "ben-test")["Blocked"] == (3, ["Unspecified wait", "Waits on Ana", "Waits on bot"])
 
 
@@ -471,15 +471,15 @@ def test_needs_condition_can_be_removed_changed_and_restored(api):
     task(api, "Mine", "human:ana", "bot:ops", status="open")
     task(api, "Wait on viewer", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
     task(api, "Bot work", "bot:ops", "human:ana", status="doing")
-    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])
+    assert shown(api, "ops")["Needs you"] == (2, ["Mine", "Wait on viewer"])
     changed = {**DEFAULT[0], "conditions": [{"field": "status", "value": ["doing"]}]}
     save(api, "ops", [changed])
     assert tabs(api, "ops")["tabs"] == [changed]
-    assert shown(api, "ops")["Needs You"] == (1, ["Bot work"])
+    assert shown(api, "ops")["Needs you"] == (1, ["Bot work"])
     save(api, "ops", [{**DEFAULT[0], "conditions": []}])
-    assert shown(api, "ops")["Needs You"] == (3, ["Bot work", "Mine", "Wait on viewer"])
+    assert shown(api, "ops")["Needs you"] == (3, ["Bot work", "Mine", "Wait on viewer"])
     save(api, "ops", [DEFAULT[0]])
-    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])
+    assert shown(api, "ops")["Needs you"] == (2, ["Mine", "Wait on viewer"])
 
 
 def test_bot_filter_finds_an_api_saved_wait_and_drops_it_on_resolution(api):
