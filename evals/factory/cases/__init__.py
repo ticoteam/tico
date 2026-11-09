@@ -55,3 +55,9 @@ SCENARIOS += _pipeline_review
 from .pipeline_manager import SCENARIOS as _pipeline_manager
 
 SCENARIOS += _pipeline_manager
+from .pipeline_marketing import SCENARIOS as _pipeline_marketing
+
+SCENARIOS += _pipeline_marketing
+from .pipeline_handoff import SCENARIOS as _pipeline_handoff
+
+SCENARIOS += _pipeline_handoff
