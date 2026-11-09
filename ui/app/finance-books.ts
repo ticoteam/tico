@@ -282,7 +282,7 @@ function finCardSavedWire(c: FinCard, rail: HTMLElement): void {
 async function finCardAdd(): Promise<void> {
   const [b, u] = await Promise.allSettled([get<FinBudRead>('/v2/finance/budgets', {fresh: true}), get<import('../types/api').FinanceMercuryUsers>('/v2/finance/mercury-users', {fresh: true})]);
   const budgets = b.status === 'fulfilled' ? b.value?.budgets || [] : [], users = u.status === 'fulfilled' ? u.value?.users || [] : [];
-  const people: FinAccess['teammates'] = FIN?.acc?.teammates || [];
+  const people: FinAccess['teammates'] = finNeed(FIN, 'the Finance page').acc?.teammates || [];
   finDialog('Card', `<label>Holder<select name="holder" required>${people.map(t => `<option value="${esc(t.teammate)}">${esc(finWho(t.teammate))}</option>`).join('')}</select></label>
     <label>Budget<select name="budget" required>${budgets.filter(b => b.active && !b.catch_all).map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}</select></label>
     <label>Limit / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>

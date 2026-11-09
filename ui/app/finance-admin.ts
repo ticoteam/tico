@@ -485,7 +485,7 @@ function finDefaultLabel(row: FinAccMate) {
 }
 const finDefaultCls = (row: FinAccMate) => finAsker(row) ? 'own' : {everything: 'all', team_expenses: 'mgr', own_expenses: 'own', none: 'none'}[row.default] || 'own';
 function finLineNames(ids: string[]) {
-  const rows = [...(FIN_PNL.last?.rows || []), ...(FIN?.accLines?.pnl || []), ...(FIN?.accLines?.bs || [])];
+  const rows = [...(FIN_PNL.last?.rows || []), ...(finNeed(FIN, 'the Finance page').accLines?.pnl || []), ...(finNeed(FIN, 'the Finance page').accLines?.bs || [])];
   return (ids || []).map(id => rows.find(r => r.account_id === id)?.name || 'A line').join(', ');
 }
 function finGrantLabel(g: FinGrant) {
