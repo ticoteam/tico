@@ -553,6 +553,7 @@ KEEP = (
             "storage_moves",
             "strategy_bets",
             "strategy_versions",
+            "stuck_spells",
             "system_runs",
             "tags",
             "task_assets",

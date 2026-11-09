@@ -54,6 +54,7 @@ TABLES = {
     rows.PresenceRow: "presences",
     rows.TaskCheckBackWakeRow: "task_check_back_wakes",
     rows.TaskHoldRow: "task_holds",
+    rows.StuckSpellRow: "stuck_spells",
     rows.QuarantineHoldRow: "quarantine_holds",
     rows.MaintenanceStepRow: "maintenance_steps",
     rows.MaintenanceRunRow: "maintenance_runs",
