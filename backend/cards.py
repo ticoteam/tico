@@ -449,7 +449,7 @@ def thread_rows(ctx, limit):
             rows.append(
                 {
                     "id": t["id"],
-                    "title": t.get("title") or "",
+                    "title": t.get("name") or t.get("title") or "",
                     "unread": int(me.get("unread") or 0),
                     "activity": bool(me.get("activity")),
                     "updated_at": t.get("last_message_at"),
