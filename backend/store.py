@@ -16,7 +16,6 @@ import orjson
 import yaml
 
 from . import bot_settings as BS
-from . import goals as G
 from . import hubdb as H
 from . import idempotency_messages
 from . import message_links
@@ -70,7 +69,7 @@ CREATE INDEX IF NOT EXISTS settings_changes_bot_id ON settings_changes(bot,creat
 CREATE TABLE IF NOT EXISTS session_epochs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), epoch INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
 -- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
--- (clients/sessions.py), so one chat's Clear must reach the next turn of any of them.
+-- (the sessions client), so one chat's Clear must reach the next turn of any of them.
 CREATE TABLE IF NOT EXISTS bot_session_epochs(
  bot TEXT PRIMARY KEY REFERENCES bots(id), epoch INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
 -- Current provider thread for one bot+runtime+model. Local files hold the real
@@ -86,7 +85,7 @@ CREATE TABLE IF NOT EXISTS agents(
  created_at TEXT NOT NULL, created_by TEXT NOT NULL, last_seen_at TEXT, version TEXT, platform TEXT,
  model TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT '',
  detail TEXT NOT NULL DEFAULT '', revoked_at TEXT, revoked_by TEXT);
--- A Hermes profile asking to be connected to a bot (backend/agents.py): the code a person
+-- A Hermes profile asking to be connected to a bot (the agents module): the code a person
 -- reads out, the hash of the secret only the profile knows, the public key that secret derives
 -- (token_key), and, from approval until the profile collects it once, the minted credential
 -- sealed to that key: only the profile's secret opens it.
@@ -111,7 +110,7 @@ CREATE TABLE IF NOT EXISTS model_login_cleared(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
  cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, clear_key INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(runner_id,runtime,profile));
--- A model key stored in the vault for one computer (backend/computer_keys.py): staged until the computer checks it.
+-- A model key stored in the vault for one computer (the computer keys module): staged until the computer checks it.
 CREATE TABLE IF NOT EXISTS computer_keys(
  credential_id TEXT PRIMARY KEY REFERENCES credentials(id), runner_id TEXT NOT NULL REFERENCES runners(id),
  runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
@@ -136,7 +135,7 @@ CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
  last_used_at TEXT, expires_at TEXT, revoked_at TEXT);
--- OAuth sign-in for the MCP server (backend/mcp_oauth.py): registered agents, and each person's approval of one,
+-- OAuth sign-in for the MCP server (the MCP OAuth module): registered agents, and each person's approval of one,
 -- which ends in a human_tokens row whose secret a refresh rotates in place.
 CREATE TABLE IF NOT EXISTS oauth_clients(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -145,7 +144,7 @@ CREATE TABLE IF NOT EXISTS oauth_grants(
  redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, state TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
  code_hash TEXT UNIQUE, code_expires_at TEXT, token_id TEXT REFERENCES human_tokens(id),
  refresh_hash TEXT UNIQUE, refresh_expires_at TEXT, denied_at TEXT);
--- Service keys (backend/service_keys.py): another system's credential for a few routes (its scope), as a
+-- Service keys (the service keys module): another system's credential for a few routes (its scope), as a
 -- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
@@ -209,9 +208,9 @@ CREATE TABLE IF NOT EXISTS attempt_conversations(
 CREATE TABLE IF NOT EXISTS attempt_inputs(
  attempt_id TEXT NOT NULL REFERENCES attempts(id), message_id TEXT PRIMARY KEY REFERENCES messages(id),
  acked_at TEXT);
--- A run's inputs by run (backend/task_privacy.py attempt_tasks): without it each lookup scanned every message.
+-- A run's inputs by run (task privacy: attempt_tasks): without it each lookup scanned every message.
 CREATE INDEX IF NOT EXISTS attempt_inputs_attempt ON attempt_inputs(attempt_id);
--- A run's raw provider stream for a bot with `capture_stream` on, kept a week (backend/stream_capture.py).
+-- A run's raw provider stream for a bot with `capture_stream` on, kept a week (the stream capture module).
 CREATE TABLE IF NOT EXISTS attempt_captures(
  attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), bot TEXT NOT NULL, provider TEXT NOT NULL,
  frames TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, dropped_bytes INTEGER NOT NULL DEFAULT 0,
@@ -221,7 +220,7 @@ CREATE INDEX IF NOT EXISTS attempt_captures_created ON attempt_captures(created_
 CREATE TABLE IF NOT EXISTS attempt_capture_drops(attempt_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
 -- One table for the request cache (binding NULL: a saved answer, swept after IDEMPOTENCY_RETENTION_HOURS) and the
 -- retained operation bindings (binding names the operation; never swept). docs/status-and-state.md has the states.
--- Migration 0050_idempotency_one_table.py builds this same table, with its indexes, on every file (test_migrations
+-- Migration 0050 (idempotency, one table) builds this same table, with its indexes, on every file (test_migrations
 -- checks the two match), so this statement only declares it.
 CREATE TABLE IF NOT EXISTS idempotency(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
@@ -2610,6 +2609,8 @@ class Store:
             document = yaml.safe_load(path.read_text()) or {}
         except yaml.YAMLError:
             return []
+        from . import goals as G  # local: keeps goals out of the selector's fan-in
+
         added = G.seed(c, document, lambda owner: H.resolve_actor(c, owner))
         from . import market as Market
 

@@ -26,7 +26,6 @@ from . import app_delivery, login_holds, providers, runner_versions, runs
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch
 from pathlib import Path
 
 from . import read_cache, roster_clock
@@ -51,6 +50,15 @@ MIN_RUNNER_VERSION = (0, 2, 0)
 DOC_BOT = "doc-updater"  # the documentation agent: docs questions and doc PR reviews
 # the Strategy Bot (backend/strategy_bot.py SLUG): of people, only the owner chats with it
 STRATEGY_BOT = "goal-manager"
+
+
+def __getattr__(name):
+    # local: keeps execution out of the selector's fan-in; app.py reads views.AWAKE_GAP
+    if name == "AWAKE_GAP":
+        from .execution import AWAKE_GAP
+
+        return AWAKE_GAP
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def runner_version_supported(value):
@@ -515,6 +523,8 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
         "private" if threads.private_task_thread(c, room) else threads.audience_class(room),
     )
     if key in (sessions.BOT_THREAD, sessions.PUBLIC_THREAD):
+        from .execution import bump_bot_session_epoch  # local: keeps execution out of the selector's fan-in
+
         bump_bot_session_epoch(c, bot)
     H.event(c, actor, "session.clear", conversation_id, detail)
     # A new session is said in the task's history: a task room's own, or the task of the run that failed (run_triggers).
@@ -601,6 +611,7 @@ def prime_machines(c, slugs):
 
 def machine(c, bot):
     from .agents import presence
+    from .execution import AWAKE_GAP, Execution  # local: keeps execution out of the selector's fan-in
     from .screen import listing as screen_listing
 
     external = presence(c, bot)

@@ -15,7 +15,6 @@ from .archive import import_text_archives
 from .backup import inspect, snapshot, upload_bundle
 from .blobs import Blobs
 from .config import ROOT, Settings
-from .execution import Execution
 from .store import H, P, Problem, Store, encode, repo_url
 from . import bot_settings as BS
 
@@ -292,6 +291,7 @@ def main(argv=None):
         report = enrollment(store, Auth(store), args.request_id, args.code_hash, args.label, args.owner, args.status)
     elif args.command == "enrollment":
         from .models import EnrollmentRequest
+        from .execution import Execution  # local: keeps execution out of the selector's fan-in
 
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         auth = Auth(store)

@@ -20,7 +20,6 @@ from pydantic import (
     model_validator,
 )
 
-from .company_file import draft as company_draft
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -2606,6 +2605,8 @@ class OnboardingNames(Contract):
 def _places_rule(places):
     """Where the company serves, held to the company file's rule (draft.regions), so a place reads the same in a file,
     on the setup page and here."""
+    from .company_file import draft as company_draft  # local: keeps company_file out of the selector's fan-in
+
     return company_draft.regions(places, "regions")
 
 
