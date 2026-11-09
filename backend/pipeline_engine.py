@@ -851,12 +851,14 @@ def _move_visit(
 
 
 def handed_on_open(conn: sqlite3.Connection, card_id: str) -> set[str]:
-    """The subtasks an `enter` spawn filed from this card that are still live (not returned). Finishing the card does not
-    close them (hubdb._handed_on): the Opportunity a Qualified Lead files is its own work from then on."""
+    """The subtasks a spawn filed from this card that are still live (not returned), whether it fired as the card entered
+    its stage or left it. Finishing the card as done does not close them (hubdb._handed_on): once filed, a New ticket is its
+    own work, as the Opportunity a Qualified Lead files is. A move's handoff is the card itself, so it is not a subtask here."""
     try:
         found = conn.execute(
             "SELECT h.target_task_id FROM pipeline_handoffs h JOIN pipeline_links l ON l.id = h.pipeline_link_id "
-            "WHERE h.source_task_id = ? AND l.fires = 'enter' AND h.returned_at IS NULL",
+            "WHERE h.source_task_id = ? AND l.mode = 'spawn' AND h.target_task_id != h.source_task_id "
+            "AND h.returned_at IS NULL",
             (card_id,),
         ).fetchall()
     except sqlite3.OperationalError:  # a hub without the pipeline tables has no handoffs

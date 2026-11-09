@@ -25,7 +25,9 @@ Row = dict[str, Any]
 MODES = ("move", "spawn")
 # When a spawn files: as its card leaves the stage (the default, every spawn so far) or as a card enters it (Lead's Qualified).
 FIRES = ("leave", "enter")
-COLUMNS = "id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, return_stage_id, created_by, created_at"
+COLUMNS = (
+    "id, from_pipeline_id, from_pipeline_stage_id, to_pipeline_id, mode, return_stage_id, created_by, created_at, fires"
+)
 LINK_LIMIT = 200  # links per page; a page also stays under LINK_BYTES, as the audit list does
 LINK_BYTES = 262_144
 
@@ -37,10 +39,10 @@ def _rows(conn: sqlite3.Connection, sql: str, args: "tuple[Any, ...]" = ()) -> l
 
 
 def link_for_stage(conn: sqlite3.Connection, pipeline_stage_id: str) -> Row | None:
-    """The live link that leaves this stage, or None. Its `fires` is included for the engine; it is not in COLUMNS."""
+    """The live link that leaves this stage, or None."""
     found = _rows(
         conn,
-        f"SELECT {COLUMNS}, fires FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
+        f"SELECT {COLUMNS} FROM pipeline_links WHERE from_pipeline_stage_id = ? AND retired_at IS NULL",
         (pipeline_stage_id,),
     )
     return found[0] if found else None
@@ -662,6 +664,7 @@ class PipelineLinkBody(BaseModel):
     to_pipeline_id: str
     mode: str = "move"
     return_stage_id: str | None = None
+    fires: str = "leave"
 
 
 class PipelineRetireBody(BaseModel):
@@ -695,7 +698,7 @@ def install(app: "FastAPI", store: "Store", mutate: Callable[..., Any], auth: "A
         def work(c: sqlite3.Connection) -> dict[str, Any]:
             return {
                 "link": create_link(
-                    c, who.actor, body.from_stage_id, body.to_pipeline_id, body.mode, body.return_stage_id
+                    c, who.actor, body.from_stage_id, body.to_pipeline_id, body.mode, body.return_stage_id, body.fires
                 )
             }
 

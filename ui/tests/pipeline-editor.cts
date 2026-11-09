@@ -71,7 +71,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
       return json({type: state.type});
     }
     if (p === '/api/v2/pipeline-links' && method === 'GET') return json({links: state.links});
-    if (p === '/api/v2/pipeline-links') { state.links = [{id: 'l1', from_pipeline_id: 'dev', from_pipeline_stage_id: body.from_stage_id, to_pipeline_id: body.to_pipeline_id, mode: body.mode} as {id: string}]; return json({link: state.links[0]}); }
+    if (p === '/api/v2/pipeline-links') { state.links = [{id: 'l1', from_pipeline_id: 'dev', from_pipeline_stage_id: body.from_stage_id, to_pipeline_id: body.to_pipeline_id, mode: body.mode, fires: body.fires ?? 'leave'} as {id: string}]; return json({link: state.links[0]}); }
     if (p === '/api/v2/pipeline-links/l1/retire') { state.links = []; return json({link: {}}); }
     // The affected count (GET /api/v2/pipeline-stages/{id}/affected): four open cards at Doing, one with the label "urgent".
     const affected = p.match(/^\/api\/v2\/pipeline-stages\/(\w+)\/affected$/);
@@ -207,6 +207,18 @@ async function desktop(browser: import('playwright').Browser) {
   await page.locator('[data-pe-link-save=s2]').click();
   await page.waitForFunction(() => document.body.innerText.includes('Then Ops'));
   assert.deepEqual(last(writes, '/api/v2/pipeline-links'), {from_stage_id: 's2', to_pipeline_id: 'ops', mode: 'move'});
+  await page.locator('[data-pe-unlink=l1]').click();
+  await page.waitForFunction(() => !document.body.innerText.includes('Then Ops'));
+  // Then: a New ticket that files when a card enters its stage; the timing choice shows only for New ticket.
+  await page.locator('[data-pe-link=s2]').click();
+  assert.equal(await page.locator('[data-pe-link-fires]').isHidden(), true);
+  await page.locator('[data-pe-link-mode]').selectOption('spawn');
+  await page.waitForFunction(() => !(document.querySelector('[data-pe-link-fires]') as HTMLSelectElement).hidden);
+  await page.locator('[data-pe-link-fires]').selectOption('enter');
+  await page.locator('[data-pe-link-to]').selectOption('ops');
+  await page.locator('[data-pe-link-save=s2]').click();
+  await page.waitForFunction(() => document.body.innerText.includes('new ticket when the card enters'));
+  assert.deepEqual(last(writes, '/api/v2/pipeline-links'), {from_stage_id: 's2', to_pipeline_id: 'ops', mode: 'spawn', fires: 'enter'});
   await page.locator('[data-pe-unlink=l1]').click();
   await page.waitForFunction(() => !document.body.innerText.includes('Then Ops'));
   await page.locator('[data-pe-close]').click();

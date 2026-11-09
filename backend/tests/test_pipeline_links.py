@@ -214,3 +214,129 @@ def test_a_blob_shared_by_many_tasks_is_skipped_in_a_few_statements(tmp_path, bo
     assert L._pipeline_tasks(c, {"blob_id": "shared-blob"}) is None
     c.set_trace_callback(None)
     assert len(statements) < 10
+
+
+def leave_pipeline(c, name, stages):
+    """A pipeline with the given (name, status) stages, owned by ANA so the test may edit its links."""
+    t = H.type_create(c, ANA, name, [{"name": n, "status": s} for n, s in stages], mover=True)
+    c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, t["id"]))
+    return t
+
+
+def test_a_spawn_that_fires_on_leave_into_a_done_stage_keeps_the_child_it_files_open(tmp_path, booted):
+    """Spec 871 AT1: a card that leaves a stage with a spawn link into a done stage files its child, and the same move's finish
+    leaves that child open (it used to close it with the card)."""
+    c, sales, _, other = two(tmp_path, booted)
+    L.create_link(c, ANA, step_id(c, sales["id"], "Lead"), other["id"], "spawn")
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=sales["id"], step="Lead", lint=False)["id"]
+    H.task_update(c, ANA, card, step=step_id(c, sales["id"], "Won"))
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", card) == [{"status": "done"}]
+    [child] = rows(c, "SELECT id, status, note FROM tasks WHERE type_id=?", other["id"])
+    assert child["status"] == "open" and not child["note"]
+
+
+def test_a_bot_manager_move_that_files_a_leave_spawn_into_a_done_stage_is_not_refused(tmp_path, booted):
+    """Spec 871 AT2: a bot that may move a card its manager's report owns files the child and finishes the card in one move.
+    The child is the report's, so the bot that moved it does not close it, and the move is not refused with 'close'."""
+    c, sales, _, other = two(tmp_path, booted)
+    H.sync_registry(c, {"coo": {}, "ops": {}}, {"people": []})
+    c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", ("bot:ops", sales["id"]))
+    L.create_link(c, ANA, step_id(c, sales["id"], "Lead"), other["id"], "spawn")
+    card = H.task_create(c, ANA, "Acme lead", "", "bot:coo", type=sales["id"], step="Lead", lint=False)["id"]
+    H.task_update(c, "bot:ops", card, step=step_id(c, sales["id"], "Won"), mover=True)
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", card) == [{"status": "done"}]
+    assert rows(c, "SELECT status, requester_id FROM tasks WHERE type_id=?", other["id"]) == [
+        {"status": "open", "requester_id": "bot:coo"}
+    ]
+
+
+def test_a_child_filed_on_leave_earlier_stays_open_when_the_card_later_finishes_as_done(tmp_path, booted):
+    """Spec 871 AT4 (broad fix A1): a live leave-spawn child filed by an earlier move out of a working stage is not closed
+    when the card is later moved into a done stage. A close (a cancel) still takes it."""
+    c, _, _, other = two(tmp_path, booted)
+    pipe = leave_pipeline(
+        c, "Pipeline A", [("Working", "doing"), ("Review", "doing"), ("Won", "done"), ("Lost", "closed")]
+    )
+    L.create_link(c, ANA, step_id(c, pipe["id"], "Working"), other["id"], "spawn")
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=pipe["id"], step="Working", lint=False)["id"]
+    H.task_update(c, ANA, card, step=step_id(c, pipe["id"], "Review"))
+    [child] = rows(c, "SELECT id, status FROM tasks WHERE type_id=?", other["id"])
+    assert child["status"] == "open"
+    H.task_update(c, ANA, card, step=step_id(c, pipe["id"], "Won"))
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", card) == [{"status": "done"}]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child["id"]) == [{"status": "open"}]
+    H.task_close(c, ANA, card, note="cancelled")
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child["id"]) == [{"status": "closed"}]
+
+
+def test_a_leave_spawn_into_a_closed_stage_files_no_child(tmp_path, booted):
+    """Spec 871 AT5: a move from a spawn stage into a closed or declined stage files nothing (no change from before)."""
+    c, sales, _, other = two(tmp_path, booted)
+    L.create_link(c, ANA, step_id(c, sales["id"], "Lead"), other["id"], "spawn")
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=sales["id"], step="Lead", lint=False)["id"]
+    H.task_update(c, ANA, card, step=step_id(c, sales["id"], "Lost"))
+    assert rows(c, "SELECT id FROM tasks WHERE type_id=?", other["id"]) == []
+
+
+def test_a_link_fires_on_enter_or_leave_and_only_a_spawn_can_fire_on_enter(tmp_path, booted):
+    """Spec 871 AT6-AT9: a spawn link may fire on enter (saved and read back as enter), a spawn link without fires fires on
+    leave as before, and a move link can't fire on enter."""
+    c, sales, _, other = two(tmp_path, booted)
+    lead = step_id(c, sales["id"], "Lead")
+    enter = L.create_link(c, ANA, lead, other["id"], "spawn", fires="enter")
+    assert enter["fires"] == "enter"
+    assert [r["fires"] for r in L.links(c, sales["id"])] == ["enter"]
+    L.retire_link(c, ANA, enter["id"])
+    assert L.create_link(c, ANA, lead, other["id"], "spawn")["fires"] == "leave"
+    won = step_id(c, sales["id"], "Won")
+    assert refused(lambda: L.create_link(c, ANA, won, other["id"], "move", fires="enter")).rule == "link"
+    assert rows(
+        c, "SELECT COUNT(*) AS n FROM pipeline_links WHERE from_pipeline_stage_id=? AND retired_at IS NULL", won
+    ) == [{"n": 0}]
+
+
+def test_the_link_route_accepts_fires_enter_or_leave_and_shows_it_back(tmp_path):
+    """Spec 871 AT6, AT7, AT8, AT9 through the route: a spawn link saved with fires enter reads back as enter, one without
+    fires fires on leave, and a move link can't fire on enter (refused, nothing created)."""
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+    from backend.auth import Identity
+    from backend.config import Settings
+
+    app = create_app(
+        Settings(
+            db_path=tmp_path / "hub.db",
+            registry_dir=tmp_path,
+            test_identities={"ana-test": Identity("human:ana", "owner", "ana@acme.example")},
+        )
+    )
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            H.sync_registry(c, {}, {"people": [{"id": "ana", "email": "ana@acme.example"}]})
+            sales = H.type_create(
+                c, ANA, "Sales", [{"name": "Lead", "status": "open"}, {"name": "Won", "status": "done"}], mover=True
+            )
+            other = H.type_create(c, ANA, "Support", [{"name": "Inbox", "status": "open"}], mover=True)
+            for t in (sales, other):
+                c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, t["id"]))
+            lead = step_id(c, sales["id"], "Lead")
+            won = step_id(c, sales["id"], "Won")
+            other_id = other["id"]
+        headers = {"Authorization": "Bearer ana-test"}
+        calls = iter(range(1, 100))
+
+        def post(body):
+            return client.post(
+                "/api/v2/pipeline-links", json=body, headers={**headers, "Idempotency-Key": f"k{next(calls)}"}
+            )
+
+        enter = post({"from_stage_id": lead, "to_pipeline_id": other_id, "mode": "spawn", "fires": "enter"})
+        assert enter.status_code == 200, enter.text
+        assert enter.json()["link"]["fires"] == "enter"
+        assert [r["fires"] for r in client.get("/api/v2/pipeline-links", headers=headers).json()["links"]] == ["enter"]
+        bad = post({"from_stage_id": won, "to_pipeline_id": other_id, "mode": "move", "fires": "enter"})
+        assert bad.status_code == 422 and "Only a spawn link" in bad.text, bad.text
+        assert (
+            post({"from_stage_id": won, "to_pipeline_id": other_id, "mode": "move"}).json()["link"]["fires"] == "leave"
+        )

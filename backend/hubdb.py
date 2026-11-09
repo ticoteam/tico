@@ -8792,9 +8792,10 @@ def _closed_with_note(parent):
 
 
 def _handed_on(conn, parent_id, done):
-    """The live subtasks an `enter` pipeline spawn filed from this card, and their own subtasks. A finish as done leaves
-    them alone (pipeline_engine.handed_on_open): a Qualified Lead's Opportunity is not closed with the Lead. A close
-    (a cancel) still takes them with it."""
+    """The live subtasks a pipeline spawn filed from this card, and their own subtasks. A finish as done leaves them alone
+    (pipeline_engine.handed_on_open), whether the spawn fired as the card entered its stage or left it: a Qualified Lead's
+    Opportunity is not closed with the Lead, and a New ticket filed on leaving a stage is not closed by the move that
+    finished the card. A close (a cancel) still takes them with it."""
     from . import pipeline_engine
 
     kept = set()

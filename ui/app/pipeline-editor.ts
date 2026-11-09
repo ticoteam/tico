@@ -17,7 +17,7 @@ interface PeReq {
   id: string; name: string; kind: string; needs: PeNeeds; reviewed_by: string; reviewer_id?: string | null;
   backup_reviewer_id?: string | null; rubric?: string | null; applies_to_label?: string | null; position?: number | null;
 }
-interface PeLink { id: string; from_pipeline_id: string; from_pipeline_stage_id: string; to_pipeline_id: string; mode: string; }
+interface PeLink { id: string; from_pipeline_id: string; from_pipeline_stage_id: string; to_pipeline_id: string; mode: string; fires?: string; }
 interface PeState {
   type: PeType; reqs: Map<string, PeReq[]>; links: PeLink[] | null; requirements: boolean;
   mover: boolean; warn: string; cap: string; link: string;
@@ -141,13 +141,15 @@ function peLinkHTML(state: PeState, stage: PeStage): string {
   const link = state.links.find(l => l.from_pipeline_stage_id === stage.id && l.from_pipeline_id === state.type.id);
   if (link) {
     const name = peTypes().find(t => t.id === link.to_pipeline_id)?.name ?? link.to_pipeline_id;
-    return `<span class="pe-then">Then <b>${esc(name)}</b> (${link.mode === 'spawn' ? 'new ticket' : 'move'}) <button type="button" class="ghost" data-pe-unlink="${esc(link.id)}" aria-label="Remove link">Remove</button></span>`;
+    const how = link.mode !== 'spawn' ? 'move' : link.fires === 'enter' ? 'new ticket when the card enters' : 'new ticket';
+    return `<span class="pe-then">Then <b>${esc(name)}</b> (${how}) <button type="button" class="ghost" data-pe-unlink="${esc(link.id)}" aria-label="Remove link">Remove</button></span>`;
   }
   if (stage.status === 'done' || stage.status === 'closed') return '';
   if (state.link !== stage.id) return `<button type="button" class="ghost pe-then-add" data-pe-link="${esc(stage.id)}">Then…</button>`;
   const others = peTypes().filter(t => t.id !== state.type.id && t.id !== 'general');
   return `<span class="pe-pop" role="group" aria-label="Then"><select data-pe-link-to aria-label="Then go to">${others.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select>
     <select data-pe-link-mode aria-label="How"><option value="move">Move</option><option value="spawn">New ticket</option></select>
+    <select data-pe-link-fires aria-label="When" hidden><option value="leave">when the card leaves</option><option value="enter">when the card enters</option></select>
     <button type="button" class="primary" data-pe-link-save="${esc(stage.id)}">Add</button><button type="button" class="ghost" data-pe-link-cancel>Cancel</button></span>`;
 }
 
@@ -424,8 +426,11 @@ async function peClick(target: Element): Promise<void> {
   if (linkSave) {
     const root = target.closest('.pe-pop');
     const to = root?.querySelector<HTMLSelectElement>('[data-pe-link-to]')?.value, mode = root?.querySelector<HTMLSelectElement>('[data-pe-link-mode]')?.value ?? 'move';
+    const fires = root?.querySelector<HTMLSelectElement>('[data-pe-link-fires]')?.value ?? 'leave';
     if (!to) return;
-    try { await writeRequest('POST', peRoute('/v2/pipeline-links'), {from_stage_id: linkSave, to_pipeline_id: to, mode}); PE.link = ''; } catch (e) { peFail(e); }
+    const body: Record<string, string> = {from_stage_id: linkSave, to_pipeline_id: to, mode};
+    if (mode === 'spawn') body['fires'] = fires;
+    try { await writeRequest('POST', peRoute('/v2/pipeline-links'), body); PE.link = ''; } catch (e) { peFail(e); }
     await peReload();
     return;
   }
@@ -461,6 +466,11 @@ function peWire(dialog: HTMLDialogElement): void {
   });
   dialog.addEventListener('change', ev => {
     const t = ev.target;
+    if (t instanceof HTMLSelectElement && t.hasAttribute('data-pe-link-mode')) {
+      const when = t.closest('.pe-pop')?.querySelector<HTMLSelectElement>('[data-pe-link-fires]');
+      if (when) when.hidden = t.value !== 'spawn';
+      return;
+    }
     if (t instanceof HTMLElement && t.closest('[data-pe-form]')) { const form = t.closest('form'); if (form) { peFormSync(form); void peAffectedSync(form); } return; }
     if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) {
       const key = t.dataset['peSetting'], renamed = t.dataset['peRename'];
