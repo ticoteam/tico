@@ -157,6 +157,7 @@ function obChartHTML(state, big) {
 }
 function obEditHTML(state, slug) {
   const cat = state.catalog, card = catalogCard(cat, slug), current = frReports(state, slug);
+  if (!card) throw new Error('Catalog card missing');
   const groups = ['Humans', 'Bots on your team'].map(group => {
     const rows = frParentOptions(state, slug).filter(option => option.group === group);
     return rows.length ? `<optgroup label="${esc(group)}">${rows.map(option =>
