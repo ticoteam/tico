@@ -5,7 +5,7 @@
 // ---- Needs you: hub.db items, rendered as the same request rows the Issues use ----
 // What a card takes, in the order Needs you lists the groups (the server sets each card's `need`, backend/views.py
 // NEED_GROUPS): all the yes/no and pick cards can be cleared in one sitting.
-const NEED_GROUPS = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Connect'], ['review', 'Review'], ['do', 'Do']];
+const NEED_GROUPS: [string, string][] = [['decide', 'Answer'], ['pay', 'Pay'], ['connect', 'Connect'], ['review', 'Review'], ['do', 'Do']];
 const NEED_RANK = Object.fromEntries(NEED_GROUPS.map(([k], i) => [k, i]));
 const needLabel = need => (NEED_GROUPS.find(([k]) => k === need) || NEED_GROUPS.at(-1))[1];
 let NEEDS_MEMO = null;
@@ -50,7 +50,7 @@ document.addEventListener('click', ev => {
 });
 // "Do what you recommend": one tap answers the bot's ask with what it said it would do, and the card goes. It sends
 // the version of the task the card showed, so a task that changed meanwhile is refused, not answered unseen.
-const recommendButton = (rec, cls = 'primary', version = null) => rec?.ask
+const recommendButton = (rec, cls = 'primary', version: number | null = null) => rec?.ask
   ? `<button type="button" class="${cls}" data-recommend="${esc(rec.ask)}"${version ? ` data-version="${esc(String(version))}"` : ''} title="${esc(rec.do)}">Do what you recommend</button>` : '';
 const recommendLine = (rec, from) => rec?.do
   ? `<div class="req-context need-rec"><span>${esc(actorLabel(from) || 'The bot')} recommends</span> ${esc(plainActors(rec.do))}</div>` : '';
