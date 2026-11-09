@@ -413,3 +413,16 @@ def test_each_department_lead_has_a_goal_that_rolls_up_to_the_company_goal(ana):
             while at["parent_id"] and steps < 10:
                 at, steps = goals[at["parent_id"]], steps + 1
             assert at["id"] == company["id"], f"{goal['title']} rolls up to the company goal"
+
+
+def test_the_demo_seed_polls_no_inbound_deliveries(monkeypatch):
+    """With an inbound key set, the demo build's app (`demo_build`) must not poll for real deliveries (they would be
+    fetched and acknowledged). The control case, the same settings without the build, polls: so the gate turns it off."""
+    from types import SimpleNamespace
+
+    from backend.inbound import Inbound
+
+    monkeypatch.setenv("TICO_INBOUND_KEY", "demo-key")
+    base = dict(demo=False, rehearsal=False, demo_build=False)
+    assert Inbound(None, SimpleNamespace(**base), None).off is False
+    assert Inbound(None, SimpleNamespace(**{**base, "demo_build": True}), None).off is True

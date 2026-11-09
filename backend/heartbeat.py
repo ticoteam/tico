@@ -158,6 +158,11 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     refresh_pending_checks(github_app)
     # A merge-queue removal that was not a merge is read afresh before its owner is woken (github.refresh_queue_removals).
     refresh_queue_removals(github_app)
+    # Tico merges approved work itself, at most once a minute: it arms the merge, re-arms one GitHub dropped, hands a red
+    # or conflicting one to the pipeline manager, and moves merged cards to their merged step (backend/merge_arm.py).
+    from . import merge_arm
+
+    merge_arm.sweep(github_app, paced=True)
     # An open pull request's conflict with a moved base sends no event: read the unknown and stale ones (github.refresh_conflicts).
     refresh_conflicts(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
