@@ -177,8 +177,7 @@ const draggingFiles = (ev: DragEvent): ev is DragEvent & {dataTransfer: DataTran
 }));
 // `pillNow` is the pill, or a function giving the one there now (the Ask panel keeps its zone and makes a new pill per load).
 // The composer a drop attaches to: a pill (PillState) or the Ask panel's (AskComposer).
-interface ChatDropPill { el: HTMLElement | null; files: File[] | unknown[] }
-function chatDropZone(zone: HTMLElement, pillNow: ChatDropPill | null | (() => ChatDropPill | null | undefined)) {
+function chatDropZone(zone: HTMLElement, pillNow: Pill | null | (() => Pill | null | undefined)) {
   const cur = () => typeof pillNow === 'function' ? pillNow() : pillNow;
   let depth = 0;
   const on = (v: boolean) => { const P = cur(); if (P) pq(P, '.p-pill')?.classList.toggle('over', v); };
@@ -606,7 +605,7 @@ const helpHTML = () => `<div class="cmd-out"><div class="lbl">Commands</div>${SL
 const unknownHTML = (word: string) => `<div class="cmd-out"><span class="err">Unknown command${word ? ` <code>/${esc(word)}</code>` : ''}.</span>
   <span class="muted">Messages starting with <code>/</code> are not sent. Commands: ${SLASH_HELP.map(([c]) => `<code>${esc(c)}</code>`).join(', ')}.</span></div>`;
 // True when the text was a command and has been handled here, so the caller must not send it.
-function runCommand(text: unknown, out: Element | null | undefined, slug: string | undefined) {
+function runCommand(text: unknown, out: Element | null | undefined, slug: string | null | undefined) {
   if (!isCommand(text)) return false;
   const word = commandWord(text);
   const say = (html: string) => { if (out instanceof HTMLElement) { out.innerHTML = html; out.hidden = false; } };

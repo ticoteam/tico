@@ -283,10 +283,10 @@ async function settingsTokenRevoke(id: string | undefined, label: string | undef
 function agentConfigYaml(setup: AgentSetup) {
   return `mcp_servers:\n  tico:\n    url: "${setup.mcp_servers.tico.url}"\n    headers:\n      Authorization: "Bearer \${TICO_AGENT_TOKEN}"\n# .env in the profile directory:\nTICO_AGENT_TOKEN=${setup.token}`;
 }
-async function settingsAgentRevoke(slug: string) {
+async function settingsAgentRevoke(slug: string | undefined) {
   const e = S.emps.find(row => row.id === slug); if (!e) return;
   if (!confirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`)) return;
-  try { await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
+  try { await post(`/v2/bots/${encodeURIComponent(String(slug))}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
   catch (error) { toast(errorMessage(error, ''), true); }
 }
 // The Add computer flow, shared by Settings and the first-run wizard: one private short-lived
