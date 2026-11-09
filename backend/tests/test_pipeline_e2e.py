@@ -1142,27 +1142,24 @@ def test_a_spawn_on_a_stage_with_no_assign_rule_goes_to_the_filer_not_the_manage
 def test_engineering_config_looks_up_the_role_holder_before_the_filer(co, monkeypatch):
     """Spec A5, Engineering as the Hub sets it up: its first stage has no assign rule and its manager is another bot. The
     Engineering role holder is looked up through task_types.role before the filer. It resolves to no one (no stored record
-    links a bot to the role), so the filer owns the ticket, never the manager. The spy shows the lookup ran, found the
-    Engineering type by its role, and returned None."""
-    from backend import roadmap_flow
-
+    links a bot to the role), so the filer owns the ticket, never the manager. The spy shows the lookup ran for the
+    Engineering stage's type."""
     H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
     co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
     co.c.commit()
-    seen: list[tuple[str | None, str | None]] = []
+    seen: list[str] = []
     real = pipeline_links._role_holder
 
-    def spy(conn):
-        holder = real(conn)
-        seen.append((roadmap_flow.role_type(conn, roadmap_flow.ENGINEERING), holder))
-        return holder
+    def spy(conn, type_id):
+        seen.append(type_id)
+        return real(conn, type_id)
 
     monkeypatch.setattr(pipeline_links, "_role_holder", spy)
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    assert seen == [(co.type["Engineering"], None)]
+    assert seen == [co.type["Engineering"]]
     owner = H.task(co.c, d41)["owner_id"]
     assert owner == H.task(co.c, card)["owner_id"]
     assert owner != "bot:pipeline-manager"
@@ -1175,7 +1172,7 @@ def test_a_role_holder_that_resolves_owns_the_spawned_ticket_before_the_filer(co
     co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
     co.c.commit()
-    monkeypatch.setattr(pipeline_links, "_role_holder", lambda conn: "eng")
+    monkeypatch.setattr(pipeline_links, "_role_holder", lambda conn, type_id: "eng")
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)

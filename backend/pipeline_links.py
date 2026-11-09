@@ -188,6 +188,7 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     from . import pipeline_engine, step_flow
 
     first = pipeline_engine.first_stage(conn, pipeline_id)
+    step: Row | None = None
     if first is not None:
         step = _one(conn, "SELECT id, type_id, position, flow FROM task_steps WHERE id = ?", (first["id"],))
         flow: dict[str, Any] = step_flow.of(step)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -196,21 +197,22 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
             picked = _pool_bot(conn, step, rule) or _pool_bot(conn, step, rule, within_slots=False)
             if picked:
                 return f"bot:{picked}"
-    holder = _role_holder(conn)
+    holder = _role_holder(conn, step["type_id"]) if step else None
     return f"bot:{holder}" if holder else filer
 
 
-def _role_holder(conn: sqlite3.Connection) -> str | None:
-    """The bot that holds the Engineering role (spec A5), or None when no bot does. The role is resolved through
-    task_types.role: roadmap_flow.role_type finds the first type carrying the engineering role. No stored record then
-    names a bot for that type or role, so the lookup resolves to no one today: task_types.role holds the role key only;
-    task_roles is per task; TYPE_BOTS is a permission (read or work); seats.team names a team; automation_templates
-    ROLES names manager bots, which are never a role holder. The pipeline's manager is never returned."""
+def _role_holder(conn: sqlite3.Connection, type_id: str) -> str | None:
+    """The bot that holds the Engineering role (spec A5) for a stage of type `type_id`, or None when no bot does. Only a
+    type that carries the engineering role in task_types.role is looked up, so a spawn into any other pipeline never
+    reaches Engineering's holder. No stored record then names a bot for that type or role, so the lookup resolves to no
+    one today: task_types.role holds the role key only; task_roles is per task; TYPE_BOTS is a permission (read or
+    work); seats.team names a team; automation_templates ROLES names manager bots, which are never a role holder. The
+    pipeline's manager is never returned."""
     from . import roadmap_flow
 
     flows: Any = roadmap_flow  # roadmap_flow is untyped; the Any alias keeps strict mode quiet, as H and allocator do
-    engineering = flows.role_type(conn, flows.ENGINEERING)
-    if engineering is None:
+    row = _one(conn, "SELECT role FROM task_types WHERE id = ?", (type_id,))
+    if row is None or row["role"] != flows.ENGINEERING:
         return None
     # The bot holding that type's role. No stored record links one (see above), so none resolves.
     return None
