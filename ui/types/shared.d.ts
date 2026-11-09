@@ -162,6 +162,9 @@ interface Employee {
   slug?: string;
   display_name?: string;
   status?: string;
+  /** The state a bot row may carry besides status (overview.ts reads it). */
+  state?: string;
+  icon?: string;
   template?: string;
   harness?: string;
   team?: string;
@@ -356,4 +359,68 @@ interface HTMLElement {
  *  check for it first (visual-cards.ts visualSwap, overview.ts). */
 interface ParentNode {
   moveBefore(node: Node, child: Node | null): void;
+}
+
+// ---------------------------------------------------------------- the health answer (HL, ui/health.ts) and live task drafts (task-live.ts)
+
+/** A bot the health answer lists as stuck (`HL.stuck`). */
+interface HealthStuckRow {
+  bot: string;
+  why: string;
+  [key: string]: unknown;
+}
+
+/** A bot on a fallback model since a time (`HL.on_fallback`). */
+interface HealthFallbackRow {
+  changed_at?: string | null;
+  [key: string]: unknown;
+}
+
+/** The health answer the app polls (`HL`, ui/health.ts): the parts the other pages read. */
+interface HealthSnapshot {
+  checks?: unknown[];
+  audience?: string;
+  stuck?: HealthStuckRow[];
+  on_fallback?: HealthFallbackRow[];
+  limited?: unknown[];
+  [key: string]: unknown;
+}
+
+/** A chat or input box the page keeps (pill.ts PILLS): its mode, its bot's slug and its element. */
+interface PillState {
+  mode?: string;
+  slug?: string;
+  el: HTMLElement;
+  files: unknown[];
+  [key: string]: unknown;
+}
+
+/** One field of a task's live draft: the copy the edit was made on (`version`) and its value (task-live.ts). */
+interface TaskFieldBase {
+  value: unknown;
+  version?: number;
+}
+
+/** A task's live draft (task-live.ts sharedDraft): the unsaved edits and the copies they were made on. */
+interface TaskLiveDraft {
+  patch: Record<string, unknown>;
+  dirty: Record<string, unknown>;
+  bases: Record<string, TaskFieldBase>;
+  error: string;
+  [key: string]: unknown;
+}
+
+/** A task open in its dialog, live (`dialog.taskLive`, task-live.ts). */
+interface TaskLiveState {
+  id: string;
+  identity: string;
+  owner: string;
+  draft: TaskLiveDraft;
+  nodes: Record<string, unknown>;
+  fields: Record<string, TaskFieldBase>;
+  revoked?: boolean;
+}
+
+interface HTMLDialogElement {
+  taskLive?: TaskLiveState | null;
 }
