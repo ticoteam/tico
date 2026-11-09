@@ -30,7 +30,7 @@ interface ChatRefs {
   read_back?: unknown;
   warnings?: string[] | undefined;
   attachments?: ChatFile[] | undefined;
-  turn_id?: string | undefined;
+  turn_id?: string | null | undefined;
   maintenance?: string | undefined;
   approval?: unknown;
   questions?: unknown;
@@ -70,13 +70,13 @@ interface ChatElsewhere {
 interface ChatMessage {
   id?: string | undefined;
   kind?: string | undefined;
-  body?: string | undefined;
+  body?: string | null | undefined;
   created_at?: string | undefined;
   sender_id?: string | undefined;
   /** The Ask panel's own lines name their sender here (ui/app/ask-panel.ts). */
   from_actor?: string | undefined;
-  recipient_id?: string | undefined;
-  in_reply_to?: string | undefined;
+  recipient_id?: string | null | undefined;
+  in_reply_to?: string | null | undefined;
   prompted_by?: string | undefined;
   refs?: ChatRefs | undefined;
   ref_tasks?: Record<string, { title?: string | undefined }> | undefined;
@@ -155,7 +155,7 @@ interface ChatState {
   waitTimer?: number | undefined;
   openFolds?: Set<string> | undefined;
   openSide?: Set<string | undefined> | undefined;
-  openSteps?: Set<string | undefined> | undefined;
+  openSteps?: Set<string | null | undefined> | undefined;
   steps?: Record<string, string> | undefined;
   dismissed?: string | undefined;
   sentAt?: number | undefined;
@@ -493,7 +493,7 @@ function v2RunRow(verb: string, what: string, {task = '', href = '', failed = fa
 const tookWords = (s: number | null | undefined) => s == null ? '' : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m`;
 // What the run did reads as one folded line under the reply, named by its first few actions.
 // `state` keeps which folds are open and the steps read so far: the chat's (V2C), or a thread view's own.
-function v2RunHTML(m: ChatMessage, state: ChatState | null = V2C) {
+function v2RunHTML(m: ChatMessage, state: Pick<ChatState, 'openSteps' | 'steps' | 'openFolds'> | null = V2C) {
   const run = m.run || {}, rows = [], said = [], given = new Set((run.did || []).filter(d => d.kind === 'task').map(d => d.task_id));
   for (const [id, t] of Object.entries(m.ref_tasks || {}))
     if (!given.has(id)) rows.push(v2RunRow('task ·', esc(t.title), {task: id}));
@@ -528,7 +528,7 @@ function v2RunHTML(m: ChatMessage, state: ChatState | null = V2C) {
 }
 const chatLine = (text: unknown, n: number) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 // Folded lines stay as the reader left them across redraws.
-const v2FoldOpen = (m: {id?: string | undefined}, state: ChatState | null = V2C) => !!(m.id && state?.openFolds?.has(m.id));
+const v2FoldOpen = (m: {id?: string | undefined}, state: Pick<ChatState, 'openFolds'> | null = V2C) => !!(m.id && state?.openFolds?.has(m.id));
 const v2FoldAttrs = (m: ChatMessage) => `data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}`;
 // A turn's steps are read when someone opens them, once, and kept open across redraws.
 function v2StepsHTML(d: {steps?: ChatStep[]}) {
@@ -555,7 +555,7 @@ async function v2StepsOpen(state: Pick<ChatState, 'openSteps' | 'steps'>, el: HT
 }
 // Copy the original message, not timestamps, action labels or rendered link shortcuts. `fb`: a bot's message's feedback
 // key, whose 👍 / 👎 follow Copy on the row under it (ui/app/feedback.js).
-function chatCopyHTML(text: string | undefined, fb = '') {
+function chatCopyHTML(text: string | null | undefined, fb = '') {
   return text ? `<div class="chat-message-actions"><button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button>${fbButtonsHTML(fb)}</div>` : '';
 }
 document.addEventListener('click', async ev => {
@@ -705,7 +705,7 @@ function chatSideKind(m: ChatMessage, slug: string | undefined) {
 function chatSideName(m: ChatMessage, slug: string | undefined) {
   const src = rowSource(m);
   if (SOURCE_LINES.has(src.kind)) return src.kind === 'task_update' ? 'tasks' : src.name;
-  const self: (string | undefined)[] = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
+  const self: (string | null | undefined)[] = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
   if (self.includes(m.sender_id) && actorSlug(m.recipient_id) && !self.includes(m.recipient_id)) return actorLabel(m.recipient_id);
   return actorLabel(m.sender_id);
 }
