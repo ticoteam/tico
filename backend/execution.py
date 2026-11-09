@@ -2785,7 +2785,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task = H.task(c, task_id) if task_id else None
     from . import pipeline_budgets
 
-    if reason := pipeline_budgets.hold_reason(c, task_id):
+    if reason := pipeline_budgets.hold_reason(c, task_id, task=task):
         return reason
     refs = message.get("refs") or {}
     if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):

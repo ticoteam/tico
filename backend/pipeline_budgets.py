@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any
 
-from . import hubdb, pipeline_rights, usage_limits, usage_records
+from . import hubdb, pipeline_rights, read_cache, usage_limits, usage_records
 from .store import Problem
 
 H: Any = hubdb  # hubdb is untyped; the pipeline settings module uses the same boundary.
@@ -76,10 +76,11 @@ def read(c: sqlite3.Connection, actor: str, pipeline_id: str, at: datetime | Non
 
 
 def _target(c: sqlite3.Connection, pipeline_id: str) -> dict[str, Any] | None:
-    row = c.execute(
+    row = read_cache.one(
+        c,
         "SELECT id,name,manager,pipeline_visibility,daily_cap_nano,monthly_cap_nano FROM task_types WHERE id=?",
         (pipeline_id,),
-    ).fetchone()
+    )
     return dict(row) if row else None
 
 
@@ -176,10 +177,12 @@ def after_run(c: sqlite3.Connection, task_id: str | None, at: datetime | None = 
             _level(c, row, period, at)
 
 
-def hold_reason(c: sqlite3.Connection, task_id: str | None, at: datetime | None = None) -> str | None:
+def hold_reason(
+    c: sqlite3.Connection, task_id: str | None, at: datetime | None = None, *, task: dict[str, Any] | None = None
+) -> str | None:
     if not task_id:
         return None
-    task = H.task(c, task_id)
+    task = task if task is not None else H.task(c, task_id)
     row = _target(c, str(task.get("type_id") or "")) if task else None
     if not row:
         return None
