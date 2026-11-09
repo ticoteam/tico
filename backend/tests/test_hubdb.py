@@ -1210,7 +1210,7 @@ class WaitingWithDependency(HubCase):
         ]
         self.assertEqual(len(told), 1, told)
         self.assertEqual((needs(), H.needs_you(self.conn, 'ana')['tasks']), (0, []))
-        # A direct answer of No is still an answer; Declined is reserved for closing without one.
+        # A direct answer of No is still an answer; a declined question carries the person's note to its asker.
         other = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
         card = H.task_update(
             self.conn,
@@ -1220,14 +1220,23 @@ class WaitingWithDependency(HubCase):
             waiting_on='ana',
             note='Buy a signing key for $5? If yes, I will order it today.',
         )['asked_in']
-        H.task_update(self.conn, ANA, card['id'], status='done', note='No. Use the old one.')
+        H.task_update(self.conn, ANA, card['id'], status='declined', note='No. Use the old one.')
         self.assertEqual(
             (
                 H.task(self.conn, other['id'])['status'],
                 H.task(self.conn, other['id'])['note'],
                 TR.blocker_ids(self.conn, other['id']),
             ),
-            ('open', 'Ana Rivera answered: No. Use the old one.', []),
+                ('open', 'Question closed (declined): Buy a signing key for $5?\nNo. Use the old one.', []),
+        )
+        told = [
+            m['body']
+            for m in H.messages(self.conn, other['conversation_id'])
+            if m['recipient_id'] == CMO and 'Question closed (declined)' in m['body']
+        ]
+        self.assertEqual(
+            told,
+            ['All subtasks done\nQuestion closed (declined): Buy a signing key for $5?\nNo. Use the old one.'],
         )
         # Closing the card settles it too: the task opens with her words, and its bot hears it once.
         moved = H.task_create(self.conn, CMO, 'Set up the new bots', '', CMO, private=False)

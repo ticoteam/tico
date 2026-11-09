@@ -8258,6 +8258,9 @@ def task_update(
         from . import question_tasks
 
         question_tasks.closed(conn, actor, row, status, note)
+        # Closing records the answer on the question task. Use the updated row below so the asker receives
+        # the stored answer (including a decline note), not the pre-close snapshot.
+        after = isolate_private_task(conn, task(conn, task_id))
         from . import strategy_merge
 
         if row["requester_id"] == strategy_merge.STRATEGY_BOT:
