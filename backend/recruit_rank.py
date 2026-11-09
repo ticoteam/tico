@@ -119,8 +119,8 @@ def build(departments, cards):
     """The org builder's catalog from parsed groups.yaml and card.yaml documents. Built-in (`required`) cards,
     helpers (`kind: helper`, which serve a person and sit outside the org chart) and cards in no offered department are
     left out, and so are retired ones (`retired: true`). A card with no `icon` takes its department's; with no `suggest`, it is `common`; with no `tags`, its
-    `pains` phrases stand in. A department's head is its card with `lead: true`, else the `head` groups.yaml
-    names; the served `head` and each card's `lead` say which."""
+    `pains` phrases stand in. A department's head is the `head` groups.yaml names when that card is `lead: true`, else its
+    first `lead: true` card; the served `head` and each card's `lead` say which."""
     rows = departments.get("departments") if isinstance(departments, dict) else departments
     known = [department(row) for row in (rows or []) if isinstance(row, dict)]
     known = [row for row in known if row["id"] in DEPARTMENT_IDS]
@@ -157,9 +157,15 @@ def build(departments, cards):
     for row in known:
         members = [card for card in out if card["department"] == row["id"]]
         leads = [card["template"] for card in members if card["lead"]]
-        row["head"] = (
-            leads[0] if leads else row["head"] if any(card["template"] == row["head"] for card in members) else ""
-        )
+        named = row["head"]
+        # A Team Manager is a lead too, so the head groups.yaml names keeps the seat when it is a lead; the first lead by
+        # name stands in only for a head that is not one.
+        if named in leads:
+            row["head"] = named
+        elif leads:
+            row["head"] = leads[0]
+        else:
+            row["head"] = named if any(card["template"] == named for card in members) else ""
         for card in members:
             card["lead"] = card["template"] == row["head"]
     body = {"departments": known, "cards": out}

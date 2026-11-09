@@ -985,6 +985,35 @@
    "default": false
   },
   {
+   "slug": "engineering-team-manager",
+   "template": "engineering-team-manager",
+   "name": "Engineering Team Manager",
+   "department": "engineering",
+   "lead": true,
+   "core": false,
+   "summary": "Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, routes tests, security, CI and releases to their owners, and reports progress with links.",
+   "when": "Offer when builders work across several repositories, or when a team needs one seat to plan the engineering week.",
+   "tags": [
+    "github",
+    "delivery",
+    "developer-tools"
+   ],
+   "pains": [
+    "Changes across repositories need one delivery plan",
+    "Stuck child tasks and pull requests need follow-up",
+    "Delivery reports miss dependencies between builder tasks",
+    "Tests, security, CI and releases have no one owner"
+   ],
+   "recommend_when": [
+    "sells_software"
+   ],
+   "first_routine": "Daily delivery check · Daily at 09:00 team time",
+   "tools": [
+    "github"
+   ],
+   "default": false
+  },
+  {
    "slug": "equity-manager",
    "template": "equity-manager",
    "name": "Equity Manager",
@@ -1299,6 +1328,47 @@
    "default": false
   },
   {
+   "slug": "growth-team-manager",
+   "template": "growth-team-manager",
+   "name": "Growth Team Manager",
+   "department": "marketing",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the growth team's week: one page on marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, plus routing and hiring proposals. Channel owners and pipeline managers do the work; routing and set-up tasks happen only when the task asks for them and a granted Tool allows it.",
+   "when": "A team that runs marketing and sales as one growth engine and wants one weekly page from first touch to closed deal, instead of separate marketing and sales reports.",
+   "tags": [
+    "marketing",
+    "sales",
+    "weekly-summary",
+    "pipeline",
+    "calendar",
+    "b2b",
+    "b2c",
+    "smb"
+   ],
+   "pains": [
+    "nobody sees marketing and sales as one funnel",
+    "marketing counts leads and sales counts deals, and the numbers never match",
+    "new leads sit unassigned for days",
+    "I can't tell which deals are really moving",
+    "campaigns and launches collide with the sales calendar"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "publishes_content",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly growth summary · Fridays at 14:00 team time",
+   "tools": [
+    "calendar",
+    "crm",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
    "slug": "hr-business-partner",
    "template": "hr-business-partner",
    "name": "HR Business Partner",
@@ -1401,6 +1471,39 @@
     "uses_slack"
    ],
    "first_routine": "Weekly incident review · Mondays at 10:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "infrastructure-owner",
+   "template": "infrastructure-owner",
+   "name": "Infrastructure Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the GitHub Actions pipeline and its runners healthy: slow jobs, red-main streaks, workflow and runner faults, and deploy frequency, each with a fix plan. Flaky tests go to the QA Owner. It never reruns, cancels, deploys or merges.",
+   "when": "Offer to a software team whose GitHub Actions pipelines are slow or often red, and where nobody owns the runners and workflows.",
+   "tags": [
+    "saas",
+    "github",
+    "ci",
+    "build-times",
+    "deploys",
+    "developer-tools"
+   ],
+   "pains": [
+    "our CI is slow and people just hit rerun",
+    "the main branch is red and nobody knows why",
+    "deploys are scary so we do them rarely"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly CI health report · Tuesdays at 09:00 team time",
    "tools": [
     "chat",
     "github"
@@ -2443,6 +2546,39 @@
    "default": false
   },
   {
+   "slug": "pipeline-manager",
+   "template": "pipeline-manager",
+   "name": "Pipeline Manager",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Runs one pipeline: moves its cards through the stages, puts each card with the bot or person its stage needs, checks each stage's requirements and limits, and reports what is stuck and why. It does not do the work on a card, and it never changes a stage's rules.",
+   "when": "A team whose work moves through stages, such as product, engineering, growth or customer success, and whose cards wait in a stage that nobody is watching.",
+   "tags": [
+    "pipeline",
+    "stages",
+    "cards",
+    "handoffs",
+    "requirements",
+    "queue",
+    "operations",
+    "saas"
+   ],
+   "pains": [
+    "cards sit in one stage for weeks and nobody notices",
+    "a card moves on without the review or the spec its stage requires",
+    "work lands with the wrong person and comes back",
+    "a stage is full and every card waits for room nobody makes",
+    "a card says in progress and nobody has touched it for a week"
+   ],
+   "recommend_when": [
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly stage report · Mondays at 09:00 team time",
+   "tools": [],
+   "default": false
+  },
+  {
    "slug": "pr",
    "template": "pr",
    "name": "PR Manager",
@@ -2845,6 +2981,77 @@
    "default": false
   },
   {
+   "slug": "product-team-manager",
+   "template": "product-team-manager",
+   "name": "Product Team Manager",
+   "department": "product",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner and the product pipeline found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. Roadmap changes happen only when asked and a Tool allows them.",
+   "when": "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place.",
+   "tags": [
+    "saas",
+    "software",
+    "roadmap",
+    "prioritisation",
+    "discovery",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "nobody knows what's on the roadmap this quarter",
+    "every loud request jumps the queue",
+    "product decisions aren't written down anywhere",
+    "we can't say why we built what we built"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly product summary · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "qa-owner",
+   "template": "qa-owner",
+   "name": "QA Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns every automated test, from unit to end to end: keeps the flaky test register and decides fix or quarantine for each, reports the suite's health each week, and files each product bug a test exposes into the Engineering pipeline. It never merges, and it changes a test only when asked.",
+   "when": "Offer to a software team whose automated tests are flaky, slow or missing for the paths that matter, and where nobody owns the test suite as a whole.",
+   "tags": [
+    "saas",
+    "github",
+    "testing",
+    "quality",
+    "flaky-tests",
+    "developer-tools"
+   ],
+   "pains": [
+    "our tests are flaky and people just hit rerun",
+    "nobody knows which tests still matter",
+    "a bug got through because no test covered the path",
+    "the end to end suite is slow and nobody owns it"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly test health report · Tuesdays at 09:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": false
+  },
+  {
    "slug": "quality-inspections",
    "template": "quality-inspections",
    "name": "Quality & Inspections",
@@ -2976,6 +3183,44 @@
    ],
    "first_routine": "Weekly release notes draft · Fridays at 14:00 team time",
    "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "release-owner",
+   "template": "release-owner",
+   "name": "Release Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the path from a merged change to users. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. It never reruns, cancels, deploys, rolls back or merges on its own.",
+   "when": "A software team whose merged changes wait days to reach users, whose merge queue is slow or distrusted, or who cut releases by hand and need one seat to get each release ready and out.",
+   "tags": [
+    "saas",
+    "github",
+    "delivery",
+    "merge-queue",
+    "releases",
+    "changelog",
+    "rollbacks",
+    "deploys"
+   ],
+   "pains": [
+    "a merged change waits days before users see it",
+    "the merge queue is slow and people stop trusting it",
+    "we release rarely because every release feels risky",
+    "release notes are written by hand at the last minute, or not at all",
+    "a rollback takes an afternoon and nobody is sure how",
+    "customers do not know what changed in each release"
+   ],
+   "recommend_when": [
+    "sells_software"
+   ],
+   "first_routine": "Weekly delivery report · Mondays at 09:30 team time",
+   "tools": [
+    "chat",
     "docs",
     "github"
    ],
@@ -3511,6 +3756,42 @@
    "default": false
   },
   {
+   "slug": "security-owner",
+   "template": "security-owner",
+   "name": "Security Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Works the security backlog: ranks dependency alerts by real exposure and whether the code reaches the flaw, writes the patch plan in merge order, and reports any credential committed to a repository by location only. A person merges every fix.",
+   "when": "Offer to a software team whose repositories are on GitHub and whose dependency alerts pile up with nobody owning them.",
+   "tags": [
+    "saas",
+    "github",
+    "dependencies",
+    "vulnerabilities",
+    "secrets",
+    "regulated",
+    "enterprise"
+   ],
+   "pains": [
+    "dependabot alerts pile up and nobody looks at them",
+    "we can't tell which vulnerabilities actually matter",
+    "a customer security review asks how fast we patch",
+    "someone committed an API key to the repository"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly dependency and advisory report · Mondays at 08:00 team time",
+   "tools": [
+    "chat",
+    "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "segment-marketing-owner",
    "template": "segment-marketing-owner",
    "name": "Marketing Owner",
@@ -3587,6 +3868,43 @@
     "crm",
     "github",
     "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "seo-owner",
+   "template": "seo-owner",
+   "name": "SEO Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Checks how the team shows up in search and in AI answers each week, then hands over the three page fixes worth doing first, drafted to apply in minutes. It never edits a live page itself.",
+   "when": "A team whose buyers search or ask an AI assistant before they talk to anyone, and that has a website with content on it.",
+   "tags": [
+    "seo",
+    "ai-search",
+    "content",
+    "website",
+    "saas",
+    "ecommerce"
+   ],
+   "pains": [
+    "we don't know if AI assistants mention us",
+    "our website gets little organic traffic",
+    "competitors outrank us for what buyers search",
+    "nobody checks our pages for search problems",
+    "we don't know which pages to write to rank"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_to_businesses",
+    "sells_software"
+   ],
+   "first_routine": "Weekly search and AI visibility report · Mondays at 08:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "web"
    ],
    "default": false
   },
