@@ -148,6 +148,67 @@ Nothing folds on a phone. Backlog, finished and other steps each get a chip. A s
 **warn after** limit, its ▶ button when tasks wait on you, and a select-all button. An empty step says **Nothing
 here**. General works the same way, with its steps as chips.
 
+## Review mode: the ▶ screen
+
+Press **▶** on a board to open review mode. It lists the work that waits on you as one queue, and it shows one item at a
+time. The header reads **For you · 2 of 5** and names the item's stage. The queue lists each pipeline's stages from left
+to right, then the oldest item first within each stage.
+
+An item is one of three things:
+
+- **A review**: one requirement of one ticket that waits on your review.
+- **A question**: a bot's question you answer on the screen.
+- **A subtask**: a subtask you own on an open ticket, which you finish or send back.
+
+1. Press **▶** on a board where tasks wait on you.
+2. Read the card and **Why you**. Open an attachment or the **Open** link when you need the detail.
+3. Move with **‹** and **›**. **Exit** (Esc) leaves the queue.
+4. Choose one action. The queue moves on to the next item.
+
+### What a review shows
+
+The card shows, from the top:
+
+- The ticket's title.
+- Its attachments, one tab each. A text file shows as plain text, with an **Open** link beside it. A file that does not
+  load says **Could not load the file.**
+- With no attachment, the words **No spec attached**, then the ticket's body, acceptance criteria and checkpoint. Each
+  shows only when the ticket has it.
+- **Bot:** and the bot's note, when a bot left one.
+
+Beside the card, **Why you** says why the item is yours: the requirement and the pipeline, for example
+**Spec approved · Product**. **Sent back to you** or **Asked as backup** comes first when someone sent it to you or asked
+you as backup. The heading reads **Why** when another person is the reviewer.
+
+A page on the ticket that you cannot open is not shown. The card then says **You can't open this page, so you can't
+approve it.** and offers no **Approve**.
+
+### Actions on a review
+
+- **Note**: the box for the actions below. **Message** to the owner, **Message** to the manager and **Mark met** each
+  need a note. Without one, the screen says **Write a note first.**
+- **Message** with the owner's name, for example **Message Product Manager**: sends your note back to the owner, so the
+  requirement goes back to them. The item leaves your queue.
+- **Message** with the manager's name: sends your note to the pipeline's manager. The button shows only when the pipeline
+  has a manager. The item leaves your queue.
+- **Approve** (⌘⏎): moves the ticket on. An **Approved · Undo** notice stays for 10 seconds.
+- **Mark met**: marks the requirement met, with your note as the reason. It shows only when the pipeline allows it.
+- **Not validated**: sends the item back to the stage before Validate and files one follow-up ticket. It shows only when
+  the pipeline allows it.
+
+A footer says where **Approve** moves the ticket: **Last requirement · moves** the ticket's title **to** the next stage.
+The title is cut to about 40 characters.
+
+### Questions and subtasks on the screen
+
+A question shows the same question card as **Decide**, with its picks. A question without picks shows an answer box and
+**Send**. Answering it, on the screen or on its card, takes all of that question's rows out of the queue. A page behind
+the question that you cannot open is redacted, as it is on the task page.
+
+A subtask shows its body, acceptance criteria and files, and an **Open** link to the subtask. Its **Note** box is beside
+it. **Done** finishes the subtask, with the note if you write one. **Send back** needs a note. Either button takes the
+subtask out of the queue.
+
 ## Managers acting on tasks
 
 A bot or person above a task's owner or requester on the org chart inherits that
