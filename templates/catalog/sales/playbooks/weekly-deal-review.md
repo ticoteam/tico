@@ -16,7 +16,7 @@ action last week's review proposed: done, slipped or dropped. Say which.
 
 For each open deal: the stage and amount as the CRM shows them (a read), the last touch (the seller's
 thread, `hub meeting search "<customer>"`), the next step and its date, and the mutual action plan's next
-milestone. Days quiet = today minus the last two-way contact, not the last email we sent.
+milestone. Days quiet = today minus the last two-way contact, not the last email we sent. Check each stage against its exit evidence with `skills/check-a-deal-stage-against-evidence/SKILL.md`.
 
 ## 3. Sort
 
@@ -29,7 +29,7 @@ milestone. Days quiet = today minus the last two-way contact, not the last email
 
 For each at-risk deal, prepare one follow-up that adds a new reason (an answer to their open question, a
 relevant fact, a smaller ask), under 120 words, in `knowledge/voice.md`. Never "just checking in". Put the
-recipient, subject and body on the task and send requested follow-ups with your Tools when a person has turned mail sending on in Tico; otherwise leave drafts in the connected seller's mailbox.
+recipient, subject and body on the task write each one as `skills/write-a-follow-up-with-a-new-reason/SKILL.md` says. Send one only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise it stays a draft in the connected seller's mailbox.
 
 ## 5. List what is due
 

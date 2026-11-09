@@ -1,0 +1,29 @@
+{
+  "expected": [
+    {
+      "text": "Do not create a false identity or mislead others about who sent a message or where it came from.",
+      "quote": "Creating a false identity or any attempt to mislead others as to the identity of the sender or the origin of any data or communications.",
+      "section": "Falsification of Identity or Origin",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Do not break laws, industry standards, or carrier requirements in any jurisdiction where we send.",
+      "quote": "Violating laws, regulations, governmental orders, industry standards, or telecommunications providers' requirements or guidance in any applicable jurisdiction",
+      "section": "Violations of Laws or Standards",
+      "who_hint": "messaging"
+    },
+    {
+      "text": "Do not reverse engineer, copy, disassemble, or decompile the Services.",
+      "quote": "Reverse engineering, copying, disassembling, or decompiling the Services.",
+      "section": "Reverse Engineering",
+      "who_hint": "engineering"
+    }
+  ],
+  "url": "https://www.twilio.com/en-us/legal/aup",
+  "fetched_at": "2026-10-30T23:39:34Z",
+  "from": {
+    "name": "Twilio Acceptable Use Policy",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

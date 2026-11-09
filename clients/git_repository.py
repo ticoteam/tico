@@ -1,4 +1,5 @@
 """Repository addresses and stable folder names shared by the server and computer."""
+
 import hashlib
 import re
 from urllib.parse import urlsplit
@@ -10,7 +11,14 @@ def address(value):
     if re.fullmatch(r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+', value) and value.split('/')[1] not in ('.', '..'):
         return 'https://github.com/' + value + '.git'
     parsed = urlsplit(value)
-    if parsed.scheme in ('https', 'ssh', 'file') and parsed.path and not parsed.query and not parsed.fragment and not parsed.password and not (parsed.scheme == 'https' and parsed.username):
+    if (
+        parsed.scheme in ('https', 'ssh', 'file')
+        and parsed.path
+        and not parsed.query
+        and not parsed.fragment
+        and not parsed.password
+        and not (parsed.scheme == 'https' and parsed.username)
+    ):
         if parsed.scheme == 'file' and parsed.netloc not in ('', 'localhost'):
             raise ValueError('Use a local file remote')
         if parsed.scheme == 'file' or parsed.hostname:

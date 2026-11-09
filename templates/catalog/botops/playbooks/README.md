@@ -1,6 +1,10 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire. Read the one that matches the
 request before you act; AGENT.md says when for the rest.
 
+Inputs: the request or task in hand. Find the playbook that matches it below.
+
+Done when: the matching playbook has been read and its own Done when line is met.
+
 ## Chat requests from a human (as them)
 - `build-me-a-bot.md`: build a bot and take it live.
 - `change-model-or-computer.md`: a model change or a move, checked on the computer.

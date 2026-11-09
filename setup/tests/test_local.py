@@ -1,4 +1,5 @@
 """The `local` target: what scripts/install.sh runs on the server itself."""
+
 from setup import dns, state
 from setup.tests import fakes
 from setup.tests.fakes import FakeShell
@@ -10,6 +11,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def secret_env(monkeypatch):
     from setup import verify
+
     monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", SECRET)
     monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.Check("stub", True, "ok")])
 
@@ -32,4 +34,3 @@ def test_local_run_pins_the_release_and_never_uses_ssh(monkeypatch):
     assert "TICO_TAG=v0.2.0" in env_input and "COMPOSE_PROFILES=caddy,updater" in env_input
     assert not any(SECRET in c for c in shell.cmds()) and SECRET not in out
     assert state.load("tico.example.com")[0]["tag"] == "v0.2.0"
-

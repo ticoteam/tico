@@ -17,10 +17,26 @@ from .blobs import Blobs
 from .config import ROOT, Settings
 from .execution import Execution
 from .store import H, P, Problem, Store, encode, repo_url
+from . import bot_settings as BS
 
 
-CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
-                "meeting_versions", "meeting_deliveries")
+CORE_HISTORY = (
+    "conversations",
+    "messages",
+    "tasks",
+    "task_events",
+    "turns",
+    "meetings",
+    "meeting_versions",
+    "meeting_deliveries",
+)
+# A legacy source's task_events rows are the new database's task rows in history_events
+# (backend/migrations/0064_history_events.py); the report keeps the source's name for them. A legacy turn is an attempts
+# row with a run record (migration 0072), so a turns count reads those.
+HISTORY_COUNTS = {
+    "task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'",
+    "turns": "SELECT count(*) FROM attempts WHERE job_id IS NULL OR trigger IS NOT NULL",
+}
 
 
 def registry_dir():
@@ -31,7 +47,7 @@ def registry_dir():
 def bots_by_operator(c):
     """Who hosts what after an import, so an operator can check the split at a glance."""
     result = {}
-    for bot, operator in c.execute("SELECT bot,operator FROM bot_config ORDER BY operator,bot"):
+    for bot, operator in c.execute("SELECT bot,owner_id FROM bot_config ORDER BY owner_id,bot"):
         result.setdefault(operator, []).append(bot)
     return result
 
@@ -39,9 +55,30 @@ def bots_by_operator(c):
 def resolved_registry(projects, registry_dir):
     source = yaml.safe_load((registry_dir / "employees.yaml").read_text())
     entries = {}
-    fields = {"name", "display_name", "description", "repo", "reports_to", "team", "runtime", "model",
-              "reasoning_effort", "effort", "compact_at", "status", "max_run_minutes", "schedules", "access", "routines", "tools",
-              "reads", "slack_channel", "role", "title", "order"}
+    fields = {
+        "name",
+        "display_name",
+        "description",
+        "repo",
+        "reports_to",
+        "team",
+        "runtime",
+        "model",
+        "reasoning_effort",
+        "effort",
+        "compact_at",
+        "status",
+        "max_run_minutes",
+        "schedules",
+        "access",
+        "routines",
+        "tools",
+        "reads",
+        "slack_channel",
+        "role",
+        "title",
+        "order",
+    }
     for entry in source["employees"]:
         slug = entry["name"]
         path = manifest_path(repo_dir(projects, slug))
@@ -72,40 +109,47 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
     if not seeded:
         store.seed(entries=entries)
     with store.transaction() as c:
-        # Legacy bot tokens, machine paths, runtime hosts and provider sessions
-        # are local capabilities/history, never cloud execution credentials.
-        c.execute("UPDATE bots SET token_hash=NULL,thread_id=NULL,cwd='',host='remote'")
+        # Legacy provider sessions are local history, never cloud execution credentials. The bot's machine path,
+        # its host and any token are no longer stored on bots at all (migration 0043).
         c.execute("DELETE FROM rate_limits")
-        H.event(c, H.KEEPER, "legacy.execution_fenced", "database",
-                {"source_sha256": source_report["sha256"]})
+        H.event(c, H.KEEPER, "legacy.execution_fenced", "database", {"source_sha256": source_report["sha256"]})
     with store.read() as c:
         pending_messages = c.execute(
-            "SELECT count(*) FROM messages WHERE to_actor LIKE 'bot:%' AND delivered_at IS NULL"
+            "SELECT count(*) FROM messages WHERE recipient_id LIKE 'bot:%' AND delivered_at IS NULL"
         ).fetchone()[0]
     if queue_backlog:
         store.enqueue_existing()
     archives = import_text_archives(store, runtime)
     with store.transaction() as c:
-        counts = {table: c.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0]
-                  for table in CORE_HISTORY}
+        counts = {
+            table: c.execute(HISTORY_COUNTS.get(table) or 'SELECT count(*) FROM "' + table + '"').fetchone()[0]
+            for table in CORE_HISTORY
+        }
         expected = {table: source_report["tables"].get(table, 0) for table in CORE_HISTORY}
         if counts != expected:
             raise RuntimeError("Core history counts changed during migration")
-        state = {"pending_messages": pending_messages,
-                 "backlog_activated": bool(queue_backlog),
-                 "queued_jobs": c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0],
-                 "assignments": c.execute("SELECT count(*) FROM assignments").fetchone()[0],
-                 "runners": c.execute("SELECT count(*) FROM runners").fetchone()[0],
-                 "legacy_tokens": c.execute("SELECT count(*) FROM bots WHERE token_hash IS NOT NULL").fetchone()[0],
-                 "legacy_paths": c.execute("SELECT count(*) FROM bots WHERE cwd<>'' OR host<>'remote'").fetchone()[0],
-                 "bots_by_operator": bots_by_operator(c)}
-        if state["assignments"] or state["runners"] or state["legacy_tokens"] or state["legacy_paths"]:
+        state = {
+            "pending_messages": pending_messages,
+            "backlog_activated": bool(queue_backlog),
+            "queued_jobs": c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0],
+            "assignments": c.execute("SELECT count(*) FROM assignments").fetchone()[0],
+            "runners": c.execute("SELECT count(*) FROM runners").fetchone()[0],
+            "bots_by_operator": bots_by_operator(c),
+        }
+        if state["assignments"] or state["runners"]:
             raise RuntimeError("Legacy execution authority was not fully fenced")
-        manifest = {"format": "tico-legacy-import-v1", "source": str(source),
-                    "source_sha256": source_report["sha256"], "history": counts,
-                    "archives": archives, "execution": state}
-        c.execute("INSERT INTO registry_metadata VALUES('legacy-import',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-                  (encode(manifest),))
+        manifest = {
+            "format": "tico-legacy-import-v1",
+            "source": str(source),
+            "source_sha256": source_report["sha256"],
+            "history": counts,
+            "archives": archives,
+            "execution": state,
+        }
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('legacy-import',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (encode(manifest),),
+        )
     # Produce one portable file for transfer. The cloud server will return it to WAL mode on
     # first startup, but no accepted migration write may remain only in a local sidecar.
     with sqlite3.connect(destination) as c:
@@ -117,8 +161,7 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
     final = inspect(destination)
     if final["integrity"] != ["ok"] or final["foreign_key_violations"]:
         raise RuntimeError("Migrated database failed final integrity verification")
-    return {"source": source_report, "destination": final, "history": counts,
-            "archives": archives, "execution": state}
+    return {"source": source_report, "destination": final, "history": counts, "archives": archives, "execution": state}
 
 
 def main(argv=None):
@@ -140,13 +183,20 @@ def main(argv=None):
     p = sub.add_parser("initialize")
     p.add_argument("database", type=Path)
     p.add_argument("--projects", type=Path, default=ROOT.parent)
-    p.add_argument("--registry", type=Path, default=registry_dir(),
-                   help="This environment's registry directory (default: $TICO_REGISTRY_DIR)")
+    p.add_argument(
+        "--registry",
+        type=Path,
+        default=registry_dir(),
+        help="This environment's registry directory (default: $TICO_REGISTRY_DIR)",
+    )
     p = sub.add_parser("set-repo", help="Point a bot at its Git repository: a name, owner/name, or an https URL")
     p.add_argument("database", type=Path)
     p.add_argument("bot")
     p.add_argument("repo")
-    p = sub.add_parser("usage-count", help="The anonymous usage count (PRIVACY.md): show it, turn it on or off, or make a new install ID")
+    p = sub.add_parser(
+        "usage-count",
+        help="The anonymous usage count (PRIVACY.md): show it, turn it on or off, or make a new install ID",
+    )
     p.add_argument("database", type=Path)
     p.add_argument("action", choices=("show", "on", "off", "reset-id", "payload"))
     p = sub.add_parser("import-history")
@@ -157,8 +207,11 @@ def main(argv=None):
     p.add_argument("destination", type=Path)
     p.add_argument("--runtime", type=Path, required=True)
     p.add_argument("--projects", type=Path, default=ROOT.parent)
-    p.add_argument("--queue-legacy-backlog", action="store_true",
-                   help="Explicitly make old undelivered bot messages claimable after import")
+    p.add_argument(
+        "--queue-legacy-backlog",
+        action="store_true",
+        help="Explicitly make old undelivered bot messages claimable after import",
+    )
     p = sub.add_parser("hosting-enrollment")
     p.add_argument("database", type=Path)
     p.add_argument("--owner", required=True)
@@ -170,23 +223,32 @@ def main(argv=None):
     p.add_argument("database", type=Path)
     owner = p.add_mutually_exclusive_group(required=True)
     owner.add_argument("--owner", dest="operator", help="the roster ID or email of the human who owns the computer")
-    owner.add_argument("--operator", dest="operator", help=argparse.SUPPRESS)      # the old spelling, hidden for one release
+    owner.add_argument(
+        "--operator", dest="operator", help=argparse.SUPPRESS
+    )  # the old spelling, hidden for one release
     p.add_argument("--out", type=Path, required=True, help="New private file for the enrollment code")
-    p = sub.add_parser("delete-tasks", help="Move tasks made by mistake, with their conversations, to the "
-                       "trash; lists what would go unless --apply")
+    p = sub.add_parser(
+        "delete-tasks",
+        help="Move tasks made by mistake, with their conversations, to the trash; lists what would go unless --apply",
+    )
     p.add_argument("database", type=Path)
     p.add_argument("--ids-file", type=Path, required=True, help="One task id per line")
     p.add_argument("--apply", action="store_true", help="Delete; without it nothing changes")
     p = sub.add_parser("restore-tasks", help="Put deleted tasks back from the trash")
     p.add_argument("database", type=Path)
     p.add_argument("--ids-file", type=Path, required=True, help="One task id per line")
-    p = sub.add_parser("purge-deleted-tasks", help="Remove for good what has been in the trash longer than "
-                       "--older-than-days; lists it unless --apply")
+    p = sub.add_parser(
+        "purge-deleted-tasks",
+        help="Remove for good what has been in the trash longer than --older-than-days; lists it unless --apply",
+    )
     p.add_argument("database", type=Path)
     p.add_argument("--older-than-days", type=int, required=True)
     p.add_argument("--apply", action="store_true", help="Purge; without it nothing changes")
-    p = sub.add_parser("owner-email", help="Change the owner's sign-in email in place (the same person), e.g. to get back in "
-                       "after a lockout; shows what would change unless --apply")
+    p = sub.add_parser(
+        "owner-email",
+        help="Change the owner's sign-in email in place (the same person), e.g. to get back in "
+        "after a lockout; shows what would change unless --apply",
+    )
     p.add_argument("database", type=Path)
     p.add_argument("--to", required=True, help="The owner's new sign-in address")
     p.add_argument("--apply", action="store_true", help="Change it; without it nothing changes")
@@ -204,12 +266,15 @@ def main(argv=None):
         report = snapshot(args.source, args.destination)
     elif args.command == "checkpoint":
         from .backup import checkpoint
+
         report = checkpoint(args.source, args.destination)
     elif args.command == "compact":
         from .backup import compact
+
         report = compact(args.database)
     elif args.command == "restore":
         from .backup import restore_snapshot
+
         report = restore_snapshot(args.source, args.destination)
     elif args.command == "initialize":
         store = Store(Settings(db_path=args.database, registry_dir=args.registry))
@@ -222,15 +287,17 @@ def main(argv=None):
             report["bots_by_operator"] = bots_by_operator(c)
     elif args.command == "hosting-enrollment":
         from .hosting_enrollment import enrollment
+
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         report = enrollment(store, Auth(store), args.request_id, args.code_hash, args.label, args.owner, args.status)
     elif args.command == "enrollment":
         from .models import EnrollmentRequest
+
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         auth = Auth(store)
         execution = Execution(store, auth)
         with store.transaction() as c:
-            auth.sync_access(c)   # the owner is stored in the database; an offline command has no request to load it
+            auth.sync_access(c)  # the owner is stored in the database; an offline command has no request to load it
             operator = args.operator
             if "@" in operator:
                 row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (operator.strip().lower(),)).fetchone()
@@ -242,47 +309,61 @@ def main(argv=None):
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as stream:
                 json.dump(code, stream)
-        report = {"written": str(args.out), "expires": code["expires"]}
+        report = {"written": str(args.out), "expires": code["expires_at"]}
     elif args.command == "set-repo":
         from .models import repo_reference
+
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         repo = repo_reference(args.repo)
         with store.transaction() as c:
-            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (args.bot,)).fetchone()
+            bot = (H.resolve_bot(c, args.bot) or {}).get("id", args.bot)
+            row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
-            config = {**json.loads(row["config_json"] or "{}"), "repo": repo}
-            c.execute("UPDATE bot_config SET repo=?,config_json=?,revision=revision+1 WHERE bot=?",
-                      (repo, encode(config), args.bot))
-            H.event(c, H.KEEPER, "bot.repo_set", args.bot, {"repo": repo})
-        report = {"bot": args.bot, "repo": repo,
-                  "repo_url": repo_url(repo, store.settings.github_owner)}
+            config = {**json.loads(row["config"] or "{}"), "repo": repo}
+            BS.write(c, bot, config)
+            c.execute("UPDATE bot_config SET repo=?,revision=revision+1 WHERE bot=?", (repo, bot))
+            H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
+        report = {"bot": bot, "repo": repo, "repo_url": repo_url(repo, store.settings.github_owner)}
     elif args.command == "delete-tasks":
         from .task_delete import delete_tasks
+
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         with store.transaction() as c:
             report = delete_tasks(c, args.ids_file.read_text().split(), apply=args.apply)
     elif args.command == "restore-tasks":
         from .task_delete import restore_tasks
+
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         with store.transaction() as c:
             report = restore_tasks(c, args.ids_file.read_text().split())
     elif args.command == "purge-deleted-tasks":
         from .task_delete import purge_trash
+
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         with store.transaction() as c:
             report = purge_trash(c, args.older_than_days, apply=args.apply)
     elif args.command == "owner-email":
         from . import access
         from .views import roster
+
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         try:
             with store.transaction() as c:
                 owner = access.load_owner(c, store.settings)
                 # A dry run makes the same change with every check, then rolls it back.
                 c.execute("SAVEPOINT owner_email")
-                after = access.change_owner_email(c, "host", roster(c), owner, args.to, expected_revision=owner["revision"],
-                                                  now=H.now(), settings=store.settings, via="host")
+                after = access.change_owner_email(
+                    c,
+                    "host",
+                    roster(c),
+                    owner,
+                    args.to,
+                    expected_revision=owner["revision"],
+                    now=H.now(),
+                    settings=store.settings,
+                    via="host",
+                )
                 lists = access.load_access(c, store.settings)
                 if not args.apply:
                     c.execute("ROLLBACK TO owner_email")
@@ -290,11 +371,18 @@ def main(argv=None):
         except Problem as exc:
             raise SystemExit(exc.detail) from None
         # The server reads the owner record on its next request: no restart.
-        report = {"owner": owner["email"], "to": after["email"], "revision": after["revision"], "applied": args.apply,
-                  "allowed": lists["allowed"], "admins": lists["admins"]}
+        report = {
+            "owner": owner["email"],
+            "to": after["email"],
+            "revision": after["revision"],
+            "applied": args.apply,
+            "allowed": lists["allowed"],
+            "admins": lists["admins"],
+        }
     elif args.command == "usage-count":
         from .census import Census
         from .releases import version
+
         settings = Settings(db_path=args.database, registry_dir=registry_dir())
         store, census = Store(settings), Census(Store(settings), settings)
         if args.action == "on" or args.action == "off":
@@ -304,7 +392,10 @@ def main(argv=None):
         elif args.action == "payload":
             # What would be sent right now; nothing is sent by this command.
             with store.read() as c:
-                report = census.payload(c, version()) or {"sent": False, "reason": census.off_reason(c) or "notice not yet shown"}
+                report = census.payload(c, version()) or {
+                    "sent": False,
+                    "reason": census.off_reason(c) or "notice not yet shown",
+                }
         else:
             with store.read() as c:
                 report = census.view(c)
@@ -313,17 +404,26 @@ def main(argv=None):
         store.initialize()
         report = import_text_archives(store, args.runtime)
     elif args.command == "migrate-legacy":
-        report = migrate_legacy(args.source, args.destination, args.runtime, args.projects,
-                                queue_backlog=args.queue_legacy_backlog)
+        report = migrate_legacy(
+            args.source, args.destination, args.runtime, args.projects, queue_backlog=args.queue_legacy_backlog
+        )
     else:
         import boto3
+
         s3 = boto3.client("s3")
         settings = Settings(db_path=args.database, blob_dir=args.blob_dir, blob_bucket=args.blob_bucket or "")
         # A hand-run bundle carries the key files beside the database (credential.key, github-app.key, slack.key):
         # restore_bundle (python -m backend.backup) puts them back beside the restored database.
         from .company_storage import for_backup
-        report = upload_bundle(args.database, args.bucket, args.key, s3, for_backup(Store(settings), Blobs(settings, s3)),
-                               key_dir=Path(args.database).resolve().parent)
+
+        report = upload_bundle(
+            args.database,
+            args.bucket,
+            args.key,
+            s3,
+            for_backup(Store(settings), Blobs(settings, s3)),
+            key_dir=Path(args.database).resolve().parent,
+        )
     print(json.dumps(report, indent=2))
 
 

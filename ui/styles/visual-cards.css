@@ -1,4 +1,4 @@
-/* Visuals in replies (ui/app/visual-cards.js): a card the width of the message column, never wider than the screen.
+/* Visuals in replies (ui/app/visual-cards.ts): a card the width of the message column, never wider than the screen.
    A card holds its space before it loads (aspect-ratio from the file's size, or its kind's own), so nothing jumps. */
 :root{--vcard-cap:480px}
 @media (max-width:760px){:root{--vcard-cap:60vh}}
@@ -13,7 +13,7 @@
 .vcard[data-kind="image"] .vcard-cap{padding-left:6px}
 .conv-run.from-me .vcards{justify-content:flex-end}
 .vcard-body{position:relative;width:min(100%,var(--vcard-w,100%));max-width:100%;max-height:var(--vcard-cap);overflow:hidden;margin:0 auto}
-.vcard[data-state="ready"] .vcard-body:not(.ready){background:linear-gradient(90deg,var(--surface2) 25%,var(--line) 50%,var(--surface2) 75%);background-size:200% 100%;animation:mskel 1.2s linear infinite}
+/* .vcard-body:not(.ready) shimmers while it loads: skeleton.css */
 .vcard-open{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:64px;padding:12px}
 .vcard-preview{display:block;max-width:100%;max-height:240px;border-radius:6px;object-fit:contain}
 .vcard-note{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;min-height:64px;padding:12px;color:var(--muted);font-size:var(--t-base);text-align:center}
@@ -29,7 +29,7 @@
 .vcard-menu-list.toward-right{right:auto;left:0}
 .vcard-menu-list>button,.vcard-menu-list>a{all:unset;box-sizing:border-box;padding:8px 10px;border-radius:6px;cursor:pointer;color:var(--ink);font-size:var(--t-base)}
 .vcard-menu-list>button:hover,.vcard-menu-list>a:hover,.vcard-menu-list>button:focus-visible,.vcard-menu-list>a:focus-visible{background:var(--surface2)}
-/* Pictures and SVG (ui/app/visual-pictures.js): scaled to fit, never cropped. */
+/* Pictures and SVG (ui/app/visual-pictures.ts): scaled to fit, never cropped. */
 .vcard-hit{all:unset;display:block;width:100%;height:100%;cursor:zoom-in}
 .vcard-hit:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .vcard-img{display:block;width:100%;height:auto;max-height:var(--vcard-cap);object-fit:contain}

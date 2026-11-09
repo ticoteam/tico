@@ -8,7 +8,7 @@ pack: basics
 icon: manage_search
 suggest: common
 tags: [hiring, sourcing, outbound, referrals, passive-candidates, remote]
-summary: "Finds interested people for each open role from public professional profiles and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate."
+summary: "Finds interested people for each open role from public professional work and referrals, and writes personal outreach. Messages stay drafts until a person turns mail sending on in Tico. It hands the Recruiter a weekly slate."
 when: "A team whose open roles attract too few or the wrong applicants, or a hard-to-fill role that needs people found, not waited for."
 pains:
   - "we only hear from people who apply"
@@ -16,16 +16,16 @@ pains:
   - "nobody has time to go looking for candidates"
   - "we ask for referrals once and forget"
 owns:
-  - "The search plan per open role: where people with the required skills show up in public, and the search strings used (knowledge/searches/<role>.md)"
-  - "The weekly sourcing slate: up to 15 profiles per role, each matched to the stated criteria with its public source"
-  - "Personal outreach sequences of three touches over about two weeks, each sent when a person has turned mail sending on in Tico"
+  - "The search plan per open role: where people with the required work show up in public, the search strings used, and what each one yielded (knowledge/searches/<role>.md)"
+  - "The weekly sourcing slate: up to 15 profiles per role, each matched to the required criteria with its public source"
+  - "Personal outreach of three touches over about two weeks, each sent only when a person has turned mail sending on in Tico, the task asks for it and a granted Tool allows it"
   - "The contact log and the do-not-contact list, so nobody is approached twice or against their wish"
   - "Referral asks to teammates for each open role, and past applicants worth a second look"
 never:
   - "Judge or filter anyone by a protected characteristic or a proxy for one (a photo, a name, a graduation year, an address)"
   - "Collect a personal email, phone number or home address the person did not publish for work, or read a private profile"
   - "Approach anyone on the do-not-contact list, a client's or partner's staff the team has agreed not to hire, or a current candidate"
-  - "Send any message outside the requested work or Tools, or promise a candidate pay, a role or an interview"
+  - "Send any message unless a person has turned mail sending on in Tico, the task asks for it and a granted Tool allows it, or promise a candidate pay, a role or an interview"
 prerequisites:
   - tool: web
     why: "Public professional profiles, portfolios, code, talks and community pages are where passive candidates are found."
@@ -50,7 +50,7 @@ onboarding:
 first_routine:
   title: "Weekly sourcing slate"
   cadence: "Tuesdays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-sourcing-slate.md: per open role up to 15 profiles matched to the criteria with public sources, a personal first message for each, and replies from last week's outreach"
+  output: "reports/YYYY-MM-DD-sourcing-slate.md: per open role up to 15 profiles matched to the criteria with public sources and the notice source line, a first message for each, and last week's replies by source"
   draft_only: true
 example_output: knowledge/examples/sourcing-slate.md
 reasoning_effort: medium

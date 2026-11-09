@@ -3,6 +3,9 @@
 Schedule: Tuesdays at 09:00 team time (routine `weekly-email-draft`), after setup. Also run by hand. Budget 40 minutes. The outcome is one draft for the next email
 on the calendar, or a note that none is due. Nothing is sent.
 
+Inputs: `knowledge/calendar.md`, `knowledge/results.md`, the open email tasks, and the brief on each.
+Done when: one draft is on the calendar as drafted, or a one-line note says none is due; the task is marked done with its open checklist items named.
+
 ---
 
 ## 1. Decide what is due
@@ -17,7 +20,7 @@ why. If nothing is worth an email, say so in one line and finish. Never draft to
 ## 2. Confirm the brief
 
 One audience, one job, one call to action, the date it should reach people. If any is missing, ask
-the requester once with `hub task ask <id>` and stop.
+the requester once with `hub task question "<question>" --on <person> --parent <id>` and stop.
 
 ## 3. Draft
 

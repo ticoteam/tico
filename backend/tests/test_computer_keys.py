@@ -26,10 +26,16 @@ def heartbeat(api, token, source=None, capabilities=CAPABLE, runtime="codex", na
     row = {"installed": True, "authenticated": "ready" if source else "missing"}
     if source:
         row["key"] = {"name": name, "source": source}
-    r = api.post("/api/v2/runners/heartbeat", headers={"Authorization": "Bearer " + token,
-                                                        "Idempotency-Key": uuid.uuid4().hex},
-                 json={"version": "test", "platform": "linux", "capabilities": capabilities,
-                       "readiness": {"schema_version": 1, "runtimes": {runtime: row}, "bots": {}}})
+    r = api.post(
+        "/api/v2/runners/heartbeat",
+        headers={"Authorization": "Bearer " + token, "Idempotency-Key": uuid.uuid4().hex},
+        json={
+            "version": "test",
+            "platform": "linux",
+            "capabilities": capabilities,
+            "readiness": {"schema_version": 1, "runtimes": {runtime: row}, "bots": {}},
+        },
+    )
     assert r.status_code == 200, r.text
 
 
@@ -40,8 +46,11 @@ def call(api, method, path, body=None, who=None, expected=200):
 
 
 def report(api, machine, lid, state, message=""):
-    r = api.post(f"/api/v2/runner-logins/{lid}/report", json={"state": state, "message": message},
-                 headers={"Authorization": "Bearer " + machine["token"], "Idempotency-Key": uuid.uuid4().hex})
+    r = api.post(
+        f"/api/v2/runner-logins/{lid}/report",
+        json={"state": state, "message": message},
+        headers={"Authorization": "Bearer " + machine["token"], "Idempotency-Key": uuid.uuid4().hex},
+    )
     assert r.status_code == 200, r.text
 
 
@@ -53,8 +62,9 @@ def pending(api, machine):
 
 def fetch(api, machine, login="", runtime="codex"):
     params = {"runtime": runtime, **({"login": login} if login else {})}
-    r = api.get("/api/v2/runner-model-credentials", params=params,
-                headers={"Authorization": "Bearer " + machine["token"]})
+    r = api.get(
+        "/api/v2/runner-model-credentials", params=params, headers={"Authorization": "Bearer " + machine["token"]}
+    )
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -77,16 +87,24 @@ def test_a_new_key_is_stored_in_the_vault_and_reaches_the_computer_only_from_the
     job = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": new})
     assert job["kind"] == "use_key" and job["key"]["preview"] == "sk-…789" and job["key"]["env"] == "OPENAI_API_KEY"
     # The login relay carries no key: not the job the runner reads, not its row, not the request's receipt.
-    assert pending(api, box) == [{"id": job["id"], "runtime": "codex", "profile": "", "kind": "use_key",
-                                  "expires_at": job["expires_at"]}]
+    assert pending(api, box) == [
+        {"id": job["id"], "runtime": "codex", "profile": "", "kind": "use_key", "expires_at": job["expires_at"]}
+    ]
     with api.app.state.store.read() as c:
-        everything = json.dumps([[tuple(r) for r in c.execute(f"SELECT * FROM {t}")]
-                                 for t in ("model_logins", "idempotency", "events", "computer_keys")], default=str)
+        everything = json.dumps(
+            [
+                [tuple(r) for r in c.execute(f"SELECT * FROM {t}")]
+                for t in ("model_logins", "idempotency", "events", "computer_keys")
+            ],
+            default=str,
+        )
         stored = c.execute("SELECT ciphertext FROM credentials WHERE source=?", ("computer:" + rid,)).fetchone()
     assert new not in everything and stored and new.encode() not in bytes(stored[0])
     # Staged until the computer checks it: only the job's own fetch gets it.
     assert fetch(api, box) == {"credentials": []}
-    assert fetch(api, box, job["id"]) == {"credentials": [{"env": "OPENAI_API_KEY", "value": new, "source": "computer"}]}
+    assert fetch(api, box, job["id"]) == {
+        "credentials": [{"env": "OPENAI_API_KEY", "value": new, "source": "computer"}]
+    }
     assert listed(api, box)["keys"] == {}
     report(api, box, job["id"], "done")
     assert fetch(api, box) == {"credentials": [{"env": "OPENAI_API_KEY", "value": new, "source": "computer"}]}
@@ -112,7 +130,7 @@ def test_a_new_key_that_fails_its_check_is_deleted_and_the_old_one_stays(environ
     call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-third-0123456789"}, expected=409)
     report(api, box, bad["id"], "failed", "OpenAI refused the key")
     assert fetch(api, box)["credentials"][0]["value"] == "sk-proj-good-key-0123456789"
-    # Cancelled or run out of time: deleted the same way.
+    # Canceled or run out of time: deleted the same way.
     late = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-late-key-0123456789"})
     call(api, "POST", f"runners/{rid}/logins/{late['id']}/cancel", {})
     with api.app.state.store.read() as c:
@@ -122,10 +140,11 @@ def test_a_new_key_that_fails_its_check_is_deleted_and_the_old_one_stays(environ
     # without the job (so a regular fetch meanwhile cannot bring the old one back), and a cancel comes too late.
     agreed = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-agreed-0123456789"})
     report(api, box, agreed["id"], "finishing")
-    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": "sk-proj-agreed-0123456789",
-                                               "source": "computer"}]
+    assert fetch(api, box)["credentials"] == [
+        {"env": "OPENAI_API_KEY", "value": "sk-proj-agreed-0123456789", "source": "computer"}
+    ]
     late = call(api, "POST", f"runners/{rid}/logins/{agreed['id']}/cancel", {}, expected=409)
-    assert "can't be cancelled now" in late["error"]["detail"]
+    assert "can't be canceled now" in late["error"]["detail"]
     report(api, box, agreed["id"], "done")
     assert fetch(api, box)["credentials"][0]["value"] == "sk-proj-agreed-0123456789"
     with api.app.state.store.read() as c:
@@ -155,8 +174,11 @@ def test_a_cleared_key_is_not_signed_back_in_by_the_shared_key(environment):
     added = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-own-key-0123456789"})
     assert fetch(api, box)["credentials"] == [], "nothing until the computer has checked the new key"
     report(api, box, added["id"], "done")
-    assert fetch(api, box)["credentials"][0] == {"env": "OPENAI_API_KEY", "value": "sk-proj-own-key-0123456789",
-                                                 "source": "computer"}
+    assert fetch(api, box)["credentials"][0] == {
+        "env": "OPENAI_API_KEY",
+        "value": "sk-proj-own-key-0123456789",
+        "source": "computer",
+    }
     # ... and clearing that deletes it from the vault too.
     heartbeat(api, box["token"], "computer")
     again = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex"})["computers"][0]["login"]
@@ -170,7 +192,7 @@ def test_a_cleared_key_is_not_signed_back_in_by_the_shared_key(environment):
 
 
 def test_switch_to_subscription_keeps_the_key_it_runs_on_and_is_refused_once_the_key_is_cleared(environment):
-    """#1298: a cancelled Switch to subscription leaves the key in use and the computer reading ready on it. After Clear
+    """#1298: a canceled Switch to subscription leaves the key in use and the computer reading ready on it. After Clear
     key there is no login to keep, so a switch (a page drawn before the clear) is refused rather than run as a plain
     sign-in whose cancel would read "The API key is still in use" on a computer with no login; Sign in is the way."""
     api = setup(environment)
@@ -205,11 +227,16 @@ def test_this_computer_only_or_all_of_them_for_a_key_serving_several_computers(e
     three = computer(api, "Charlie", source="shared")
     own = computer(api, "Delta", source="terminal")
     with api.app.state.store.transaction() as c:  # Charlie went offline
-        c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id=?", (three["runner_id"],))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at='2026-01-01T00:00:00Z' WHERE runner_id=?", (three["runner_id"],)
+        )
     ask = call(api, "GET", f"runners/{one['runner_id']}/keys?runtime=codex")
     assert ask["source"] == "shared" and ask["preview"] == "sk-…789" and ask["can_replace_all"] is True
-    assert [(c["label"], c["online"]) for c in ask["computers"]] == [("Alpha", True), ("Bravo", True),
-                                                                     ("Charlie", False)]
+    assert [(c["label"], c["online"]) for c in ask["computers"]] == [
+        ("Alpha", True),
+        ("Bravo", True),
+        ("Charlie", False),
+    ]
     assert call(api, "GET", f"runners/{own['runner_id']}/keys?runtime=codex")["computers"] == []
     # This computer only: Alpha stops using it, Bravo and Charlie keep it.
     call(api, "POST", f"runners/{one['runner_id']}/keys/clear", {"runtime": "codex", "scope": "this"})
@@ -219,8 +246,10 @@ def test_this_computer_only_or_all_of_them_for_a_key_serving_several_computers(e
     heartbeat(api, one["token"], None)
     # All of them, from Bravo: every computer still on it, online ones by a job, Charlie when it is back.
     out = call(api, "POST", f"runners/{two['runner_id']}/keys/clear", {"runtime": "codex", "scope": "all"})["computers"]
-    assert [(c["label"], bool(c["login"]), c["waiting"]) for c in out] == [("Bravo", True, False),
-                                                                          ("Charlie", False, True)]
+    assert [(c["label"], bool(c["login"]), c["waiting"]) for c in out] == [
+        ("Bravo", True, False),
+        ("Charlie", False, True),
+    ]
     assert pending(api, two)[0]["kind"] == "clear_key" and pending(api, three) == []
     assert fetch(api, three) == {"credentials": [], "signed_out": True, "clear_key": True}
     assert "signed_out" not in fetch(api, own), "a computer on its own key is not touched"
@@ -240,26 +269,47 @@ def test_replacing_the_shared_key_for_all_of_them_is_a_credential_administrators
     assert ask["can_replace_all"] is False
     assert [c["may"] for c in ask["computers"]] == [True, False]
     rotated = "sk-team-rotated-0123456789"
-    refused = call(api, "POST", f"runners/{mine['runner_id']}/keys", {"runtime": "codex", "secret": rotated, "scope": "all"},
-                   who=as_person(api, "quinn"), expected=403)
+    refused = call(
+        api,
+        "POST",
+        f"runners/{mine['runner_id']}/keys",
+        {"runtime": "codex", "secret": rotated, "scope": "all"},
+        who=as_person(api, "quinn"),
+        expected=403,
+    )
     assert "credential administrator" in refused["error"]["detail"]
-    refused = call(api, "POST", f"runners/{mine['runner_id']}/keys/clear", {"runtime": "codex", "scope": "all"},
-                   who=as_person(api, "quinn"), expected=403)
+    refused = call(
+        api,
+        "POST",
+        f"runners/{mine['runner_id']}/keys/clear",
+        {"runtime": "codex", "scope": "all"},
+        who=as_person(api, "quinn"),
+        expected=403,
+    )
     assert "Team box" in refused["error"]["detail"]
     # This computer only is theirs to do: Quinn's box gets its own key, the Team box keeps the shared one.
-    job = call(api, "POST", f"runners/{mine['runner_id']}/keys", {"runtime": "codex", "secret": "sk-quinn-own-0123456789"},
-               who=as_person(api, "quinn"))
+    job = call(
+        api,
+        "POST",
+        f"runners/{mine['runner_id']}/keys",
+        {"runtime": "codex", "secret": "sk-quinn-own-0123456789"},
+        who=as_person(api, "quinn"),
+    )
     report(api, mine, job["id"], "done")
     assert fetch(api, mine)["credentials"][0]["source"] == "computer"
     assert fetch(api, other)["credentials"][0]["value"] == SHARED
     # The owner (a credential administrator) replaces it for all: every computer on it gets the new value.
-    done = call(api, "POST", f"runners/{other['runner_id']}/keys", {"runtime": "codex", "secret": rotated, "scope": "all"})
+    done = call(
+        api, "POST", f"runners/{other['runner_id']}/keys", {"runtime": "codex", "secret": rotated, "scope": "all"}
+    )
     assert done["shared"]["preview"] == "sk-…789"
     assert fetch(api, other)["credentials"] == [{"env": "OPENAI_API_KEY", "value": rotated, "source": "shared"}]
     assert fetch(api, mine)["credentials"][0]["value"] == "sk-quinn-own-0123456789"
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT count(*) FROM changes WHERE topic='runner' AND kind='credentials' AND subject_id=?",
-                         (other["runner_id"],)).fetchone()[0]
+        told = c.execute(
+            "SELECT count(*) FROM changes WHERE topic='runner' AND kind='credentials' AND subject_id=?",
+            (other["runner_id"],),
+        ).fetchone()[0]
     assert told, "the computers were told to fetch the key again"
 
 
@@ -270,15 +320,26 @@ def test_rights_are_sign_ins_and_an_old_runner_is_asked_to_update(environment):
     stranger = as_person(api, "quinn")
     call(api, "GET", f"runners/{rid}/keys?runtime=codex", who=stranger, expected=403)
     call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex"}, who=as_person(api, "quinn"), expected=403)
-    call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-x-0123456789"},
-         who=as_person(api, "quinn"), expected=403)
+    call(
+        api,
+        "POST",
+        f"runners/{rid}/keys",
+        {"runtime": "codex", "secret": "sk-proj-x-0123456789"},
+        who=as_person(api, "quinn"),
+        expected=403,
+    )
     call(api, "POST", f"runners/{rid}/keys", {"runtime": "gemini", "secret": "sk-proj-x-0123456789"}, expected=422)
     call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "two\nlines-0123456789"}, expected=422)
     old = computer(api, "Old box", source="terminal", capabilities=["model_sign_out_v1"])
     refused = call(api, "POST", f"runners/{old['runner_id']}/keys/clear", {"runtime": "codex"}, expected=409)
     assert "Update Old box" in refused["error"]["detail"]
-    call(api, "POST", f"runners/{old['runner_id']}/keys", {"runtime": "codex", "secret": "sk-proj-x-0123456789"},
-         expected=409)
+    call(
+        api,
+        "POST",
+        f"runners/{old['runner_id']}/keys",
+        {"runtime": "codex", "secret": "sk-proj-x-0123456789"},
+        expected=409,
+    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM credentials").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
@@ -288,17 +349,25 @@ def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_c
     """Clear key stops bots and a new key can too, so BotOps does neither, even with the operator's rights; and "all of
     them" is refused while any computer on the shared key, online or not, runs a runner that cannot clear it."""
     from backend.auth import Identity
+
     api = setup(environment)
     grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     one = computer(api, "Alpha", source="shared")
     rid = one["runner_id"]
     api.app.state.store.settings.test_identities["morgan-via-botops"] = Identity(
-        "human:morgan", "human", via="botops", confirmed=True)
+        "human:morgan", "human", via="botops", confirmed=True
+    )
     botops = signed_in("morgan-via-botops")
     refused = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex"}, who=botops, expected=403)
     assert "BotOps cannot" in refused["error"]["detail"]
-    call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-x-0123456789"}, who=botops,
-         expected=403)
+    call(
+        api,
+        "POST",
+        f"runners/{rid}/keys",
+        {"runtime": "codex", "secret": "sk-proj-x-0123456789"},
+        who=botops,
+        expected=403,
+    )
     old = computer(api, "Old box", source="shared", capabilities=["model_sign_out_v1"])
     older = computer(api, "Older box", source="shared", capabilities=[])
     stale = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"}, expected=409)
@@ -310,17 +379,21 @@ def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_c
     # Offline, an older runner still has nothing that clears its copy when it is back (it never reads the mark), so
     # it is not marked as if it would.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id IN (?,?)",
-                  (old["runner_id"], older["runner_id"]))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at='2026-01-01T00:00:00Z' WHERE runner_id IN (?,?)",
+            (old["runner_id"], older["runner_id"]),
+        )
     stale = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"}, expected=409)
     assert stale["error"]["detail"].startswith("Update Old box, Older box to clear")
-    assert "Credentials" in stale["error"]["detail"]
+    assert "Tools > Keys" in stale["error"]["detail"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
     # Updated, an offline computer is marked to clear its copy when it is back.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capabilities_json=? WHERE id IN (?,?)",
-                  (json.dumps(CAPABLE), old["runner_id"], older["runner_id"]))
+        c.execute(
+            "UPDATE runner_states SET capabilities=? WHERE runner_id IN (?,?)",
+            (json.dumps(CAPABLE), old["runner_id"], older["runner_id"]),
+        )
     out = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"})["computers"]
     assert [(c["label"], c["waiting"]) for c in out] == [("Alpha", False), ("Old box", True), ("Older box", True)]
 
@@ -342,25 +415,42 @@ def test_replacing_a_shared_key_for_all_of_them_changes_only_the_kind_chosen(env
     assert listed(api, box)["shared_keys"]["claude"] == {"env": "ANTHROPIC_API_KEY", "preview": "sk-…789"}
     assert listed(api, other)["shared_keys"]["claude"] == {"env": "CLAUDE_CODE_OAUTH_TOKEN", "preview": "oau…789"}
     new = "sk-ant-new-team-key-987654321"
-    out = call(api, "POST", f"runners/{rid}/keys",
-               {"runtime": "claude", "secret": new, "env": "ANTHROPIC_API_KEY", "scope": "all"})
+    out = call(
+        api,
+        "POST",
+        f"runners/{rid}/keys",
+        {"runtime": "claude", "secret": new, "env": "ANTHROPIC_API_KEY", "scope": "all"},
+    )
     assert out["shared"] == {"id": key_id, "env": "ANTHROPIC_API_KEY", "preview": "sk-…321"}
     values = {row["env"]: row["value"] for row in fetch(api, box, runtime="claude")["credentials"]}
     assert values == {"CLAUDE_CODE_OAUTH_TOKEN": token, "ANTHROPIC_API_KEY": new}
     assert listed(api, box)["shared_keys"]["claude"]["preview"] == "sk-…321"
     assert listed(api, other)["shared_keys"]["claude"]["preview"] == "oau…789"
     # No kind given: the one this computer runs on.
-    call(api, "POST", f"runners/{other['runner_id']}/keys", {"runtime": "claude", "secret": "oauth-new-0123456789",
-                                                              "scope": "all"})
+    call(
+        api,
+        "POST",
+        f"runners/{other['runner_id']}/keys",
+        {"runtime": "claude", "secret": "oauth-new-0123456789", "scope": "all"},
+    )
     values = {row["env"]: row["value"] for row in fetch(api, box, runtime="claude")["credentials"]}
     assert values == {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-new-0123456789", "ANTHROPIC_API_KEY": new}
     # A kind the runtime does not take, or one not shared, changes nothing.
-    call(api, "POST", f"runners/{rid}/keys", {"runtime": "claude", "secret": "x" * 20, "env": "OPENAI_API_KEY",
-                                             "scope": "all"}, expected=422)
+    call(
+        api,
+        "POST",
+        f"runners/{rid}/keys",
+        {"runtime": "claude", "secret": "x" * 20, "env": "OPENAI_API_KEY", "scope": "all"},
+        expected=422,
+    )
     call(api, "DELETE", f"credentials/{oauth_id}")
-    refused = call(api, "POST", f"runners/{other['runner_id']}/keys",
-                   {"runtime": "claude", "secret": "oauth-x-0123456789", "env": "CLAUDE_CODE_OAUTH_TOKEN",
-                    "scope": "all"}, expected=409)
+    refused = call(
+        api,
+        "POST",
+        f"runners/{other['runner_id']}/keys",
+        {"runtime": "claude", "secret": "oauth-x-0123456789", "env": "CLAUDE_CODE_OAUTH_TOKEN", "scope": "all"},
+        expected=409,
+    )
     assert "The shared key is ANTHROPIC_API_KEY" in refused["error"]["detail"]
     assert [row["value"] for row in fetch(api, box, runtime="claude")["credentials"]] == [new]
 
@@ -384,7 +474,9 @@ def test_a_computer_key_is_deleted_in_credentials_unless_it_is_being_checked(env
     active = call(api, "GET", f"runners/{rid}/keys?runtime=codex")
     assert active["source"] == "computer"
     with api.app.state.store.read() as c:
-        own = c.execute("SELECT credential_id FROM computer_keys WHERE runner_id=? AND state='active'", (rid,)).fetchone()
+        own = c.execute(
+            "SELECT credential_id FROM computer_keys WHERE runner_id=? AND state='active'", (rid,)
+        ).fetchone()
     assert call(api, "DELETE", f"credentials/{own[0]}") == {"deleted": True, "id": own[0]}
     assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
     assert listed(api, box)["keys"] == {}
@@ -425,11 +517,13 @@ def test_a_member_sees_another_persons_computer_without_its_key_previews(environ
     api = setup(environment)
     grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     box = computer(api, "Team box", source="shared")
-    job = call(api, "POST", f"runners/{box['runner_id']}/keys", {"runtime": "codex", "secret": "sk-proj-own-0123456789"})
+    job = call(
+        api, "POST", f"runners/{box['runner_id']}/keys", {"runtime": "codex", "secret": "sk-proj-own-0123456789"}
+    )
     report(api, box, job["id"], "done")
     owner = listed(api, box)
     assert owner["keys"]["codex"]["preview"] == "sk-…789" and owner["shared_keys"]["codex"]["preview"] == "sk-…789"
-    quinn = as_person(api, "quinn")   # neither an administrator nor its operator
+    quinn = as_person(api, "quinn")  # neither an administrator nor its operator
     member = next(m for m in call(api, "GET", "operations", who=quinn)["computers"] if m["id"] == box["runner_id"])
     assert member["may_manage"] is False
     assert member["keys"] == {"codex": {k: v for k, v in owner["keys"]["codex"].items() if k != "preview"}}
@@ -454,10 +548,13 @@ def test_switch_to_subscription_deletes_the_computers_own_key_and_a_key_added_la
         assert c.execute("SELECT count(*) FROM credentials WHERE source=?", ("computer:" + rid,)).fetchone()[0] == 0
     assert listed(api, box)["keys"] == {}
     added = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-added-0123456789"})
-    assert fetch(api, box, added["id"])["credentials"][0]["value"] == "sk-proj-added-0123456789", "its own job checks it"
+    assert fetch(api, box, added["id"])["credentials"][0]["value"] == "sk-proj-added-0123456789", (
+        "its own job checks it"
+    )
     report(api, box, added["id"], "done")
-    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": "sk-proj-added-0123456789",
-                                               "source": "computer"}]
+    assert fetch(api, box)["credentials"] == [
+        {"env": "OPENAI_API_KEY", "value": "sk-proj-added-0123456789", "source": "computer"}
+    ]
 
 
 TO_KEY = CAPABLE + ["model_switch_type_v1", "model_switch_to_key_v1"]
@@ -495,8 +592,9 @@ def test_switch_to_subscription_then_to_an_api_key_and_the_next_turn_has_the_key
     new = "sk-proj-switched-0123456789"
     job = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": new, "switch": True})
     assert job["kind"] == "to_key" and job["key"]["preview"] == "sk-…789"
-    assert pending(api, box) == [{"id": job["id"], "runtime": "codex", "profile": "", "kind": "to_key",
-                                  "expires_at": job["expires_at"]}], "the job carries no key"
+    assert pending(api, box) == [
+        {"id": job["id"], "runtime": "codex", "profile": "", "kind": "to_key", "expires_at": job["expires_at"]}
+    ], "the job carries no key"
     call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": new, "switch": True}, expected=409)
     # Only the job's own fetch gets the key; a regular one meanwhile is told a switch is running and changes nothing.
     assert fetch(api, box) == {"credentials": [], "switching": True}
@@ -513,14 +611,15 @@ def test_switch_to_subscription_then_to_an_api_key_and_the_next_turn_has_the_key
     assert listed(api, box)["keys"]["codex"]["preview"] == "sk-…789"
 
 
-def test_a_switch_to_an_api_key_that_is_cancelled_fails_or_runs_out_leaves_the_subscription(environment):
+def test_a_switch_to_an_api_key_that_is_canceled_fails_or_runs_out_leaves_the_subscription(environment):
     from backend.store import H
+
     api = setup(environment)
     box = on_subscription(api)
     rid = box["runner_id"]
     body = {"runtime": "codex", "secret": "sk-proj-switched-0123456789", "switch": True}
-    cancelled = call(api, "POST", f"runners/{rid}/keys", body)
-    call(api, "POST", f"runners/{rid}/logins/{cancelled['id']}/cancel", {})
+    canceled = call(api, "POST", f"runners/{rid}/keys", body)
+    call(api, "POST", f"runners/{rid}/logins/{canceled['id']}/cancel", {})
     untouched(api, box)
     # Failed, after its commit point too: the computer undid what it changed, and Tico has nothing to undo.
     refused = call(api, "POST", f"runners/{rid}/keys", body)
@@ -541,18 +640,22 @@ def test_a_switch_to_an_api_key_that_is_cancelled_fails_or_runs_out_leaves_the_s
 
 def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment):
     from backend.auth import Identity
+
     api = setup(environment)
     box = on_subscription(api)
     rid = box["runner_id"]
     body = {"runtime": "codex", "secret": "sk-proj-switched-0123456789", "switch": True}
     call(api, "POST", f"runners/{rid}/keys", body, who=as_person(api, "quinn"), expected=403)
     api.app.state.store.settings.test_identities["morgan-via-botops"] = Identity(
-        "human:morgan", "human", via="botops", confirmed=True)
+        "human:morgan", "human", via="botops", confirmed=True
+    )
     call(api, "POST", f"runners/{rid}/keys", body, who=signed_in("morgan-via-botops"), expected=403)
     as_runner = {"Authorization": "Bearer " + box["token"], "Idempotency-Key": "runner-try"}
     call(api, "POST", f"runners/{rid}/keys", body, who=as_runner, expected=403)
-    assert "own login" in call(api, "POST", f"runners/{rid}/keys", {**body, "scope": "all"},
-                               expected=422)["error"]["detail"]
+    assert (
+        "own login"
+        in call(api, "POST", f"runners/{rid}/keys", {**body, "scope": "all"}, expected=422)["error"]["detail"]
+    )
     # A runner that cannot switch to a key would use it next to the subscription: it is asked to update.
     old = on_subscription(api, "Old box", capabilities=CAPABLE + ["model_switch_type_v1"])
     refused = call(api, "POST", f"runners/{old['runner_id']}/keys", body, expected=409)
@@ -561,11 +664,16 @@ def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment)
     # On a Mac Claude Code keeps its subscription in the keychain, where a logout that half worked could not be undone.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
-    mac = call(api, "POST", f"runners/{rid}/keys", {**body, "runtime": "claude", "secret": "sk-ant-switched-0123456789"},
-               expected=422)
+    mac = call(
+        api,
+        "POST",
+        f"runners/{rid}/keys",
+        {**body, "runtime": "claude", "secret": "sk-ant-switched-0123456789"},
+        expected=422,
+    )
     assert "keychain" in mac["error"]["detail"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id=?", (rid,))
+        c.execute("UPDATE runner_states SET last_seen_at='2026-01-01T00:00:00Z' WHERE runner_id=?", (rid,))
     assert "offline" in call(api, "POST", f"runners/{rid}/keys", body, expected=409)["error"]["detail"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_logins WHERE kind='to_key'").fetchone()[0] == 0

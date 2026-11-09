@@ -1,7 +1,12 @@
 # Weekly reply review
 
-Schedule: Fridays at 10:00 team time (routine `weekly-reply-review`), after setup. Also run by hand on request. Budget 40 minutes. The outcome is one review for the owner:
-a scored sample, patterns and drafted coaching. Nothing changes in the support tool.
+Schedule: Fridays at 10:00 team time (routine `weekly-reply-review`), after setup. Also run by hand on request. Budget 40 minutes.
+
+Inputs: the sent replies from the last seven days (from the source setup named, or the tasks a human attached), `knowledge/scorecard.md`, `knowledge/calibration.md`, `knowledge/patterns.md`, and the docs the replies should match.
+
+Outcome: one review for the owner: a scored sample, patterns and drafted coaching. Nothing changes in the support tool.
+
+Done when: every sampled reply is scored or listed as unscored with its reason, critical misses are on their own line, the review is published, coaching drafts are on the task for the owner only, and the task is done with the pass rate.
 
 ---
 

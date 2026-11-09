@@ -1,4 +1,5 @@
 """The public updater manifest must point at signed assets from its own release."""
+
 import json
 import subprocess
 import sys
@@ -12,14 +13,34 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_github_cli_writes_a_complete_tauri_manifest(tmp_path):
-    names = ["Tico_1.2.3_universal.dmg", "Tico.app.tar.gz", "Tico_1.2.3_x64-setup.exe", "Tico_1.2.3_amd64.AppImage", "Tico_1.2.3_amd64.deb"]
+    names = [
+        "Tico_1.2.3_universal.dmg",
+        "Tico.app.tar.gz",
+        "Tico_1.2.3_x64-setup.exe",
+        "Tico_1.2.3_amd64.AppImage",
+        "Tico_1.2.3_amd64.deb",
+    ]
     for name in names:
         (tmp_path / name).write_bytes(b"bundle")
         if name.endswith((".app.tar.gz", "-setup.exe", ".AppImage")):
             (tmp_path / (name + ".sig")).write_text("update-signature")
     output = tmp_path / "latest.json"
-    subprocess.run([sys.executable, str(ROOT / "scripts/app_release.py"), "--github", "--version", "1.2.3-rc.1",
-                    "--tag", "v1.2.3-rc.1", "--output", str(output), str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/app_release.py"),
+            "--github",
+            "--version",
+            "1.2.3-rc.1",
+            "--tag",
+            "v1.2.3-rc.1",
+            "--output",
+            str(output),
+            str(tmp_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
     value = json.loads(output.read_text())
     assert value["version"] == "1.2.3-rc.1"
     assert value["pub_date"].endswith("Z")
@@ -37,21 +58,42 @@ def test_github_cli_writes_a_complete_tauri_manifest(tmp_path):
 def test_company_s3_publish_with_prefix_and_quiet_output(tmp_path, monkeypatch, capsys):
     import boto3
     from scripts.app_release import main
+
     calls = []
+
     class S3:
         def get_object(self, **kw):
             raise KeyError("missing")
+
         def upload_file(self, source, bucket, key):
             calls.append(("file", bucket, key))
+
         def put_object(self, **kw):
             calls.append(("manifest", kw))
+
     monkeypatch.setattr(boto3, "client", lambda name: S3())
     for name in ("Acme Tico.app.tar.gz", "Acme Tico.dmg", "Acme Tico-setup.exe", "Acme Tico.AppImage", "Acme Tico.deb"):
         (tmp_path / name).write_bytes(b"bundle")
         if name.endswith((".app.tar.gz", "-setup.exe", ".AppImage")):
             (tmp_path / (name + ".sig")).write_text("signature")
-    assert main(["--version", "1.2.3", "--bucket", "acme-files", "--base", "https://runner.example.com",
-                 "--prefix", "team", "--complete", "--quiet", str(tmp_path)]) == 0
+    assert (
+        main(
+            [
+                "--version",
+                "1.2.3",
+                "--bucket",
+                "acme-files",
+                "--base",
+                "https://runner.example.com",
+                "--prefix",
+                "team",
+                "--complete",
+                "--quiet",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
     assert capsys.readouterr().out == ""
     assert calls[-1][0] == "manifest"
     value = json.loads(calls[-1][1]["Body"])
@@ -62,6 +104,117 @@ def test_company_s3_publish_with_prefix_and_quiet_output(tmp_path, monkeypatch, 
     calls.clear()
     (tmp_path / "Acme Tico.app.tar.gz.sig").unlink()
     with pytest.raises(SystemExit):
-        main(["--version", "1.2.3", "--bucket", "acme-files", "--base", "https://runner.example.com",
-              "--complete", "--quiet", str(tmp_path)])
+        main(
+            [
+                "--version",
+                "1.2.3",
+                "--bucket",
+                "acme-files",
+                "--base",
+                "https://runner.example.com",
+                "--complete",
+                "--quiet",
+                str(tmp_path),
+            ]
+        )
     assert not calls
+
+
+def test_recorder_manifest_is_mac_only_and_named_for_the_recorder(tmp_path):
+    names = ["Tico-Recorder.app.tar.gz", "Tico-Recorder_0.2.0_universal.dmg", "Tico-Recorder.dmg"]
+    for name in names:
+        (tmp_path / name).write_bytes(b"bundle")
+    (tmp_path / "Tico-Recorder.app.tar.gz.sig").write_text("recorder-signature")
+    output = tmp_path / "recorder-latest.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/app_release.py"),
+            "--github",
+            "--kind",
+            "recorder",
+            "--version",
+            "0.2.0",
+            "--tag",
+            "v0.2.0",
+            "--output",
+            str(output),
+            str(tmp_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    value = json.loads(output.read_text())
+    assert value["app_kind"] == "recorder"
+    assert set(value["platforms"]) == {"darwin-aarch64", "darwin-x86_64"}
+    assert value["platforms"]["darwin-x86_64"]["url"].endswith("/Tico-Recorder.app.tar.gz")
+    assert value["installers"]["mac"]["url"].startswith("https://github.com/ticoteam/tico/releases/download/v0.2.0/")
+    windows = tmp_path / "windows"
+    windows.mkdir()
+    (windows / "Tico Recorder-setup.exe").write_bytes(b"bundle")
+    (windows / "Tico Recorder-setup.exe.sig").write_text("windows-signature")
+    from scripts.app_release import main
+
+    with pytest.raises(SystemExit, match="Recorder releases need"):
+        main(
+            ["--github", "--kind", "recorder", "--version", "0.2.0", "--output", str(tmp_path / "x.json"), str(windows)]
+        )
+
+
+def test_a_new_version_drops_updates_signed_for_the_previous_one():
+    mac = {
+        "platforms": {"darwin-aarch64": {"file": "Tico.app.tar.gz", "bytes": 6, "signature": "mac-1.1.0"}},
+        "installers": {},
+    }
+    previous = {
+        "version": "1.0.0",
+        "installers": {"windows": {"file": "Tico-setup.exe", "bytes": 6}},
+        "platforms": {
+            "windows-x86_64": {"signature": "win-1.0.0", "url": "https://hub/1.0.0/Tico-setup.exe"},
+            "linux-x86_64": {"signature": "linux-1.0.0", "url": "https://hub/1.0.0/Tico.AppImage"},
+        },
+    }
+    value = manifest("1.1.0", "https://hub", [mac], previous)
+    assert set(value["platforms"]) == {"darwin-aarch64"}
+    assert value["installers"]["windows"]["file"] == "Tico-setup.exe"
+    # A second publish of the same version (another platform's build) keeps what the first one brought.
+    again = manifest("1.1.0", "https://hub", [], value)
+    assert again["platforms"] == value["platforms"]
+
+
+def test_recorder_notes_come_from_the_newest_changes_section_once(tmp_path):
+    from scripts.app_release import changes_note, main
+
+    text = (
+        "# Tico Recorder changes\n\nIntro.\n\n## 0.5.181\n\n- Newest line.\nMore.\n\n"
+        "## 0.5.178\n\nClearer task linking and @me.\n"
+    )
+    assert changes_note(text) == "Newest line."
+    # The heading is only a label: what counts is whether the last shipped build already showed the line.
+    assert changes_note(text, shown="Built from abc1234") == "Newest line."
+    assert changes_note(text, shown="Newest line.") is None
+    assert changes_note("# Tico Recorder changes\n\n## 1.0\n\n### Fixed\n") is None
+    assert changes_note("no sections\n") is None
+    for name in ["Tico-Recorder.app.tar.gz", "Tico-Recorder.dmg"]:
+        (tmp_path / name).write_bytes(b"bundle")
+    (tmp_path / "Tico-Recorder.app.tar.gz.sig").write_text("sig")
+    changes = tmp_path / "CHANGES.md"
+    changes.write_text(text)
+    output = tmp_path / "recorder-latest.json"
+    base = [
+        "--github",
+        "--kind",
+        "recorder",
+        "--output",
+        str(output),
+        "--notes",
+        "Built from abc1234",
+        "--version",
+        "0.5.190",
+    ]
+    main([*base, "--changes", str(changes), "--shown", "Built from 2b9ab1e", str(tmp_path)])
+    assert json.loads(output.read_text())["notes"] == "Newest line."
+    main([*base, "--changes", str(changes), "--shown", "Newest line.", str(tmp_path)])
+    assert json.loads(output.read_text())["notes"] == "Built from abc1234"
+    main([*base, "--changes", str(tmp_path / "missing.md"), str(tmp_path)])
+    assert json.loads(output.read_text())["notes"] == "Built from abc1234"

@@ -1,4 +1,4 @@
-// The one question card (ui/app/question-card.js), in the Needs you card and in the task page's Needs you box: the real asker,
+// The one question card (ui/app/question-card.ts), in the Needs you card and in the task page's Needs you box: the real asker,
 // "asked N days ago" and what it holds up; the question and its why line; four picks as checkboxes, the recommended
 // ones ticked and labelled; "Yes to all" and "Send ticked (n)", each with its "what happens" line; the fallback small
 // at the foot; ids, paths and error text only under Details. Ticking 1, 2 and 4 sends those three, and the bot hears
@@ -14,18 +14,18 @@ const PICKS = [
   {label: 'Pages', then: 'Home, pricing and docs get the chat'},
   {label: 'Spend cap', then: 'Chat stops for the day at $10', recommended: true},
 ];
-const question = (id, over = {}) => ({id, kind: 'question', title: 'Website sales chat picks', body: BODY, owner: 'bot:writer',
-  requester: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created: at(80), updated: at(72), open_asks: 1,
+const question = (id, over = {}) => ({id, kind: 'question', title: 'Website sales chat picks', body: BODY, owner_id: 'bot:writer',
+  requester_id: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created_at: at(80), updated_at: at(72), open_asks: 1,
   labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, why: "Engineering can't start until these are set.",
   holds_up: {id: 'r-chat', title: 'Website sales chat build', kind: 'roadmap', step: 'Building'}, tier: 1,
-  ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Website sales chat: go with these picks?', created: at(72),
+  ask: {id: 'q-' + id, sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Website sales chat: go with these picks?', created_at: at(72),
     goes_ahead_at: '2026-10-23T16:00:00.000000Z',
     refs: {task: id, questions: [{id: 'decision', header: '', question: 'Website sales chat: go with these picks?', multi: true, other: true,
       why: "Engineering can't start until these are set.", options: PICKS}], if_no_answer: {do: 'It stays a draft', kind: 'reversible'}}},
   ...over});
-const stuck = {id: 't-stuck', kind: 'question', title: 'Is this still moving?', body: '', owner: 'bot:writer', requester: 'bot:writer',
-  status: 'waiting', version: 1, created: at(2), updated: at(2), open_asks: 1, from_person: 'human:ana', tier: 2,
-  ask: {id: 'q-stuck', from_actor: 'keeper', to_actor: 'human:ana', body: 'No progress for 60 min after a status check.', created: at(2),
+const stuck = {id: 't-stuck', kind: 'question', title: 'Is this still moving?', body: '', owner_id: 'bot:writer', requester_id: 'bot:writer',
+  status: 'waiting', version: 1, created_at: at(2), updated_at: at(2), open_asks: 1, from_person: 'human:ana', tier: 2,
+  ask: {id: 'q-stuck', sender_id: 'keeper', recipient_id: 'human:ana', body: 'No progress for 60 min after a status check.', created_at: at(2),
     refs: {questions: [{id: 'stuck', header: 'Stuck', question: 'Keep going or stop?', multi: false, other: true,
       options: [{label: 'Keep going', then: 'The bot is woken again'}, {label: 'Stop', then: 'The task is closed'}]}]}}};
 
@@ -82,19 +82,20 @@ const card = () => ({
         {text: '4. Spend cap (recommended)', then: PICKS[3].then, ticked: true}],
       buttons: [{label: 'Yes to all', then: 'All 4 go to Writer as yes'},
         {label: 'Send ticked (3)', then: 'These 3 as yes; Writer hears "not this one" for the rest'}]});
-    // 16, 17: the fallback is a small line at the foot, not a button and not styled as a pick; the run id, the error
+    // 16, 17: the fallback is a line at the foot, no larger than a pick's text (the 12 px floor, 9d11efec7, makes them
+    // equal), not a button and not styled as a pick; the run id, the error
     // and the path are only under Details, closed.
     const foot = await page.evaluate(() => {
       const body = document.querySelector('.decide .dc-body'), line = body.querySelector('.qc-fallback'), details = body.querySelector('.qc-details');
       const above = [...body.children].filter(x => x !== details).map(x => x.textContent).join(' ');
       return {line: line.textContent, last: [...body.children].slice(-2)[0] === line && body.lastElementChild === details, open: details.open,
-        small: parseFloat(getComputedStyle(line).fontSize) < parseFloat(getComputedStyle(body.querySelector('.qc-then')).fontSize),
+        notLarger: parseFloat(getComputedStyle(line).fontSize) <= parseFloat(getComputedStyle(body.querySelector('.qc-then')).fontSize),
         weight: getComputedStyle(line).fontWeight, inButton: !!line.closest('button'),
         leaks: ['8719e1a6', 'ValueError', 'reports/chat-plan.md'].filter(x => above.includes(x)),
         detail: ['8719e1a6', 'ValueError', 'reports/chat-plan.md'].every(x => details.textContent.includes(x))};
     });
     const day = new Date('2026-10-23T16:00:00Z').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
-    assert.deepEqual(foot, {line: `If you don't answer by ${day}: It stays a draft`, last: true, open: false, small: true, weight: '400',
+    assert.deepEqual(foot, {line: `If you don't answer by ${day}: It stays a draft`, last: true, open: false, notLarger: true, weight: '400',
       inButton: false, leaks: [], detail: true});
 
     // 12: untick pick 3 stays unticked; tick changes count. Untick 4, tick it back: Send ticked (3) sends 1, 2 and 4.
@@ -112,12 +113,12 @@ const card = () => ({
     assert.deepEqual(answers.shift(), {task: 't-four', target: {comment: 'q-t-four'},
       answers: {decision: ['Calls', 'Visitor notes', 'Spend cap']}, other: 'Pages: only pricing for now.'});
 
-    // 15: Tico's own check says Tico, never the assistant's name or "You asked"; each of its buttons says what happens.
+    // 15: the server's own check says Automatic, never the assistant's name or "You asked"; each of its buttons says what happens.
     await page.locator('.decide .dc-card[data-key="task:t-stuck"]').waitFor();
     const check = await page.evaluate(() => ({who: document.querySelector('.decide .dc-who-name').textContent.trim(),
       header: document.querySelector('.decide .dc-who').textContent,
       buttons: [...document.querySelectorAll('.decide .dc-actions button')].map(b => b.querySelector('.qc-then')?.textContent)}));
-    assert.equal(check.who, 'Tico');
+    assert.equal(check.who, 'Automatic');
     assert.ok(!/Assistant|You asked/.test(check.header), check.header);
     assert.deepEqual(check.buttons, ['The bot is woken again', 'The task is closed']);
 
@@ -129,6 +130,19 @@ const card = () => ({
     await page.locator('.decide .dc-actions [data-dc="all"]').click();
     await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(answers.shift(), {task: 't-all', target: {comment: 'q-t-all'},
+      answers: {decision: ['Calls', 'Visitor notes', 'Pages', 'Spend cap']}});
+
+    // A question task (backend/question_tasks.py): the same card, its ask the task itself, answered with {task}.
+    const qtask = question('t-qt', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', waiting_on: null});
+    qtask.ask = {...qtask.ask, id: 't-qt', question_task: true, refs: {...qtask.ask.refs, target: {task: 't-qt'}, task_question: true}};
+    items = [qtask];
+    await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-qt'); });
+    await page.locator('.decide .dc-card[data-key="task:t-qt"]').waitFor();
+    assert.equal((await page.evaluate(card)).picks.length, 4);
+    await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
+    await page.locator('.decide .dc-actions [data-dc="all"]').click();
+    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
+    assert.deepEqual(answers.shift(), {task: 't-qt', target: {task: 't-qt'},
       answers: {decision: ['Calls', 'Visitor notes', 'Pages', 'Spend cap']}});
 
     // 11: the task page's Needs you box is the same card: same header, question, why line, picks and buttons.
@@ -216,6 +230,23 @@ const card = () => ({
     assert.deepEqual(await fresh(), {warned: true, note: '', ticked: ['1. Calls (recommended)', '2. Visitor notes (recommended)', '4. Spend cap (recommended)']});
     assert.deepEqual(await swap().evaluate(el => [...el.querySelectorAll('.qc-pick .qc-l')].map(x => x.textContent.trim())),
       ['1. Calls (recommended)', '2. Visitor notes (recommended)', '3. Pages', '4. Spend cap (recommended)']);
+
+    // A full live task redraw must not let generic form recovery transfer the old note or modified checkboxes.
+    await swap().locator('[data-qc-tick="1"]').uncheck();
+    await swap().locator('.qc-note').fill('Full redraw old answer');
+    await page.evaluate(() => sessionKeep());
+    await reword('Docs pages');
+    await page.evaluate(async () => {
+      const d = taskModal();
+      await taskModalShow(d.liveTask, d, {detail: {task: d.liveTask, comments: [], children: [], events: []}});
+      sessionReturn();
+    });
+    assert.deepEqual(await swap().evaluate(el => ({note: el.querySelector('.qc-note').value,
+      ticked: [...el.querySelectorAll('[data-qc-tick]:checked')].map(x => x.closest('.qc-pick').querySelector('.qc-l').textContent.trim())})),
+      {note: '', ticked: NEW_TICKS});
+    assert.equal(answers.length, 0, 'changed question drafts never send during redraw or sign-in recovery');
+    await reword('Pages');
+    await page.evaluate(() => { const el = document.querySelector('.qcard[data-qcard="t-swap"]'); el.outerHTML = qcardBoxHTML({id: 't-swap'}); });
 
     // Typed into, then redrawn: the old draft is dropped, not carried into the newer wording.
     await swap().locator('[data-qc-tick="1"]').uncheck();

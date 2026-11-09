@@ -41,9 +41,11 @@ def check_name(name):
     if not n:
         raise Failure("empty label name")
     if not n.startswith(PREFIX) and n.upper() != n:
-        raise Failure(f"refusing to touch the label {n!r}",
-                      "The mail connector only manages hub/* labels and Gmail's own system "
-                      "labels (INBOX, UNREAD, STARRED). Anything else is the owner's filing.")
+        raise Failure(
+            f"refusing to touch the label {n!r}",
+            "The mail connector only manages hub/* labels and Gmail's own system "
+            "labels (INBOX, UNREAD, STARRED). Anything else is the owner's filing.",
+        )
     return n
 
 
@@ -67,6 +69,6 @@ def resolve(gmail, name):
     ids = gmail.label_ids()
     if name in ids:
         return ids[name]
-    if name.upper() == name:                            # INBOX, UNREAD, STARRED, ...
+    if name.upper() == name:  # INBOX, UNREAD, STARRED, ...
         return name
     return ensure(gmail, [name])[0][name]

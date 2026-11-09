@@ -1,0 +1,65 @@
+Twilio Messaging Policy | Twilio
+
+ Print this page 
+
+ Twilio Messaging Policy
+
+Last Updated: April 13, 2026
+
+This Twilio Messaging Policy (“Messaging Policy”) applies to SMS, MMS, RCS, Conversations, and third-party messaging platform channels (e.g., WhatsApp Business Platform, Facebook Messenger for Business) as part of or via the Services (collectively, “Twilio Messaging Services”), regardless of your use case or the phone number type (e.g., long code, short code, toll-free, Alphanumeric Sender ID) you use with the Twilio Messaging Services. This Messaging Policy provides the restrictions and requirements you, your organization, your End Users, and your customers must abide by to use the Twilio Messaging Services. This Messaging Policy applies to you, your organization, your End Users, and your customers. Any references to “you” or “your” in this Messaging Policy includes your organization, End Users, and customers. These restrictions and requirements ensure that all messages transmitted via the Twilio Messaging Services are safe, wanted, and legal.
+
+This Messaging Policy applies in addition to, and forms part of, Twilio's Acceptable Use Policy.
+
+Messaging Traffic Classification
+
+Twilio treats any and all messages transmitted via the Twilio Messaging Services as non-consumer or application-to-person (A2P) messages, regardless of the actual content of the message or the type of message recipient. You are prohibited from transmitting person-to-person (P2P) messages via the Twilio Messaging Services.
+
+A2P messaging is any kind of traffic in which a person is receiving messages from an application. A2P messaging includes, but is not limited to, marketing messages, appointment reminders, chat bots or virtual assistants, notifications, and one-time passwords (OTPs) or personal identification number (PIN) codes.
+
+P2P messaging, on the other hand, is generally defined as a two-way (back and forth) messaging conversation between two humans.
+
+Consent
+
+Minimum Consent Requirements. Prior to sending any messages via the Twilio Messaging Services, as further described below, you must obtain prior express consent from the message recipient in accordance with all applicable laws and regulations in the jurisdiction to which you are communicating. All consent must be freely given by each recipient to each sender for each message subject (e.g., blanket consents or consents provided on behalf of a third party are not acceptable), and must be informed and unambiguous. This means a recipient must be (a) presented with the choice to provide or withhold consent; (b) informed of the sender’s identity (see Sender Identification Requirements paragraph below), how a recipient’s phone number will be used, and the specific subject matter of the messages a recipient will receive; (c) presented with or informed of any other information required under applicable law, regulation, governmental orders, industry policies and standards (e.g., CTIA Messaging Principles and Best Practices), or telecommunications providers' requirements or guidance; and (d) made aware of how to withdraw, at any time, any previously provided consent (see Revocation of Consent (“opt-out”) paragraph below for more information).
+
+Proof of Consent. You are required to retain proof of all consents obtained from recipients for as long as needed to meet your legal requirements and at least until a recipient withdraws their consent. Upon written request from Twilio, you must provide proof of a recipient’s consent and the date and the method through which that consent was obtained.
+
+Consent from Your End Users or Customers. If you use the Twilio Messaging Services as part of your software application or service that is used by your End Users or customers, you must require those End Users and customers to obtain prior express written consent from any downstream users of your software application or service.
+
+Consent for Messages Initiated by an Individual to You. If an individual sends a message to you, you may respond in an exchange with that individual. For example, if an individual texts your phone number asking for your hours of operation, you can respond directly to that individual with your open business hours. In this case, the individual’s inbound message to you constitutes both consent and proof of consent. This conversational engagement does not provide you necessary consent to engage in ongoing recurring engagement with that individual.
+
+Consent for Informational Messages. Sending informational messages (i.e., non-marketing messages that contain necessary information about an action or transaction a recipient has taken or agreed to and, if applicable, updates or notifications to that recipient about that action or transaction) requires prior express consent from a recipient. Examples of informational messages include password reset or one-time verification code notifications, appointment reminders, order confirmations, or payment receipts. Informational messages may not, for example, market or promote a product, service, or cause or convince someone to buy something.
+
+Consent for Promotional Messages. Sending messages that market or promote a specific product or service requires prior express written consent from the recipient. Examples of promotional messages include sale or discount announcements, new product launches, newsletters, or invitations to join a loyalty program.
+
+Consent Limitations. Any consent that you obtain from a recipient is strictly for the subject matter for which that recipient provided their consent. Any messages that cover other subject matters for which consent was not provided requires separate prior express written consent from a recipient.
+
+Selling, Renting, or Transferring Consent Prohibited. You are prohibited from using the Twilio Messaging Services if you buy, sell, rent, or transfer consent to or from your affiliates or any other party. Prior express written consent only applies to the recipient that provided that consent and does not extend to any other recipient, individual, or party.
+
+Reconfirming Consent. You need to proactively ask recipients to reconfirm their consent as required under applicable law, regulation, governmental orders, industry standards (e.g., CTIA), or telecommunications providers' requirements or guidance and consistent with the Minimum Consent Requirements paragraph above. For example, it is recommended that you reconfirm consent if a significant amount of time has passed since you received the initial consent or if you are changing the subject matter of messages that you are sending to a recipient.
+
+ Sender Identification Requirements. Except for follow-up messages to an ongoing conversation, every message that you send via the Twilio Messaging Services must clearly identify you (i.e., the party that obtained the consent from a recipient) as the sender.
+
+Revocation of Consent (“opt-out”)
+
+The initial message that you send to a recipient needs to include the following language: “Reply STOP to unsubscribe,” or the equivalent using another standard opt-out keyword, such as STOPALL, UNSUBSCRIBE, OPTOUT, CANCEL, END, REVOKE, or QUIT. The opt-out process must be straightforward and easily accessible, requiring a single step to complete.
+
+A recipient must have the ability to revoke their previously provided consent at any time by replying with a standard opt-out keyword. However, for messages that you intend to send to a recipient on an ongoing basis, it is best practice to offer the recipient a clear reminder of how to unsubscribe from those messages using standard opt-out keywords.
+
+When a recipient revokes their previously provided consent, also known as an opt-out, you may deliver one final message to confirm that the revocation of their prior consent or opt-out has been processed, but any subsequent messages are prohibited. You may not send messages to a recipient that has withdrawn their consent or opted out, unless that recipient elects to receive those messages again by providing subsequent express written consent.
+
+Prohibited Content and Use Cases
+
+You agree that you will not use the Twilio Messaging Services to transmit content or support a use case that is prohibited by law, regulation, or carrier requirement, or as otherwise prohibited in the SMS Guidelines. 
+
+Prohibited Actions
+
+You are prohibited from using the Twilio Messaging Services in the following ways:
+
+Intentionally misspelling words or non-standard opt-out phrases created to evade detection and prevention mechanisms;
+
+Spreading similar or identical messages across multiple phone numbers with the intent or effect of evading unwanted messaging detection and prevention mechanisms, also known as snowshoeing;
+
+Sending any messages that are used for security testing, including simulated phishing and other activities that may resemble social engineering or similar attacks; and
+
+Sending any unsolicited or unwanted messages in bulk.

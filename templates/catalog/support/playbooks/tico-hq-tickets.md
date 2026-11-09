@@ -2,7 +2,7 @@
 
 For the Tico project team's own Support Agent, when `HQ_STAFF_KEY` and `HQ_URL` are in this bot's credentials. Without
 them the `hq-tickets` watcher does nothing and this playbook does not apply. People file these from Contact support in
-their Tico app (docs/support.md). Budget ten minutes per ticket. The outcome is a draft reply on the task and, when a person has turned mail sending on in Tico, the requested reply posted.
+their Tico app (docs/support.md). Budget ten minutes per ticket. The outcome is a draft reply on the task and, when a person has turned mail sending on in Tico, the requested reply posted as the bot's sending policy in Tico allows.
 
 Nothing polls with a model. Tico runs `software/hq-tickets watch` every 5 minutes as a program. It opens one task
 per new ticket, titled `Support: <first words>`, and adds a note to that task when the person writes again or HQ closes
@@ -81,20 +81,19 @@ Write `reports/hq-TK-XXXXXXXX.md`: plain text (nothing is rendered as HTML in th
 `knowledge/voice.md`'s tone, ending with what happens next. No promise of a fix or a date. Never paste a token, a key or a
 person's details from the ticket. Put the same text on the task.
 
-If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool when a person has turned mail sending on in Tico; otherwise keep the draft. HQ itself sends no email.
+If the ticket has a reply-to email, add an email-ready copy to the task. Send requested email with a connected mail Tool (`mail.sh send` queues it with Tico, which decides it); a send Tico holds or blocks stays a draft. HQ itself sends no email.
 
 ## 4. Post the requested reply
 
-Until a person who manages this bot turns its sending on in Tico, keep the reply as a draft on the task:
-`outbound_send` in bot.yaml only asks, and `reply` refuses while the switch in Tico is off or cannot be read.
-When it is on, post the requested file from this bot's repository:
+`reply` follows this bot's sending policy in Tico (Tools > the mailbox > Limits). With **On their own**,
+post the requested file from this bot's repository:
 
     software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md
 
-Verify the reply with `show` before saying it was posted. If you are genuinely unsure about the
-exact reply, you may use `payload` and `hub approval request --kind publish` and pass the resulting
-id with `--approval <approval-id>`. That optional approval must match this ticket and these exact
-bytes, and it does not turn sending on.
+With **Ask first**, use `payload` and `hub approval request --kind publish`, and once a person approves, pass the id
+with `--approval <approval-id>`; the approval must match this ticket and these exact bytes. With **Never**, or when
+Tico cannot be asked, `reply` refuses: keep the reply as a draft on the task. Verify the reply with `show` before
+saying it was posted.
 
 ## 5. Finish
 

@@ -5,6 +5,7 @@ The live runner (evals/botops/run.py) needs a real model and never runs here. Th
 achievable with the tools BotOps has, that their `done` checks hold when the job is done and not before, and that the
 scoring counts what it says (the words of the conversation this work came from are the fixture).
 """
+
 import sys
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import pytest
 from backend.mcp import ApiProblem
 from clients import hubtools
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import vault
+from backend.tests.test_botops_parity import bot_id, vault
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
 EVALS = Path(__file__).resolve().parents[2] / "evals" / "botops"
@@ -45,8 +46,13 @@ class ToolApi:
 
     def call(self, method, path, body=None, key=None, query=None, delegate=False):
         head = {**headers(self.token), **({"X-Tico-On-Behalf-Of": "turn"} if delegate else {})}
-        r = self.client.request(method, "/api/v2/" + path.lstrip("/"), json=body if method != "GET" else None,
-                                params={k: v for k, v in (query or {}).items() if v is not None}, headers=head)
+        r = self.client.request(
+            method,
+            "/api/v2/" + path.lstrip("/"),
+            json=body if method != "GET" else None,
+            params={k: v for k, v in (query or {}).items() if v is not None},
+            headers=head,
+        )
         payload = r.json() if r.content else {}
         if r.status_code >= 400:
             error = payload.get("error", {})
@@ -66,7 +72,9 @@ class ToolApi:
 def seed(api, rows):
     server = Server(api)
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM assignments WHERE bot IN ('coo','ops','cpo','product-design','finance','inbox','doc-updater')")
+        c.execute(
+            "DELETE FROM assignments WHERE bot IN ('coo','ops','cpo','product-design','finance','inbox','doc-updater')"
+        )
     live.seed(server, TOKENS["owner"], rows)
 
 
@@ -87,22 +95,39 @@ def replay(api, botops_machine, scenario):
     for step in scenario["script"]:
         if step.get("person") == "fill_card":
             with api.app.state.store.read() as c:
-                card = c.execute("SELECT id FROM credential_requests WHERE status='pending' ORDER BY created DESC").fetchone()
+                card = c.execute(
+                    "SELECT id FROM credential_requests WHERE status='pending' ORDER BY created_at DESC"
+                ).fetchone()
             post(api, f"credential-requests/{card['id']}/save", {"value": rules["credential_card"]["value"]}, owner)
             steps += 1
         elif step.get("next_turn"):
             post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, botops_machine["token"])
-            post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, botops_machine["token"])
-            attempt = claim(api, botops_machine, "botops")             # woken by the person's own saved message
+            post(
+                api,
+                f"attempts/{attempt['id']}/complete",
+                {"outcome": "completed", "last_seq": 0},
+                botops_machine["token"],
+            )
+            attempt = claim(api, botops_machine, "botops")  # woken by the person's own saved message
         else:
             args = dict(step.get("args") or {})
             if args.get("model") == "$other_model":
-                args["model"] = next(m["id"] for m in captured["models"]["models"] if m["id"] != captured["models"]["current"])
+                args["model"] = next(
+                    m["id"] for m in captured["models"]["models"] if m["id"] != captured["models"]["current"]
+                )
             if step["tool"] == "hub_bot_go_live":
                 # Local repository construction is outside the remote tool script; report its result.
                 post(api, f"bots/{args['bot']}/place", {"computer": computer["runner_id"]}, person)
-                post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"bots": {
-                    args["bot"]: {"ready": True, "repository_present": True}}}}, computer["token"])
+                readiness = {
+                    "schema_version": 1,
+                    "bots": {bot_id(api, args["bot"]): {"ready": True, "repository_present": True}},
+                }
+                post(
+                    api,
+                    "runners/heartbeat",
+                    {"version": "test", "platform": "test", "readiness": readiness},
+                    computer["token"],
+                )
             fn = hubtools.BY_NAME[step["tool"]]["fn"]
             try:
                 result = fn(ToolApi(api, attempt["token"]), args)

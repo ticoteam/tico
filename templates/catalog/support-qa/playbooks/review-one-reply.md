@@ -17,13 +17,15 @@ marked "unverified", never "wrong" and never "right".
 
 ## 3. Score
 
-Each criterion 1, 2 or 3 as `knowledge/scorecard.md` defines it:
+First check the critical items: a wrong policy, a promise the policy does not allow, another customer's details, or
+advice that could cause harm. Any one fails the reply whatever its scores. Then score each criterion 1, 2 or 3 as
+`knowledge/scorecard.md` defines it (`skills/score-a-reply-against-its-source/SKILL.md`):
 - **Accuracy**: the facts and steps are right for this customer's plan and situation.
 - **Tone**: warm and plain, acknowledges the problem, does not blame the customer.
 - **Completeness**: answers everything asked, in one reply where it can.
 - **Policy**: no promise, discount or disclosure outside what is allowed.
 - **Next step**: the customer knows what happens next and who does it.
-Write one reason and one quoted sentence for any score below 2 or of 3.
+Write one reason and one quoted sentence for each score.
 
 ## 4. Record
 

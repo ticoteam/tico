@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 25 minutes. The outcome is six recorded answers, a first weekly deal review on the task
+finished. Budget 25 minutes. The outcome is five recorded answers, a first weekly deal review on the task
 from the real deals, and the first routine checked.
 
 ---
@@ -27,11 +27,10 @@ everything leaving the team goes out when a person has turned mail sending on in
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
 1. What do you sell, to whom, and how does a deal happen from first meeting to signature? Which stages?
-2. Which open deals first, who owns each, and where do they live?
+2. Which open deals first, who owns each, where do they live, and after how many quiet days is a deal at risk? (Default: 10 days.)
 3. Who sends recaps and proposals, from which address? One recap and one proposal that worked.
 4. Where are the price sheet, documented security and legal answers, and citable case studies? Who owns each?
 5. What must never appear in writing (discounts, competitors, customers, unreleased features, dates)?
-6. After how many quiet days is a deal at risk, and when should the review land? (Default: 10 days, Mondays 09:00.)
 
 ## 4. Record
 
@@ -47,13 +46,13 @@ it to the task and label it "First draft, not yet reviewed". Nothing is sent and
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will review every open deal each Monday at 09:00 and have the follow-ups ready for review." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will review every open deal each Monday at 09:00 and have the follow-ups ready for review." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

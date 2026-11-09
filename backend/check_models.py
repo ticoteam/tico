@@ -4,10 +4,12 @@ The subtask stays the bot's own. Its turns run on the named runtime and model, i
 read only the subtask's room. Only the runtime, model, harness and effort change: the bot's repository, tools,
 isolation and credentials are its own, so a check never runs with more than the bot has. When the bot finishes
 it, the parent's owner is woken on the parent with the verdict (hubdb._subtask_wake)."""
+
 from . import hubdb as H
 from . import providers
 from .harnesses import runtime_of
 from .readiness import SIGNED_OUT, can_run
+from . import bot_settings as BS
 
 ROLES = ("review", "check")
 
@@ -39,14 +41,15 @@ def authors_of(c, settings, task_id):
     yet and adds nothing. Empty when none is known (a person's task with no runs)."""
     from .shared_bots import follow
     from .usage_records import ran_on
+
     task = H.task(c, task_id) if task_id else None
     if not task:
         return set()
-    turns = [row["id"] for row in c.execute("SELECT id FROM turns WHERE task_id=?", (task_id,))]
+    turns = [row["id"] for row in c.execute("SELECT id FROM attempts WHERE task_id=?", (task_id,))]
     makers = {s["family"] for made in ran_on(c, turns).values() for s in made["segments"] if s["family"]}
-    if H.is_bot(task["owner"]):
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(task["owner"]),)).fetchone()
-        config = follow(c, H.actor_id(task["owner"]), H._json(row["config_json"], {}) or {}) if row else {}
+    if H.is_bot(task["owner_id"]):
+        row = c.execute(BS.ONE_SQL, (H.actor_id(task["owner_id"]),)).fetchone()
+        config = follow(c, H.actor_id(task["owner_id"]), H._json(row["config"], {}) or {}) if row else {}
         makers.add(providers.author_provider(providers.bot_choice(c, settings, config)[1]))
     return makers - {""}
 
@@ -69,12 +72,20 @@ def _auto(c, settings, bot, authors):
         if row["provider"] not in authors:
             return row["runtime"], row["model"], ""
         names = sorted(providers.PROVIDER_BY_ID[p]["label"] for p in authors if p in providers.PROVIDER_BY_ID)
-        return row["runtime"], row["model"], (f"no provider other than {' or '.join(names) or 'the author'} can run "
-                                              "it, so it runs on the author's own")
-    raise CheckModelError("runner_not_ready" if refused else "check_model",
-                          "No check model can run" + (": " + "; ".join(refused[:3]) if refused else
-                                                      ": enable an AI provider in Settings > Computers, or name one "
-                                                      "with --check-model"))
+        return (
+            row["runtime"],
+            row["model"],
+            (f"no provider other than {' or '.join(names) or 'the author'} can run it, so it runs on the author's own"),
+        )
+    raise CheckModelError(
+        "runner_not_ready" if refused else "check_model",
+        "No check model can run"
+        + (
+            ": " + "; ".join(refused[:3])
+            if refused
+            else ": enable an AI provider in Settings > Computers, or name one with --check-model"
+        ),
+    )
 
 
 def choose(c, settings, bot, spec, role, authors=()):
@@ -97,21 +108,63 @@ def choose(c, settings, bot, spec, role, authors=()):
     if not runtime:
         raise CheckModelError("check_model", "Enable an AI provider in Settings before naming a check model")
     row = providers.MODEL_BY_ID.get(model) or {}
+    effort = str(row.get("default_effort") or "")
     harnesses = tuple(row.get("harnesses") or (runtime,))
     harness = next((h for h in harnesses if runtime_of(h) == runtime), harnesses[0])
     can = can_run(c, bot, runtime, harness=harness, model=model)
     if can.get("can_run") is False:
         raise CheckModelError("runner_not_ready", can.get("problem") or f"{runtime} cannot run on this bot's computer")
-    return {"runtime": runtime, "model": model, "harness": harness,
-            "effort": str(row.get("default_effort") or ""), "role": role, **({"note": note} if note else {})}
+    return {
+        "runtime": runtime,
+        "model": model,
+        "harness": harness,
+        "effort": effort,
+        "role": role,
+        **({"note": note} if note else {}),
+    }
 
 
 def record(c, actor, task_id, check):
-    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created) "
-              "VALUES(?,?,?,?,?,?,?,?)", (task_id, check["runtime"], check["model"], check["harness"],
-                                          check["effort"], check["role"], actor, H.now()))
-    H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}",
-                  check["role"] + (f"; {check['note']}" if check.get("note") else ""))
+    c.execute(
+        "INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (task_id, check["runtime"], check["model"], check["harness"], check["effort"], check["role"], actor, H.now()),
+    )
+    H._task_event(
+        c,
+        task_id,
+        actor,
+        "check_model",
+        None,
+        f"{check['runtime']}:{check['model']}",
+        check["role"] + (f"; {check['note']}" if check.get("note") else ""),
+    )
+
+
+def prime(c, pairs):
+    """Seed H.check_model's read for these (task id, bot) pairs that have no check model, one query for all: most
+    queued work is no check subtask, and Health asks for every queued job (execution.prime_job_checks). A pair with
+    one is left to its own read, which returns exactly the columns check_model selects."""
+    from .read_cache import cache, prime as seed
+
+    pairs = {(tid, bot) for tid, bot in pairs if tid and bot}
+    if cache(c) is None or not pairs or not H._has_table(c, "task_check_models"):
+        return
+    have = set()
+    for part in H.chunks(sorted({tid for tid, _ in pairs})):
+        have.update(
+            (row[0], row[1])
+            for row in c.execute(
+                "SELECT m.task_id,m.created_by FROM task_check_models m JOIN tasks t ON t.id=m.task_id "
+                f"WHERE m.task_id IN ({','.join('?' * len(part))}) AND t.owner_id=m.created_by",
+                part,
+            )
+        )
+    seed(
+        c,
+        H.CHECK_MODEL_SQL,
+        {(tid, "bot:" + bot, "bot:" + bot): None for tid, bot in pairs if (tid, "bot:" + bot) not in have},
+    )
 
 
 def of(c, task_id, bot):
@@ -121,9 +174,13 @@ def of(c, task_id, bot):
     first model again."""
     first = H.check_model(c, task_id, bot)
     from .repositories import metadata
+
     moved = metadata(c, "check-moved:" + task_id) if first else None
-    if (moved and _default_login(c, bot, first, moved["runner_id"])
-            and _out_of_quota(c, moved["runner_id"], first["runtime"])):
+    if (
+        moved
+        and _default_login(c, bot, first, moved["runner_id"])
+        and _out_of_quota(c, moved["runner_id"], first["runtime"])
+    ):
         return {k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")}
     return first
 
@@ -136,8 +193,9 @@ def _default_login(c, bot, check, runner_id):
 
 def _out_of_quota(c, runner_id, runtime, settings=None):
     """Whether Health's default_login_limited marks `runner_id`'s default `runtime` login out of quota: a turn there
-    completing, or the provider's reset passing, ends it (health_monitor.out_of_quota_logins)."""
-    from .health_monitor import out_of_quota_logins
+    completing, or the provider's reset passing, ends it (maintenance_health.out_of_quota_logins)."""
+    from .maintenance_health import out_of_quota_logins
+
     return any(x["runner_id"] == runner_id and x["runtime"] == runtime for x in out_of_quota_logins(c, settings))
 
 
@@ -147,9 +205,10 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     first in the company's check order that is not the limited model, not on another login out of quota there, and
     that this bot's computer can run, from a provider other than the work's authors' when one qualifies. It goes back to its first model once
     that model's login is not out of quota any more (of)."""
-    from .health_monitor import out_of_quota_logins
+    from .maintenance_health import out_of_quota_logins
     from .repositories import save_metadata
     from .task_relations import parent_of
+
     first = H.check_model(c, task_id, bot)
     out = {x["runtime"] for x in out_of_quota_logins(c, settings) if x["runner_id"] == runner_id}
     if not first or check["runtime"] not in out or not _default_login(c, bot, check, runner_id):
@@ -164,9 +223,16 @@ def move_on(c, settings, bot, task_id, check, runner_id):
         except CheckModelError:
             continue
         save_metadata(c, "check-moved:" + task_id, {**nxt, "runner_id": runner_id})
-        H._task_event(c, task_id, H.KEEPER, "check_model", f"{check['runtime']}:{check['model']}",
-                      f"{nxt['runtime']}:{nxt['model']}", f"the computer's default {check['runtime']} login is out "
-                      f"of quota; back to {first['runtime']}:{first['model']} once it works again")
+        H._task_event(
+            c,
+            task_id,
+            H.KEEPER,
+            "check_model",
+            f"{check['runtime']}:{check['model']}",
+            f"{nxt['runtime']}:{nxt['model']}",
+            f"the computer's default {check['runtime']} login is out "
+            f"of quota; back to {first['runtime']}:{first['model']} once it works again",
+        )
         return nxt
     return None
 
@@ -174,12 +240,14 @@ def move_on(c, settings, bot, task_id, check, runner_id):
 def handed(c, attempt_id, task_id, check):
     """Remember that the claim handed this attempt out on the check's model, for its completion."""
     from .repositories import save_metadata
+
     save_metadata(c, "check-attempt:" + attempt_id, {"task_id": task_id, **dict(check)})
 
 
 def handed_out(c, attempt_id):
     """(task id, check) the claim handed this attempt out on, or (None, None); forgotten once read."""
     from .repositories import metadata
+
     found = metadata(c, "check-attempt:" + attempt_id)
     if not found:
         return None, None
@@ -190,12 +258,14 @@ def handed_out(c, attempt_id):
 def hold(c, task_id, runtime, until):
     """A usage limit on the check's model holds that check alone until `until`; the bot's own work goes on."""
     from .repositories import save_metadata
+
     save_metadata(c, "check-limited:" + task_id, {"runtime": runtime, "until": until})
 
 
 def held(c, task_id):
     """Whether a usage limit on the check's model still holds the check."""
     from .repositories import metadata
+
     return bool(task_id) and str(metadata(c, "check-limited:" + task_id).get("until") or "") > H.now()
 
 
@@ -203,6 +273,7 @@ def dropped(c, task_id):
     """Whether a check a usage limit has held has left the board (done, closed or declined): its queued turn is let go
     (Execution.hold_unrunnable) instead of retrying after every reset and running once on a finished task."""
     from .repositories import metadata
+
     if not task_id or not metadata(c, "check-limited:" + task_id):
         return False
     row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -215,8 +286,14 @@ def apply(config, check):
     if not check:
         return config
     out = {k: v for k, v in config.items() if k not in ("fallback_models",)}
-    out.update(runtime=check["runtime"], model=check["model"], harness=check["harness"],
-               fallback={"off": True}, session="task", subtask_session="own")
+    out.update(
+        runtime=check["runtime"],
+        model=check["model"],
+        harness=check["harness"],
+        fallback={"off": True},
+        session="task",
+        subtask_session="own",
+    )
     if check["effort"]:
         out["reasoning_effort"] = check["effort"]
     else:
@@ -239,11 +316,12 @@ def review_default(c, settings, owner, parent_id):
     when the author is unknown or no check model can run it; then `why not` says so for the task's history, and
     the bot works on its own model, as before, rather than the review being refused."""
     from .shared_bots import follow
+
     parent = H.task(c, parent_id) if parent_id else None
-    if not parent or not H.is_bot(owner) or parent["owner"] == owner:
+    if not parent or not H.is_bot(owner) or parent["owner_id"] == owner:
         return None, None
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(owner),)).fetchone()
-    config = follow(c, H.actor_id(owner), H._json(row["config_json"], {}) or {}) if row else {}
+    row = c.execute(BS.ONE_SQL, (H.actor_id(owner),)).fetchone()
+    config = follow(c, H.actor_id(owner), H._json(row["config"], {}) or {}) if row else {}
     if config.get("review_model") != "check":
         return None, None
     authors = authors_of(c, settings, parent_id)

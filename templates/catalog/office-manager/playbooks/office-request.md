@@ -4,6 +4,11 @@ Triggered by a task from anyone: "the meeting room screen is broken", "we need a
 starter on Monday", "can we get oat milk". Budget 10 minutes. The outcome is the request logged with a
 fixer and a date, and the human who raised it told what happens next.
 
+Inputs: the task and its attachments, `knowledge/fixers.md`, `knowledge/supplies.md`, `knowledge/requests.md`.
+
+Done when: the request is a row in `knowledge/requests.md` with a fixer and a promised date (or "not given"), the requester has
+a one-line reply, and any order or message is on the task as a draft or as placed under a granted Tool.
+
 ---
 
 ## 1. Understand it
@@ -14,6 +19,8 @@ What, where, since when, how bad. If it is unsafe (water, gas, electrics, a lock
 so in the first line and tell the Operations Manager now; do not wait for the weekly page.
 
 ## 2. Route it
+
+Skill: `skills/triage-an-office-request/SKILL.md`. Route by type:
 
 - IT (laptops, accounts, Wi-Fi password, software): hand to `it-support` with `hub task create --owner
   it-support` and tell the requester.
@@ -26,7 +33,7 @@ so in the first line and tell the Operations Manager now; do not wait for the we
 ## 3. Prepare the action
 
 The message to the fixer or landlord (what, where, since when, access times, a photo if the requester
-attached one), or the order. Record it on the task. Place requested orders with your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
+attached one), or the order. Record it on the task. Place a requested order only when the task asks for it and a granted Tool allows it. Messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 4. Log and reply
 

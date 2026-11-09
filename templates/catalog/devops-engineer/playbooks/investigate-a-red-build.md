@@ -1,33 +1,39 @@
 # Investigate a red build
 
-Triggered by a task or message about a failing run ("main is red", "why does deploy keep failing?").
-Budget 20 minutes. The outcome is the cause, the first bad commit, and the fix or the owner. You rerun and
-revert nothing.
+Triggered by a task or message about a failing run ("main is red", "why does deploy keep failing?"). Budget 20 minutes.
+The outcome is the cause, the first bad commit, and the fix or the owner. You rerun and revert nothing.
 
 ---
 
-## 1. Find the first failure
+## Inputs
 
-    hub task show <id>
-    gh run list -R <repo> --branch main --workflow <name> --limit 30
+- The task, the repository and the workflow name.
+- The last 30 runs on the branch: `gh run list -R <repo> --branch main --workflow <name> --limit 30`.
+- The failed log of the first red run: `gh run view <id> -R <repo> --log-failed`.
 
-Walk back to the last green run. The first red run after it names the commit range to look at.
+## Steps
 
-## 2. Read the log
+1. **Find the first failure.** `hub task show <id>`, then the run list above. Walk back to the last green run. The first
+   red run after it bounds the commit range to look at.
+2. **Read the log.** Read the first failing step, not the last one: later steps often fail because an earlier one left
+   state behind. Classify the failure with `skills/classify-a-failed-run/SKILL.md`: product bug, flaky test,
+   infrastructure, dependency or configuration. Quote the lines that show it, with any credential redacted.
+3. **Check flakiness before blaming a commit.** Has this test flipped before (`knowledge/flaky-tests.md`)? Did the same
+   commit pass on another run? If so, it is flaky, not broken. Say so and propose the register entry.
+4. **Name the owner.** Take the owner from `knowledge/pipeline.md`. A product bug goes to the QA Engineer for triage, as
+   a note, when their decision is needed.
 
-`gh run view <id> -R <repo> --log-failed`. Classify: a test assertion (product bug or broken test), a
-flaky signature (timeout, port in use, order-dependent state), infrastructure (runner, network, rate
-limit, expired credential), or a dependency (a new release upstream, a yanked version). Quote the three
-lines that show it; redact anything credential.
+## Output
 
-## 3. Check flakiness before blaming a commit
+On the task, four lines:
 
-Has this test flipped before (`knowledge/flaky-tests.md`)? Did the same commit pass on another run? If
-so, it is flaky, not broken: say so, and propose the register entry.
+- **Cause:** the class and the quoted evidence.
+- **First bad run and commit:** a link.
+- **Fix or owner:** the change or the revert a human should consider, or the owner from `knowledge/pipeline.md`.
+- **Confidence:** high, medium or low, and what would confirm it.
 
-## 4. Answer
+## Done when
 
-On the task, in four lines: **Cause** with the quoted evidence; **First bad run and commit** (link);
-**Fix** (the change or the revert a human should consider) or **Owner** from `knowledge/pipeline.md`;
-**Confidence** and what would confirm it. `hub task update <id> --status done --note`. A product bug also
-becomes a note for the QA Engineer to triage, when their decision is needed.
+- The cause is named, or the log is named as unreadable with the reason.
+- The first bad run and commit are linked, or the commit range is given with the reason it could not be narrowed.
+- The task is closed with `hub task update <id> --status done --note`.

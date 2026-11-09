@@ -1,7 +1,7 @@
-// Tico Cloud access (ui/app/cloud-access.js, backend/cloud_access.py) against a fake server. Off cloud nothing shows.
+// Tico Cloud access (ui/app/cloud-access.ts, backend/cloud_access.py) against a fake server. Off cloud nothing shows.
 // Frozen: a slim strip over every page, "Out of credit · Add credit" to the billing page, the page below shortened to
 // fit and still usable, on a desktop and a phone with no sideways scroll. Locked: the whole page is Pay to continue,
-// with Open billing and the owner's Download your data, shown at once by any 402 `locked`; open again reloads the page
+// with Open billing and the owner's Download your files, shown at once by any 402 `locked`; open again reloads the page
 // by itself. Every request is intercepted. TICO_SHOTS=<dir> saves screenshots of both states.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -27,7 +27,7 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css'
-          : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/me') return json({id: 'ana', email: 'ana@boatyard.example', role, cloud: true, config: {company_name: 'Boatyard'}});
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: [], active: [], queued: [], cloud_access: cloud});
@@ -39,7 +39,6 @@ const BILLING = 'https://app.tico.dev/billing/boatyard';
       return json(unrouted(p));
     };
     await page.route('**/*', serve);
-    await page.addInitScript(() => localStorage.setItem('tico.needsYou', JSON.stringify({snoozedUntil: Date.now() + 3600e3})));
     let opened = 0;
     const open = async () => {
       await page.goto(`http://tico-ui.test/?open=${++opened}#/tasks`);   // a new query: a fresh load every time

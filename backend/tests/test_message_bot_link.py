@@ -3,9 +3,11 @@
 That link is what lets the bot's runs ask a computer for a mail token (routines.token_mailboxes). It is written where
 the bot is made, and once at start for bots made before that when there is no doubt whose they are.
 """
+
 from backend import message_bots, routines
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.test_api import api, post  # noqa: F401  (fixture)
+from backend import bot_settings as BS
 
 MODEL = {"model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None}
 
@@ -21,19 +23,34 @@ def mailbox_of(api, bot):
 
 
 def add_from_template(api, slug, instructions, token="ana-test"):
-    return post(api, "bots", {"slug": slug, "display_name": "Inbox Manager", "description": "Mail", "status": "planned",
-                              "template": "inbox", "instructions": instructions, **MODEL}, token=token)
+    return post(
+        api,
+        "bots",
+        {
+            "slug": slug,
+            "display_name": "Inbox Manager",
+            "description": "Mail",
+            "status": "planned",
+            "template": "inbox",
+            "instructions": instructions,
+            **MODEL,
+        },
+        token=token,
+    )
 
 
 def test_adding_the_template_in_settings_links_the_person_the_mailbox_line_names(api):
     add_from_template(api, "ben-inbox", "# Inbox\n\nMailbox: ben@acme.example\n")
-    assert inbox_bot_of(api, "ben") == "ben-inbox" and inbox_bot_of(api, "ana") is None
-    assert mailbox_of(api, "ben-inbox") == "ben@acme.example"
     with api.app.state.store.read() as c:
-        assert routines.token_mailboxes(c, "ben-inbox")[0] == "ben@acme.example"
+        bot = H.resolve_bot(c, "ben-inbox")["id"]  # the roster and the bot's config name the bot by id
+    assert inbox_bot_of(api, "ben") == bot and inbox_bot_of(api, "ana") is None
+    assert mailbox_of(api, bot) == "ben@acme.example"
+    with api.app.state.store.read() as c:
+        assert routines.token_mailboxes(c, bot)[0] == "ben@acme.example"
 
 
 # ------------------------------------------------------------------ start-up backfill
+
 
 def old_message_bot(api, slug, instructions="", tools=None, template="inbox"):
     """A message bot as an earlier release left it: a template and its text, and nobody's `inbox_bot`."""
@@ -41,8 +58,9 @@ def old_message_bot(api, slug, instructions="", tools=None, template="inbox"):
     if tools:
         config["tools"] = tools
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES(?,?,'active')", (slug, slug))
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')", (slug, encode(config)))
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (slug, slug, slug))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (slug,))
+        BS.write(c, slug, config)
 
 
 def backfill(api):
@@ -56,12 +74,12 @@ def test_backfill_links_the_bot_whose_mailbox_is_a_person_s_email(api):
     assert backfill(api) == ["cara-mail", "inbox-manager"]
     assert inbox_bot_of(api, "ben") == "inbox-manager" and inbox_bot_of(api, "cara") == "cara-mail"
     assert mailbox_of(api, "inbox-manager") == "ben@acme.example"
-    assert backfill(api) == []                                                            # nothing left to do
+    assert backfill(api) == []  # nothing left to do
 
 
 def test_backfill_leaves_what_is_a_choice_for_an_owner(api):
     old_message_bot(api, "first", "Mailbox: ben@acme.example\n")
-    old_message_bot(api, "second", "Mailbox: ben@acme.example\n")           # two bots for one person
+    old_message_bot(api, "second", "Mailbox: ben@acme.example\n")  # two bots for one person
     old_message_bot(api, "no-mailbox", "Runs mail, says nothing of whose.\n")
     old_message_bot(api, "a-role", "Mailbox: cara@acme.example\n", template="support")
     assert backfill(api) == []

@@ -1,4 +1,4 @@
-/* ui/styles/computer-screen.css — a computer's screen (ui/app/computer-screen.js): the viewer, the Computers row's sign,
+/* ui/styles/computer-screen.css — a computer's screen (ui/app/computer-screen.ts): the viewer, the Computers row's sign,
    its ⋯ menu choice. The cascade runs in the order index.html links these files. */
 /* The viewer takes the whole window on every width, over the rail and the phone's tab bar. */
 body.screen-open{overflow:hidden}
@@ -37,6 +37,6 @@ body.screen-open{overflow:hidden}
 
 /* Settings > Computers: the pop-up's Screen link and choice. */
 .machine-screen{display:flex;width:fit-content;align-items:center;gap:4px;margin-top:3px;font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
-a.machine-screen{color:var(--accent)}
+a.machine-screen{color:var(--ink)}
 .machine-screen .nav-icon{width:14px;height:14px;font-size:14px;color:inherit}
 .machine-screen-choice{display:flex;align-items:center;flex-wrap:wrap;gap:12px;cursor:default}

@@ -5,14 +5,20 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowJs": true,
-    "checkJs": false,
+    "checkJs": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "strict": false,
     "strictNullChecks": true,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "noUnusedLocals": true,
     "noImplicitAny": false,
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["./**/*.js", "./types/**/*.d.ts"],
-  "exclude": ["./vendor/**", "./assets/**", "./node_modules/**"]
+  "include": ["./**/*.js", "./**/*.ts", "./types/**/*.d.ts"],
+  "exclude": ["./vendor/**", "./assets/**", "./node_modules/**", "./observability-vendors.ts"]
 }

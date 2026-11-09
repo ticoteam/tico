@@ -5,6 +5,7 @@ The owner pastes the bot token (xoxb-) and app-level token (xapp-) from a Slack 
 process (`backend/slack_gateway.py`) is the one that opens them. Tokens are never returned by an
 endpoint and never written to a log. See docs/slack.md.
 """
+
 import json
 import logging
 import os
@@ -30,7 +31,7 @@ KEY_FILE = "slack.key"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS slack_credentials(
  id TEXT PRIMARY KEY, ciphertext BLOB NOT NULL, nonce BLOB NOT NULL, team_id TEXT NOT NULL DEFAULT '',
- app_id TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, created_by TEXT NOT NULL);
+ app_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 """
 _lock = threading.Lock()
 log = logging.getLogger("tico.slack_app")
@@ -65,7 +66,8 @@ def save(store, settings, actor, bot_token, app_token, vault=None):
     with store.transaction() as c:
         c.executescript(SCHEMA)
         sealed = AESGCM(_key(settings, vault, c)).encrypt(
-            nonce, json.dumps({"bot_token": bot_token, "app_token": app_token}).encode(), AAD)
+            nonce, json.dumps({"bot_token": bot_token, "app_token": app_token}).encode(), AAD
+        )
         c.execute("DELETE FROM slack_credentials")
         c.execute("INSERT INTO slack_credentials VALUES('app',?,?,'','',?,?)", (sealed, nonce, H.now(), actor))
         c.execute("DELETE FROM service_health WHERE service=?", (HEALTH,))
@@ -85,12 +87,29 @@ def load(store, settings, vault=None):
                 return None
             # Under KMS, tokens saved before TICO_CREDENTIAL_KMS_KEY was set open with slack.key and are re-sealed once.
             kms = settings.credential_kms_key and vault is not None
-            data = json.loads(open_or_reseal(c, key, key_file(settings) if kms else None, row["nonce"], row["ciphertext"],
-                                             AAD, "slack_credentials", "id", "app", log))
+            data = json.loads(
+                open_or_reseal(
+                    c,
+                    key,
+                    key_file(settings) if kms else None,
+                    row["nonce"],
+                    row["ciphertext"],
+                    AAD,
+                    "slack_credentials",
+                    "id",
+                    "app",
+                    log,
+                )
+            )
         except Exception:
             return None
-    return {"bot_token": data["bot_token"], "app_token": data["app_token"], "team_id": row["team_id"],
-            "app_id": row["app_id"], "created": row["created"]}
+    return {
+        "bot_token": data["bot_token"],
+        "app_token": data["app_token"],
+        "team_id": row["team_id"],
+        "app_id": row["app_id"],
+        "created_at": row["created_at"],
+    }
 
 
 def stamp(store):
@@ -98,8 +117,8 @@ def stamp(store):
     with store.read() as c:
         if not c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone():
             return ""
-        row = c.execute("SELECT created FROM slack_credentials WHERE id='app'").fetchone()
-    return row["created"] if row else ""
+        row = c.execute("SELECT created_at FROM slack_credentials WHERE id='app'").fetchone()
+    return row["created_at"] if row else ""
 
 
 def pin(store, team_id, app_id):
@@ -121,36 +140,70 @@ def report(store, state, message="", team=""):
     detail = json.dumps({"state": state, "message": message, "team": team})
     with store.transaction() as c:
         if state == "connected":
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,"
-                      "detail_json=excluded.detail_json", (HEALTH, now, detail))
+            c.execute(
+                "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?) "
+                "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,"
+                "detail=excluded.detail",
+                (HEALTH, now, detail),
+            )
         else:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
-                      (HEALTH, now, detail))
+            c.execute(
+                "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
+                "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
+                (HEALTH, now, detail),
+            )
 
 
 def status(c):
     """The state the Settings card and the Health page read; never a token."""
     exists = c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone()
-    row = c.execute("SELECT team_id,app_id,created FROM slack_credentials WHERE id='app'").fetchone() if exists else None
-    health = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?", (HEALTH,)).fetchone()
+    row = (
+        c.execute("SELECT team_id,app_id,created_at FROM slack_credentials WHERE id='app'").fetchone()
+        if exists
+        else None
+    )
+    health = c.execute(
+        "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?", (HEALTH,)
+    ).fetchone()
     detail = {}
     if health:
         try:
-            detail = json.loads(health["detail_json"] or "{}")
+            detail = json.loads(health["detail"] or "{}")
         except ValueError:
             detail = {}
-    return {"configured": bool(row), "team_id": row["team_id"] if row else "", "app_id": row["app_id"] if row else "",
-            "state": detail.get("state") or ("waiting" if row else "off"), "message": detail.get("message") or "",
-            "last_success": health["last_success"] if health else None,
-            "last_error": health["last_error"] if health else None}
+    return {
+        "configured": bool(row),
+        "team_id": row["team_id"] if row else "",
+        "app_id": row["app_id"] if row else "",
+        "state": detail.get("state") or ("waiting" if row else "off"),
+        "message": detail.get("message") or "",
+        "last_succeeded_at": health["last_succeeded_at"] if health else None,
+        "last_error": health["last_error"] if health else None,
+    }
 
 
 class Tokens(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bot_token: str
     app_token: str
+
+
+def with_hosts(manifest, settings):
+    """The manifest with this server's link-preview hosts (backend/slack_unfurl.py) for the example one; with
+    none Slack can register (a loopback install), no previews are asked for."""
+    from .slack_unfurl import hosts
+
+    names = sorted(hosts(settings))
+    if names:
+        manifest["features"]["unfurl_domains"] = names
+        return manifest
+    manifest["features"].pop("unfurl_domains", None)
+    manifest["oauth_config"]["scopes"]["bot"] = [
+        s for s in manifest["oauth_config"]["scopes"]["bot"] if s not in ("links:read", "links:write")
+    ]
+    events = manifest["settings"]["event_subscriptions"]["bot_events"]
+    manifest["settings"]["event_subscriptions"]["bot_events"] = [e for e in events if e != "link_shared"]
+    return manifest
 
 
 def install_slack_app(app, settings, store):
@@ -169,7 +222,7 @@ def install_slack_app(app, settings, store):
     @app.get("/api/v2/slack/manifest")
     def manifest(request: Request):
         owner(request)
-        return json.loads(MANIFEST.read_text())
+        return with_hosts(json.loads(MANIFEST.read_text()), settings)
 
     @app.put("/api/v2/slack/tokens")
     def tokens(request: Request, body: Tokens):
@@ -178,7 +231,9 @@ def install_slack_app(app, settings, store):
         if not BOT_TOKEN.match(bot):
             raise Problem("slack_bot_token", "The bot token starts with xoxb-. Copy it from Install App.", 422)
         if not APP_TOKEN.match(app_token):
-            raise Problem("slack_app_token", "The app-level token starts with xapp-. Create it under Basic Information.", 422)
+            raise Problem(
+                "slack_app_token", "The app-level token starts with xapp-. Create it under Basic Information.", 422
+            )
         save(store, settings, who.actor, bot, app_token, getattr(app.state, "vault", None))
         with store.transaction() as c:
             H.event(c, who.actor, "slack.tokens_saved", "", {})

@@ -7,8 +7,10 @@ from backend import hubdb as H
 from backend import release_flow as RF
 from backend.store import encode
 from backend.tests.test_github import PR, api, get, headers, hook, pr_event, post  # noqa: F401
+from backend import bot_settings as BS
 
 RELEASE_URL = "https://github.com/ticoteam/tico/releases/tag/v1.2.3"
+LEAVE_OUT = "do not ask anyone for their names"
 
 
 def _team(api):
@@ -17,34 +19,68 @@ def _team(api):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         for slug, template in (("cmo", RF.MANAGER), ("cpo", RF.WRITER), ("qab", RF.QA)):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
-                      (slug, encode({**bots[slug], "template": template}), "product", "ana"))
-        dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=[
-            {"name": "In QA", "status": "review"}, {"name": "Pending Release", "status": "review"},
-            {"name": "Post Release QA", "status": "review"}, {"name": "Done", "status": "done"}])
+            c.execute('INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
+            BS.write(c, slug, {**bots[slug], 'template': template})
+        dev = H.type_create(
+            c,
+            "human:ana",
+            "Dev tickets",
+            numbered=True,
+            steps=[
+                {"name": "In QA", "status": "review"},
+                {"name": "Pending Release", "status": "review"},
+                {"name": "Post Release QA", "status": "review"},
+                {"name": "Done", "status": "done"},
+            ],
+        )
     return dev
 
 
-def _ticket(api, dev, title, number=412, tags=()):
+def _ticket(api, dev, title, number=412, tags=(), owner="cpo"):
     url = PR.replace("/412", f"/{number}")
-    ticket = post(api, "tasks", {"owner": "cpo", "title": title, "body": "x", "links": [url], "type": dev["id"],
-                                 "step": "Pending Release", "labels": list(tags)})
-    hook(api, "pull_request", pr_event("closed", html_url=url, merged=True, merge_commit_sha="abc%d" % number,
-                                       merged_at="2026-10-19T12:42:19Z"))
+    ticket = post(
+        api,
+        "tasks",
+        {
+            "owner": owner,
+            "title": title,
+            "body": "x",
+            "links": [url],
+            "type": dev["id"],
+            "step": "Pending Release",
+            "labels": list(tags),
+        },
+    )
+    hook(
+        api,
+        "pull_request",
+        pr_event(
+            "closed", html_url=url, merged=True, merge_commit_sha="abc%d" % number, merged_at="2026-10-19T12:42:19Z"
+        ),
+    )
     return ticket
 
 
 def _tasks(api, owner, prefix="Release:"):
     with api.app.state.store.read() as c:
-        return [r["title"] for r in c.execute("SELECT title FROM tasks WHERE owner=? AND title LIKE ?",
-                                              (H.bot_actor(owner), prefix + "%"))]
+        return [
+            r["title"]
+            for r in c.execute(
+                "SELECT title FROM tasks WHERE owner_id=? AND title LIKE ?", (H.bot_actor(owner), prefix + "%")
+            )
+        ]
 
 
 def _release_wakes(api, ticket):
     with api.app.state.store.read() as c:
-        return [(r["body"], r["refs_json"]) for r in c.execute(
-            "SELECT m.body, m.refs_json FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.wake')='release_published'", (ticket["id"],))]
+        return [
+            (r["body"], r["refs"])
+            for r in c.execute(
+                "SELECT m.body, m.refs FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+                f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.wake')='release_published'",
+                (ticket["id"],),
+            )
+        ]
 
 
 def test_the_daily_hour_sends_one_task_and_nothing_when_nothing_is_pending(api):
@@ -68,6 +104,7 @@ def test_release_now_is_for_those_who_move_dev_tickets_and_wakes_an_open_release
     dev = _team(api)
     _ticket(api, dev, "Hotfix", 412)
     from backend.auth import Identity
+
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_types SET manager='cpo' WHERE id=?", (dev["id"],))
     with api.app.state.store.read() as c:
@@ -103,10 +140,13 @@ def test_a_published_release_gives_the_writer_one_task_and_qa_a_wake_per_ticket(
     dev = _team(api)
     tested = _ticket(api, dev, "Visual replies", 412, tags=["qa"])
     plain = _ticket(api, dev, "Typo fix", 413)
-    event = {"action": "published", "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
-             "repository": {"full_name": "ticoteam/tico"}}
+    event = {
+        "action": "published",
+        "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
+        "repository": {"full_name": "ticoteam/tico"},
+    }
     hook(api, "release", event)
-    hook(api, "release", event)      # the same delivery again
+    hook(api, "release", event)  # the same delivery again
     assert [json.loads(r)["role"] for _, r in _release_wakes(api, plain)] == ["note"], "a quiet note, no wake"
     assert json.loads(_release_wakes(api, plain)[0][1])["quiet"] is True
     roles = sorted(json.loads(r)["role"] for _, r in _release_wakes(api, tested))
@@ -114,8 +154,10 @@ def test_a_published_release_gives_the_writer_one_task_and_qa_a_wake_per_ticket(
     wakes = {json.loads(r)["role"]: json.loads(r) for _, r in _release_wakes(api, tested)}
     assert wakes["qa"]["rule"] == "release_published" and not wakes["qa"].get("quiet"), "QA's wake is the named event"
     with api.app.state.store.read() as c:
-        written = c.execute("SELECT refs_json FROM messages WHERE body LIKE 'New task from%Docs for v1.2.3%'").fetchall()
-    assert [json.loads(r[0])["rule"] for r in written] == ["release_published"], "the writer's docs task wakes under it too"
+        written = c.execute("SELECT refs FROM messages WHERE body LIKE 'New task from%Docs for v1.2.3%'").fetchall()
+    assert [json.loads(r[0])["rule"] for r in written] == ["release_published"], (
+        "the writer's docs task wakes under it too"
+    )
     docs = [t for t in _tasks(api, "cpo", "Docs for")]
     assert docs == ["Docs for v1.2.3: 2 tickets"], "one docs task for the release, however many tickets or replays"
 
@@ -123,14 +165,23 @@ def test_a_published_release_gives_the_writer_one_task_and_qa_a_wake_per_ticket(
 def test_a_private_ticket_is_counted_but_never_named_in_the_docs_task(api):
     dev = _team(api)
     _ticket(api, dev, "Visual replies", 412)
-    secret = _ticket(api, dev, "Acme payroll export", 413)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
-    hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
-                          "repository": {"full_name": "ticoteam/tico"}})
+    hook(
+        api,
+        "release",
+        {
+            "action": "published",
+            "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
+            "repository": {"full_name": "ticoteam/tico"},
+        },
+    )
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE owner='bot:cpo' AND title LIKE 'Docs for%'").fetchone()["body"]
-    assert "Visual replies" in body and "1 private ticket, not named here" in body
+        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:cpo' AND title LIKE 'Docs for%'").fetchone()[
+            "body"
+        ]
+    assert "Visual replies" in body and LEAVE_OUT in body
     assert "Acme payroll" not in body and "/413" not in body
 
 
@@ -138,13 +189,233 @@ def test_qa_hears_a_private_ticket_shipped_on_its_own_qa_subtask(api):
     dev = _team(api)
     secret = _ticket(api, dev, "Acme payroll export", 413, tags=["qa"])
     with api.app.state.store.transaction() as c:
-        check = H.task_create(c, "bot:cpo", "QA: payroll export", "Check it live.", "bot:qab", parent_id=secret["id"],
-                              lint=False)
+        check = H.task_create(
+            c, "bot:cpo", "QA: payroll export", "Check it live.", "bot:qab", parent_id=secret["id"], lint=False
+        )
         c.execute("UPDATE tasks SET private=1 WHERE id IN (?,?)", (secret["id"], check["id"]))
-    hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
-                          "repository": {"full_name": "ticoteam/tico"}})
+    hook(
+        api,
+        "release",
+        {
+            "action": "published",
+            "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
+            "repository": {"full_name": "ticoteam/tico"},
+        },
+    )
     with api.app.state.store.read() as c:
-        woke = c.execute("SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                         f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:qab' "
-                         "AND json_extract(m.refs_json,'$.wake')='release_published'", (check["id"],)).fetchall()
+        woke = c.execute(
+            "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:qab' "
+            "AND json_extract(m.refs,'$.wake')='release_published'",
+            (check["id"],),
+        ).fetchall()
     assert len(woke) == 1 and "QA: payroll export" in woke[0][0] and "Acme payroll export" not in woke[0][0]
+
+
+def test_a_published_release_withdraws_the_undecided_asks_at_or_below_it_in_its_channel(api):
+    """The webhook path: an ask for an older or the same version goes, a newer or prerelease ask and another
+    repository's stay, and a decided ask is never touched."""
+    _team(api)
+    store = api.app.state.store
+
+    def ask(c, task, tag, repo="ticoteam/tico", commit=None):
+        url = f"https://github.com/{repo}/releases/tag/{tag}"
+        return H.approval_request(
+            c,
+            H.bot_actor("cmo"),
+            "publish",
+            {"url": url, "version": tag.lstrip("v"), "commit": commit or tag, "content_sha256": "a" * 64},
+            task_id=task["id"],
+        )
+
+    with store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Release", "Cut it.", H.bot_actor("cmo"), lint=False)
+        asks = {
+            name: ask(c, task, *args)
+            for name, args in {
+                "old": ("v1.0.0",),
+                "same": ("v1.2.3", "ticoteam/tico", "b2"),
+                "newer": ("v1.3.0",),
+                "pre": ("v1.2.3-rc.1",),
+                "other": ("v1.0.0", "ticoteam/other"),
+            }.items()
+        }
+        decided = ask(c, task, "v0.9.0")
+        H.approval_decide(c, H.human_actor("ana"), decided["id"], "approved")
+    hook(
+        api,
+        "release",
+        {
+            "action": "published",
+            "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
+            "repository": {"full_name": "ticoteam/tico"},
+        },
+    )
+    with store.read() as c:
+        got = {name: H.approval(c, a["id"])["decision"] for name, a in asks.items()}
+        told = [
+            r["body"]
+            for r in c.execute(
+                "SELECT body FROM messages WHERE recipient_id=? AND body LIKE 'Withdrawn:%'", (H.bot_actor("cmo"),)
+            )
+        ]
+        kept = H.approval(c, decided["id"])["decision"]
+    assert got == {"old": "withdrawn", "same": "withdrawn", "newer": None, "pre": None, "other": None}
+    assert sorted(told) == ["Withdrawn: your publish approval. v1.2.3 already shipped."] * 2, "the bot hears it quietly"
+    assert kept == "approved"
+
+
+def test_a_release_in_another_connected_repository_withdraws_its_own_older_asks_at_once(api):
+    """Only the server's release repository gets the ticket and docs follow-ups; the older asks of any repository
+    are withdrawn as soon as its release publishes."""
+    _team(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Release", "Cut it.", H.bot_actor("cmo"), lint=False)
+        older = H.approval_request(
+            c,
+            H.bot_actor("cmo"),
+            "publish",
+            {
+                "url": "https://github.com/acme/other/releases/tag/v1.0.0",
+                "version": "1.0.0",
+                "commit": "o1",
+                "content_sha256": "a" * 64,
+            },
+            task_id=task["id"],
+        )
+    hook(
+        api,
+        "release",
+        {
+            "action": "published",
+            "release": {"tag_name": "v1.2.3", "html_url": "https://github.com/acme/other/releases/tag/v1.2.3"},
+            "repository": {"full_name": "acme/other"},
+        },
+    )
+    with store.read() as c:
+        assert H.approval(c, older["id"])["decision"] == "withdrawn"
+
+
+def test_the_release_and_docs_tasks_leave_private_tickets_out_and_never_ask_for_names(api):
+    dev = _team(api)
+    visible = _ticket(api, dev, "Visual replies", 412)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
+        tickets = RF.pending(c)
+        release = RF.request(c, "human:ana", source="release_now")
+        body = H.task(c, release["task"])["body"]
+        assert release["tickets"] == 2, "the Release Manager's count is the whole release"
+        assert "1 private ticket with no public title" in body and LEAVE_OUT in body and "Skip them" not in body
+        assert secret["title"] not in body and "/413" not in body
+        assert visible["title"] in body and "Cut one release for them" in body
+        docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
+        docs_body = H.task(c, docs)["body"]
+        assert LEAVE_OUT in docs_body and secret["title"] not in docs_body
+
+
+def test_a_private_ticket_with_a_public_title_is_named_by_it_and_its_summary(api):
+    dev = _team(api)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE tasks SET private=1, public_title=?, public_summary=? WHERE id=?",
+            ("Faster payroll exports", "Exports now finish in seconds.\n\nNo more timeouts.", secret["id"]),
+        )
+        docs = RF._docs_task(c, "cpo", "v1.2.3", RF.pending(c), RELEASE_URL)
+        body = H.task(c, docs)["body"]
+    assert "- Faster payroll exports" in body and "Exports now finish in seconds. No more timeouts." in body
+    assert "Acme payroll" not in body and "private ticket" not in body, "its count line is not needed"
+    assert "qab" not in body and "/413" not in body, "a private ticket shows no owner and no pull request"
+
+
+def test_a_private_ticket_is_never_named_by_its_private_title_for_anyone(api):
+    dev = _team(api)
+    _ticket(api, dev, "Visual replies", 412)
+    secret = _ticket(api, dev, "Acme payroll export", 413, owner="qab")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
+        tickets = RF.pending(c)
+        body = RF._listing(c, tickets, "x")
+        assert "Visual replies" in body and "Acme payroll" not in body
+        assert "...and 1 private ticket with no public title. " in body and LEAVE_OUT in body
+        c.execute("UPDATE tasks SET public_title=? WHERE id=?", ("Faster payroll exports", secret["id"]))
+        tickets = RF.pending(c)  # read again: each ticket carries the public title it had when it was read
+        body = RF._listing(c, tickets, "x")
+        assert "- Faster payroll exports\n" in body + "\n" and "Acme payroll" not in body
+        assert "qab" not in body and "/413" not in body, "a private ticket shows no owner and no pull request"
+        release = RF.request(c, "human:ana", source="release_now")
+        assert "Acme payroll export" not in H.task(c, release["task"])["body"]
+        docs = RF._docs_task(c, "cpo", "v1.2.3", tickets, RELEASE_URL)
+        assert "Acme payroll export" not in H.task(c, docs)["body"]
+
+
+def _step_of(api, ticket):
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?", (ticket["id"],)
+        ).fetchone()[0]
+
+
+def _published(api, repo="ticoteam/tico", tag="v1.2.3"):
+    hook(
+        api,
+        "release",
+        {
+            "action": "published",
+            "release": {"tag_name": tag, "html_url": RELEASE_URL.replace("v1.2.3", tag)},
+            "repository": {"full_name": repo},
+        },
+    )
+
+
+def test_a_published_release_moves_its_carried_tickets_to_post_release_qa(api):
+    dev = _team(api)
+    carried = _ticket(api, dev, "Visual replies", 412)
+    _published(api)
+    assert _step_of(api, carried) == "Post Release QA"
+    with api.app.state.store.read() as c:
+        notes = [
+            r[0]
+            for r in c.execute(
+                "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=?", (carried["id"],)
+            )
+        ]
+    assert any("Shipped in v1.2.3" in (n or "") for n in notes)
+    # a second delivery for the same tag changes nothing; a ticket moved on by hand is left where it is
+    _published(api)
+    assert _step_of(api, carried) == "Post Release QA"
+
+
+def test_a_ticket_without_a_merged_pull_request_in_the_repository_stays_at_pending_release(api):
+    dev = _team(api)
+    other = post(
+        api,
+        "tasks",
+        {"owner": "cpo", "title": "No PR", "body": "x", "type": dev["id"], "step": "Pending Release"},
+    )
+    _published(api)
+    assert _step_of(api, other) == "Pending Release"
+
+
+def test_the_repository_name_is_compared_without_case(api):
+    dev = _team(api)
+    carried = _ticket(api, dev, "Visual replies", 412)
+    _published(api, repo="TicoTeam/Tico")
+    assert _step_of(api, carried) == "Post Release QA"
+    assert RF.norm_repo("https://github.com/TicoTeam/Tico.git/") == "ticoteam/tico"
+
+
+def test_a_release_closes_the_schedule_filed_release_task_but_not_one_the_manager_made(api):
+    dev = _team(api)
+    store = api.app.state.store
+    _ticket(api, dev, "Visual replies", 412)
+    with store.transaction() as c:
+        assert RF.request(c, H.KEEPER, source="release_schedule")["sent"] is True
+        mine = H.task_create(c, "bot:cmo", "Release: notes for the team", "x", "bot:cmo", deduplicate=False)
+    _published(api)
+    with store.read() as c:
+        rows = {r["title"]: r["status"] for r in c.execute("SELECT title, status FROM tasks WHERE owner_id='bot:cmo'")}
+    assert rows["Release: 1 ticket at Pending Release"] in ("closed", "done")
+    assert rows["Release: notes for the team"] not in ("closed", "done") and mine

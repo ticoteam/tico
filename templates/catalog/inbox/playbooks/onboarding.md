@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 20 minutes. The outcome is six recorded answers, a real brief on the human's actual
+finished. Budget 20 minutes. The outcome is five recorded answers, a real brief on the human's actual
 inbox with nothing written to Gmail, and the first routine checked.
 
 ---
@@ -27,10 +27,10 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 1. What must always reach you (people, topics, senders)? It becomes the flag-first list.
 2. What can you file or ignore without asking (newsletters, receipts, notifications)?
 3. How do you write: greeting, sign-off, length, formality? Ask for two replies they were happy with.
-4. What must you never commit them to (times, money, contracts, introductions), and what are their
-   calendar hours and buffers?
+4. What must you never commit them to (times, money, contracts, introductions), what are their calendar
+   hours and buffers, and when should the brief land? (Default weekdays 07:30.) The first two become hard
+   limits; the time sets the first routine.
 5. Which mail belongs to someone else (leads, support, hiring), and who handles it?
-6. When should the brief land? (Default weekdays 07:30.)
 
 ## 4. Record
 
@@ -45,13 +45,13 @@ task, labelled "First draft, not yet reviewed". Nothing is written to Gmail.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you a brief every weekday at 07:30, leave drafts in Gmail for you to send, and file nothing until you say so." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you a brief every weekday at 07:30, leave drafts in Gmail for you to send, and file nothing until you say so." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `playbooks/inbox-preferences.md` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

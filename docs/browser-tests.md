@@ -10,7 +10,7 @@ privacy policy, browser engine or release check changes. The removed coverage is
 
 | Removed script | Retained coverage | Coverage intentionally lost |
 | --- | --- | --- |
-| agent-chips.cjs | team-groups.cjs covers the Team chart and management; connect-agent.cjs covers token creation, first-call detection and revocation | Chip overflow labels, chip-versus-row representation, history display and chart Connect-button placement |
+| agent-chips.cjs | team-groups.cjs covers the Team chart and management; connect-agent.cjs covers token creation, first-call detection and revocation | Chip overflow labels, chip-versus-row representation, history display |
 | page-layouts.cjs | docs.cjs, meetings.cjs, goals.cjs, assistant.cjs and bot-tools.cjs cover those feature paths | Cross-route layout-class cleanup, precise alignment, full-height rails, whole-page overflow and the extended tooltip keyboard/wording matrix |
 | rails.cjs | tasks-page.cjs keeps saved-view preference persistence | Sidebar drag width, arrow-key/end limits, device/account width restore, double-click reset and hidden phone edge; these rail-specific assertions have no remaining equivalent |
 | subscriptions-weekly.cjs | None: named subscriptions left the page with one login per AI tool per computer (#1259), and subscription-identity.cjs with them; backend/tests/test_subscription_refresh.py covers refresh state and access | Pure wording/state rendering matrix and exact JavaScript polling schedule/stop assertion |

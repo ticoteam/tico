@@ -10,29 +10,32 @@ const NOW = Date.now(), at = minutes => new Date(NOW - minutes * 60000).toISOStr
 const NOTE = 'Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static Larkspur. '
   + 'Docs task Doing; no sample edit/deploy or duplicate human question. <img src=x onerror="window.pwned=1">';
 const PLAIN = "Approve the video tool trial on Thursday? If yes, I'll send the invite.";
-const wait = (id, title, over = {}) => ({id, kind: 'waiting', title, body: '', owner: 'bot:writer', requester: 'bot:botops',
-  status: 'waiting', waiting_on: 'human:ana', note: NOTE, version: 2, created: at(400), updated: at(360), ask: null, open_asks: 0,
+const wait = (id, title, over = {}) => ({id, kind: 'waiting', title, body: '', owner_id: 'bot:writer', requester_id: 'bot:botops',
+  status: 'waiting', waiting_on: 'human:ana', note: NOTE, version: 2, created_at: at(400), updated_at: at(360), ask: null, open_asks: 0,
   person_ask: '', ask_missing: false, lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, ...over});
 const items = [
   // an open question with "or" is not a yes or a no: it opens the task
-  wait('t-ask', 'Coordinate the external agent scenario in the example', {created: at(500),
-    ask: {id: 'q-1', from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Should the public example show the agent demo, or stay static?', created: at(300)}}),
-  // a stale ask (unanswered past three days): the card carries one-click Clarify
-  wait('t-stale', 'Sync the external agent scenario', {created: at(5000), updated: at(5000),
-    ask: {id: 'q-stale', from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Should the public example show the agent demo?', created: at(5000), stale: true}}),
-  wait('t-plain', 'Run the video tool trial', {created: at(490), note: PLAIN, person_ask: PLAIN,
+  wait('t-ask', 'Coordinate the external agent scenario in the example', {created_at: at(500),
+    ask: {id: 'q-1', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo, or stay static?', created_at: at(300)}}),
+  // a question task a bot put to Ana, unanswered past three days
+  {id: 't-stale', kind: 'question', title: 'Sync the external agent scenario', body: '', owner_id: 'human:ana', requester_id: 'bot:writer',
+    status: 'open', version: 2, created_at: at(5000), updated_at: at(5000), note: '', ask_missing: false, open_asks: 0,
+    lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0},
+    ask: {id: 't-stale', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo?',
+      created_at: at(5000), question_task: true, refs: {}}},
+  wait('t-plain', 'Run the video tool trial', {created_at: at(490), note: PLAIN, person_ask: PLAIN,
     body: 'Run the video tool trial\n\nThe test plan is in the shared folder.'}),
   // set waiting before the rule, with no plain ask: its task, not a card
-  wait('t-blank', 'Check the newsletter list', {created: at(480), ask_missing: true}),
-  {id: 't-person', kind: 'task', title: 'Read the Q4 board notes', body: 'Read the Q4 board notes\n\nBefore Thursday, please.', owner: 'human:ana',
-    requester: 'human:sam', status: 'open', version: 1, created: at(460), updated: at(460), ask: null, open_asks: 0,
+  wait('t-blank', 'Check the newsletter list', {created_at: at(480), ask_missing: true}),
+  {id: 't-person', kind: 'task', title: 'Read the Q4 board notes', body: 'Read the Q4 board notes\n\nBefore Thursday, please.', owner_id: 'human:ana',
+    requester_id: 'human:sam', status: 'open', version: 1, created_at: at(460), updated_at: at(460), ask: null, open_asks: 0,
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}},
 ];
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', extraTasks: items});
-    const sent = [], clarified = [];
+    const sent = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => {
       const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2));
@@ -40,10 +43,7 @@ const items = [
       return route.fulfill({contentType: 'application/json', body: JSON.stringify({comments: []})});
     });
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));
-    await page.route('**/api/v2/needs-you/clarify', route => {
-      clarified.push(route.request().postDataJSON());
-      return route.fulfill({contentType: 'application/json', body: '{}'});
-    });
+    await page.evaluate(() => v2Refresh());
     const card = page.locator('#need-card .dc-card');
     const read = async id => {
       await page.locator(`#need-card .dc-card[data-key="task:${id}"]`).waitFor();
@@ -54,8 +54,7 @@ const items = [
           title: second?.className === 'dc-title' ? second.textContent : null,
           sizes: [first, second].map(x => parseFloat(getComputedStyle(x).fontSize)),
           details: details ? {open: details.open, text: details.textContent, last: body.lastElementChild === details} : null,
-          buttons: [...document.querySelectorAll('#need-card .dc-actions button')].map(b => b.dataset.dc),
-          clarify: body.querySelector('[data-dc="clarify"]')?.textContent.trim() || null};
+          buttons: [...document.querySelectorAll('#need-card .dc-actions button')].map(b => b.dataset.dc)};
       });
     };
     // DECIDE_SHOTS=<dir> saves each card for the owner.
@@ -70,9 +69,9 @@ const items = [
     // The card says whose request it is when that is not the name it shows.
     assert.deepEqual(await page.evaluate(() => ({
       order: decideCards([
-        {id: 'bot-made', kind: 'waiting', owner: 'bot:writer', requester: 'bot:writer', waiting_on: 'human:ana', created: '2026-01-01T00:00:00Z'},
-        {id: 'for-sam', kind: 'task', owner: 'human:ana', requester: 'bot:writer', from_person: 'human:sam', created: '2026-01-03T00:00:00Z'},
-        {id: 'overdue', kind: 'waiting', owner: 'bot:writer', requester: 'bot:writer', waiting_on: 'human:ana', pressing: true, created: '2026-01-02T00:00:00Z'},
+        {id: 'bot-made', kind: 'waiting', owner_id: 'bot:writer', requester_id: 'bot:writer', waiting_on: 'human:ana', created_at: '2026-01-01T00:00:00Z'},
+        {id: 'for-sam', kind: 'task', owner_id: 'human:ana', requester_id: 'bot:writer', from_person: 'human:sam', created_at: '2026-01-03T00:00:00Z'},
+        {id: 'overdue', kind: 'waiting', owner_id: 'bot:writer', requester_id: 'bot:writer', waiting_on: 'human:ana', pressing: true, created_at: '2026-01-02T00:00:00Z'},
       ]).map(c => c.key),
       cue: [decideFromPerson({from_person: 'human:sam'}, 'bot:writer'), decideFromPerson({from_person: 'human:ana'}, 'bot:writer'),
         decideFromPerson({from_person: 'human:sam'}, 'human:sam'), decideFromPerson({}, 'bot:writer')],
@@ -80,16 +79,18 @@ const items = [
     // A 4-day-old question and a 1-hour-old one that holds up a roadmap item at Building: the Building one is first.
     // Something due, or going ahead on its own, within two working days goes ahead of both (backend/views.py decide_tier).
     assert.deepEqual(await page.evaluate(() => decideCards([
-      {id: 'old', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created: new Date(Date.now() - 96 * 3600e3).toISOString(), tier: 2},
-      {id: 'building', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created: new Date(Date.now() - 3600e3).toISOString(), tier: 1},
-      {id: 'due', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created: new Date(Date.now() - 200 * 3600e3).toISOString(), tier: 0},
+      {id: 'old', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 96 * 3600e3).toISOString(), tier: 2},
+      {id: 'building', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 3600e3).toISOString(), tier: 1},
+      {id: 'due', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 200 * 3600e3).toISOString(), tier: 0},
     ]).map(c => c.key)), ['task:due', 'task:building', 'task:old']);
-    // A yes or no, an option, an approval, a stale check, a question outside a task, or a recommendation: a card.
+    // An approval, a stale check, a question task with a recommendation, or a task with a recommendation: a card.
     // Anything else opens whole.
     assert.deepEqual(await page.evaluate(() => [
-      {id: 'a', kind: 'approval'}, {id: 'b', kind: 'ask'}, {id: 'c', kind: 'stale'},
-      {id: 'd', kind: 'task', owner: 'human:ana', recommend: {ask: 'q', do: 'Gusto'}}, {id: 'e', kind: 'task', owner: 'human:ana'},
-    ].map(decideCardKey)), ['approval:a', 'ask:b', 'stale:c', 'task:d', '']);
+      {id: 'a', kind: 'approval'}, {id: 'b', kind: 'question', owner_id: 'human:ana', requester_id: 'bot:writer',
+        ask: {id: 'b', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Gusto?', refs: {}}, recommend: {ask: 'b', do: 'Gusto'}},
+      {id: 'c', kind: 'stale'}, {id: 'd', kind: 'task', owner_id: 'human:ana', recommend: {ask: 'q', do: 'Gusto'}},
+      {id: 'e', kind: 'task', owner_id: 'human:ana'}, {id: 'f', kind: 'question', owner_id: 'human:ana', ask: {id: 'f', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Gusto?', refs: {}}},
+    ].map(decideCardKey)), ['approval:a', 'task:b', 'stale:c', 'task:d', '', '']);
 
     // An old link to one item: Needs you, with that item's card open over it, full screen.
     await page.evaluate(() => { location.hash = '#/decide?item=t-plain'; });
@@ -97,10 +98,12 @@ const items = [
     assert.match(await page.evaluate(() => location.hash), /^#\/tasks\?(.*&)?view=foryou/);
     assert.deepEqual(await page.locator('#need-card').evaluate(d => { const r = d.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }),
       [0, 0, 390, 844], 'a takeover on a phone');
-    // Only rows a card answers carry one; the rest open their task.
+    // Needs you includes full-task rows too; only the answerable rows open a card.
     const rows = await page.locator('#task-body .tl-row[data-task-key^="t"]').evaluateAll(els => Object.fromEntries(els
       .filter(el => /^t-(ask|stale|plain|blank|person)$/.test(el.dataset.taskKey.slice(1))).map(el => [el.dataset.taskKey.slice(1), el.dataset.needCard || ''])));
     assert.deepEqual(rows, {'t-ask': '', 't-stale': 'task:t-stale', 't-plain': 'task:t-plain', 't-blank': '', 't-person': ''});
+    assert.equal(await page.locator('#task-scope .cnt').innerText(), '5');
+    assert.deepEqual(await page.locator('[data-needs-badge]').allTextContents(), ['5', '5']);
     assert.equal(await page.locator('#task-body details').count(), 0, 'nothing in the list unfolds');
 
     // The bot's plain yes/no ask leads, with Yes and No; the rest of the body is a detail. Yes answers the bot.
@@ -123,14 +126,9 @@ const items = [
     await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
 
-    // A stale ask carries one-click Clarify: one tap asks the bot whether it still matters, in clearer words.
     assert.equal(c.lead, 'Should the public example show the agent demo?');
-    assert.equal(c.clarify, 'Ask Writer to clarify');
+    assert.equal(await page.locator('#need-card [data-dc="clarify"]').count(), 0, 'a stale check has no Clarify');
     assert.deepEqual(c.buttons, ['no', 'yes']);
-    await page.locator('#need-card .dc-body [data-dc="clarify"]').click();
-    assert.equal(await page.locator('#need-card .dc-toast span').textContent(), 'Asked Writer to clarify');
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
-    assert.deepEqual(clarified, [{ask: 'q-stale'}]);
     // the note is only ever text
     assert.equal(await page.locator('#need-card .dc-body img').count(), 0);
     assert.equal(await page.evaluate(() => window.pwned), undefined);
@@ -140,7 +138,7 @@ const items = [
     await page.waitForFunction(() => !document.querySelector('#need-card')?.open && !DEC);
     assert.match(await page.evaluate(() => location.hash), /^#\/tasks\?(.*&)?view=foryou/);
 
-    // A row with no card opens its task.
+    // A Needs you row with no card opens its task.
     await page.locator('#task-body [data-task-key="tt-blank"] .tl-title').click();
     await page.locator('#task-peek[open]').waitFor();
     assert.equal(await page.evaluate(() => !!document.querySelector('#need-card')?.open), false);
@@ -152,12 +150,13 @@ const items = [
     await page.waitForFunction(() => location.hash === '#/task/t-person');
     await page.evaluate(() => { location.hash = '#/tasks?view=foryou'; });
 
-    // Go through, in the phone's header, says how many cards wait and opens the first.
+    // Catch up, in the phone's header, opens the first card without repeating the count.
+    // The stale question is still open, so it waits on its card: Catch up is there and opens it.
     const go = page.locator('#tasks-pane [data-go-through]:visible');
-    assert.equal(await go.count(), 0, 'nothing waits on a card: no Go through');
-    await page.evaluate(() => { DEC_HANDLED.delete('task:t-stale'); needsListsRedraw(); });
-    assert.equal((await go.textContent()).trim(), 'Go through · 1');
-    assert.equal(await go.evaluate(el => el.classList.contains('tl-decide-head')), true);
+    assert.equal(await page.locator('#task-body .tl-row').count(), 4, 'the open question and the full-task rows need the person');
+    assert.equal(await page.locator('#task-scope .cnt').innerText(), '4');
+    assert.equal((await go.textContent()).trim(), 'Catch up');
+    assert.equal(await go.evaluate(el => !!el.closest('.tl-head')), true, 'Catch up sits in the header row');
     await go.click();
     await read('t-stale');
     // Closed and opened again at once: the close's Back lands after the new card opened, and leaves it open with a
