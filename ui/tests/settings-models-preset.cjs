@@ -59,7 +59,7 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(p));
     });
     const choices = page.locator('#onb-prov [data-provider-presets]');
-    // The first-run form as welcome.js draws it, on the loaded app.
+    // The first-run form as welcome.ts draws it, on the loaded app.
     const open = async () => {
       await page.evaluate(async () => {
         await loadSettings();

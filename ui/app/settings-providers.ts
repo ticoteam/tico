@@ -3,9 +3,11 @@
 'use strict';
 
 // What the providers view (GET /v2/providers, backend/providers.py) carries, as the page reads it.
-interface SettingsProviderRow { id: string; label: string; gateway?: boolean; recommended?: string | null; }
+interface SettingsProviderRow { id: string; label: string; gateway?: boolean; recommended?: string | null; runtime?: string; }
 interface SettingsProvidersView {
   providers?: SettingsProviderRow[];
+  /** Whether the team has chosen its AI providers (the first run starts with them until it has). */
+  configured?: boolean;
   presets?: string[];
   preset?: string;
   enabled?: string[];
