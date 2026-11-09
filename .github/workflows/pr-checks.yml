@@ -1,8 +1,10 @@
 # PR checks and the merge queue run on GitHub-hosted Ubuntu runners (free for this public repository), so they cost no
 # RunsOn minutes. RunsOn runs only release validation (ci.yml) and remote-run.yml.
 # Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
-# also runs the plan's selected tests and factory simulation, so its `checks` passes only when they pass. A fork's pull
-# request keeps the cheap checks only, and a draft runs nothing.
+# also runs a light plan's tests (scripts/pr_checks.py NARROW, `plan --light`): the Python tests its change reaches
+# directly, the smoke set when that drops any, capped at four VMs; the browser scripts, the factory simulation and the
+# Caddy job only when it touches their own inputs. Its `checks` passes only when they pass. The merge queue group is the
+# gate: it plans from the full selection. A fork's pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
 # a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
@@ -129,10 +131,13 @@ jobs:
             echo "$?" > "$RUNNER_TEMP/merge-checks.status" ) > "$RUNNER_TEMP/merge-checks.log" 2>&1 &
       - name: Select affected tests and size measured Python and browser groups
         id: plan
+        # A pull request's plan is light (scripts/pr_checks.py NARROW): the tests its change reaches directly, the smoke
+        # set, at most four VMs; its queue group runs the full selection.
         env:
           EVENT: ${{ github.event_name }}
           CHECK_HEAD: ${{ github.event.merge_group.head_sha || 'HEAD' }}
-        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json'
+          LIGHT: ${{ github.event_name == 'pull_request' && 'light' || '' }}
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/pr_checks.py plan --event "$EVENT" --base "$BASE_SHA" --head "$CHECK_HEAD" --timings previous-timings/durations.json ${LIGHT:+--light}'
       - name: Merge commit checks
         if: github.event_name == 'merge_group'
         timeout-minutes: 8

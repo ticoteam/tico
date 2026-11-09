@@ -467,8 +467,10 @@ GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue;
 
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
 failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
-the pull request's own run first, because a ready pull request runs its selected tests. After a queue failure, fix it and get
-green PR checks before enqueuing again.
+the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
+that import, name or read a changed file, the smoke set, at most four VMs), and its queue group runs the full selection. The
+job summary of the pull request's plan lists what it left for the queue. After a queue failure, fix it and get green PR
+checks before enqueuing again.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
