@@ -40,87 +40,6 @@ function botStopped() {
   if (BOT?.thread) threadUnmount(BOT.thread.view);
   BOT = null;
 }
-// Pause is one row in the bot's Settings, not a strip on the page; the header's Paused badge says it at a glance.
-// The control API remains the sole authority; failed writes never change the shown state.
-function botPauseHTML(slug, state, error = '') {
-  const retry = '<button type="button" class="ghost small" data-bot-pause-retry>Retry</button>';
-  if (!state) return error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : '<p class="muted" role="status">Loading…</p>';
-  const name = botDisplayName(slug);
-  const paused = state.state === 'paused', record = state.paused_by;
-  const stamp = record && Number.isFinite(Date.parse(record.at))
-    ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
-  const can = state.can_control && !state.company_paused && ['active', 'paused'].includes(state.state);
-  const tasks = paused && state.open_tasks ? ` <a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a>` : '';
-  return `<div class="bot-pause-row">
-    <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
-      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.owner_id || 'its operator')} to unpause.` : ''}`
-        : 'Stops new tasks, messages and routines; a turn in progress is interrupted.'}</p>
-      ${state.company_paused ? '<p class="muted">Company is paused for billing. <a href="#/settings/billing">Add credit</a></p>' : ''}
-      ${error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : ''}</div>
-    ${can ? `<button type="button" class="ghost" data-bot-pause-action="${paused ? 'resume' : 'pause'}">${paused ? 'Unpause' : 'Pause'}</button>` : ''}
-  </div>`;
-}
-function botPauseDraw() {
-  const host = $('#bot-control-host'); if (!host || !BOT) return;
-  const focus = host.contains(document.activeElement);
-  patchLiveHTML(host, botPauseHTML(BOT.slug, BOT.pauseState, BOT.pauseError));
-  const button = host.querySelector('[data-bot-pause-action]');
-  if (button) { button.disabled = !!BOT.pauseBusy; button.onclick = () => botPauseChange(BOT, button.dataset.botPauseAction); }
-  const retry = host.querySelector('[data-bot-pause-retry]');
-  if (retry) { retry.disabled = !!BOT.pauseBusy; retry.onclick = async () => { const view = BOT, action = view.pauseRetry; await botPauseLoad(); if (action && BOT === view) await botPauseChange(view, action); }; }
-  if (focus && !host.contains(document.activeElement)) (button || retry)?.focus();
-}
-// The header's and the tree's Paused badges read the roster, which only catches up at its next poll. The pause state
-// (a fresh read or a finished control) is the authority, so the roster entry follows it as soon as it is known.
-function botPauseFollow(view) {
-  const emp = botRow(view.slug), paused = view.pauseState?.state === 'paused', badge = $('#bot-paused');
-  if (emp && paused !== (emp.status === 'paused')) { emp.status = paused ? 'paused' : 'active'; renderTree(); }
-  if (badge) patchLiveHTML(badge, botPausedBadge(view.slug));
-}
-async function botPauseLoad() {
-  const view = BOT;
-  if (!view || view.pauseLoading || view.pauseBusy) return;
-  view.pauseLoading = true;
-  const generation = view.pauseGeneration || 0;
-  try {
-    const value = await get(`/v2/bots/${encodeURIComponent(view.slug)}/pause-state`, {fresh: true});
-    if (BOT !== view || view.pauseBusy || generation !== (view.pauseGeneration || 0)) return;
-    view.pauseState = value;
-    view.pauseLoadedAt = Date.now();
-    if (!view.pauseRetry) view.pauseError = '';
-    botPauseFollow(view);
-  } catch (error) {
-    if (BOT === view && generation === (view.pauseGeneration || 0) && !view.pauseState) view.pauseError = `Could not load bot state: ${error.message}`;
-  } finally {
-    view.pauseLoading = false;
-    if (BOT === view) {
-      botPauseDraw();
-      // The control may have finished while this older read waited on billing. Re-read its committed state.
-      if (generation !== (view.pauseGeneration || 0) && !view.pauseBusy && !view.pauseRetry) void botPauseLoad();
-    }
-  }
-}
-async function botPauseChange(view, action) {
-  if (BOT !== view || view.pauseBusy || !view.pauseState?.can_control || view.pauseState.company_paused) return;
-  // Invalidate any refresh already in flight, even if it arrives after the control finishes.
-  view.pauseGeneration = (view.pauseGeneration || 0) + 1;
-  view.pauseBusy = true; view.pauseError = ''; view.pauseRetry = null; botPauseDraw();
-  try {
-    const result = await post(`/v2/bots/${encodeURIComponent(view.slug)}/control`, {action, expected_revision: view.pauseState.revision});
-    if (BOT !== view) return;
-    view.pauseState = {...view.pauseState, state: action === 'pause' ? 'paused' : 'active', revision: result.revision,
-      paused_by: null};
-    botPauseFollow(view);
-    const name = botDisplayName(view.slug);
-    toast(`${name} is ${action === 'pause' ? 'paused.' : 'unpaused'}`, false,
-      action === 'pause' ? {label: 'Unpause', run: () => botPauseChange(view, 'resume')} : null);
-  } catch (error) {
-    if (BOT === view) { view.pauseError = `Could not ${action === 'pause' ? 'pause' : 'unpause'}: ${error.message}`; view.pauseRetry = action; }
-  } finally {
-    view.pauseBusy = false;
-    if (BOT === view) { botPauseDraw(); if (!view.pauseRetry) void botPauseLoad(); }
-  }
-}
 function botStatePill(slug) {
   const st = stateOf(slug);
   const act = (S.status?.active || []).find(a => a.employee === slug);
@@ -145,91 +64,8 @@ function goalParts(role) {
   }
   return {lead, rest: full.slice(lead.length).trim()};
 }
-// The bot's goal, at the top of its page (#514): its first goal in the owner's order, as words.
-// Tapping it opens it on the Goals page. No goal is one quiet link: "Set goal".
+// The newest goal load (botGoalLoad, ui/app/bot-page-goals.ts): an older one that finishes late draws nothing.
 let BOT_GOAL_LOAD = 0;
-async function botGoalLoad(slug) {
-  if (!$('#bot-goal')) return;
-  const load = ++BOT_GOAL_LOAD;
-  // A deploy restarts the hub for a few seconds and a phone drops a request now and then: try
-  // again quietly before giving up, and a miss shows nothing and tries again in 30 s.
-  let r = null;
-  for (const wait of [0, 600, 2000]) {
-    if (wait) await new Promise(done => setTimeout(done, wait));
-    if (load !== BOT_GOAL_LOAD || BOT?.slug !== slug) return;
-    r = await v2Get(`/v2/goals?owner=${encodeURIComponent('bot:' + slug)}`);
-    if (r) break;
-  }
-  const mine = (r?.goals || []).filter(goalLive).sort(goalRank);
-  if (load !== BOT_GOAL_LOAD || BOT?.slug !== slug || !$('#bot-goal')) return;
-  botGoalRender(slug, r ? mine : undefined);
-}
-// The Goals card under More is the bot's goals as plain lines, each edited in
-// place with the link icon for the goal it supports; the same goals the top line shows and the
-// bot reads.
-async function botGoalsCardLoad(slug) {
-  /** @type {[any, any]} */
-  const [r, goals] = await Promise.all([v2Get(`/v2/goals?owner=${encodeURIComponent('bot:' + slug)}`), goalOptions()]);
-  const host = $('#bot-goals-list');
-  if (!host || BOT?.slug !== slug) return;
-  if (!r) { host.innerHTML = '<div class="empty">Could not load the goals.</div>'; return; }
-  const live = (r.goals || []).filter(goalLive).sort(goalRank);
-  const all = goals.some(g => g.id === live[0]?.id) ? goals : [...goals, ...live];
-  host.innerHTML = live.map(g => `<div class="bot-goal-row">${goalEditorHtml(g, all)}</div>`).join('')
-    + (live.length ? '' : '<div class="empty" id="bot-goals-none">No goal yet.</div>')
-    + '<div id="bot-goals-finished"></div>';
-  for (const el of host.querySelectorAll('[data-goal-ed]')) {
-    const g = live.find(x => x.id === el.dataset.goalEd);
-    bindGoalEditor(el, g, () => botGoalsCardLoad(slug));
-  }
-  for (const a of host.querySelectorAll('[data-goal-go]'))
-    a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalGo); };
-  // Its done and dropped goals, under the live ones: "Finished (N)" (ui/app/goals.js).
-  const finished = await v2Get('/v2/goals?all=true&status=done,dropped&owner=' + encodeURIComponent('bot:' + slug));
-  if (!finished || BOT?.slug !== slug || !host.isConnected) return;
-  goalFinishedMount(host.querySelector('#bot-goals-finished'), 'bot:' + slug, [...all, ...(finished.goals || [])], () => goalsRefresh());
-}
-// "Set goal" and the Goals card's add open the Goals page's goal sheet, the owner filled in (ui/app/goals.js).
-async function botGoalAdd(slug) {
-  const goals = await goalOptions();
-  if (BOT?.slug !== slug) return;
-  goalSheetOpen({goals}, {owner: 'bot:' + slug});
-}
-// The top line's goal: a target, the first goal cut to fit, and "+N" for the rest. A tap lists them all with
-// Add goal under them; no goal is the target and "Set goal", which opens the goal sheet.
-function botGoalRender(slug, goals) {
-  const el = $('#bot-goal');
-  if (goals === undefined) {
-    el.removeAttribute('data-status'); el.innerHTML = '';
-    setTimeout(() => { if (BOT?.slug === slug && $('#bot-goal') && !$('#bot-goal').innerHTML) botGoalLoad(slug); }, 30000);
-    return;
-  }
-  const icon = '<span class="nav-icon bot-goal-i" aria-hidden="true">target</span>';
-  if (!goals.length) {
-    el.dataset.status = 'none';
-    el.innerHTML = `<button type="button" class="bot-goal-main bot-goal-set" id="bot-goal-set">${icon}<span class="bot-goal-title">Set goal</span></button>`;
-    $('#bot-goal-set').onclick = () => void botGoalAdd(slug);
-    return;
-  }
-  const [g, ...rest] = goals;
-  el.dataset.status = 'set';
-  el.innerHTML = `<button type="button" class="bot-goal-main" id="bot-goal-btn" aria-haspopup="menu" aria-expanded="false"
-      aria-label="Goal: ${esc(g.title)}${rest.length ? `, ${rest.length} more` : ''}" title="${esc(goals.map(x => x.title).join('\n'))}">
-      ${icon}<span class="bot-goal-title">${esc(g.title)}</span>${rest.length ? `<span class="bot-goal-n">+${rest.length}</span>` : ''}</button>
-    <div class="tl-pop bot-goal-pop" id="bot-goal-pop" popover><div class="tl-menu" role="menu" aria-label="Goals">
-      ${goals.map(x => `<a class="tl-mi" role="menuitem" href="${GOALS}/${encodeURIComponent(x.id)}" data-goal-open="${esc(x.id)}" title="${esc(x.title)}"><span class="bot-goal-mi">${esc(x.title)}</span></a>`).join('')}
-      <button type="button" class="tl-mi" role="menuitem" data-goal-add><span class="nav-icon" aria-hidden="true">add</span>Add goal</button></div></div>`;
-  const btn = $('#bot-goal-btn'), pop = $('#bot-goal-pop');
-  btn.onclick = () => {
-    if (pop.matches(':popover-open')) { pop.hidePopover(); return; }
-    pop.showPopover(); tasksMenuPlace(pop, btn); pop.querySelector('.tl-mi')?.focus();
-  };
-  pop.ontoggle = ev => btn.setAttribute('aria-expanded', String(ev.newState === 'open'));
-  pop.onkeydown = tasksMenuKeys;
-  for (const a of pop.querySelectorAll('[data-goal-open]'))
-    a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); pop.hidePopover(); openGoal(a.dataset.goalOpen); };
-  pop.querySelector('[data-goal-add]').onclick = () => { pop.hidePopover(); void botGoalAdd(slug); };
-}
 // Why the bot's last run ended without finishing (backend/execution.py last_stop), never a bare "Crashed": one plain
 // line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the
 // Stopped runs dialog, which retries or dismisses the run). A click opens what happened.
@@ -314,11 +150,6 @@ function botLimitHTML(slug) {
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 // The Settings pause row re-reads HQ-backed state only when the page's view of paused is out of date, or a minute old.
 const PAUSE_STALE_MS = 60_000;
-function botPauseStale(view) {
-  if (!view.pauseState || view.pauseLoadedAt == null) return true;
-  if ((stateOf(view.slug) === 'paused') !== (view.pauseState.state === 'paused')) return true;
-  return Date.now() - view.pauseLoadedAt >= PAUSE_STALE_MS;
-}
 function botAlertDraw() {
   if (!BOT) return;
   if (botPauseStale(BOT)) void botPauseLoad();
