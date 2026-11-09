@@ -5,15 +5,15 @@
 // is added once Dana picks one; and its quote shows in the rule's side panel, linked to the file version it cites.
 // With RULES_SHOTS=<dir>, it also saves Add document, Suggested and an external rule's panel at 1440 and 390, light and
 // dark, into <dir>/p1c-*.png.
-import type * as RealHubSupport from './support/real-hub.cjs';
+import type * as RealHubSupport from './support/real-hub.cts';
 import type {Browser, Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const crypto: typeof import('node:crypto') = require('node:crypto');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
-const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 // The page's globals this spec reads (app/ scripts loaded by the Rules page).
 declare const S: {emps: {name: string}[]};

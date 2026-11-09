@@ -1,12 +1,12 @@
-// New inbox (ui/app/automations-new.ts) against the fake hub in support/automations-fake.cjs: + → New inbox on a
+// New inbox (ui/app/automations-new.ts) against the fake hub in support/automations-fake.cts: + → New inbox on a
 // person's email inbox offers Person and Bot only (a channel adds Group and Other); a refused template fill shows in
 // the dialog and saves nothing; Create POSTs the filled template's steps and destinations with Turn on now as
 // switched, then opens the new automation as a board; the dialog fits a phone with no sideways scroll.
 import type {Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 const kinds = (page: Page) => page.locator('.au-nd [data-kind]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.kind));
 async function openDialog(page: Page) {
@@ -61,11 +61,11 @@ async function openDialog(page: Page) {
       assert.equal(posts.length, 1);
       const filled = filledTemplate('founder', 'person:dana', 'dana@acme.example');
       const post = posts[0]!;
-      assert.equal(post.body.enabled, true);
-      assert.equal(post.body.owner, 'person:dana');
-      assert.deepEqual(post.body.trigger, {type: 'message', inbox: 'dana@acme.example'});
-      assert.deepEqual(post.body.steps, filled.steps);
-      assert.deepEqual(post.body.destinations, filled.destinations);
+      assert.equal(post.body!.enabled, true);
+      assert.equal(post.body!.owner, 'person:dana');
+      assert.deepEqual(post.body!.trigger, {type: 'message', inbox: 'dana@acme.example'});
+      assert.deepEqual(post.body!.steps, filled.steps);
+      assert.deepEqual(post.body!.destinations, filled.destinations);
       assert.match(await page.evaluate(() => location.hash), /^#\/automations\/au_\d+$/);
       assert.equal(await page.locator('.au-dest[data-board^="dest:"]:not(.au-dest-add)').count(), 4);
       assert.equal(await page.locator('[data-bmode="draft"]').getAttribute('aria-pressed'), 'true');
@@ -82,8 +82,8 @@ async function openDialog(page: Page) {
       await page.locator('.au-nd [data-go]').click();
       await page.waitForSelector('.au-board');
       const post = writes.find(w => w.method === 'POST')!;
-      assert.equal(post.body.enabled, false);
-      assert.equal(post.body.name, 'Blank');
+      assert.equal(post.body!.enabled, false);
+      assert.equal(post.body!.name, 'Blank');
       assert.deepEqual(errors, []);
       await page.close();
     }

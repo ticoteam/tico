@@ -3,9 +3,9 @@
 // leads Engineering only, so his Move to… offers Engineering's groups and not Release, and a Release teammate's sheet
 // has no Move to…. No approval is filed: org changes beyond that are the Strategy Bot's to suggest in words.
 import type {Page} from 'playwright';
-import type * as RE from './support/redesign-e2e.cjs';
+import type * as RE from './support/redesign-e2e.cts';
 const assert = require('node:assert/strict');
-const {run, open, ok, sideways, shot, t} = require('./support/redesign-e2e.cjs') as typeof RE;
+const {run, open, ok, sideways, shot, t} = require('./support/redesign-e2e.cts') as RE.Api;
 
 interface Group {
   id: string;
@@ -75,4 +75,4 @@ run('redesign-e2e-org', ['org', 'toured', 'groups'], async ({hub, browser, phone
   await omar.context().close();
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-}, {only: 'phone'});   // redesign-org.js branches on the phone only for the pane's height (the phone keeps its pass); the asserts are the hub's answers to Move to, and strategy-org.cjs draws the chart at both widths
+}, {only: 'phone'});   // redesign-org.js branches on the phone only for the pane's height (the phone keeps its pass); the asserts are the hub's answers to Move to, and strategy-org.cts draws the chart at both widths

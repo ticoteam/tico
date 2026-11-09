@@ -7,16 +7,16 @@
 //  - a hidden tab reads nothing.
 // The stream is a stand-in EventSource the test drives, so the events land spread out as they do on a real team,
 // not in one batch.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as ThreadsFake from './support/threads-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as ThreadsFake from './support/threads-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
-const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cjs') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
+const {t}: {t: (ms: number) => number} = (() => { try { return require('./support/load.cts') as {t: (ms: number) => number}; } catch { return {t: (ms: number) => ms}; } })();
 interface LiveStream {emit(type: string, data: Record<string, unknown>): void}
 interface PageWin {EventSource: unknown; __liveStream?: LiveStream}
 interface TaskFields {id?: string; title?: string; status?: string; version?: number}

@@ -7,9 +7,9 @@
 // A browser does not hand a redirect's target to Playwright's routes, so the edge is a real server on this computer
 // that the browser's resolver sends the files host to (Chromium only), all on plain http (the app at localhost, which
 // the edge's ancestors slot accepts); the signed links and the edge's code are those of https.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as ThreadsFake from './support/threads-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as ThreadsFake from './support/threads-fake.cts';
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import type {AddressInfo} from 'node:net';
 import type {Locator} from 'playwright';
@@ -21,9 +21,9 @@ const http: typeof import('node:http') = require('node:http');
 const path: typeof import('node:path') = require('node:path');
 const vm: typeof import('node:vm') = require('node:vm');
 const {execFileSync}: typeof import('node:child_process') = require('node:child_process');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
 type Obj = {type: string; body: string; meta: Record<string, string>; path?: string};
 type Template = {Resources: Record<string, {Properties: {FunctionCode: string | {'Fn::Join': [string, Array<string | Record<string, string>>]}}}>};
 type FrameEl = HTMLIFrameElement & {visualHeight?: number};

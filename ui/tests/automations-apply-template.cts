@@ -1,4 +1,4 @@
-// Apply template (ui/app/automations-new.ts) against the fake hub in support/automations-fake.cjs: offered in the ⋯ menu
+// Apply template (ui/app/automations-new.ts) against the fake hub in support/automations-fake.cts: offered in the ⋯ menu
 // of an October inbox only (one llm step, no choose), it shows the filled template's destinations, then PATCHes the
 // template's rules, questions and destinations with the old step as the LLM (its prompt as the instructions, its id,
 // out and model kept, Sort + draft as the owner) and the automation renders as the board. A group's inbox gets Sort
@@ -6,10 +6,10 @@
 // stays off; Blank's Sort, which goes, never renames the old step; a refused fill shows in the dialog and saves
 // nothing; the dialog fits a phone.
 import type {Browser, Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, filledTemplate, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 type Question = {type: string; instructions: string; criteria: Record<string, string>};
 type Step = {id: string; type: string; enabled: boolean; as: string; model: string; out: string; prompt: string;

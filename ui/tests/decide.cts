@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // The Needs you card on a phone (390px), a full-screen takeover: a row that takes a yes or no, an option or an
 // approval opens its card; any other row opens the whole task. A task card leads with the plain ask, large, and the
 // title second, smaller; the bot's status note and the rest of the body fold under Details, as text. A yes/no ask gets
@@ -6,7 +6,17 @@ import type * as Tasks from './tasks-page.cjs';
 // or its task when it has none. Back closes the card.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var DEC: Tasks.Globals['DEC'];
+declare var DEC_OUTBOX: Tasks.Globals['DEC_OUTBOX'];
+declare var decideCardKey: Tasks.Globals['decideCardKey'];
+declare var decideCards: Tasks.Globals['decideCards'];
+declare var decideFromPerson: Tasks.Globals['decideFromPerson'];
+declare var decideOpen: Tasks.Globals['decideOpen'];
+declare var decideStop: Tasks.Globals['decideStop'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
+declare const window: Window & typeof globalThis & Pick<Tasks.WindowMarks, 'pwned'>;
 const NOW = Date.now(), at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
 const NOTE = 'Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static Larkspur. '
   + 'Docs task Doing; no sample edit/deploy or duplicate human question. <img src=x onerror="window.pwned=1">';

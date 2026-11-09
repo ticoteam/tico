@@ -11,8 +11,8 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cts');
+const {unrouted} = require('./support/routes.cts');
 
 const stamp = '2026-11-08T09:00:00Z';
 const SHOTS = process.env.TICO_UI_SHOTS;
@@ -61,18 +61,14 @@ async function open(browser: Browser, opts: {live?: boolean; snoozed?: string[]}
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', mover: true, config: {company_name: 'Acme Bikes'}};
-  const settings = {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: null, judge_model: null, visibility: 'company', factory_id: null,
-    owner_id: 'human:ana', manager_id: null, members: [], judge_models: ['haiku-5.5'], default_judge_model: 'haiku-5.5'};
+  const settings = {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: null, visibility: 'company', factory_id: null,
+    owner_id: 'human:ana', manager_id: null, members: []};
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    if (p.startsWith('/tico/ui/')) {
-      const name = p.slice('/tico/ui/'.length), file = uiFile(name);
-      if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
-    }
-    if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
+    if (isUiPath(p)) return serveUi(route, p);
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     const body = (method === 'GET' ? null : req.postDataJSON()) as Body;
     if (method !== 'GET') writes.push({method, p, body});

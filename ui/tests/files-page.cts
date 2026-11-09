@@ -5,14 +5,13 @@
 // address, so a view can be shared. Also: More paging, search, the empty, error and loading states, and opening a file.
 // Fixtures only, no network.
 import type {Browser, LaunchOptions, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, isUiPath, serveUi} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 const shots = process.env.TICO_SCREENSHOT_DIR;
 
 const DESKTOP = {width: 1440, height: 900}, PHONE = {width: 390, height: 844};
@@ -78,11 +77,8 @@ async function open(browser: Browser, viewport: Viewport, state: FetchState, the
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
+    if (isUiPath(p)) return serveUi(route, p);
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    // The icon font (ui/vendor/fonts): without it every icon is its ligature word.
-    if (p.startsWith('/vendor/fonts/') && fs.existsSync(path.join(__dirname, '..', p))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: TEAMS});
     if (p === '/api/issues') return json([]);

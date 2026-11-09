@@ -15,7 +15,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import hubdb
-from . import pipeline_judges, pipeline_rights
+from . import pipeline_rights
 from .models import Contract
 from .store import Problem
 
@@ -75,18 +75,22 @@ class RequirementBody(Contract):
 
 class PipelineSettingsBody(Contract):
     """What a pipeline's owner or an admin sets. Every field is optional; a field left out stays as it is. The route
-    passes only the fields the body sent, so for goal, judge_model and factory_id an empty value (or null) clears it;
-    visibility and members are left alone when null."""
+    passes only the fields the body sent, so for goal and factory_id an empty value (or null) clears it;
+    visibility and members are left alone when null. manager_id is `bot:<id>` or `<id>`, an active bot: an empty string
+    clears it, and null leaves it as it is."""
 
     prefix: str | None = Field(default=None, max_length=2)
     owner_id: str | None = Field(default=None, max_length=128)
     manager_id: str | None = Field(default=None, max_length=128)
     manager_every_minutes: int | None = Field(default=None, ge=EVERY_MIN, le=EVERY_MAX)
     goal: str | None = Field(default=None, max_length=GOAL_MAX)
-    judge_model: str | None = Field(default=None, max_length=32)
     visibility: Literal["company", "members"] | None = None
     members: list[str] | None = Field(default=None, max_length=MEMBERS_MAX)
     factory_id: str | None = Field(default=None, max_length=128)
+    # The stuck rule (backend/stuck_cards.py). Null clears one back to its default.
+    stuck_after_hours: int | None = Field(default=None, ge=1, le=168)
+    ask_person_after_hours: int | None = Field(default=None, ge=1, le=720)
+    question_expiry_days: int | None = Field(default=None, ge=1, le=60)
 
 
 class StageBody(Contract):
@@ -149,6 +153,30 @@ def _may_edit(conn: "sqlite3.Connection", actor: str, pipeline_id: str) -> None:
 def _human(actor: object) -> bool:
     text = str(actor or "")
     return text.startswith("human:") and len(text) > len("human:")
+
+
+def manager_bot(conn: "sqlite3.Connection", value: object) -> str | None:
+    """The bare id of the bot a pipeline's manager is set to, or None to clear it. `bot:<id>`, `<id>` and a bot's slug all
+    name a bot; it must be active. An archived, paused, planned or unknown bot is a 422 and nothing is written (the pass
+    wakes only the stored manager, so a refused one never reaches it)."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    bot = H.resolve_bot(conn, text)
+    if bot is None or bot.get("state") != "active":
+        raise Problem(
+            "validation", f"No active bot {text.removeprefix('bot:')!r}: pick an active bot, or clear the manager", 422
+        )
+    return str(bot["id"])
+
+
+def set_manager(conn: "sqlite3.Connection", actor: str, pipeline_id: str, value: object) -> None:
+    """Set or clear a pipeline's manager for the pipeline's owner and admins. The task-type route (backend/task_types.py)
+    calls this; the settings route checks the same way inside update_settings. The manager is stored as the bare bot id."""
+    _may_edit(conn, actor, pipeline_id)
+    conn.execute(
+        "UPDATE task_types SET manager=?, updated_at=? WHERE id=?", (manager_bot(conn, value), H.now(), pipeline_id)
+    )
 
 
 def check_definition(body: dict[str, Any]) -> dict[str, Any]:
@@ -356,15 +384,6 @@ def set_prefix(conn: "sqlite3.Connection", actor: str, pipeline_id: str, prefix:
     return value
 
 
-def _judge_model(value: str | None) -> str | None:
-    """A pipeline's judge model: one of pipeline_judges.MODELS, or None (the default) for an empty value."""
-    if not value:
-        return None
-    if value not in pipeline_judges.MODELS:
-        raise Problem("validation", f"The judge model is one of: {', '.join(pipeline_judges.MODELS)}", 422)
-    return value
-
-
 def _member_ref(value: object) -> str:
     """A pipeline member as its actor reference: "human:<id>" for a person (the "person:" form is accepted) or "bot:<slug>"."""
     ref = str(value or "").strip()
@@ -383,28 +402,27 @@ def _factory_live(conn: "sqlite3.Connection", factory_id: str) -> bool:
 
 
 def settings_view(conn: "sqlite3.Connection", pipeline_id: str) -> dict[str, Any]:
-    """A pipeline's settings: what its owner and admins see and set. A null judge_model is the default judge."""
+    """A pipeline's settings: what its owner and admins see and set."""
     row = conn.execute(
-        "SELECT id, name, prefix, goal, judge_model, pipeline_visibility AS visibility, factory_id, "
-        "pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes FROM task_types WHERE id=?",
+        "SELECT id, name, prefix, goal, pipeline_visibility AS visibility, factory_id, "
+        "pipeline_owner_id AS owner_id, manager AS manager_id, manager_every_minutes, stuck_after_hours, "
+        "ask_person_after_hours, question_expiry_days FROM task_types WHERE id=?",
         (pipeline_id,),
     ).fetchone()
     members = conn.execute(
         "SELECT actor_id FROM pipeline_members WHERE pipeline_id=? ORDER BY actor_id", (pipeline_id,)
     ).fetchall()
-    return {**dict(row), "members": [str(m[0]) for m in members]}
+    from .stuck_cards import defaults  # read here: stuck_cards imports the pipeline manager
+
+    # A null stuck rule setting is its default, sent beside it so the editor can show it.
+    return {**dict(row), "members": [str(m[0]) for m in members], "stuck_rule_defaults": defaults()}
 
 
 def settings_read(conn: "sqlite3.Connection", actor: str, pipeline_id: str) -> dict[str, Any]:
-    """A pipeline's settings for a reader who may see it, with the judge models a pipeline may be given. A members-only
-    pipeline is not found by anyone outside it."""
+    """A pipeline's settings for a reader who may see it. A members-only pipeline is not found by anyone outside it."""
     if not pipeline_rights.may_see(conn, actor, pipeline_id):
         raise Problem("not_found", "No such pipeline", 404)
-    return {
-        **settings_view(conn, pipeline_id),
-        "judge_models": list(pipeline_judges.MODELS),
-        "default_judge_model": pipeline_judges.DEFAULT_MODEL,
-    }
+    return settings_view(conn, pipeline_id)
 
 
 def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -419,14 +437,15 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
     _may_edit(conn, actor, pipeline_id)
     if body.get("owner_id") is not None and not _human(body["owner_id"]):
         raise Problem("validation", "A pipeline's owner is a person", 422)
-    if body.get("manager_id") is not None and not str(body["manager_id"]).startswith("bot:"):
-        raise Problem("validation", "A pipeline manager is a bot", 422)
+    manager_sent = body.get("manager_id") is not None
+    manager = manager_bot(conn, body["manager_id"]) if manager_sent else None  # checked before anything is written
     visibility = str(body.get("visibility") or found[1] or "company")
     sets: dict[str, Any] = {}
     if "goal" in body:
         sets["goal"] = (body["goal"] or "").strip() or None
-    if "judge_model" in body:
-        sets["judge_model"] = _judge_model(body["judge_model"])
+    for column in ("stuck_after_hours", "ask_person_after_hours", "question_expiry_days"):
+        if column in body:
+            sets[column] = None if body[column] is None else int(body[column])
     if body.get("visibility") is not None:
         sets["pipeline_visibility"] = body["visibility"]
         if body["visibility"] == "members":
@@ -446,8 +465,8 @@ def update_settings(conn: "sqlite3.Connection", actor: str, pipeline_id: str, bo
         conn.execute(
             "UPDATE task_types SET pipeline_owner_id=?, updated_at=? WHERE id=?", (body["owner_id"], now, pipeline_id)
         )
-    if body.get("manager_id") is not None:
-        conn.execute("UPDATE task_types SET manager=?, updated_at=? WHERE id=?", (body["manager_id"], now, pipeline_id))
+    if manager_sent:
+        conn.execute("UPDATE task_types SET manager=?, updated_at=? WHERE id=?", (manager, now, pipeline_id))
     if body.get("manager_every_minutes") is not None:
         conn.execute(
             "UPDATE task_types SET manager_every_minutes=?, updated_at=? WHERE id=?",
@@ -574,7 +593,7 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
 
     @app.get("/api/v2/pipelines/{pipeline_id}/settings")
     def pipeline_settings_read(request: Request, pipeline_id: str) -> dict[str, Any]:
-        """The pipeline's settings and the judge models it may be given. A members-only pipeline is a 404 to anyone outside it."""
+        """The pipeline's settings. A members-only pipeline is a 404 to anyone outside it."""
         who = request.state.identity
         guard.domain(who)
         with db.read() as c:
@@ -582,7 +601,7 @@ def install(app: "FastAPI", store: "Store", mutate: "Callable[..., Any]", auth: 
 
     @app.patch("/api/v2/pipelines/{pipeline_id}/settings")
     def pipeline_settings(request: Request, pipeline_id: str, body: PipelineSettingsBody) -> dict[str, Any]:
-        """The pipeline's prefix, owner, manager, manager cadence, goal, judge model, visibility, members and factory.
+        """The pipeline's prefix, owner, manager, manager cadence, goal, visibility, members and factory.
         Only the fields sent change. The pipeline's owner and admins only."""
         who = request.state.identity
 

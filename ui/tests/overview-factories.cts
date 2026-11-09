@@ -10,9 +10,8 @@ import type {Route} from 'playwright';
 //    opens chat as a full-screen sheet, with no sideways scroll.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 // The cards behind an arrow (GET /api/v2/pipelines/overview/crossings): set per test, with a failure switch.
 type CrossCard = {handoff_id: string; task_id: string; title: string | null; crossed_at: string; approval: string | null};
@@ -42,11 +41,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    if (p.startsWith('/tico/ui/')) {
-      const name = p.slice('/tico/ui/'.length), file = uiFile(name);
-      if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
-    }
-    if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
+    if (isUiPath(p)) return serveUi(route, p);
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json([{name: 'lead', display_name: 'Lead Manager', status: 'active', state: 'active', users: [], bot_owners: [], my_access: {see: true, read: true, write: true}}]);
@@ -89,6 +84,10 @@ async function desktop(browser: import('playwright').Browser) {
   assert.equal(await page.locator('.of-dot').innerText(), '14');
   assert.equal(await page.locator('.of-in-l').innerText(), 'Ads');
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.of-edge')!).animationName), 'of-flow');
+  // The input drops straight down into its factory box, and the lines sit above the boxes, so a line inside a box shows.
+  const drop = (await page.locator('.of-edge-in').getAttribute('d'))!.match(/^M([\d.]+),[\d.-]+ L([\d.]+),[\d.-]+$/);
+  assert.ok(drop && drop[1] === drop[2], `input line ${drop}`);
+  assert.equal(await page.evaluate(() => getComputedStyle(document.getElementById('of-lines')!).zIndex), '1');
   // The period: the week at first, and the one picked is remembered.
   assert.equal(await page.locator('[data-of-period="7d"]').getAttribute('aria-pressed'), 'true');
   await page.locator('[data-of-period="30d"]').click();
@@ -150,7 +149,8 @@ async function mapExtras(browser: import('playwright').Browser) {
 
 async function noLinks(browser: import('playwright').Browser) {
   // A factory whose pipelines have no links between them (no Marketing to Sales): it renders with no lines or loops.
-  const data = {...map, edges: [], loops: [], inputs: []};
+  // A loop with no laps yet draws nothing.
+  const data = {...map, edges: [], loops: [{pipelines: ['camp', 'sales'], laps: 0, median_lap_minutes: null}], inputs: []};
   const {page, errors} = await open(browser, {data});
   await page.locator('.of-node').first().waitFor();
   assert.equal(await page.locator('.of-edge').count(), 0);
@@ -225,6 +225,8 @@ async function phone(browser: import('playwright').Browser) {
   assert.equal(await page.locator('#of-lines').isVisible(), false);
   assert.match(await page.locator('[data-of-pl=camp] .of-onward').innerText(), /38 · 2d to Sales/);
   assert.match(await page.locator('[data-of-pl=camp] .of-in-chip').innerText(), /Ads 14/);
+  const short = await page.locator('[data-of-period], #of-new-b').evaluateAll((bs: HTMLElement[]) => bs.filter(b => b.getBoundingClientRect().height < 44).map(b => b.textContent));
+  assert.deepEqual(short, [], 'the period picker and + Factory are 44px tall on a phone');
   await page.locator('[data-of-pl=camp] .of-chat').click();
   await page.locator('#of-rail-chat .thv').waitFor();
   const sheet = (await page.locator('#of-rail').boundingBox())!;

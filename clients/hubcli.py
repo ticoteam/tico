@@ -2436,7 +2436,12 @@ def parser():
     s.add_argument("--add", action="append", help="with tags: a tag to add; repeat for more")
     s.add_argument("--remove", action="append", help="with tags: a tag to take off; repeat for more")
     s.add_argument("--note", help="what changed, or why; goes with each task's change")
-    s.add_argument("--dry-run", dest="dry_run", action="store_true", help="count what would change; change nothing")
+    s.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="count what would change, but not rule or handoff holds (the real run skips those); change nothing",
+    )
     for name, word in (
         ("owner", "owner (a bot slug, a human id or me)"),
         ("requester", "requester"),
@@ -4154,6 +4159,17 @@ def parser():
     s.add_argument("--bot", help="queues and failures for this bot only")
     s.add_argument("--since", help="failure window: 24h (default), up to 7d, or an ISO date-time")
     s.set_defaults(fn="pipeline")
+    # Owners and admins of the pipeline; the bot must be active (archived, paused and planned bots are refused).
+    # A top-level command, not a `pipeline` subcommand: `pipeline` stays a leaf (the MCP tool test counts commands).
+    s = sub.add_parser(
+        "pipeline-manager",
+        help="set a pipeline's manager bot, or clear it with --clear: the bot that runs its manager pass and judges "
+        "stuck tasks; an active bot only",
+    )
+    s.add_argument("pipeline", help="the pipeline: its id or its name")
+    s.add_argument("bot", nargs="?", help="the bot to manage the pipeline: its id or slug")
+    s.add_argument("--clear", action="store_true", help="clear the pipeline's manager instead of setting one")
+    s.set_defaults(fn="pipeline-manager")
     s = sub.add_parser("brief", help="alerts, who needs the person, what bots said since --since")
     s.add_argument("--since", help="an ISO date-time; default the last 12 hours")
     s.set_defaults(fn="brief")

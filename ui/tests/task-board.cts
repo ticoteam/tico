@@ -1,20 +1,20 @@
 /// <reference lib="dom.iterable" />
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-board.cjs
+// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-board.cts
 // Every request is intercepted; this test never contacts the hub, Slack, or a bot.
 // Labels and PR links, a comment thread
 // with the author on every line (not a chat), and mover-only controls. The list itself (rows, groups, chips, the peek,
-// bulk changes, the keys) is ui/tests/tasks-page.cjs.
+// bulk changes, the keys) is ui/tests/tasks-page.cts.
 // The Product lane is retired: no lane switch, no product board, and the page
 // only asks the hub for company tasks (the product rows below must never show).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 interface Tag {id: string; key: string; label: string; metadata: Record<string, string>; markdown: string; is_template: boolean; template_id: string | null; owner_id: string; version: number}
 interface Task {id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string; rank: number; labels: string[]; links: {id: string; kind: string; url: string; title: string; state: string}[]; parts: {total: number; done: number}; version: number; created_at: string; updated_at: string; closed_at?: string; close?: unknown; note?: string; waiting_on?: string; ask?: {recipient_id: string}; tags?: Tag[]; attachments?: {id: string; name: string}[]; relations?: Record<string, {id: string; title: string; status: string; owner_id: string; direction: string}[]>}
 interface Comment {id: string; kind: string; sender_id: string; recipient_id: string; body: string; created_at: string; edited_at?: string; refs: {task: string; comment: boolean; attachments?: {id: string; name: string}[]}}
@@ -306,6 +306,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     // A card with related tasks shows how many, like an attachment count; one without shows nothing.
     const relCounts = await page.locator('#task-body .bcard').evaluateAll(cs => cs.map(c => c.querySelector('.bcard-rel')?.getAttribute('aria-label') || ''));
     assert.deepEqual(relCounts.filter(Boolean), ['2 related tasks']);
+    // A tag on a card shortens with an ellipsis rather than running under the chips beside it.
+    assert.equal(await page.locator('#task-body .bcard-chips .tlabel').first().evaluate(el => getComputedStyle(el).textOverflow), 'ellipsis');
     await page.locator('#task-body .bcard').first().click();
     await page.locator('#task-peek[open]').waitFor();
     assert.equal(await page.locator('#task-modal[open]').count(), 0, 'a card opens beside the board, not over it');
@@ -325,7 +327,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.doesNotMatch(await page.locator('#task-body').innerText(), /Open chat|bots and people|bot or person/);
     if (screenshotDir) { fs.mkdirSync(screenshotDir, {recursive: true}); await page.screenshot({path: path.join(screenshotDir, 'task-board-company.png')}); }
 
-    // List filters, search, Done and recurring controls are exercised in tasks-page.cjs.
+    // List filters, search, Done and recurring controls are exercised in tasks-page.cts.
 
     // The modal: comments with authors, state changes inline, one box; the mover controls are there
     await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 'Draft the newsletter')));

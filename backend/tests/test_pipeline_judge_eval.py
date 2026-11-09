@@ -45,9 +45,9 @@ def test_judge_once_goes_through_the_servers_judge_with_the_work_and_the_evidenc
         return {"p": 0.9, "reason": "ok", "provider": "t", "model": model, "cost_usd": 0.002, "latency_ms": 12}
 
     case = next(c for c in run.load() if c.get("trap") == "old_version")
-    p, cost, ms = adapter.judge_once(engine, case, "haiku-5.5")
+    p, cost, ms = adapter.judge_once(engine, case)
     assert (p, cost, ms) == (0.9, 0.002, 12)
-    assert seen["model"] == "haiku-5.5" and seen["label"] == adapter.QUESTION_SET
+    assert seen["model"] == "jev" and seen["label"] == adapter.QUESTION_SET
     assert seen["state"]["work"]["work_version"] == case["work"]["work_version"]
     assert seen["state"]["attachment"]["work_version"] == case["attachment"]["work_version"]
     assert seen["state"]["attachment"]["work_version"] != seen["state"]["work"]["work_version"]
@@ -59,15 +59,13 @@ def test_a_model_call_that_fails_is_raised_to_the_caller_and_never_passes():
         raise J.JudgeError("unavailable", "down")
 
     with pytest.raises(J.JudgeError):
-        adapter.judge_once(broken, run.load()[0], "jev")
+        adapter.judge_once(broken, run.load()[0])
 
 
-def test_the_gateways_cost_is_kept_and_tokens_are_priced_when_it_gives_none():
-    assert adapter.cost_usd("haiku-5.5", {"cost_usd": 0.5, "prompt_tokens": 1_000_000}) == 0.5
-    assert (
-        adapter.cost_usd("haiku-5.5", {"prompt_tokens": 1_000_000, "completion_tokens": 0})
-        == (adapter.PRICES["haiku-5.5"][0])
-    )
+def test_the_only_eval_model_is_jev_and_the_gateways_cost_is_kept_or_priced():
+    assert adapter.MODELS == ("jev",)
+    assert adapter.cost_usd("jev", {"cost_usd": 0.5, "prompt_tokens": 1_000_000}) == 0.5
+    assert adapter.cost_usd("jev", {"prompt_tokens": 1_000_000, "completion_tokens": 0}) == adapter.PRICES["jev"][0]
 
 
 def test_no_gateway_key_means_no_engine_for_any_model_and_nothing_is_sent():
@@ -133,17 +131,17 @@ def test_a_perfect_judge_that_takes_sixty_seconds_fails_the_real_cases():
     assert not slow["passes_bar"] and slow["accuracy"] == 1.0
 
 
-def test_a_run_with_a_skipped_model_is_incomplete_and_sends_nothing(monkeypatch, tmp_path, capsys):
+def test_a_run_with_no_key_is_incomplete_and_sends_nothing(monkeypatch, tmp_path, capsys):
     built = []
 
     def build(name, env=None):
         built.append(name)
-        return None if name == "sonnet" else (lambda *a: (0.95, 0.0, 5))
+        return None
 
     monkeypatch.setattr(adapter, "build_engine", build)
-    assert run.main(["--models", "jev,sonnet", "--out", str(tmp_path)], env={}) == 2
+    assert run.main(["--out", str(tmp_path)], env={}) == 2
     assert "INCOMPLETE RUN" in capsys.readouterr().err and not list(tmp_path.iterdir())
-    assert built == ["jev", "sonnet"]
+    assert built == ["jev"]
 
 
 def test_the_default_judges_all_go_through_the_gateway_key_only():
@@ -179,7 +177,7 @@ def test_a_missing_evidence_case_is_not_met_and_no_model_is_called():
         asked.append(model)
         return {"p": 0.9, "reason": "", "provider": "t", "model": model}
 
-    assert adapter.judge_once(engine, case, "haiku-5.5") == (0.0, 0.0, 0)
+    assert adapter.judge_once(engine, case) == (0.0, 0.0, 0)
     assert asked == []
 
 

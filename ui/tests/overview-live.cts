@@ -2,15 +2,15 @@
 // without reading the status again and without waiting for the 2-minute refresh. During a replay the desks keep the
 // day's states; a replay that plays to its end goes back to the live status, events that came meanwhile included.
 // The 3D renderer is replaced by a recording stand-in: WebGL timing is not what this checks. Fixtures only.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 import type {Route} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();
 
 // The desks the stand-in scene draws, read back from the scene's own record in the page.
 interface Member { id: string; state: string; detail?: string }

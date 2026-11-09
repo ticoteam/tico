@@ -4,9 +4,9 @@
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {assistantView} = require('./support/assistant-chat.cjs') as typeof import('./support/assistant-chat.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {assistantView} = require('./support/assistant-chat.cts') as import('./support/assistant-chat.cts').Api;
 
 type Card = {id: string; status: string; env: string; bot: string; bot_name: string; label: string; title: string; format: string;
   help_url: string; kind: string; can_save: boolean; note: string | null; credential_id: string | null};

@@ -1,13 +1,13 @@
 // Personal review controls against local fixtures; no provider or server calls.
 import type {Browser, LaunchOptions, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 const evidence = process.env.TICO_REVIEW_EVIDENCE;
 const row = (id: string, title: string, owner: string, review_state: string, privateMeeting = false) => ({id, title, owner: owner, review_state, private: privateMeeting,
   kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',

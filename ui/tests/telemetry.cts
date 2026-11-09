@@ -1,10 +1,10 @@
-import type * as PageSupport from './support/page.cjs';
+import type * as PageSupport from './support/page.cts';
 // The real SDK must scrub outgoing events and discard retries after sign-out, including late failures.
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const {chromium}: typeof import('playwright') = require('playwright');
-require('./support/page.cjs') as typeof PageSupport;
+require('./support/page.cts') as PageSupport.Api;
 
 // The page's SDK entry point, defined by the built observability module.
 interface Telemetry {

@@ -219,6 +219,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 button.handoff-chip{cursor:pointer}
 button.handoff-chip:hover{color:var(--ink)}
 button.handoff-chip:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+/* A long tag shortens with an ellipsis instead of running under the Waiting chip beside it. */
+.bcard-chips .tlabel{display:inline-block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.bcard-chips .tlabel i{margin-right:5px;vertical-align:middle}
 .bcard-chips .tl-due{display:none}
 .bcard-rel{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted)}
 .bcard-rel svg{flex:none}

@@ -3,13 +3,13 @@
 // app without the Recorder installed, it stays the download, until Tico has seen one of the person's copies lately;
 // a copy older than the newest release shows one quiet update link. Neither shows on a phone.
 import type {Browser, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {webkit} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 type RW = {__posted: [string, unknown][]; __recorderAsked?: boolean; ticoNative: (name: string) => {postMessage: (body: unknown) => Promise<unknown>}; ticoNativeFeatures: string[]};
 interface Recorder {version: string; last_seen_at: string | null; recent: boolean; update_available: boolean}
 const DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';

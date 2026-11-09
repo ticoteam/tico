@@ -41,6 +41,7 @@ ORDER = [
     "go_live_expiry",
     "stall_checks",
     "approval_expiry",
+    "stuck_cards",
     "repository_waits",
     "entity_links",
     "call_sweeps",

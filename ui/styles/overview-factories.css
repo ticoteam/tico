@@ -66,7 +66,7 @@
   .of-node{max-width:none;min-width:0}
   .of-node + .of-node{margin-top:22px}
   .of-rail{position:fixed;inset:0;z-index:50;width:auto;border-left:0}
-  .of-chip,.of-rail-hide{min-height:44px}
+  .of-chip,.of-rail-hide,.of-bar .og-seg button,.of-new-b{min-height:44px}
   .of-rail-hide{min-width:44px}
   .of-chat{min-width:44px;min-height:44px}
   .of-phone-only{display:flex;flex-wrap:wrap;gap:6px}

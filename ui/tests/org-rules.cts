@@ -5,14 +5,14 @@
 // it, the Engineering Lead's Rules tab shows the rule and its settings, a teammate who manages nothing reads the rule
 // without Save or Retire, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also
 // saves each screen at 1440 and 390, light and dark, into that directory.
-import type * as RealHubSupport from './support/real-hub.cjs';
+import type * as RealHubSupport from './support/real-hub.cts';
 import type {Browser, Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
-const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 interface Source { id: string; name: string; kind: string }
 interface Rule {

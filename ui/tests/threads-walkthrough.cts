@@ -1,4 +1,4 @@
-// A walkthrough of the whole threads feature on a real hub (ui/tests/support/real-hub.cjs): each journey runs at desktop
+// A walkthrough of the whole threads feature on a real hub (ui/tests/support/real-hub.cts): each journey runs at desktop
 // (1440x900) and at phone width (390x844), and screenshots every screen it reaches. Nothing here asserts copy; the pictures
 // are read by a person. What the script does check, and records in results.json:
 //   - a step that fails (the screen is shot as FAILED-<step>, and the journey goes on with the next step);
@@ -6,16 +6,16 @@
 //   - sideways scrolling at phone width;
 //   - the words "channel" and "room", raw ids and JSON showing in the visible text.
 // Screenshots go to TICO_SHOTS, or $RUNNER_TEMP/remote/threads-walkthrough on a RunsOn VM (its folder is uploaded as
-// the run's artifact), or .remote-runs/threads-walkthrough here. Run: node ui/tests/threads-walkthrough.cjs
+// the run's artifact), or .remote-runs/threads-walkthrough here. Run: node ui/tests/threads-walkthrough.cts
 import type {Browser, Page} from 'playwright';
-import type * as RealHubSupport from './support/real-hub.cjs';
+import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
-const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 const REPO = path.join(__dirname, '..', '..');
 const SHOTS = process.env.TICO_SHOTS || path.join(process.env.RUNNER_TEMP ? path.join(process.env.RUNNER_TEMP, 'remote')
@@ -53,7 +53,7 @@ async function api(hub: RealHubSupport.Hub, teammate: string, method: string, p:
   return json;
 }
 
-// Builder-claude: everyone may see it, only Dana may read or write its Home (as real-hub.cjs sets it up).
+// Builder-claude: everyone may see it, only Dana may read or write its Home (as real-hub.cts sets it up).
 async function restrictBot(hub: RealHubSupport.Hub) {
   const current = await api(hub, 'dana', 'GET', `/v2/bots/${BOT}/access`);
   const everyone = {everyone: true, people: [], teams: [], bots: []};

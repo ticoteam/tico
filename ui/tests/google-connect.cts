@@ -3,13 +3,13 @@
 // Workspace policy denial is shown as the admin's; only Google's own sign-in page is opened, and its return address
 // (#/settings/inbox) opens Tools › Settings › Email.
 import type {LaunchOptions, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 interface GoogleState {
   configured?: boolean; mailbox: string; syncing?: boolean; status: string; kind?: string | null; message?: string | null;
   hint?: string | null; can?: string[]; app?: string; acts?: {mail: boolean; calendar: boolean}; stalled?: boolean;

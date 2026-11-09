@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -581,6 +581,22 @@ def step_approval_expiry(ctx):
         "held messages kept unsent": ended.get("held") or [],
     }
     return SR.words_of(acted, none="Nothing expired"), not any(acted.values())
+
+
+def step_stuck_cards(ctx: "Context") -> tuple[str, bool]:
+    # Every 10 minutes: the stuck rule wakes a pipeline's manager about a card that stopped moving, then asks a person
+    # (backend/stuck_cards.py). Plain SQL, no model.
+    from . import stuck_cards
+
+    store: Any = ctx.store  # Store.transaction is untyped
+    with store.transaction() as c:
+        done = stuck_cards.sweep(c, stamp(ctx.at))
+    acted = {
+        "managers woken": done["woken"],
+        "people asked": done["asked"],
+        "answers passed on": done["relayed"],
+    }
+    return SR.words_of(acted, none="No stuck cards"), not any(acted.values())
 
 
 class Scheduler:

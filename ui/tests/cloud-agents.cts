@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 import type {Browser, Page, ViewportSize} from 'playwright';
 // Cloud agents on Recruit (ui/app/cloud-agents.ts, backend/cloud_agents.py): the agents grid is four across and two
 // across on a phone, a request files a seat and opens its Connecting page, the team builder's Request link opens the same
@@ -12,8 +12,8 @@ const assert: typeof import('node:assert/strict') = require('node:assert/strict'
 const {execFileSync}: typeof import('node:child_process') = require('node:child_process');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 declare const window: Window & typeof globalThis & {
   // Defined by ui/app/cloud-agents.ts.
