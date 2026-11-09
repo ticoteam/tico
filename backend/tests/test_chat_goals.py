@@ -4,7 +4,6 @@ import pytest
 
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner, restrict  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.chat_goals import action, goal_event, setup, task_goal_world
 

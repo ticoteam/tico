@@ -6,7 +6,6 @@ import pytest
 from backend import librarian
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 
 RESULTS = [

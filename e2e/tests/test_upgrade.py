@@ -7,7 +7,6 @@ from contextlib import closing
 import pytest
 
 from backend.store import Store
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from e2e import renames, scenario
 from e2e.preserve import compare, integrity, table_state
 from e2e.server import serve, settings_for, snapshot

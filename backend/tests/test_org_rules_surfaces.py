@@ -9,7 +9,6 @@ import pytest
 
 from backend import rule_due as D
 from backend.tests.helpers.api import headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401  (the botops fixture)
 from backend.tests.helpers.org_rules import org, rule as post_rule

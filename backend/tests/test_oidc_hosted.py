@@ -13,7 +13,6 @@ from backend.app import create_app
 from backend.config import Settings
 from backend.store import digest
 from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
 
 URL = "https://acme.hosted.example"

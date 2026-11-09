@@ -1,7 +1,6 @@
 """runner_versions.load reuses one fleet map per read snapshot."""
 
 from backend.tests.helpers.api import post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import runner_versions
 
 

@@ -14,7 +14,6 @@ import pytest
 
 from backend.store import encode
 from backend.tests.helpers.api import assign, get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from runner_support.tests.helpers.conformance import MODELS, Computer, reply_to, rust_binary, until  # noqa: F401
 from backend import bot_settings as BS

@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from backend import goal_asks as GA
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.kpis import goal_with_kpi, log
 from backend.tests.helpers.goal_asks import MANAGER, asks, goal_manager, needs_tasks, raise_level, sync
 

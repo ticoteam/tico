@@ -9,7 +9,6 @@ from backend import task_privacy
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_api import api  # noqa: F401  (the fixture and its helper)
 from backend.tests.helpers.automation_api import as_bot
 from backend.tests.helpers.thread_events import cursor, new_thread, read_as, say, who
 

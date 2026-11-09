@@ -5,7 +5,6 @@ import pytest
 
 from backend import docs_merge
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.groups import add_bots
 from backend.tests.helpers.groups_leads import as_bot
 

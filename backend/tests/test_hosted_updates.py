@@ -14,7 +14,6 @@ import pytest
 from backend import execution, hosted_updates as HU, releases
 from backend.credentials import Vault
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 KEY = "tgw-synthetic-fixture-key-0042"
 URL = "https://gateway.acme.example/v1/gateway"

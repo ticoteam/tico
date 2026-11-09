@@ -2,7 +2,6 @@
 what is left in Tico when a live share is kept on the computer instead. Synthetic text only."""
 
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.media import import_meeting
 from backend.tests.helpers.recorder_audience import live_meeting, readable
 

@@ -7,7 +7,7 @@ import pytest
 
 from backend import hubdb as H, review_gate, qa_defaults, test_receipts
 from backend.tests.helpers.github import api, get, headers, post, hook, pr_event, PR  # noqa: F401
-from backend.tests.helpers.api import hold
+from backend.tests.helpers.api import hold  # noqa: F401
 
 HEAD, OLD, BASE = 'a' * 40, 'b' * 40, 'c' * 40
 
@@ -540,7 +540,7 @@ def _removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api, monkeypa
 @pytest.mark.parametrize('reader', ['human:ana', 'bot:cpo'])
 def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, reader):
     task = ticket(api, private=False)
-    from backend.tests.helpers.api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers  # noqa: F401
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

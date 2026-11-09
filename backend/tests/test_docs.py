@@ -1,7 +1,6 @@
 """Docs: internal docs (versions, locks, import, search) and linked docs (docs/docs.md)."""
 
 from backend.tests.helpers.api import assign, claim, ready, runner
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 from backend.tests.helpers.docs import ANA, BEN, CARA, call, make
 

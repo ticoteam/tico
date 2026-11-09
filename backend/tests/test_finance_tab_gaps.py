@@ -12,7 +12,6 @@ from backend.finance import tab as FT
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.finance_fixtures import (
     open_views,
     AT,

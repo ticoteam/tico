@@ -1,4 +1,4 @@
-"""A real Tico server for the custom-frontend browser test (ui/tests/custom-frontend.cjs).
+"""A real Tico server for the custom-frontend browser test (ui/tests/custom-frontend.cts).
 
     python3 ui/tests/support/frontend_server.py --auth none|oidc --origin http://localhost:5173
 

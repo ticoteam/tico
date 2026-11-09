@@ -6,7 +6,6 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import hubdb as H
 from backend import threads, updates
 from backend.auth import Identity
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.bot_contact import bot
 
 DAY = "2026-10-30"

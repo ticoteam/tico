@@ -9,7 +9,6 @@ from backend.store import H
 from backend.tests.helpers.api import restrict
 from backend.tests.helpers.bot_access import bot, bot_id
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.meeting_items import add, change, items, push, record
 
 

@@ -4,7 +4,6 @@ from backend import task_privacy as privacy, usage_limits
 from backend.events import prime_status_lines, status_line
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, ready  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.run_backoff import hold_bot, setup
 from backend import usage_limits
 from backend.tests.helpers.status_reads import busy, page

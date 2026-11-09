@@ -20,7 +20,6 @@ import pytest
 import uvicorn
 
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 @pytest.mark.slow

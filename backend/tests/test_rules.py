@@ -7,7 +7,6 @@ import json
 from backend import hubdb as H
 from backend import rules as R
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.wake_rules import as_cause, claim, finish, jobs, news, parked_task, setup, skips
 from backend.tests.helpers.rules import plain_task
 

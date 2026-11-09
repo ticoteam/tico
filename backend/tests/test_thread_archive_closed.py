@@ -10,7 +10,7 @@ import pytest
 
 from backend import threads
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.api import headers  # noqa: F401
 from backend.tests.test_thread_rail import ids, listed, new_thread, post_as, private_ref, say
 
 FINISHES = ({"status": "done"}, {"status": "declined"}, {"close": True})

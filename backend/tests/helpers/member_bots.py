@@ -2,7 +2,6 @@
 
 import pytest
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 
 

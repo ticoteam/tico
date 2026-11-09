@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from backend import events, meeting_items, meeting_audience
 from backend.tests.helpers.api import headers, get, restrict, unrelated_task_managers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.meeting_items import record, add, change, push, items
 
 

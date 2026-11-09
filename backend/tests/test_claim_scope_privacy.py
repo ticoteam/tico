@@ -3,7 +3,6 @@ limit is on; only a reader of that task learns which task it is, from GET /api/v
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 
 
 def private_task(api, requester, title):

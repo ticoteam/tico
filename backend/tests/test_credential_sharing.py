@@ -12,7 +12,6 @@ import pytest
 
 from backend.credentials import CredentialCipher
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import act, everything
 from backend.tests.helpers.mcp import call as mcp
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)

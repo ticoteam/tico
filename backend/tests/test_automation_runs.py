@@ -12,7 +12,6 @@ import time_machine
 from backend import automations, mailbox_access
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_api import patch
 from backend.tests.helpers.automation_turns import draft_then_tell, finish
 from backend.tests.helpers.automation_runs import EVENT, FIND, make, queued, run_row, sql

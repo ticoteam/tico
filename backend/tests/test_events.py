@@ -13,7 +13,6 @@ from backend import hubdb as H
 from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post, restrict, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.events import live, ready, topic
 
 

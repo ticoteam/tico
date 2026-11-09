@@ -9,7 +9,6 @@ import uuid
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.pipeline_settings_j import make_pipeline, read_settings, send, settings  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 
 
 def seen_on_overview(api, token):

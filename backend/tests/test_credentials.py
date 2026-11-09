@@ -1,7 +1,6 @@
 import json
 
 from backend.tests.helpers.api import post, get, runner, assign, ready, claim, headers
-from backend.tests.test_api import api
 from backend.tests.helpers.credentials import create, setup
 
 

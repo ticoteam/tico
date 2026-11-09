@@ -6,7 +6,6 @@ import json
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.credential_sharing import JIRA, jira, local
 from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)

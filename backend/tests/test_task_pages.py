@@ -3,7 +3,6 @@
 from backend import events as E, file_library
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.cards import delete, page as seeded_page, patch, place, task
 from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.pages import page, read

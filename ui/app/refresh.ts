@@ -161,7 +161,7 @@ function liveWire(): void {
   });
   // Needs you comes as the ids that changed; the list is mended from them (v2NeedsChanged), then `needs-list` says so.
   liveOn('needs', (d: unknown) => void v2NeedsChanged(d).then(moved => {
-    // A live change reaches the browser notifications too, not only the refresh (hub-v2.js); one memory serves both.
+    // A live change reaches the browser notifications too, not only the refresh (hub-v2.ts); one memory serves both.
     if (typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
     if (!moved) return;
     liveEmit('needs-list', S.v2.needs || []);

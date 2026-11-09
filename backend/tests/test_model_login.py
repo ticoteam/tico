@@ -3,7 +3,6 @@
 import json
 
 from backend.tests.helpers.api import get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.model_login import stored
 
 

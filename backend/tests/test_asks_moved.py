@@ -6,7 +6,6 @@ Answered asks stay as history, a private task's ask stays private, and it all ha
 from backend import hubdb as H, question_tasks as QT, task_relations as TR
 from backend.tests.old_asks import old_answer, old_ask, with_refs
 from backend.tests.helpers.api import get  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.derived_waiting import _migration
 
 UP = _migration("20261106131713_asks_to_question_tasks").up

@@ -115,7 +115,7 @@ a.th-status-act:hover{text-decoration:none}
 .th-upd-btn:hover{color:var(--ink)}
 .th-upd-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 
-/* A row no person or bot wrote (rowSource, ui/app/hub-v2.js): a small gray line, no avatar or sender row. A built-in's
+/* A row no person or bot wrote (rowSource, ui/app/hub-v2.ts): a small gray line, no avatar or sender row. A built-in's
    name leads in bold, an automation's is a link; a run of task updates is one "N task updates" row, shut until opened.
    Lines sit tight together; the next message keeps its own spacing. Shared by threads, the chat and a task's thread. */
 .src-line{display:flex;align-items:baseline;gap:0 6px;min-width:0;padding:1px 6px;color:var(--muted);font-size:var(--t-sm);line-height:1.45}

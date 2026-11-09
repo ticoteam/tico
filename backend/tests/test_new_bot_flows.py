@@ -14,7 +14,6 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, runner, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.automation_cli import Client
 from clients import hubcli, hubtools, remotecli
 from backend import bot_settings as BS

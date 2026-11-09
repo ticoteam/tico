@@ -4,7 +4,6 @@ from backend.auth import Identity
 from backend.models import Claim
 from backend.store import H
 from backend.tests.helpers.api import assign, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def test_company_waiter_reads_a_computer_with_two_waits_once(api):

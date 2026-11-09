@@ -14,7 +14,6 @@ import pytest
 from backend import hubdb as H
 from backend import postal_mail as P
 from backend.tests.helpers.api import get, post, put  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.api import setup_attempt
 from backend.tests.helpers.hook_relay import hq, service  # noqa: F401

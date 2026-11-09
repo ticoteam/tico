@@ -12,7 +12,7 @@ from backend import onboarding as O, setup_handoff
 from backend.app import create_app
 from backend.config import Settings
 from backend.store import H, digest
-from backend.tests.test_api import api, api_settings, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import api_settings, get, headers, post  # noqa: F401  (api: the fixture)
 from backend.tests.helpers.mcp import call, rpc
 
 OWNER, ADMIN = "ana-test", "ben-test"

@@ -9,7 +9,6 @@ from backend import performance as P
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, runner, setup_attempt  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.bot_access import world  # noqa: F401  (a Legal bot and who may see it)
 from backend.tests.helpers.performance import sample
 

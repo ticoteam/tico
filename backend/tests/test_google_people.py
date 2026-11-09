@@ -11,7 +11,6 @@ from backend import google_workspace as W
 from backend import routines
 from backend.store import H, encode
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.google_workspace import MAILBOX, connected, fresh_state, google, keys, personal, private
 
 PEOPLE = "/api/v2/google/people"

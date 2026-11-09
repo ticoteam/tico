@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from backend.granola_mcp import GranolaMCP
-from backend.tests.helpers.granola_mcp import BASE, Provider, api, headers  # noqa: F401
+from backend.tests.helpers.granola_mcp import BASE, Provider, headers  # noqa: F401
 from scripts import granola_live_check
 
 FIXTURE = Path(__file__).parent / "fixtures" / "granola" / "mcp_shapes.json"

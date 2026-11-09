@@ -10,7 +10,6 @@ from backend import sources as SRC
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.helpers.api import headers  # noqa: F401  (the fixture)
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 
 NAMES = {"human:ana": "Ana Lee", "bot:ops": "Ops", "automation:a1": "Nightly sweep"}
 

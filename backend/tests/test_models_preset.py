@@ -6,7 +6,7 @@ import json
 import pytest
 
 from backend import models_preset, providers
-from backend.tests.test_api import api, assign, claim, post, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, post, runner  # noqa: F401
 from backend.tests.helpers.gateway_connection import KEY, fake_gateway, handed_to, save, setup  # noqa: F401
 from backend import bot_settings as BS
 
@@ -112,7 +112,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
 
 
 def test_a_new_computer_prepares_the_gateway_before_its_first_subscription_turn(api, monkeypatch):
-    from backend.tests.test_api import get
+    from backend.tests.helpers.api import get  # noqa: F401
     from backend.tests.helpers.gateway_connection import delete  # noqa: F401
 
     connected(api, monkeypatch)
@@ -266,7 +266,7 @@ def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_
 
 
 def needs(api, token="ana-test"):
-    from backend.tests.test_api import get
+    from backend.tests.helpers.api import get  # noqa: F401
 
     return [it for it in get(api, "needs-you", token)["items"] if it["kind"] == "setup"]
 
@@ -314,7 +314,7 @@ def test_no_sign_in_card_under_the_other_choices(api):
 @pytest.mark.parametrize("isolated", [True, False, None, "cloud"])
 def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_tico_models(api, monkeypatch, isolated):
     from backend import readiness
-    from backend.tests.test_api import get
+    from backend.tests.helpers.api import get  # noqa: F401
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED, enabled=("anthropic", "openai", "tico"))
@@ -396,7 +396,7 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
         assert attempt["config"]["model"] == "tico-medium-1.0" and attempt["gateway"] is True
         if isolated == "cloud":
             # The runner says `trust` only to a server whose config answer takes it (runner-rs/src/readiness.rs).
-            from backend.tests.test_api import get
+            from backend.tests.helpers.api import get  # noqa: F401
 
             assert get(api, "config", machine["token"])["readiness_trust"] is True
         return
@@ -565,7 +565,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
 
 
 def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
-    from backend.tests.helpers.api import get, put
+    from backend.tests.helpers.api import get, put  # noqa: F401
 
     view = get(api, "providers")
     assert view["presets"] == list(models_preset.PRESETS) and view["preset"] == ""

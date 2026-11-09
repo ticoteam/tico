@@ -4,7 +4,6 @@ import json
 
 from backend.store import H, digest
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.skill_devices import add_skill, ask, bearer, connect, install_for, poll, rows
 
 

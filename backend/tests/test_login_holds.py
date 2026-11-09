@@ -8,7 +8,6 @@ from pathlib import Path
 from backend import maintenance_health, login_holds
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, headers, post, ready, runner
-from backend.tests.test_api import api
 from backend import bot_settings as BS
 from backend.tests.helpers.login_holds import CLAUDE, QUOTA, at, done, events, health_detail, limit, signed_in, two_bots
 

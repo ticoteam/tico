@@ -6,7 +6,6 @@ bot's blocker; a private parent names its person only where the question task's 
 from backend import hubdb as H, question_tasks as QT, task_holds, task_relations as TR
 from backend.tests.old_asks import old_ask
 from backend.tests.helpers.api import get, post  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.question_tasks import _answer, _bot_only_private_parent, _mark, _to, _to_ops, _work
 from backend.tests.helpers.derived_waiting import _migration
 

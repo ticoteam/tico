@@ -7,7 +7,6 @@ import pytest
 from backend import automation_actions as A, automations as M, gmail_live as G, google_workspace as W, mailbox_access
 from backend.store import H
 from backend.tests.helpers.api import post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_mail_actions import BOX, automate, claim, computer, last_run, later, owned_by_ana  # noqa: F401
 from backend.tests.helpers.gmail_live import gmail_http  # noqa: F401
 from backend.tests.helpers.google_workspace import personal

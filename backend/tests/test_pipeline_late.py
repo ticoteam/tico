@@ -6,7 +6,6 @@ import uuid
 from backend import hubdb as H
 from backend import task_holds
 from backend.tests.helpers.api import get, headers  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.pipeline_members_only import make_pipeline, ticket
 
 

@@ -8,7 +8,6 @@ Fictional people only: ana (owner), ben (a person); the bot ops comes from the a
 from backend import threads
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.helpers.task_news_delivery import budget_thread, delivery, rows, unread_for
 
 

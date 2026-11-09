@@ -3,7 +3,6 @@ updates that task (question_tasks.open_for, question_tasks.fold) instead of fili
 
 from backend import ask_deadlines, hubdb as H, question_tasks as QT, task_relations as TR, team_rules
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.question_tasks import keep_asking
 

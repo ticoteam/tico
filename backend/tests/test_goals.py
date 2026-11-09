@@ -2,7 +2,6 @@
 may log."""
 
 from backend.tests.helpers.api import get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def company_goal(api, title="Grow revenue 30% this year"):

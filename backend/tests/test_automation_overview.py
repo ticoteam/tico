@@ -5,7 +5,6 @@ import json
 
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_api import as_bot
 
 

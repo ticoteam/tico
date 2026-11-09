@@ -19,7 +19,6 @@ from backend import judge as B
 from backend import slack_gateway as G
 from backend.config import Settings
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS
 from backend.tests.helpers.slack_gateway import DM, Clock, FakeSlack, envelope, hub, rows  # noqa: F401
 from clients import judge as J

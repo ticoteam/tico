@@ -9,7 +9,6 @@ import pytest
 
 from backend import usage_facts, usage_limits
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0053_usage_facts.py"
 SONNET = {

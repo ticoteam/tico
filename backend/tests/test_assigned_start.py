@@ -8,7 +8,6 @@ from backend import assigned_start as A, health, maintenance_health, queue_refus
 from backend import question_tasks as QT
 from backend.store import H
 from backend.tests.helpers.api import claim, get, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.auto_tasks import deck, finish, set_cap, take
 from backend.tests.helpers.profiles import put
 from backend.tests.helpers.task_lanes import new_task, task_bot

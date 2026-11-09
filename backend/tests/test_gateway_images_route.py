@@ -3,7 +3,6 @@ Gateway's image maker with the company's key, answers the Gateway's shape, maps 
 reaches the Gateway for a refused request. The Gateway is faked: no call leaves the test."""
 
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from clients import gateway as G
 
 

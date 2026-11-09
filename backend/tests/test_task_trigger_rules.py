@@ -8,7 +8,6 @@ import pytest
 
 from backend import hubdb as H, task_trigger_rules as T
 from backend.tests.helpers.api import headers, post, unrelated_task_managers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.task_trigger_rules import rule
 

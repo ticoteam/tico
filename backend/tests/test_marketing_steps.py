@@ -13,7 +13,6 @@ from backend import hubdb as H
 from backend import marketing_tasks as MT
 from backend import rules as R
 from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "20261106010106_marketing_step_names.py"
 _spec = importlib.util.spec_from_file_location("marketing_step_names", MIGRATION)

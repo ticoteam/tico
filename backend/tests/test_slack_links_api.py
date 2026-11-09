@@ -8,7 +8,6 @@ import pytest
 from backend import slack_app
 from backend.store import H
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 THREAD = "T-marketing"
 ADMIN, MEMBER = "ana-test", "cara-test"  # ana is the owner; cara is an ordinary person (test_api.api_settings)

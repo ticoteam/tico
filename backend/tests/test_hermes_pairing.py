@@ -3,7 +3,6 @@
 from backend.store import H
 from backend.tests.helpers.agents import beat, credential, hermes_bot
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.hermes_pairing import approve, pair
 
 

@@ -2,7 +2,6 @@
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def setup(api):

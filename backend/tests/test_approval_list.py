@@ -5,7 +5,6 @@ import json
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.batch import approval_for_ana
 
 

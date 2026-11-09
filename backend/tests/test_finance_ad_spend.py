@@ -17,7 +17,6 @@ from backend.credentials import Vault
 from backend.finance import ad_import as AI
 from backend.finance.store import ads as SA
 from backend.store import Store
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.finance_fixtures import AT, OWNER, books, finance_template, store  # noqa: F401  (fixtures)
 from backend.tests.helpers.finance_ad_spend import FakeNet, http, key, meta, setup_import, tool
 

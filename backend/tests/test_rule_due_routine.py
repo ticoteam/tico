@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from backend import rule_due as D
 from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 from backend.tests.helpers.automation_api import patch
 from backend.tests.helpers.automation_due import drain, runs_of, tick
 from backend.tests.helpers.automation_runs import sql

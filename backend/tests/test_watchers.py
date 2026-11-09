@@ -1,7 +1,6 @@
 """What a watcher's report does on the server: one task per key, a wake for a new message, only from the host."""
 
 from backend.tests.helpers.api import post, runner
-from backend.tests.test_api import api
 from backend.tests.helpers.watchers import hosted, report, task, tasks, wakes
 
 

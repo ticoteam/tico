@@ -7,7 +7,6 @@ prompt as a task of its own. Closing it before then is a cancel and wakes nobody
 """
 
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def claim(api, r, next_run=True):

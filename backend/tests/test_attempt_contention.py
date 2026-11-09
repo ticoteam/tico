@@ -13,7 +13,6 @@ from backend import flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode
 from backend.tests.helpers.api import headers, runner
-from backend.tests.test_api import api
 from backend.enqueue import enqueue_stored
 from backend.tests.helpers.attempt_contention import fleet
 

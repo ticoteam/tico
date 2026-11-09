@@ -11,7 +11,6 @@ import pytest
 
 from backend import judge as B
 from backend.tests.helpers.api import headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS, events
 from backend.tests.helpers.slack_gateway import gateway, hub  # noqa: F401
 from clients import judge as J

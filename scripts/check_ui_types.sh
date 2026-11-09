@@ -6,9 +6,12 @@
 # ui/observability-vendors.ts is left out: it is the bundler entry for the npm packages posthog-js and @sentry/browser,
 # so its findings would depend on whether node_modules is installed, and CI runs this before npm ci. Pass --base
 # origin/main on a pull request so a baseline that grew fails too (scripts/ui_baseline.py).
+# ui/sw.ts, the service worker, is left out of ui/tsconfig.json too: it is its own program (ui/tsconfig.worker.json, the
+# WebWorker lib), which must report nothing (check_ui_strict.py --worker-only, run here as well).
 #   scripts/check_ui_types.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 scripts/gen_ui_types.py
 python3 scripts/ui_baseline.py tsc --check "$@"
+python3 scripts/check_ui_strict.py --worker-only
 echo "ui types: ok"

@@ -4,7 +4,6 @@ import pytest
 
 from backend import hubdb as H
 from backend.tests.helpers.api import claim, get, headers, post, ready, settled  # noqa: F401 (fixture)
-from backend.tests.test_api import api  # noqa: F401 (fixture)
 from backend.tests.helpers.execution_review import job_state
 from backend.tests.helpers.held_runs import botops
 from backend.tests.helpers.task_lanes import new_task, task_bot

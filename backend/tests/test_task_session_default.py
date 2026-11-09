@@ -2,7 +2,6 @@
 
 import json
 
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from clients import sessions
 from backend import bot_settings as BS
 

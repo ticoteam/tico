@@ -30,7 +30,6 @@ from backend import (
 )
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt
-from backend.tests.test_api import api
 from backend.tests.helpers.held_runs import task_held
 from backend.tests.helpers.run_backoff import at, complete, setup as budget_setup
 

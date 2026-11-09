@@ -13,7 +13,6 @@ from backend import webhook_delivery as D
 from backend import webhooks as W
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_confirm_cards import confirm
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.gateway_connection import KEY, OTHER, fake_gateway, save, setup

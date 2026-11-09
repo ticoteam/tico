@@ -2,7 +2,6 @@
 the model that ran it, never the bot's configured one, and a maker Tico cannot know stays unknown."""
 
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 CLAUDE = {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude", "billing": "subscription"}
 CODEX = {"model": "gpt-6.1-sol", "runtime": "codex", "harness": "codex", "billing": "subscription"}

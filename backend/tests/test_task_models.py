@@ -9,7 +9,6 @@ import pytest
 from backend import usage_limits
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import company, finish, heartbeat
 from backend import bot_settings as BS
 from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model, task_turn

@@ -12,7 +12,6 @@ from backend import gateway_connection, providers, task_models
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, get, headers, post, restrict, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
 from backend import bot_settings as BS
 from backend.tests.helpers.live_meetings import attach, chunk, live, ready, settle

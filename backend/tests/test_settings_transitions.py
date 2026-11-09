@@ -4,7 +4,6 @@ import json
 from backend.store import encode
 
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.settings_transitions import _company_default
 

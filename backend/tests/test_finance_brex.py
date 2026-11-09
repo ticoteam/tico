@@ -26,7 +26,6 @@ from backend.finance.context import load
 from backend.finance.mercury import Answer
 from backend.finance.store import banking as store_banking
 from backend.tests.helpers.api import get, headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.finance_fixtures import AT, OWNER, act, books, finance_template, store
 
 CARD = "card_acc_1"

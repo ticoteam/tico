@@ -18,7 +18,6 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.observability import Observability, browser_config, public_dsn, sanitize_event
 from backend.store import H, Problem
-from backend.tests.test_api import api
 from backend.tests.helpers.auth import signing
 
 DSN = "https://" + "a" * 32 + "@o123.ingest.us.sentry.io/123"
@@ -130,12 +129,12 @@ def events(transport):
 
 @pytest.fixture
 def reporting_api(request, monkeypatch, recording):
-    """The test_api fixture's install with server error reporting on, named "Acme Co", at release 0.3.99."""
-    from backend.tests import test_api  # the api fixture reads api_settings here
+    """The api fixture's install with server error reporting on, named "Acme Co", at release 0.3.99."""
+    from backend.tests.helpers import api_app  # the api fixture reads api_settings here
 
-    plain = test_api.api_settings
+    plain = api_app.api_settings
     monkeypatch.setattr(
-        test_api,
+        api_app,
         "api_settings",
         lambda tmp: replace(
             plain(tmp), observability_environment="test", sentry_server_dsn=DSN, instance_name="Acme Co"

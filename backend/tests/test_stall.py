@@ -3,7 +3,6 @@ stalled, and BotOps's stuck list takes the ones that quiet subtasks hold. Tico w
 blocked and routine-covered work is left alone."""
 
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
 
 
 def aged(c, task_id, minutes):

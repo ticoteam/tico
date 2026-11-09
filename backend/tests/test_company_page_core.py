@@ -17,7 +17,6 @@ from backend.company_page import audiences as A, disclosure as D, release, rende
 from backend.finance import actions as FA, reads as FR
 from backend.store import Problem
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.finance_fixtures import OWNER, account, act, books, finance_template, spend, store  # noqa: F401
 from backend.tests.helpers.company_page_core import make_kpi, numbers, on_board, post_income, read, setup, shown
 

@@ -12,7 +12,6 @@ from backend import rules as R
 from backend import wake_presets as W
 from backend.store import encode
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.wake_rules import jobs, news
 from backend import bot_settings as BS
 from backend.tests.helpers.profiles import add_bot, profile_of, put

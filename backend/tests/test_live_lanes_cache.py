@@ -1,6 +1,5 @@
 """live_lanes reuses one set per read snapshot."""
 
-from backend.tests.test_api import api  # noqa: F401
 from backend import execution
 
 

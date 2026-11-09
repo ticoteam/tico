@@ -15,7 +15,6 @@ from backend import automation_engine as E
 from backend import automations, cloud_access, hubdb
 from backend.tests.automation_fakes import Services
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_runs import FIND, make, sql
 from backend.tests.helpers.automation_due import drain, runs_of, tick
 

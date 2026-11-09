@@ -6,7 +6,6 @@ import pytest
 
 from backend import routines
 from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.helpers.scheduler import _wake_by_hand

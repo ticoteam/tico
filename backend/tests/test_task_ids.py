@@ -3,7 +3,6 @@ candidates, a one-character slip is suggested and never acted on, and none of it
 caller may not see."""
 
 from backend.tests.helpers.api import get, post  # noqa: F401  (fixtures)
-from backend.tests.test_api import api  # noqa: F401  (fixtures)
 
 
 def make(api, owner="ops", title="Write the report", token="ana-test"):

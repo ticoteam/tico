@@ -6,7 +6,6 @@ import pytest
 
 from backend.botops_act import classify, default_delegable, person_only
 from backend.tests.helpers.api import headers  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.botops_confirm_cards import card_in_chat, confirm
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
 

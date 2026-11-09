@@ -3,7 +3,6 @@
 import json
 
 from backend.tests.helpers.api import runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend import views
 from backend.subscription_identity import connection_id, display_names, identity
 

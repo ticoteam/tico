@@ -18,9 +18,7 @@ import uuid
 
 from backend import assigned_start as A, auto_tasks, bot_settings as BS, provenance_clock, queue_refusals as Q
 from backend.store import H, encode
-from backend.tests import test_api as api_fixture  # the api fixture itself
 
-api = api_fixture.api  # the fixture, bound so that tests can take it
 BOTS = [f"bot{n:02d}" for n in range(20)]
 TASKS = 200
 RUNS = 50

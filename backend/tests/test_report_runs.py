@@ -4,7 +4,6 @@ wake-up runs, with cost and steps. A person's chat with a report stays theirs, a
 from backend import rooms
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def bot(api, slug, reports_to=None):

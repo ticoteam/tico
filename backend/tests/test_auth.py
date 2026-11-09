@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.tests.test_api import api
 from backend.tests.helpers.auth import signing
 
 LOCAL_TOKEN = "local-owner-bearer-token-32chars!!"

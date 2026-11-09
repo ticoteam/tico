@@ -4,7 +4,6 @@ privacy and carries its words and a link back. Fictional people only: ana (owner
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
 from backend.tests.helpers.api import headers, post  # noqa: F401  (the fixture and its helpers)
-from backend.tests.test_api import api  # noqa: F401  (the fixture and its helpers)
 from backend.tests.helpers.thread_api import new_thread
 from backend.tests.helpers.thread_tasks import make_task
 

@@ -12,7 +12,6 @@ from backend import bot_settings as BS
 from backend import task_privacy as privacy
 from backend.auth import Identity
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401 (api: the fixture)
-from backend.tests.test_api import api  # noqa: F401 (api: the fixture)
 from backend.tests.helpers.execution_review import (
     aged,
     interrupted,

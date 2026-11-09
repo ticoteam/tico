@@ -108,7 +108,7 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
-  'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.js',
+  'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
 ];
@@ -167,7 +167,7 @@ const PAGES: PageSpec[] = [
       await page.waitForTimeout(300);
     }},
   {name: 'tour', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
-    ui: ['ui/app/welcome.js', 'ui/getting-started.ts', 'ui/styles/getting-started.css', 'ui/app/settings-devices.ts', ...SETTINGS_UI],
+    ui: ['ui/app/welcome.ts', 'ui/getting-started.ts', 'ui/styles/getting-started.css', 'ui/app/settings-devices.ts', ...SETTINGS_UI],
     steps: async page => {
       // On a phone the account menu is in the drawer, which stays closed (and inert) until More opens it.
       if (await page.locator('#mobile-more').isVisible()) await page.click('#mobile-more');

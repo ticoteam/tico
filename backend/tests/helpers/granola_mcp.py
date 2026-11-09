@@ -3,7 +3,6 @@
 import json
 import httpx
 from backend.tests.helpers.api import headers
-from backend.tests.test_api import api
 
 
 BASE = "/api/v2/meetings/granola"

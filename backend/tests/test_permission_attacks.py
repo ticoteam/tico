@@ -13,7 +13,7 @@ import pytest
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.helpers.api import claim, get, headers, post, restrict  # noqa: F401
-from backend.tests.helpers.member_bots import api, botops, call, close_computer, finish, register, runner, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.member_bots import botops, call, close_computer, finish, register, runner, turn  # noqa: F401  (fixtures)
 
 
 def add_dee(api):

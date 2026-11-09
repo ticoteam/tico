@@ -8,7 +8,6 @@ from backend import events as E
 from backend import queue_refusals, thread_bot_status, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixture, helpers)
-from backend.tests.test_api import api  # noqa: F401  (fixture, helpers)
 from backend.tests.helpers.thread_events import read_as, who
 from backend.tests.helpers.threads_delivery import bot_post, delivery, queued_job
 from backend.tests.helpers.thread_halfway import bot_status, new_thread, say

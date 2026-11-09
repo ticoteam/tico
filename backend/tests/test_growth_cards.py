@@ -7,7 +7,6 @@ import uuid
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company import bot  # noqa: F401
 
 GROWTH_NUMBERS = ["new_customers", "cac", "spend", "ltv_cac", "payback_months", "kept_d30"]

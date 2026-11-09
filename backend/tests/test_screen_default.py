@@ -4,7 +4,6 @@ one; a computer from before this default keeps what it had."""
 import json
 
 from backend.tests.helpers.api import get, post, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 
 def heartbeat(api, r, offers):

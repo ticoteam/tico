@@ -2,7 +2,7 @@
 through the settings route and the task-type route. An archived, paused, planned or unknown bot is a 422 and the stored
 manager does not change; the bare bot id is stored, from `bot:<id>` or `<id>`; "" clears it."""
 
-from backend.tests.test_api import api, get, headers  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import get
 from backend.tests.helpers.pipeline_settings_j import make_pipeline, read_settings, settings
 from backend.tests.helpers.tasks_board import post
 

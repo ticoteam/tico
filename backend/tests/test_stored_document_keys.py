@@ -11,7 +11,6 @@ from backend import access, directory, gateway_connection, move_retry, onboardin
 from backend import source_outages
 from backend.store import H
 from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.login_holds import at
 from backend.tests.helpers.source_outages import managers, notices
 

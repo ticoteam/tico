@@ -11,7 +11,6 @@ from backend import automations
 from backend import hubdb as H
 from backend.store import sweep_mail
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.automation_turns import finish
 from backend.tests.helpers.connectors import mail_message
 

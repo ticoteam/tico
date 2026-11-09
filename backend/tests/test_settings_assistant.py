@@ -15,7 +15,6 @@ from backend.auth import Identity
 from backend.settings_entries import ENTRIES
 from backend.store import Problem
 from backend.tests.helpers.api import as_member, get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.botops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
 from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)

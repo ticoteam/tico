@@ -22,7 +22,6 @@ from backend.company_page.api import preview_view
 from backend.tests.helpers.company_page_core import numbers, post_income, setup, shown
 from backend.tests.helpers.company_page_editions import plain_sections
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 from backend.tests.helpers.company_page_editions import page  # noqa: F401
 from backend.tests.helpers.finance_fixtures import OWNER, books, finance_template, store  # noqa: F401
 

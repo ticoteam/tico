@@ -3,7 +3,6 @@
 import json
 
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
 
 
 def start(api):
