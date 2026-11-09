@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS pages(
  file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
  cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
  as_of TEXT, replaced_by_id TEXT, audience TEXT, deleted_at TEXT, archived INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, spec TEXT);
 CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
 """
 
@@ -47,9 +47,6 @@ def ensure(c):
     for statement in SCHEMA.split(";"):
         if statement.strip():
             c.execute(statement)
-    from . import spec_approval
-
-    spec_approval.migrate(c)
 
 
 class PageEdit(M.Contract):

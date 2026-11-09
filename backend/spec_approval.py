@@ -76,12 +76,6 @@ def page_text(data: bytes) -> str:
     return html.unescape(re.sub(r"\s+", " ", text)).strip()[:TEXT_CAP]
 
 
-def migrate(c: Any) -> None:
-    """pages.spec: which pages are specs (CARD) or frozen copies (FROZEN). Older rows stay NULL."""
-    if "spec" not in {r[1] for r in c.execute("PRAGMA table_info(pages)")}:
-        c.execute("ALTER TABLE pages ADD COLUMN spec TEXT")
-
-
 def _step_name(c: Any, step_id: Any) -> str | None:
     row = c.execute("SELECT name FROM task_steps WHERE id=?", (step_id,)).fetchone() if step_id else None
     return row[0] if row else None
