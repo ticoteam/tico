@@ -17,25 +17,14 @@ from backend import org_rule_check as K
 from backend import thread_attention
 from backend import approval_expiry
 from backend import threads
-from backend.tests.helpers.question_tasks import keep_asking
+from backend.tests.helpers.question_tasks import keep_asking  # noqa: F401
 from backend import updates
 from backend.auth import Identity
-from backend.store import H
+from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
+from backend.store import H, Problem
 from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
-from backend.tests.helpers.org_rule_check import (
-    COLOR,
-    NEEDLE,
-    bodies,
-    chat,
-    color_rule,
-    events,
-    hold_row,
-    ruled,
-    say,
-    sql,
-)
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +33,68 @@ def _not_a_friday(monkeypatch):
     from backend import updates as _updates
 
     monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
+
+
+COLOR = "Never tell anyone Acme's favorite color."
+NEEDLE = "favorite color is"
+
+
+class Judge:
+    """Answers rule-check@1: a rule is broken when the output holds that rule's needle. It notes whether the store's
+    write lock was held when it was asked, which must never happen."""
+
+    def __init__(self, store, needles=None):
+        self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
+        self.calls, self.locked, self.fail, self.hold = [], [], None, None
+
+    def __call__(self, state, questions, label=None, level=None):
+        self.locked.append(bool(self.store.writer.queue))
+        self.calls.append({"state": state, "questions": questions, "label": label, "level": level})
+        if self.hold:
+            self.hold.wait(5)
+        if self.fail:
+            raise self.fail
+        text = (state["output"] + " " + json.dumps(state.get("context") or {})).lower()
+        answers = {}
+        for rule_row in state["rules"]:
+            broken = any(key in rule_row["text"] and needle.lower() in text for key, needle in self.needles.items())
+            answers[rule_row["id"]] = {"type": "noul", "noul": 0.95 if broken else 0.05}
+        return {"model": "jev-1.14", "usage": {"input_tokens": 300, "output_tokens": 0}, "ms": 40, "answers": answers}
+
+
+@pytest.fixture
+def ruled(api):
+    org(api)
+    judge = Judge(api.app.state.store)
+    api.app.state.judge = judge
+    return api, judge
+
+
+def color_rule(api, if_broken="block", **more):
+    return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "if_broken": if_broken, **more})
+
+
+def say(api, text, to="ana", token="ops-test", **more):
+    r = api.post("/api/v2/messages", json={"to": to, "text": text, **more}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def sql(api, query, args=()):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute(query, args)]
+
+
+def events(api, action):
+    return sql(api, "SELECT actor, target, detail FROM events WHERE action=? ORDER BY rowid", (action,))
+
+
+def bodies(api, text):
+    return sql(api, "SELECT id FROM messages WHERE body LIKE ?", (f"%{text}%",))
+
+
+def hold_row(api, hold_id):
+    return sql(api, "SELECT * FROM org_rule_holds WHERE id=?", (hold_id,))[0]
 
 
 # ---- what is checked ----------------------------------------------------------------------------------------------
@@ -440,6 +491,177 @@ def test_a_hold_with_no_reviewer_is_a_block_the_owner_or_an_admin_releases(ruled
     assert len(bodies(api, "favorite color is teal")) == 1
 
 
+def _hire(api, pid):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id, name, email) VALUES(?, ?, ?)", (pid, pid.title(), f"{pid}@acme.example"))
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw["people"].append({"id": pid, "email": f"{pid}@acme.example"})
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
+
+
+def _leave(api, pid):
+    """The person's sign-in is turned off: they no longer count as a reviewer who is present."""
+    with api.app.state.store.transaction() as c:
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in raw["people"] if p["id"] == pid)["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
+
+
+def _app_support():
+    """Tico support in an app-only session: a human with no roster row, reading as an Admin does everywhere else."""
+    return Identity(SUPPORT_ACTOR, "human", via_token=True, token_label=SUPPORT_NAME, token_id="sa_test", support="app")
+
+
+def test_with_the_reviewer_gone_app_only_tico_support_reads_no_bot_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    _hire(api, "dan")
+    color_rule(api, if_broken="escalate", reviewer="dan")
+    held = say(api, "Our favorite color is gold")["held"]
+    assert hold_row(api, held["id"])["reviewer"] == "human:dan"
+    _leave(api, "dan")
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, held["id"])
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.held_for(c, app, ("message",)) == []
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, held["id"], auth)
+        assert kept.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as sent:
+            K.send(c, app, held["id"], hold_row(api, held["id"])["nonce"], auth=auth)
+        assert sent.value.status == 404
+    assert hold_row(api, held["id"])["state"] == "held" and bodies(api, "favorite color is gold") == []
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)
+    listed = get(api, "rule-holds", token="ben-test")["holds"]  # an Admin reads it, the reviewer being gone
+    assert [h["id"] for h in listed] == [held["id"]]
+    view = get(api, f"rule-holds/{held['id']}", token="ana-test")  # the owner too
+    assert view["can_send"]
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_the_reviewer_gone_app_only_tico_support_reads_no_person_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    _hire(api, "dan")
+    made = color_rule(api, reviewer="dan")
+    with api.app.state.store.transaction() as c:  # a person's held post, held by a rule whose editors can release it
+        c.execute(
+            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "h-cara-app",
+                "message",
+                json.dumps({"text": "Our favorite color is gold", "replay": {}}),
+                "human:cara",
+                "[]",
+                json.dumps([made["id"]]),
+                "{}",
+                "n-cara-app",
+                "held",
+                "human:dan",
+                None,
+                H.now(),
+            ),
+        )
+    _leave(api, "dan")
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, "h-cara-app")
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, "h-cara-app", auth)
+        assert kept.value.status == 404
+    assert hold_row(api, "h-cara-app")["state"] == "held"
+    assert "nonce" in get(api, "rule-holds/h-cara-app", token="ben-test")  # an Admin reads and releases it
+    assert "nonce" in get(api, "rule-holds/h-cara-app", token="ana-test")  # the owner too
+    kept = post(api, "rule-holds/h-cara-app/keep", {}, token="ben-test")
+    assert kept["state"] == "kept" and kept["decided_by"] == "human:ben"
+
+
+def _app_reads_nothing(api, hold_id):
+    """App-only Tico support sees no hold, lists none, keeps none and sends none: the hold stays held."""
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        hold = K._hold(c, hold_id)
+        assert not K._is_reviewer(app, hold, c, auth)
+        assert K.holds_listed(c, app, auth=auth) == ([], None)
+        with pytest.raises(Problem) as seen:
+            K.view_hold(c, app, hold, auth=auth)
+        assert seen.value.status == 404
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(Problem) as kept:
+            K.keep(c, app, hold_id, auth)
+        assert kept.value.status == 404
+        with pytest.raises(Problem) as sent:
+            K.send(c, app, hold_id, hold_row(api, hold_id)["nonce"], auth=auth)
+        assert sent.value.status == 404
+    assert hold_row(api, hold_id)["state"] == "held"
+
+
+def test_with_no_reviewer_app_only_tico_support_reads_no_bot_hold_and_the_owner_and_admin_do(ruled, monkeypatch):
+    api, _ = ruled
+    _nobody_near_ops(api)
+    monkeypatch.setattr(K, "owner_or_admin", lambda c: None)  # no person on the team to name as reviewer
+    color_rule(api, if_broken="escalate")
+    held = say(api, "Our favorite color is gold")["held"]
+    assert held["outcome"] == "blocked" and hold_row(api, held["id"])["reviewer"] is None
+    _app_reads_nothing(api, held["id"])
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ben-test")  # an Admin reads it
+    assert [h["id"] for h in get(api, "rule-holds", token="ben-test")["holds"]] == [held["id"]]
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ana-test")  # the owner too
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_no_reviewer_app_only_tico_support_reads_no_person_hold_and_the_owner_and_admin_do(ruled):
+    api, _ = ruled
+    made = color_rule(api)
+    with api.app.state.store.transaction() as c:  # a person's held post whose rule names no reviewer
+        c.execute(
+            "INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+            "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "h-cara-none",
+                "message",
+                json.dumps({"text": "Our favorite color is gold", "replay": {}}),
+                "human:cara",
+                "[]",
+                json.dumps([made["id"]]),
+                "{}",
+                "n-cara-none",
+                "held",
+                None,
+                None,
+                H.now(),
+            ),
+        )
+    _app_reads_nothing(api, "h-cara-none")
+    assert "nonce" in get(api, "rule-holds/h-cara-none", token="ben-test")  # an Admin reads and releases it
+    assert "nonce" in get(api, "rule-holds/h-cara-none", token="ana-test")  # the owner too
+    assert post(api, "rule-holds/h-cara-none/keep", {}, token="ben-test")["state"] == "kept"
+
+
+def test_with_the_reviewer_present_a_bot_hold_is_not_read_by_app_only_tico_support(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    held = say(api, "Our favorite color is gold")["held"]
+    app, auth = _app_support(), api.app.state.auth
+    with api.app.state.store.read() as c:
+        assert not K._is_reviewer(app, K._hold(c, held["id"]), c, auth)
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ben-test")  # the reviewer reads it as before
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+
+
 def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     api, _ = ruled
     color_rule(api, reviewer="ben")
@@ -796,9 +1018,9 @@ def test_no_engine_call_happens_under_the_write_lock(ruled):
 
 
 def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
-    from backend.tests.helpers.org_rules_surfaces import cli, mcp
+    from backend.tests.helpers.org_rules_surfaces import cli, mcp  # noqa: F401
     from clients import hubcli, remotecli
-    from backend.tests.helpers.automation_cli import Client
+    from backend.tests.helpers.automation_cli import Client  # noqa: F401
 
     api, judge = ruled
     color_rule(api, reviewer="ben")
@@ -921,7 +1143,7 @@ def test_automation_assign_judges_the_task_handed_over_and_replies_reach_their_p
 
 def review_turn(api):
     """A review subtask for ops in its own room, claimed and started: its reply waits until the task is done."""
-    from backend.tests.helpers.api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner  # noqa: F401
 
     r = runner(api, "ana")
     assign(api, r, "ops")
@@ -1648,6 +1870,12 @@ def test_a_conversation_post_whose_recipient_moved_needs_a_new_check(ruled, monk
 # ---- chat, updates and task questions; the author of a replay; public task text; the fast path ----------------------
 
 
+def chat(api, text, to="finance", token="ops-test"):
+    r = api.post(f"/api/v2/chat/{to}", json={"text": text}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 def ask(api, question, token="ops-test", **more):
     r = api.post(
         "/api/v2/task-questions", json={"on": "human:ana", "question": question, **more}, headers=headers(token)
@@ -1682,7 +1910,7 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled, monk
 
 
 def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch):
-    from backend.tests.helpers.org_rules_surfaces import mcp
+    from backend.tests.helpers.org_rules_surfaces import mcp  # noqa: F401
 
     api, _ = ruled
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
@@ -2330,7 +2558,7 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
     # The mail CLI only queues: POST email/sends runs the org rule check itself (backend/email_sending.py rule_gate).
     import base64
     from backend import email_sending as S, mailbox_access as MA
-    from backend.tests.helpers.email_sending import BOX, mime
+    from backend.tests.helpers.email_sending import BOX, mime  # noqa: F401
 
     api, judge = ruled
     monkeypatch.setattr(

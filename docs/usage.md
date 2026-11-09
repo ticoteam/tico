@@ -71,6 +71,15 @@ guards are separate safety controls and stay where they are.
 
 **Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team or one group and its subgroups. Tasks stay on their current step. Messages from people stay queued, including keeper notices carrying their messages or reporting their own acts. A run that has already started finishes. `POST /api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
 
+### Strategy > Budget
+
+Strategy > **Budget** (`#/strategy/budget`) shows the same limits as one tree: the company on top, then the groups, people and bots
+as on Org, with the helpers in their own branch. Each row shows what it spent over the period picked above the list (**7 days**,
+**30 days** or **This month**; a group or person adds up everyone under it), and its limit that binds when one is set, with a thin
+bar. **Near limit** keeps the rows that are near or over a limit, or paused, or that have used up the day's count of a task cap they send. Tapping a row opens a panel (a sheet on a phone) with
+where the period's spend went, by model and by top task, then the row's limits and task caps. Limits are saved there as they are on
+Usage > Limits; the hub decides who may change which, and a row it says is not yours is read only.
+
 ## API
 
 `GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and

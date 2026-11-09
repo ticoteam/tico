@@ -102,8 +102,10 @@ stdio server's environment names the Gateway key empty so it never inherits it. 
 
 **Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
 `compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
-kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window.
-No OpenRouter model's window is known to Tico yet, so those turns keep pi's own compaction. pi's `compaction_end` with a
+kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window,
+so a Compact at of 250,000 or more compacts at 183,616 tokens there (200,000 less 16,384). No model outside the Gateway has a
+window Tico knows yet (OpenRouter's, DeepSeek's, Moonshot's and Mistral's included), so those turns keep pi's own compaction
+whatever the Compact at. pi's `compaction_end` with a
 result is a compaction: the session's next turn is given the whole prompt. pi can compact between one turn's tool calls,
 where Tico cannot put back what the turn left out, so that turn keeps what it was given until the next one.
 `compact_first` and `/compact` send pi's RPC `compact`, which ends at its `compaction_end`.
@@ -269,9 +271,8 @@ A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-mo
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
 A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
-**Task context length** or save the same model again. Settings lists a held model's **Task effort** choices only
-while a bot's own model or the team default is that model. Otherwise that field is disabled for a bot whose
-**Task model** it is. A save that sends only an effort or a context length keeps the model too.
+**Task context length** or save the same model again. Settings does not offer **Task effort** choices for such a
+model, so that field stays disabled there. A save that sends only an effort or a context length keeps the model too.
 Terra 6.1 (`gpt-6.1-terra`) is one such model. Choosing it for a bot that does not have it saved is refused, and
 so is choosing another model that is not offered yet.
 
