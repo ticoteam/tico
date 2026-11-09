@@ -6,7 +6,7 @@ name: Tico Recorder
 on:
   push:
     branches: [main]
-    paths: ["recorder/**", "scripts/app_release.py", ".github/workflows/recorder.yml"]
+    paths: ["recorder/**", "scripts/app_release.py", ".github/workflows/recorder.yml", "package.json", "package-lock.json"]
   workflow_dispatch:
   workflow_call:    # a version tag whose recorder changed (release.yml); the server release never waits for it
 

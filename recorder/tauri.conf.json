@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "dist/app",
     "beforeBuildCommand": "node recorder/build-ui.cjs",
-    "beforeDevCommand": { "script": "node recorder/build-ui.cjs", "wait": true }
+    "beforeDevCommand": { "script": "node recorder/build-ui.cjs --watch", "wait": false }
   },
   "app": {
     "withGlobalTauri": true,

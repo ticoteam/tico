@@ -505,10 +505,12 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
-          # These Rust modules are cfg(test)-only; preview assets are outside the bundled ui/app.
+          # These Rust modules are cfg(test)-only; preview assets are outside the bundled ui/app. The root npm files pin
+          # esbuild, which builds the window (recorder/build-ui.cjs).
           # Check CHANGES.md separately because it feeds updater notes and must survive the Markdown exclusion.
           if [ "$FORCE" != true ] && [ -n "$previous" ] \
              && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder scripts/app_release.py .github/workflows/recorder.yml \
+                  package.json package-lock.json \
                   ':!recorder/tests/**' ':!recorder/bench/**' ':!recorder/ui/preview/**' ':!recorder/*.md' \
                   ':!recorder/src/network_tests.rs' ':!recorder/src/stream_tests.rs' ':!recorder/src/app/tests.rs' \
              && git diff --quiet "$previous" "$GITHUB_SHA" -- recorder/CHANGES.md \

@@ -8,7 +8,7 @@ Requires Rust 1.92 or newer and the Tauri CLI (`cargo install tauri-cli --versio
 
 ```sh
 npm ci                        # once, at the repository root: esbuild for the window's build
-node recorder/build-ui.cjs    # after changing ui/; cargo tauri build/dev run it themselves
+node recorder/build-ui.cjs    # after changing ui/ (or --watch); cargo tauri build/dev run it themselves
 cargo run --manifest-path recorder/Cargo.toml --features desktop --bin tico-recorder
 bash recorder/package-macos.sh
 ```
@@ -19,7 +19,9 @@ bash recorder/package-macos.sh
 
 The page scripts (`ui/app/*.ts`, and the preview's `ui/preview/mock.ts`) are strict TypeScript, but the WebView runs JavaScript, so `node recorder/build-ui.cjs` strips their types into `recorder/dist/` (gitignored): `ui/app` → `dist/app`, the folder `tauri.conf.json` embeds (`frontendDist`), and `ui/preview` → `dist/preview`. It uses esbuild's per-file transform with the options `scripts/build-ui.cjs` gives Tico's own UI: no bundling, each file stays a classic script at the same path, so `index.html` lists `app.js` as before. HTML, CSS and fonts are copied as they are.
 
-The build runs through Tauri's hooks rather than `build.rs`: stripping TypeScript needs Node and esbuild, and a Cargo build script that needs Node would break every `cargo` command on a machine without it. `cargo tauri build` and `cargo tauri dev` run it first (`beforeBuildCommand`, `beforeDevCommand`, from the repository root). With the `desktop` feature, `build.rs` checks only, with the standard library: when a file of `ui/app` has no output in `dist/app`, or one older than itself, a plain `cargo build`/`cargo test` stops with the command to run instead of embedding a stale window. Without the `desktop` feature (the CLI, most tests) nothing is embedded and Node is not needed.
+The build runs through Tauri's hooks rather than `build.rs`: stripping TypeScript needs Node and esbuild, and a Cargo build script that needs Node would break every `cargo` command on a machine without it. `cargo tauri build` runs it first (`beforeBuildCommand`). `cargo tauri dev` runs `node recorder/build-ui.cjs --watch` (`beforeDevCommand`, not waited on): one full build, then a rebuild of what changed on each save under `ui/app` or `ui/preview`, until dev stops. The window is embedded even in dev (the `tauri` dependency always has `custom-protocol`), so a save also makes `cargo tauri dev` rebuild and relaunch the app, which then embeds the new `dist/app`; restart dev after changing `build-ui.cjs` or the npm packages.
+
+Each build ends by writing `dist/build-manifest.txt`: every source and output with an FNV-1a 64 hash, and the hashes of the recipe (`build-ui.cjs`, the root `package.json` and `package-lock.json`). With the `desktop` feature, `build.rs` (standard library only, `build_window.rs`) checks `dist/app` against it by content, not by time: a source changed, added or removed since the build, an output missing, altered or not from the build, or a changed recipe stops a plain `cargo build`/`cargo test` with the command to run, instead of embedding a stale window. While a watcher runs (`dist/.watching` holds its process id) the check waits up to ten seconds for it to catch up. Without the `desktop` feature (the CLI, most tests) nothing is embedded and Node is not needed. `scripts/tests/test_recorder_build_ui.py` covers the build and the watch; `build_window.rs` has the check's tests.
 
 `ui/tsconfig.json` type-checks the page scripts with the DOM and no Node types (`python3 scripts/check_node_types.py`, the same strict options as `ui/tsconfig.strict.json`); the Tauri bridge is typed in `ui/types/bridge.d.ts`: every command the page invokes, with its arguments and reply, as the Rust `#[tauri::command]` functions take and return them.
 

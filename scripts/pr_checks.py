@@ -1388,7 +1388,8 @@ QUEUE_JOB_PATHS = {
         r"(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|scripts/rust_checks\.sh$"
     ),
     "desktop": re.compile(r"app/"),
-    "recorder": re.compile(r"recorder/"),
+    # The root npm files pin esbuild, which builds the recorder's window (recorder/build-ui.cjs).
+    "recorder": re.compile(r"recorder/|package(-lock)?\.json$"),
 }
 
 

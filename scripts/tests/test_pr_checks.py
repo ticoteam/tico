@@ -1772,6 +1772,10 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
     assert checks.queue_jobs(["scripts/rust_checks.sh"])["rust_lint"]
     assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "recorder": False}
     assert checks.queue_jobs(["recorder/src/lib.rs"]) == {"rust_lint": False, "desktop": False, "recorder": True}
+    # esbuild builds the recorder's window: the root npm files run its job, a package.json deeper in the tree does not.
+    for name in ("package.json", "package-lock.json"):
+        assert checks.queue_jobs([name]) == {"rust_lint": False, "desktop": False, "recorder": True}, name
+    assert not checks.queue_jobs(["ui/vendor/x/package.json"])["recorder"]
     # Anchored at the root: a folder named app/ or recorder/ deeper in the tree is not the desktop app or the recorder.
     assert checks.queue_jobs(
         ["backend/app/x.py", "docs/recorder/x.md", "scripts/tests/rust_checks.sh"]
