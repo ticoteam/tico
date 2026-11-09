@@ -5,15 +5,16 @@ Pure: no database and no clock. Occurrences are anchored on `first_due`, so a mo
 (or 29), then Mar 31 again, not Mar 28. An occurrence's run starts at 00:00 in the trigger's zone, `open_days` before
 its due day. There is no RRULE: a repeat is once, weekly, monthly, quarterly or yearly.
 """
+
 from calendar import monthrange
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 REPEATS = ("once", "weekly", "monthly", "quarterly", "yearly")
-MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}   # the months between two occurrences of each repeat
-OPEN_DAYS = 14          # how many days before the due day the run starts, unless the trigger says otherwise
+MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}  # the months between two occurrences of each repeat
+OPEN_DAYS = 14  # how many days before the due day the run starts, unless the trigger says otherwise
 MAX_OPEN_DAYS = 366
-MAX_CATCH_UP = 50       # runs one pass of the scheduler starts for one routine, after a long outage
+MAX_CATCH_UP = 50  # runs one pass of the scheduler starts for one routine, after a long outage
 
 
 def occurrence(first, repeats, n):
@@ -61,6 +62,7 @@ def zone_of(trigger):
     if trigger.get("tz"):
         return str(trigger["tz"])
     from .updates import ZONE
+
     return str(ZONE.key)
 
 

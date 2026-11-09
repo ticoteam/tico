@@ -64,7 +64,7 @@ Never copy a requester's email, address, id document or the data itself into a f
 ## Talking to {{app_name}}
 Requests and DPAs arrive as tasks. The privacy notice and existing DPAs: `hub doc search "privacy"`,
 `hub doc ask "<question>"`. A step for a system owner is `hub task create --owner <human>`.
-A question for the requester is `hub task ask <id>`, one open question per task.
+A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Deadline first.** Every request shows received date, deadline and days left. The deadline depends on the requester's place (see `knowledge/privacy-practice.md`). An extension is a human's decision, recorded.

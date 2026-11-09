@@ -183,14 +183,14 @@ function recruitFor({department, briefing, share}) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     const context = await browser.newContext({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', acceptDownloads: true, colorScheme: scheme});
-    // The app is dark unless the browser saved another theme (ui/theme.js): screenshots take the one asked for.
+    // The app is dark unless the browser saved another theme (ui/theme.ts): screenshots take the one asked for.
     if (shots) await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), scheme);
     let setupGets = 0;
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
     let refuseSetup = false;   // the next PUT /api/v2/setup is refused once (set on the team chart)
     const recruits = [], opened = {};
     // Each bot's DM reads what Set up wrote to it (the chat the first message opened).
-    const dms = ['support', 'meeting-notes'].map(bot => threadsFake({bot, messages: () => opened[bot]?.messages || []}));
+    const dms = ['support', 'meeting-notes'].map(bot => threadsFake({bot, messages: () => opened[bot]?.messages || [], home: () => opened[bot]?.home || []}));
     let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
     let record = {
       names: {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace'},
@@ -210,10 +210,10 @@ function recruitFor({department, briefing, share}) {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      // The page's own modules come from disk: the page shares state with them (docs-page.js
+      // The page's own modules come from disk: the page shares state with them (docs-page.ts
       // declares DOC_POLL, which route() clears on every navigation), so an empty stub would
       // break every route. Everything else that ends in .js still stubs out.
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module) {
         const file = uiFile(module[1]);
         if (fs.existsSync(file)) return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')});
@@ -274,6 +274,15 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires_at: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
+      // Start onboarding writes in the bot's Home (the team sees it), and the bot page's chat shows it from then on.
+      if (/^\/api\/v2\/threads\/t-home-[^/]+\/messages$/.test(p) && request.method() === 'POST') {
+        const bot = p.split('/')[4].slice('t-home-'.length), text = request.postDataJSON().text;
+        chats.push([bot, request.postDataJSON()]);
+        const message = {id: 'msg-' + bot, seq: 1, depth: 0, thread_id: 't-home-' + bot, sender_id: 'human:ana', body: text,
+                         created_at: '2026-09-16T10:05:00Z'};
+        opened[bot] = {...opened[bot], home: [message]};
+        return json({message});
+      }
       // A person's chat with a bot: the first message opens it, and the bot page's DM tab shows it from then on.
       if (/^\/api\/v2\/chat\/[^/]+$/.test(p)) {
         const bot = p.split('/')[4], text = request.postDataJSON().text;
@@ -308,7 +317,7 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], scheduler_enabled: true});
       if (p === '/api/v2/models') return json({models: [{id: 'gpt-6-sol', label: 'Sol', runtime: 'codex', efforts: ['high', 'xhigh'], default_effort: 'high'}], harnesses});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -936,8 +945,8 @@ function recruitFor({department, briefing, share}) {
     // Keys are entered once, in the hub's own fields, and never in a chat.
     assert.deepEqual(await page.locator('.fr-connections [data-fr-link]').evaluateAll(els => els.map(el => el.dataset.frLink)),
       ['credentials', 'integrations']);
-    assert.equal(await page.locator('[data-fr-link=credentials]').getAttribute('href'), '#/credentials');
-    assert.match(await page.locator('[data-fr-secrets]').textContent(), /Enter credentials on the Credentials page, never in a chat with a bot/);
+    assert.equal(await page.locator('[data-fr-link=credentials]').getAttribute('href'), '#/tools/keys');
+    assert.match(await page.locator('[data-fr-secrets]').textContent(), /Enter credentials in Tools › Keys, never in a chat with a bot/);
     // What was typed survives the progress poll (only the rows are redrawn).
     await page.locator('#fr-admin-form [name=name]').fill('Half typed');
     await page.evaluate(() => onbRenderDone(ONB));
@@ -962,14 +971,14 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
     assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
     assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
-    // The DM tab shows the setup conversation: the person's line, in the chat Set up wrote to.
-    await page.goto('https://tico-ui.test/#/bot/support/dm');
+    // Home shows the setup conversation: the person's line, in the chat Set up wrote to (not the private DM).
+    await page.goto('https://tico-ui.test/#/bot/support/home');
     await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor();
     // A planned starter is activated first (an owner's call), then told the same line.
     await page.goto('https://tico-ui.test/#/bot/meeting-notes');
     await page.locator('#bot-start-setup').click();
     await page.locator('#bot-start-setup', {hasText: 'Onboarding started'}).waitFor();
-    // Start onboarding opens its DM tab, which shows the line at once, not after a reload.
+    // Start onboarding opens Home (Incognito stays off), which shows the line at once, not after a reload.
     await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
     assert.equal(await page.locator('#bot-thread .th-empty').count(), 0);
     assert.deepEqual(definitions, [{path: '/api/v2/bots/meeting-notes/definition', body: {status: 'active', expected_revision: 4}}]);

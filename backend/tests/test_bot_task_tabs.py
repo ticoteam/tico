@@ -5,24 +5,42 @@ filter tabs of rows the server checks, counted for each viewer ("me" and "others
 import json
 from datetime import datetime, timedelta, timezone
 
-from backend import hubdb as H, task_relations as TR
-from backend.tests.test_api import api, as_member, get, post, put, setup_attempt  # noqa: F401  (api is a fixture)
+from backend import hubdb as H, question_tasks as QT, task_relations as TR
+from backend.tests.test_api import api, as_member, get, headers, post, put, setup_attempt  # noqa: F401  (api is a fixture)
 from backend.tests.hold_rows import set_holds
 
 ACTIVE = ["open", "doing", "waiting"]
-OTHERS = {"name": "Assigned to Others", "show_count": True, "conditions": [
-    {"field": "asked_by", "value": "this_bot"}, {"field": "assigned_to", "value": "others"},
-    {"field": "status", "value": ACTIVE}]}
-DEFAULT = [{"builtin": "needs", "name": "Needs You", "show_count": True},
-           {"builtin": "active", "name": "Doing", "show_count": True},
-           {"builtin": "blocked", "name": "Blocked", "show_count": True}, OTHERS]
+OTHERS = {
+    "name": "Assigned to others",
+    "show_count": True,
+    "conditions": [
+        {"field": "asked_by", "value": "this_bot"},
+        {"field": "assigned_to", "value": "others"},
+        {"field": "status", "value": ACTIVE},
+    ],
+}
+DEFAULT = [
+    {"builtin": "needs", "name": "Needs you", "show_count": True},
+    {"builtin": "active", "name": "Doing", "show_count": True},
+    {"builtin": "blocked", "name": "Blocked", "show_count": True},
+    OTHERS,
+]
 DEFAULT[0]['conditions'] = [{'field': 'needs', 'value': 'you'}]
-DEFAULT[1]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['open', 'doing']}]
-DEFAULT[2]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['waiting']},
-                            {'field': 'waiting_on', 'value': 'not_me'}]
+DEFAULT[1]['conditions'] = [
+    {'field': 'assigned_to', 'value': 'this_bot'},
+    {'field': 'status', 'value': ['open', 'doing']},
+]
+DEFAULT[2]['conditions'] = [
+    {'field': 'assigned_to', 'value': 'this_bot'},
+    {'field': 'status', 'value': ['waiting']},
+    {'field': 'waiting_on', 'value': 'not_me'},
+]
 WIDGETS = [{"id": w, "hidden": False, "height": None} for w in ("tasks", "updates", "files")]
-PRODUCT = {"name": "product tasks", "show_count": True, "conditions": [{"field": "type", "value": ["general"]},
-                                                                       {"field": "status", "value": ACTIVE}]}
+PRODUCT = {
+    "name": "product tasks",
+    "show_count": True,
+    "conditions": [{"field": "type", "value": ["general"]}, {"field": "status", "value": ACTIVE}],
+}
 
 
 def tabs(api, bot, token="ana-test"):
@@ -40,14 +58,37 @@ def shown(api, bot, token="ana-test"):
     return {tab["name"]: (tab["count"], sorted(title[i] for i in tab["ids"])) for tab in out["tabs"]}
 
 
+def wait_card(c, tid, person):
+    """What a task waiting on `person` waits on (question_tasks.waiting_on, derived): an open question task of theirs
+    with no options under it. Theirs alone (they asked it of themselves here), so it is in no bot's tabs."""
+    card = H.task_create(c, person, "Which option?", "Which option?", person, lint=False, private=False)
+    QT.store(
+        c,
+        card["id"],
+        {
+            "questions": [
+                {"id": QT.FIRST_ID, "header": "", "question": "Which option?", "why": "", "options": [], "multi": False}
+            ]
+        },
+    )
+    c.execute(
+        "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent',?,?)",
+        (card["id"], tid, person, H.now()),
+    )
+
+
 def task(api, title, owner, requester, **columns):
+    """A task made with `columns` set on it; `waiting_on=<person>` files them a question task under it instead."""
     stamp = lambda days: (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000000Z")  # noqa: E731
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, requester, title, "Details.", owner, lint=False, private=False)["id"]
         for name, value in columns.items():
             if name in ("created_at", "updated_at", "done_at"):
                 value = stamp(value)
-            if name.startswith(("blocked_", "snoozed_")):
+            if name == "waiting_on":
+                if value:
+                    wait_card(c, tid, value)
+            elif name.startswith(("blocked_", "snoozed_")):
                 set_holds(c, tid, **{name: value})
             else:
                 c.execute(f"UPDATE tasks SET {name}=? WHERE id=?", (value, tid))
@@ -71,8 +112,11 @@ def test_a_bot_starts_with_the_new_default_tabs_and_widgets(api):
 
 def test_a_layout_is_the_bots_and_changing_one_never_moves_anothers(api):
     layout = [DEFAULT[1], PRODUCT, {**DEFAULT[0], "name": "For you", "show_count": False}]
-    widgets = [{"id": "files", "hidden": False, "height": 240}, {"id": "tasks", "hidden": False, "height": None},
-               {"id": "updates", "hidden": True, "height": None}]
+    widgets = [
+        {"id": "files", "hidden": False, "height": 240},
+        {"id": "tasks", "hidden": False, "height": None},
+        {"id": "updates", "hidden": True, "height": None},
+    ]
     saved = save(api, "ops", layout, widgets=widgets)
     assert saved["tabs"] == layout and saved["widgets"] == widgets and saved["updated_by"] == "human:ana"
     # Everyone who opens the bot sees the same sidebar: Cara, who cannot change it, too.
@@ -82,11 +126,17 @@ def test_a_layout_is_the_bots_and_changing_one_never_moves_anothers(api):
     assert save(api, "ops", [PRODUCT])["widgets"] == widgets
     assert tabs(api, "cpo")["tabs"] == DEFAULT and tabs(api, "cpo")["widgets"] == WIDGETS
     # A partial widget list keeps the rest after it, as they come by default.
-    assert [w["id"] for w in save(api, "cpo", DEFAULT, "ben-test", widgets=[{"id": "files"}])["widgets"]] == \
-        ["files", "tasks", "updates"]
+    assert [w["id"] for w in save(api, "cpo", DEFAULT, "ben-test", widgets=[{"id": "files"}])["widgets"]] == [
+        "files",
+        "tasks",
+        "updates",
+    ]
     # An old saved Routines widget is dropped: routines are automations.
-    assert [w["id"] for w in save(api, "cpo", DEFAULT, "ben-test", widgets=[{"id": "routines"}])["widgets"]] == \
-        ["tasks", "updates", "files"]
+    assert [w["id"] for w in save(api, "cpo", DEFAULT, "ben-test", widgets=[{"id": "routines"}])["widgets"]] == [
+        "tasks",
+        "updates",
+        "files",
+    ]
     # Back to the defaults, widgets and all.
     assert save(api, "ops", None)["tabs"] == DEFAULT
     assert tabs(api, "ops", "cara-test")["saved"] is False and tabs(api, "ops")["widgets"] == WIDGETS
@@ -95,7 +145,7 @@ def test_a_layout_is_the_bots_and_changing_one_never_moves_anothers(api):
 def test_only_the_bot_or_a_person_who_manages_it_changes_its_sidebar(api):
     save(api, "ops", [DEFAULT[0]], "cara-test", expected=403)
     as_member(api, "ben@acme.example")
-    save(api, "ops", [DEFAULT[0]], "ben-test", expected=403)      # Ben manages cpo, not ops
+    save(api, "ops", [DEFAULT[0]], "ben-test", expected=403)  # Ben manages cpo, not ops
     save(api, "cpo", [DEFAULT[0]], "ben-test", widgets=[{"id": "tasks", "hidden": True}])
     _, _, attempt = setup_attempt(api, "ops")
     assert save(api, "ops", [PRODUCT], attempt["token"])["tabs"] == [PRODUCT]
@@ -124,8 +174,16 @@ def test_no_cap_on_tabs(api):
 
 def test_a_hidden_bots_sidebar_is_not_found(api):
     save(api, "ops", [PRODUCT])
-    access = lambda see: put(api, "bots/ops/access", {"see": see, "read": see, "write": see,  # noqa: E731
-                                                      "revision": get(api, "bots/ops/access")["revision"]})
+    access = lambda see: put(
+        api,
+        "bots/ops/access",
+        {
+            "see": see,
+            "read": see,
+            "write": see,  # noqa: E731
+            "revision": get(api, "bots/ops/access")["revision"],
+        },
+    )
     access({"people": ["ben"]})
     hidden = get(api, "bots/ops/task-tabs", "cara-test", expected=404)
     assert "tabs" not in hidden and "product tasks" not in str(hidden)
@@ -138,6 +196,7 @@ def test_every_field_and_value_is_checked(api):
     def refused(conditions, word):
         r = save(api, "ops", [{"name": "x", "conditions": conditions}], expected=422)
         assert word in json.dumps(r), r
+
     refused([{"field": "colour", "value": "red"}], "field")
     refused([{"field": "status", "value": ["open", "sleeping"]}], "Unknown status: sleeping")
     refused([{"field": "status", "value": []}], "Status needs one or more values")
@@ -153,8 +212,12 @@ def test_every_field_and_value_is_checked(api):
     refused([{"field": "due", "value": "soon"}], "Due within")
     refused([{"field": "label", "value": " "}], "label is 1 to 60")
     refused([{"field": "status", "value": ACTIVE, "extra": 1}], "extra")
-    r = save(api, "ops", [{"builtin": "done", "name": "x", "conditions": [{"field": "status", "value": "open"}]}],
-             expected=422)
+    r = save(
+        api,
+        "ops",
+        [{"builtin": "done", "name": "x", "conditions": [{"field": "status", "value": "open"}]}],
+        expected=422,
+    )
     assert "keeps its own filter" in json.dumps(r)
     put(api, "bots/ops/task-tabs", {"tabs": [PRODUCT], "widgets": [{"id": "chat"}]}, expected=422)
     put(api, "bots/ops/task-tabs", {"tabs": [PRODUCT], "widgets": [{"id": "tasks", "height": 20}]}, expected=422)
@@ -163,12 +226,20 @@ def test_every_field_and_value_is_checked(api):
     # Every field, each in its stored form: a lone status becomes a list, a label lower case.
     with api.app.state.store.read() as c:
         step = c.execute("SELECT id FROM task_steps ORDER BY id LIMIT 1").fetchone()[0]
-    every = [{"field": "status", "value": "waiting"}, {"field": "step", "value": step},
-             {"field": "type", "value": "general"}, {"field": "assigned_to", "value": "human:ben"},
-             {"field": "asked_by", "value": "me"}, {"field": "waiting_on", "value": "person"},
-             {"field": "created_within", "value": 3}, {"field": "updated_within", "value": 7},
-             {"field": "done_within", "value": 30}, {"field": "due", "value": "overdue"},
-             {"field": "due", "value": 0}, {"field": "label", "value": " QA "}]
+    every = [
+        {"field": "status", "value": "waiting"},
+        {"field": "step", "value": step},
+        {"field": "type", "value": "general"},
+        {"field": "assigned_to", "value": "human:ben"},
+        {"field": "asked_by", "value": "me"},
+        {"field": "waiting_on", "value": "person"},
+        {"field": "created_within", "value": 3},
+        {"field": "updated_within", "value": 7},
+        {"field": "done_within", "value": 30},
+        {"field": "due", "value": "overdue"},
+        {"field": "due", "value": 0},
+        {"field": "label", "value": " QA "},
+    ]
     stored = save(api, "ops", [{"name": "Everything", "show_count": False, "conditions": every}])["tabs"][0]
     assert stored["show_count"] is False
     assert stored["conditions"][0] == {"field": "status", "value": ["waiting"]}
@@ -185,13 +256,15 @@ def test_me_and_others_are_the_person_looking(api):
     task(api, "Not about ops", "human:ben", "bot:cpo")
     mine = {"name": "Mine", "conditions": [{"field": "assigned_to", "value": "me"}]}
     save(api, "ops", [*DEFAULT, mine])
-    for token, me, others in (("ben-test", ["For Ben"], ["For Cara", "For cpo"]),
-                              ("cara-test", ["For Cara"], ["For Ben", "For cpo"])):
+    for token, me, others in (
+        ("ben-test", ["For Ben"], ["For Cara", "For cpo"]),
+        ("cara-test", ["For Cara"], ["For Ben", "For cpo"]),
+    ):
         seen = shown(api, "ops", token)
         assert seen["Mine"] == (len(me), me), token
-        assert seen["Assigned to Others"] == (len(others), others), token
+        assert seen["Assigned to others"] == (len(others), others), token
     # Ana is neither: everything ops asked of someone else is "others" to her.
-    assert shown(api, "ops")["Assigned to Others"] == (3, ["For Ben", "For Cara", "For cpo"])
+    assert shown(api, "ops")["Assigned to others"] == (3, ["For Ben", "For Cara", "For cpo"])
     assert shown(api, "ops")["Mine"] == (0, [])
 
 
@@ -207,6 +280,7 @@ def test_a_filter_counts_only_what_the_viewer_may_read(api):
 
 def test_a_filter_with_more_than_one_page_reaches_every_task(api, monkeypatch):
     from backend import bot_task_tabs
+
     monkeypatch.setattr(bot_task_tabs, "ROWS", 2)
     for n in range(5):
         task(api, f"T{n}", "bot:ops", "human:ana", created_at=5 - n)
@@ -227,22 +301,35 @@ def test_a_filter_with_more_than_one_page_reaches_every_task(api, monkeypatch):
 def test_each_field_filters(api):
     task(api, "New", "bot:ops", "human:ana", created_at=1)
     task(api, "Old", "bot:ops", "human:ana", created_at=10, updated_at=10)
-    task(api, "Waits on Ben", "bot:ops", "human:ana", status="waiting", waiting_on="human:ben", created_at=10, updated_at=10)
+    task(
+        api,
+        "Waits on Ben",
+        "bot:ops",
+        "human:ana",
+        status="waiting",
+        waiting_on="human:ben",
+        created_at=10,
+        updated_at=10,
+    )
     bot_wait(api, "Waits on cpo", created_at=10, updated_at=10)
     task(api, "Done lately", "bot:ops", "human:ana", status="done", done_at=5, created_at=10, updated_at=5)
     task(api, "Done long ago", "bot:ops", "human:ana", status="done", done_at=40, created_at=50, updated_at=40)
     task(api, "Overdue", "bot:ops", "human:ana", due_at="2020-01-01", created_at=10, updated_at=10)
     rows = lambda *c: [{"field": f, "value": v} for f, v in c]  # noqa: E731
-    save(api, "ops", [
-        {"name": "Created recently", "show_count": False, "conditions": rows(("created_within", 3))},
-        {"name": "Waits on a person", "conditions": rows(("waiting_on", "person"))},
-        {"name": "Waits on Ben", "conditions": rows(("waiting_on", "me"))},
-        {"name": "Waits", "conditions": rows(("waiting_on", "any"))},
-        {"name": "Done", "conditions": rows(("status", ["done"]))},
-        {"name": "Done 60", "conditions": rows(("status", ["done"]), ("done_within", 60))},
-        {"name": "Overdue", "conditions": rows(("due", "overdue"))},
-        {"name": "Asked by Ana", "conditions": rows(("asked_by", "human:ana"), ("status", ["open"]))},
-    ])
+    save(
+        api,
+        "ops",
+        [
+            {"name": "Created recently", "show_count": False, "conditions": rows(("created_within", 3))},
+            {"name": "Waits on a person", "conditions": rows(("waiting_on", "person"))},
+            {"name": "Waits on Ben", "conditions": rows(("waiting_on", "me"))},
+            {"name": "Waits", "conditions": rows(("waiting_on", "any"))},
+            {"name": "Done", "conditions": rows(("status", ["done"]))},
+            {"name": "Done 60", "conditions": rows(("status", ["done"]), ("done_within", 60))},
+            {"name": "Overdue", "conditions": rows(("due", "overdue"))},
+            {"name": "Asked by Ana", "conditions": rows(("asked_by", "human:ana"), ("status", ["open"]))},
+        ],
+    )
     seen = shown(api, "ops", "ben-test")
     assert seen["Created recently"] == (1, ["New"])
     assert seen["Waits on a person"] == (1, ["Waits on Ben"])
@@ -258,21 +345,28 @@ def test_each_field_filters(api):
 
 def test_a_layout_saved_before_filters_had_rows_keeps_working(api):
     # Rows stored by Task-list tabs 2/3: a filter of types, states and whom it waits on, and no widgets column value.
-    old = [{"builtin": "done", "name": "Done Recently"}, {"builtin": "active", "name": "Doing"},
-           {"name": "Waiting on bots", "types": [], "states": ["waiting"], "waiting_on": "bot"},
-           {"name": "Product", "types": ["general"], "states": ["open", "doing"], "waiting_on": ""}]
+    old = [
+        {"builtin": "done", "name": "Done recently"},
+        {"builtin": "active", "name": "Doing"},
+        {"name": "Waiting on bots", "types": [], "states": ["waiting"], "waiting_on": "bot"},
+        {"name": "Product", "types": ["general"], "states": ["open", "doing"], "waiting_on": ""},
+    ]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,updated_at,updated_by) VALUES('ops','',?,?,?)",
-                  (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"))
+        c.execute(
+            "INSERT INTO bot_task_tabs(bot,viewer,tabs,updated_at,updated_by) VALUES('ops','',?,?,?)",
+            (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"),
+        )
     bot_wait(api, "Waits on cpo")
     bot_wait(api, "Asked of cpo, waiting", "bot:cpo", "bot:ops", prerequisite_owner="bot:finance")
     layout = tabs(api, "ops")
     assert layout["saved"] is True and layout["widgets"] == WIDGETS
-    assert [t["name"] for t in layout["tabs"]] == ["Done Recently", "Doing", "Waiting on bots", "Product"]
-    assert layout["tabs"][0] == {"builtin": "done", "name": "Done Recently", "show_count": True}
-    assert layout["tabs"][2]["conditions"] == [{"field": "assigned_to", "value": "this_bot"},
-                                               {"field": "status", "value": ["waiting"]},
-                                               {"field": "waiting_on", "value": "bot"}]
+    assert [t["name"] for t in layout["tabs"]] == ["Done recently", "Doing", "Waiting on bots", "Product"]
+    assert layout["tabs"][0] == {"builtin": "done", "name": "Done recently", "show_count": True}
+    assert layout["tabs"][2]["conditions"] == [
+        {"field": "assigned_to", "value": "this_bot"},
+        {"field": "status", "value": ["waiting"]},
+        {"field": "waiting_on", "value": "bot"},
+    ]
     assert layout["tabs"][3]["conditions"][2] == {"field": "type", "value": ["general"]}
     # Still only the bot's own tasks, as before.
     assert shown(api, "ops")["Waiting on bots"] == (1, ["Waits on cpo"])
@@ -294,15 +388,19 @@ def test_default_filters_are_disjoint_and_viewer_relative(api):
     seen = shown(api, "ops")
     assert seen["Doing"] == (2, ["Doing", "Open"])
     assert seen["Blocked"] == (2, ["Unspecified wait", "Waits on bot"])
-    assert seen["Needs You"] == (2, ["Viewer owns open", "Waits on Ana"])
+    assert seen["Needs you"] == (2, ["Viewer owns open", "Waits on Ana"])
     assert shown(api, "ops", "ben-test")["Blocked"] == (3, ["Unspecified wait", "Waits on Ana", "Waits on bot"])
 
 
 def test_default_tab_edits_persist_and_empty_conditions_are_not_reset(api):
     task(api, "Open", "bot:ops", "human:ana", status="open")
     task(api, "Wait", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
-    changed = {**DEFAULT[2], "name": "Changed", "show_count": False,
-               "conditions": [{"field": "status", "value": ["open"]}]}
+    changed = {
+        **DEFAULT[2],
+        "name": "Changed",
+        "show_count": False,
+        "conditions": [{"field": "status", "value": ["open"]}],
+    }
     assert save(api, "ops", [changed])["tabs"] == [changed]
     assert tabs(api, "ops")["tabs"] == [changed]
     assert shown(api, "ops")["Changed"] == (1, ["Open"])
@@ -314,10 +412,14 @@ def test_default_tab_edits_persist_and_empty_conditions_are_not_reset(api):
 
 
 def test_all_legacy_builtins_keep_order_names_counts_and_receive_default_conditions(api):
-    old = [{"builtin": key, "name": "Old " + key, "show_count": False} for key in ("blocked", "needs", "active", "done")]
+    old = [
+        {"builtin": key, "name": "Old " + key, "show_count": False} for key in ("blocked", "needs", "active", "done")
+    ]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,updated_at,updated_by) VALUES('ops','',?,?,?)",
-                  (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"))
+        c.execute(
+            "INSERT INTO bot_task_tabs(bot,viewer,tabs,updated_at,updated_by) VALUES('ops','',?,?,?)",
+            (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"),
+        )
     new = tabs(api, "ops")["tabs"]
     assert [(t["builtin"], t["name"], t["show_count"]) for t in new] == [(t["builtin"], t["name"], False) for t in old]
     for i, default in zip((1, 2, 0), DEFAULT):
@@ -329,6 +431,7 @@ def test_all_legacy_builtins_keep_order_names_counts_and_receive_default_conditi
 
 def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_private_tasks(api, monkeypatch):
     from backend import bot_task_tabs
+
     monkeypatch.setattr(bot_task_tabs, "ROWS", 1)
     older = task(api, "Older question", "bot:ops", "human:ana", status="waiting", waiting_on="human:cara", created_at=5)
     newer = task(api, "New wait", "bot:ops", "human:ana", status="waiting", waiting_on="human:cara", created_at=1)
@@ -347,10 +450,20 @@ def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_pri
 
 def test_attention_counts_include_approvals_in_whole_list():
     from backend import views
-    items = [{"kind": "task", "id": "owned", "owner_id": "human:ana", "requester_id": "bot:ops", "status": "open"},
-             {"kind": "waiting", "id": "wait", "owner_id": "bot:ops", "requester_id": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
-             {"kind": "approval", "id": "approval", "requested_by_id": "bot:ops"},
-             {"kind": "approval", "id": "other", "requested_by_id": "human:ben"}]
+
+    items = [
+        {"kind": "task", "id": "owned", "owner_id": "human:ana", "requester_id": "bot:ops", "status": "open"},
+        {
+            "kind": "waiting",
+            "id": "wait",
+            "owner_id": "bot:ops",
+            "requester_id": "human:ana",
+            "status": "waiting",
+            "waiting_on": "human:ana",
+        },
+        {"kind": "approval", "id": "approval", "requested_by_id": "bot:ops"},
+        {"kind": "approval", "id": "other", "requested_by_id": "human:ben"},
+    ]
     assert views.needs_bots(items, "human:ana") == {"bot:ops": 3}
 
 
@@ -358,15 +471,15 @@ def test_needs_condition_can_be_removed_changed_and_restored(api):
     task(api, "Mine", "human:ana", "bot:ops", status="open")
     task(api, "Wait on viewer", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
     task(api, "Bot work", "bot:ops", "human:ana", status="doing")
-    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])
+    assert shown(api, "ops")["Needs you"] == (2, ["Mine", "Wait on viewer"])
     changed = {**DEFAULT[0], "conditions": [{"field": "status", "value": ["doing"]}]}
     save(api, "ops", [changed])
     assert tabs(api, "ops")["tabs"] == [changed]
-    assert shown(api, "ops")["Needs You"] == (1, ["Bot work"])
+    assert shown(api, "ops")["Needs you"] == (1, ["Bot work"])
     save(api, "ops", [{**DEFAULT[0], "conditions": []}])
-    assert shown(api, "ops")["Needs You"] == (3, ["Bot work", "Mine", "Wait on viewer"])
+    assert shown(api, "ops")["Needs you"] == (3, ["Bot work", "Mine", "Wait on viewer"])
     save(api, "ops", [DEFAULT[0]])
-    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])
+    assert shown(api, "ops")["Needs you"] == (2, ["Mine", "Wait on viewer"])
 
 
 def test_bot_filter_finds_an_api_saved_wait_and_drops_it_on_resolution(api):
@@ -375,8 +488,24 @@ def test_bot_filter_finds_an_api_saved_wait_and_drops_it_on_resolution(api):
     _, _, attempt = setup_attempt(api, "ops")
     tid, pre = bot_wait(api, "Ship after the review")
     before = get(api, "tasks/" + tid, attempt["token"])["task"]
-    saved = post(api, "tasks/" + tid, {"version": before["version"], "status": "waiting",
-                "waiting_on": "bot:cpo", "note": "Needs the review first."}, attempt["token"])
+    # A task waits on a person, not a bot (D9): the blocker is the wait, and the note says what for.
+    r = api.post(
+        "/api/v2/tasks/" + tid,
+        json={
+            "version": before["version"],
+            "status": "waiting",
+            "waiting_on": "bot:cpo",
+            "note": "Needs the review first.",
+        },
+        headers=headers(attempt["token"]),
+    )
+    assert r.status_code >= 400 and "not a bot" in r.text, r.text
+    saved = post(
+        api,
+        "tasks/" + tid,
+        {"version": before["version"], "status": "waiting", "note": "Needs the review first."},
+        attempt["token"],
+    )
     saved = saved.get("task", saved)
     assert saved["waiting_on"] is None and saved["note"] == "Needs the review first."
     save(api, "ops", [{"name": "Bot waits", "conditions": [{"field": "waiting_on", "value": "bot"}]}])
@@ -401,13 +530,20 @@ def test_bot_filter_uses_readable_blockers_and_preserves_other_waits(api):
     with api.app.state.store.transaction() as c:
         human = H.task_create(c, "human:ana", "Answer the question", "", "human:ana", lint=False, private=False)
         TR.relate(c, "bot:ops", mixed, human["id"], "blocked_by")
-        H.task_ask(c, "bot:ops", asked, "Is this ready for review?")
+        QT.ask_plain(c, "bot:ops", "human:ana", "Is this ready for review?", parent=H.task(c, asked))
         # The relation existed before its prerequisite became private; Cara must not infer it from the count.
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (pre,))
-    save(api, "ops", [{"name": "Bot waits", "conditions": [{"field": "waiting_on", "value": "bot"}]},
-                      {"name": "People", "conditions": [{"field": "waiting_on", "value": "person"}]}])
+    save(
+        api,
+        "ops",
+        [
+            {"name": "Bot waits", "conditions": [{"field": "waiting_on", "value": "bot"}]},
+            {"name": "People", "conditions": [{"field": "waiting_on", "value": "person"}]},
+        ],
+    )
     ana = get(api, "bots/ops/task-tabs/tasks")["tabs"]
     cara = get(api, "bots/ops/task-tabs/tasks", "cara-test")["tabs"]
     assert ana[0]["count"] == 2 and set(ana[0]["ids"]) == {normal, hidden}
     assert cara[0]["count"] == 1 and cara[0]["ids"] == [normal]
-    assert ana[1]["count"] == 1 and ana[1]["ids"] == [person]
+    # Its open question task to Ana makes "Open question" wait on a person (question_tasks.waits_sql).
+    assert ana[1]["count"] == 2 and set(ana[1]["ids"]) == {person, asked}

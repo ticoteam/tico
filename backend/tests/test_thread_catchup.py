@@ -15,13 +15,14 @@ BEN = Identity("human:ben", "human", "ben@acme.example")
 
 @pytest.fixture(autouse=True)
 def plain_member(api):
-    as_member(api, "ben@acme.example")          # the fixture makes Ben an admin; these tests are about membership
+    as_member(api, "ben@acme.example")  # the fixture makes Ben an admin; these tests are about membership
 
 
 def thread(api, members=("human:ben",), title="Launch", parent=None):
     with api.app.state.store.transaction() as c:
-        return threads.create(c, "human:cara", title=title, audience="members", members=list(members),
-                              parent_message_id=parent)["id"]
+        return threads.create(
+            c, "human:cara", title=title, audience="members", members=list(members), parent_message_id=parent
+        )["id"]
 
 
 def say(api, thread_id, text, actor="human:cara"):
@@ -108,7 +109,7 @@ def test_subtree_scope_reads_sub_threads_and_thread_scope_does_not(api, monkeypa
 
 def test_a_thread_the_person_cannot_read_is_not_found(api, monkeypatch):
     no_model(monkeypatch)
-    tid = thread(api, members=("human:ana",))       # Ben is not a member, so the thread does not exist for him
+    tid = thread(api, members=("human:ana",))  # Ben is not a member, so the thread does not exist for him
     say(api, tid, "Ana only.")
     catch_up(api, tid, expected=404)
     assert assistant_bodies(api) == []
@@ -187,8 +188,10 @@ def test_what_the_migration_carried_and_imported_history_are_not_new(api, monkey
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET legacy_audience=NULL WHERE id=?", (opened["id"],))
         carried = c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0]
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
-                  (threads.MIGRATION_KEY, json.dumps({"at": "2026-10-01T00:00:00Z", "seq": carried})))
+        c.execute(
+            "INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
+            (threads.MIGRATION_KEY, json.dumps({"at": "2026-10-01T00:00:00Z", "seq": carried})),
+        )
         threads.post(c, "human:cara", tid, "Imported from Slack", refs={"import": True})
     say(api, tid, "Written after it")
     prompts = prompts_of(monkeypatch)

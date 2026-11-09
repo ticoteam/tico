@@ -38,32 +38,41 @@ def _ids(pid):
 def recent_history(c, pid):
     """The indexed kinds of history: what they did (events, tasks, messages), a token they used, a sign-in."""
     ids = _ids(pid)
-    checks = ("SELECT 1 FROM events WHERE actor IN (?,?)",
-              "SELECT 1 FROM tasks WHERE owner_id IN (?,?)", "SELECT 1 FROM tasks WHERE requester_id IN (?,?)",
-              "SELECT 1 FROM messages WHERE recipient_id IN (?,?)")
+    checks = (
+        "SELECT 1 FROM events WHERE actor IN (?,?)",
+        "SELECT 1 FROM tasks WHERE owner_id IN (?,?)",
+        "SELECT 1 FROM tasks WHERE requester_id IN (?,?)",
+        "SELECT 1 FROM messages WHERE recipient_id IN (?,?)",
+    )
     if any(c.execute(sql + " LIMIT 1", ids).fetchone() for sql in checks):
         return True
-    return bool(c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used_at IS NOT NULL", (pid,)).fetchone()
-                or c.execute("SELECT 1 FROM oidc_sessions WHERE human=?", (pid,)).fetchone())
+    return bool(
+        c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used_at IS NOT NULL", (pid,)).fetchone()
+        or c.execute("SELECT 1 FROM oidc_sessions WHERE human=?", (pid,)).fetchone()
+    )
 
 
 def history(c, pid):
     """The first `table.column` that names `pid` outside what `remove` deletes, or ''. Every column is read for
     their bare id or `human:<id>`, and for `"human:<id>"` inside JSON text."""
     from .devcopy import data_tables, quote
+
     ids = _ids(pid)
     quoted = '"' + ids[1] + '"'
     if c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used_at IS NOT NULL", (pid,)).fetchone():
         return "human_tokens.last_used_at"
     for table in sorted(set(data_tables(c)) - set(SKIP_TABLES)):
-        columns = [row[1] for row in c.execute(f"PRAGMA table_info({quote(table)})")
-                   if (table, row[1]) not in OWN_COLUMNS]
+        columns = [
+            row[1] for row in c.execute(f"PRAGMA table_info({quote(table)})") if (table, row[1]) not in OWN_COLUMNS
+        ]
         clauses, args = [], []
         for col in columns:
             if (table, col) == ("events", "target"):
-                clauses.append(f"{quote(col)} = ?"); args.append(ids[1])
+                clauses.append(f"{quote(col)} = ?")
+                args.append(ids[1])
             else:
-                clauses.append(f"{quote(col)} IN (?,?) OR instr({quote(col)}, ?) > 0"); args += [*ids, quoted]
+                clauses.append(f"{quote(col)} IN (?,?) OR instr({quote(col)}, ?) > 0")
+                args += [*ids, quoted]
         if not clauses:
             continue
         sql = f"SELECT * FROM {quote(table)} WHERE ({' OR '.join(clauses)})"
@@ -100,20 +109,25 @@ def remove(c, actor, roster, person):
     if recent_history(c, pid):
         raise Problem("has_history", KEEPS, 409)
     from . import pages
+
     pages.forget_audience_member(c, actor, "people", pid)
     people = [p for p in roster["people"] if p["id"] != pid]
     people = [{**p, "reports_to": person.get("reports_to") or ""} if p.get("reports_to") == pid else p for p in people]
     Access.save_roster(c, {**roster, "people": people})
     heir = "human:" + person["reports_to"] if person.get("reports_to") else str(actor)
     for (seat_id,) in c.execute("SELECT id FROM seats WHERE reports_to=?", ("human:" + pid,)).fetchall():
-        c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?", (heir, H.now(), str(actor), seat_id))
+        c.execute(
+            "UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?", (heir, H.now(), str(actor), seat_id)
+        )
         H.event(c, actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     c.execute("DELETE FROM human_tokens WHERE human=?", (pid,))
     # The invite bindings stay, so a repeat of an invite request answers from them and never invites the person again
     # (invites.replay). What names them goes: the hash of the address, and any refusal text that carries it.
     c.execute("UPDATE idempotency SET request_hash='' WHERE binding=? AND subject=?", (invites.BINDING, pid))
-    c.execute("UPDATE idempotency SET error_detail=? WHERE binding=? AND subject=? AND state='refused'",
-              (invites.REMOVED, invites.BINDING, pid))
+    c.execute(
+        "UPDATE idempotency SET error_detail=? WHERE binding=? AND subject=? AND state='refused'",
+        (invites.REMOVED, invites.BINDING, pid),
+    )
     c.execute("DELETE FROM humans WHERE id=?", (pid,))
     sent = invites.sent(c)
     if pid in sent:
@@ -121,10 +135,22 @@ def remove(c, actor, roster, person):
         c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(sent), invites.KEY))
     email = person.get("email") or ""
     stored = Access._load_json(c, Access.ACCESS)
-    if email and stored and (email in Access.emails(stored.get("allowed")) or email in Access.emails(stored.get("admins"))):
+    if (
+        email
+        and stored
+        and (email in Access.emails(stored.get("allowed")) or email in Access.emails(stored.get("admins")))
+    ):
         # A removed address no longer signs in on its own; the revision moves so an open People tab reloads first.
-        Access._store(c, Access.ACCESS, {**stored, "allowed": [e for e in Access.emails(stored.get("allowed")) if e != email],
-                                         "admins": [e for e in Access.emails(stored.get("admins")) if e != email],
-                                         "revision": int(stored.get("revision") or 0) + 1, "updated_at": H.now(),
-                                         "updated_by": str(actor)})
+        Access._store(
+            c,
+            Access.ACCESS,
+            {
+                **stored,
+                "allowed": [e for e in Access.emails(stored.get("allowed")) if e != email],
+                "admins": [e for e in Access.emails(stored.get("admins")) if e != email],
+                "revision": int(stored.get("revision") or 0) + 1,
+                "updated_at": H.now(),
+                "updated_by": str(actor),
+            },
+        )
     H.event(c, actor, "person.removed", pid, {"name": person.get("name") or "", "email": email})

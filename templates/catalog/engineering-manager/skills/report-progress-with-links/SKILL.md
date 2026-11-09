@@ -15,7 +15,7 @@ Steps:
    make it a question for the requester.
 5. Write one line per child: its task link, its state, its pull request links, the blocker if any, and the next action.
 6. Write the dates you were given, or "no date set". Never estimate a date and present it as set.
-7. Post the report as a comment on the parent task with `hub task comment`. Ask a question only with `hub task ask <id>`,
+7. Post the report as a comment on the parent task with `hub task comment`. Ask a question only with `hub task question "<question>" --on <person> --parent <id>`,
    one open question per task.
 
 Checks before you finish:

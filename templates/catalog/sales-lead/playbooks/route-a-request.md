@@ -23,7 +23,7 @@ negotiation, or the prospect replied or asked about price, it belongs to a human
 
 ## 3. Propose
 
-On the task, in three lines: the owner, the reason, and what the owner should produce and by when. Ask with `hub task ask <id>` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
+On the task, in three lines: the owner, the reason, and what the owner should produce and by when. Ask with `hub task question "<question>" --on <person> --parent <id>` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
 
 ## 4. Carry out the requested work
 

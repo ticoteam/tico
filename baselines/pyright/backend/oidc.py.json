@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/oidc.py": [
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 79,
+                    "endColumn": 83,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

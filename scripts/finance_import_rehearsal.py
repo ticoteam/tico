@@ -13,6 +13,7 @@ Only a loopback demo is accepted. Its owner token is in the demo's data director
 
 The demo must hold no transactions at all: the checks model every month. The exit code is 0 only when every check passes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -47,7 +48,7 @@ TITLES = {
     8: "limits and safety: row, byte, name and cap limits; formulas stay text",
     9: "rights: anonymous and cross-origin calls are refused",
 }
-Entry = tuple[str, str, int]          # (month, sheet line, cents)
+Entry = tuple[str, str, int]  # (month, sheet line, cents)
 
 
 def _months(year: int) -> list[str]:
@@ -103,11 +104,13 @@ class Demo:
     def __init__(self, base: str, token: str) -> None:
         self.base = base
         self.token = token
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
-                                                  NoRedirect)
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), NoRedirect
+        )
 
-    def request(self, method: str, path: str, body: Any = None, headers: dict[str, str] | None = None,
-                opener: Any = None) -> tuple[int, Any]:
+    def request(
+        self, method: str, path: str, body: Any = None, headers: dict[str, str] | None = None, opener: Any = None
+    ) -> tuple[int, Any]:
         data = json.dumps(body).encode() if body is not None else None
         head = {"Content-Type": "application/json", "Origin": self.base, **(headers or {})}
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=head)
@@ -115,23 +118,28 @@ class Demo:
             with (opener or self.opener).open(req, timeout=300) as resp:
                 return resp.status, _decode(resp.read())
         except urllib.error.HTTPError as e:
-            return e.code, _decode(e.read())
+            with e:
+                return e.code, _decode(e.read())
 
     def sign_in(self) -> None:
         url = f"{self.base}/api/v2/local-signin?token={urllib.parse.quote(self.token)}&next=/"
         try:
             self.opener.open(urllib.request.Request(url), timeout=30)
         except urllib.error.HTTPError as e:
-            if e.code not in (302, 303):
-                raise SystemExit(f"sign-in failed: HTTP {e.code}") from None
+            with e:
+                if e.code not in (302, 303):
+                    raise SystemExit(f"sign-in failed: HTTP {e.code}") from None
         status, _ = self.request("GET", "/api/v2/finance/chart")
         if status != 200:
             raise SystemExit(f"sign-in did not reach Finance: HTTP {status}")
 
     def act(self, kind: str, payload: dict[str, Any], dry: bool = False) -> dict[str, Any]:
-        status, body = self.request("POST", "/api/v2/finance/actions",
-                                    {"kind": kind, "payload": payload, "dry_run": dry},
-                                    {"Idempotency-Key": uuid.uuid4().hex})
+        status, body = self.request(
+            "POST",
+            "/api/v2/finance/actions",
+            {"kind": kind, "payload": payload, "dry_run": dry},
+            {"Idempotency-Key": uuid.uuid4().hex},
+        )
         if status != 200 or not isinstance(body, dict):
             return {"http": status, "status": f"http {status}", "body": body}
         return body
@@ -166,16 +174,16 @@ class Rehearsal:
         self.checks = {n: Check(n, title) for n, title in TITLES.items()}
         self.shapes: list[tuple[int, str, str, str]] = []
         self.files = 0
-        self.refusal_months = _months(year - 2)      # refused or dry-run only, never committed
+        self.refusal_months = _months(year - 2)  # refused or dry-run only, never committed
         self.commit_months = _months(year - 1) + _months(year)
         self.chart: dict[str, dict[str, Any]] = {}
         self.code_by_id: dict[str, str] = {}
-        self.net: dict[str, dict[str, int]] = {}     # month -> account code -> cents the books should show
-        self.live: dict[str, str] = {}               # month -> basis of its standing import
-        self.imports: dict[str, tuple[str, dict[str, int]]] = {}   # entry id -> (month, totals)
+        self.net: dict[str, dict[str, int]] = {}  # month -> account code -> cents the books should show
+        self.live: dict[str, str] = {}  # month -> basis of its standing import
+        self.imports: dict[str, tuple[str, dict[str, int]]] = {}  # entry id -> (month, totals)
         self.vendor_id = ""
-        self.bills: dict[str, dict[str, int]] = {}   # month -> account code -> cents of approved bills (accrual only)
-        self.numbers: dict[str, str] = {}            # bill id -> bill number, to find its reversal
+        self.bills: dict[str, dict[str, int]] = {}  # month -> account code -> cents of approved bills (accrual only)
+        self.numbers: dict[str, str] = {}  # bill id -> bill number, to find its reversal
         self.standard: tuple[str, str, dict[str, str], str] = ("", "", {}, "")
 
     # Setup and helpers.
@@ -216,8 +224,16 @@ class Rehearsal:
         if busy:
             raise SystemExit(f"the demo has {busy} transactions: start a fresh demo, the checks model every month")
 
-    def send(self, label: str, text: str, mapping: dict[str, Any], *, basis: str = "cash",
-             source_name: str | None = None, dry: bool = False) -> dict[str, Any]:
+    def send(
+        self,
+        label: str,
+        text: str,
+        mapping: dict[str, Any],
+        *,
+        basis: str = "cash",
+        source_name: str | None = None,
+        dry: bool = False,
+    ) -> dict[str, Any]:
         """Writes the sheet to the temp folder, then sends it through the import action."""
         self.files += 1
         slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:50]
@@ -227,18 +243,23 @@ class Rehearsal:
             payload["source_name"] = source_name
         return self.demo.act("import_raw_totals", payload, dry=dry)
 
-    def refuse(self, check: Check, label: str, text: str, mapping: dict[str, Any], code: str, reason: str,
-               **kwargs: Any) -> bool:
+    def refuse(
+        self, check: Check, label: str, text: str, mapping: dict[str, Any], code: str, reason: str, **kwargs: Any
+    ) -> bool:
         """A sheet that must be refused: its dry run and its commit both say why, and the commit posts nothing."""
         before = self.total_rows()
         dry = self.send(label, text, mapping, dry=True, **kwargs)
-        ok = check.expect(dry.get("status") == "failed" and dry.get("code") == code and reason in (dry.get("reason") or ""),
-                          f"{label}: expected {code} naming '{reason}', got {dry.get('status')}/{dry.get('code')}: "
-                          f"{dry.get('reason') or dry.get('body')}")
+        ok = check.expect(
+            dry.get("status") == "failed" and dry.get("code") == code and reason in (dry.get("reason") or ""),
+            f"{label}: expected {code} naming '{reason}', got {dry.get('status')}/{dry.get('code')}: "
+            f"{dry.get('reason') or dry.get('body')}",
+        )
         if ok:
             real = self.send(label, text, mapping, **kwargs)
-            check.expect(real.get("status") == "failed" and real.get("code") == code,
-                         f"{label}: the commit gave {real.get('status')}/{real.get('code')}")
+            check.expect(
+                real.get("status") == "failed" and real.get("code") == code,
+                f"{label}: the commit gave {real.get('status')}/{real.get('code')}",
+            )
             check.expect(self.total_rows() == before, f"{label}: a refused sheet posted rows")
         self.record(check.number, label, "refused" if ok else "UNEXPECTED", dry.get("reason") or dry.get("status"))
         return ok
@@ -246,10 +267,16 @@ class Rehearsal:
     def accepts(self, check: Check, label: str, text: str, mapping: dict[str, Any], rows: int, **kwargs: Any) -> bool:
         """A sheet within the limits: its dry run commits every row."""
         dry = self.send(label, text, mapping, dry=True, **kwargs)
-        ok = check.expect(dry.get("status") == "committed" and dry.get("impact", {}).get("rows") == rows,
-                          f"{label}: dry run gave {dry.get('status')}: {dry.get('reason') or dry.get('body')}")
-        self.record(check.number, label, "accepted (dry)" if ok else "UNEXPECTED",
-                    f"{rows} rows" if ok else dry.get("reason") or dry.get("status"))
+        ok = check.expect(
+            dry.get("status") == "committed" and dry.get("impact", {}).get("rows") == rows,
+            f"{label}: dry run gave {dry.get('status')}: {dry.get('reason') or dry.get('body')}",
+        )
+        self.record(
+            check.number,
+            label,
+            "accepted (dry)" if ok else "UNEXPECTED",
+            f"{rows} rows" if ok else dry.get("reason") or dry.get("status"),
+        )
         return ok
 
     def _add(self, month: str, totals: dict[str, int], sign: int) -> None:
@@ -298,27 +325,35 @@ class Rehearsal:
     def check_month(self, check: Check, label: str, month: str) -> None:
         for basis in ("cash", "accrual"):
             # The P&L lists income and expense accounts only; the bank balance is checked on the balance sheet instead.
-            want = {self.chart[code]["id"]: value for code, value in self.expected(month, basis).items()
-                    if value and self.chart[code]["type"] in ("income", "expense")}
+            want = {
+                self.chart[code]["id"]: value
+                for code, value in self.expected(month, basis).items()
+                if value and self.chart[code]["type"] in ("income", "expense")
+            }
             body = self.pnl(month, basis)
             rows = {row["account_id"]: row for row in body["rows"]}
             got = {aid: row["total"] for aid, row in rows.items() if row["total"]}
             allowed = set(want)
             for aid in want:
                 parent = rows.get(aid, {}).get("parent_id") or ""
-                while parent and parent not in allowed:      # parent rollups show their children's totals
+                while parent and parent not in allowed:  # parent rollups show their children's totals
                     allowed.add(parent)
                     parent = rows.get(parent, {}).get("parent_id") or ""
-            wrong = [self.code_by_id.get(aid, aid) for aid in set(want) | set(got)
-                     if got.get(aid, 0) != want.get(aid, 0) or (aid not in allowed and got.get(aid, 0))]
+            wrong = [
+                self.code_by_id.get(aid, aid)
+                for aid in set(want) | set(got)
+                if got.get(aid, 0) != want.get(aid, 0) or (aid not in allowed and got.get(aid, 0))
+            ]
             check.expect(not wrong, f"{label}: {month} {basis} P&L differs on accounts {sorted(wrong)}")
             standing = self.live.get(month)
             shown = [item for item in body.get("imported", []) if item.get("month") == month]
             if standing is None or standing == basis:
                 check.expect(not shown, f"{label}: {month} {basis} view labels an import it does not state: {shown}")
             else:
-                check.expect(shown == [{"month": month, "basis": standing}],
-                             f"{label}: {month} {basis} view should label the {standing}-basis import, got {shown}")
+                check.expect(
+                    shown == [{"month": month, "basis": standing}],
+                    f"{label}: {month} {basis} view should label the {standing}-basis import, got {shown}",
+                )
 
     def check_balance(self, check: Check, label: str, month: str) -> None:
         body = self.demo.get(f"/api/v2/finance/balance-sheet?as_of={_eom(month)}")
@@ -330,13 +365,24 @@ class Rehearsal:
         self.check_month(check, label, month)
         self.check_balance(check, label, month)
 
-    def post(self, check: Check, label: str, text: str, mapping: dict[str, Any], entries: list[Entry], *,
-             basis: str = "cash", source_name: str | None = None) -> dict[str, Any] | None:
+    def post(
+        self,
+        check: Check,
+        label: str,
+        text: str,
+        mapping: dict[str, Any],
+        entries: list[Entry],
+        *,
+        basis: str = "cash",
+        source_name: str | None = None,
+    ) -> dict[str, Any] | None:
         """A sheet that must post: the dry run names each account's impact, the commit posts, and every month it
         touches matches the sheet in both P&L bases, with the right label, and in the bank balance."""
         dry = self.send(label, text, mapping, basis=basis, source_name=source_name, dry=True)
-        if not check.expect(dry.get("status") == "committed",
-                            f"{label}: dry run gave {dry.get('status')}: {dry.get('reason') or dry.get('body')}"):
+        if not check.expect(
+            dry.get("status") == "committed",
+            f"{label}: dry run gave {dry.get('status')}: {dry.get('reason') or dry.get('body')}",
+        ):
             return None
         expected = self._by_month(entries, mapping)
         want: dict[str, int] = {}
@@ -344,29 +390,37 @@ class Rehearsal:
             for code, cents in totals.items():
                 want[code] = want.get(code, 0) + self.natural(code, cents)
         impact = {a["code"]: a["total"] for a in dry["impact"]["accounts"] if a["total"]}
-        check.expect(impact == {c: v for c, v in want.items() if v},
-                     f"{label}: dry-run impact {impact} is not {want}")
+        check.expect(impact == {c: v for c, v in want.items() if v}, f"{label}: dry-run impact {impact} is not {want}")
         check.expect(dry["impact"]["rows"] == len(entries), f"{label}: dry run counts {dry['impact']['rows']} rows")
         real = self.send(label, text, mapping, basis=basis, source_name=source_name)
         result = real.get("result") or {}
-        if not check.expect(real.get("status") == "committed" and not result.get("already_imported"),
-                            f"{label}: commit gave {real.get('status')}: {real.get('reason') or real.get('body')}"):
+        if not check.expect(
+            real.get("status") == "committed" and not result.get("already_imported"),
+            f"{label}: commit gave {real.get('status')}: {real.get('reason') or real.get('body')}",
+        ):
             return real
         posted = {item["month"]: item["entry_id"] for item in result.get("months", [])}
-        check.expect(sorted(posted) == sorted(expected), f"{label}: posted months {sorted(posted)}, sheet has {sorted(expected)}")
+        check.expect(
+            sorted(posted) == sorted(expected), f"{label}: posted months {sorted(posted)}, sheet has {sorted(expected)}"
+        )
         for month, entry_id in posted.items():
             self.imports[entry_id] = (month, expected.get(month, {}))
             self.live[month] = basis
             self._add(month, expected.get(month, {}), +1)
         for month in sorted(expected):
             self.verify(check, label, month)
-        self.record(check.number, label, "posts", f"{basis} basis, {len(posted)} month(s), batch {result.get('batch_id')}")
+        self.record(
+            check.number, label, "posts", f"{basis} basis, {len(posted)} month(s), batch {result.get('batch_id')}"
+        )
         return real
 
     def journal_reverse(self, check: Check, label: str, entry_id: str) -> None:
         month, totals = self.imports[entry_id]
         res = self.demo.act("journal", {"reverses": entry_id})
-        check.expect(res.get("status") == "committed", f"{label}: reversing {month} gave {res.get('status')}: {res.get('reason')}")
+        check.expect(
+            res.get("status") == "committed",
+            f"{label}: reversing {month} gave {res.get('status')}: {res.get('reason')}",
+        )
         if res.get("status") == "committed":
             self._add(month, totals, -1)
             self.live.pop(month, None)
@@ -383,35 +437,78 @@ class Rehearsal:
             ("semicolon-separated", f"month;line;amount\n{y}-01;Software subscriptions;100\n", "the header is month"),
             ("blank text", "", "csv is required"),
             ("header only", "month,line,amount\n", "the CSV has no rows"),
-            ("duplicate column", f"month,month,line,amount\n{y}-01,{y}-01,Software subscriptions,100\n", "the header is month"),
+            (
+                "duplicate column",
+                f"month,month,line,amount\n{y}-01,{y}-01,Software subscriptions,100\n",
+                "the header is month",
+            ),
             ("missing amount column", f"month,line\n{y}-01,Software subscriptions\n", "the header is month"),
-            ("notes column", f"month,line,amount,notes\n{y}-01,Software subscriptions,100,vendor\n", "the header is month"),
+            (
+                "notes column",
+                f"month,line,amount,notes\n{y}-01,Software subscriptions,100,vendor\n",
+                "the header is month",
+            ),
         ]
         for label, text, reason in refusals:
             self.refuse(c, label, text, STANDARD, "invalid", reason)
         m = self.commit_month()
         text = _csv([[m, "Café subscriptions", "12345"]], header=("Month", "Line", "Amount"), eol="\r\n")
-        self.post(c, "CRLF, capitalised header, accented line", text, {"Café subscriptions": "6100"},
-                  [(m, "Café subscriptions", 12345)])
+        self.post(
+            c,
+            "CRLF, capitalised header, accented line",
+            text,
+            {"Café subscriptions": "6100"},
+            [(m, "Café subscriptions", 12345)],
+        )
         bom = self.commit_month()
-        self.post(c, "a leading byte order mark is stripped", "\ufeff" + _csv([[bom, "Software subscriptions", "100"]]),
-                  STANDARD, [(bom, "Software subscriptions", 100)])
+        self.post(
+            c,
+            "a leading byte order mark is stripped",
+            "\ufeff" + _csv([[bom, "Software subscriptions", "100"]]),
+            STANDARD,
+            [(bom, "Software subscriptions", 100)],
+        )
 
     def check2(self) -> None:
         c, y = self.checks[2], self.year - 2
-        self.refuse(c, "wide: months across the top", f"Line,{y}-01,{y}-02\nSales revenue,4100,4200\n", STANDARD,
-                    "invalid", "the header is month")
-        self.refuse(c, "two month forms in one file",
-                    f"month,line,amount\n{y}-01,Sales revenue,4100\nJan {y},Software subscriptions,100\n", STANDARD,
-                    "invalid", "month is YYYY-MM")
+        self.refuse(
+            c,
+            "wide: months across the top",
+            f"Line,{y}-01,{y}-02\nSales revenue,4100,4200\n",
+            STANDARD,
+            "invalid",
+            "the header is month",
+        )
+        self.refuse(
+            c,
+            "two month forms in one file",
+            f"month,line,amount\n{y}-01,Sales revenue,4100\nJan {y},Software subscriptions,100\n",
+            STANDARD,
+            "invalid",
+            "month is YYYY-MM",
+        )
         for form in (f"Jan {y}", f"{y}-01-31", f"1/31/{y}", "January", f"{y}-1", f"{y}-13", f"{y}-01-01", f"{y}/01"):
-            self.refuse(c, f"one month form: {form}", f"month,line,amount\n{form},Sales revenue,4100\n", STANDARD,
-                        "invalid", "month is YYYY-MM")
+            self.refuse(
+                c,
+                f"one month form: {form}",
+                f"month,line,amount\n{form},Sales revenue,4100\n",
+                STANDARD,
+                "invalid",
+                "month is YYYY-MM",
+            )
         m = self.commit_month()
-        entries: list[Entry] = [(m, "Sales revenue", 410000), (m, "Software subscriptions", 48000),
-                                (m, "Office rent", 250000), (m, "Cash at bank", 300000)]
-        cells = [[m, "Sales revenue", "410000", "leadership"], [m, "Software subscriptions", "48000", ""],
-                 [m, "Office rent", "250000", "leadership"], [m, "Cash at bank", "300000", ""]]
+        entries: list[Entry] = [
+            (m, "Sales revenue", 410000),
+            (m, "Software subscriptions", 48000),
+            (m, "Office rent", 250000),
+            (m, "Cash at bank", 300000),
+        ]
+        cells = [
+            [m, "Sales revenue", "410000", "leadership"],
+            [m, "Software subscriptions", "48000", ""],
+            [m, "Office rent", "250000", "leadership"],
+            [m, "Cash at bank", "300000", ""],
+        ]
         self.post(c, "long layout with a team column", _csv(cells, header=(*HEAD, "team")), STANDARD, entries)
 
     def check3(self) -> None:
@@ -420,58 +517,126 @@ class Rehearsal:
         def one(amount: str) -> str:
             return f"month,line,amount\n{y}-01,Software subscriptions,{amount}\n"
 
-        for amount in ['"$1,234.56"', '"(1,234.56)"', "$1,234.56", "1234.56", "-1234.56", "0.00", "1e5", "=1+1",
-                       "+100", '"12,345"', "1 234", "1234 USD", "--1234", "", "-"]:
+        for amount in [
+            '"$1,234.56"',
+            '"(1,234.56)"',
+            "$1,234.56",
+            "1234.56",
+            "-1234.56",
+            "0.00",
+            "1e5",
+            "=1+1",
+            "+100",
+            '"12,345"',
+            "1 234",
+            "1234 USD",
+            "--1234",
+            "",
+            "-",
+        ]:
             reason = "has 4 fields" if amount == "$1,234.56" else "amount is whole cents"
             self.refuse(c, f"amount {amount}", one(amount), STANDARD, "invalid", reason)
-        for amount in ("١٢٣٤", "１２３４"):      # Arabic-Indic and fullwidth digits: ASCII digits only
+        for amount in ("١٢٣٤", "１２３４"):  # Arabic-Indic and fullwidth digits: ASCII digits only
             self.refuse(c, f"digits {amount}", one(amount), STANDARD, "invalid", "amount is whole cents")
         m = self.commit_month()
-        text = (f"month,line,amount\n{m}, Office rent , 1234\n{m},Software subscriptions,-1234\n"
-                f"{m},Sales revenue,000001234\n")
-        self.post(c, "spaces, a negative figure and leading zeros", text, STANDARD,
-                  [(m, "Office rent", 1234), (m, "Software subscriptions", -1234), (m, "Sales revenue", 1234)])
+        text = (
+            f"month,line,amount\n{m}, Office rent , 1234\n{m},Software subscriptions,-1234\n"
+            f"{m},Sales revenue,000001234\n"
+        )
+        self.post(
+            c,
+            "spaces, a negative figure and leading zeros",
+            text,
+            STANDARD,
+            [(m, "Office rent", 1234), (m, "Software subscriptions", -1234), (m, "Sales revenue", 1234)],
+        )
 
     def check4(self) -> None:
         c, y = self.checks[4], self.year - 2
         m = self.commit_month()
-        lines = ["amount,line,month,team", "", f"5000,Office rent,{m},leadership", f"700,Office rent,{m},",
-                 f"0,Sales revenue,{m},", f"48000,  SOFTWARE SUBSCRIPTIONS ,{m},", "", f"410000,Sales revenue,{m},leadership", ""]
-        self.post(c, "column order, blank rows, a zero row, two teams on one line", "\n".join(lines), STANDARD,
-                  [(m, "Office rent", 5000), (m, "Office rent", 700), (m, "  SOFTWARE SUBSCRIPTIONS ", 48000),
-                   (m, "Sales revenue", 410000)])
+        lines = [
+            "amount,line,month,team",
+            "",
+            f"5000,Office rent,{m},leadership",
+            f"700,Office rent,{m},",
+            f"0,Sales revenue,{m},",
+            f"48000,  SOFTWARE SUBSCRIPTIONS ,{m},",
+            "",
+            f"410000,Sales revenue,{m},leadership",
+            "",
+        ]
+        self.post(
+            c,
+            "column order, blank rows, a zero row, two teams on one line",
+            "\n".join(lines),
+            STANDARD,
+            [
+                (m, "Office rent", 5000),
+                (m, "Office rent", 700),
+                (m, "  SOFTWARE SUBSCRIPTIONS ", 48000),
+                (m, "Sales revenue", 410000),
+            ],
+        )
         refusals = [
             ("section header row", f"month,line,amount\n,Revenue,\n{y}-01,Sales revenue,100\n", "month is YYYY-MM"),
-            ("title row above the header", f"Acme history {y}\nmonth,line,amount\n{y}-01,Sales revenue,100\n",
-             "the header is month"),
-            ("total row, unmapped", f"month,line,amount\n{y}-01,Sales revenue,100\n{y}-01,Total expenses,100\n",
-             "no account is mapped for: Total expenses"),
+            (
+                "title row above the header",
+                f"Acme history {y}\nmonth,line,amount\n{y}-01,Sales revenue,100\n",
+                "the header is month",
+            ),
+            (
+                "total row, unmapped",
+                f"month,line,amount\n{y}-01,Sales revenue,100\n{y}-01,Total expenses,100\n",
+                "no account is mapped for: Total expenses",
+            ),
             ("trailing empty column", f"month,line,amount,\n{y}-01,Sales revenue,100,\n", "the header is month"),
             ("extra field on a row", f"month,line,amount\n{y}-01,Sales revenue,100,extra\n", "has 4 fields"),
-            ("same line twice in a month", f"month,line,amount\n{y}-01,Sales revenue,100\n{y}-01,sales revenue,50\n",
-             "repeats"),
-            ("unknown team", f"month,line,amount,team\n{y}-01,Sales revenue,100,Nope\n",
-             "no team on the org chart for: Nope"),
-            ("team name in another case", f"month,line,amount,team\n{y}-01,Sales revenue,100,Leadership\n",
-             "no team on the org chart for: Leadership"),
+            (
+                "same line twice in a month",
+                f"month,line,amount\n{y}-01,Sales revenue,100\n{y}-01,sales revenue,50\n",
+                "repeats",
+            ),
+            (
+                "unknown team",
+                f"month,line,amount,team\n{y}-01,Sales revenue,100,Nope\n",
+                "no team on the org chart for: Nope",
+            ),
+            (
+                "team name in another case",
+                f"month,line,amount,team\n{y}-01,Sales revenue,100,Leadership\n",
+                "no team on the org chart for: Leadership",
+            ),
             ("every row zero", f"month,line,amount\n{y}-01,Sales revenue,0\n", "every row is 0"),
         ]
         for label, text, reason in refusals:
             self.refuse(c, label, text, STANDARD, "invalid", reason)
         spaced = self.commit_month()
-        self.post(c, "a double space inside a line name is one space", _csv([[spaced, "Software  subscriptions", "100"]]),
-                  STANDARD, [(spaced, "Software  subscriptions", 100)])
+        self.post(
+            c,
+            "a double space inside a line name is one space",
+            _csv([[spaced, "Software  subscriptions", "100"]]),
+            STANDARD,
+            [(spaced, "Software  subscriptions", 100)],
+        )
         dollars = self.commit_month()
-        warned = self.send("every amount ends in 00", _csv([[dollars, "Sales revenue", "290000"],
-                                                             [dollars, "Office rent", "300000"]]),
-                           {"Sales revenue": "4000", "Office rent": "6900"}, dry=True)
-        c.expect(warned.get("status") == "committed" and any("00" in w for w in warned.get("impact", {}).get("warnings", [])),
-                 f"a sheet of whole dollars gave no dry-run warning: {warned.get('status')} {warned.get('impact', {}).get('warnings')}")
+        warned = self.send(
+            "every amount ends in 00",
+            _csv([[dollars, "Sales revenue", "290000"], [dollars, "Office rent", "300000"]]),
+            {"Sales revenue": "4000", "Office rent": "6900"},
+            dry=True,
+        )
+        c.expect(
+            warned.get("status") == "committed"
+            and any("00" in w for w in warned.get("impact", {}).get("warnings", [])),
+            f"a sheet of whole dollars gave no dry-run warning: {warned.get('status')} {warned.get('impact', {}).get('warnings')}",
+        )
 
     def _retired_account(self) -> None:
         if "6977" not in self.chart:
             created = self.demo.act("account_create", {"code": "6977", "name": "Acme retired line", "type": "expense"})
-            self.checks[5].expect(created.get("status") == "committed", f"account 6977 create gave {created.get('status')}")
+            self.checks[5].expect(
+                created.get("status") == "committed", f"account 6977 create gave {created.get('status')}"
+            )
             self.load_chart()
         if self.chart["6977"].get("active", True):
             retired = self.demo.act("account_update", {"account_id": self.chart["6977"]["id"], "active": False})
@@ -481,10 +646,19 @@ class Rehearsal:
     def check5(self) -> None:
         c, y = self.checks[5], self.year - 2
         m = self.commit_month()
-        mapping = {"Sales revenue": "4000", " Software subscriptions ": self.chart["6100"]["id"],
-                   "Office rent": "6900", "Cash at bank": "1000", "Unused line": "6100"}
-        entries: list[Entry] = [(m, "Sales revenue", 100000), (m, "Software subscriptions", 20000),
-                                (m, "Office rent", 30000), (m, "Cash at bank", 40000)]
+        mapping = {
+            "Sales revenue": "4000",
+            " Software subscriptions ": self.chart["6100"]["id"],
+            "Office rent": "6900",
+            "Cash at bank": "1000",
+            "Unused line": "6100",
+        }
+        entries: list[Entry] = [
+            (m, "Sales revenue", 100000),
+            (m, "Software subscriptions", 20000),
+            (m, "Office rent", 30000),
+            (m, "Cash at bank", 40000),
+        ]
         self.post(c, "mapping by code and id, unused mapping lines", _csv(_cells(entries)), mapping, entries)
         self._retired_account()
         probe = f"month,line,amount\n{y}-01,Sales revenue,100\n"
@@ -495,21 +669,35 @@ class Rehearsal:
             ("two names fold to one", {**STANDARD, "sales REVENUE": "4000"}, "two mapping names fold to"),
             ("blank account", {**STANDARD, "Sales revenue": "  "}, "is an account id or code"),
             ("number instead of code", {**STANDARD, "Sales revenue": 4000}, "is an account id or code"),
-            ("line not in the mapping", {k: v for k, v in STANDARD.items() if k != "Cash at bank"},
-             "no account is mapped for"),
+            (
+                "line not in the mapping",
+                {k: v for k, v in STANDARD.items() if k != "Cash at bank"},
+                "no account is mapped for",
+            ),
         ]:
             sheet = probe if label != "line not in the mapping" else _csv(_cells([(f"{y}-01", "Cash at bank", 5)]))
             self.refuse(c, label, sheet, bad, "invalid" if label != "unknown account code" else "not_found", reason)
         too_many = {f"Line {k:03d}": "6100" for k in range(501)}
-        self.refuse(c, "501 mapping lines", _csv([[f"{y}-01", "Line 000", "1"]]), too_many, "invalid",
-                    "mapping holds 1 to 500 lines")
+        self.refuse(
+            c,
+            "501 mapping lines",
+            _csv([[f"{y}-01", "Line 000", "1"]]),
+            too_many,
+            "invalid",
+            "mapping holds 1 to 500 lines",
+        )
 
     def check6(self) -> None:
         c = self.checks[6]
         m = self.commit_month()
         mapping = {**STANDARD, "Software subs": "6100"}
-        entries: list[Entry] = [(m, "Sales revenue", 410000), (m, "Software subscriptions", 48000),
-                                (m, "Software subs", 7000), (m, "Office rent", 250000), (m, "Cash at bank", 300000)]
+        entries: list[Entry] = [
+            (m, "Sales revenue", 410000),
+            (m, "Software subscriptions", 48000),
+            (m, "Software subs", 7000),
+            (m, "Office rent", 250000),
+            (m, "Cash at bank", 300000),
+        ]
         text = _csv(_cells(entries))
         first = self.post(c, "cash history, two lines on one account", text, mapping, entries)
         if first is not None:
@@ -522,17 +710,26 @@ class Rehearsal:
         c = self.checks[7]
         m, text, mapping, batch = self.standard
         again = self.send("same file again", text, mapping)
-        c.expect(again.get("status") == "committed" and again["result"].get("already_imported")
-                 and again["result"].get("batch_id") == batch, f"same file again gave {again.get('status')}: {again.get('result')}")
+        c.expect(
+            again.get("status") == "committed"
+            and again["result"].get("already_imported")
+            and again["result"].get("batch_id") == batch,
+            f"same file again gave {again.get('status')}: {again.get('result')}",
+        )
         lines = text.splitlines()
         reordered = "\n".join([lines[0], *reversed(lines[1:])]) + "\n"
         again = self.send("reordered, another source name", reordered, mapping, source_name="Acme history, copy")
-        c.expect(again.get("status") == "committed" and again["result"].get("already_imported")
-                 and again["result"].get("batch_id") == batch, f"reordered copy gave {again.get('status')}: {again.get('result')}")
+        c.expect(
+            again.get("status") == "committed"
+            and again["result"].get("already_imported")
+            and again["result"].get("batch_id") == batch,
+            f"reordered copy gave {again.get('status')}: {again.get('result')}",
+        )
         self.record(7, "same content in another order, another source name", "already imported", batch)
         self.verify(c, "after the repeats", m)
-        self.refuse(c, "same months on accrual basis", text, mapping, "conflict", "already has raw totals",
-                    basis="accrual")
+        self.refuse(
+            c, "same months on accrual basis", text, mapping, "conflict", "already has raw totals", basis="accrual"
+        )
         mc = self.commit_month()
         closed_text = _csv([[mc, "Sales revenue", "9000"]])
         self.act_check(c, "close_period", {"month": mc}, "close the month")
@@ -540,15 +737,20 @@ class Rehearsal:
         self.act_check(c, "reopen_period", {"month": mc}, "reopen the month")
         self.post(c, "reopened month posts", closed_text, {"Sales revenue": "4000"}, [(mc, "Sales revenue", 9000)])
         pa, pb = self.commit_month(), self.commit_month()
-        two: list[Entry] = [(pa, "Sales revenue", 5000), (pa, "Software subscriptions", 700),
-                            (pb, "Sales revenue", 6000), (pb, "Office rent", 800)]
+        two: list[Entry] = [
+            (pa, "Sales revenue", 5000),
+            (pa, "Software subscriptions", 700),
+            (pb, "Sales revenue", 6000),
+            (pb, "Office rent", 800),
+        ]
         two_text = _csv(_cells(two))
         first = self.post(c, "two-month file", two_text, STANDARD, two)
         if first is not None:
             entries = {item["month"]: item["entry_id"] for item in first["result"]["months"]}
             self.journal_reverse(c, "undo one month", entries[pa])
-            self.refuse(c, "one month undone, the other still stands", two_text, STANDARD, "conflict",
-                        "already has raw totals")
+            self.refuse(
+                c, "one month undone, the other still stands", two_text, STANDARD, "conflict", "already has raw totals"
+            )
             self.journal_reverse(c, "undo the other month", entries[pb])
             self.post(c, "file posts again once every month is undone", two_text, STANDARD, two)
         po = self.commit_month()
@@ -557,7 +759,10 @@ class Rehearsal:
         self.refuse(c, "month with an approved bill", overlap, STANDARD, "conflict", "already has transactions")
         if bill_id:
             voided = self.demo.act("bill_void", {"bill_id": bill_id})
-            c.expect(voided.get("status") == "committed", f"voiding the bill gave {voided.get('status')}: {voided.get('reason')}")
+            c.expect(
+                voided.get("status") == "committed",
+                f"voiding the bill gave {voided.get('status')}: {voided.get('reason')}",
+            )
             if voided.get("status") == "committed":
                 # The reversal is dated on the bill's own date, in the bill's month, which takes it back out.
                 day = self.void_month(c, self.numbers[bill_id], po)
@@ -567,25 +772,38 @@ class Rehearsal:
                     self.verify(c, "after the bill is voided", day)
                     self.record(7, "voided bill: reversal month", f"dated {day}", f"the bill's own month {po}")
                 self.verify(c, "after the bill is voided", po)
-        self.post(c, "month freed of the bill", overlap, STANDARD,
-                  [(po, "Software subscriptions", 4800), (po, "Sales revenue", 9000)])
+        self.post(
+            c,
+            "month freed of the bill",
+            overlap,
+            STANDARD,
+            [(po, "Software subscriptions", 4800), (po, "Sales revenue", 9000)],
+        )
         pr = self.commit_month()
         rows_r: list[Entry] = [(pr, "Software subscriptions", 4800), (pr, "Sales revenue", 9000)]
         raw_r = self.post(c, "import, then a bill into the same month", _csv(_cells(rows_r)), STANDARD, rows_r)
         bill_r = self.bill(c, pr, 5000, approve=False)
         if bill_r and raw_r is not None:
             res = self.demo.act("bill_approve", {"bill_id": bill_r})
-            refused = c.expect(res.get("status") == "failed" and res.get("code") == "conflict",
-                               f"a bill approved into a month holding raw totals gave {res.get('status')}: the expense "
-                               "is counted by both the import and the bill")
-            self.record(7, "bill approved into a month holding raw totals", "refused" if refused else "DOUBLE COUNT",
-                        res.get("reason") or "posted")
+            refused = c.expect(
+                res.get("status") == "failed" and res.get("code") == "conflict",
+                f"a bill approved into a month holding raw totals gave {res.get('status')}: the expense "
+                "is counted by both the import and the bill",
+            )
+            self.record(
+                7,
+                "bill approved into a month holding raw totals",
+                "refused" if refused else "DOUBLE COUNT",
+                res.get("reason") or "posted",
+            )
             # Once that month's raw entry is reversed, the same bill posts into it, once (spec §4.1).
             raw_entry = next(item["entry_id"] for item in raw_r["result"]["months"] if item["month"] == pr)
             self.journal_reverse(c, "undo the month's raw totals", raw_entry)
             res = self.demo.act("bill_approve", {"bill_id": bill_r})
-            c.expect(res.get("status") == "committed",
-                     f"after the raw totals were undone, approving the bill gave {res.get('status')}: {res.get('reason')}")
+            c.expect(
+                res.get("status") == "committed",
+                f"after the raw totals were undone, approving the bill gave {res.get('status')}: {res.get('reason')}",
+            )
             if res.get("status") == "committed":
                 self._bill(pr, {"6100": 5000}, +1)
                 self.verify(c, "after the bill posted", pr)
@@ -599,18 +817,29 @@ class Rehearsal:
         if not self.vendor_id:
             contact = self.demo.act("contact_create", {"name": f"Acme vendor {uuid.uuid4().hex[:6]}", "kind": "vendor"})
             self.vendor_id = str((contact.get("result") or {}).get("contact_id") or "")
-            check.expect(bool(self.vendor_id), f"creating a vendor gave {contact.get('status')}: {contact.get('reason')}")
+            check.expect(
+                bool(self.vendor_id), f"creating a vendor gave {contact.get('status')}: {contact.get('reason')}"
+            )
         number = uuid.uuid4().hex[:8]
-        created = self.demo.act("bill_create", {"vendor_id": self.vendor_id, "number": number,
-                                                "bill_date": f"{month}-10", "terms_days": 30,
-                                                "lines": [{"account_id": self.chart["6100"]["id"], "amount": cents}]})
+        created = self.demo.act(
+            "bill_create",
+            {
+                "vendor_id": self.vendor_id,
+                "number": number,
+                "bill_date": f"{month}-10",
+                "terms_days": 30,
+                "lines": [{"account_id": self.chart["6100"]["id"], "amount": cents}],
+            },
+        )
         bill_id = str((created.get("result") or {}).get("bill_id") or "")
         self.numbers[bill_id] = number
         if not check.expect(bool(bill_id), f"bill_create gave {created.get('status')}: {created.get('reason')}"):
             return ""
         if approve:
             res = self.demo.act("bill_approve", {"bill_id": bill_id})
-            check.expect(res.get("status") == "committed", f"bill_approve gave {res.get('status')}: {res.get('reason')}")
+            check.expect(
+                res.get("status") == "committed", f"bill_approve gave {res.get('status')}: {res.get('reason')}"
+            )
             if res.get("status") == "committed":
                 self._bill(month, {"6100": cents}, +1)
                 self.verify(check, "after the bill", month)
@@ -623,14 +852,22 @@ class Rehearsal:
         mapping = {name: "6100" for name, _ in pairs}
         before = self.total_rows()
         dry = self.send(label, rows, mapping, dry=True)
-        dry_ok = check.expect(dry.get("status") == "failed" and dry.get("code") == "invalid",
-                              f"{label}: the dry run gave {dry.get('status')}/{dry.get('code')}: {dry.get('reason')}")
+        dry_ok = check.expect(
+            dry.get("status") == "failed" and dry.get("code") == "invalid",
+            f"{label}: the dry run gave {dry.get('status')}/{dry.get('code')}: {dry.get('reason')}",
+        )
         real = self.send(label, rows, mapping)
         posted = self.total_rows() - before
-        commit_ok = check.expect(real.get("status") == "failed" and posted == 0,
-                                 f"{label}: the commit gave {real.get('status')} and posted {posted} rows")
-        self.record(8, label, "refused" if dry_ok and commit_ok else "UNEXPECTED",
-                    dry.get("reason") or real.get("reason") or dry.get("status") or "")
+        commit_ok = check.expect(
+            real.get("status") == "failed" and posted == 0,
+            f"{label}: the commit gave {real.get('status')} and posted {posted} rows",
+        )
+        self.record(
+            8,
+            label,
+            "refused" if dry_ok and commit_ok else "UNEXPECTED",
+            dry.get("reason") or real.get("reason") or dry.get("status") or "",
+        )
 
     def check8(self) -> None:
         c = self.checks[8]
@@ -639,40 +876,106 @@ class Rehearsal:
         big: list[Entry] = [(months[i], f"Vendor {k:03d}", 100) for i, n in enumerate(counts) for k in range(n)]
         mapping = {f"Vendor {k:03d}": "6100" for k in range(417)}
         self.accepts(c, "5000 rows across 12 months", _csv(_cells(big)), mapping, 5000)
-        self.refuse(c, "5001 rows", _csv(_cells(big)) + f"{months[0]},Vendor 417,100\n", mapping, "invalid",
-                    "more than 5000 rows")
+        self.refuse(
+            c,
+            "5001 rows",
+            _csv(_cells(big)) + f"{months[0]},Vendor 417,100\n",
+            mapping,
+            "invalid",
+            "more than 5000 rows",
+        )
         names = {f"Line {k:03d}": "6100" for k in range(500)}
         month_rows: list[Entry] = [(months[0], f"Line {k:03d}", 100) for k in range(500)]
-        self.refuse(c, "500 lines in one month (501 with the offset)", _csv(_cells(month_rows)), names, "invalid",
-                    "has more than 500 lines")
-        self.accepts(c, "499 lines in one month", _csv(_cells(month_rows[:499])),
-                     {k: v for k, v in names.items() if int(k[5:]) < 499}, 499)
+        self.refuse(
+            c,
+            "500 lines in one month (501 with the offset)",
+            _csv(_cells(month_rows)),
+            names,
+            "invalid",
+            "has more than 500 lines",
+        )
+        self.accepts(
+            c,
+            "499 lines in one month",
+            _csv(_cells(month_rows[:499])),
+            {k: v for k, v in names.items() if int(k[5:]) < 499},
+            499,
+        )
         long_name = "x" * 201
-        self.refuse(c, "line name of 201 characters", f"month,line,amount\n{months[0]},{long_name},100\n",
-                    {long_name: "6100"}, "invalid", "line is a name of 1 to 200 characters")
-        self.accepts(c, "line name of 200 characters", f"month,line,amount\n{months[0]},{'x' * 200},100\n",
-                     {"x" * 200: "6100"}, 1)
-        self.refuse(c, "team of 81 characters", f"month,line,amount,team\n{months[0]},Software subscriptions,100,{'y' * 81}\n",
-                    STANDARD, "invalid", "team is 80 characters at most")
+        self.refuse(
+            c,
+            "line name of 201 characters",
+            f"month,line,amount\n{months[0]},{long_name},100\n",
+            {long_name: "6100"},
+            "invalid",
+            "line is a name of 1 to 200 characters",
+        )
+        self.accepts(
+            c,
+            "line name of 200 characters",
+            f"month,line,amount\n{months[0]},{'x' * 200},100\n",
+            {"x" * 200: "6100"},
+            1,
+        )
+        self.refuse(
+            c,
+            "team of 81 characters",
+            f"month,line,amount,team\n{months[0]},Software subscriptions,100,{'y' * 81}\n",
+            STANDARD,
+            "invalid",
+            "team is 80 characters at most",
+        )
         one = f"month,line,amount\n{months[0]},Software subscriptions,100\n"
-        self.refuse(c, "source name of 121 characters", one, STANDARD, "invalid",
-                    "source_name is longer than 120 characters", source_name="s" * 121)
+        self.refuse(
+            c,
+            "source name of 121 characters",
+            one,
+            STANDARD,
+            "invalid",
+            "source_name is longer than 120 characters",
+            source_name="s" * 121,
+        )
         self.accepts(c, "source name of 120 characters", one, STANDARD, 1, source_name="s" * 120)
-        self.refuse(c, "file over 512 KB", "month,line,amount\n" + f"{months[0]},Software subscriptions,1\n" * 20000,
-                    STANDARD, "invalid", "longer than")
-        self.no_wrong_total(c, "twelve 18-digit amounts, net past 64 bits", months[0],
-                            [(f"Big {k:02d}", "999999999999999999") for k in range(12)])
-        self.no_wrong_total(c, "twenty 18-digit amounts, net zero, gross past 64 bits", months[0],
-                            [(f"Plus {k:02d}", "999999999999999999") for k in range(10)]
-                            + [(f"Minus {k:02d}", "-999999999999999999") for k in range(10)])
-        res = self.demo.act("import_raw_totals", {"csv": "month,line,amount\n" + "x" * 2_280_000, "basis": "cash",
-                                                  "mapping": STANDARD}, dry=True)
+        self.refuse(
+            c,
+            "file over 512 KB",
+            "month,line,amount\n" + f"{months[0]},Software subscriptions,1\n" * 20000,
+            STANDARD,
+            "invalid",
+            "longer than",
+        )
+        self.no_wrong_total(
+            c,
+            "twelve 18-digit amounts, net past 64 bits",
+            months[0],
+            [(f"Big {k:02d}", "999999999999999999") for k in range(12)],
+        )
+        self.no_wrong_total(
+            c,
+            "twenty 18-digit amounts, net zero, gross past 64 bits",
+            months[0],
+            [(f"Plus {k:02d}", "999999999999999999") for k in range(10)]
+            + [(f"Minus {k:02d}", "-999999999999999999") for k in range(10)],
+        )
+        res = self.demo.act(
+            "import_raw_totals",
+            {"csv": "month,line,amount\n" + "x" * 2_280_000, "basis": "cash", "mapping": STANDARD},
+            dry=True,
+        )
         c.expect(res.get("http") == 413, f"a 2.28 MB request gave HTTP {res.get('http')}, not 413")
-        self.record(8, "2.28 MB request body", "refused" if res.get("http") == 413 else "UNEXPECTED", f"HTTP {res.get('http')}")
+        self.record(
+            8, "2.28 MB request body", "refused" if res.get("http") == 413 else "UNEXPECTED", f"HTTP {res.get('http')}"
+        )
         formula = '=HYPERLINK("https://acme.example/ledger","ledger") <script>alert("acme")</script>'
         mf = self.commit_month()
-        self.post(c, "formula and script text in the source name", _csv([[mf, "Software subscriptions", "900"]]),
-                  STANDARD, [(mf, "Software subscriptions", 900)], source_name=formula)
+        self.post(
+            c,
+            "formula and script text in the source name",
+            _csv([[mf, "Software subscriptions", "900"]]),
+            STANDARD,
+            [(mf, "Software subscriptions", 900)],
+            source_name=formula,
+        )
         shown = self.demo.get(f"/api/v2/finance/transactions?start={mf}-01&end={_eom(mf)}&limit=200")
         c.expect(_contains(shown, formula), "the source name does not come back as the same text in the transactions")
 
@@ -680,28 +983,53 @@ class Rehearsal:
         c = self.checks[9]
         anonymous = urllib.request.build_opener(NoRedirect)
         before = self.total_rows()
-        payload = {"kind": "import_raw_totals", "dry_run": True,
-                   "payload": {"csv": f"month,line,amount\n{self.year - 2}-01,Software subscriptions,100\n", "basis": "cash",
-                               "mapping": STANDARD}}
-        status, _ = self.demo.request("POST", "/api/v2/finance/actions", payload, {"Idempotency-Key": uuid.uuid4().hex},
-                                      opener=anonymous)
+        payload = {
+            "kind": "import_raw_totals",
+            "dry_run": True,
+            "payload": {
+                "csv": f"month,line,amount\n{self.year - 2}-01,Software subscriptions,100\n",
+                "basis": "cash",
+                "mapping": STANDARD,
+            },
+        }
+        status, _ = self.demo.request(
+            "POST", "/api/v2/finance/actions", payload, {"Idempotency-Key": uuid.uuid4().hex}, opener=anonymous
+        )
         c.expect(status >= 400, f"an anonymous import got HTTP {status}")
-        status, _ = self.demo.request("GET", f"/api/v2/finance/pnl?start={self.year - 2}-01-01&end={self.year - 2}-01-31",
-                                      opener=anonymous)
+        status, _ = self.demo.request(
+            "GET", f"/api/v2/finance/pnl?start={self.year - 2}-01-01&end={self.year - 2}-01-31", opener=anonymous
+        )
         c.expect(status >= 400, f"an anonymous P&L read got HTTP {status}")
-        status, _ = self.demo.request("POST", "/api/v2/finance/actions", payload,
-                                      {"Idempotency-Key": uuid.uuid4().hex, "Origin": "http://evil.example.invalid"})
+        status, _ = self.demo.request(
+            "POST",
+            "/api/v2/finance/actions",
+            payload,
+            {"Idempotency-Key": uuid.uuid4().hex, "Origin": "http://evil.example.invalid"},
+        )
         c.expect(status >= 400, f"a cross-origin import got HTTP {status}")
         c.expect(self.total_rows() == before, "a refused call posted rows")
         self.record(9, "anonymous and cross-origin calls", "refused", "see check 9 failures if any")
-        self.record(9, "bookkeeper and bot grants", "not over HTTP",
-                    "the demo cannot mint non-owner identities; backend/tests/test_finance_raw_totals.py covers them")
+        self.record(
+            9,
+            "bookkeeper and bot grants",
+            "not over HTTP",
+            "the demo cannot mint non-owner identities; backend/tests/test_finance_raw_totals.py covers them",
+        )
 
     def run(self) -> bool:
         self.load_chart()
         self.precondition()
-        steps = [self.check1, self.check2, self.check3, self.check4, self.check5, self.check6, self.check7,
-                 self.check8, self.check9]
+        steps = [
+            self.check1,
+            self.check2,
+            self.check3,
+            self.check4,
+            self.check5,
+            self.check6,
+            self.check7,
+            self.check8,
+            self.check9,
+        ]
         for number, step in enumerate(steps, 1):
             try:
                 step()

@@ -20,15 +20,24 @@ def session_task(attempt):
 
 def session_key(config, attempt):
     """The provider thread this turn continues (clients/sessions.py), read from a claimed attempt."""
+    if isinstance((attempt.get("make_page") or {}).get("task"), dict):
+        return "make-page:" + attempt["id"]
     conv = attempt.get("conversation") or {}
-    return sessions.session_key(config, attempt.get("bot"), session_task(attempt), conv.get("id"),
-                                conv.get("root_id"), conv.get("audience_class"))
+    return sessions.session_key(
+        config,
+        attempt.get("bot"),
+        session_task(attempt),
+        conv.get("id"),
+        conv.get("root_id"),
+        conv.get("audience_class"),
+    )
 
 
 def lane(config, attempt):
     """The lane this turn runs in: the server's word when it sent one, else worked out the same way."""
-    return attempt.get("lane") or sessions.lane(config, attempt.get("bot"), session_task(attempt),
-                                                (attempt.get("conversation") or {}).get("id"))
+    return attempt.get("lane") or sessions.lane(
+        config, attempt.get("bot"), session_task(attempt), (attempt.get("conversation") or {}).get("id")
+    )
 
 
 class State:
@@ -100,13 +109,18 @@ class State:
 
     def record(self, attempt):
         with self.connect() as c:
-            c.execute("INSERT OR IGNORE INTO attempts(id,payload,phase) VALUES(?,?,'claimed')",
-                      (attempt["id"], json.dumps(attempt)))
+            c.execute(
+                "INSERT OR IGNORE INTO attempts(id,payload,phase) VALUES(?,?,'claimed')",
+                (attempt["id"], json.dumps(attempt)),
+            )
 
     def input_phase(self, aid, mid, phase=None):
         with self.connect() as c:
             if phase:
-                c.execute("INSERT INTO inputs VALUES(?,?,?) ON CONFLICT(attempt_id,message_id) DO UPDATE SET phase=excluded.phase", (aid, mid, phase))
+                c.execute(
+                    "INSERT INTO inputs VALUES(?,?,?) ON CONFLICT(attempt_id,message_id) DO UPDATE SET phase=excluded.phase",
+                    (aid, mid, phase),
+                )
             row = c.execute("SELECT phase FROM inputs WHERE attempt_id=? AND message_id=?", (aid, mid)).fetchone()
             return row[0] if row else None
 
@@ -123,8 +137,11 @@ class State:
 
     def pending(self, aid):
         with self.connect() as c:
-            rows = c.execute("SELECT e.* FROM events e JOIN attempts a ON a.id=e.attempt_id "
-                             "WHERE e.attempt_id=? AND e.seq>a.ack ORDER BY e.seq LIMIT 100", (aid,)).fetchall()
+            rows = c.execute(
+                "SELECT e.* FROM events e JOIN attempts a ON a.id=e.attempt_id "
+                "WHERE e.attempt_id=? AND e.seq>a.ack ORDER BY e.seq LIMIT 100",
+                (aid,),
+            ).fetchall()
             return [{"seq": r["seq"], "kind": r["kind"], "payload": json.loads(r["payload"])} for r in rows]
 
     def ack(self, aid, seq):
@@ -142,9 +159,11 @@ class State:
         """Saves an interrupted completion for an attempt that has none yet; a result already saved stands."""
         with self.connect() as c:
             seq = c.execute("SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?", (aid,)).fetchone()[0]
-            c.execute("UPDATE attempts SET phase='uploading',completion=? WHERE id=? AND completion IS NULL "
-                      "AND phase NOT IN ('synced','historical')",
-                      (json.dumps({"outcome": "interrupted", "text": text, "last_seq": seq}), aid))
+            c.execute(
+                "UPDATE attempts SET phase='uploading',completion=? WHERE id=? AND completion IS NULL "
+                "AND phase NOT IN ('synced','historical')",
+                (json.dumps({"outcome": "interrupted", "text": text, "last_seq": seq}), aid),
+            )
 
     def settled(self, aid, text):
         """The completion to send for an attempt being recovered, read fresh: a result saved since the snapshot
@@ -164,17 +183,24 @@ class State:
         """The files in `files` ({path: stamp}) not yet reported for this bot at that stamp, and remember them all.
         A file that is gone from the list is forgotten, so it is reported again if it comes back."""
         with self.connect() as c:
-            seen = {r["path"]: r["stamp"] for r in c.execute("SELECT path,stamp FROM left_out_reported WHERE bot=?", (bot,))}
-            c.executemany("DELETE FROM left_out_reported WHERE bot=? AND path=?",
-                          [(bot, path) for path in seen if path not in files])
-            c.executemany("INSERT OR REPLACE INTO left_out_reported VALUES(?,?,?)",
-                          [(bot, path, stamp) for path, stamp in files.items()])
+            seen = {
+                r["path"]: r["stamp"] for r in c.execute("SELECT path,stamp FROM left_out_reported WHERE bot=?", (bot,))
+            }
+            c.executemany(
+                "DELETE FROM left_out_reported WHERE bot=? AND path=?",
+                [(bot, path) for path in seen if path not in files],
+            )
+            c.executemany(
+                "INSERT OR REPLACE INTO left_out_reported VALUES(?,?,?)",
+                [(bot, path, stamp) for path, stamp in files.items()],
+            )
         return [path for path, stamp in files.items() if seen.get(path) != stamp]
 
     def session(self, bot, conversation, runtime):
         with self.connect() as c:
-            row = c.execute("SELECT thread FROM sessions WHERE bot=? AND conversation=? AND runtime=?",
-                            (bot, conversation, runtime)).fetchone()
+            row = c.execute(
+                "SELECT thread FROM sessions WHERE bot=? AND conversation=? AND runtime=?", (bot, conversation, runtime)
+            ).fetchone()
             return row[0] if row else None
 
     def save_session(self, bot, conversation, runtime, thread):
@@ -184,8 +210,10 @@ class State:
     def forget_session(self, bot, conversation, runtime, thread):
         """Drop a failed provider thread without deleting a newer replacement."""
         with self.connect() as c:
-            c.execute("DELETE FROM sessions WHERE bot=? AND conversation=? AND runtime=? AND thread=?",
-                      (bot, conversation, runtime, thread))
+            c.execute(
+                "DELETE FROM sessions WHERE bot=? AND conversation=? AND runtime=? AND thread=?",
+                (bot, conversation, runtime, thread),
+            )
 
     def cursor(self, thread, message=None):
         with self.connect() as c:
@@ -215,28 +243,40 @@ class State:
         """What this machine has already done with one outside record: never import it twice."""
         with self.connect() as c:
             if phase:
-                c.execute("INSERT INTO imports(source,external_id,phase,meeting_id) VALUES(?,?,?,?) "
-                          "ON CONFLICT(source,external_id) DO UPDATE SET phase=excluded.phase,"
-                          "meeting_id=coalesce(excluded.meeting_id,imports.meeting_id)",
-                          (source, external_id, phase, meeting_id))
-            row = c.execute("SELECT phase FROM imports WHERE source=? AND external_id=?",
-                            (source, external_id)).fetchone()
+                c.execute(
+                    "INSERT INTO imports(source,external_id,phase,meeting_id) VALUES(?,?,?,?) "
+                    "ON CONFLICT(source,external_id) DO UPDATE SET phase=excluded.phase,"
+                    "meeting_id=coalesce(excluded.meeting_id,imports.meeting_id)",
+                    (source, external_id, phase, meeting_id),
+                )
+            row = c.execute(
+                "SELECT phase FROM imports WHERE source=? AND external_id=?", (source, external_id)
+            ).fetchone()
             return row[0] if row else None
 
-    def close_pending(self, resource_type=None, external_id=None, *, created=None, checked=None,
-                      remove=False, limit=100):
+    def close_pending(
+        self, resource_type=None, external_id=None, *, created=None, checked=None, remove=False, limit=100
+    ):
         """Provider activities to revisit when a transcript was not yet available."""
         with self.connect() as c:
             if resource_type and external_id and remove:
-                c.execute("DELETE FROM close_transcript_pending WHERE resource_type=? AND external_id=?",
-                          (resource_type, external_id))
+                c.execute(
+                    "DELETE FROM close_transcript_pending WHERE resource_type=? AND external_id=?",
+                    (resource_type, external_id),
+                )
             elif resource_type and external_id and created is not None:
-                c.execute("INSERT INTO close_transcript_pending VALUES(?,?,?,?) "
-                          "ON CONFLICT(resource_type,external_id) DO UPDATE SET last_checked=excluded.last_checked",
-                          (resource_type, external_id, created, checked or created))
+                c.execute(
+                    "INSERT INTO close_transcript_pending VALUES(?,?,?,?) "
+                    "ON CONFLICT(resource_type,external_id) DO UPDATE SET last_checked=excluded.last_checked",
+                    (resource_type, external_id, created, checked or created),
+                )
             if resource_type and external_id:
-                row = c.execute("SELECT * FROM close_transcript_pending WHERE resource_type=? AND external_id=?",
-                                (resource_type, external_id)).fetchone()
+                row = c.execute(
+                    "SELECT * FROM close_transcript_pending WHERE resource_type=? AND external_id=?",
+                    (resource_type, external_id),
+                ).fetchone()
                 return dict(row) if row else None
-            return [dict(row) for row in c.execute(
-                "SELECT * FROM close_transcript_pending ORDER BY last_checked LIMIT ?", (limit,))]
+            return [
+                dict(row)
+                for row in c.execute("SELECT * FROM close_transcript_pending ORDER BY last_checked LIMIT ?", (limit,))
+            ]

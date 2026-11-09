@@ -1,4 +1,4 @@
-// A file review on the question card (ui/app/question-card.js, backend/file_reviews.py): the versions under review show
+// A file review on the question card (ui/app/question-card.ts, backend/file_reviews.py): the versions under review show
 // inline, four at most and the rest as chips; Request changes waits for the note that says what to change; in a pick
 // each option sits under its own picture, and the spend a pick approves is said under them.
 // REVIEW_SHOTS=<dir> also saves the Decide card at desktop and phone width.

@@ -1,12 +1,14 @@
-# One explicitly requested release check, split across isolated native VMs that run side by side.
-# The VMs are RunsOn instances in Tico's own AWS account (manual runs only, never fork code).
-# No PR/push tests, schedule or publication: the release command dispatches it for the frozen candidate.
+# One release check for one candidate, split across isolated native VMs that run side by side.
+# The VMs are RunsOn instances in Tico's own AWS account (dispatched runs only, never fork code).
+# TICO_CI_HOSTED=true runs them on GitHub-hosted runners instead (docs/releasing.md#tests-on-a-pr).
+# No PR/push tests, schedule or publication: the release window (train.yml), a hotfix (hotfix.yml) or a person dispatches
+# it for an exact commit and version, and release.yml and the release window find the run by its title.
 # It builds the release once: the Linux runner and relay binaries and the three images for both architectures, pushed by
 # digest only. The gate tests those binaries and images, and release.yml publishes exactly them for the tag, so what
 # shipped is what was tested. The Mac binaries are built by release.yml after the tag (no gate part runs on a Mac, and a
 # GitHub macOS runner can take 5-15 minutes to start), or carried forward when the runner sources did not change.
 name: Release validation
-run-name: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}
+run-name: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}${{ inputs.anchor != '' && format(' (incremental on {0})', inputs.anchor) || '' }}
 
 on:
   workflow_dispatch:
@@ -24,6 +26,21 @@ on:
         description: The version this candidate will be released as (vX.Y.Z); it is built into the images
         required: true
         type: string
+      anchor:
+        description: Incremental only; the full commit SHA of the green validation (full or incremental) this one builds on. Empty runs the full validation
+        required: false
+        default: ''
+        type: string
+      carried:
+        description: Incremental only; a JSON list of the failed tests carried from open red validations (scripts/release_increment.py)
+        required: false
+        default: ''
+        type: string
+      anchor_previous:
+        description: Incremental only; the published release the anchor validated against (its product part runs when the previous release differs)
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -33,28 +50,90 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The ceiling on full validations: at most 10 a UTC day, manual dispatches included, counted from GitHub before any
+  # RunsOn VM starts. A hard backstop: the automatic window already dispatches at most one full validation a day
+  # (scripts/release_increment.py full_within_day). Incremental runs are not counted; every job that starts a VM waits here.
+  ceiling:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      - name: Count today's full validations
+        if: inputs.anchor == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CAP: '10'
+        run: |
+          today=$(date -u +%Y-%m-%d)
+          count=$(gh api --paginate "repos/$REPO/actions/workflows/ci.yml/runs?event=workflow_dispatch&created=$today&per_page=100" \
+            --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | select(.created_at | startswith(\"$today\")) | select(.display_title | contains(\" (incremental on \") | not) | .id" | wc -l | tr -d ' ')
+          echo "$count full validations started today (UTC $today) besides this one"
+          if [ "$count" -ge "$CAP" ]; then echo "::error::$CAP full runs today; ceiling reached"; exit 1; fi
+
   # What to validate: the requested candidate against the requested published release.
   candidate:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    needs: ceiling
+    # An incremental validation runs on GitHub-hosted runners: its plan is made here, and it is small.
+    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
       previous: ${{ steps.pick.outputs.previous }}
       version: ${{ steps.pick.outputs.version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      plan: ${{ steps.plan.outputs.plan }}
     steps:
       - id: pick
         env:
           SHA: ${{ inputs.candidate_sha }}
           PREVIOUS: ${{ inputs.previous_release }}
           VERSION: ${{ inputs.version }}
+          ANCHOR: ${{ inputs.anchor }}
+          CARRIED: ${{ inputs.carried }}
         run: |
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::candidate_sha must be a full commit SHA"; exit 1; }
           [[ "$PREVIOUS" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::previous_release must be vX.Y.Z"; exit 1; }
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::version must be vX.Y.Z"; exit 1; }
+          [[ -z "$ANCHOR" || "$ANCHOR" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::an incremental validation names its anchor commit"; exit 1; }
+          [[ -z "$CARRIED" || "$CARRIED" == \[*\] ]] || { echo "::error::carried failures are a JSON list"; exit 1; }
           { echo "sha=$SHA"; echo "previous=$PREVIOUS"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
+      # Controls from the reviewed workflow commit: the gate's VMs are the full validation's, or the incremental plan's.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: validation-control
+          sparse-checkout: |
+            scripts/release_increment.py
+            scripts/pr_checks.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      # An incremental validation makes its plan from the candidate's history (the anchor is an ancestor of main).
+      - if: inputs.anchor != ''
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        if: inputs.anchor != ''
+        env:
+          ANCHOR: ${{ inputs.anchor }}
+          HEAD: ${{ inputs.candidate_sha }}
+          CARRIED: ${{ inputs.carried }}
+          ANCHOR_PREVIOUS: ${{ inputs.anchor_previous }}
+          PREVIOUS: ${{ inputs.previous_release }}
+        run: |
+          plan="$(python3 validation-control/scripts/release_increment.py plan --root candidate --base "$ANCHOR" --head "$HEAD" --carried "$CARRIED" --anchor-previous "$ANCHOR_PREVIOUS" --previous "$PREVIOUS")"
+          printf 'plan=%s\n' "$plan" >> "$GITHUB_OUTPUT"
+      - id: matrix
+        env:
+          PLAN: ${{ steps.plan.outputs.plan }}
+        run: echo "matrix=$(python3 validation-control/scripts/release_increment.py matrix "$PLAN")" >> "$GITHUB_OUTPUT"
 
   # The runner and screen relay for Linux, built once from the candidate, reusing compiled dependencies from a cache only
   # main writes. Linux builds are static (musl): the images, Linux checkouts and
-  # the gate all run these same files. On-demand VMs, so an interruption never leaves a half-built release.
+  # the gate all run these same files. Spot VMs: an interrupted build is rerun automatically and pushes by digest again.
   native-linux:
     needs: candidate
     strategy:
@@ -62,9 +141,12 @@ jobs:
         include:
           - {arch: x64, name: linux-x86_64, target: x86_64-unknown-linux-musl}
           - {arch: arm64, name: linux-arm64, target: aarch64-unknown-linux-musl}
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.arch }}/spot=false
+    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && (matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}', github.run_id, matrix.arch, matrix.arch == 'x64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 20
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -103,7 +185,7 @@ jobs:
           # stamp (#1905: its build.rs does not read TICO_VERSION, and the runner has no --release) skips the check.
           if grep -q TICO_VERSION runner-rs/build.rs; then
             want="${TICO_VERSION#v}"
-            got="$(runner-rs/target/$TARGET/release/tico-runner --release)"
+            got="$("runner-rs/target/$TARGET/release/tico-runner" --release)"
             [ "$got" = "$want" ] || { echo "::error::tico-runner --release says '$got', release is '$want'"; exit 1; }
           else
             echo "::notice::runner-rs/build.rs predates the release stamp; tico-runner --release not checked"
@@ -130,13 +212,16 @@ jobs:
         image: [tico, tico-runner, tico-updater]
         platform: [amd64, arm64]
     # Each architecture builds natively: emulating npm and pip installs is slow and flaky.
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}/spot=false/extras=s3-cache
+    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && (matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04') || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-{1}{2}/extras=s3-cache', github.run_id, matrix.platform == 'arm64' && 'arm64' || 'x64', matrix.platform != 'arm64' && '/family=m8+m7+m6+r8+r7' || '') }}
     timeout-minutes: 30
     permissions:
       actions: read   # watches this run's native-linux build
       contents: read
       packages: write
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -207,8 +292,9 @@ jobs:
           if-no-files-found: error
 
   # Each VM runs one part of the candidate's own `release_checks.py --release`; together they are the whole gate.
-  # Each part is sized to about 4 minutes of tests on its VM. The parts start with the candidate, not after the Linux
-  # binaries: each one's setup runs while native-linux builds them, and waits for them below before it runs its tests.
+  # Each part is sized to about 5 minutes on its VM (4 vCPUs, the largest size these parts use). The parts start with
+  # the candidate, not after the Linux binaries: each one's setup runs while native-linux builds them, and waits for them
+  # below before it runs its tests.
   # Product also waits for the image builds itself.
   gate:
     needs: candidate
@@ -217,49 +303,17 @@ jobs:
       contents: read
       actions: read   # product watches this run's image builds; every part watches the Linux binary build
     # The gate needs 35 GiB free (Docker images, browsers, Rust targets); the default RunsOn disk leaves about 10.
-    # On demand, not Spot: a reclaimed VM would fail the one validation a release waits on.
-    # Every part runs on 4 vCPUs (common on-demand sizes start fast); more shards, not bigger VMs, for speed.
+    # Spot, like every RunsOn job: RunsOn reruns a part whose VM is reclaimed (twice at most), and AWS does not bill a
+    # Spot VM reclaimed in its first hour. Disks use the free gp3 speed (125 MiB/s).
+    # Every part runs on 4 vCPUs; more shards, not bigger VMs, for speed.
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - {name: product, part: product, shard: '', workers: '2', runner: 4cpu-linux-x64}
-          - {name: browser-1, part: browser, shard: '1/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: browser-2, part: browser, shard: '2/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-1, part: python, shard: '1/28', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-2, part: python, shard: '2/28', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-3, part: python, shard: '3/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-4, part: python, shard: '4/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-5, part: python, shard: '5/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-6, part: python, shard: '6/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-7, part: python, shard: '7/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-8, part: python, shard: '8/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-9, part: python, shard: '9/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-10, part: python, shard: '10/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-11, part: python, shard: '11/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-12, part: python, shard: '12/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-13, part: python, shard: '13/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-14, part: python, shard: '14/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-15, part: python, shard: '15/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-16, part: python, shard: '16/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-17, part: python, shard: '17/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-18, part: python, shard: '18/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-19, part: python, shard: '19/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-20, part: python, shard: '20/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-21, part: python, shard: '21/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-22, part: python, shard: '22/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-23, part: python, shard: '23/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-24, part: python, shard: '24/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-25, part: python, shard: '25/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-26, part: python, shard: '26/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-27, part: python, shard: '27/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          - {name: python-28, part: python, shard: '28/28', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
-          # The Linux desktop app updating from a company feed; on its own VM, beside the longer product part.
-          - {name: desktop, part: desktop, shard: '', workers: '2', runner: 4cpu-linux-x64}
-    runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/volume=80gb/spot=false/extras=s3-cache
+      # The VMs: the full validation's (release_increment.full_matrix), or an incremental plan's (--plan).
+      matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
+    # An incremental validation's python and browser VMs run on hosted runners; its product and desktop VMs need the
+    # 35 GiB disk and the Docker images, so they stay on RunsOn.
+    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')) && 'ubuntu-24.04' || format('runs-on={0}/runner={1}/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, matrix.runner) }}
     env:
       CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
       PREVIOUS_RELEASE: ${{ needs.candidate.outputs.previous }}
@@ -267,6 +321,8 @@ jobs:
       TICO_VALIDATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
       TICO_RELEASE_PART: ${{ matrix.part }}
       TICO_RELEASE_SHARD: ${{ matrix.shard }}
+      # An incremental plan's python or browser VM runs its suite (scripts/pr_checks.py run) from the candidate's checkout.
+      TICO_INCREMENT_SUITE: ${{ needs.candidate.outputs.plan != '' && matrix.part != 'product' && matrix.part != 'desktop' && matrix.name || '' }}
       TICO_PYTHON_WORKERS: ${{ matrix.workers }}
       TICO_UI_JOBS: '3'
       TICO_UI_SLOWDOWN: '2'
@@ -275,6 +331,9 @@ jobs:
       # The slowest tests of each part, so a part that outruns the others shows what holds it.
       PYTEST_ADDOPTS: '--durations=25'
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - name: Validate inputs before checkout
         env:
           TICO_HOSTED_ENVIRONMENT: ${{ runner.environment }}
@@ -319,6 +378,9 @@ jobs:
           # uv installs the same pinned lock as pip, in seconds instead of about a minute.
           python3 -m pip install --disable-pip-version-check uv==0.13.1
           python3 -m uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" -r backend/requirements-dev.txt
+          # The UI's TypeScript, compiled as the image compiles it (backend/ui_build.py refuses a missing build). A
+          # candidate from before the build step has nothing to compile.
+          if [ -f scripts/build-ui.cjs ]; then npm ci --no-audit --no-fund && npm run --silent build:ui; fi
       # One real collection validates the filesystem shard plan while native-linux is still building. The other
       # 27 Python VMs never collect the whole suite; python-1 has about two minutes of binary-wait slack here.
       - name: Check Python shard coverage during the native build
@@ -462,11 +524,22 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/junit"
           echo "PYTEST_ADDOPTS=$PYTEST_ADDOPTS -o junit_family=xunit1 --junitxml=$RUNNER_TEMP/junit/python-${TICO_RELEASE_SHARD//\//-of-}.xml" >> "$GITHUB_ENV"
+      - name: Write the browser part's per-script seconds (ui-tests.cjs TICO_UI_TIMINGS), for the PR check groups
+        if: matrix.part == 'browser'
+        run: |
+          mkdir -p "$RUNNER_TEMP/junit"
+          echo "TICO_UI_TIMINGS=$RUNNER_TEMP/junit/browser-${TICO_RELEASE_SHARD//\//-of-}.json" >> "$GITHUB_ENV"
+      - name: Write the incremental plan this VM runs from
+        if: needs.candidate.outputs.plan != ''
+        env:
+          PLAN: ${{ needs.candidate.outputs.plan }}
+        run: printf '%s\n' "$PLAN" > "$RUNNER_TEMP/increment-plan.json"
       - name: Run the candidate's unchanged release gate, this part
         # The helper takes its slice only from --part/--shard (argparse), never from the environment.
         run: |
           set -- --part "$TICO_RELEASE_PART"
           [ -z "$TICO_RELEASE_SHARD" ] || set -- "$@" --shard "$TICO_RELEASE_SHARD"
+          [ -z "$TICO_INCREMENT_SUITE" ] || set -- "$@" --plan "$RUNNER_TEMP/increment-plan.json" --suite "$TICO_INCREMENT_SUITE"
           "$RUNNER_TEMP/release-venv/bin/python" validation-control/scripts/hosted_release_check.py run "$@"
       - name: Collect only bounded validation logs
         if: always()
@@ -482,7 +555,7 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always() && matrix.part == 'python'
+        if: always() && (matrix.part == 'python' || matrix.part == 'browser')
         with:
           name: release-junit-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
           path: ${{ runner.temp }}/junit
@@ -490,21 +563,26 @@ jobs:
           if-no-files-found: warn
 
   # The factory simulation (evals/factory): scripted bots work the candidate's Dev board on a fake clock, seeds 1-3,
-  # packed into eight groups (each VM now has half the work it had in four). A failed check fails the release; NOTE
-  # lines (tickets that ran long) go in the job summary for the Release Manager. A candidate frozen before the sim
-  # could shard skips it.
+  # packed into seven groups of about equal time, each VM running four scenarios at a time (-j 4). A failed check
+  # fails the release; NOTE lines (tickets that ran long) go in the job summary for the Release Manager. A candidate
+  # frozen before the sim could shard skips it.
   factory-sim:
     needs: candidate
+    # An incremental validation runs the sim only when its plan says a change reaches it (release_increment.plan_for).
+    if: needs.candidate.outputs.plan == '' || fromJSON(needs.candidate.outputs.plan).factory
     name: factory-sim-${{ matrix.shard }}
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/spot=false/extras=s3-cache
+    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1', '2', '3', '4', '5', '6', '7', '8']
+        shard: ['1', '2', '3', '4', '5', '6', '7']
     env:
       PYTHONUNBUFFERED: '1'
     steps:
+      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
+        if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.candidate.outputs.sha }}
@@ -533,18 +611,46 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           set -o pipefail
-          "$RUNNER_TEMP/venv/bin/python" -W ignore -m evals.factory.run --seeds 1-3 --shard "$SHARD/8" -j 4 2>&1 \
+          "$RUNNER_TEMP/venv/bin/python" -W ignore -m evals.factory.run --seeds 1-3 --shard "$SHARD/7" -j 4 2>&1 \
             | tee "$RUNNER_TEMP/sim.log"
       - if: always() && steps.has.outputs.run == 'true'
         name: Summary
         run: |
-          { echo "### Factory sim, group ${{ matrix.shard }} of 8"; echo '```'
+          { echo "### Factory sim, group ${{ matrix.shard }} of 7"; echo '```'
             awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
             echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+  # Per-file and per-script seconds from this gate's reports, in the format PR checks size their groups from
+  # (scripts/pr_checks.py durations). Optional: it never changes the release verdict or the run's conclusion.
+  test-timings:
+    needs: gate
+    # A full validation's timings only: an incremental one measures a part of the gate.
+    if: inputs.anchor == ''
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts/pr_checks.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-junit-${{ github.run_id }}-*
+          path: ci-results
+          merge-multiple: true
+      - run: python3 scripts/pr_checks.py durations
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings
+          path: durations.json
+          retention-days: 30
+
   # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
-    needs: [gate, factory-sim, images]
+    needs: [candidate, gate, factory-sim, images]
     if: always()
     # Only compares results: GitHub-hosted starts in seconds, where a RunsOn VM boots for ~20 s at the run's very end.
     runs-on: ubuntu-24.04
@@ -555,6 +661,11 @@ jobs:
           GATE: ${{ needs.gate.result }}
           SIM: ${{ needs.factory-sim.result }}
           IMAGES: ${{ needs.images.result }}
+          PLAN: ${{ needs.candidate.outputs.plan }}
         run: |
           echo "Release gate parts: $GATE; factory sim: $SIM; images: $IMAGES"
-          test "$GATE" = success && test "$SIM" = success && test "$IMAGES" = success
+          # An incremental validation's plan may leave the factory sim out: a skipped sim is then the plan's choice.
+          sim_ok=false
+          [ "$SIM" = success ] && sim_ok=true
+          [ "$SIM" = skipped ] && [ -n "$PLAN" ] && [ "$(jq -r .factory <<<"$PLAN")" = false ] && sim_ok=true
+          test "$GATE" = success && [ "$sim_ok" = true ] && test "$IMAGES" = success

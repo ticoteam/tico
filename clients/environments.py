@@ -33,7 +33,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from backend import providers as PROVIDERS  # noqa: E402  the one provider -> runtime -> model map
+from backend import providers as PROVIDERS  # the one provider -> runtime -> model map
 
 TEMPLATE_DIR = ROOT / "templates/environment-registry"
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -119,7 +119,8 @@ def provider_choice(providers, default_runtime="", default_model=""):
             raise ValueError(
                 "--providers is required: name the AI providers this company uses, e.g. "
                 "--providers anthropic,openai (choose from " + ", ".join(PROVIDERS.PROVIDER_BY_ID) + "). "
-                "Tico assumes no vendor; --default-runtime and --default-model pick the default.")
+                "Tico assumes no vendor; --default-runtime and --default-model pick the default."
+            )
         runtime, model = PROVIDERS.complete_choice(enabled, default_runtime, default_model)
     except PROVIDERS.ProviderError as exc:
         raise ValueError(exc.detail) from exc
@@ -128,18 +129,20 @@ def provider_choice(providers, default_runtime="", default_model=""):
 
 def server_values(environment, directory, owner_email, github_owner=""):
     """The backend process's configuration for a local server, as KEY=VALUE pairs."""
-    values = {"TICO_DB": str(directory / "hub.sqlite"),
-              "TICO_BLOB_DIR": str(directory / "blobs"),
-              "TICO_REGISTRY_DIR": str(directory / "registry"),
-              "TICO_PUBLIC_URL": environment["url"],
-              "TICO_RUNNER_URL": environment["url"],
-              "TICO_ENVIRONMENT_ID": environment["id"],
-              "TICO_COMPANY_NAME": environment["company_name"],
-              "TICO_APP_NAME": environment["app_name"],
-              "TICO_ASSISTANT_NAME": environment["assistant_name"],
-              "TICO_OWNER_EMAIL": owner_email,
-              "TICO_LOCAL_OWNER_TOKEN_FILE": str(directory / "local-owner.token"),
-              "TICO_SCHEDULER": "1"}
+    values = {
+        "TICO_DB": str(directory / "hub.sqlite"),
+        "TICO_BLOB_DIR": str(directory / "blobs"),
+        "TICO_REGISTRY_DIR": str(directory / "registry"),
+        "TICO_PUBLIC_URL": environment["url"],
+        "TICO_RUNNER_URL": environment["url"],
+        "TICO_ENVIRONMENT_ID": environment["id"],
+        "TICO_COMPANY_NAME": environment["company_name"],
+        "TICO_APP_NAME": environment["app_name"],
+        "TICO_ASSISTANT_NAME": environment["assistant_name"],
+        "TICO_OWNER_EMAIL": owner_email,
+        "TICO_LOCAL_OWNER_TOKEN_FILE": str(directory / "local-owner.token"),
+        "TICO_SCHEDULER": "1",
+    }
     if github_owner:
         values["TICO_GITHUB_OWNER"] = github_owner
     provider = environment.get("providers") or {}
@@ -175,10 +178,14 @@ def seed_registry(directory, owner_name, owner_email, environment):
     """Copy the fictional seed roster in, with this company's owner and names substituted."""
     registry = directory / "registry"
     registry.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fields = {"owner_name": owner_name, "owner_email": owner_email,
-              "owner_id": re.sub(r"[^a-z0-9-]", "-", owner_email.split("@")[0].lower()) or "owner",
-              "company_name": environment["company_name"], "app_name": environment["app_name"],
-              "assistant_name": environment["assistant_name"]}
+    fields = {
+        "owner_name": owner_name,
+        "owner_email": owner_email,
+        "owner_id": re.sub(r"[^a-z0-9-]", "-", owner_email.split("@")[0].lower()) or "owner",
+        "company_name": environment["company_name"],
+        "app_name": environment["app_name"],
+        "assistant_name": environment["assistant_name"],
+    }
     for template in sorted(TEMPLATE_DIR.glob("*.yaml")):
         text = template.read_text()
         for key, value in fields.items():
@@ -202,9 +209,13 @@ def seed_database(directory, workspace, values, python=sys.executable):
     deleted rather than handed over, because it is exactly what an environment must never hold.
     """
     database = Path(values["TICO_DB"])
-    result = subprocess.run([python, "-m", "backend.manage", "initialize", str(database),
-                             "--projects", str(workspace)], cwd=ROOT, capture_output=True,
-                            text=True, env={**os.environ, **values})
+    result = subprocess.run(
+        [python, "-m", "backend.manage", "initialize", str(database), "--projects", str(workspace)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **values},
+    )
     if result.returncode:
         raise RuntimeError("Seeding the database failed: " + (result.stderr.strip().splitlines() or [""])[-1])
     try:
@@ -221,13 +232,27 @@ def seed_database(directory, workspace, values, python=sys.executable):
             f"backend does not read TICO_REGISTRY_DIR yet, so it used {ROOT / 'registry'}. The database "
             f"has been deleted; the rest of the environment is in place. Seed it with "
             f"`python -m backend.manage initialize {database} --projects {workspace}` once the backend "
-            f"reads the registry directory.")
+            f"reads the registry directory."
+        )
     return bots
 
 
-def create(slug, *, company, app="", assistant="", owner_email, owner_name="", url="",
-           workspace="", github_owner="", skip_seed=False, providers="", default_runtime="",
-           default_model=""):
+def create(
+    slug,
+    *,
+    company,
+    app="",
+    assistant="",
+    owner_email,
+    owner_name="",
+    url="",
+    workspace="",
+    github_owner="",
+    skip_seed=False,
+    providers="",
+    default_runtime="",
+    default_model="",
+):
     """Write a new environment. `url` empty means a local server on a free loopback port.
 
     `providers` is required: the choice is stored in environment.json and, for a local server,
@@ -239,13 +264,18 @@ def create(slug, *, company, app="", assistant="", owner_email, owner_name="", u
         raise ValueError("That environment already exists: " + str(directory))
     app = app or company
     assistant = assistant or app
-    environment = {"id": new_id(), "slug": slug, "company_name": company, "app_name": app,
-                   "assistant_name": assistant, "url": url.rstrip("/"),
-                   "server": "remote" if url else "local",
-                   "providers": {"enabled": enabled, "runtime": runtime, "model": model},
-                   "workspace": str(Path(workspace).expanduser() if workspace
-                                    else Path.home() / "Companies" / company),
-                   "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    environment = {
+        "id": new_id(),
+        "slug": slug,
+        "company_name": company,
+        "app_name": app,
+        "assistant_name": assistant,
+        "url": url.rstrip("/"),
+        "server": "remote" if url else "local",
+        "providers": {"enabled": enabled, "runtime": runtime, "model": model},
+        "workspace": str(Path(workspace).expanduser() if workspace else Path.home() / "Companies" / company),
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
     if not url:
         environment["port"] = free_port()
         environment["url"] = f"http://127.0.0.1:{environment['port']}"
@@ -260,8 +290,7 @@ def create(slug, *, company, app="", assistant="", owner_email, owner_name="", u
         seed_registry(directory, owner_name or owner_email, owner_email, environment)
         values = server_values(environment, directory, owner_email, github_owner)
         write_server_env(directory, values)
-        report["bots"] = ("not seeded" if skip_seed
-                          else seed_database(directory, environment["workspace"], values))
+        report["bots"] = "not seeded" if skip_seed else seed_database(directory, environment["workspace"], values)
     return report
 
 
@@ -274,9 +303,12 @@ def remove(slug, delete_data=False):
     data = [name for name in DATA_NAMES if (directory / name).exists()]
     data += [item.name for item in directory.glob("state-*")]
     if data and not delete_data:
-        raise ValueError("This environment still holds " + ", ".join(sorted(data))
-                         + ". Stop its services, take a backup, then repeat with --delete-data."
-                         " Its workspace at " + workspace + " is never deleted either way.")
+        raise ValueError(
+            "This environment still holds "
+            + ", ".join(sorted(data))
+            + ". Stop its services, take a backup, then repeat with --delete-data."
+            " Its workspace at " + workspace + " is never deleted either way."
+        )
     shutil.rmtree(directory)
     return {"removed": str(directory), "workspace_kept": workspace}
 
@@ -296,10 +328,14 @@ def main(argv=None):
     where.add_argument("--url", default="", help="An already hosted server, https://...")
     p.add_argument("--workspace", default="", help="Bot checkouts and secrets; default ~/Companies/<Company>")
     p.add_argument("--github-owner", default="", help="GitHub organization for this company's bot repositories")
-    p.add_argument("--providers", default="",
-                   help="Required. Comma-separated AI providers this company uses: "
-                        + ", ".join(PROVIDERS.PROVIDER_BY_ID))
-    p.add_argument("--default-runtime", default="", help="Runtime bots use by default; must belong to an enabled provider")
+    p.add_argument(
+        "--providers",
+        default="",
+        help="Required. Comma-separated AI providers this company uses: " + ", ".join(PROVIDERS.PROVIDER_BY_ID),
+    )
+    p.add_argument(
+        "--default-runtime", default="", help="Runtime bots use by default; must belong to an enabled provider"
+    )
     p.add_argument("--default-model", default="", help="Model bots use by default; defaults to the recommended model")
     p.add_argument("--skip-seed", action="store_true", help="Create the files but do not initialize the database")
     sub.add_parser("list")
@@ -322,8 +358,16 @@ def main(argv=None):
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
         directory = path(args.slug)
-        print(json.dumps({**environment, "directory": str(directory),
-                          "files": sorted(item.name for item in directory.iterdir())}, indent=2))
+        print(
+            json.dumps(
+                {
+                    **environment,
+                    "directory": str(directory),
+                    "files": sorted(item.name for item in directory.iterdir()),
+                },
+                indent=2,
+            )
+        )
         return 0
     try:
         if args.command == "create":
@@ -334,11 +378,21 @@ def main(argv=None):
                     args.default_model = input("default model (blank for the recommended one): ").strip()
             if args.url and not args.url.startswith(("http://", "https://")):
                 parser.error("--url is the server's address, https://...")
-            report = create(args.slug, company=args.company, app=args.app, assistant=args.assistant,
-                            owner_email=args.owner_email, owner_name=args.owner_name, url=args.url,
-                            workspace=args.workspace, github_owner=args.github_owner,
-                            skip_seed=args.skip_seed, providers=args.providers,
-                            default_runtime=args.default_runtime, default_model=args.default_model)
+            report = create(
+                args.slug,
+                company=args.company,
+                app=args.app,
+                assistant=args.assistant,
+                owner_email=args.owner_email,
+                owner_name=args.owner_name,
+                url=args.url,
+                workspace=args.workspace,
+                github_owner=args.github_owner,
+                skip_seed=args.skip_seed,
+                providers=args.providers,
+                default_runtime=args.default_runtime,
+                default_model=args.default_model,
+            )
         else:
             report = remove(args.slug, args.delete_data)
     except (ValueError, OSError, RuntimeError) as exc:

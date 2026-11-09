@@ -2,6 +2,7 @@
 dream_auto's: the changed lines, the lookback, the gaps and the busy checks. The 02:00 timer is gone; this step is its
 only trigger. No customer tokens are counted here: a started dream is a task, and its turns are the bot's own.
 """
+
 from .. import dream, dream_auto
 from ..store import H
 
@@ -25,9 +26,18 @@ def run(c, ctx):
     # Only limiter refusals leave the daily attempt unused. A start or any other refusal still counts for the day.
     limited = report.get("limited", [])
     retry = bool(limited) and not started and len(limited) == len(report.get("held", []))
-    return {"status": "skipped" if retry else "ran",
-            "reason": "maintenance wake limits" if retry else report.get("reason", ""), "checked": report.get("judged", 0),
-            "found": report.get("due", 0), "woke": len(started), "cost_usd": 0.0,
-            "details": {"started": report.get("started", []), "held": report.get("held", []),
-                        "limited": limited,
-                        "over": report.get("over", 0), "limit": limit}}
+    return {
+        "status": "skipped" if retry else "ran",
+        "reason": "maintenance wake limits" if retry else report.get("reason", ""),
+        "checked": report.get("judged", 0),
+        "found": report.get("due", 0),
+        "woke": len(started),
+        "cost_usd": 0.0,
+        "details": {
+            "started": report.get("started", []),
+            "held": report.get("held", []),
+            "limited": limited,
+            "over": report.get("over", 0),
+            "limit": limit,
+        },
+    }

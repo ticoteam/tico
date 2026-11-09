@@ -10,6 +10,7 @@ Also here: the resource counters a stall is classified by (cpu, memory, disk, lo
 SIGUSR1 writes every thread's stack to `stacks.txt` (faulthandler, so it works while the event loop is stuck in C),
 SIGUSR2 starts tracemalloc and, sent again, writes the top 50 allocation sites and stops it.
 """
+
 import collections
 import json
 import logging
@@ -26,9 +27,9 @@ LOG = logging.getLogger("tico.flight")
 FORMAT = 1
 NAME = "flight.ndjson"
 MAX_BYTES = 10 * 1024 * 1024
-KEEP = 10                       # the live file and nine rotated ones
+KEEP = 10  # the live file and nine rotated ones
 QUEUE = 10_000
-STACKS = "stacks.txt"           # SIGUSR1's dumps, appended; started over past STACKS_MAX
+STACKS = "stacks.txt"  # SIGUSR1's dumps, appended; started over past STACKS_MAX
 STACKS_MAX = 2 * 1024 * 1024
 PID = "server.pid"
 
@@ -49,6 +50,7 @@ def _private_dir(path):
 
 # ---------------------------------------------------------------------------- the writer
 
+
 class Writer(threading.Thread):
     """Appends records to the file from a bounded queue. `put` never blocks: when the queue is full the record is
     dropped and counted, and the count is written as a `drops` record once there is room."""
@@ -58,7 +60,7 @@ class Writer(threading.Thread):
         self.folder, self.max_bytes, self.keep = Path(folder), max_bytes, keep
         self.path = self.folder / NAME
         self.queue = queue.Queue(maxsize=size)
-        self.dropped = 0            # records lost to a full queue or a failed write, since the start
+        self.dropped = 0  # records lost to a full queue or a failed write, since the start
         self.reported = 0
         self.written = 0
         self.file = None
@@ -93,8 +95,12 @@ class Writer(threading.Thread):
             lines = [json.dumps(r, separators=(",", ":"), default=str) + "\n" for r in batch if r is not None]
             if self.dropped > self.reported:
                 n, self.reported = self.dropped - self.reported, self.dropped
-                lines.append(json.dumps({"v": FORMAT, "ts": round(time.time(), 3), "kind": "drops", "n": n},
-                                        separators=(",", ":")) + "\n")
+                lines.append(
+                    json.dumps(
+                        {"v": FORMAT, "ts": round(time.time(), 3), "kind": "drops", "n": n}, separators=(",", ":")
+                    )
+                    + "\n"
+                )
             self._write(lines)
             if stop:
                 if self.file:
@@ -119,7 +125,7 @@ class Writer(threading.Thread):
             self.file.flush()
         except OSError as exc:
             self.dropped += len(lines)
-            self.reported = self.dropped        # nowhere to report them: the file is what failed
+            self.reported = self.dropped  # nowhere to report them: the file is what failed
             LOG.warning("Flight file write failed: %s", type(exc).__name__)
             try:
                 if self.file:
@@ -159,11 +165,12 @@ def rss_now():
         try:
             import ctypes
             import struct
+
             if _LIBPROC is None:
                 _LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib")
             buf = ctypes.create_string_buffer(512)
-            if _LIBPROC.proc_pid_rusage(os.getpid(), 0, buf) == 0:       # RUSAGE_INFO_V0
-                return struct.unpack_from("<Q", buf, 64)[0]               # ri_resident_size
+            if _LIBPROC.proc_pid_rusage(os.getpid(), 0, buf) == 0:  # RUSAGE_INFO_V0
+                return struct.unpack_from("<Q", buf, 64)[0]  # ri_resident_size
         except Exception:
             _LIBPROC = False
     try:
@@ -188,16 +195,35 @@ def counters(lock_wait_ms=0.0):
     bytes (Linux), resident memory, and the write-lock wait finished so far (ms)."""
     u = resource.getrusage(resource.RUSAGE_SELF)
     io = _io()
-    return (time.monotonic(), u.ru_utime, u.ru_stime, u.ru_majflt, u.ru_minflt, u.ru_nivcsw, u.ru_inblock,
-            u.ru_oublock, io[0] if io else None, io[1] if io else None, rss_now(), lock_wait_ms)
+    return (
+        time.monotonic(),
+        u.ru_utime,
+        u.ru_stime,
+        u.ru_majflt,
+        u.ru_minflt,
+        u.ru_nivcsw,
+        u.ru_inblock,
+        u.ru_oublock,
+        io[0] if io else None,
+        io[1] if io else None,
+        rss_now(),
+        lock_wait_ms,
+    )
 
 
 # A stall's class, from what the process did while the event loop was not waking. Checked in this order; the first that
 # holds wins. `lock_share`: the write-lock wait in the window (finished waits plus waits still going) over the window;
 # `cpu_share`: CPU seconds over the window (1.0 = one core busy); `majflt`: page faults that read from storage
 # (memory pressure); `io_mb`: storage megabytes read and written (Linux), or block operations elsewhere.
-RULES = {"lock_share": 0.5, "majflt": 50, "rss_mb": 512, "cpu_share": 0.8, "nivcsw_per_s": 200, "io_mb": 50,
-         "blocks": 2000}
+RULES = {
+    "lock_share": 0.5,
+    "majflt": 50,
+    "rss_mb": 512,
+    "cpu_share": 0.8,
+    "nivcsw_per_s": 200,
+    "io_mb": 50,
+    "blocks": 2000,
+}
 
 
 def classify(d, rules=RULES):
@@ -238,12 +264,18 @@ class Usage:
         window_ms = max((end[0] - first[0]) * 1000, 1.0)
         going = sum(max(0.0, now - max(w, first[0])) for w in waiting) * 1000
         io = None if end[8] is None or first[8] is None else (end[8] - first[8] + end[9] - first[9]) / 1e6
-        return {"window_ms": round(window_ms), "cpu_s": round(end[1] - first[1] + end[2] - first[2], 3),
-                "majflt": end[3] - first[3], "minflt": end[4] - first[4], "nivcsw": end[5] - first[5],
-                "inblock": end[6] - first[6], "oublock": end[7] - first[7],
-                "io_mb": round(io, 1) if io is not None else None,
-                "rss_mb": round((end[10] - first[10]) / 1e6, 1) if end[10] and first[10] else None,
-                "lock_ms": round(end[11] - first[11] + going)}
+        return {
+            "window_ms": round(window_ms),
+            "cpu_s": round(end[1] - first[1] + end[2] - first[2], 3),
+            "majflt": end[3] - first[3],
+            "minflt": end[4] - first[4],
+            "nivcsw": end[5] - first[5],
+            "inblock": end[6] - first[6],
+            "oublock": end[7] - first[7],
+            "io_mb": round(io, 1) if io is not None else None,
+            "rss_mb": round((end[10] - first[10]) / 1e6, 1) if end[10] and first[10] else None,
+            "lock_ms": round(end[11] - first[11] + going),
+        }
 
 
 # ---------------------------------------------------------------------------- signals
@@ -257,6 +289,7 @@ def install_signals(folder, writer=None):
     set there); neither signal is used by uvicorn or litestream, which forwards only SIGINT and SIGTERM, so a signal
     sent to the container's first process does not reach the server: send it to the pid in `server.pid`."""
     import signal
+
     if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "SIGUSR1"):
         return False
     folder = Path(folder)
@@ -267,6 +300,7 @@ def install_signals(folder, writer=None):
         if path.exists() and path.stat().st_size > STACKS_MAX:
             path.unlink()
         import faulthandler
+
         old = _SIGNALS.pop("stacks", None)
         if old:
             old.close()
@@ -279,6 +313,7 @@ def install_signals(folder, writer=None):
     def memory(signum, frame):
         # Snapshots take a while: off the main thread, which is the event loop.
         threading.Thread(target=memory_toggle, args=(folder, writer), name="tico-flight-memory", daemon=True).start()
+
     try:
         signal.signal(signal.SIGUSR2, memory)
     except (OSError, ValueError) as exc:
@@ -288,6 +323,7 @@ def install_signals(folder, writer=None):
 
 def memory_toggle(folder, writer=None, top=50):
     import tracemalloc
+
     if not tracemalloc.is_tracing():
         tracemalloc.start(1)
         LOG.warning("Flight: tracemalloc started; send SIGUSR2 again to write the top %d allocation sites", top)
@@ -298,8 +334,11 @@ def memory_toggle(folder, writer=None, top=50):
     traced, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     from .flight import _where
-    rows = [{"where": f"{_where(s.traceback[0].filename)}:{s.traceback[0].lineno}", "bytes": s.size, "count": s.count}
-            for s in snapshot.statistics("lineno")[:top]]
+
+    rows = [
+        {"where": f"{_where(s.traceback[0].filename)}:{s.traceback[0].lineno}", "bytes": s.size, "count": s.count}
+        for s in snapshot.statistics("lineno")[:top]
+    ]
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     try:
         _private_dir(Path(folder))
@@ -316,6 +355,7 @@ def memory_toggle(folder, writer=None, top=50):
 
 
 # ---------------------------------------------------------------------------- reading the files
+
 
 def _names():
     return [f"{NAME}.{i}" for i in range(KEEP + 5, 0, -1)] + [NAME]
@@ -385,12 +425,12 @@ def records(folder, since=0.0, opener=None):
                 start = _start(f, st.st_size, since) if since and st.st_size > TAIL_FROM else 0
                 f.seek(start)
                 if start:
-                    f.readline()                    # the line the search landed inside
+                    f.readline()  # the line the search landed inside
                 for line in f:
                     try:
                         r = json.loads(line)
                     except ValueError:
-                        continue                    # a line cut short by a crash
+                        continue  # a line cut short by a crash
                     if isinstance(r, dict) and (r.get("ts") or 0) >= since:
                         yield r
         except OSError:
@@ -409,7 +449,7 @@ def quantiles(buckets, qs=(0.5, 0.95, 0.99)):
         p50 = max(p50 or 0, 0)
         p95 = max(p95 or 0, p50)
         top = max(top or 0, p95)
-        for a, b, share in ((0, p50, .5), (p50, p95, .45), (p95, top, .05)):
+        for a, b, share in ((0, p50, 0.5), (p50, p95, 0.45), (p95, top, 0.05)):
             w = n * share
             if b > a:
                 events += [(a, w / (b - a), 0.0), (b, -w / (b - a), 0.0)]
@@ -447,9 +487,21 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12, ope
             for x in r.get("routes") or []:
                 buckets.append((x.get("n") or 0, x.get("p50"), x.get("p95"), x.get("max_ms")))
                 errors += x.get("errors") or 0
-                m = routes.setdefault(x.get("route"), {"route": x.get("route"), "n": 0, "errors": 0, "total_ms": 0.0,
-                                                        "max_ms": 0.0, "p95": 0.0, "bytes": 0, "bytes_max": 0,
-                                                        "sql_ms": 0.0, "wait_ms": 0.0})
+                m = routes.setdefault(
+                    x.get("route"),
+                    {
+                        "route": x.get("route"),
+                        "n": 0,
+                        "errors": 0,
+                        "total_ms": 0.0,
+                        "max_ms": 0.0,
+                        "p95": 0.0,
+                        "bytes": 0,
+                        "bytes_max": 0,
+                        "sql_ms": 0.0,
+                        "wait_ms": 0.0,
+                    },
+                )
                 m["n"] += x.get("n") or 0
                 m["errors"] += x.get("errors") or 0
                 m["total_ms"] += x.get("total_ms") or 0
@@ -491,12 +543,20 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12, ope
     for s in chosen:
         end = ends.get(s.get("id"))
         threads = (s.get("threads") or {}).get("busy") or []
-        out_stalls.append({"ts": s.get("ts"), "seconds": end.get("seconds") if end else s.get("seconds"),
-                           "ongoing": end is None, "class": (end or s).get("class"),
-                           "usage": (end or s).get("usage"),
-                           "threads": [{"thread": t.get("thread"), "loop": t.get("loop"),
-                                        "stack": (t.get("stack") or [])[-stack_frames:]} for t in threads[:8]],
-                           "idle_threads": (s.get("threads") or {}).get("idle")})
+        out_stalls.append(
+            {
+                "ts": s.get("ts"),
+                "seconds": end.get("seconds") if end else s.get("seconds"),
+                "ongoing": end is None,
+                "class": (end or s).get("class"),
+                "usage": (end or s).get("usage"),
+                "threads": [
+                    {"thread": t.get("thread"), "loop": t.get("loop"), "stack": (t.get("stack") or [])[-stack_frames:]}
+                    for t in threads[:8]
+                ],
+                "idle_threads": (s.get("threads") or {}).get("idle"),
+            }
+        )
     waits = [m for m in minutes if (m.get("wait_max") or 0) >= 1000 or m.get("locked")]
     folder = Path(folder)
     dump = None
@@ -512,22 +572,59 @@ def summary(folder, since_s=1800, now=None, stall_limit=10, stack_frames=12, ope
     def peak(key):
         values = [m.get(key) for m in minutes if m.get(key) is not None]
         return max(values) if values else None
-    return {"folder": str(folder), "since": round(since), "now": round(now), "starts": starts,
-            "routes": sorted(routes.values(), key=lambda x: -x["total_ms"])[:15],
-            "slow": sorted(slow, key=lambda x: -(x.get("ms") or 0))[:15],
-            "long_holds": sorted(holds, key=lambda x: -(x.get("hold_s") or 0))[:15],
-            "stalls": out_stalls, "stalls_total": len(stalls),
-            "minutes": [{k: m.get(k) for k in ("ts", "cpu", "rss", "lag_max", "requests", "wait_max", "wait_ms",
-                                                "hold_max", "locked", "dropped", "db_failed", "db_pending", "sql_ms",
-                                                "queries", "threads")}
-                        for m in minutes],
-            "requests": dict(zip(("p50", "p95", "p99"), quantiles(buckets), strict=True),
-                             count=sum(b[0] for b in buckets), errors=errors),
-            "peaks": {"cpu": peak("cpu"), "rss": peak("rss"), "lag_max": peak("lag_max"), "wait_max": peak("wait_max"),
-                      "hold_max": peak("hold_max")},
-            "lock_waits": {"minutes": len(waits), "wait_ms": round(sum(m.get("wait_ms") or 0 for m in minutes)),
-                           "locked": sum(m.get("locked") or 0 for m in minutes)},
-            "drops": drops, "stack_dump": dump, "memory": memory[-1:] if memory else []}
+
+    return {
+        "folder": str(folder),
+        "since": round(since),
+        "now": round(now),
+        "starts": starts,
+        "routes": sorted(routes.values(), key=lambda x: -x["total_ms"])[:15],
+        "slow": sorted(slow, key=lambda x: -(x.get("ms") or 0))[:15],
+        "long_holds": sorted(holds, key=lambda x: -(x.get("hold_s") or 0))[:15],
+        "stalls": out_stalls,
+        "stalls_total": len(stalls),
+        "minutes": [
+            {
+                k: m.get(k)
+                for k in (
+                    "ts",
+                    "cpu",
+                    "rss",
+                    "lag_max",
+                    "requests",
+                    "wait_max",
+                    "wait_ms",
+                    "hold_max",
+                    "locked",
+                    "dropped",
+                    "db_failed",
+                    "db_pending",
+                    "sql_ms",
+                    "queries",
+                    "threads",
+                )
+            }
+            for m in minutes
+        ],
+        "requests": dict(
+            zip(("p50", "p95", "p99"), quantiles(buckets), strict=True), count=sum(b[0] for b in buckets), errors=errors
+        ),
+        "peaks": {
+            "cpu": peak("cpu"),
+            "rss": peak("rss"),
+            "lag_max": peak("lag_max"),
+            "wait_max": peak("wait_max"),
+            "hold_max": peak("hold_max"),
+        },
+        "lock_waits": {
+            "minutes": len(waits),
+            "wait_ms": round(sum(m.get("wait_ms") or 0 for m in minutes)),
+            "locked": sum(m.get("locked") or 0 for m in minutes),
+        },
+        "drops": drops,
+        "stack_dump": dump,
+        "memory": memory[-1:] if memory else [],
+    }
 
 
 def _clock(ts):
@@ -546,43 +643,61 @@ def render(s):
     out.append(f"\nStalls ({s['stalls_total']}):" if s["stalls_total"] else "\nStalls: none")
     for st in s["stalls"]:
         u = st.get("usage") or {}
-        out.append(f"  {_clock(st['ts'])} {st.get('seconds')}s{' (still going)' if st['ongoing'] else ''} "
-                   f"class={st.get('class')} cpu={u.get('cpu_s')}s lock_wait={u.get('lock_ms')}ms "
-                   f"majflt={u.get('majflt')} io={'-' if u.get('io_mb') is None else str(u['io_mb']) + 'MB'} "
-                   f"blocks={(u.get('inblock') or 0) + (u.get('oublock') or 0)}")
+        out.append(
+            f"  {_clock(st['ts'])} {st.get('seconds')}s{' (still going)' if st['ongoing'] else ''} "
+            f"class={st.get('class')} cpu={u.get('cpu_s')}s lock_wait={u.get('lock_ms')}ms "
+            f"majflt={u.get('majflt')} io={'-' if u.get('io_mb') is None else str(u['io_mb']) + 'MB'} "
+            f"blocks={(u.get('inblock') or 0) + (u.get('oublock') or 0)}"
+        )
         for t in st["threads"]:
             out.append(f"    {'[loop] ' if t.get('loop') else ''}{t.get('thread')}:")
             out += [f"      {frame}" for frame in reversed(t.get("stack") or [])]
     out.append("\nSlowest routes (by total time):")
-    out.append(f"  {'route':<48} {'n':>6} {'total s':>8} {'p95 ms':>8} {'max ms':>8} {'sql ms':>8} {'lock ms':>8} "
-               f"{'avg B':>8} {'max B':>9}")
+    out.append(
+        f"  {'route':<48} {'n':>6} {'total s':>8} {'p95 ms':>8} {'max ms':>8} {'sql ms':>8} {'lock ms':>8} "
+        f"{'avg B':>8} {'max B':>9}"
+    )
     for r in s["routes"]:
-        out.append(f"  {str(r['route'])[:48]:<48} {r['n']:>6} {r['total_ms'] / 1000:>8.1f} {r['p95']:>8.0f} "
-                   f"{r['max_ms']:>8.0f} {r['sql_ms']:>8.0f} {r['wait_ms']:>8.0f} {r['avg_bytes']:>8} {r['bytes_max']:>9}")
+        out.append(
+            f"  {str(r['route'])[:48]:<48} {r['n']:>6} {r['total_ms'] / 1000:>8.1f} {r['p95']:>8.0f} "
+            f"{r['max_ms']:>8.0f} {r['sql_ms']:>8.0f} {r['wait_ms']:>8.0f} {r['avg_bytes']:>8} {r['bytes_max']:>9}"
+        )
     if s["slow"]:
         out.append("\nSlow requests:")
         for r in s["slow"]:
-            out.append(f"  {_clock(r.get('ts'))} {r.get('route')} {r.get('ms')}ms status {r.get('status')} "
-                       f"sql {r.get('sql_ms')}ms lock wait {r.get('wait_ms')}ms queries {r.get('queries')} "
-                       f"bytes {r.get('bytes')}")
+            out.append(
+                f"  {_clock(r.get('ts'))} {r.get('route')} {r.get('ms')}ms status {r.get('status')} "
+                f"sql {r.get('sql_ms')}ms lock wait {r.get('wait_ms')}ms queries {r.get('queries')} "
+                f"bytes {r.get('bytes')}"
+            )
             out += [f"    {t.get('ms')}ms {t.get('n')}x {str(t.get('sql'))[:160]}" for t in r.get("top") or []]
     if s.get("long_holds"):
         out.append("\nWrite lock held longest (who held it):")
         for h in s["long_holds"]:
-            out.append(f"  {_clock(h.get('ts'))} {h.get('hold_s')}s{' (still held)' if h.get('open') else ''} "
-                       f"{h.get('route') or 'background job'} at {h.get('site') or '?'}")
+            out.append(
+                f"  {_clock(h.get('ts'))} {h.get('hold_s')}s{' (still held)' if h.get('open') else ''} "
+                f"{h.get('route') or 'background job'} at {h.get('site') or '?'}"
+            )
     p = s["peaks"]
-    out.append(f"\nPer minute (peaks: cpu {p['cpu']}%, rss {_mb(p['rss'])}, loop lag {p['lag_max']}ms, "
-               f"lock wait {p['wait_max']}ms, hold {p['hold_max']}ms):")
-    out.append(f"  {'minute':<9} {'cpu%':>6} {'rss':>7} {'lag ms':>8} {'reqs':>6} {'wait max':>9} {'hold max':>9} "
-               f"{'locked':>6}")
+    out.append(
+        f"\nPer minute (peaks: cpu {p['cpu']}%, rss {_mb(p['rss'])}, loop lag {p['lag_max']}ms, "
+        f"lock wait {p['wait_max']}ms, hold {p['hold_max']}ms):"
+    )
+    out.append(
+        f"  {'minute':<9} {'cpu%':>6} {'rss':>7} {'lag ms':>8} {'reqs':>6} {'wait max':>9} {'hold max':>9} "
+        f"{'locked':>6}"
+    )
     for m in s["minutes"][-30:]:
-        out.append(f"  {_clock(m['ts']):<9} {m.get('cpu') if m.get('cpu') is not None else '-':>6} {_mb(m.get('rss')):>7} "
-                   f"{m.get('lag_max') or 0:>8} {m.get('requests') or 0:>6} {m.get('wait_max') or 0:>9} "
-                   f"{m.get('hold_max') or 0:>9} {m.get('locked') or 0:>6}")
+        out.append(
+            f"  {_clock(m['ts']):<9} {m.get('cpu') if m.get('cpu') is not None else '-':>6} {_mb(m.get('rss')):>7} "
+            f"{m.get('lag_max') or 0:>8} {m.get('requests') or 0:>6} {m.get('wait_max') or 0:>9} "
+            f"{m.get('hold_max') or 0:>9} {m.get('locked') or 0:>6}"
+        )
     lw = s["lock_waits"]
-    out.append(f"\nLock waits: {lw['wait_ms']}ms in all, {lw['minutes']} minute(s) with a wait over 1s or a "
-               f"'database is locked', {lw['locked']} locked error(s)")
+    out.append(
+        f"\nLock waits: {lw['wait_ms']}ms in all, {lw['minutes']} minute(s) with a wait over 1s or a "
+        f"'database is locked', {lw['locked']} locked error(s)"
+    )
     out.append(f"Dropped: {s['drops']} (samples or records the recorder could not keep up with)")
     if s["stack_dump"]:
         out.append(f"\nLast SIGUSR1 stack dump ({_clock(s['stack_dump']['ts'])}), tail:")
@@ -599,23 +714,72 @@ def bundle(folder, since_s=86400, now=None):
     s = summary(folder, since_s, now, stall_limit=5, stack_frames=10)
     hours = {}
     for m in s["minutes"]:
-        h = hours.setdefault(int((m["ts"] or 0) // 3600 * 3600), {"ts": int((m["ts"] or 0) // 3600 * 3600),
-                                                                   "cpu_max": 0, "rss_max": 0, "lag_max": 0,
-                                                                   "wait_max": 0, "locked": 0, "requests": 0})
+        h = hours.setdefault(
+            int((m["ts"] or 0) // 3600 * 3600),
+            {
+                "ts": int((m["ts"] or 0) // 3600 * 3600),
+                "cpu_max": 0,
+                "rss_max": 0,
+                "lag_max": 0,
+                "wait_max": 0,
+                "locked": 0,
+                "requests": 0,
+            },
+        )
         h["cpu_max"] = max(h["cpu_max"], m.get("cpu") or 0)
         h["rss_max"] = max(h["rss_max"], m.get("rss") or 0)
         h["lag_max"] = max(h["lag_max"], m.get("lag_max") or 0)
         h["wait_max"] = max(h["wait_max"], m.get("wait_max") or 0)
         h["locked"] += m.get("locked") or 0
         h["requests"] += m.get("requests") or 0
-    return {"since": s["since"], "drops": s["drops"], "stalls_total": s["stalls_total"],
-            "routes": [{k: r[k] for k in ("route", "n", "errors", "total_ms", "p95", "max_ms", "sql_ms", "wait_ms",
-                                          "avg_bytes", "bytes_max")} for r in s["routes"][:10]],
-            "slow": [{"ts": r.get("ts"), "route": r.get("route"), "ms": r.get("ms"), "status": r.get("status"),
-                      "sql_ms": r.get("sql_ms"), "wait_ms": r.get("wait_ms")} for r in s["slow"][:10]],
-            "stalls": [{"ts": st["ts"], "seconds": st["seconds"], "class": st["class"],
-                        "usage": json.dumps(st.get("usage") or {}, separators=(",", ":"), sort_keys=True),
-                        "threads": [("[loop] " if t.get("loop") else "") + str(t.get("thread")) + ": "
-                                    + " < ".join(reversed(t.get("stack") or [])) for t in st["threads"][:6]]}
-                       for st in s["stalls"]],
-            "hours": sorted(hours.values(), key=lambda h: h["ts"])}
+    return {
+        "since": s["since"],
+        "drops": s["drops"],
+        "stalls_total": s["stalls_total"],
+        "routes": [
+            {
+                k: r[k]
+                for k in (
+                    "route",
+                    "n",
+                    "errors",
+                    "total_ms",
+                    "p95",
+                    "max_ms",
+                    "sql_ms",
+                    "wait_ms",
+                    "avg_bytes",
+                    "bytes_max",
+                )
+            }
+            for r in s["routes"][:10]
+        ],
+        "slow": [
+            {
+                "ts": r.get("ts"),
+                "route": r.get("route"),
+                "ms": r.get("ms"),
+                "status": r.get("status"),
+                "sql_ms": r.get("sql_ms"),
+                "wait_ms": r.get("wait_ms"),
+            }
+            for r in s["slow"][:10]
+        ],
+        "stalls": [
+            {
+                "ts": st["ts"],
+                "seconds": st["seconds"],
+                "class": st["class"],
+                "usage": json.dumps(st.get("usage") or {}, separators=(",", ":"), sort_keys=True),
+                "threads": [
+                    ("[loop] " if t.get("loop") else "")
+                    + str(t.get("thread"))
+                    + ": "
+                    + " < ".join(reversed(t.get("stack") or []))
+                    for t in st["threads"][:6]
+                ],
+            }
+            for st in s["stalls"]
+        ],
+        "hours": sorted(hours.values(), key=lambda h: h["ts"]),
+    }

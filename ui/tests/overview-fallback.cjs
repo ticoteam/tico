@@ -26,11 +26,11 @@ const SCENE = `export function createBuilding() {
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      if (p === '/tico/ui/overview/building.js') return route.fulfill({contentType: 'application/javascript', body: SCENE});
+      if (p === '/tico/ui/overview/building.ts') return route.fulfill({contentType: 'application/javascript', body: SCENE});
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
-          : name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/employees') return json([]);
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: []});

@@ -13,8 +13,11 @@ def listed(api, query="", token="ana-test"):
 
 
 def needs_approval_ids(api, token="ana-test"):
-    return {i["subject"]["id"] for i in get(api, "needs-you", token)["items"]
-            if (i.get("subject") or {}).get("type") == "approval"}
+    return {
+        i["subject"]["id"]
+        for i in get(api, "needs-you", token)["items"]
+        if (i.get("subject") or {}).get("type") == "approval"
+    }
 
 
 def approval_row(api, aid):
@@ -44,7 +47,9 @@ def test_a_decided_approval_leaves_pending_and_shows_under_its_status(api):
     approval = approval_for_ana(api, token=finance["token"])
     post(api, f"approvals/{approval['id']}", {"decision": "declined", "note": "Not now"}, token="ana-test")
     assert approval["id"] not in {r["id"] for r in listed(api)["approvals"]}
-    assert [(r["id"], r["status"]) for r in listed(api, "status=declined")["approvals"]] == [(approval["id"], "declined")]
+    assert [(r["id"], r["status"]) for r in listed(api, "status=declined")["approvals"]] == [
+        (approval["id"], "declined")
+    ]
     assert listed(api, "status=approved")["approvals"] == []
 
 
@@ -61,8 +66,12 @@ def test_from_before_and_since_narrow_the_list(api):
 
 def test_pages_are_offsets_and_only_the_last_page_has_no_next(api):
     _, _, finance = setup_attempt(api, "finance")
-    made = {approval_for_ana(api, token=finance["token"],
-                             payload={"amount": n, "account": "ads", "what": f"Item {n}"})["id"] for n in range(3)}
+    made = {
+        approval_for_ana(api, token=finance["token"], payload={"amount": n, "account": "ads", "what": f"Item {n}"})[
+            "id"
+        ]
+        for n in range(3)
+    }
     first = listed(api, "limit=2")
     second = listed(api, f"limit=2&offset={first['next']}")
     assert (len(first["approvals"]), first["next"], first["total"]) == (2, 2, 3)
@@ -72,13 +81,19 @@ def test_pages_are_offsets_and_only_the_last_page_has_no_next(api):
 
 def test_a_row_has_its_fields_and_a_long_summary_is_one_line_within_the_page_budget(api):
     _, _, finance = setup_attempt(api, "finance")
-    approval = approval_for_ana(api, token=finance["token"], payload={"amount": 5, "account": "ads", "what": "x" * 5000})
+    approval = approval_for_ana(
+        api, token=finance["token"], payload={"amount": 5, "account": "ads", "what": "x" * 5000}
+    )
     body = listed(api)
     [row] = body["approvals"]
     assert set(row) == {"id", "status", "from_actor", "summary", "message_id", "task_id", "created", "link"}
     assert row["id"] == approval["id"] and row["status"] == "pending"
     assert len(row["summary"]) <= 200
-    assert row["task_id"] is None and row["link"].startswith("#/thread/") and row["link"].endswith("?m=" + row["message_id"])
+    assert (
+        row["task_id"] is None
+        and row["link"].startswith("#/thread/")
+        and row["link"].endswith("?m=" + row["message_id"])
+    )
     assert len(json.dumps(body)) < 64 * 1024
 
 
@@ -92,9 +107,12 @@ def test_a_task_approval_links_to_the_task(api):
 
 def test_long_unicode_summaries_stay_under_the_byte_cap_and_paging_reaches_every_row(api):
     _, _, finance = setup_attempt(api, "finance")
-    made = {approval_for_ana(api, token=finance["token"],
-                             payload={"amount": n, "account": "ads", "what": ("漢字🙂ü " * 200) + str(n)})["id"]
-            for n in range(100)}
+    made = {
+        approval_for_ana(
+            api, token=finance["token"], payload={"amount": n, "account": "ads", "what": ("漢字🙂ü " * 200) + str(n)}
+        )["id"]
+        for n in range(100)
+    }
     first = api.get("/api/v2/approvals?limit=100", headers=headers("ana-test"))
     assert first.status_code == 200 and len(first.content) <= 64 * 1024
     body = first.json()
@@ -116,10 +134,12 @@ def test_an_unknown_status_is_refused(api):
 def history_statements(api, monkeypatch, query, token="ana-test"):
     """GET /api/v2/approvals with `query` (after one warm-up read), and the SQL statements that request ran."""
     import contextlib
+
     store, seen = api.app.state.store, []
     api.get("/api/v2/approvals?" + query, headers=headers(token))
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction"):
+
             def traced(opened=getattr(store, name)):
                 @contextlib.contextmanager
                 def borrowed():
@@ -129,7 +149,9 @@ def history_statements(api, monkeypatch, query, token="ana-test"):
                             yield c
                         finally:
                             c.set_trace_callback(None)
+
                 return borrowed()
+
             patched.setattr(store, name, traced)
         response = api.get("/api/v2/approvals?" + query, headers=headers(token))
     assert response.status_code == 200, response.text

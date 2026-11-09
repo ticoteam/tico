@@ -1,6 +1,7 @@
 """GET /api/v2/rules/by-teammate, the Rules view of the org chart (backend/org_rules.py `teammate_rules`): the rules in force,
 and for each bot and person the caller may see, the rules whose Who or With names it. Acme is the fictional company, as in
 test_org_rules.py: Ana owns it, Ben is an admin, Cara is a plain member of Support, and Finance sits in Support Tier 2."""
+
 import json
 
 import pytest
@@ -24,8 +25,13 @@ def add_people(api, *people):
 def set_access(api, path, token="ana-test", **levels):
     current = api.get(f"/api/v2/{path}/access", headers=headers(token))
     revision = current.json()["revision"] if current.status_code == 200 else 0
-    body = {"see": {"everyone": True}, "read": {"everyone": True}, "write": {"everyone": True},
-            "revision": revision, **levels}
+    body = {
+        "see": {"everyone": True},
+        "read": {"everyone": True},
+        "write": {"everyone": True},
+        "revision": revision,
+        **levels,
+    }
     r = api.put(f"/api/v2/{path}/access", json=body, headers=headers(token))
     assert r.status_code == 200, r.text
 
@@ -49,16 +55,23 @@ def test_a_group_rule_reaches_a_person_and_a_bot_in_a_nested_group(api):
     add_people(api, {"id": "dan", "email": "dan@acme.example", "team": "support-tier-2", "name": "Dan"})
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     view = teammates(api)
-    assert by_id(view, "dan") == {"id": "dan", "who": [support], "with": []}    # Dan is in Support Tier 2, under Support
+    assert by_id(view, "dan") == {"id": "dan", "who": [support], "with": []}  # Dan is in Support Tier 2, under Support
     assert by_id(view, "cara")["who"] == [support]
-    assert by_slug(view, "finance")["who"] == [support]                          # Finance is in Support Tier 2
-    assert by_slug(view, "ops") is None and by_id(view, "ben") is None           # no rule names them
+    assert by_slug(view, "finance")["who"] == [support]  # Finance is in Support Tier 2
+    assert by_slug(view, "ops") is None and by_id(view, "ben") is None  # no rule names them
 
 
 def test_who_and_with_are_listed_apart(api):
     org(api)
-    r = rule(api, {"kind": "internal", "text": "Cara checks every note to Ops.",
-                   "who": {"people": ["cara"]}, "with": {"bots": ["ops"]}})["id"]
+    r = rule(
+        api,
+        {
+            "kind": "internal",
+            "text": "Cara checks every note to Ops.",
+            "who": {"people": ["cara"]},
+            "with": {"bots": ["ops"]},
+        },
+    )["id"]
     view = teammates(api)
     assert by_id(view, "cara") == {"id": "cara", "who": [r], "with": []}
     assert by_slug(view, "ops") == {"slug": "ops", "who": [], "with": [r]}
@@ -76,10 +89,13 @@ def test_all_bots_reaches_bots_and_no_person(api):
 def test_suggested_and_retired_rules_are_left_out(api):
     org(api)
     active = rule(api, {"kind": "internal", "text": "Cara signs off on credits.", "who": {"people": ["cara"]}})["id"]
-    suggested = rule(api, {"kind": "internal", "text": "Cara answers in a day.", "who": {"people": ["cara"]}},
-                     token="cara-test")
+    suggested = rule(
+        api, {"kind": "internal", "text": "Cara answers in a day.", "who": {"people": ["cara"]}}, token="cara-test"
+    )
     assert suggested["status"] == "suggested"
-    retired = rule(api, {"kind": "internal", "text": "Finance checks every credit.", "who": {"bots": ["finance"]}})["id"]
+    retired = rule(api, {"kind": "internal", "text": "Finance checks every credit.", "who": {"bots": ["finance"]}})[
+        "id"
+    ]
     assert api.post(f"/api/v2/rules/{retired}/retire", json={"version": 1}, headers=headers()).status_code == 200
     view = teammates(api)
     assert [r["id"] for r in view["rules"]] == [active]
@@ -101,21 +117,27 @@ def test_a_bot_the_caller_cannot_see_and_an_archived_bot_are_left_out(api):
 
 def test_a_hidden_person_and_one_the_caller_cannot_see_are_left_out(api):
     org(api)
-    add_people(api, {"id": "dan", "email": "dan@acme.example", "team": "support", "name": "Dan"},
-               {"id": "frank", "email": "frank@acme.example", "team": "support", "name": "Frank", "hidden": True})
+    add_people(
+        api,
+        {"id": "dan", "email": "dan@acme.example", "team": "support", "name": "Dan"},
+        {"id": "frank", "email": "frank@acme.example", "team": "support", "name": "Frank", "hidden": True},
+    )
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     view = teammates(api)
     assert by_id(view, "dan")["who"] == [support]
-    assert by_id(view, "frank") is None                                  # off the org chart
+    assert by_id(view, "frank") is None  # off the org chart
     set_access(api, "humans/dan", see={"people": ["ben"]}, read={"people": ["ben"]}, write={"people": ["ben"]})
-    assert by_id(teammates(api, "cara-test"), "dan") is None             # Cara cannot see Dan
+    assert by_id(teammates(api, "cara-test"), "dan") is None  # Cara cannot see Dan
     assert by_id(teammates(api, "ben-test"), "dan")["who"] == [support]
 
 
 def test_the_people_and_bots_are_the_ones_the_org_chart_shows(api):
     org(api)
-    add_people(api, {"id": "dan", "email": "dan@acme.example", "team": "support-tier-2", "name": "Dan"},
-               {"id": "frank", "email": "frank@acme.example", "team": "support", "name": "Frank", "hidden": True})
+    add_people(
+        api,
+        {"id": "dan", "email": "dan@acme.example", "team": "support-tier-2", "name": "Dan"},
+        {"id": "frank", "email": "frank@acme.example", "team": "support", "name": "Frank", "hidden": True},
+    )
     rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})
     rule(api, {"kind": "internal", "text": "Bots cite their source.", "who": {"all_bots": True}})
     set_access(api, "humans/dan", see={"people": ["ben"]}, read={"people": ["ben"]}, write={"people": ["ben"]})
@@ -129,8 +151,10 @@ def test_the_people_and_bots_are_the_ones_the_org_chart_shows(api):
 def test_can_edit_is_true_for_an_admin_and_an_owner_and_false_for_a_plain_member(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
-    edits = {token: next(x["can_edit"] for x in teammates(api, token)["rules"] if x["id"] == r)
-             for token in ("ana-test", "ben-test", "cara-test")}
+    edits = {
+        token: next(x["can_edit"] for x in teammates(api, token)["rules"] if x["id"] == r)
+        for token in ("ana-test", "ben-test", "cara-test")
+    }
     assert edits == {"ana-test": True, "ben-test": True, "cara-test": False}
 
 
@@ -160,5 +184,7 @@ def test_the_answer_matches_the_declared_schema(api):
     org(api)
     rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
-    schema = document["paths"]["/api/v2/rules/by-teammate"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    schema = document["paths"]["/api/v2/rules/by-teammate"]["get"]["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
     assert conforms(teammates(api), schema, document) is None

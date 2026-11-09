@@ -5,6 +5,7 @@ One request goes to one person who may: the setting's Confirm card in that perso
 list that the asker requested. The card is theirs to tap or cancel, as any card (backend/assistant.py), and runs with
 their rights; its outcome settles the task (done, or declined) and is told to the asker in the chat they asked from.
 The asker's words never run anything: only the other person's tap does."""
+
 import json
 from dataclasses import replace
 
@@ -12,15 +13,17 @@ from . import hubdb as H
 from .store import Problem
 
 BOTOPS = "botops"
-MAX_OPEN = 5            # asks one person may have waiting at once
+MAX_OPEN = 5  # asks one person may have waiting at once
 # What the asker is told, by how the card ended.
-TOLD = {"done": "{name} confirmed it: {what} is done.",
-        "canceled": "{name} said no to {what}: nothing changed.",
-        "withdrawn": "{what} was withdrawn: nothing changed.",
-        "failed": "{name} confirmed {what}, but it did not go through: {error}",
-        "expired": "{name} didn't answer about {what} within a day, so the card expired: nothing changed.",
-        "interrupted": "{name} confirmed {what}, but it was cut off before it finished, so it may or may not have "
-                       "changed: check it, and ask again if it didn't."}
+TOLD = {
+    "done": "{name} confirmed it: {what} is done.",
+    "canceled": "{name} said no to {what}: nothing changed.",
+    "withdrawn": "{what} was withdrawn: nothing changed.",
+    "failed": "{name} confirmed {what}, but it did not go through: {error}",
+    "expired": "{name} didn't answer about {what} within a day, so the card expired: nothing changed.",
+    "interrupted": "{name} confirmed {what}, but it was cut off before it finished, so it may or may not have "
+    "changed: check it, and ask again if it didn't.",
+}
 
 
 def _name(c, actor):
@@ -32,6 +35,7 @@ def who_to_ask(c, auth, settings, asker, e, target, to=""):
     (the owner, for a setting only the owner or a task mover changes, or when no admin may; then anyone else who may,
     such as a bot's owner). Never the asker."""
     from . import settings_catalog
+
     found = []
     for row in c.execute("SELECT id FROM humans ORDER BY lower(coalesce(name, id)), id"):
         actor = "human:" + row["id"]
@@ -40,14 +44,14 @@ def who_to_ask(c, auth, settings, asker, e, target, to=""):
         try:
             who = auth.identity_for_actor(c, actor)
         except Problem:
-            continue                                    # left the team
+            continue  # left the team
         if settings_catalog.may(c, auth, who, e, target):
             found.append(who)
     if not found:
         raise Problem("no_one", f"{_name(c, to) if to else 'No one else on the team'} may change {e.name}", 409)
     owners = [w for w in found if w.role == "owner"]
     admins = [w for w in found if w.role != "owner" and auth.bot_admin(w)]
-    others = [w for w in found if w.role != "owner" and not auth.bot_admin(w)]      # a bot's owners, task movers
+    others = [w for w in found if w.role != "owner" and not auth.bot_admin(w)]  # a bot's owners, task movers
     order = (owners, admins, others) if e.who in ("owner", "mover") else (admins, owners, others)
     return next(group[0] for group in order if group)
 
@@ -59,11 +63,15 @@ def check_asker(c, asker, asked, instruction):
         raise Problem("forbidden", "A person asks someone who can, or BotOps or their Assistant for them", 403)
     if asker.via == "assistant":
         instruction(c, asker, asked)
-    waiting = c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending' AND ask IS NOT NULL "
-                        "AND json_extract(ask, '$.asker')=?", (asker.actor,)).fetchone()[0]
+    waiting = c.execute(
+        "SELECT count(*) FROM assistant_actions WHERE status='pending' AND ask IS NOT NULL "
+        "AND json_extract(ask, '$.asker')=?",
+        (asker.actor,),
+    ).fetchone()[0]
     if waiting >= MAX_OPEN:
-        raise Problem("too_many", f"{MAX_OPEN} of your asks are still waiting for an answer; ask again when one is "
-                      "settled", 409)
+        raise Problem(
+            "too_many", f"{MAX_OPEN} of your asks are still waiting for an answer; ask again when one is settled", 409
+        )
 
 
 def _what(c, e, target):
@@ -88,27 +96,47 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=N
         if ask and ask["asker"] == asker.actor:
             return ask["task"]
         by = f"{_name(c, ask['asker'])} already asked them for" if ask else "they already have their own card for"
-        raise Problem("already_waiting", f"{_name(c, chosen.actor)} has exactly this change waiting: {by} it. Nothing "
-                      "was asked; ask again once it is settled", 409)
+        raise Problem(
+            "already_waiting",
+            f"{_name(c, chosen.actor)} has exactly this change waiting: {by} it. Nothing "
+            "was asked; ask again once it is settled",
+            409,
+        )
     on = {k: str(v) for k, v in (target or {}).items() if v}
     what = _what(c, e, on)
-    for row in c.execute("SELECT ask FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
-                         "json_extract(ask, '$.asker')=? AND json_extract(ask, '$.key')=?",
-                         (chosen.actor, action["id"], asker.actor, e.key)):
+    for row in c.execute(
+        "SELECT ask FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
+        "json_extract(ask, '$.asker')=? AND json_extract(ask, '$.key')=?",
+        (chosen.actor, action["id"], asker.actor, e.key),
+    ):
         if (json.loads(row["ask"]).get("target") or {}) == on:
             # Refused before anything is kept: the card just made goes with the transaction.
-            raise Problem("already_asked", f"You already asked {_name(c, chosen.actor)} about {what}; their answer "
-                          "to that comes first (they confirm or cancel it, or it expires after a day)", 409)
+            raise Problem(
+                "already_asked",
+                f"You already asked {_name(c, chosen.actor)} about {what}; their answer "
+                "to that comes first (they confirm or cancel it, or it expires after a day)",
+                409,
+            )
     asker_name = _name(c, asker.actor)
-    body = (f"{asker_name} asked to change {what} ({e.where}) and may not change it themselves. "
-            f"The Confirm card in your chat with BotOps does it: {action.get('description') or action['summary']}.\n\n"
-            + (f"{asker_name} said: {note}\n\n" if note else "")
-            + f"Confirm or cancel that card. Either settles this request, and {asker_name} is told.")
+    body = (
+        f"{asker_name} asked to change {what} ({e.where}) and may not change it themselves. "
+        f"The Confirm card in your chat with BotOps does it: {action.get('description') or action['summary']}.\n\n"
+        + (f"{asker_name} said: {note}\n\n" if note else "")
+        + f"Confirm or cancel that card. Either settles this request, and {asker_name} is told."
+    )
     # Filed as the asker, who is then its requester: the request is theirs, BotOps or the Assistant only carried it.
-    task = H.task_create(c, asker.actor, f"{asker_name} asks you to change {what}"[:200], body, chosen.actor,
-                         lint=False)
-    ask = {"task": task["id"], "asker": asker.actor, "room": room["id"], "bot": bot, "key": e.key, "target": on,
-           "what": what}
+    task = H.task_create(
+        c, asker.actor, f"{asker_name} asks you to change {what}"[:200], body, chosen.actor, lint=False
+    )
+    ask = {
+        "task": task["id"],
+        "asker": asker.actor,
+        "room": room["id"],
+        "bot": bot,
+        "key": e.key,
+        "target": on,
+        "what": what,
+    }
     c.execute("UPDATE assistant_actions SET ask=? WHERE id=?", (json.dumps(ask), action["id"]))
     H.event(c, asker.actor, "settings.asked", e.key, {"to": chosen.actor, "task": task["id"], "action": action["id"]})
     return task["id"]
@@ -125,11 +153,23 @@ def settled(c, row, status, result=None):
     told = TOLD.get(status, TOLD["failed"]).format(name=name, what=what, error=error or "it was refused")
     task = H.task(c, ask["task"])
     if task and task.get("status") not in ("done", "declined", "closed"):
-        H.task_update(c, row["owner"], ask["task"], status="done" if status == "done" else "declined", note=told, strict=False)
+        H.task_update(
+            c, row["owner"], ask["task"], status="done" if status == "done" else "declined", note=told, strict=False
+        )
     room = H.conversation(c, ask["room"]) if ask.get("room") else None
     if room and not room.get("closed_at"):
-        H._write_message(c, "bot:" + ask.get("bot", BOTOPS), ask["asker"], told, room, "say",
-                         {"settings_ask": row["id"], "task": ask["task"]}, None, None, delivered_at=H.now())
+        H._write_message(
+            c,
+            "bot:" + ask.get("bot", BOTOPS),
+            ask["asker"],
+            told,
+            room,
+            "say",
+            {"settings_ask": row["id"], "task": ask["task"]},
+            None,
+            None,
+            delivered_at=H.now(),
+        )
 
 
 def sweep(c, at=None):
@@ -137,15 +177,23 @@ def sweep(c, at=None):
     would find it, so its request is declined, the asker is told and their ask no longer counts against MAX_OPEN."""
     from .assistant import CONFIRM_TTL_H
     from .batch_work import isolated
+
     at = at or H.now()
     gone = []
     if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assistant_actions'").fetchone():
-        return gone                                     # a database made without the Assistant's tables
-    for row in H._rows(c.execute("SELECT * FROM assistant_actions WHERE status='pending' AND ask IS NOT NULL "
-                                 "AND created_at<? ORDER BY created_at", (H.shift(at, hours=-CONFIRM_TTL_H),))):
+        return gone  # a database made without the Assistant's tables
+    for row in H._rows(
+        c.execute(
+            "SELECT * FROM assistant_actions WHERE status='pending' AND ask IS NOT NULL "
+            "AND created_at<? ORDER BY created_at",
+            (H.shift(at, hours=-CONFIRM_TTL_H),),
+        )
+    ):
         with isolated(c, "settings_asks", row["id"]):
-            c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=? AND status='pending'",
-                      (at, row["id"]))
+            c.execute(
+                "UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=? AND status='pending'",
+                (at, row["id"]),
+            )
             settled(c, row, "expired")
             gone.append(row["id"])
     return gone + recover(c, at, orphans=True)
@@ -154,12 +202,20 @@ def sweep(c, at=None):
 def interrupted(c, at, ttl_s, orphans=False):
     """The asked cards whose confirm never settled (a restart mid-run): those still `running` past `ttl_s`, and with
     `orphans` (the hourly sweep) those already marked failed without settling their ask (their task still open)."""
-    rows = H._rows(c.execute("SELECT * FROM assistant_actions WHERE ask IS NOT NULL AND ((status='running' AND "
-                             "running_since<?) OR (? AND status='failed')) ORDER BY created_at",
-                             (H.shift(at, seconds=-ttl_s), int(orphans))))
+    rows = H._rows(
+        c.execute(
+            "SELECT * FROM assistant_actions WHERE ask IS NOT NULL AND ((status='running' AND "
+            "running_since<?) OR (? AND status='failed')) ORDER BY created_at",
+            (H.shift(at, seconds=-ttl_s), int(orphans)),
+        )
+    )
     ended = ("done", "declined", "closed")
-    return [r for r in rows if r["status"] == "running"
-            or (H.task(c, json.loads(r["ask"])["task"]) or {}).get("status") not in (None, *ended)]
+    return [
+        r
+        for r in rows
+        if r["status"] == "running"
+        or (H.task(c, json.loads(r["ask"])["task"]) or {}).get("status") not in (None, *ended)
+    ]
 
 
 def recover(c, at=None, orphans=False):
@@ -167,12 +223,15 @@ def recover(c, at=None, orphans=False):
     not have changed. Nothing is run again. The Assistant's expiry calls it before its own (backend/assistant.py)."""
     from .assistant import RUNNING_TTL_S
     from .batch_work import isolated
+
     at, done = at or H.now(), []
     for row in interrupted(c, at, RUNNING_TTL_S, orphans):
         with isolated(c, "settings_asks", row["id"]):
-            c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
-                      "WHERE id=? AND status='running'",
-                      (at, json.dumps({"status_code": 0, "error": "It did not finish; ask again"}), row["id"]))
+            c.execute(
+                "UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
+                "WHERE id=? AND status='running'",
+                (at, json.dumps({"status_code": 0, "error": "It did not finish; ask again"}), row["id"]),
+            )
             settled(c, row, "interrupted")
             done.append(row["id"])
     return done

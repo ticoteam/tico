@@ -8,7 +8,7 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-The sidebar's version row (above Ask Tico, one row at a time) reads **Updated to v…** while product changes you have not
+The sidebar's version row (above Tico Assistant, one row at a time) reads **Updated to v…** while product changes you have not
 acknowledged are unread, and **Update to v…** while a newer release is on offer (it then wins the row; its pop-up links
 **What's new**). Clicking **Updated to** opens **What's new**, which shows the product changes you have not acknowledged; **Changelog**
 in the account menu lists the same changes. **Since last look** includes every unread release and team announcement;
@@ -120,7 +120,8 @@ Each line is a venv (its `pyvenv.cfg`) or a user-install folder built by another
 
 ## Disk space
 
-Health warns when a computer reports that its disk is over 85% full. Free space on that computer; for a Docker install,
+Health warns when a computer reports that its disk is over 85% full. A computer low on disk first cleans up what is safe
+by itself ([Task worktrees](worktrees.md#low-disk)), and the warning names what that freed. Free space on that computer; for a Docker install,
 `docker image prune -a` removes unused images. This can remove a cached rollback image, so the previous release may
 need to be pulled again if you later roll back. Disk-space update failures say what ran out and retry when free space
 increases, including while the server and computers are on different releases. Older computers that do not report disk
@@ -393,14 +394,19 @@ refuses every update. A `cloudflared` command of its own should read `--config /
 COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
 TICO_UPDATER_URL=http://updater:8080
 TICO_TAG=vX.Y.Z                         # the release running now
-# TICO_UPDATER_SNAPSHOT_SECONDS=900     # optional; raise if a very large hub needs a longer pre-update copy
+# TICO_UPDATER_SNAPSHOT_SECONDS=1800    # optional; a fixed time for the pre-update copy (unset: it scales with hub.sqlite)
 ```
 
 and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
 
-Before switching images the updater copies `hub.sqlite` with SQLite's online backup API. That copy must pass
-`PRAGMA quick_check`, because rollback refuses a snapshot that fails it. On a multi-gigabyte database the copy and check
-can take minutes; set `TICO_UPDATER_SNAPSHOT_SECONDS` (default 900) in `.env` when a hub needs longer.
+Before switching images the updater copies `hub.sqlite` with SQLite's online backup API, and the status shows
+`snapshotting, N GB` while it does. The copy must pass `PRAGMA quick_check`, because rollback refuses a snapshot that
+fails it. On a multi-gigabyte database that check takes minutes, so the time allowed for the copy is the larger of
+20 minutes (1200 seconds) and 5 minutes (300 seconds) per gigabyte of `hub.sqlite`: max(1200 seconds, 300 seconds × N GB).
+A 3.6 GB hub gets the 20-minute floor, 1200 seconds, because 5 minutes × 3.6 GB is 1080 seconds. Set
+`TICO_UPDATER_SNAPSHOT_SECONDS` in `.env` to use a fixed number of seconds instead; a value that is not a positive whole
+number is ignored, with a warning in the updater's log. If the copy and check run past the limit, the update is refused
+cleanly; raise the limit for that hub rather than turning the check off.
 
 ## The runner
 

@@ -66,7 +66,7 @@ A bot's write is checked on:
 
 - creating a task for someone else (`POST /api/v2/tasks`, MCP and CLI included), and the person a task question or
   approval asks (`asked`), unless they share the parent task;
-- handing a task to someone or setting who it waits on (`POST /api/v2/tasks/{id}` with `owner` or `waiting_on`);
+- handing a task to someone or setting it waiting on a person (`POST /api/v2/tasks/{id}` with `owner` or `waiting_on`, which files them a question task);
 - chat: a message (`POST /api/v2/messages`, bot to bot included: the one it is sent to first, then everyone else it was
   delivered to, its @mentions and a DM's members, in the same write), a note (`POST /api/v2/notes`), and a thread post
   or new thread or DM (`/api/v2/threads...`): the one it is addressed to, those it @mentions who can read the thread, a
@@ -76,25 +76,33 @@ A bot's write is checked on:
 
 `hub_task_dry_run` reports the refusal a task would get.
 
-Never refused:
+A person is only reached by a bot next to them on the chart: the bot's manager (the owner, for a bot with no manager)
+or a person on its own team, or a person a line allows. A bot two levels down does not reach the owner: it takes the
+work to its manager, who passes it up. Being on a task with the person (reader, former owner, thread member, party to
+a parent task) or having been given some task by them does not open them. Only three things do, for the person who is
+the receiver: a direct reply to that person's own message; a write in a conversation where that person wrote to the
+bot in the last 7 days; a write on a task that person handed this bot (they are its requester, the bot its owner).
+Questions and asks that become a question task for a person are checked the same way.
+
+Never refused (a person receiver follows the rule above):
 
 - a person's write, the owner's included; only a bot is ever checked;
 - a bot writing to itself;
-- a solicited reply: a reply to the receiver's message (`in_reply_to`, or the message a sub-thread hangs from), an
-  answer to a teammate who gave the bot an open task, or to one who wrote to it (addressed or @mentioning it) in the
-  last 7 days, in that thread (or the thread above a sub-thread) when it names one. In a DM, anything the receiver
-  wrote there, and any person's message there (a person brought its members together), counts. It still adds to the
-  bot's chats a day;
-- anything on a task the bot and the receiver are both part of: requester, owner (now or at any earlier step), the one
-  it waits on, its guest, or a poster in or member of the task's thread. A message in a task's thread is on that task.
-  Handing a task back to its requester passes; handing it to someone new is checked;
+- a solicited reply, to a bot teammate: a reply to its message (`in_reply_to`, or the message a sub-thread hangs from),
+  an answer to one who gave the bot an open task, or who wrote to it (addressed or @mentioning it) in the last 7 days,
+  in that thread (or the thread above a sub-thread) when it names one. In a DM, anything the receiver wrote there, and
+  any person's message there, counts. It still adds to the bot's chats a day;
+- anything on a task the bot and a bot teammate are both part of: requester, owner (now or at any earlier step), the
+  one it waits on, its readers, or a poster in or member of the task's thread. A message in a task's thread is on that
+  task. Handing a task back to its requester passes; handing it to someone new is checked;
 - system hand-offs: step flow and the allocator, check pools, routines and automations, rule wakes and the keeper. They
   write in the hub, not through a bot's route;
 - the hub's own work in a bot's name: a runner's reply to the message that woke it, an approval's decider, comments
   on a task;
 - a held write (a message, note or task) a person chose to Send anyway: it passed reach before it was held;
 - built-in helpers off the chart, as sender or receiver: BotOps, Task Manager, Goal Manager, Librarian, the Assistant
-  (`TICO_ASSISTANT_BOT`, `coo` by default), the Bookkeeper, Counsel (`tico-counsel`) and the support helper. Anyone
+  (`TICO_ASSISTANT_BOT`, `coo` by default), the Bookkeeper, Counsel (`tico-counsel`), the Brand Owner (`brand`) and the
+  support helper. Anyone
   reaches them.
 
 The refusal is a 409 the bot reads once and acts on, never a retry:

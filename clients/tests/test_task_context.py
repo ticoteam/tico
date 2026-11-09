@@ -1,4 +1,5 @@
 """Task context and notes use the same handlers for CLI and MCP, with bot credentials intact."""
+
 from clients import hubcli, hubtools, remotecli
 
 
@@ -8,7 +9,11 @@ class Api:
 
     def get(self, path, **query):
         self.calls.append((path, query))
-        return {"text": "Saved decisions", "notes": "Saved decisions"} if path == "meetings/transcript" else {"pages": [], "meetings": []}
+        return (
+            {"text": "Saved decisions", "notes": "Saved decisions"}
+            if path == "meetings/transcript"
+            else {"pages": [], "meetings": []}
+        )
 
 
 def test_task_context_and_notes_cli_mcp_parity(monkeypatch, capsys):
@@ -19,8 +24,9 @@ def test_task_context_and_notes_cli_mcp_parity(monkeypatch, capsys):
     remotecli.run(parser.parse_args(["task", "context", "#12"]))
     remotecli.main(parser.parse_args(["meeting", "read", "meeting-1", "--notes"]))
     assert capsys.readouterr().out.strip() == "Saved decisions"
-    assert client.calls == [("tasks/#12/context", {}), ("meetings/transcript", {
-        "id": "meeting-1", "offset": 0, "limit": 20000, "notes": True})]
+    assert client.calls == [
+        ("tasks/#12/context", {}),
+        ("meetings/transcript", {"id": "meeting-1", "offset": 0, "limit": 20000, "notes": True}),
+    ]
     assert "bot" in hubtools.offered_to(hubtools.BY_NAME["hub_task_context"])
     assert "assistant" in hubtools.offered_to(hubtools.BY_NAME["hub_task_context"])
-

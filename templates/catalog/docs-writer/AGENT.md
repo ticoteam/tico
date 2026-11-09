@@ -39,7 +39,8 @@ the requested work and granted Tools. Apply an owner's routine changes directly.
 
 These three need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts on the task:
 - **Committing, merging or publishing any change to the docs.** The starter access is read only, and
-  `.claude/settings.json` denies the write verbs. Keep the draft on the task until write access is granted.
+  `.claude/settings.json` denies the write verbs. Keep the draft on the task until write access is granted. Once granted, a
+  docs-only pull request needs no approval: add a `Changelog:` line to its body, then merge it once its checks are green.
 - **Deleting, renaming or moving a page**, or changing a URL that other pages link to.
 - **Sharing a draft outside the team**, or contacting a user or customer about a page.
 
@@ -47,7 +48,8 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 On a team that tracks changes as tickets, your docs work for a change starts when its release is published, never
 before. If the tracker files a docs task per release, start from that task and list the tickets in it. Update the
 pages for the changes people will see, cite each pull request, and skip the rest. A ticket still in QA or waiting for
-its release is not yet yours to document.
+its release is not yet yours to document. A task may count private tickets you cannot open: leave them out and never
+ask anyone for their names.
 
 ## Skills
 - `skills/check-a-doc-against-the-code/SKILL.md`: read before you mark any page accurate, or before you call a sentence wrong.
@@ -70,7 +72,7 @@ its release is not yet yours to document.
 Read merged changes with `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,url`
 and `gh pr diff <n> -R <repo>`. Read the docs in the repositories as far as your access reaches. For anything about how the team works
 (a process a README links to), ask the Librarian: `hub doc ask "<question>"`. An internal doc that is wrong
-or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task ask <id>`,
+or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`,
 one open question per task. A page that needs a subject-matter answer is a task for the person who knows it:
 `hub task create --owner <person> --title "<the question>" --link <pull request url>`.
 Finish every task, quiet week or not.

@@ -38,16 +38,30 @@ pub fn could_be_built_in(bot: &str, config: &Value) -> bool {
 
 /// The set-up's problem for a bot still without its repository, for its readiness row.
 pub fn problem(bot: &str) -> Option<String> {
-    TRIED.lock().unwrap().as_ref().and_then(|m| m.get(bot)).map(|t| t.2.clone()).filter(|p| !p.is_empty())
+    TRIED
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(bot))
+        .map(|t| t.2.clone())
+        .filter(|p| !p.is_empty())
 }
 
 pub fn unpushed(bot: &str) -> bool {
-    UNPUSHED.lock().unwrap().as_ref().is_some_and(|s| s.contains(bot))
+    UNPUSHED
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|s| s.contains(bot))
 }
 
 #[cfg(test)]
 pub(crate) fn mark_unpushed(bot: &str) {
-    UNPUSHED.lock().unwrap().get_or_insert_with(HashSet::new).insert(bot.to_string());
+    UNPUSHED
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashSet::new)
+        .insert(bot.to_string());
 }
 
 /// The bot's checkout was pushed: its refreshed product files are upstream now.
@@ -60,12 +74,21 @@ pub fn pushed(bot: &str) {
 /// One request to `python -m runner_support catalog`; its answer, or None (logged) when Python could not give one.
 async fn ask(config: &Config, request: &Value) -> Option<Value> {
     let mut cmd = tokio::process::Command::new(crate::env::python());
-    cmd.args(["-m", "runner_support", "--config"]).arg(&config.path).arg("catalog").current_dir(crate::env::root())
-        .env_remove("TICO_SIDE_JOBS").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).kill_on_drop(true);
+    cmd.args(["-m", "runner_support", "--config"])
+        .arg(&config.path)
+        .arg("catalog")
+        .current_dir(crate::env::root())
+        .env_remove("TICO_SIDE_JOBS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
-            log(&format!("Tico runner: could not start Python for the bot catalog ({e})"));
+            log(&format!(
+                "Tico runner: could not start Python for the bot catalog ({e})"
+            ));
             return None;
         }
     };
@@ -84,9 +107,16 @@ async fn ask(config: &Config, request: &Value) -> Option<Value> {
         }
     };
     let text = String::from_utf8_lossy(&output.stdout);
-    let answer = text.lines().rev().find(|l| !l.trim().is_empty()).and_then(|l| serde_json::from_str::<Value>(l).ok());
+    let answer = text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .and_then(|l| serde_json::from_str::<Value>(l).ok());
     if !output.status.success() || answer.is_none() {
-        log(&format!("Tico runner: the bot catalog job failed ({})", output.status));
+        log(&format!(
+            "Tico runner: the bot catalog job failed ({})",
+            output.status
+        ));
     }
     answer.filter(Value::is_object)
 }
@@ -103,7 +133,10 @@ pub async fn bootstrap_missing(config: &Config, candidates: &[Value]) {
         for entry in candidates {
             let bot = text_of(&entry["bot"]);
             let path = crate::sessions::local_path(config, &bot, &entry["config"]);
-            if mine.is_empty() || text_of(&entry["runner_id"]) != mine || path.join("AGENT.md").is_file() {
+            if mine.is_empty()
+                || text_of(&entry["runner_id"]) != mine
+                || path.join("AGENT.md").is_file()
+            {
                 tried.remove(&bot);
                 continue;
             }
@@ -111,7 +144,9 @@ pub async fn bootstrap_missing(config: &Config, candidates: &[Value]) {
                 continue;
             }
             let generation = entry["generation"].to_string();
-            if tried.get(&bot).is_some_and(|t| t.0 == generation && t.1.elapsed() < Duration::from_secs(FETCH_RETRY_S)) {
+            if tried.get(&bot).is_some_and(|t| {
+                t.0 == generation && t.1.elapsed() < Duration::from_secs(FETCH_RETRY_S)
+            }) {
                 continue;
             }
             let problem = tried.get(&bot).map(|t| t.2.clone()).unwrap_or_default();
@@ -122,7 +157,9 @@ pub async fn bootstrap_missing(config: &Config, candidates: &[Value]) {
     if due.is_empty() {
         return;
     }
-    let Some(answer) = ask(config, &json!({"bots": due})).await else { return };
+    let Some(answer) = ask(config, &json!({"bots": due})).await else {
+        return;
+    };
     let mut tried = TRIED.lock().unwrap();
     let tried = tried.get_or_insert_with(HashMap::new);
     for (bot, row) in answer.as_object().into_iter().flatten() {
@@ -135,13 +172,28 @@ pub async fn bootstrap_missing(config: &Config, candidates: &[Value]) {
 /// Once per start of this runner, before a built-in bot's turn in its checkout: the product files its template
 /// changed are written and committed there, and the bot stays `unpushed` until a push of the checkout succeeds.
 pub async fn refresh(config: &Config, bot: &str, bot_config: &Value, path: &Path) {
-    if !REFRESHED.lock().unwrap().get_or_insert_with(HashSet::new).insert(bot.to_string()) || !could_be_built_in(bot, bot_config) {
+    if !REFRESHED
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashSet::new)
+        .insert(bot.to_string())
+        || !could_be_built_in(bot, bot_config)
+    {
         return;
     }
     let request = json!({"bots": [{"bot": bot, "entry": {"bot": bot, "config": bot_config}, "path": path.display().to_string(), "action": "refresh"}]});
-    let Some(answer) = ask(config, &request).await else { return };
-    if answer[bot]["changed"].as_array().is_some_and(|c| !c.is_empty()) {
-        UNPUSHED.lock().unwrap().get_or_insert_with(HashSet::new).insert(bot.to_string());
+    let Some(answer) = ask(config, &request).await else {
+        return;
+    };
+    if answer[bot]["changed"]
+        .as_array()
+        .is_some_and(|c| !c.is_empty())
+    {
+        UNPUSHED
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashSet::new)
+            .insert(bot.to_string());
     }
 }
 

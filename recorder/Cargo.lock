@@ -4794,6 +4794,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "block2",
+ "cc",
  "chrono",
  "clap",
  "core-foundation 0.10.1",

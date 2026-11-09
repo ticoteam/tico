@@ -2,6 +2,7 @@
 total per line, maps the sheet's lines to accounts, and posts one balanced entry per month against Opening balance
 equity. The same file posts nothing again; a month that already holds raw totals is refused until its entry is
 reversed. Every refusal that could name a figure or an entry checks the caller's view first."""
+
 from collections.abc import Mapping
 from typing import Any
 
@@ -17,9 +18,9 @@ from .posting import post
 from .store import ledger as SL
 from .store import raw_totals as SR
 
-LISTED = 20             # line names a refusal lists
-SHOWN = 60              # accounts a dry run lists
-OUTSIDE = "some of these lines are outside your view"     # the same refusal whatever the lines or the month
+LISTED = 20  # line names a refusal lists
+SHOWN = 60  # accounts a dry run lists
+OUTSIDE = "some of these lines are outside your view"  # the same refusal whatever the lines or the month
 
 
 def _names(names: list[str]) -> str:
@@ -90,8 +91,11 @@ def _check_month(ctx: Ctx, who: str, month: str) -> None:
     if posting is not None:
         if not _covered(ctx, who, SR.entry_lines(ctx.c, str(posting["id"]))):
             raise denied(OUTSIDE)
-        raise FinanceError(CONFLICT, f"{month} already has transactions or journal entries in entry {posting['id']}: raw "
-                                     "totals post only to months with neither")
+        raise FinanceError(
+            CONFLICT,
+            f"{month} already has transactions or journal entries in entry {posting['id']}: raw "
+            "totals post only to months with neither",
+        )
     # A bank or card row of the month that already posted: its entry can be dated outside the month (a closed month
     # rolls it forward), so the entries above do not see it. Its month is closed to raw totals all the same.
     posted = SR.posted_feed_in(ctx.c, ctx.book.id, start, end)
@@ -99,15 +103,22 @@ def _check_month(ctx: Ctx, who: str, month: str) -> None:
         return
     if not _covered(ctx, who, SR.entry_lines(ctx.c, str(posted["entry_id"]))):
         raise denied(OUTSIDE)
-    raise FinanceError(CONFLICT, f"{month} already has bank or card transactions posted in entry {posted['entry_id']}: "
-                                 "raw totals post only to months with none")
+    raise FinanceError(
+        CONFLICT,
+        f"{month} already has bank or card transactions posted in entry {posted['entry_id']}: "
+        "raw totals post only to months with none",
+    )
 
 
 def _again(row: Any) -> Plan:
     """The file is already in the books: nothing posts, and the result names the import that holds it."""
     done: Result = {"batch_id": str(row["id"]), "basis": str(row["basis"]), "already_imported": True}
-    return Plan(gate=K.ALLOW, summary=f"Raw totals already imported as {row['id']}: nothing posts",
-                apply=lambda _aid: dict(done), impact={"already_imported": str(row["id"])})
+    return Plan(
+        gate=K.ALLOW,
+        summary=f"Raw totals already imported as {row['id']}: nothing posts",
+        apply=lambda _aid: dict(done),
+        impact={"already_imported": str(row["id"])},
+    )
 
 
 def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -143,31 +154,61 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         account = by_key[r.key]
         totals[account.code] = totals.get(account.code, 0) + RT.natural(r.amount, account.type)
         names[account.code] = account.name
-    accounts: list[object] = [{"code": code, "name": names[code], "total": total}
-                              for code, total in list(totals.items())[:SHOWN]]
+    accounts: list[object] = [
+        {"code": code, "name": names[code], "total": total} for code, total in list(totals.items())[:SHOWN]
+    ]
 
     def apply(aid: str) -> Result:
-        from .banking import opening_terms, refresh_covered    # lazy: banking imports posting, which imports this module
-        before = opening_terms(ctx)     # the openings' terms as the books stood: the months posted here move them
+        from .banking import opening_terms, refresh_covered  # lazy: banking imports posting, which imports this module
+
+        before = opening_terms(ctx)  # the openings' terms as the books stood: the months posted here move them
         batch = SL.new_id()
         posted: list[object] = []
         for month, lines in months.items():
-            entry = L.Entry(book_id=ctx.book.id, entry_date=RT.month_end(month), memo=memo, source="import",
-                            source_id=f"raw_totals:{batch}:{month}", lines=lines, basis="both")
+            entry = L.Entry(
+                book_id=ctx.book.id,
+                entry_date=RT.month_end(month),
+                memo=memo,
+                source="import",
+                source_id=f"raw_totals:{batch}:{month}",
+                lines=lines,
+                basis="both",
+            )
             entry_id, _ = post(ctx, entry, by=who, action_id=aid)
             posted.append({"month": month, "entry_id": entry_id})
-        SR.insert(ctx.c, {"id": batch, "book_id": ctx.book.id, "content_hash": sheet.digest, "basis": sheet.basis,
-                          "source_name": source, "periods": len(months), "row_count": len(sheet.rows),
-                          "gross": gross, "action_id": aid, "created_at": ctx.at, "created_by": who})
-        refresh_covered(ctx, before)    # the months just posted cover the feed rows dated on or before them
+        SR.insert(
+            ctx.c,
+            {
+                "id": batch,
+                "book_id": ctx.book.id,
+                "content_hash": sheet.digest,
+                "basis": sheet.basis,
+                "source_name": source,
+                "periods": len(months),
+                "row_count": len(sheet.rows),
+                "gross": gross,
+                "action_id": aid,
+                "created_at": ctx.at,
+                "created_by": who,
+            },
+        )
+        refresh_covered(ctx, before)  # the months just posted cover the feed rows dated on or before them
         return {"batch_id": batch, "basis": sheet.basis, "months": posted}
 
-    return Plan(gate=K.default_gate(ctx.org, who, "import_raw_totals"), apply=apply,
-                summary=f"Import {len(sheet.rows)} raw total rows across {len(months)} months ({sheet.basis} basis)",
-                impact={"rows": len(sheet.rows), "zero_rows": sheet.zero_rows, "basis": sheet.basis,
-                        "months": len(months), "accounts": accounts,
-                        "warnings": [w for w in (RT.cents_warning(sheet),) if w]},
-                facts={"amount": gross, "months": len(months), "accounts": sorted(totals)})
+    return Plan(
+        gate=K.default_gate(ctx.org, who, "import_raw_totals"),
+        apply=apply,
+        summary=f"Import {len(sheet.rows)} raw total rows across {len(months)} months ({sheet.basis} basis)",
+        impact={
+            "rows": len(sheet.rows),
+            "zero_rows": sheet.zero_rows,
+            "basis": sheet.basis,
+            "months": len(months),
+            "accounts": accounts,
+            "warnings": [w for w in (RT.cents_warning(sheet),) if w],
+        },
+        facts={"amount": gross, "months": len(months), "accounts": sorted(totals)},
+    )
 
 
 PLANNERS = {"import_raw_totals": import_raw_totals}

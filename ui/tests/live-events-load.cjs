@@ -1,4 +1,4 @@
-// Live task events at scale (ui/app/live.js, ui/app/refresh.js): every open tab gets every task change, and a busy
+// Live task events at scale (ui/app/live.ts, ui/app/refresh.ts): every open tab gets every task change, and a busy
 // team's bots create and change tasks every few seconds. When each change made a tab read whole task lists, a few
 // open tabs kept the server at 100% CPU. This sends 50 task events over about three seconds and caps the requests
 // the page makes in reply:
@@ -45,10 +45,10 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     // Not counted: boot.js re-reads the observability config on a timer, events or not, and on a slow
     // box that read can land inside a burst.
     if (p.startsWith('/api/') && p !== '/api/v2/observability') requests.push(p + url.search);

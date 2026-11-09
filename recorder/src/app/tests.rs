@@ -655,12 +655,7 @@ fn background_delivery_failure_is_visible_in_the_library_and_meeting_without_los
     );
     app.open(&record.id).unwrap();
     let meeting = full_view(&mut app)["meeting"]["data"].clone();
-    assert_eq!(
-        meeting["sync_error"],
-        format!(
-            "Tico sync needs attention: {error}. Audio and transcript remain saved on this Mac."
-        )
-    );
+    assert_eq!(meeting["sync_error"], error);
     assert_eq!(meeting["live"], "Private in Tico");
     assert_eq!(meeting["place"], "Shared live · ");
     let stored = app.store.get(&record.id).unwrap();
@@ -693,6 +688,7 @@ fn a_recording_shows_live_levels_and_stopping_saves_it() {
             health,
             consumer,
             stream: Box::new(Synthetic),
+            live_input: None,
         }
     };
     let directory = tempfile::tempdir().unwrap();
@@ -799,6 +795,7 @@ fn delete_during_capture_stop(fail_stop: bool, shutdown: bool) {
                     started: Instant::now(),
                     health,
                     consumer,
+                    live_input: None,
                     stream: Box::new(GatedStop {
                         entered,
                         release: Some(gate),

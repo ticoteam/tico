@@ -1,13 +1,20 @@
 """Read-only branch checks shared by the release updater and the runner's Health report."""
+
 import argparse
 import json
 from pathlib import Path
 import re
 
 BOT_BRANCH = re.compile(r"(?:tico/[0-9a-f]{8}-[a-z0-9][a-z0-9-]*|tico-session/[A-Za-z0-9][A-Za-z0-9_-]*)\Z")
-OPERATIONS = (("MERGE_HEAD", "merge"), ("rebase-merge", "rebase"), ("rebase-apply", "rebase"),
-              ("CHERRY_PICK_HEAD", "cherry-pick"), ("REVERT_HEAD", "revert"),
-              ("sequencer", "cherry-pick or revert"), ("BISECT_START", "bisect"))
+OPERATIONS = (
+    ("MERGE_HEAD", "merge"),
+    ("rebase-merge", "rebase"),
+    ("rebase-apply", "rebase"),
+    ("CHERRY_PICK_HEAD", "cherry-pick"),
+    ("REVERT_HEAD", "revert"),
+    ("sequencer", "cherry-pick or revert"),
+    ("BISECT_START", "bisect"),
+)
 
 
 def blocker(root, g):
@@ -45,8 +52,7 @@ def inspect(root, g, version=""):
         return {"branch": branch, "recover": False, "error": ""}
     prefix = f"the checkout is on branch {branch}; "
     if not BOT_BRANCH.fullmatch(branch):
-        return {"branch": branch, "recover": False,
-                "error": prefix + "switch it to main to follow releases"}
+        return {"branch": branch, "recover": False, "error": prefix + "switch it to main to follow releases"}
     reason = blocker(root, g)
     if not reason and version:
         target = g("rev-parse", "--verify", "--quiet", "v" + version.lstrip("v") + "^{commit}")
@@ -54,13 +60,17 @@ def inspect(root, g, version=""):
             preview = g("read-tree", "--dry-run", "-m", "-u", "HEAD", target.stdout.strip())
             if preview.returncode:
                 reason = "local files are in the way"
-    return {"branch": branch, "recover": not reason,
-            "error": prefix + ("cannot recover: " + reason if reason else
-                               "will be recovered automatically on the next update")}
+    return {
+        "branch": branch,
+        "recover": not reason,
+        "error": prefix
+        + ("cannot recover: " + reason if reason else "will be recovered automatically on the next update"),
+    }
 
 
 def main():
     from .release_update import git
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
     parser.add_argument("--version", default="")

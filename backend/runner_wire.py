@@ -7,13 +7,20 @@ link's `detail_json`. Renamed time and actor columns go back under their old nam
 `created_at`, `from_actor` beside `sender_id`, a task's `owner`, a worktree link's `updated`). Everything else the hub
 serves uses the new column names (backend/migrations/0013, 0014, 0031).
 """
+
 from . import hubdb as H
 from .migrations.renames_data import COLUMNS
 
 # Renamed time and actor columns of the tables a runner reads: {table: {new name: old name}}.
 TIMES = {}
 for _table, _old, _new, _wave in COLUMNS:
-    if _wave in ("2", "2s", "2b", "3") and _table in ("assignments", "conversations", "messages", "task_links", "tasks"):
+    if _wave in ("2", "2s", "2b", "3") and _table in (
+        "assignments",
+        "conversations",
+        "messages",
+        "task_links",
+        "tasks",
+    ):
         TIMES.setdefault(_table, {})[_new] = _old
 
 
@@ -24,6 +31,7 @@ def _times(table, row):
             row[old] = row[new]
     return row
 
+
 # The task columns a claim hands out as stored text, under their old names.
 TASK_TEXT = ("acceptance", "blocked_gate", "labels", "resume")
 
@@ -31,8 +39,9 @@ TASK_TEXT = ("acceptance", "blocked_gate", "labels", "resume")
 def _stored(c, table, column, ids):
     found = {}
     for part in H.chunks(sorted({i for i in ids if i})):
-        found.update(c.execute(f"SELECT id,{column} FROM {table} WHERE id IN ({','.join('?' * len(part))})",
-                               part).fetchall())
+        found.update(
+            c.execute(f"SELECT id,{column} FROM {table} WHERE id IN ({','.join('?' * len(part))})", part).fetchall()
+        )
     return found
 
 
@@ -43,10 +52,10 @@ def messages(c, rows, *, who=None, auth=None):
     for m in rows:
         if who is not None:
             from .files import readable_page_refs
+
             m.update(readable_page_refs(c, auth, who, m))
         if m.get("id") in stored:
-            m["refs_json"] = (readable_page_refs(c, auth, who, stored[m["id"]]) if who is not None
-                              else stored[m["id"]])
+            m["refs_json"] = readable_page_refs(c, auth, who, stored[m["id"]]) if who is not None else stored[m["id"]]
         _times("messages", m)
     return rows
 
@@ -58,6 +67,7 @@ def message(c, m, *, as_read=False, who=None, auth=None):
         if as_read:
             if who is not None:
                 from .files import readable_page_refs
+
                 m.update(readable_page_refs(c, auth, who, m))
             m["refs_json"] = H._dump(m.get("refs") if m.get("refs") is not None else {})
             _times("messages", m)
@@ -79,8 +89,11 @@ def conversation(c, conv):
 def assignment(row):
     """The fields an assignment adds for the runner wire: its bot's stored configuration text as `config_json`, its
     operator and its time columns under their old names."""
-    return {"config_json": row["config"], **({"operator": row["owner_id"]} if "owner_id" in row.keys() else {}),
-            **{old: row[new] for new, old in TIMES.get("assignments", {}).items() if new in row.keys()}}
+    return {
+        "config_json": row["config"],
+        **({"operator": row["owner_id"]} if "owner_id" in row.keys() else {}),
+        **{old: row[new] for new, old in TIMES.get("assignments", {}).items() if new in row.keys()},
+    }
 
 
 def task(t):

@@ -32,7 +32,7 @@ const HOSTILE_SCRIPT = 'parent.postMessage({ticoVisualHeight: 50, navigate: "htt
   + 'try { top.location = "https://evil.test/top" } catch (e) {} try { parent.document.body.dataset.owned = "yes" } catch (e) {}'
   + 'try { document.cookie = "x=1" } catch (e) { document.title = "opaque" }';
 // The app's own treatment (backend/visuals.py): cleaned, the height reporter appended; the slots as the app writes them.
-const app = JSON.parse(execFileSync('python3', ['-I', '-c', `
+const app = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-I', '-c', `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(ROOT)})
 from backend import visuals
@@ -140,7 +140,7 @@ const edgeServer = http.createServer(async (req, res) => {
         return route.fulfill({status: 302, headers: {Location: link(OBJECTS[id]), 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer'}, body: ''});
       }
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p === '/api/v2/config') return json({company_name: 'Acme', visuals: 'media', visual_origin: ''});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
