@@ -110,7 +110,7 @@ function auRunToggle(id: string): void {
 }
 
 // Today's runs show the time; older ones the day too.
-function auRunTime(at: string | undefined): string {
+function auRunTime(at: string | null | undefined): string {
   const d = new Date(at ?? '');
   if (Number.isNaN(d.getTime())) return '';
   return d.toDateString() === new Date().toDateString() ? clockTime(at)

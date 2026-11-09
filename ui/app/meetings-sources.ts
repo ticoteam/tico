@@ -13,7 +13,7 @@ interface MsrcItem { id: string; name: string; act?: string; key?: string; word?
 // An action control: a button can be disabled, a link cannot.
 type MsrcControl = HTMLElement & {disabled?: boolean};
 // The fields ui/app/meetings-granola.ts adds to MeetState.
-interface MeetSourcesState extends MeetState { gmsg?: string; gflow?: unknown; gSyncing?: boolean }
+interface MeetSourcesState extends MeetState { gmsg?: string; gflow?: GranolaFlow | null; gSyncing?: boolean }
 
 // What needs a look: an importer that errors or lags, or the viewer's Granola signed out or failing.
 function meetSourcesTrouble(state: MeetSourcesState) {
