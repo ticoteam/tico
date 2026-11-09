@@ -2,16 +2,102 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+/** What a usage row, a day, the totals or a routine add up to (UsageFigures in ui/types/api.d.ts). */
+interface UseFigures {
+  runs: number;
+  input_tokens: number;
+  cached_tokens: number;
+  output_tokens: number;
+  est_cost_usd: number | null;
+  subscription_equiv_usd: number;
+  low_estimate_runs: number;
+}
+interface UseRow extends UseFigures { bot: string; name?: string; limit?: UseLimit | null; share?: number }
+interface UseDay extends UseFigures { day: string }
+interface UseRoutine extends UseFigures { title: string }
+/** GET /api/v2/usage (backend/usage.py): the figures for one group-by, with the rows, days or routines it was asked for. */
+interface UseData {
+  bot?: string;
+  name?: string;
+  group: string;
+  from: string;
+  to: string;
+  department?: string | null;
+  departments?: string[];
+  dimensions?: Record<string, string[]>;
+  dimension_labels?: Record<string, Record<string, string>>;
+  rows?: UseRow[];
+  totals: UseFigures;
+  daily?: UseDay[];
+  routines?: UseRoutine[];
+}
+/** Who holds a limit (`blocked_by`): the bot itself, or the team or a group, over a period. */
+interface UseHeld { scope?: string; name?: string; period?: string }
+/** A limit as the server answers it: a bot's (UsageLimitView), a group's or the team's pool (UsagePoolView). The caps are
+ *  read by period name (per_30m_usd, hourly_usd, ...), and so are a bot's own caps (own_*), so the rest is unknown. */
+interface UseLimit {
+  name?: string;
+  parent?: string;
+  may_edit?: boolean;
+  blocked?: string | null;
+  blocked_by?: UseHeld | null;
+  percent: number;
+  spent?: Record<string, number | null>;
+  [field: string]: unknown;
+}
+interface UseDefault { count_subscription?: boolean; [field: string]: unknown }
+interface UsePools { company?: UseLimit; groups?: Record<string, UseLimit> }
+interface UseLimits {
+  bots: Record<string, UseLimit>;
+  default: UseDefault;
+  may_edit_default: boolean;
+  pools: UsePools | null;
+}
+/** One row of the Limits tab: the default, the team, a group or a bot. */
+interface UseLimitRow {
+  key: string;
+  kind: 'default' | 'company' | 'group' | 'bot';
+  name: string;
+  title?: string;
+  path: string;
+  slug?: string;
+  state?: UseLimit | null;
+  value(key: string): number | null;
+  hint(key: string): string;
+  removable?: boolean;
+}
+/** The Limits tab's unsaved edits: rows added, rows struck out, and the last save's error. */
+interface UseEdit { added: string[]; removed: Set<string>; error?: string }
+interface UseState {
+  range: string;
+  department: string;
+  group: string;
+  sort: string;
+  filters: Record<string, string>;
+  custom: { from: string; to: string };
+  open: string;
+  data: UseData | null;
+  load: number;
+  view: string;
+  edit: UseEdit | null;
+  limits?: UseLimits | null;
+  detail?: UseData;
+}
+/** What a queue purge answers (POST /api/v2/usage/queues/purge). */
+interface UsePurged { cancelled: number; kept_people: number; still_running: number }
+
 // ----------------------------------------------------------------- usage
 // GET /api/v2/usage (backend/usage.py, docs/usage.md): tokens each run used, priced at list price. Days are UTC.
 // Every figure shown is API-equivalent: billed spend (API keys, Tico Gateway) plus what subscription runs would have cost
 // at list price. Billed spend alone is in the hover, since a bot's limits count only that.
-const USE_RANGES = [['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['month', 'This month'], ['custom', 'Custom']];
-const USE_DIMENSIONS = [['harness', 'Harness'], ['model', 'Model'], ['effort', 'Effort'], ['subscription', 'Subscription']];
-let USE = null;
-const useDay = date => date.toISOString().slice(0, 10);
-const useAdd = (day, n) => useDay(new Date(Date.parse(day + 'T00:00:00Z') + n * 864e5));
-function useSpan(range, custom?) {
+const USE_RANGES: [string, string][] = [['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['month', 'This month'], ['custom', 'Custom']];
+const USE_DIMENSIONS: [string, string][] = [['harness', 'Harness'], ['model', 'Model'], ['effort', 'Effort'], ['subscription', 'Subscription']];
+let USE: UseState | null = null;
+// The value of the select an event came from (its own control, so a plain read of the value).
+const eventValue = (ev: Event): string => { const el = eventElement(ev); return el && 'value' in el ? String(el.value) : ''; };
+const useDay = (date: Date): string => date.toISOString().slice(0, 10);
+const useAdd = (day: string, n: number): string => useDay(new Date(Date.parse(day + 'T00:00:00Z') + n * 864e5));
+function useSpan(range: string, custom?: { from?: string; to?: string } | null): { from: string; to: string } {
   const today = useDay(new Date());
   if (range === 'today') return {from: today, to: today};
   if (range === '30d') return {from: useAdd(today, -29), to: today};
@@ -19,12 +105,12 @@ function useSpan(range, custom?) {
   if (range === 'custom' && custom?.from && custom?.to) return {from: custom.from, to: custom.to};
   return {from: useAdd(today, -6), to: today};
 }
-function useMoney(n) {
+function useMoney(n: number | null | undefined): string {
   if (n == null) return '—';
   if (n > 0 && n < 0.01) return '<$0.01';
   return '$' + n.toLocaleString(undefined, n >= 100 ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
-function useCount(n) {
+function useCount(n: number | null | undefined): string {
   n = n || 0;
   if (n < 1000) return String(n);
   if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0).replace(/\.0$/, '') + 'K';
@@ -33,29 +119,31 @@ function useCount(n) {
   const v = n / size;
   return v.toFixed(v < 10 ? 2 : 1).replace(/\.?0+$/, '') + unit;
 }
-const useTokens = r => (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.output_tokens || 0);
-const useSpend = r => (r.est_cost_usd || 0) + (r.subscription_equiv_usd || 0);
-const useRuns = n => `${(n || 0).toLocaleString()} run${n === 1 ? '' : 's'}`;
+const useTokens = (r: UseFigures): number => (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.output_tokens || 0);
+const useSpend = (r: UseFigures): number => (r.est_cost_usd || 0) + (r.subscription_equiv_usd || 0);
+const useRuns = (n: number | null | undefined): string => `${(n || 0).toLocaleString()} run${n === 1 ? '' : 's'}`;
 // Runs on a model whose long prompts cost more, without each request's tokens, were priced at the lower rate.
-const useLowWhy = n => `${useRuns(n)} on a model that charges more for long prompts did not report each request's tokens, so they are priced at the lower rate`;
-const useLow = r => r.low_estimate_runs > 0 ? `<span class="use-sub use-low" title="${esc(useLowWhy(r.low_estimate_runs))}">estimate, may be low</span>` : '';
+const useLowWhy = (n: number): string => `${useRuns(n)} on a model that charges more for long prompts did not report each request's tokens, so they are priced at the lower rate`;
+const useLow = (r: UseFigures): string => r.low_estimate_runs > 0 ? `<span class="use-sub use-low" title="${esc(useLowWhy(r.low_estimate_runs))}">estimate, may be low</span>` : '';
 // API-equivalent, or a dash for tokens on a model with no list price and no subscription runs.
-const useEquiv = r => r.est_cost_usd == null && !(r.subscription_equiv_usd > 0) ? null : useSpend(r);
-const useBilled = r => r.est_cost_usd > 0 ? `${useMoney(r.est_cost_usd)} billed on API keys or Tico Gateway; the rest ran on subscriptions` : 'All on subscriptions';
-function useCost(r) {
+const useEquiv = (r: UseFigures): number | null => r.est_cost_usd == null && !(r.subscription_equiv_usd > 0) ? null : useSpend(r);
+const useBilled = (r: UseFigures): string => (r.est_cost_usd ?? 0) > 0 ? `${useMoney(r.est_cost_usd)} billed on API keys or Tico Gateway; the rest ran on subscriptions` : 'All on subscriptions';
+function useCost(r: UseFigures): string {
   return `<span class="use-est" title="${esc(useBilled(r))}">${useMoney(useEquiv(r))}</span>${useLow(r)}`;
 }
-function useSaved() {
+// A number a limit or a pool holds under a field name; anything else reads as no amount.
+const useNum = (v: unknown): number | null => typeof v === 'number' ? v : null;
+function useSaved(): { range?: string; department?: string } {
   try { return JSON.parse(localStorage.getItem('tico.usage') || '{}') || {}; } catch { return {}; }
 }
-function useSave() {
-  try { localStorage.setItem('tico.usage', JSON.stringify({range: USE.range, department: USE.department})); } catch {}
+function useSave(): void {
+  try { if (!USE) return; localStorage.setItem('tico.usage', JSON.stringify({range: USE.range, department: USE.department})); } catch {}
 }
 
-function pageUsage() {
+function pageUsage(): void {
   const saved = useSaved();
   const span = useSpan('7d');
-  const state = USE = {range: USE_RANGES.some(r => r[0] === saved.range) && saved.range !== 'custom' ? saved.range : '7d',
+  const state: UseState = USE = {range: USE_RANGES.some(r => r[0] === saved.range) && saved.range !== 'custom' ? String(saved.range) : '7d',
                        department: saved.department || '', group: 'bot', sort: 'cost', filters: {}, custom: {from: span.from, to: span.to}, open: '', data: null, load: 0,
                        view: 'spend', edit: null};
   $('#main').innerHTML = `<div class="use-page">
@@ -78,31 +166,32 @@ function pageUsage() {
     <div id="use-body" aria-live="polite"></div></div>
   </div>`;
   const main = $('#main');
-  main.querySelector('.use-seg').onclick = ev => {
-    const b = ev.target.closest('[data-use-range]'); if (!b || b.dataset.useRange === state.range) return;
-    state.range = b.dataset.useRange; state.open = ''; useSave(); useLoad();
+  main.querySelector('.use-seg').onclick = (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLElement>('[data-use-range]'); if (!b || b.dataset.useRange === state.range) return;
+    state.range = String(b.dataset.useRange); state.open = ''; useSave(); useLoad();
   };
-  $('#use-group').onchange = ev => { state.group = ev.target.value; state.open = ''; useLoad(); };
-  $('#use-sort').onchange = ev => { state.sort = ev.target.value; usePaint(); };
-  main.querySelectorAll('[data-use-filter]').forEach(select => select.onchange = () => {
-    state.filters[select.dataset.useFilter] = select.value; state.open = ''; useLoad();
+  $('#use-group').onchange = (ev: Event) => { state.group = eventValue(ev); state.open = ''; useLoad(); };
+  $('#use-sort').onchange = (ev: Event) => { state.sort = eventValue(ev); usePaint(); };
+  main.querySelectorAll('[data-use-filter]').forEach((select: HTMLSelectElement) => select.onchange = () => {
+    state.filters[String(select.dataset.useFilter)] = select.value; state.open = ''; useLoad();
   });
-  $('#use-dept').onchange = ev => { state.department = ev.target.value; state.open = ''; useSave(); useLoad(); };
+  $('#use-dept').onchange = (ev: Event) => { state.department = eventValue(ev); state.open = ''; useSave(); useLoad(); };
   $('#use-from').onchange = $('#use-to').onchange = () => {
     state.custom = {from: $('#use-from').value, to: $('#use-to').value};
     if (state.custom.from && state.custom.to && state.custom.from <= state.custom.to) { state.open = ''; useLoad(); }
   };
-  $('#use-body').onclick = ev => {
-    const cap = ev.target.closest('[data-use-limit]');
+  $('#use-body').onclick = (ev: MouseEvent) => {
+    const el = eventElement(ev);
+    const cap = el?.closest<HTMLElement>('[data-use-limit]');
     if (cap) {
-      return void useView('limits', 'bot:' + cap.dataset.useLimit);
+      return void useView('limits', 'bot:' + String(cap.dataset.useLimit));
     }
-    const line = ev.target.closest('.use-line');
-    if (line && state.group === 'bot') return void useOpen(line.closest('.use-row').dataset.bot);
-    if (ev.target.closest('[data-use-csv]')) useCsv();
+    const line = el?.closest<HTMLElement>('.use-line');
+    if (line && state.group === 'bot') return void useOpen(String(line.closest<HTMLElement>('.use-row')?.dataset.bot));
+    if (el?.closest('[data-use-csv]')) useCsv();
   };
-  main.querySelector('.use-tabs').onclick = ev => { const b = ev.target.closest('[data-use-view]'); if (b) useView(b.dataset.useView); };
-  $('#use-purge').onclick = () => usePurgeDialog(state.limits, result => {
+  main.querySelector('.use-tabs').onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-use-view]'); if (b) useView(String(b.dataset.useView)); };
+  $('#use-purge').onclick = () => usePurgeDialog(state.limits, (result: UsePurged) => {
     if (USE === state && $('#use-purge')) toast(`Cleared ${result.cancelled} queued · ${result.kept_people} kept · ${result.still_running} running`);
   });
   void useLimits();
@@ -110,9 +199,10 @@ function pageUsage() {
 }
 
 // The team default limit, the team's and groups' limits, and each bot's: the Limits tab shows when any is ours to change.
-async function useLimits() {
+async function useLimits(): Promise<void> {
   const state = USE;
-  try { state.limits = await get('/v2/usage/limits', {fresh: true}); } catch { state.limits = null; }
+  if (!state) return;
+  try { state.limits = await get<UseLimits>('/v2/usage/limits', {fresh: true}); } catch { state.limits = null; }
   if (USE !== state || !$('#use-limits')) return;
   $('#use-purge').hidden = !state.limits?.may_edit_default;
   const may = useLimitRows(state.limits, []).length > 0 || useLimitAddable(state.limits, []).length > 0;
@@ -121,26 +211,26 @@ async function useLimits() {
   else if (state.view === 'limits') useLimitsPaint();
 }
 // Spend or Limits; `focus` (a row key such as bot:<slug>) adds that row if it is not shown and puts the cursor in it.
-function useView(view, focus) {
+function useView(view: string, focus?: string): void {
   const state = USE; if (!state) return;
   state.view = view;
   for (const b of $('#main').querySelectorAll('[data-use-view]')) b.setAttribute('aria-selected', String(b.dataset.useView === view));
   $('#use-spend').hidden = view !== 'spend';
   $('#use-limits').hidden = view !== 'limits';
   if (view !== 'limits') return;
-  state.edit = state.edit || {added: [], removed: new Set()};
+  state.edit = state.edit || {added: [], removed: new Set<string>()};
   if (focus && !useLimitRows(state.limits, state.edit.added).some(r => r.key === focus)) state.edit.added.push(focus);
   useLimitsPaint();
   if (focus) $('#use-limits').querySelector(`[data-lim-row="${CSS.escape(focus)}"] input`)?.focus();
 }
 
-const useParams = (state, extra) => {
+const useParams = (state: UseState, extra: Record<string, string>): { from: string; to: string; query: string } => {
   const {from, to} = useSpan(state.range, state.custom);
   const q = new URLSearchParams({from, to, group: state.group, ...state.filters, ...extra});
   return {from, to, query: q.toString()};
 };
 
-async function useLoad() {
+async function useLoad(): Promise<void> {
   const state = USE; if (!state || !$('#use-body')) return;
   const mine = ++state.load, range = useParams(state, state.department ? {department: state.department} : {});
   $('#use-body').setAttribute('aria-busy', 'true');
@@ -148,9 +238,9 @@ async function useLoad() {
   for (const b of $('#main').querySelectorAll('[data-use-range]')) b.setAttribute('aria-selected', String(b.dataset.useRange === state.range));
   $('#main').querySelector('.use-custom').hidden = state.range !== 'custom';
   $('#use-from').value = range.from; $('#use-to').value = range.to;
-  let data;
-  try { data = await get('/v2/usage?' + range.query); }
-  catch (e) { if (USE === state && mine === state.load) $('#use-body').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  let data: UseData;
+  try { data = await get<UseData>('/v2/usage?' + range.query); }
+  catch (e) { if (USE === state && mine === state.load) $('#use-body').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (USE !== state || mine !== state.load) return;      // a newer switch is already loading
   state.data = data;
   const select = $('#use-dept');
@@ -166,11 +256,12 @@ async function useLoad() {
   usePaint();
 }
 
-function usePaint() {
-  const state = USE, data = state.data, body = $('#use-body');
+function usePaint(): void {
+  const state = USE; if (!state) return;
+  const data = state.data, body = $('#use-body');
   if (!data || data.group !== state.group) return;
   body.removeAttribute('aria-busy');
-  const rank = state.sort === 'tokens' ? useTokens : state.sort === 'runs' ? r => r.runs : useSpend;
+  const rank = state.sort === 'tokens' ? useTokens : state.sort === 'runs' ? (r: UseRow) => r.runs : useSpend;
   const rows = [...(data.rows || [])].sort((a, b) => state.sort === 'name'
     ? (a.name || '').localeCompare(b.name || '') : rank(b) - rank(a) || (a.name || '').localeCompare(b.name || ''));
   if (!rows.length) { body.innerHTML = '<div class="empty">No usage yet.</div>'; return; }
@@ -191,8 +282,8 @@ function usePaint() {
   if (state.open) void useDetail(state.open);
 }
 
-function useOpen(slug) {
-  const state = USE;
+function useOpen(slug: string): void {
+  const state = USE; if (!state) return;
   state.open = state.open === slug ? '' : slug;
   for (const row of $('#use-body').querySelectorAll('.use-row')) {
     const on = row.dataset.bot === state.open;
@@ -202,14 +293,15 @@ function useOpen(slug) {
   if (state.open) void useDetail(slug);
 }
 
-async function useDetail(slug) {
-  const state = USE, row = $('#use-body').querySelector(`.use-row[data-bot="${CSS.escape(slug)}"]`);
+async function useDetail(slug: string): Promise<void> {
+  const state = USE; if (!state) return;
+  const row = $('#use-body').querySelector(`.use-row[data-bot="${CSS.escape(slug)}"]`);
   if (!row) return;
   const host = row.querySelector('.use-detail');
   host.innerHTML = '<div class="muted">Loading…</div>';
-  let data;
-  try { data = await get('/v2/usage?' + useParams(state, {bot: slug}).query); }
-  catch (e) { if (USE === state) host.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  let data: UseData;
+  try { data = await get<UseData>('/v2/usage?' + useParams(state, {bot: slug}).query); }
+  catch (e) { if (USE === state) host.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (USE !== state || state.open !== slug) return;
   state.detail = data;
   const days = data.daily || [], peak = Math.max(...days.map(useSpend), 0);
@@ -227,10 +319,10 @@ async function useDetail(slug) {
 }
 
 // The open bot's days as a CSV, in the units the API returns.
-function useCsv() {
+function useCsv(): void {
   const data = USE?.detail; if (!data) return;
-  const head = ['day', 'runs', 'input_tokens', 'cached_tokens', 'output_tokens', 'est_cost_usd', 'subscription_equiv_usd'];
-  const cell = v => v == null ? '' : String(v);
+  const head: (keyof UseDay)[] = ['day', 'runs', 'input_tokens', 'cached_tokens', 'output_tokens', 'est_cost_usd', 'subscription_equiv_usd'];
+  const cell = (v: unknown): string => v == null ? '' : String(v);
   const text = [head.join(','), ...(data.daily || []).map(d => head.map(k => cell(d[k])).join(','))].join('\n') + '\n';
   const link = document.createElement('a');
   link.href = URL.createObjectURL(new Blob([text], {type: 'text/csv'}));
@@ -245,20 +337,20 @@ function useCsv() {
 // new job; at 80% someone is told. The hour came before the half hour replaced it: still enforced where it is set, so it
 // shows only where it is set and is never sent elsewhere (a new hour would be saved as half of it per 30 minutes).
 // [field, column, unit in a row's summary, key of `spent`]
-const USE_PERIODS = [['per_30m_usd', '30 min', '/30m', '30m'], ['hourly_usd', 'Hour', '/hr', 'hour'], ['daily_usd', 'Day', '/day', 'day'],
+const USE_PERIODS: [string, string, string, string][] = [['per_30m_usd', '30 min', '/30m', '30m'], ['hourly_usd', 'Hour', '/hr', 'hour'], ['daily_usd', 'Day', '/day', 'day'],
                      ['weekly_usd', 'Week', '/wk', 'week'], ['monthly_usd', 'Month', '/mo', 'month']];
-const USE_WORDS = {per_30m: '30-minute', hourly: 'hourly', daily: 'daily', weekly: 'weekly', monthly: 'monthly'};
-const useCap = n => '$' + (n >= 100 || Number.isInteger(n) ? n.toLocaleString(undefined, {maximumFractionDigits: 0}) : n.toFixed(2));
-const usePlain = n => String(Math.round(n * 100) / 100);
-function useLimitText(limit) {
-  return USE_PERIODS.filter(([key]) => limit?.[key]).map(([key, , unit]) => useCap(limit[key]) + unit).join(' · ');
+const USE_WORDS: Record<string, string> = {per_30m: '30-minute', hourly: 'hourly', daily: 'daily', weekly: 'weekly', monthly: 'monthly'};
+const useCap = (n: number): string => '$' + (n >= 100 || Number.isInteger(n) ? n.toLocaleString(undefined, {maximumFractionDigits: 0}) : n.toFixed(2));
+const usePlain = (n: number): string => String(Math.round(n * 100) / 100);
+function useLimitText(limit: UseLimit | null | undefined): string {
+  return USE_PERIODS.filter(([key]) => limit?.[key]).map(([key, , unit]) => useCap(useNum(limit?.[key]) ?? 0) + unit).join(' · ');
 }
 // What holds a bot, in words: its own limit, or the team's or a group's.
-const useHeldBy = limit => limit?.blocked_by && limit.blocked_by.scope !== 'bot'
-  ? `${limit.blocked_by.name} is over its ${USE_WORDS[limit.blocked_by.period] || limit.blocked_by.period} limit`
-  : `Over its ${USE_WORDS[limit?.blocked] || limit?.blocked} limit`;
+const useHeldBy = (limit: UseLimit | null | undefined): string => limit?.blocked_by && limit.blocked_by.scope !== 'bot'
+  ? `${limit.blocked_by.name} is over its ${USE_WORDS[String(limit.blocked_by.period)] || limit.blocked_by.period} limit`
+  : `Over its ${USE_WORDS[String(limit?.blocked)] || limit?.blocked} limit`;
 // The cell on a Usage row and in Settings > Bots: the limit, a chip when it is near or met, and a click to change it.
-function useLimitButton(slug, name, limit) {
+function useLimitButton(slug: string, name: string | undefined, limit: UseLimit | null | undefined): string {
   if (!limit?.may_edit) return '<span class="use-limit"></span>';
   const text = useLimitText(limit);
   const chip = limit.blocked ? '<span class="pill fail">Paused</span>' : limit.percent >= 80 ? `<span class="pill waiting">${limit.percent}%</span>` : '';
@@ -267,51 +359,57 @@ function useLimitButton(slug, name, limit) {
 }
 
 // Groups ordered as the org nests them: by the names from the top group down.
-function useGroupOrder(groups) {
-  const chain = id => { const out = []; let at = id; while (at && groups[at] && out.length < 8) { out.unshift(groups[at].name || at); at = groups[at].parent; } return out; };
-  return Object.entries(groups).map(([id, g]) => [id, g, chain(id)]).sort((a, b) => a[2].join('\u0000').localeCompare(b[2].join('\u0000')));
+function useGroupOrder(groups: Record<string, UseLimit>): [string, UseLimit, string[]][] {
+  const chain = (id: string): string[] => {
+    const out: string[] = []; let at: string | undefined = id;
+    while (at && out.length < 8) { const g: UseLimit | undefined = groups[at]; if (!g) break; out.unshift(g.name || at); at = g.parent; }
+    return out;
+  };
+  return Object.entries(groups).map(([id, g]): [string, UseLimit, string[]] => [id, g, chain(id)]).sort((a, b) => a[2].join('\u0000').localeCompare(b[2].join('\u0000')));
 }
-const useBotName = slug => typeof botDisplayName === 'function' ? botDisplayName(slug) : slug;
-const useHasCap = (row, prefix = '') => USE_PERIODS.some(([key]) => row?.[prefix + key] != null);
-// The Limits tab's rows, {key, kind, name, path, value(field): what is stored, hint(field), state}: the default for each bot
-// and the whole team (owner and administrators), then each group and bot with a limit of its own and those added since
-// the last save. A bot's empty window follows the default, so the default is its hint.
-function useLimitRows(limits, added) {
+const useBotName = (slug: string): string => typeof botDisplayName === 'function' ? botDisplayName(slug) : slug;
+const useHasCap = (row: UseLimit | null | undefined, prefix = ''): boolean => USE_PERIODS.some(([key]) => row?.[prefix + key] != null);
+// The Limits tab's rows: the default for each bot and the whole team (owner and administrators), then each group and bot
+// with a limit of its own and those added since the last save. A bot's empty window follows the default, so the default
+// is its hint.
+function useLimitRows(limits: UseLimits | null | undefined, added: string[]): UseLimitRow[] {
   if (!limits) return [];
-  const def = limits.default || {}, pools = limits.pools || {}, out = [];
-  if (limits.may_edit_default) out.push({key: 'default', kind: 'default', name: 'Each bot', path: '/v2/usage/limits', value: k => def[k] ?? null, hint: () => ''});
-  if (pools.company) out.push({key: 'company', kind: 'company', name: 'Whole team', path: '/v2/usage/pools/company', state: pools.company,
-                               value: k => pools.company[k] ?? null, hint: () => ''});
+  const def: UseDefault = limits.default || {}, pools: UsePools = limits.pools || {}, out: UseLimitRow[] = [];
+  if (limits.may_edit_default) out.push({key: 'default', kind: 'default', name: 'Each bot', path: '/v2/usage/limits', value: k => useNum(def[k]), hint: () => ''});
+  const company = pools.company;
+  if (company) out.push({key: 'company', kind: 'company', name: 'Whole team', path: '/v2/usage/pools/company', state: company,
+                         value: k => useNum(company[k]), hint: () => ''});
   for (const [id, g, chain] of useGroupOrder(pools.groups || {}))
     if ((limits.may_edit_default || g.may_edit) && (useHasCap(g) || added.includes('group:' + id)))
       out.push({key: 'group:' + id, kind: 'group', name: g.name || id, title: chain.join(' › '), path: '/v2/usage/pools/groups/' + encodeURIComponent(id),
-                state: g, value: k => g[k] ?? null, hint: () => '', removable: true});
+                state: g, value: k => useNum(g[k]), hint: () => '', removable: true});
   const bots = Object.entries(limits.bots || {}).filter(([slug, b]) => b.may_edit && (useHasCap(b, 'own_') || added.includes('bot:' + slug)))
-    .map(([slug, b]) => ({key: 'bot:' + slug, kind: 'bot', slug, name: useBotName(slug), path: '/v2/usage/limits/' + encodeURIComponent(slug), state: b,
-                          value: k => b['own_' + k] ?? null, hint: k => def[k] != null ? useCap(def[k]) : '', removable: true}));
+    .map(([slug, b]): UseLimitRow => ({key: 'bot:' + slug, kind: 'bot', slug, name: useBotName(slug), path: '/v2/usage/limits/' + encodeURIComponent(slug), state: b,
+                          value: k => useNum(b['own_' + k]), hint: k => { const d = useNum(def[k]); return d != null ? useCap(d) : ''; }, removable: true}));
   return out.concat(bots.sort((a, b) => a.name.localeCompare(b.name)));
 }
 // What can be added: the groups and bots this person may limit that have no row.
-function useLimitAddable(limits, added) {
+function useLimitAddable(limits: UseLimits | null | undefined, added: string[]): [string, string][] {
   if (!limits) return [];
   const shown = new Set(useLimitRows(limits, added).map(r => r.key));
   const groups = useGroupOrder(limits.pools?.groups || {}).filter(([id, g]) => (limits.may_edit_default || g.may_edit) && !shown.has('group:' + id))
-    .map(([id, g, chain]) => ['group:' + id, chain.join(' › ') || g.name || id]);
+    .map(([id, g, chain]): [string, string] => ['group:' + id, chain.join(' › ') || g.name || id]);
   const bots = Object.entries(limits.bots || {}).filter(([slug, b]) => b.may_edit && !shown.has('bot:' + slug))
-    .map(([slug]) => ['bot:' + slug, useBotName(slug)]).sort((a, b) => a[1].localeCompare(b[1]));
+    .map(([slug]): [string, string] => ['bot:' + slug, useBotName(slug)]).sort((a, b) => a[1].localeCompare(b[1]));
   return [...groups, ...bots];
 }
 
-function useLimitsPaint() {
+function useLimitsPaint(): void {
   const state = USE, host = $('#use-limits'); if (!state || !host) return;
   const limits = state.limits, edit = state.edit;
   if (!limits) { host.innerHTML = limits === undefined ? '<div class="muted">Loading…</div>' : '<div class="err">Limits did not load.</div>'; return; }
+  if (!edit) return;
   // What was typed survives a repaint (a row added or removed, a reload after a save that failed part way).
-  const typed = Object.fromEntries([...host.querySelectorAll('input[name]')].map(i => [i.name, i.type === 'checkbox' ? i.checked : i.value]));
+  const typed = Object.fromEntries([...host.querySelectorAll('input[name]')].map((i): [string, string | boolean] => [i.name, i.type === 'checkbox' ? i.checked : i.value]));
   const rows = useLimitRows(limits, edit.added);
   const periods = USE_PERIODS.filter(([key]) => key !== 'hourly_usd' || rows.some(r => r.value(key) != null));
   const add = useLimitAddable(limits, edit.added);
-  const opts = (label, list) => list.length ? `<optgroup label="${label}">${list.map(([k, n]) => `<option value="${esc(k)}">${esc(n)}</option>`).join('')}</optgroup>` : '';
+  const opts = (label: string, list: [string, string][]): string => list.length ? `<optgroup label="${label}">${list.map(([k, n]) => `<option value="${esc(k)}">${esc(n)}</option>`).join('')}</optgroup>` : '';
   host.innerHTML = `<div class="use-lim" style="--use-n:${periods.length}" role="table" aria-label="Limits">
       <div class="use-lim-row use-lim-head" role="row"><span role="columnheader"></span>${periods.map(([, label]) => `<span role="columnheader">${label}</span>`).join('')}<span></span></div>
       ${rows.map(r => useLimitRowHtml(r, periods, edit.removed.has(r.key))).join('')}
@@ -325,10 +423,12 @@ function useLimitsPaint() {
     </div>`;
   for (const input of host.querySelectorAll('input[name]')) {
     if (!(input.name in typed)) continue;
-    if (input.type === 'checkbox') input.checked = typed[input.name]; else input.value = typed[input.name];
+    const v = typed[input.name];
+    if (input.type === 'checkbox') { if (typeof v === 'boolean') input.checked = v; }
+    else if (typeof v === 'string') input.value = v;
   }
-  host.oninput = host.onchange = ev => {
-    const pick = ev.target.closest('.use-lim-add');
+  host.oninput = host.onchange = (ev: Event) => {
+    const pick = eventElement(ev)?.closest<HTMLSelectElement>('.use-lim-add');
     if (!pick) return void useLimitsDirty();
     if (ev.type !== 'change' || !pick.value) return;
     const key = pick.value;
@@ -336,29 +436,29 @@ function useLimitsPaint() {
     useLimitsPaint();
     host.querySelector(`[data-lim-row="${CSS.escape(key)}"] input`)?.focus();
   };
-  host.onkeydown = ev => { if (ev.key === 'Enter' && ev.target.matches('input:not([type=checkbox])')) { ev.preventDefault(); void useLimitsSave(); } };
-  host.onclick = ev => {
-    const x = ev.target.closest('[data-lim-remove]');
+  host.onkeydown = (ev: KeyboardEvent) => { const el = eventElement(ev); if (ev.key === 'Enter' && el?.matches('input:not([type=checkbox])')) { ev.preventDefault(); void useLimitsSave(); } };
+  host.onclick = (ev: MouseEvent) => {
+    const x = eventElement(ev)?.closest<HTMLElement>('[data-lim-remove]');
     if (x) {
-      const key = x.closest('[data-lim-row]').dataset.limRow, row = useLimitRows(limits, edit.added).find(r => r.key === key);
+      const key = String(x.closest<HTMLElement>('[data-lim-row]')?.dataset.limRow), row = useLimitRows(limits, edit.added).find(r => r.key === key);
       // A row added and never saved just goes; one with saved limits is struck out until Save clears them.
       if (row && !USE_PERIODS.some(([k]) => row.value(k) != null)) edit.added = edit.added.filter(k => k !== key);
       else if (edit.removed.has(key)) edit.removed.delete(key); else edit.removed.add(key);
       useLimitsPaint();
       return;
     }
-    if (ev.target.closest('[data-lim-discard]')) {
-      state.edit = {added: [], removed: new Set()};
+    if (eventElement(ev)?.closest('[data-lim-discard]')) {
+      state.edit = {added: [], removed: new Set<string>()};
       host.innerHTML = '';
       useLimitsPaint();
       return;
     }
-    if (ev.target.closest('[data-lim-save]')) void useLimitsSave();
+    if (eventElement(ev)?.closest('[data-lim-save]')) void useLimitsSave();
   };
   useLimitsDirty();
 }
-function useLimitRowHtml(r, periods, removed) {
-  const icon = r.kind === 'bot' ? botAvatar(r.slug, 20)
+function useLimitRowHtml(r: UseLimitRow, periods: [string, string, string, string][], removed: boolean): string {
+  const icon = r.kind === 'bot' ? botAvatar(String(r.slug), 20)
     : `<span class="nav-icon use-lim-icon" aria-hidden="true">${r.kind === 'group' ? 'groups' : r.kind === 'company' ? 'account_balance' : 'smart_toy'}</span>`;
   const st = r.state;
   const chip = !st ? '' : st.blocked ? `<span class="pill fail" title="${esc(useHeldBy(st))}">Paused</span>`
@@ -367,7 +467,7 @@ function useLimitRowHtml(r, periods, removed) {
     const v = r.value(k), head = `<span class="use-lim-h" aria-hidden="true">${label}</span>`;
     if (k === 'hourly_usd' && v == null) return `<span class="use-lim-cell" role="cell"></span>`;
     // The bar is what this window has spent against the cap that applies: a bot's own, else the default.
-    const cap = r.kind === 'bot' ? st?.[k] : v, spent = st?.spent?.[w];
+    const cap = (r.kind === 'bot' ? useNum(st?.[k]) : v) ?? 0, spent = st?.spent?.[w];
     const pct = cap > 0 && spent != null && !removed ? Math.min(100, Math.round(100 * spent / cap)) : null;
     const meter = pct == null ? '' : `<i class="use-meter${pct >= 100 ? ' bad' : pct >= 80 ? ' warn' : ''}" title="${esc(`${useMoney(spent)} of ${useCap(cap)}`)}"><b style="width:${pct}%"></b></i>`;
     return `<span class="use-lim-cell" role="cell">${head}<label class="use-money"><span aria-hidden="true">$</span><input name="${esc(r.key + '|' + k)}" inputmode="decimal" autocomplete="off"
@@ -381,12 +481,14 @@ function useLimitRowHtml(r, periods, removed) {
 // What Save sends: for each row, one PUT of only the windows whose amount changed (empty clears one), every window a
 // removed row sets cleared, and the default's subscription switch when it moved. Nothing else is sent, so nothing else
 // changes. Marks each changed or unreadable field as it goes.
-function useLimitChanges() {
-  const state = USE, host = $('#use-limits'), limits = state.limits, writes = [];
+function useLimitChanges(): [string, Record<string, number | boolean | null>][] {
+  const state = USE, host = $('#use-limits'), limits = state?.limits, edit = state?.edit;
+  const writes: [string, Record<string, number | boolean | null>][] = [];
+  if (!state || !edit) return writes;
   let problem = '';
-  for (const r of useLimitRows(limits, state.edit.added)) {
-    const body = {};
-    if (state.edit.removed.has(r.key)) {
+  for (const r of useLimitRows(limits, edit.added)) {
+    const body: Record<string, number | boolean | null> = {};
+    if (edit.removed.has(r.key)) {
       for (const [k] of USE_PERIODS) if (r.value(k) != null) body[k] = null;
     } else for (const [k, label] of USE_PERIODS) {
       const input = host.querySelector(`input[name="${CSS.escape(r.key + '|' + k)}"]`); if (!input) continue;
@@ -400,15 +502,16 @@ function useLimitChanges() {
       if (changed) body[k] = want;
     }
     const box = r.kind === 'default' && host.querySelector('input[name=count_subscription]');
-    if (box && box.checked !== !!limits.default?.count_subscription) body.count_subscription = box.checked;
+    if (box && box.checked !== !!limits?.default?.count_subscription) body.count_subscription = box.checked;
     if (Object.keys(body).length) writes.push([r.path, body]);
   }
   if (problem) throw new Error(problem);
   return writes;
 }
-function useLimitsDirty() {
+function useLimitsDirty(): void {
   const state = USE, host = $('#use-limits');
-  let writes = [], bad = false;
+  if (!state?.edit) return;
+  let writes: [string, Record<string, number | boolean | null>][] = [], bad = false;
   try { writes = useLimitChanges(); } catch { bad = true; }
   const dirty = writes.length > 0 || bad;
   host.querySelector('[data-lim-save]').disabled = !dirty;
@@ -416,28 +519,29 @@ function useLimitsDirty() {
   host.querySelector('.use-lim-foot').classList.toggle('dirty', dirty);
 }
 // One PUT per changed row, in order. Whatever saved is read back; what did not stays typed with the error beside Save.
-async function useLimitsSave() {
-  const state = USE, host = $('#use-limits'), edit = state.edit;
-  let writes;
+async function useLimitsSave(): Promise<void> {
+  const state = USE, host = $('#use-limits'), edit = state?.edit;
+  if (!state || !edit) return;
+  let writes: [string, Record<string, number | boolean | null>][];
   try { writes = useLimitChanges(); }
-  catch (e) { edit.error = e.message; const err = host.querySelector('[data-lim-err]'); err.textContent = e.message; err.hidden = false; return; }
+  catch (e) { edit.error = errorMessage(e, ''); const err = host.querySelector('[data-lim-err]'); err.textContent = edit.error; err.hidden = false; return; }
   if (!writes.length) return;
   host.querySelector('[data-lim-save]').disabled = true;
   edit.error = '';
-  let failed = null;
+  let failed: unknown = null;
   for (const [path, body] of writes) {
     try { await put(path, body); } catch (e) { failed = e; break; }
   }
   if (USE !== state) return;
-  if (failed) edit.error = failed.message;
-  else { state.edit = {added: [], removed: new Set()}; host.innerHTML = ''; toast('Saved'); }   // read back as saved
+  if (failed) edit.error = errorMessage(failed, '');
+  else { state.edit = {added: [], removed: new Set<string>()}; host.innerHTML = ''; toast('Saved'); }   // read back as saved
   await useLimits();
   void useLoad();
 }
 // Settings > Bots: one bot's limits in a dialog. The Usage page edits every limit in its Limits tab.
-const useAmount = value => { const t = String(value).trim(); return t === '' ? null : Number(t); };
-const useAmounts = form => Object.fromEntries(USE_PERIODS.filter(([key]) => form[key]).map(([key]) => [key, useAmount(form[key].value)]));
-function useDialog(label, body, save, done, submitLabel = 'Save') {
+const useAmount = (value: unknown): number | null => { const t = String(value).trim(); return t === '' ? null : Number(t); };
+const useAmounts = (form: HTMLFormElement): Record<string, number | null> => Object.fromEntries(USE_PERIODS.filter(([key]) => form[key]).map(([key]) => [key, useAmount(form[key].value)]));
+function useDialog<R>(label: string, body: string, save: (form: HTMLFormElement) => R, done?: (result: Awaited<R>) => void, submitLabel = 'Save'): HTMLDialogElement {
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal use-dialog';
   dialog.setAttribute('aria-label', label);
@@ -445,32 +549,36 @@ function useDialog(label, body, save, done, submitLabel = 'Save') {
     <form class="tmodal-body" novalidate>${body}<p class="err" data-error hidden></p>
       <div class="use-dialog-row"><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary">${esc(submitLabel)}</button></div></form>`;
   document.body.appendChild(dialog);
-  dialog.querySelectorAll('[data-close]').forEach(b => b.onclick = () => dialog.close());
+  dialog.querySelectorAll<HTMLButtonElement>('[data-close]').forEach(b => b.onclick = () => dialog.close());
   dialog.onclose = () => dialog.remove();
-  const form = dialog.querySelector('form'), err = dialog.querySelector('[data-error]');
+  const form = dialog.querySelector<HTMLFormElement>('form'), err = dialog.querySelector<HTMLParagraphElement>('[data-error]');
+  if (!form || !err) return dialog;
   form.onsubmit = async ev => {
     ev.preventDefault(); err.hidden = true;
-    const submit = form.querySelector('[type=submit]'); submit.disabled = true;
+    const submit = form.querySelector<HTMLButtonElement>('[type=submit]'); if (submit) submit.disabled = true;
     try { const result = await save(form); dialog.close(); done && done(result); }
-    catch (e) { err.textContent = e.message; err.hidden = false; submit.disabled = false; }
+    catch (e) { err.textContent = errorMessage(e, ''); err.hidden = false; if (submit) submit.disabled = false; }
   };
   dialog.showModal();
   form.querySelector('input')?.focus();
   return dialog;
 }
-function useLimitDialog(slug, name, limit, company, done) {
-  const hint = key => company?.[key] ? useCap(company[key]) : '—';
+function useLimitDialog(slug: string, name: string | undefined, limit: UseLimit | null | undefined, company: UseLimit | null | undefined, done: () => void): void {
+  const hint = (key: string): string => { const c = useNum(company?.[key]); return c ? useCap(c) : '—'; };
   const held = limit?.blocked_by && limit.blocked_by.scope !== 'bot' ? `<p class="muted">${esc(useHeldBy(limit))}; raising this bot's own limit does not lift it.</p>` : '';
   const periods = USE_PERIODS.filter(([key]) => key !== 'hourly_usd' || limit?.own_hourly_usd != null);
-  const fields = periods.map(([key, label]) => `<label>${label}<span class="use-money"><span aria-hidden="true">$</span><input name="${key}" inputmode="decimal" autocomplete="off"
-      value="${limit?.['own_' + key] == null ? '' : usePlain(limit['own_' + key])}" placeholder="${esc(hint(key))}"></span></label>`).join('');
+  const fields = periods.map(([key, label]) => {
+    const own = useNum(limit?.['own_' + key]);
+    return `<label>${label}<span class="use-money"><span aria-hidden="true">$</span><input name="${key}" inputmode="decimal" autocomplete="off"
+      value="${own == null ? '' : usePlain(own)}" placeholder="${esc(hint(key))}"></span></label>`;
+  }).join('');
   useDialog(name || slug, held + `<div class="use-fields">${fields}</div>`,
     form => put('/v2/usage/limits/' + encodeURIComponent(slug), useAmounts(form)), done);
 }
 // Drop queued automatic wakes and waits. Tasks, people's messages and live runs stay.
-function usePurgeDialog(limits, done) {
-  const scopes = [['company', 'Whole team'], ...useGroupOrder(limits?.pools?.groups || {})
-    .map(([id, g, chain]) => ['group:' + id, '\u00a0\u00a0'.repeat(chain.length) + (g.name || id)])];
+function usePurgeDialog(limits: UseLimits | null | undefined, done: (result: UsePurged) => void): void {
+  const scopes: [string, string][] = [['company', 'Whole team'], ...useGroupOrder(limits?.pools?.groups || {})
+    .map(([id, g, chain]): [string, string] => ['group:' + id, '  '.repeat(chain.length) + (g.name || id)])];
   useDialog('Clear automatic queue',
     `<label>Applies to<select name="scope">${scopes.map(([key, label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('')}</select></label>
      <p>Cancels queued automatic wakes and waits. Keeps tasks, people's messages and running work.</p>`,
