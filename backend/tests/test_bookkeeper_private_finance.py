@@ -191,7 +191,7 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
 
 
 @pytest.mark.parametrize("carried", [("books",), ("watch",)])
-def test_a_private_run_may_categorize_but_never_ignore_a_row(api, carried):
+def test_a_private_run_never_ignores_a_row(api, carried):
     """Ignoring a feed row reverses its entry, so a row a payment paid would return to owed: from a private run the
     categorize is refused when it ignores, and the row stays in the queue."""
     token, made, _ = private_run(api, carried=carried)
