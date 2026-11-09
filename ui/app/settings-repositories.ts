@@ -7,41 +7,54 @@
 // team works on to In use (the stored `enabled` tick); bots reach them through their own access below. Everyone else
 // sees the same lists, read only. An organization of hundreds stays short: an In use row opens in place for its setup
 // command, and Not in use is one line until it is searched or opened.
-let REPOS = null;                 // the last GET: {repositories, new_bot_default, github_connected}
+// One repository as GET /api/v2/repositories lists it; `archived` comes from GitHub when it says so.
+type ReposRow = import('../types/api').Repository & {archived?: boolean};
+// The last GET: the list, plus the default for new bots (stored as whatever the select last sent).
+interface ReposView extends Omit<import('../types/api').RepositoryList, 'repositories' | 'new_bot_default'> {
+  repositories: ReposRow[];
+  new_bot_default: string;
+}
+// What reposSave sends: an In use tick or a setup command.
+interface ReposSaveBody {
+  enabled?: boolean;
+  setup_command?: string;
+}
+type ProductRepoPreview = import('../types/api').ProductRepositoryPreview;
+let REPOS: ReposView | null = null;                 // the last GET: {repositories, new_bot_default, github_connected}
 let REPOS_SHOW_BOTS = false;      // bot repositories stay out of Not in use until asked for
 let REPOS_SHOW_ARCHIVED = false;  // archived ones too
 let REPOS_OFF_OPEN = false;       // Not in use opened without a search
-const REPOS_OPEN = new Set();     // In use rows opened to their setup command
+const REPOS_OPEN = new Set<string>();     // In use rows opened to their setup command
 const REPOS_OFF_MAX = 100;        // Not in use draws this many rows at most; a search narrows the rest
-const REPO_SOURCES = ['tico.json', 'conductor.json'];
-const REPO_NEW_BOT = [['own', 'Their own repo'], ['all', 'All repos in use']];
-let PRODUCT_REPO_PREVIEW = null;
-const repoPath = name => String(name).split('/').map(encodeURIComponent).join('/');
-const repoNameHTML = name => {
+const REPO_SOURCES: ReadonlyArray<string | null> = ['tico.json', 'conductor.json'];
+const REPO_NEW_BOT: [string, string][] = [['own', 'Their own repo'], ['all', 'All repos in use']];
+let PRODUCT_REPO_PREVIEW: ProductRepoPreview | null = null;
+const repoPath = (name: string) => String(name).split('/').map(encodeURIComponent).join('/');
+const repoNameHTML = (name: string) => {
   const cut = String(name).indexOf('/');
   return cut < 0 ? esc(name) : `<span class="repo-org">${esc(name.slice(0, cut + 1))}</span>${esc(name.slice(cut + 1))}`;
 };
 // Two to three choices as one row of real radios: arrow keys move between them, as everywhere else.
-function repoSegHTML(name, label, options, value, disabled, extra = '') {
+function repoSegHTML(name: string, label: string, options: ReadonlyArray<readonly [string, string]>, value: string, disabled: boolean, extra = '') {
   return `<div class="repo-seg${extra}" role="radiogroup" aria-label="${esc(label)}">${options.map(([v, text]) =>
     `<label><input type="radio" name="${esc(name)}" value="${esc(v)}"${v === value ? ' checked' : ''}${disabled ? ' disabled' : ''}><span>${esc(text)}</span></label>`).join('')}</div>`;
 }
 const REPO_LOCKED = 'Owners and admins change this';
 
 // The bots whose own repository this is, from the roster already loaded; '' when none is known.
-function repoUsedBy(r) {
+function repoUsedBy(r: ReposRow) {
   if (!r.bot_repo) return '';
-  const short = String(r.full_name).split('/').pop().toLowerCase();
-  return (S.emps || []).filter(e => String(e.repo || (e.slug ? `bot-${e.slug}` : '')).replace(/\.git$/i, '').split('/').pop().toLowerCase() === short)
+  const short = String(r.full_name).split('/').pop()!.toLowerCase();
+  return (S.emps || []).filter(e => String(e.repo || (e.slug ? `bot-${e.slug}` : '')).replace(/\.git$/i, '').split('/').pop()!.toLowerCase() === short)
     .map(e => e.display_name || e.slug || e.id).join(', ');
 }
-const repoChipsHTML = r => `${r.bot_repo ? '<span class="repo-tag">bot</span>' : ''}${r.archived ? '<span class="repo-tag">archived</span>' : ''}${
+const repoChipsHTML = (r: ReposRow) => `${r.bot_repo ? '<span class="repo-tag">bot</span>' : ''}${r.archived ? '<span class="repo-tag">archived</span>' : ''}${
   r.reachable === false ? '<span class="repo-tag repo-warn" title="GitHub no longer lists it">Not reachable</span>' : ''}`;
-const repoSrcHTML = r => REPO_SOURCES.includes(r.setup_source) ? `<small class="repo-src" title="Read from ${esc(r.setup_source)}">${esc(r.setup_source)}</small>` : '';
-const repoLineHTML = r => `<span class="repo-nm">${repoNameHTML(r.full_name)}</span>${repoChipsHTML(r)}<span class="repo-branch">${esc(r.default_branch || '')}</span>`;
+const repoSrcHTML = (r: ReposRow) => REPO_SOURCES.includes(r.setup_source) ? `<small class="repo-src" title="Read from ${esc(r.setup_source)}">${esc(r.setup_source)}</small>` : '';
+const repoLineHTML = (r: ReposRow) => `<span class="repo-nm">${repoNameHTML(r.full_name)}</span>${repoChipsHTML(r)}<span class="repo-branch">${esc(r.default_branch || '')}</span>`;
 
 // In use: one line; a tap opens the setup command, who uses it, and Remove. Only open rows draw an input.
-function reposOnRowHTML(r, admin, i) {
+function reposOnRowHTML(r: ReposRow, admin: boolean, i: number) {
   const open = REPOS_OPEN.has(r.full_name), id = `repo-more-${i}`, used = repoUsedBy(r);
   return `<li class="repo-row on${open ? ' open' : ''}" data-repo="${esc(r.full_name)}">
     <button type="button" class="repo-line" data-repo-open aria-expanded="${open}" aria-controls="${id}" title="${esc(r.full_name)}">${repoLineHTML(r)}<span class="nav-icon repo-chev" aria-hidden="true">chevron_right</span></button>
@@ -51,13 +64,13 @@ function reposOnRowHTML(r, admin, i) {
       ${admin ? '<button type="button" class="ghost repos-small" data-repo-remove>Remove</button>' : ''}</div>` : ''}</li>`;
 }
 // Not in use: one line and Add.
-const reposOffRowHTML = (r, admin) => `<li class="repo-row" data-repo="${esc(r.full_name)}">
+const reposOffRowHTML = (r: ReposRow, admin: boolean) => `<li class="repo-row" data-repo="${esc(r.full_name)}">
     <span class="repo-line" title="${esc(r.full_name)}">${repoLineHTML(r)}</span>${admin ? '<button type="button" class="ghost repos-small" data-repo-add>Add</button>' : ''}</li>`;
 
 function reposDrawList() {
   const host = $('#set-repos'), onList = host?.querySelector('[data-repos-on]');
   if (!onList || !REPOS) return;
-  const admin = settingsIsAdmin(), byName = (a, b) => a.full_name.localeCompare(b.full_name);
+  const admin = settingsIsAdmin(), byName = (a: ReposRow, b: ReposRow) => a.full_name.localeCompare(b.full_name);
   const all = REPOS.repositories || [];
   const on = all.filter(r => r.enabled).sort(byName);
   const off = all.filter(r => !r.enabled && (REPOS_SHOW_ARCHIVED || !r.archived) && (REPOS_SHOW_BOTS || !r.bot_repo)).sort(byName);
@@ -75,11 +88,11 @@ function reposDrawList() {
     + (more > 0 ? `<li class="empty">${more} more · search to narrow</li>` : '')
     : `<li class="empty">${q ? 'No match.' : 'None.'}</li>`;
 }
-async function renderSettingsRepos(fresh?: boolean) {
+async function renderSettingsRepos(fresh?: ReposView) {
   const host = $('#set-repos');
   if (!host) return;
-  try { REPOS = fresh || await get('/v2/repositories'); }
-  catch (error) { host.innerHTML = `<div class="err">${esc(error.message)}</div>`; return; }
+  try { REPOS = fresh || await get<ReposView>('/v2/repositories'); }
+  catch (error) { host.innerHTML = `<div class="err">${esc(errorMessage(error, ''))}</div>`; return; }
   if (!$('#set-repos')) return;
   host.dataset.drawn = '';   // a link to the card (SETTINGS_REPOS_CARD) scrolls once it is filled in
   const admin = settingsIsAdmin(), dis = admin ? '' : ` disabled title="${REPO_LOCKED}"`, owner = S.me?.role === 'owner';
@@ -92,12 +105,13 @@ async function renderSettingsRepos(fresh?: boolean) {
   const archived = (REPOS.repositories || []).some(r => r.archived && !r.enabled);
   const formOpen = !!host.querySelector('[data-product-repo]:not([hidden])');
   PRODUCT_REPO_PREVIEW = null;
+  const newBot = REPOS.new_bot_default || 'own';
   host.innerHTML = `<header><h2>Repositories</h2>${helpBubble('Read from GitHub daily and on Refresh. A setup command saved here wins over tico.json and conductor.json.')}<span class="spacer"></span>
       <button class="ghost repos-small" type="button" data-repos-refresh${dis}>Refresh</button></header>
     ${admin ? '' : settingsWhoCanHTML('which repositories bots use', {admins: true})}
     <div class="repos-bar"><label class="repos-newbot"><span class="repos-k">New bots get</span>
       <select name="repos_new_bot" data-repos-newbot${dis}>${REPO_NEW_BOT.map(([v, text]) =>
-        `<option value="${v}"${v === (REPOS.new_bot_default || 'own') ? ' selected' : ''}>${esc(text)}</option>`).join('')}</select></label>
+        `<option value="${v}"${v === newBot ? ' selected' : ''}>${esc(text)}</option>`).join('')}</select></label>
       ${owner ? `<span class="spacer"></span><button class="ghost repos-small" type="button" data-product-repo-open aria-expanded="${formOpen}" aria-controls="product-repo-form">New repository</button>` : ''}</div>
     ${owner ? `<section class="repos-new" id="product-repo-form" data-product-repo${formOpen ? '' : ' hidden'}>
       <div class="repos-new-row"><input id="product-repo-name" data-product-repo-name maxlength="100" autocomplete="off" spellcheck="false" placeholder="Repository name" aria-label="Repository name">
@@ -116,7 +130,7 @@ async function renderSettingsRepos(fresh?: boolean) {
   reposDrawList();
 }
 // A setup command saved: patched in place from what the server saved, so the cursor stays wherever the person moved it.
-function reposPatchRow(r) {
+function reposPatchRow(r: ReposRow) {
   const input = $(`#set-repos [data-repo="${CSS.escape(r.full_name)}"] [data-repo-setup]`);
   if (!input) return;
   input.defaultValue = r.setup_command || '';
@@ -125,29 +139,29 @@ function reposPatchRow(r) {
   input.insertAdjacentHTML('afterend', repoSrcHTML(r));
 }
 // Add or Remove moves the row to the other list; the keyboard goes to the row that took its place.
-function reposMoved(list, index) {
+function reposMoved(list: string, index: number) {
   const host = $('#set-repos');
   if (!host || document.activeElement && document.activeElement !== document.body) return;   // the person has moved on
   const rows = host.querySelectorAll(`[${list}] > .repo-row`);
   const row = rows[Math.min(index, rows.length - 1)];
   (row?.querySelector(list === 'data-repos-on' ? '[data-repo-open]' : '[data-repo-add]') || host.querySelector('[data-repos-filter]'))?.focus();
 }
-async function reposSave(name, body, control) {
+async function reposSave(name: string, body: ReposSaveBody, control: HTMLInputElement | HTMLSelectElement | HTMLButtonElement) {
   const row = REPOS?.repositories?.find(r => r.full_name === name);
   if (!row) return;
   const tick = body.enabled !== undefined;
   const list = control.closest('[data-repos-on]') ? 'data-repos-on' : 'data-repos-off';
-  const index = [...(control.closest(`[${list}]`)?.children || [])].indexOf(control.closest('li'));
+  const index = ([...(control.closest(`[${list}]`)?.children || [])] as Array<Element | null>).indexOf(control.closest('li'));
   if (tick) control.disabled = true;
   settingsFieldClear(control);
   try {
-    const saved = await put(`/v2/repositories/${repoPath(name)}`, body);
+    const saved: Partial<ReposRow> | null = await put(`/v2/repositories/${repoPath(name)}`, body);
     Object.assign(row, saved && saved.full_name ? saved : body,
       body.setup_command !== undefined && !(saved && saved.full_name) ? {setup_source: body.setup_command ? 'settings' : null} : {});
     toast('Saved');
   } catch (error) {
     if (tick) control.disabled = false;
-    settingsFieldError(control, error.message);
+    settingsFieldError(control, errorMessage(error, ''));
     if (!tick) reposPatchRow(row);
     return;
   }
@@ -157,12 +171,15 @@ async function reposSave(name, body, control) {
   reposMoved(list, index);
 }
 document.addEventListener('change', async event => {
-  const host = event.target.closest('#set-repos');
+  const host = eventElement(event)?.closest('#set-repos');
   if (!host) return;
-  const t = event.target, name = t.closest('[data-repo]')?.dataset.repo;
-  if (t.matches('[data-repos-archived]')) { REPOS_SHOW_ARCHIVED = t.checked; reposDrawList(); return; }
-  if (t.matches('[data-repos-bots]')) { REPOS_SHOW_BOTS = t.checked; reposDrawList(); return; }
+  const t = event.target;
+  if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) return;   // the only controls in the card
+  const name = t.closest<HTMLElement>('[data-repo]')?.dataset.repo;
+  if (t instanceof HTMLInputElement && t.matches('[data-repos-archived]')) { REPOS_SHOW_ARCHIVED = t.checked; reposDrawList(); return; }
+  if (t instanceof HTMLInputElement && t.matches('[data-repos-bots]')) { REPOS_SHOW_BOTS = t.checked; reposDrawList(); return; }
   if (!settingsIsAdmin()) return;
+  if (!REPOS) return;   // drawn from it; the two saves below read it
   if (t.matches('[data-repo-setup]') && name) {
     const row = REPOS.repositories.find(r => r.full_name === name);
     if ((row?.setup_command || '') !== t.value.trim()) return reposSave(name, {setup_command: t.value.trim()}, t);
@@ -171,92 +188,102 @@ document.addEventListener('change', async event => {
     const before = REPOS.new_bot_default || 'own';
     settingsFieldClear(eventElement(event));
     try { await put('/v2/repositories/settings', {new_bot_default: t.value}); REPOS.new_bot_default = t.value; toast('Saved'); }
-    catch (error) { settingsFieldError(eventElement(event), error.message); t.value = before; }
+    catch (error) { settingsFieldError(eventElement(event), errorMessage(error, '')); t.value = before; }
   }
 });
 document.addEventListener('input', event => {
-  if (event.target.matches('#set-repos [data-repos-filter]')) reposDrawList();
-  if (event.target.matches('#set-repos [data-product-repo-name]')) {
+  const target = eventElement(event);
+  if (target?.matches('#set-repos [data-repos-filter]')) reposDrawList();
+  if (target?.matches('#set-repos [data-product-repo-name]')) {
     PRODUCT_REPO_PREVIEW = null;
-    const result = event.target.closest('[data-product-repo]')?.querySelector('[data-product-repo-result]');
-    const create = event.target.closest('[data-product-repo]')?.querySelector('[data-product-repo-create]');
+    const result = target.closest('[data-product-repo]')?.querySelector<HTMLElement>('[data-product-repo-result]');
+    const create = target.closest('[data-product-repo]')?.querySelector<HTMLButtonElement>('[data-product-repo-create]');
     if (result) { result.hidden = true; result.textContent = ''; }
     if (create) { create.hidden = true; create.disabled = true; }
   }
 });
 document.addEventListener('keydown', event => {
-  const filter = event.target.closest?.('#set-repos [data-repos-filter]');
+  const filter = eventElement(event)?.closest<HTMLInputElement>('#set-repos [data-repos-filter]');
   if (filter && event.key === 'Escape' && filter.value) { event.preventDefault(); filter.value = ''; reposDrawList(); return; }
-  const input = event.target.closest?.('#set-repos [data-repo-setup]');
+  const input = eventElement(event)?.closest<HTMLInputElement>('#set-repos [data-repo-setup]');
   if (!input) return;
   if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
   if (event.key === 'Escape') {
-    const row = REPOS?.repositories?.find(r => r.full_name === input.closest('[data-repo]').dataset.repo);
+    const row = REPOS?.repositories?.find(r => r.full_name === input.closest<HTMLElement>('[data-repo]')?.dataset.repo);
     input.value = row?.setup_command || ''; input.blur();
   }
 });
 document.addEventListener('click', async event => {
-  const host = event.target.closest('#set-repos');
-  if (!host) return;
-  const rowButton = event.target.closest('[data-repo-open]');
+  const target = eventElement(event), host = target?.closest('#set-repos');
+  if (!target || !host) return;
+  const rowButton = target.closest('[data-repo-open]');
   if (rowButton) {
-    const name = rowButton.closest('[data-repo]').dataset.repo;
+    const name = rowButton.closest<HTMLElement>('[data-repo]')?.dataset.repo;
+    if (name === undefined) return;   // a row button is always inside its row
     if (REPOS_OPEN.has(name)) REPOS_OPEN.delete(name); else REPOS_OPEN.add(name);
     reposDrawList();
-    host.querySelector(`[data-repo="${CSS.escape(name)}"] ${REPOS_OPEN.has(name) && settingsIsAdmin() ? '[data-repo-setup]' : '[data-repo-open]'}`)?.focus();
+    host.querySelector<HTMLElement>(`[data-repo="${CSS.escape(name)}"] ${REPOS_OPEN.has(name) && settingsIsAdmin() ? '[data-repo-setup]' : '[data-repo-open]'}`)?.focus();
     return;
   }
-  const add = event.target.closest('[data-repo-add], [data-repo-remove]');
+  const add = target.closest<HTMLButtonElement>('[data-repo-add], [data-repo-remove]');
   if (add) {
     if (!settingsIsAdmin()) return;
-    return reposSave(add.closest('[data-repo]').dataset.repo, {enabled: add.matches('[data-repo-add]')}, add);
+    const repo = add.closest<HTMLElement>('[data-repo]')?.dataset.repo;
+    if (repo === undefined) return;   // Add and Remove are always inside their row
+    return reposSave(repo, {enabled: add.matches('[data-repo-add]')}, add);
   }
-  if (event.target.closest('[data-repos-off-toggle]')) {
-    const filter = host.querySelector('[data-repos-filter]');
+  if (target.closest('[data-repos-off-toggle]')) {
+    const filter = host.querySelector<HTMLInputElement>('[data-repos-filter]');
     const shown = REPOS_OFF_OPEN || !!filter?.value.trim();
     REPOS_OFF_OPEN = !shown;
     if (shown && filter) filter.value = '';
     reposDrawList();
     return;
   }
-  const openForm = event.target.closest('[data-product-repo-open]');
+  const openForm = target.closest('[data-product-repo-open]');
   if (openForm) {
-    const section = host.querySelector('[data-product-repo]');
+    const section = host.querySelector<HTMLElement>('[data-product-repo]');
     if (!section) return;
     section.hidden = !section.hidden;
     openForm.setAttribute('aria-expanded', String(!section.hidden));
-    if (!section.hidden) section.querySelector('[data-product-repo-name]').focus();
+    if (!section.hidden) section.querySelector<HTMLInputElement>('[data-product-repo-name]')?.focus();
     return;
   }
-  const previewButton = event.target.closest('[data-product-repo-preview]');
+  const previewButton = target.closest<HTMLButtonElement>('[data-product-repo-preview]');
   if (previewButton) {
     if (S.me?.role !== 'owner') return;
     const section = previewButton.closest('[data-product-repo]');
-    const result = section.querySelector('[data-product-repo-result]');
-    const create = section.querySelector('[data-product-repo-create]');
-    const name = section.querySelector('[data-product-repo-name]').value.trim();
+    if (!section) return;
+    const result = section.querySelector<HTMLElement>('[data-product-repo-result]');
+    const create = section.querySelector<HTMLButtonElement>('[data-product-repo-create]');
+    const nameInput = section.querySelector<HTMLInputElement>('[data-product-repo-name]');
+    if (!result || !create || !nameInput) return;   // drawn together with the button
+    const name = nameInput.value.trim();
     previewButton.disabled = true;
     result.hidden = false; result.textContent = 'Checking…';
     try {
       const query = new URLSearchParams({name});
-      PRODUCT_REPO_PREVIEW = await get(`/v2/github/product-repos/preview?${query}`);
+      PRODUCT_REPO_PREVIEW = await get<ProductRepoPreview>(`/v2/github/product-repos/preview?${query}`);
       const p = PRODUCT_REPO_PREVIEW;
       result.textContent = `${p.repository} · private · empty (no initial commit). ${p.capability_detail}`;
       create.hidden = p.capability !== 'available';
       create.disabled = p.capability !== 'available';
     } catch (error) {
       PRODUCT_REPO_PREVIEW = null;
-      result.textContent = error.message;
+      result.textContent = errorMessage(error, '');
       create.hidden = true; create.disabled = true;
     } finally { previewButton.disabled = false; }
     return;
   }
-  const createButton = event.target.closest('[data-product-repo-create]');
+  const createButton = target.closest<HTMLButtonElement>('[data-product-repo-create]');
   if (createButton) {
     if (S.me?.role !== 'owner') return;
     const section = createButton.closest('[data-product-repo]');
-    const resultHost = section.querySelector('[data-product-repo-result]');
-    const currentName = section.querySelector('[data-product-repo-name]').value.trim();
+    if (!section) return;
+    const resultHost = section.querySelector<HTMLElement>('[data-product-repo-result]');
+    const nameInput = section.querySelector<HTMLInputElement>('[data-product-repo-name]');
+    if (!resultHost || !nameInput) return;   // drawn together with the button
+    const currentName = nameInput.value.trim();
     if (!PRODUCT_REPO_PREVIEW || currentName !== PRODUCT_REPO_PREVIEW.name || PRODUCT_REPO_PREVIEW.capability !== 'available') {
       PRODUCT_REPO_PREVIEW = null;
       resultHost.hidden = false; resultHost.textContent = 'Preview this name again before creating it.';
@@ -266,23 +293,23 @@ document.addEventListener('click', async event => {
     createButton.disabled = true; createButton.textContent = 'Creating…';
     try {
       const p = PRODUCT_REPO_PREVIEW;
-      const created = await post('/v2/github/product-repos', {org: p.org, name: p.name, visibility: p.visibility, auto_init: p.auto_init, confirmed: true});
+      const created: import('../types/api').ProductRepositoryResult = await post('/v2/github/product-repos', {org: p.org, name: p.name, visibility: p.visibility, auto_init: p.auto_init, confirmed: true});
       PRODUCT_REPO_PREVIEW = null;
       resultHost.hidden = false;
       resultHost.innerHTML = `Created <a href="${esc(created.html_url)}" target="_blank" rel="noopener noreferrer">${esc(created.repository)}</a>. ${esc(created.note)}`;
       createButton.hidden = true;
       toast(`Created ${created.repository}`);
     } catch (error) {
-      resultHost.hidden = false; resultHost.textContent = error.message;
+      resultHost.hidden = false; resultHost.textContent = errorMessage(error, '');
       createButton.disabled = false; createButton.textContent = 'Create repository';
     }
     return;
   }
-  const button = event.target.closest('[data-repos-refresh]');
+  const button = target.closest<HTMLButtonElement>('[data-repos-refresh]');
   if (!button) return;
   button.disabled = true; button.textContent = 'Refreshing…';
   try { await renderSettingsRepos(await post('/v2/repositories/refresh', {})); toast('Repositories refreshed'); }
-  catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Refresh'; }
+  catch (error) { toast(errorMessage(error, ''), true); button.disabled = false; button.textContent = 'Refresh'; }
 });
 
 // ----------------------------------------------------------------- a bot's Repositories
@@ -294,29 +321,54 @@ document.addEventListener('click', async event => {
 // managers see it read only. Create product repositories is on for every bot until the Owner or an admin turns it
 // off; only the Owner turns it back on.
 // Hidden while GitHub is not connected.
-const BOT_REPO_MODES = [['own', 'Their own repo'], ['all', 'All repos in use'], ['chosen', 'Chosen repos']];
-const BOT_REPO_ACCESS = [['read', 'Read'], ['write', 'Write']];
+// A chosen or all-repos grant's two options, as the server names them.
+type BrepoFlag = 'run_workflows' | 'edit_workflows';
+// For each option, the repositories it is on for.
+type BrepoFlagSets = Record<BrepoFlag, Set<string>>;
+// A bot's repository access as GET /api/v2/bots/{bot}/repositories answers; the two create ticks come with it.
+type BotReposView = import('../types/api').BotRepositories & {
+  create_repositories?: boolean;
+  create_product_repositories?: boolean;
+};
+// One repository's grant as a save sends it: the access, and an option only when on or being turned off.
+type BrepoGrantBody = {full_name: string; access?: string} & Partial<Record<BrepoFlag, boolean>>;
+// The editor's copy of the bot's access: `flags` as ticked on screen, `served` as last sent or read (all_* likewise).
+interface BrepoState {
+  mode: string;
+  all_access: string;
+  create_repositories: boolean;
+  create_product_repositories: boolean;
+  chosen: Map<string, string>;
+  flags: BrepoFlagSets;
+  served: BrepoFlagSets;
+  all_flags: BrepoFlagSets;
+  all_served: BrepoFlagSets;
+  effective: import('../types/api').RepositoryGrant[];
+}
+const BOT_REPO_MODES: [string, string][] = [['own', 'Their own repo'], ['all', 'All repos in use'], ['chosen', 'Chosen repos']];
+const BOT_REPO_ACCESS: [string, string][] = [['read', 'Read'], ['write', 'Write']];
 // A chosen write repo's options: [grant flag, data attribute, label, tooltip, what Effective adds].
-const BOT_REPO_FLAGS = [
+const BOT_REPO_FLAGS: ReadonlyArray<readonly [BrepoFlag, string, string, string, string]> = [
   ['run_workflows', 'data-brepo-run', 'Run workflows', 'Start, rerun and cancel workflow runs (GitHub Actions: write)', ' + workflows'],
   ['edit_workflows', 'data-brepo-edit', 'Edit workflow files', 'Create and change files in .github/workflows (GitHub Workflows: write). A workflow pushed on a branch runs with the repository\'s secrets before review', ' + workflow edits']];
-const brepoFlagSets = chosen => Object.fromEntries(BOT_REPO_FLAGS.map(([flag]) => [flag, new Set((chosen || []).filter(c => c[flag]).map(c => c.full_name))]));
+const brepoFlagSets = (chosen: ReadonlyArray<{full_name: string} & Partial<Record<BrepoFlag, boolean | null>>> | undefined) =>
+  Object.fromEntries(BOT_REPO_FLAGS.map(([flag]) => [flag, new Set((chosen || []).filter(c => c[flag]).map(c => c.full_name))])) as BrepoFlagSets;
 // The selector of a row's checkbox, to put the keyboard back on it after a redraw.
-const brepoControl = el => `[${BOT_REPO_FLAGS.map(([, attr]) => attr).find(attr => el.matches(`[${attr}]`)) || 'data-brepo-pick'}]`;
+const brepoControl = (el: Element) => `[${BOT_REPO_FLAGS.map(([, attr]) => attr).find(attr => el.matches(`[${attr}]`)) || 'data-brepo-pick'}]`;
 // A row's two options: checked when on, greyed with `why` (said in the tooltip) when they cannot change.
-const brepoFlagsHTML = (name, flags, on, why) => BOT_REPO_FLAGS.map(([flag, attr, label, title]) =>
+const brepoFlagsHTML = (name: string, flags: BrepoFlagSets, on: boolean, why: string) => BOT_REPO_FLAGS.map(([flag, attr, label, title]) =>
   `<label class="brepo-run" title="${esc(why ? `${title}. ${why}` : title)}"><input type="checkbox" ${attr} aria-label="${esc(label)} in ${esc(name)}"${on && flags[flag].has(name) ? ' checked' : ''}${why ? ' disabled' : ''}>${esc(label)}</label>`).join('');
-async function botReposMount(host, slug) {
-  if (!host) return;
-  let view, team;
+async function botReposMount(host: Element | null, slug: string) {
+  if (!(host instanceof HTMLElement)) return;
+  let view: BotReposView, team: ReposView;
   try {
-    [view, team] = await Promise.all([get(`/v2/bots/${encodeURIComponent(slug)}/repositories`), get('/v2/repositories')]);
+    [view, team] = await Promise.all([get<BotReposView>(`/v2/bots/${encodeURIComponent(slug)}/repositories`), get<ReposView>('/v2/repositories')]);
   } catch { return; }      // an older server, or no rights to read it: the section just stays away
   if (!host.isConnected || !team.github_connected) return;
   const admin = settingsIsAdmin(), owner = S.me?.role === 'owner';
-  const state = {mode: view.mode || 'own', all_access: view.all_access || 'write', create_repositories: !!view.create_repositories,
+  const state: BrepoState = {mode: view.mode || 'own', all_access: view.all_access || 'write', create_repositories: !!view.create_repositories,
     create_product_repositories: !!view.create_product_repositories,
-    chosen: new Map((view.chosen || []).map(c => [c.full_name, c.access === 'read' ? 'read' : 'write'])),
+    chosen: new Map<string, string>((view.chosen || []).map(c => [c.full_name, c.access === 'read' ? 'read' : 'write'])),
     flags: brepoFlagSets(view.chosen), served: brepoFlagSets(view.chosen),
     all_flags: brepoFlagSets(view.all_repos), all_served: brepoFlagSets(view.all_repos),
     effective: view.effective || []};
@@ -357,10 +409,10 @@ async function botReposMount(host, slug) {
     host.hidden = false;
   };
   // What the server holds, drawn as it is: after the latest save, and after a refused one.
-  const adopt = view => {
+  const adopt = (view: BotReposView) => {
     state.mode = view.mode || 'own'; state.all_access = view.all_access || 'write'; state.create_repositories = !!view.create_repositories;
     state.create_product_repositories = !!view.create_product_repositories;
-    state.chosen = new Map((view.chosen || []).map(c => [c.full_name, c.access === 'read' ? 'read' : 'write']));
+    state.chosen = new Map<string, string>((view.chosen || []).map(c => [c.full_name, c.access === 'read' ? 'read' : 'write']));
     state.flags = brepoFlagSets(view.chosen);
     state.served = brepoFlagSets(view.chosen);
     state.all_flags = brepoFlagSets(view.all_repos);
@@ -369,36 +421,37 @@ async function botReposMount(host, slug) {
   };
   // All repos in use's own ticks for a save, on the same terms as a chosen repo's: only those on or being turned off.
   // One since unticked in Settings is left as the server holds it.
-  const allTicks = () => {
+  const allTicks = (): {all_repos?: BrepoGrantBody[]} => {
     const names = [...new Set(BOT_REPO_FLAGS.flatMap(([flag]) => [...state.all_flags[flag], ...state.all_served[flag]]))]
       .filter(name => ticked().includes(name)).sort();
     return names.length ? {all_repos: names.map(full_name => ({full_name, ...Object.fromEntries(BOT_REPO_FLAGS
       .filter(([flag]) => state.all_flags[flag].has(full_name) || state.all_served[flag].has(full_name))
       .map(([flag]) => [flag, state.all_flags[flag].has(full_name)]))}))} : {};
   };
-  const say = html => { const el = host.querySelector('[data-brepo-status]'); if (el) el.innerHTML = html; };
+  const say = (html: string) => { const el = host.querySelector('[data-brepo-status]'); if (el) el.innerHTML = html; };
   // Redraw, keeping the keyboard on the control it was on.
   const repaint = () => {
-    const at = document.activeElement, keep = host.contains(at) ? (at.type === 'radio'
+    const at = document.activeElement, keep = at && host.contains(at) ? (at instanceof HTMLInputElement && at.type === 'radio'
       ? `input[name="${CSS.escape(at.name)}"][value="${CSS.escape(at.value)}"]`
-      : at.matches('[data-brepo-create]') ? '[data-brepo-create]' : at.matches('[data-brepo-product]') ? '[data-brepo-product]' : at.closest('[data-brepo]') ? `[data-brepo="${CSS.escape(at.closest('[data-brepo]').dataset.brepo)}"] ${brepoControl(at)}`
-      : at.closest('[data-brepo-all]') ? `[data-brepo-all="${CSS.escape(at.closest('[data-brepo-all]').dataset.brepoAll)}"] ${brepoControl(at)}` : '') : '';
+      : at.matches('[data-brepo-create]') ? '[data-brepo-create]' : at.matches('[data-brepo-product]') ? '[data-brepo-product]' : at.closest('[data-brepo]') ? `[data-brepo="${CSS.escape(at.closest<HTMLElement>('[data-brepo]')!.dataset.brepo!)}"] ${brepoControl(at)}`
+      : at.closest('[data-brepo-all]') ? `[data-brepo-all="${CSS.escape(at.closest<HTMLElement>('[data-brepo-all]')!.dataset.brepoAll!)}"] ${brepoControl(at)}` : '') : '';
     paint();
-    if (keep) host.querySelector(keep)?.focus();
+    if (keep) host.querySelector<HTMLElement>(keep)?.focus();
   };
   // One save at a time per bot: a change made while one is on its way waits, and only the latest choice is sent
   // after it, so an earlier save can never land last and undo it.
   let saving = false, again = false;
-  const read = () => get(`/v2/bots/${encodeURIComponent(slug)}/repositories`);
+  const read = () => get<BotReposView>(`/v2/bots/${encodeURIComponent(slug)}/repositories`);
   const save = async () => {
     if (saving) { again = true; say('Saving…'); return; }
     saving = true;
     try {
-      let failure = null, view = null;
+      let failure: unknown = null, view: BotReposView | null = null;
       for (;;) {
         again = false; failure = null; view = null;
         say('Saving…');
-        const body = {mode: state.mode, all_access: state.all_access, create_repositories: state.create_repositories,
+        const body: {mode: string; all_access: string; create_repositories: boolean; create_product_repositories: boolean;
+          chosen: BrepoGrantBody[]; all_repos?: BrepoGrantBody[]} = {mode: state.mode, all_access: state.all_access, create_repositories: state.create_repositories,
           create_product_repositories: state.create_product_repositories,
           // Run workflows and Edit workflow files go only when on or being turned off; left out, the server keeps
           // what it holds.
@@ -413,7 +466,7 @@ async function botReposMount(host, slug) {
           for (const r of body.all_repos || []) if (r[flag]) state.all_served[flag].add(r.full_name);
         }
         try {
-          const saved = await put(`/v2/bots/${encodeURIComponent(slug)}/repositories`, body);
+          const saved: BotReposView | null = await put(`/v2/bots/${encodeURIComponent(slug)}/repositories`, body);
           view = saved?.mode ? saved : await read();
         } catch (error) {
           failure = error;
@@ -426,22 +479,24 @@ async function botReposMount(host, slug) {
       if (view) adopt(view);
       repaint();
       if (!failure) say('Saved');
-      else if (view) say(`<span class="err">${esc(failure.message)}</span>`);
-      else say(`<span class="err">Not saved: ${esc(failure.message)}</span>`);   // the choice on screen is not what is saved
+      else if (view) say(`<span class="err">${esc(errorMessage(failure, ''))}</span>`);
+      else say(`<span class="err">Not saved: ${esc(errorMessage(failure, ''))}</span>`);   // the choice on screen is not what is saved
     } finally { saving = false; }
   };
   host.onchange = event => {
     if (!admin) return;
-    const t = event.target, row = t.closest('[data-brepo]')?.dataset.brepo, allRow = t.closest('[data-brepo-all]')?.dataset.brepoAll;
+    const t = event.target;
+    if (!(t instanceof HTMLInputElement)) return;   // every control here is a checkbox or a radio
+    const row = t.closest<HTMLElement>('[data-brepo]')?.dataset.brepo, allRow = t.closest<HTMLElement>('[data-brepo-all]')?.dataset.brepoAll;
     const flagOf = () => BOT_REPO_FLAGS.find(([, attr]) => t.matches(`[${attr}]`))?.[0];
     if (t.matches('[data-brepo-create]')) state.create_repositories = t.checked;
     else if (t.matches('[data-brepo-product]')) state.create_product_repositories = t.checked;
     else if (t.name === `${id}-mode`) state.mode = t.value;
     else if (t.name === `${id}-all`) { state.all_access = t.value; if (t.value === 'read') for (const set of Object.values(state.all_flags)) set.clear(); }
-    else if (allRow && flagOf()) { const set = state.all_flags[flagOf()]; if (t.checked) set.add(allRow); else set.delete(allRow); }
+    else if (allRow && flagOf()) { const set = state.all_flags[flagOf()!]; if (t.checked) set.add(allRow); else set.delete(allRow); }
     else if (t.matches('[data-brepo-pick]') && row) { if (t.checked) state.chosen.set(row, 'write'); else { state.chosen.delete(row); for (const set of Object.values(state.flags)) set.delete(row); } }
     else if (BOT_REPO_FLAGS.some(([, attr]) => t.matches(`[${attr}]`)) && row) {
-      const set = state.flags[BOT_REPO_FLAGS.find(([, attr]) => t.matches(`[${attr}]`))[0]];
+      const set = state.flags[BOT_REPO_FLAGS.find(([, attr]) => t.matches(`[${attr}]`))![0]];
       if (t.checked) set.add(row); else set.delete(row);
     }
     else if (row && t.type === 'radio') { state.chosen.set(row, t.value); if (t.value === 'read') for (const set of Object.values(state.flags)) set.delete(row); }
@@ -449,8 +504,8 @@ async function botReposMount(host, slug) {
     // Redraw, then put the keyboard back on the control that changed.
     const back = t.type === 'radio' ? `input[name="${CSS.escape(t.name)}"][value="${CSS.escape(t.value)}"]`
       : t.matches('[data-brepo-create]') ? '[data-brepo-create]' : t.matches('[data-brepo-product]') ? '[data-brepo-product]'
-      : allRow ? `[data-brepo-all="${CSS.escape(allRow)}"] ${brepoControl(t)}` : `[data-brepo="${CSS.escape(row)}"] ${brepoControl(t)}`;
-    paint(); host.querySelector(back)?.focus();
+      : allRow ? `[data-brepo-all="${CSS.escape(allRow)}"] ${brepoControl(t)}` : `[data-brepo="${CSS.escape(String(row))}"] ${brepoControl(t)}`;
+    paint(); host.querySelector<HTMLElement>(back)?.focus();
     void save();
   };
   paint();
