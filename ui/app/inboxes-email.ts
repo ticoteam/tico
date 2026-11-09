@@ -18,7 +18,7 @@ type MbSendList = import('../types/api').EmailSendList;
 // The one mailbox page's own expandos on its host: the page's ctx is set by each draw before a handler can run, and the
 // mailbox it shows is set by the draw that rendered it.
 interface HTMLElement {
-  _mbCtx: InboxCtx;
+  _mbCtx?: InboxCtx;
   _mb?: MbDetail | null;
 }
 
@@ -79,7 +79,7 @@ async function renderMailbox(host: HTMLElement, id: string, ctx: InboxCtx): Prom
   host._mbCtx = ctx;   // the handlers below are bound once a page; each click uses the newest draw's ctx
   if (!host.dataset.mbBound) {
     host.dataset.mbBound = '1';
-    host.addEventListener('click', event => { const b = eventElement(event)?.closest<HTMLButtonElement>('button'); if (b) void mbOneClick(host, b, host._mbCtx); });
+    host.addEventListener('click', event => { const b = eventElement(event)?.closest<HTMLButtonElement>('button'); const newest = host._mbCtx; if (b && newest) void mbOneClick(host, b, newest); });
     host.addEventListener('change', event => { const input = eventElement(event)?.closest<HTMLInputElement>('[data-mb-routine]'); if (input) void mbRoutine(input); });
     host.addEventListener('submit', event => {
       const form = eventElement(event)?.closest<HTMLFormElement>('[data-mb-add-form]');
