@@ -35,6 +35,7 @@ APPROVE = "Approve"
 STYLES = ("tokens.css", "base.css", "components.css", "brand.css")
 TEXT_CAP = 6000
 NO_DEV = "No Dev tickets type, so no builder ticket was made"
+SPAWNED = "The pipeline's spawn link files the builder ticket"
 CARD, FROZEN = "card", "frozen"  # pages.spec values: the live spec on a card, its copy on a Dev ticket
 
 _files: Any = None
@@ -111,6 +112,12 @@ def _frozen(c: Any, ticket_id: str) -> Any:
     ).fetchone()
 
 
+def _audience(c: Any, file_id: str) -> str | None:
+    """A page's narrowed audience (pages.audience), or None when it is everyone its file reaches."""
+    row = c.execute("SELECT audience FROM pages WHERE file_id=?", (file_id,)).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
 def _may_approve(actor: str) -> bool:
     """A person moves a spec to Approved: directly, or through their own Assistant on words they wrote in its chat (the
     DELEGATION record assistant.instruction makes, for that person, which the move then records as via assistant). A bot,
@@ -184,6 +191,13 @@ def handoff(c: Any, actor: str, card: Any) -> None:
     spec = spec_page(c, card["id"])
     if spec is None:
         return
+    from . import pipeline_links
+
+    link = pipeline_links.link_for_stage(c, str(card.get("step_id") or ""))
+    if link is not None and link["mode"] == "spawn":
+        # pipeline_engine.on_step_change already filed this move's subtask, carrying the spec: never a second ticket.
+        hub.event(c, actor, "spec.approved", card["id"], {"note": SPAWNED})
+        return
     dev = _dev_type(c)
     if not dev:
         hub.event(c, actor, "spec.approved", card["id"], {"note": NO_DEV})
@@ -198,7 +212,9 @@ def handoff(c: Any, actor: str, card: Any) -> None:
     # The placeholder owner until the allocator hands the ticket to a pool bot: the type's manager, else the card's owner.
     dev_type: Any = hub.type_get(c, dev) or {}
     owner: str = str(dev_type.get("manager") or hub.actor_id(card.get("owner_id") or ""))
-    text = page_text(_files.blobs.get(spec["digest"])) if _files else ""
+    # A spec narrowed to some readers keeps that audience on its frozen copy, and its text stays out of ticket bodies.
+    audience = _audience(c, spec["id"])
+    text = page_text(_files.blobs.get(spec["digest"])) if _files and audience is None else ""
     title = f"Build: {card.get('title') or spec['title']}"
     ticket = hub.task_create(
         c,
@@ -235,9 +251,9 @@ def handoff(c: Any, actor: str, card: Any) -> None:
     )
     now = hub.now()
     c.execute(
-        "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
-        "ON CONFLICT(file_id) DO UPDATE SET spec=?,updated_at=?",
-        (row["id"], "none", None, now, now, FROZEN, FROZEN, now),
+        "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec,audience) VALUES(?,?,?,?,?,?,?) "
+        "ON CONFLICT(file_id) DO UPDATE SET spec=?,audience=?,updated_at=?",
+        (row["id"], "none", None, now, now, FROZEN, audience, FROZEN, audience, now),
     )
     pages_api.Pages.pin_to_task(c, row, ticket_id, actor=actor)
     # The ticket links the frozen copy, the page the builder reads; the live spec may change after approval.
@@ -282,5 +298,6 @@ def child_body(c: Any, ticket_id: Any, body: Any) -> str:
         "WHERE f.id=?",
         (frozen["id"],),
     ).fetchone()
-    text = page_text(_files.blobs.get(stored[0])) if _files and stored else ""
+    restricted = _audience(c, frozen["id"]) is not None
+    text = page_text(_files.blobs.get(stored[0])) if _files and stored and not restricted else ""
     return (str(body or "").rstrip() + "\n\n" + _block(frozen["title"], frozen["id"], text)).strip()

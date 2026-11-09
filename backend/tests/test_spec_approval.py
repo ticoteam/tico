@@ -128,6 +128,29 @@ def test_a_person_approves_a_spec_with_a_page_and_the_builder_ticket_carries_it(
         assert "frozen" in [r[0] for r in frozen]
 
 
+def test_a_narrowed_spec_keeps_its_audience_on_the_frozen_copy_and_its_text_out_of_the_ticket(api):
+    _dev_tickets(api)
+    item = _item(api, "Exports private", step="Spec")
+    assert publish_spec(api, item).status_code == 200
+    audience = '{"people":["ana"]}'
+    with api.app.state.store.transaction() as c:
+        live = SA.spec_page(c, item["id"])
+        c.execute("UPDATE pages SET audience=? WHERE file_id=?", (audience, live["id"]))
+    _step(api, item, "Approved")
+    with api.app.state.store.read() as c:
+        ticket = c.execute(
+            "SELECT t.id,t.body FROM tasks t WHERE t.id IN "
+            "(SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent')",
+            (item["id"],),
+        ).fetchone()
+        frozen = c.execute(
+            "SELECT p.audience FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE f.task_id=? AND p.spec='frozen'",
+            (ticket[0],),
+        ).fetchone()
+    assert frozen[0] == audience
+    assert "Spec page:" in ticket[1] and "Pick a range" not in ticket[1]
+
+
 def test_a_bot_cannot_approve_a_spec(api):
     _dev_tickets(api)
     item = _item(api, "Exports bot", step="Spec")
