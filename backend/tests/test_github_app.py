@@ -52,11 +52,28 @@ class FakeGitHub:
         self.refuse_actions_write = False  # refuse Actions: write whatever the live permissions say
         self.refuse_workflows_write = False  # refuse Workflows: write whatever the live permissions say
         self.on_token = None  # called with each token request's body before it is answered
+        self.accounts = {"acme": "Organization"}  # GET /users/{name}: lowercase login -> "User" or "Organization"
+        self.account_status = None  # an int, or (int, headers): every account lookup answers that instead
+        self.account_down = False  # every account lookup fails to connect
+        self.conversion_owner = {"login": "Acme", "type": "Organization"}  # whose account GitHub made the App under
 
     def __call__(self, request):
         body = json.loads(request.content) if request.content else None
         self.calls.append((request.method, request.url.path, body, request.headers.get("authorization", "")))
         path = request.url.path
+        if path.startswith("/users/"):
+            name = path.split("/")[2]
+            if self.account_down:
+                raise httpx.ConnectError("synthetic", request=request)
+            if self.account_status is not None:
+                status, headers = (
+                    self.account_status if isinstance(self.account_status, tuple) else (self.account_status, {})
+                )
+                return httpx.Response(status, headers=headers, json={"message": "limited"})
+            kind = self.accounts.get(name.lower())
+            if kind is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json={"login": name, "type": kind})
         if path == "/installation/repositories":
             page = int(request.url.params.get("page", 1))
             # An installation on all repositories lists one created through it, as GitHub does.
@@ -90,6 +107,7 @@ class FakeGitHub:
                     "webhook_secret": "whs",
                     "pem": PEM,
                     "html_url": "https://github.com/apps/acme-tico",
+                    "owner": self.conversion_owner,
                 },
             )
         if path == "/app/installations":
@@ -1407,3 +1425,164 @@ def test_the_fake_installation_lists_a_repository_created_through_it_only_when_i
     assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
     fake.missing, fake.selection = set(), "selected"
     assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
+
+
+def personal(gh, login="ana-dev"):
+    """The signed-in person's personal account: the one GitHub makes the App under, with the installation there."""
+    gh.accounts[login] = "User"
+    gh.conversion_owner = {"login": login, "type": "User"}
+    gh.installations = [{"id": 77, "account": {"login": login}}]
+
+
+def test_the_setup_link_goes_to_the_settings_of_the_kind_of_account_the_name_is(api, gh):
+    personal(gh)
+    user = manifest(api, org="ana-dev")
+    assert user["action"].startswith("https://github.com/settings/apps/new?state=")
+    # A personal account always asks for Administration, so one acceptance covers repository creation once that lands.
+    assert user["manifest"]["default_permissions"]["administration"] == "write"
+    left_out = manifest(api, org="ana-dev", administration="false")
+    assert left_out["manifest"]["default_permissions"]["administration"] == "write"
+    org = manifest(api)
+    assert org["action"].startswith("https://github.com/organizations/Acme/settings/apps/new?state=")
+    with api.app_state.store.read() as c:
+        kinds = {r["org"]: r["account_type"] for r in c.execute("SELECT org,account_type FROM github_app_states")}
+    assert kinds == {"ana-dev": "User", "Acme": "Organization"}
+
+
+def test_an_unknown_name_or_a_github_that_cannot_say_is_a_clear_problem_not_a_guess(api, gh):
+    def refused():
+        return api.get("/api/v2/github/app/manifest", params={"org": "nobody-here"}, headers=auth())
+
+    missing = refused()
+    assert missing.status_code == 404
+    assert missing.json()["error"]["detail"] == "No GitHub account or organization named nobody-here"
+    gh.account_status = 503
+    failing = refused()
+    assert failing.status_code == 502 and failing.json()["error"]["code"] == "github_account"
+    gh.account_status = (403, {"x-ratelimit-remaining": "0"})
+    assert refused().status_code == 502
+    gh.account_status, gh.account_down = None, True
+    assert refused().status_code == 502
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM github_app_states").fetchone()[0] == 0
+
+
+def test_an_account_github_says_is_neither_a_user_nor_an_organization_is_a_clear_problem_with_no_manifest(api, gh):
+    # GitHub answers 200 but with a type Tico does not connect (a bot account): no state row, no setup link, no manifest.
+    gh.accounts["some-bot"] = "Bot"
+    r = api.get("/api/v2/github/app/manifest", params={"org": "some-bot"}, headers=auth())
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "github_account"
+    assert "not a user or an organization" in r.json()["error"]["detail"]
+    assert "action" not in r.json() and "manifest" not in r.json()
+    with api.app_state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM github_app_states").fetchone()[0] == 0
+
+
+def test_a_personal_app_is_saved_under_the_login_github_made_it_for_not_the_name_typed(api, gh):
+    personal(gh, "ana-dev")
+    gh.accounts["typed-name"] = "User"
+    state = manifest(api, org="typed-name")["state"]
+    r = api.get("/api/v2/github/app/callback", params={"code": "the-code", "state": state}, headers=auth())
+    assert r.status_code == 302, r.text
+    status = api.get("/api/v2/github/app", headers=auth()).json()
+    assert status["org"] == "ana-dev" and status["account_type"] == "User"
+    assert status["settings_url"] == "https://github.com/settings/apps/acme-tico"
+    assert status["permissions_url"] == "https://github.com/settings/apps/acme-tico/permissions"
+    assert status["uninstall_url"] == "https://github.com/settings/installations"
+    assert status["install_url"] == "https://github.com/apps/acme-tico/installations/new"
+    with api.app_state.store.read() as c:
+        assert tuple(c.execute("SELECT org,account_type FROM github_app").fetchone()) == ("ana-dev", "User")
+    # The installation is found by that login, so a run token can be minted for the account's repositories.
+    assert api.app_state.github_app.installation(refresh=True) == 77
+
+
+def test_a_personal_account_waits_for_a_person_to_create_a_bots_repository(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev", administration="true")
+    gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
+    with api.app_state.store.transaction() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),)
+        )
+    botops_turn(api)
+    created = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    error = created.json()["error"]
+    assert created.status_code == 409 and error["code"] == "github_permission_missing", created.text
+    assert error["detail"].startswith("A person must act: Tico does not create repositories in a personal account yet")
+    assert error["create_url"] == "https://github.com/new?owner=ana-dev&visibility=private&name=bot-newbie"
+    assert not [c for c in gh.calls if c[0] == "POST" and c[1].startswith(("/orgs/", "/repos/", "/user/repos"))]
+    with api.app_state.store.read() as c:
+        task = c.execute("SELECT title,body FROM tasks WHERE title LIKE 'Create ana-dev/bot-newbie%'").fetchone()
+    assert task["title"] == "Create ana-dev/bot-newbie on GitHub"
+    assert "organisation" not in task["body"] and "Administration" not in task["body"]
+    assert error["create_url"] in task["body"]
+    # Without Administration an organization is warned that BotOps cannot create repositories; a personal account is not,
+    # because no BotOps fix exists there (a person creates the repository).
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE github_app SET administration=0 WHERE id='app'")
+    ids = {x["id"] for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
+    assert "github_repo_create" not in ids
+
+
+def test_a_personal_account_offers_no_product_repository_and_no_delete(api, gh):
+    personal(gh, "ana-dev")
+    connect(api, org="ana-dev")
+    gh.permissions = {"administration": "write", "metadata": "read"}
+    before = len(gh.calls)
+    preview = api.get("/api/v2/github/product-repos/preview", params={"name": "tico-recorder"}, headers=auth())
+    assert preview.status_code == 200 and preview.json()["capability"] == "not_available", preview.text
+    body = {"org": "ana-dev", "name": "tico-recorder", "visibility": "private", "auto_init": False, "confirmed": True}
+    refused = product_repo_request(api, body)
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_account", refused.text
+    deleted = api.delete(
+        "/api/v2/github/repos/ana-dev/bot-old", headers={**auth(), "Idempotency-Key": str(uuid.uuid4())}
+    )
+    assert deleted.status_code == 409 and deleted.json()["error"]["code"] == "github_account", deleted.text
+    writes = [c for c in gh.calls[before:] if c[0] == "DELETE" or c[1].startswith(("/orgs/", "/repos/", "/user/repos"))]
+    assert not writes, "a personal account is never written to: no repository is created or deleted"
+
+
+def test_links_follow_the_kind_of_account_everywhere_they_are_built():
+    from backend import repo_waits
+
+    organization = {"slug": "acme-tico", "org": "Acme", "account_type": "Organization"}
+    personal_row = {"slug": "acme-tico", "org": "ana-dev", "account_type": "User"}
+    assert G.links(organization) == {
+        "settings_url": "https://github.com/organizations/Acme/settings/apps/acme-tico",
+        "permissions_url": "https://github.com/organizations/Acme/settings/apps/acme-tico/permissions",
+        "install_url": "https://github.com/apps/acme-tico/installations/new",
+        "uninstall_url": "https://github.com/organizations/Acme/settings/installations",
+    }
+    assert G.links(personal_row) == {
+        "settings_url": "https://github.com/settings/apps/acme-tico",
+        "permissions_url": "https://github.com/settings/apps/acme-tico/permissions",
+        "install_url": "https://github.com/apps/acme-tico/installations/new",
+        "uninstall_url": "https://github.com/settings/installations",
+    }
+    assert repo_waits.permissions_url(None, personal_row) == G.links(personal_row)["permissions_url"]
+    assert repo_waits.permissions_url(None, {**personal_row, "account_type": "Organization"}) == (
+        "https://github.com/organizations/ana-dev/settings/apps/acme-tico/permissions"
+    )
+
+
+def test_an_app_connected_before_account_types_is_an_organization():
+    """The migration adds the column with the organization default, to both tables, once; a fresh database gets none
+    of its own tables from it (the module code makes them after the migrations)."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(G.__file__).parent / "migrations" / "20261107145006_github_account_type.py"
+    spec = importlib.util.spec_from_file_location("github_account_type", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with sqlite3.connect(":memory:") as c:
+        migration.up(c)
+        assert c.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
+        c.execute("CREATE TABLE github_app(id TEXT PRIMARY KEY, org TEXT NOT NULL)")
+        c.execute("CREATE TABLE github_app_states(nonce TEXT PRIMARY KEY, org TEXT NOT NULL)")
+        c.execute("INSERT INTO github_app VALUES('app','Acme')")
+        migration.up(c)
+        migration.up(c)
+        assert c.execute("SELECT org,account_type FROM github_app").fetchone() == ("Acme", "Organization")
+        assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} == {"nonce", "org", "account_type"}

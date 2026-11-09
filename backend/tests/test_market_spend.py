@@ -394,13 +394,30 @@ def test_asking_for_the_market_to_be_sized_files_one_task_and_asking_again_retur
     assert later["task_id"] != first["task_id"]
 
 
+def test_asking_for_the_market_names_the_places_the_company_serves(api):
+    _librarian(api)
+    put(
+        api,
+        "onboarding",
+        {
+            "names": {"company_name": "Acme", "app_name": "Atlas", "assistant_name": "Morgan"},
+            "answers": {"what_we_do": "Kits.", "regions": ["Texas", "Ohio"]},
+            "selected": {},
+        },
+    )
+    post(api, "market/spend/research", {"description": "Kit sales"})
+    with api.app.state.store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE title LIKE 'Size the market%'").fetchone()[0]
+    assert "Serves: Texas; Ohio. Size the market for these places." in body
+
+
 def test_the_value_chain_puts_each_neighbour_in_its_layer_and_caps_a_layer(api, tmp_path):
     _seed(api, tmp_path)
     proof = evidence(api)
     names = {}
 
     def company(name):
-        names[name] = post(api, "market/entities", {"type": "company", "name": name, "evidence_ids": [proof]})[
+        names[name] = post(api, "market/entities", {"type": "organization", "name": name, "evidence_ids": [proof]})[
             "entity"
         ]["id"]
         return names[name]
@@ -412,7 +429,7 @@ def test_the_value_chain_puts_each_neighbour_in_its_layer_and_caps_a_layer(api, 
         from backend import market as MK
 
         MK.create_entity(
-            c, "human:ana", type="company", name="Our company", entity_id=MK.OWN_COMPANY_ID, evidence_ids=[proof]
+            c, "human:ana", type="organization", name="Our company", entity_id=MK.OWN_COMPANY_ID, evidence_ids=[proof]
         )
     me = "company/self"
     rival, platform, supplier, channel, buyer = (

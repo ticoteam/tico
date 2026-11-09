@@ -26,11 +26,12 @@ UNUSED_IDLE_DAYS = 30  # ... on a card whose bot is archived or ran no turn in t
 @dataclass(frozen=True)
 class Charge:
     id: str
-    payee: str  # the counterparty, lower-cased: the grouping key
+    payee: str  # the vendor's id (its contact id, else its merchant key): the grouping key
     amount: int  # cents, a positive charge
     day: date
     shown: str = ""  # the counterparty as the bank names it: what a label says
     card: str = ""  # the card it was charged to ("" when it was not a card charge)
+    money: str = ""  # the money account it left ("" when unknown): with the card, where a subscription is kept
 
 
 def _money(cents: int) -> str:
@@ -122,12 +123,31 @@ def price_increases(charges: Sequence[Charge]) -> list[dict[str, Any]]:
     return found
 
 
+def subscription_price_increases(items: Sequence[tuple[Charge, int, str]]) -> list[dict[str, Any]]:
+    """A charge on an active subscription (subscriptions.py): items are (its latest charge, its expected amount, the
+    vendor's name). The charge is a price increase when it is PRICE_RISE_PERCENT percent above the expected amount, whole
+    cents, so a rise of exactly that much counts."""
+    found: list[dict[str, Any]] = []
+    for charge, expected, name in sorted(items, key=lambda x: (x[0].payee, x[0].id)):
+        if expected <= 0 or charge.amount <= expected or charge.amount * 100 < expected * (100 + PRICE_RISE_PERCENT):
+            continue
+        found.append(
+            {
+                "kind": "price_increase",
+                "key": f"price_increase:{charge.id}",
+                "stamp": {"amount": charge.amount, "expected": expected},
+                "label": f"{name or charge.shown or charge.payee}: {_money(expected)} → {_money(charge.amount)}",
+            }
+        )
+    return found
+
+
 def unused_subscriptions(charges: Sequence[Charge], idle_cards: Mapping[str, str], today: date) -> list[dict[str, Any]]:
     """A monthly charge: one to the same payee on the same card in each of UNUSED_MONTHS calendar months, counted from
     the months before today's (so an open month is not judged). Only a card in idle_cards is judged: card id -> the slug
     of its bot, which is archived or has run no turn in UNUSED_IDLE_DAYS (the caller reads those facts). Amounts may
     differ month to month."""
-    months = _months_before(today, UNUSED_MONTHS)
+    months = months_before(today, UNUSED_MONTHS)
     seen: dict[tuple[str, str], dict[str, Charge]] = {}
     for ch in charges:
         if ch.card in idle_cards:
@@ -149,7 +169,7 @@ def unused_subscriptions(charges: Sequence[Charge], idle_cards: Mapping[str, str
     return found
 
 
-def _months_before(today: date, n: int) -> list[str]:
+def months_before(today: date, n: int) -> list[str]:
     """The n calendar months before today's, as YYYY-MM, oldest first."""
     year, month = today.year, today.month
     out: list[str] = []

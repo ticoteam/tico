@@ -1,4 +1,4 @@
-// A bot's editable sidebar (backend/bot_task_tabs.py, ui/app/bot-sidebar.js): until the layout arrives the rail says
+// A bot's editable sidebar (backend/bot_task_tabs.py, ui/app/bot-sidebar.ts): until the layout arrives the rail says
 // Loading; one pencil (for someone who may edit) opens edit mode in place, with Done and Cancel. There each widget
 // can be moved by its handle, hidden with its eye and given a height by its bottom edge (with Reset); every task tab is
 // a pill that can be dragged, opened (Name, Show count, conditions, Delete, Save) or added with +. Done saves it all in
@@ -59,7 +59,7 @@ const matches = (bot, tab, t) => (t.owner_id === 'bot:' + bot || t.requester_id 
 
 async function open(browser, viewport, colorScheme, server) {
   const context = await browser.newContext({viewport, colorScheme, serviceWorkers: 'block'});
-  // The app is dark unless this browser saved another theme (ui/theme.js).
+  // The app is dark unless this browser saved another theme (ui/theme.ts).
   await context.addInitScript(theme => localStorage.setItem('tico.theme', theme), colorScheme);
   const page = await context.newPage();
   const errors = [];
@@ -69,7 +69,7 @@ async function open(browser, viewport, colorScheme, server) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', path: uiFile('vendor/fonts/material-symbols-outlined.woff2')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});

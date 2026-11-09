@@ -14,33 +14,33 @@ from .settings_catalog import Setting as S
 
 SETTINGS_FILES = sorted(
     [
-        "settings.js",
-        "settings-access.js",
-        "settings-bot-editor.js",
-        "settings-bots.js",
-        "settings-strategy-bot.js",
-        "settings-company.js",
-        "settings-devices.js",
-        "settings-history.js",
-        "settings-hosted.js",
-        "settings-listening.js",
-        "settings-people.js",
-        "settings-providers.js",
-        "settings-recurring.js",
-        "settings-release.js",
-        "settings-repositories.js",
-        "settings-storage.js",
+        "settings.ts",
+        "settings-access.ts",
+        "settings-bot-editor.ts",
+        "settings-bots.ts",
+        "settings-strategy-bot.ts",
+        "settings-company.ts",
+        "settings-devices.ts",
+        "settings-history.ts",
+        "settings-hosted.ts",
+        "settings-listening.ts",
+        "settings-people.ts",
+        "settings-providers.ts",
+        "settings-recurring.ts",
+        "settings-release.ts",
+        "settings-repositories.ts",
+        "settings-storage.ts",
         "settings-webhooks.js",
-        "subscriptions.js",
-        "bot-budget.js",
-        "bot-profile.js",
-        "usage.js",
-        "task-pipelines.js",
-        "tags.js",
-        "roadmaps.js",
-        "inboxes-texts.js",
-        "inboxes-letters.js",
-        "cloud-machines.js",
+        "subscriptions.ts",
+        "bot-budget.ts",
+        "bot-profile.ts",
+        "usage.ts",
+        "task-pipelines.ts",
+        "tags.ts",
+        "roadmaps.ts",
+        "inboxes-texts.ts",
+        "inboxes-letters.ts",
+        "cloud-machines.ts",
     ]
 )
 
@@ -61,7 +61,7 @@ HOOKS_IN, HOOKS_OUT, HOOKS_GW = (
 HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
 INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
 # System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
-# is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.js settingsMovedOut).
+# is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.ts settingsMovedOut).
 RELEASES, TASK_MANAGER, SECURITY = (
     "Release Manager > Settings > Releases",
     "Task Manager > Settings",

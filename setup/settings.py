@@ -40,6 +40,9 @@ HOSTED = ("own", "invited")
 PRESETS = ("recommended",)
 # The Gateway invite our operator gives the preset (Dev 210 enrolls with it); checked whole, never shown.
 INVITE_RE = re.compile(r"[A-Za-z0-9_-]{8,200}")
+# The one-time secret HQ gives the installer for the owner's coding agent (TICO_SETUP_HANDOFF); the server holds only its
+# sha256. The same pattern the server accepts (backend/setup_handoff.py).
+HANDOFF_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")
 
 # Not persisted to state.json: they live in the private .env copy or come from the environment.
 SECRET_FIELDS = (
@@ -150,6 +153,8 @@ class Settings:
     hosted: str = ""
     hosted_zone: str = ""  # our DNS zone; the domain must be under it
     owner_link_hash: str = ""  # sha256 of the owner's first sign-in link; the link itself is only in a 0600 file here
+    # sha256 of the setup handoff secret from TICO_SETUP_HANDOFF (hosted.read_handoff); the secret is never kept here
+    setup_handoff_hash: str = ""
     preset: str = ""  # recommended: the sample company, subscriptions plus Gateway, Support
     support: str = ""  # with the preset: on, or off with --no-support
     gateway_invite: str = ""
@@ -236,6 +241,8 @@ class Settings:
             e["TICO_VISUAL_SECRET"] = self.visual_secret
         if self.hosted:
             e["TICO_HOSTED"] = self.hosted
+        if self.setup_handoff_hash:
+            e["TICO_SETUP_HANDOFF_HASH"] = self.setup_handoff_hash
         if self.auth == OWNER_LINK:
             e.update(TICO_AUTH_PROXY=OWNER_LINK, TICO_OWNER_LINK_HASH=self.owner_link_hash)
         elif self.auth == "cloudflare":

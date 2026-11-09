@@ -20,11 +20,8 @@ The Ask panel is only the Assistant. Talking to the people at Tico is a separate
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
-A **peek** is a few words beside the closed dot, just past the sidebar level with the Tico Assistant row (above the tab bar on a phone), Tico saying something waits on you:
-"Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
-never who asked. Tap it and the DM opens at that card; × dismisses it for good, for every item it spoke for. One at a time, none in the first
-few seconds after the page loads or while you are typing, each question at most once a day, and never a sound or a
-count on the dot.
+Nothing speaks up beside the dot. Bot questions and Confirm cards wait in the panel, and the dot never carries a sound
+or a count.
 
 The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
 the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
@@ -83,10 +80,13 @@ that change for your click. A KPI reading, the company Vision, strategy drafts a
 clicks too, and are refused the same way.
 
 A suggestion the Strategy Bot made that you confirm with a plain yes leaves **Needs you**, as it does when you confirm
-its card. A message from you that opens with a no, such as "no" or "no, too high", turns down a Strategy Bot suggestion
-about a goal's wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag at once. It needs no read-back
-and no second yes. Your message is kept as the reason, unless it is only a no. A "no" to a Why line stays a click on its
-card. Only the owner's Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
+its card. A message from you that opens with a no, such as "no" or "no, too high", turns down the waiting Strategy Bot
+suggestion of the same kind on the same goal, for the same KPI or measure, at once. The kinds are a goal's wording, a
+KPI added to a goal, a KPI's definition, a KPI target or a flag. It needs no read-back and no second yes. Your message
+is kept as the reason, unless it is only a no. Another measure's card on the same goal stays waiting. If two waiting
+cards of the same kind are about the same measure on the same goal, nothing is turned down, and Tico asks which one you
+mean. A yes that opens with "no", such as "No problem", is not a no: it turns nothing down, and a read-back saves only on a yes it can read, such as a plain yes or "yes to 1 and 3", so "No problem, save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's
+Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
 

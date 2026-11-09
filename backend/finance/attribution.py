@@ -2,7 +2,8 @@
 
 A line's own tags say who it counts for. An attribution replaces that for a share of the line (core/attribution.py has
 the split math: basis points, largest-remainder cents, the unattributed rest). Precedence for a line: a person's or
-bot's override > a matching rule (store/attribution.py) > the line's tags.
+bot's override > a matching rule (store/attribution.py) > an ad platform's share (platform_share.py: a charge split by
+the platform's own spend per bot, re-judged after each ad import and as charges post) > the line's tags.
 
 Actions (all need finance.attribution, which the owner and finance admins have; none asks for approval, bots included):
 - attribute {line_id, splits}: put shares on a line. splits [] clears the override.
@@ -10,6 +11,8 @@ Actions (all need finance.attribution, which the owner and finance admins have; 
 - attribution_rule_set {id?, name, match, splits, enabled?, apply_from?}: a rule by vendor, P&L account or money
   account. apply_from also re-applies it to lines posted from that day on that no person or bot has overridden.
 - attribution_rule_delete {id}: the rule's lines go back to what the other rules and their tags give; overrides stay.
+- attribution_map {items: [{kind, id, team?, teammate?}]}: a class, location or project (a mirrored line's tag) to a team
+  and/or teammate, one rule per dimension at 100%, from the earliest line that carries it. Neither clears its rule.
 
 Every change rewrites the rollups the line's parts roll into (accrual and cash), and budgets are checked for crossings.
 A closed period is never changed (the same rule categorize keeps): a line in one keeps what it had until reopened.
@@ -20,6 +23,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from typing import Any
 
+from . import platform_share as PS
 from . import posting
 from .context import Ctx
 from .core import attribution as CA
@@ -155,23 +159,80 @@ def _set_line(ctx: Ctx, who: str, line_id: str, splits: Sequence[CA.Split], sour
 
 
 def _refresh(ctx: Ctx, who: str, line_id: str, rules: Sequence[Any]) -> bool:
-    """Bring a line in line with the book's rules: a person's or bot's override stays; otherwise the rule that now
-    matches it (judged across every live rule, by precedence) is in force, or a rule's old effect is cleared."""
+    """Bring a line in line with the book's attribution: a person's or bot's override stays; otherwise the rule that now
+    matches it (judged across every live rule, by precedence), else the ad platform's share of it, is in force; with
+    neither, a rule's or a platform share's old effect is cleared (the line counts as its tags again)."""
     if line_id in ATT.lines_owned_by_people(ctx.c, [line_id]):
         return False
     facts = ATT.facts_of_line(ctx.c, ctx.book.id, line_id)
     claim = ATT.claim_for(rules, facts) if facts is not None else None
+    if claim is None and facts is not None:
+        claim = PS.claim_for_line(ctx, line_id)
     if claim is not None:
-        return _set_line(ctx, who, line_id, claim.splits, "rule", claim.rule_id)
+        return _set_line(ctx, who, line_id, claim.splits, claim.source, claim.rule_id)
     source, rule_id, _ = ATT.in_force_source(ctx.c, line_id)
-    if source == "rule":
-        return _set_line(ctx, who, line_id, (), "rule", rule_id)
+    if source in ("rule", "platform"):
+        return _set_line(ctx, who, line_id, (), source, rule_id)
     return False
 
 
 def _refresh_all(ctx: Ctx, who: str, line_ids: Iterable[str]) -> int:
     rules = ATT.rules(ctx.c, ctx.book.id)
     return sum(1 for line_id in dict.fromkeys(line_ids) if _refresh(ctx, who, line_id, rules))
+
+
+# ------------------------------------------------------------------------------------------------ platform shares
+def refresh_platform(ctx: Ctx, who: str, platform: str, first: str, last: str) -> int:
+    """After an ad import replaced the platform's spend on the days [first, last]: re-judge each of the platform's
+    charges whose window overlaps them. Only a charge with no attribution in force, or a platform share, is touched
+    (a rule or a person's or bot's override never is). Returns the lines whose attribution changed."""
+    keys = PS.contact_keys(ctx, platform)
+    if not keys:
+        return 0
+    rules = ATT.rules(ctx.c, ctx.book.id)
+    changed = 0
+    for line_id, day, rid in PS.charges_from(ctx, keys, first):
+        lo, hi = PS.window(ctx, keys, day, rid)
+        if hi < first or lo > last:
+            continue
+        if ATT.in_force_source(ctx.c, line_id)[0] not in ("", "platform"):
+            continue
+        changed += _refresh(ctx, who, line_id, rules)
+    return changed
+
+
+def refresh_successor(ctx: Ctx, who: str, keys: Sequence[str], day: str, rid: int | None = None) -> None:
+    """The charge after (day, rowid) on these keys has a new window when a charge before it posts or is reversed:
+    re-judge it."""
+    nxt = PS.successor(ctx, keys, day, rid)
+    if nxt:
+        _refresh(ctx, who, nxt, ATT.rules(ctx.c, ctx.book.id))
+
+
+def after_post(ctx: Ctx, lines: Sequence[L.Line], day: str, who: str) -> None:
+    """Entry lines just posted on `day`: each P&L charge of an ad platform's contact changes the window of the charge
+    after it on the same vendor."""
+    for x in lines:
+        account = ctx.accounts.get(x.account_id)
+        if account is None or account.type not in L.PNL_TYPES or not x.contact_id:
+            continue
+        keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, x.contact_id)
+        if PS.platform_of(ctx, keys):
+            refresh_successor(ctx, who, keys, day)
+
+
+def after_reversal(ctx: Ctx, entry_id: str, who: str) -> None:
+    """A reversed entry's charges leave the windows: the charge after each of them on its vendor is re-judged."""
+    rows = ctx.c.execute(
+        "SELECT rowid, account_id, contact_id, entry_date FROM fin_lines WHERE entry_id=?", (entry_id,)
+    ).fetchall()
+    for rid, account_id, contact_id, day in rows:
+        account = ctx.accounts.get(str(account_id))
+        if account is None or account.type not in L.PNL_TYPES or not contact_id:
+            continue
+        keys = ATT.vendor_keys_of(ctx.c, ctx.book.id, str(contact_id))
+        if PS.platform_of(ctx, keys):
+            refresh_successor(ctx, who, keys, str(day), int(rid))
 
 
 # ------------------------------------------------------------------------------------------------ lines
@@ -253,11 +314,16 @@ def attribute_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 # ------------------------------------------------------------------------------------------------ rules
 def _target(ctx: Ctx, kind: str, match_id: str) -> None:
-    """A rule's match must name something in the book: a vendor, a P&L account, or a money account (a non-P&L one)."""
+    """A rule's match must name something in the book: a vendor, a P&L account, a money account (a non-P&L one), or a
+    class, location or project the books hold."""
     if kind == "vendor":
         row = ctx.c.execute("SELECT book_id FROM fin_contacts WHERE id=?", (match_id,)).fetchone()
         if row is None or str(row[0]) != ctx.book.id:
             raise invalid("no such vendor")
+        return
+    if kind in ATT.DIMENSION_KINDS:
+        if ATT.dimension_name(ctx.c, kind, match_id) is None:
+            raise invalid(f"no such {kind}")
         return
     account = ctx.accounts.get(match_id)
     if account is None:
@@ -295,29 +361,117 @@ def attribution_rule_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     new_id = rule_id or ATT.new_id()
 
     def apply(aid: str) -> Result:
-        ATT.put_rule(
-            ctx.c,
-            rule_id=new_id,
-            book_id=ctx.book.id,
-            name=name,
-            match_kind=kind,
-            match_id=match_id,
-            splits=splits,
-            enabled=enabled,
-            apply_from=apply_from,
-            by=who,
-            at=ctx.at,
-            exists=existing is not None,
-        )
-        # The lines the rule put on before (its terms or being disabled may move them), and with apply_from the lines
-        # posted from that day on that it now matches. Overrides by a person or bot are never touched.
-        lines = ATT.lines_with_rule(ctx.c, new_id)
-        if apply_from is not None and enabled:
-            lines += ATT.candidate_lines(ctx.c, ctx.book.id, ATT.rule(ctx.c, new_id), apply_from)
-        return {"id": new_id, "lines": _refresh_all(ctx, who, lines)}
+        return {
+            "id": new_id,
+            "lines": _store_rule(
+                ctx,
+                who,
+                rule_id=new_id,
+                exists=existing is not None,
+                name=name,
+                kind=kind,
+                match_id=match_id,
+                splits=splits,
+                enabled=enabled,
+                apply_from=apply_from,
+            ),
+        }
 
     what = "Change" if existing is not None else "Add"
     return Plan(K.ALLOW, f"{what} the attribution rule {name}", apply)
+
+
+def _store_rule(
+    ctx: Ctx,
+    who: str,
+    *,
+    rule_id: str,
+    exists: bool,
+    name: str,
+    kind: str,
+    match_id: str,
+    splits: Sequence[CA.Split],
+    enabled: bool,
+    apply_from: str | None,
+) -> int:
+    """Write a rule and bring its lines in line with it. The lines it put on before (its terms or being disabled may
+    move them), and with apply_from the lines posted from that day on that it now matches. Overrides by a person or bot
+    are never touched. The lines brought in line."""
+    ATT.put_rule(
+        ctx.c,
+        rule_id=rule_id,
+        book_id=ctx.book.id,
+        name=name,
+        match_kind=kind,
+        match_id=match_id,
+        splits=splits,
+        enabled=enabled,
+        apply_from=apply_from,
+        by=who,
+        at=ctx.at,
+        exists=exists,
+    )
+    lines = ATT.lines_with_rule(ctx.c, rule_id)
+    if apply_from is not None and enabled:
+        lines += ATT.candidate_lines(ctx.c, ctx.book.id, ATT.rule(ctx.c, rule_id), apply_from)
+    return _refresh_all(ctx, who, lines)
+
+
+MAP_MOST = 200  # dimensions one attribution_map action names
+
+
+def attribution_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Map each class, location or project to a team and/or teammate: one rule per dimension, 100% to that share, from the
+    earliest line that carries the dimension (so the lines already posted re-roll). An item with neither clears the rule
+    the dimension had. One transaction; never gated."""
+    V.only(p, ("items",))
+    raw = V.items(p.get("items"), "items", MAP_MOST)
+    if not raw:
+        raise invalid("items names at least one dimension")
+    seen: set[tuple[str, str]] = set()
+    prepared: list[tuple[str, str, tuple[CA.Split, ...], str, str | None]] = []
+    for item in raw:
+        q = V.obj(item, "a dimension")
+        V.only(q, ("kind", "id", "team", "teammate"))
+        kind = V.choice(q, "kind", ATT.DIMENSION_KINDS)
+        dim_id = V.text(q, "id", 200)
+        if (kind, dim_id) in seen:
+            raise invalid(f"{kind} {dim_id} is named twice")
+        seen.add((kind, dim_id))
+        _target(ctx, kind, dim_id)
+        team = V.opt_text(q, "team", MAX_TEXT) or ""
+        mate = V.opt_text(q, "teammate", MAX_TEXT) or ""
+        splits = _splits([{"teammate": mate, "team": team, "share_bps": CA.WHOLE}], ctx) if (team or mate) else ()
+        name = ATT.dimension_name(ctx.c, kind, dim_id) or dim_id
+        earliest = ATT.dimension_first_day(ctx.c, ctx.book.id, kind, dim_id)
+        prepared.append((kind, dim_id, splits, name, earliest))
+
+    def apply(aid: str) -> Result:
+        changed = 0
+        for kind, dim_id, splits, name, earliest in prepared:
+            existing = ATT.rule_taking(ctx.c, ctx.book.id, kind, dim_id)
+            if not splits:
+                if existing is None:
+                    continue
+                lines = ATT.lines_with_rule(ctx.c, str(existing["id"]))
+                ATT.delete_rule(ctx.c, str(existing["id"]), ctx.at)
+                changed += _refresh_all(ctx, who, lines)
+                continue
+            changed += _store_rule(
+                ctx,
+                who,
+                rule_id=str(existing["id"]) if existing is not None else ATT.new_id(),
+                exists=existing is not None,
+                name=name,
+                kind=kind,
+                match_id=dim_id,
+                splits=splits,
+                enabled=True,
+                apply_from=earliest,
+            )
+        return {"items": len(prepared), "lines": changed}
+
+    return Plan(K.ALLOW, f"Map {len(prepared)} class, location or project item(s) to teams", apply)
 
 
 def attribution_rule_delete(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -340,6 +494,14 @@ PLANNERS: dict[str, Any] = {
     "attribute_undo": attribute_undo,
     "attribution_rule_set": attribution_rule_set,
     "attribution_rule_delete": attribution_rule_delete,
+    "attribution_map": attribution_map,
 }
 
-__all__ = ["PLANNERS", "attribute", "attribute_undo", "attribution_rule_delete", "attribution_rule_set"]
+__all__ = [
+    "PLANNERS",
+    "attribute",
+    "attribute_undo",
+    "attribution_map",
+    "attribution_rule_delete",
+    "attribution_rule_set",
+]

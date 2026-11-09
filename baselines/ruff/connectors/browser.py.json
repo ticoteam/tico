@@ -1,0 +1,8 @@
+{
+  "connectors/browser.py": {
+    "B904": 1,
+    "DTZ005": 1,
+    "F401": 1,
+    "PLW1510": 1
+  }
+}

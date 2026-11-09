@@ -393,7 +393,7 @@ def test_a_bot_dm_or_home_thread_takes_a_goal(api, where):
 
 @pytest.mark.parametrize('where', ['dm', 'home'])
 def test_a_bot_dm_or_home_thread_takes_a_harness_command_and_shows_its_run(api, where):
-    # The bot page's composer (ui/app/thread-view.js) sends a harness's own "/" command as the old chat did: a message
+    # The bot page's composer (ui/app/thread-view.ts) sends a harness's own "/" command as the old chat did: a message
     # marked as a command, to the bot, in the thread (POST /v2/messages with the thread as its conversation). Its Stop
     # reads the thread's run from the thread's conversation snapshot.
     machine, old = setup(api)

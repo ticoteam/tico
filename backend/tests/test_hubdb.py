@@ -1171,16 +1171,19 @@ class WaitingWithDependency(HubCase):
         done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
         self.assertEqual(done['status'], 'done')
         self.assertEqual(H.task(self.conn, child['id'])['status'], 'closed')
-        said = [
-            e['new']
-            for e in H._rows(
-                self.conn.execute(
-                    "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'",
-                    (parent['id'],),
-                )
+        from backend import task_reads
+
+        # The event keeps the subtask's id; its title is written in for a reader who may open it (task_reads.children_text).
+        events = H._rows(
+            self.conn.execute(
+                "SELECT kind, new, data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'",
+                (parent['id'],),
             )
-        ]
-        self.assertEqual(said, ['Closed with it: Approve the final copy'])
+        )
+        self.assertEqual(
+            [e['new'] for e in task_reads.children_text(self.conn, '1', events)],
+            ['Closed with it: Approve the final copy'],
+        )
 
     def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)

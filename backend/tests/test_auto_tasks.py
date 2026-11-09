@@ -257,3 +257,30 @@ def test_a_bot_limited_to_one_task_starts_only_it_and_queues_no_other_start(api)
     assert take(api, machine) is None and starts() == set()
     control(action='unscope')
     assert take(api, machine)['task']['id'] == tasks[2]['id']
+
+
+def test_an_automatic_start_refused_by_a_requirement_leaves_the_card_and_logs_why(api):
+    machine = task_bot(api, lanes=True, capacity=8)
+    [task] = deck(api, 1)
+    with api.app.state.store.transaction() as c:
+        stage = c.execute(
+            "SELECT s.id, s.type_id FROM task_steps s JOIN tasks t ON t.type_id=s.type_id "
+            "WHERE t.id=? AND s.name='On Deck'",
+            (task['id'],),
+        ).fetchone()
+        now = H.now()
+        # On Deck has a rule that is not met (no due date), so leaving it is refused for the automatic start too.
+        c.execute(
+            "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            ('r-due-on-deck', stage[1], stage[0], 'Due date', 'field', '{"field": "due"}', 'nobody', now, now),
+        )
+    set_cap(api, 1)
+    take(api, machine)
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'On Deck'
+    with api.app.state.store.transaction() as c:
+        logged = c.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='auto_start_refused'",
+            (task['id'],),
+        ).fetchall()
+    assert [row[0] for row in logged] and 'Due date' in logged[0][0]

@@ -659,6 +659,10 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
     )
     if step.get("detached"):
         body += "\n" + step["pr"]["url"]
+    from . import review_pages
+
+    if review_pages.asks_shots(c, step):
+        body += "\n" + review_pages.SHOTS_ASK
     c.execute("SAVEPOINT check_pool_file")
     try:
         child = H.task_create(

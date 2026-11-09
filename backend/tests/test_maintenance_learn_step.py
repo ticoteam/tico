@@ -698,7 +698,7 @@ def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, mon
         doc = docs.insert(c, "bot:librarian", "Invoice policy", "Friday is the cutoff.")
         evidence, _ = market.create_evidence(c, "bot:librarian", quote="Invoices close on Friday.")
         entity, _ = market.create_entity(
-            c, "bot:librarian", type="company", name="Acme Billing", evidence_ids=[evidence["id"]]
+            c, "bot:librarian", type="organization", name="Acme Billing", evidence_ids=[evidence["id"]]
         )
         updates.redo(c, row["kind"], row["day"], bots=["librarian"])
         redo = c.execute("SELECT * FROM update_queue WHERE id=?", (row["id"],)).fetchone()
@@ -713,7 +713,9 @@ def test_redo_keeps_the_original_delivery_turn_for_feedback_and_history(api, mon
     complete(api, turn, "learnings_saved: 1")
     with store.transaction() as c:
         docs.insert(c, "bot:librarian", "Unrelated policy", "Outside the delivery turn.")
-        market.create_entity(c, "bot:librarian", type="company", name="Acme Shipping", evidence_ids=[evidence["id"]])
+        market.create_entity(
+            c, "bot:librarian", type="organization", name="Acme Shipping", evidence_ids=[evidence["id"]]
+        )
         updates.settle_learnings(c)
         assert c.execute("SELECT learnings_saved FROM learning_deliveries").fetchone()[0] == 1
         run_id = c.execute("SELECT run_id FROM learning_deliveries").fetchone()[0]

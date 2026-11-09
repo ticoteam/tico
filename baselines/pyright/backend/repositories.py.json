@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/repositories.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 31,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
