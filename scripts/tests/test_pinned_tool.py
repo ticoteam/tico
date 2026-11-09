@@ -91,7 +91,8 @@ def test_a_failed_download_says_it_failed_not_that_the_sha_differs(tool):
     run, paths = tool
     result = run("path", "shellcheck")
     assert result.returncode != 0
-    assert "pinned_tool: could not download https://github.com/koalaman/shellcheck/releases/download/" in result.stderr
+    assert "pinned_tool: download of " in result.stderr
+    assert "failed after retries: https://github.com/koalaman/shellcheck/releases/download/" in result.stderr
     assert "SHA-256" not in result.stderr
     assert kept(paths["tools"]) == []
 
