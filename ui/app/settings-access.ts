@@ -20,7 +20,10 @@ type SaPreset = [string, string, string];
 // A write held by the bot editor: it runs with the bot's current revision and answers the revision it saved.
 type SaRun = (rev: number) => Promise<number>;
 type SaStage = (run: SaRun, policy: SaPolicy) => void;
-type SaMailSettings = {set?: boolean | undefined; outbound_send?: boolean | undefined};
+// `per_message` is set for the Strategy Bot: its switch covers mail inside the company (internal_send) only.
+type SaMailSettings = {
+  set?: boolean | undefined; outbound_send?: boolean | undefined; internal_send?: boolean | undefined; per_message?: string | undefined;
+};
 type SaMailStage = (run: SaRun, m: SaMailSettings) => void;
 type SaOwnersStage = (run: SaRun, people: SettingsPerson[]) => void;
 type SaOptions = {
@@ -137,6 +140,7 @@ async function settingsEditBotOwners(slug: string, {stage}: {stage?: SaOwnersSta
 // per-message approval (its layer of the one sending policy, backend/email_sending.py). Set by a person who manages the bot.
 function mailSettingText(m: SaMailSettings) {
   if (!m.set) return 'Off: no one has turned it on';
+  if (m.per_message) return m.internal_send ? 'On inside the company' : 'Off';
   return m.outbound_send ? 'On' : 'Off';
 }
 async function settingsMailSummary(root: ParentNode, slug: string) {
@@ -161,7 +165,8 @@ async function settingsEditMail(slug: string, after?: (() => unknown) | null, {s
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-mail-title">Mail sending for ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-mail-close aria-label="Close">✕</button></div>
     <div class="owner-picker-body">
       <p class="muted">Each mailbox's Limits still apply.</p>
-      <label class="owner-option"><input type="checkbox" name="outbound_send" ${m.outbound_send ? 'checked' : ''}><span>Send without a per-message approval</span></label>
+      ${m.per_message ? `<p class="muted">${esc(m.per_message)}</p>` : ''}
+      <label class="owner-option"><input type="checkbox" name="outbound_send" ${(m.per_message ? m.internal_send : m.outbound_send) ? 'checked' : ''}><span>${m.per_message ? 'Send inside the company without a per-message approval' : 'Send without a per-message approval'}</span></label>
       <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-mail-close>Cancel</button><span class="muted" data-mail-status role="status"></span></div></div></form>`;
   dialog.querySelectorAll('[data-mail-close]').forEach((button: HTMLElement) => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async (event: SubmitEvent) => {
@@ -171,7 +176,7 @@ async function settingsEditMail(slug: string, after?: (() => unknown) | null, {s
     if (stage) {
       // Mail settings carry no bot revision: the next save starts from the same one.
       stage(async rev => { await post(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`, {outbound_send}); return rev; },
-        {set: true, outbound_send});
+        {...m, set: true, outbound_send: m.per_message ? false : outbound_send, internal_send: outbound_send});
       settingsPanelClose(dialog); return;
     }
     dialog.querySelectorAll('button,input').forEach((control: HTMLButtonElement | HTMLInputElement) => { control.disabled = true; }); status.textContent = 'Saving…';

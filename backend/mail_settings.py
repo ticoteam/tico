@@ -20,20 +20,40 @@ ADDRESS = re.compile(r"^[^\s@<>\",;()\[\]\\]{1,64}@[a-z0-9](?:[a-z0-9.-]{0,251}[
 RETIRED_FORWARDS = "Forward addresses are retired: a forward is a send, approved like any other"
 
 
+def per_message(c, bot):
+    """Why the bot's mail to anyone outside the company waits for a yes for each message, whatever its setting: the
+    Strategy Bot's rule (backend/email_sending.py `per_message`), or None."""
+    from . import strategy_bot
+    from .email_sending import per_message as rule
+
+    if not rule(c, bot):
+        return None
+    return (
+        f"{strategy_bot.name(c)} sends nothing outside the company without a Tico send approval for each exact message, "
+        "at every level."
+    )
+
+
 def view(c, bot):
     from .email_sending import effective, saved
 
     layer = saved(c, "bot:" + bot)
-    return {
+    on = effective(c, bot=bot)["mode"] == "on_their_own"
+    found = {
         "bot": bot,
         "set": "mode" in layer,
-        "outbound_send": effective(c, bot=bot)["mode"] == "on_their_own",
+        "outbound_send": on,
         "forward_to": [],
         "requested": None,
         "unapproved": None,
         "updated_at": layer.get("updated_at"),
         "updated_by": layer.get("updated_by"),
     }
+    why = per_message(c, bot)
+    if why:
+        # Its switch covers mail inside the company only; outside, each message needs the owner's yes.
+        found.update(outbound_send=False, internal_send=on, per_message=why)
+    return found
 
 
 def require_person(who, bot=""):
