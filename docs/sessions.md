@@ -147,6 +147,13 @@ its limit its queued work waits on every computer, and its other bots keep their
 free turn on <computer>" in its thread and on its task. The task shows the same waiting reason as the thread (a paused bot,
 an update, a computer being set up) to anyone who can read the task.
 
+When an owner or an admin pauses every bot on Tico Team, no bot starts a new turn, and a turn already running is left
+alone. Work queued for a bot waits. A task with waiting work gets one comment for each pause, the held line: "Held: all
+bots on Tico Team are paused by <name> since 12:38 UTC, Nov 8. The owner or an admin can resume them; this task starts
+when they do." Until the pause is lifted, the thread shows "Saved — waiting: all bots are paused by <name>. Resume to
+start.", and the task shows "Waiting: all bots are paused by <name>. Resume to start." The task is not moved to Doing
+while it waits. When the pause is lifted, the held work starts in queue order. A bot paused on its own stays paused.
+
 Each task session has a git worktree at `sessions/bot-<slug>/<task>` on branch `tico-session/<task>`. A bot can hold
 up to 30 worktrees, or fewer when the computer gets under 5 GB free. Nothing is removed to make room: at the limit
 the bot ends its turn and Tico wakes the task when its worktree is ready ([Task worktrees](worktrees.md)), or the bot,
