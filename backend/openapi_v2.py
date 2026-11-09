@@ -2462,6 +2462,21 @@ SCHEMAS = {
                 "type": ["integer", "null"],
                 "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
             },
+            "card_cap": {
+                "type": ["integer", "null"],
+                "description": "The most cards the stage holds at once (0 is On ice: it takes no card from a bot and "
+                "its cards wake no one), or null for no cap",
+            },
+            "held": {
+                "type": "integer",
+                "description": "The open cards the stage holds now that the caller may read, snoozed and hidden ones "
+                "included. For the pipeline's rule editor, every open card: the count its card cap is enforced against",
+            },
+            "unseen": {
+                "type": "integer",
+                "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones, "
+                "or ones a bot it may not read works on); 0 for anyone else",
+            },
             "flow": {
                 "type": "object",
                 "description": "What the step does with a ticket (docs/tasks.md, Step "

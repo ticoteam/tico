@@ -179,6 +179,17 @@ rule). In Settings → Tasks, give Spec and Approved the public step name "Plann
 "In progress"; otherwise each step shows publicly under its own name. Shipped goes out with the release notes, after
 post-release QA. Publishing a roadmap is covered in [Public roadmaps](roadmaps.md).
 
+## Visual specs
+
+A spec can be a visual page. The product manager publishes it on the card with `hub page publish <file.html> --spec
+--task <card>`. The publish is refused on any task that isn't a Product roadmap card. The page's styles are inlined
+at publish, so its mockups read as Tico does. Approval is the pipeline's: the page is attached to the Review stage's
+Spec approved requirement, and a person approves it. When the card leaves Review, the spawn link files the
+Engineering ticket under it with the spec attached. Every ticket filed under the card, and their own children
+(review, QA), gets the spec's page link and text in its body. A spec that is narrowed to some readers, on a private
+card or on a members-only pipeline gives the link only, and a ticket filed with neutral text gets nothing. Build
+instructions are in `templates/catalog/product-manager/skills/build-the-spec-page/SKILL.md`.
+
 ## When Security holds a release
 
 Security holds a release only for:
