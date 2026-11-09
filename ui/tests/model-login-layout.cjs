@@ -2,7 +2,6 @@
 // give that content space in WebKit, and keep Cancel reachable when the content must scroll.
 const {webkit} = require('playwright');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const css = [...html.matchAll(/<link\b[^>]*href="\/tico\/ui\/([^"?]+\.css)(?:\?[^"]*)?"/g)]
@@ -29,7 +28,8 @@ async function check(engine) {
         };
         window.get = async () => ({...row});
       });
-      await page.addScriptTag({path: path.join(__dirname, '../model-login.js')});
+      // model-login reads two shared helpers the app bundle defines first (eventElement, errorMessage).
+      for (const name of ['app/dom.ts', 'app/errors.ts', 'model-login.ts']) await page.addScriptTag({path: uiFile(name)});
       for (const runtime of ['codex', 'claude']) {
         await page.setViewportSize(viewport);
         await page.evaluate(runtime => {

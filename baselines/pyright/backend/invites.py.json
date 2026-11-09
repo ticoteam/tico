@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/invites.py": [
+            {
+                "code": "reportCallIssue",
+                "range": {
+                    "startColumn": 46,
+                    "endColumn": 49,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 86,
+                    "endColumn": 92,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

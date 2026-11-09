@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/client_ip.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 66,
+                    "endColumn": 72,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 66,
+                    "endColumn": 72,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

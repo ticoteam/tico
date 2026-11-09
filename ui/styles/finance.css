@@ -14,6 +14,7 @@
 .fin-bar>button,.fin-pop-at>button{padding:0 10px;white-space:nowrap}
 .fin-bar select,.fin-bar input[type=date],.fin-bar input[type=month]{width:auto;max-width:220px;min-width:0;padding-top:0;padding-bottom:0}
 .fin-inline{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);white-space:nowrap}
+.fin-seg{height:var(--ctl-sm)}
 .fin-seg button{padding:3px 10px}
 .fin-search{display:inline-flex;align-items:center;gap:6px;flex:1 1 200px;max-width:340px;min-width:0;height:var(--ctl-sm);padding:0 8px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
 .fin-search .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted)}
@@ -63,6 +64,7 @@
 .fin-more{display:inline-block;margin-top:12px;font-size:var(--t-sm)}
 .fin-more-btn{margin:10px 0 0;height:var(--ctl-sm)}
 .fin-note{margin:12px 2px}
+.fin-subs{margin:18px 0 0}
 .fin-x{height:22px;min-width:22px;padding:0 4px;border:0;color:var(--muted)}
 .fin-x:hover{color:var(--fail)}
 .fin-bars{display:grid;grid-template-columns:minmax(0,auto) minmax(40px,1fr) auto;align-items:center;gap:6px 8px}
@@ -187,6 +189,7 @@
   .fin-sel-v{display:inline}
   .fin-sel select{position:absolute;inset:0;width:100%;height:100%;opacity:0}
   .fin-form input,.fin-form select{height:40px}
+  .fin-seg{height:auto}
   .fin-seg button{min-height:40px;padding:6px 10px}
   /* Names and group rows in a table: the row's height stays the text's on a computer, 40px under a thumb. */
   .fin-t .fin-link,.fin-ln td:first-child a{display:inline-flex;align-items:center;min-height:40px}
@@ -207,7 +210,7 @@
 .fin-private{display:flex;flex-wrap:wrap;gap:6px}
 .fin-private .fin-chip{white-space:normal}
 
-/* Payables and Receivables (ui/app/finance-docs.js): plain rows, a rail with the document and its decisions. */
+/* Payables and Receivables (ui/app/finance-docs.ts): plain rows, a rail with the document and its decisions. */
 .fin-t tbody tr[data-fin-doc]:hover td{background:var(--surface2)}
 .fin-doc-email:empty{display:none}
 .fin-copy{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -291,3 +294,21 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
 @media (max-width:640px){
   .fin-share-row{grid-template-columns:minmax(0,1fr) 76px 36px}
 }
+
+/* What changed: the briefing at the top of Finance (ui/app/finance-brief.ts). Short lines; the block is absent when empty. */
+.fin-brief{margin:0 0 16px;padding:12px 14px;border:1px solid var(--line, #e5e5e5);border-radius:10px}
+.fin-brief-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.fin-brief-head h2{margin:0;font-size:15px}
+.fin-brief-at{font-size:12px}
+.fin-brief-lines{margin:6px 0 0;padding-left:18px;font-size:14px;line-height:1.5}
+.fin-brief-lines li{overflow-wrap:anywhere}
+/* Receipts above the Transactions list (finance-receipts.ts): one stacked row per receipt at phone width. */
+.fin-receipts{margin:0 0 12px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--r-ctl)}
+.fin-receipts-h{margin:0 0 4px;font-size:14px}
+.fin-receipt-list{list-style:none;margin:0;padding:0}
+.fin-receipt{padding:8px 0;border-top:1px solid var(--line)}
+.fin-receipt:first-child{border-top:0}
+.fin-receipt-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.fin-receipt-head strong{overflow-wrap:anywhere;min-width:0}
+.fin-receipt-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.fin-receipt-acts button{min-height:36px}

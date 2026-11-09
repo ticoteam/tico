@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Type-check every backend module with basedpyright (pinned) against .basedpyright/baseline.json, then the ratchet in
+# Type-check every backend module with basedpyright (pinned) against its baseline, baselines/pyright (one file per module;
+# basedpyright reads the .basedpyright/baseline.json generated from them), then the ratchet in
 # scripts/check_pyright_ratchet.py. The baseline and the legacy module list only shrink, and a module added since
 # the legacy list was written must be strict (migrations excepted). Takes about 30 seconds on a Mac; CI runs it in
 # the static job.
@@ -15,6 +16,8 @@
 # backend/requirements-dev.txt there; on a Mac without the venv, imports such as livekit and slack_sdk do not resolve).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# basedpyright ran out of the ~2 GB default Node heap in CI run 42386143816; 6 GB fits the 16 GB ubuntu-24.04 runner.
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144"
 BASEDPYRIGHT="basedpyright@1.40.2"    # released 2026-10-04; bump only after the release is two weeks old
 main_checkout="$(cd "$(git rev-parse --git-common-dir 2>/dev/null || echo .git)/.." 2>/dev/null && pwd || true)"
 if [ -x .venv-pyright/bin/python ]; then
@@ -29,11 +32,11 @@ else
 fi
 case " $* " in
   *" --writebaseline "*)
-    # basedpyright writes the baseline; then it is put in the layout scripts/baseline_merge.py merges (the ratchet checks it).
+    # basedpyright writes .basedpyright/baseline.json; its entries are split into baselines/pyright, one file per module.
     status=0
     uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" "$@" || status=$?
     if [ -f .basedpyright/baseline.json ]; then
-      "$PYTHON_BIN" scripts/baseline_merge.py normalize .basedpyright/baseline.json
+      "$PYTHON_BIN" scripts/pyright_baseline.py --split
     fi
     exit "$status"
     ;;
@@ -43,6 +46,8 @@ esac
 # the same on every run (Nov 7: "went down by 3" failed a merge group whose only change was under scripts/), so failing
 # on it ejects good PRs at random. The ratchet below still fails when the baseline grows; --writebaseline drops gone
 # entries.
+# The pieces in baselines/pyright are the source; basedpyright reads the single file generated from them (git-ignored).
+"$PYTHON_BIN" scripts/pyright_baseline.py --generate
 out="$(mktemp)"
 set +e
 uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" --baselinemode=lock --warnings "$@" 2>&1 | tee "$out"

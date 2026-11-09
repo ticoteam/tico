@@ -12,7 +12,7 @@ kept, and nothing here changes anything. What each access does:
     open     working
     frozen   out of credit: no new bot turn on a Tico model or the Gateway (execution.claim_refusal `out_of_credit`;
              a bot on its own subscription or keys still runs), routines' schedules pass (automations.tick), and every
-             page shows "Out of credit · Add credit" to `billing_url` (ui/app/cloud-access.js). Chat, history and
+             page shows "Out of credit · Add credit" to `billing_url` (ui/app/cloud-access.ts). Chat, history and
              settings stay usable.
     locked   the trial ended without a card, or the month is unpaid: no bot turn at all (a claim answers `paused`),
              routines pass, and people's API calls are refused 402 `locked` (`gate`) except OPEN_PATHS: who is signed

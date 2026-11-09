@@ -314,6 +314,17 @@ def test_the_same_date_builds_the_same_company(built):
     assert any(hours), "the windows hold spend, so the hour is really compared"
 
 
+def test_the_build_asks_no_model_for_a_person(built):
+    """A person's rule check is held to the people's daily cap, which the build zeroes: no judge call is recorded for a
+    person's check, so no model is dialled with the demo's made-up keys (the answer would depend on timing)."""
+    first, _rows, _again = built
+    with closing(sqlite3.connect(first.db_path)) as db:
+        asked = db.execute(
+            "SELECT count(*) FROM events WHERE action='judge.call' AND json_extract(detail,'$.people')=1"
+        ).fetchone()[0]
+    assert asked == 0, f"{asked} person rule checks asked a model in the build"
+
+
 def test_every_department_has_its_lead_and_answers_to_a_person(ana):
     """The org chart reads groups and reporting lines: each department names its lead, and every bot in a group
     reports, a step at a time, up to a person (so the chart hangs each department under its human head)."""

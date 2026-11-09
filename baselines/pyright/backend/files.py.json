@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/files.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 33,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 47,
+                    "endColumn": 51,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

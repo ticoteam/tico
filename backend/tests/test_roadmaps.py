@@ -1050,7 +1050,7 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
         )
         F.ensure(c)
         assert not c.execute("SELECT 1 FROM task_types WHERE id='engineering'").fetchone()
-        assert H.type_get(c, dev['id'])['manager'] == 'engineering-lead'
+        assert H.type_get(c, dev['id'])['manager'] is None  # a type with no manager stays with none
     task = post(
         api,
         'tasks',
@@ -1684,3 +1684,61 @@ def test_a_new_step_on_a_private_by_default_type_has_no_public_name_until_given_
 def test_who_may_choose_the_suggestions_bot_and_which_bot_receives_them(api):
     _only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_stays_fixed(api)
     _suggestions_receiver_order_and_states(api)
+
+
+def test_a_refused_roadmap_move_keeps_the_child_start_and_is_logged_on_the_card(api):
+    """Codex O-6: a card moved into the legacy Product type keeps a lapsed due-date requirement from the stage it left.
+    Starting its Engineering child refuses the card's automatic Approved -> Building move. The child's start stands, the
+    card stays at Approved, and the refusal is logged on the card as auto_move_refused."""
+    from backend import roadmap_flow as F
+
+    with api.app.state.store.transaction() as c:
+        F.ensure(c)
+        review = H.type_create(
+            c,
+            'human:ana',
+            'Review desk',
+            steps=[
+                {'name': 'Intake', 'status': 'open'},
+                {'name': 'Check', 'status': 'doing'},
+                {'name': 'Filed', 'status': 'done'},
+            ],
+        )
+        check = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Check'", (review['id'],)).fetchone()[0]
+        now = H.now()
+        c.execute(
+            "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, "
+            "reviewer_id, version, created_by, created_at, updated_at) "
+            "VALUES ('req-due-desk', ?, ?, 'Due', 'field', '{\"field\": \"due\"}', 'nobody', NULL, 1, 'human:ana', ?, ?)",
+            (review['id'], check, now, now),
+        )
+    card = post(
+        api, 'tasks', {'owner': 'cpo', 'title': 'Export', 'body': 'Research.', 'type': 'Review desk', 'step': 'Check'}
+    )
+    with api.app.state.store.transaction() as c:  # the due date is set so the card may leave, then it lapses
+        c.execute('UPDATE tasks SET due_at=? WHERE id=?', (H.now(), card['id']))
+    card = post(api, 'tasks/' + card['id'], {'version': card['version'], 'type': 'Product roadmap', 'step': 'Approved'})
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET due_at=NULL WHERE id=?', (card['id'],))
+    assert _roadmap_step(api, card) == 'Approved'
+
+    child = post(
+        api,
+        'tasks',
+        {
+            'owner': 'ops',
+            'title': 'Build export',
+            'body': 'Implement exports.',
+            'type': 'Engineering',
+            'relations': [{'task': card['id'], 'kind': 'parent'}],
+        },
+    )
+    child = post(api, 'tasks/' + child['id'], {'version': child['version'], 'step': 'Doing'})
+    assert get(api, 'tasks/' + child['id'])['task']['step']['name'] == 'Doing'
+    assert _roadmap_step(api, card) == 'Approved'
+    with api.app.state.store.transaction() as c:
+        refusals = c.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='auto_move_refused'",
+            (card['id'],),
+        ).fetchall()
+    assert len(refusals) == 1 and 'Due' in refusals[0][0]
