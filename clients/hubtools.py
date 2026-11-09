@@ -1714,7 +1714,8 @@ TASK_BULK_FILTER = (
     "hub_task_bulk",
     "Change every task a filter selects: step, status, owner, tags or close, as hub_task_update or hub_task_close "
     "would, with your rights (refused ones are skipped, with why). Filter: hub_task_list's plus `ids` and "
-    "`exclude_owner`; at least one. Over 200 is refused. Run `dry_run` (counts only) first.",
+    "`exclude_owner`; at least one. Over 200 is refused. Run `dry_run` first: it skips the org rule check and the "
+    "handoff check, so a task either would hold counts as changed there and is skipped for real.",
     {
         "filter": {
             "type": "object",
@@ -1743,7 +1744,11 @@ TASK_BULK_FILTER = (
         "add": {"type": "array", "items": {"type": "string"}, "description": "Action tags: add"},
         "remove": {"type": "array", "items": {"type": "string"}, "description": "Action tags: remove"},
         "note": _s("Why; noted on each change"),
-        "dry_run": {"type": "boolean", "default": False, "description": "Count only"},
+        "dry_run": {
+            "type": "boolean",
+            "default": False,
+            "description": "Count only. Does not count rule or handoff holds: a task one would hold shows as changed here",
+        },
     },
     required=("filter", "action"),
     writes=True,

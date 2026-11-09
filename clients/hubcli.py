@@ -2436,7 +2436,12 @@ def parser():
     s.add_argument("--add", action="append", help="with tags: a tag to add; repeat for more")
     s.add_argument("--remove", action="append", help="with tags: a tag to take off; repeat for more")
     s.add_argument("--note", help="what changed, or why; goes with each task's change")
-    s.add_argument("--dry-run", dest="dry_run", action="store_true", help="count what would change; change nothing")
+    s.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="count what would change, but not rule or handoff holds (the real run skips those); change nothing",
+    )
     for name, word in (
         ("owner", "owner (a bot slug, a human id or me)"),
         ("requester", "requester"),
