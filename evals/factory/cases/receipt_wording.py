@@ -110,7 +110,23 @@ def retried_after_receipt(run):
         for when, tid, step, refused in b.moves:
             if not refused or "test receipt" not in refused:
                 continue
-            clean = next((p for p in receipts if p[1] == tid and p[0] > when and p[3] == "clean"), None)
+            # The receipt that puts the refusal right: the first clean one posted at or after it, for the head in effect
+            # when it was posted (a push fix posts its receipt on the new head). A builder repairs a refusal on its next
+            # turn, and Bot.end runs settle before act, so that turn can fall on the refusal's own fake-clock instant:
+            # `>=` counts it.
+            pr = run.w.pr_of(tid)
+            clean = next(
+                (
+                    p
+                    for p in receipts
+                    if p[1] == tid
+                    and p[0] >= when
+                    and p[3] == "clean"
+                    and pr
+                    and p[2] == run.w.head_at(pr, p[0])
+                ),
+                None,
+            )
             if not clean:
                 continue
             if tid not in rows:
