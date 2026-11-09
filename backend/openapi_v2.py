@@ -8631,7 +8631,7 @@ STABLE.extend(
             'get',
             'Rules',
             'getRuleCheckStats',
-            'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on',
+            'Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on',
             None,
         ),
         (

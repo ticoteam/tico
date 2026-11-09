@@ -4149,6 +4149,11 @@ def create_app(settings=None):
                 caller,
                 lambda c: reach_update(c, caller, auth.task(c, caller, auth.resolve_task(c, caller, tid)), body),
             )
+        if body.waiting_on:
+            with store.read() as c:
+                refusal = question_tasks.chat_refusal(caller, H.resolve_actor(c, body.waiting_on))
+            if refusal:
+                raise Problem("validation", refusal, 422)
         if body.owner:
             with store.read() as c:
                 try:

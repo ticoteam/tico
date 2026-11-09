@@ -185,6 +185,143 @@ pub async fn clone_repository(
     ("failed", text)
 }
 
+/// Fast-forwards a checkout that has lost its AGENT.md to GitHub's tip, when that tip has the file and the local
+/// HEAD is an ancestor of it. Never resets, never drops a local commit, never removes the folder. "" when the file
+/// is there afterwards, else why the checkout was left as it is.
+/// The heal without the checkout lock, for tests; the readiness check uses heal_free_checkout.
+#[cfg(test)]
+pub async fn heal_checkout(path: &Path, env: &Env) -> String {
+    if path.join("AGENT.md").is_file() {
+        return String::new();
+    }
+    let env = crate::safegit::environment(env);
+    if let Err(why) = fetch_origin(path, &env).await {
+        return why;
+    }
+    finish_heal(path, &env).await
+}
+
+/// heal_checkout for the runner's readiness check. The fetch (up to 120 s) runs without the bot's checkout lock, so
+/// a turn is never queued behind it. Then the lock is taken, and the conditions are rechecked against the fetched
+/// upstream before anything is merged. A busy checkout is skipped.
+pub async fn heal_free_checkout(
+    lanes: &crate::sessions::Lanes,
+    bot: &str,
+    path: &Path,
+    env: &Env,
+) -> String {
+    if path.join("AGENT.md").is_file() {
+        return String::new();
+    }
+    let busy = || "its checkout is busy with a turn; it is healed at a later check".to_string();
+    // A busy checkout costs no fetch this tick.
+    if lanes.try_checkout(bot).is_none() {
+        return busy();
+    }
+    let env = crate::safegit::environment(env);
+    if let Err(why) = fetch_origin(path, &env).await {
+        return why;
+    }
+    let Some(_checkout) = lanes.try_checkout(bot) else {
+        return busy();
+    };
+    finish_heal(path, &env).await
+}
+
+/// The heal's fetch, run outside the repository's command gate (gitrun::fetch_ungated_as_bot) for the reason given there.
+async fn fetch_origin(path: &Path, env: &Env) -> Result<(), String> {
+    let fetched = gitrun::fetch_ungated_as_bot(path, env, &["fetch", "--quiet", "--no-tags"], 120)
+        .await
+        .map_err(|f| fault_text(&f))?;
+    if !fetched.ok() {
+        return Err(format!("fetch failed: {}", failure_text(&fetched, env)));
+    }
+    Ok(())
+}
+
+/// The locked part of a heal, against the upstream as it is now: "" when AGENT.md is there afterwards.
+async fn finish_heal(path: &Path, env: &Env) -> String {
+    if path.join("AGENT.md").is_file() {
+        return String::new();
+    }
+    match fast_forward(path, env).await {
+        Ok(()) if path.join("AGENT.md").is_file() => String::new(),
+        Ok(()) => "fast-forwarded, but still has no AGENT.md".into(),
+        Err(why) => why,
+    }
+}
+
+async fn fast_forward(path: &Path, env: &Env) -> Result<(), String> {
+    let tip = gitrun::git_as_bot(path, env, &["rev-parse", "--verify", "--quiet", "@{u}"], 15)
+        .await
+        .map_err(|f| fault_text(&f))?;
+    if !tip.ok() {
+        return Err("it has no upstream branch to fast-forward from".into());
+    }
+    let tip = tip.stdout.trim().to_string();
+    let has_file = gitrun::git_as_bot(
+        path,
+        env,
+        &["cat-file", "-e", &format!("{tip}:AGENT.md")],
+        15,
+    )
+    .await
+    .map_err(|f| fault_text(&f))?;
+    if !has_file.ok() {
+        return Err("GitHub's branch has no AGENT.md either".into());
+    }
+    let ancestor = gitrun::git_as_bot(
+        path,
+        env,
+        &["merge-base", "--is-ancestor", "HEAD", &tip],
+        15,
+    )
+    .await
+    .map_err(|f| fault_text(&f))?;
+    if !ancestor.ok() {
+        return Err("it has local commits GitHub does not have, so it cannot fast-forward".into());
+    }
+    // Ignored local files are never overwritten: a file the bot ignores and holds work in is refused, not replaced.
+    let merged = gitrun::git_as_bot(
+        path,
+        env,
+        &[
+            "merge",
+            "--ff-only",
+            "--quiet",
+            "--no-overwrite-ignore",
+            &tip,
+        ],
+        120,
+    )
+    .await
+    .map_err(|f| fault_text(&f))?;
+    if !merged.ok() {
+        return Err(format!(
+            "fast-forward refused: {}",
+            failure_text(&merged, env)
+        ));
+    }
+    Ok(())
+}
+
+fn fault_text(fault: &Fault) -> String {
+    match fault {
+        Fault::Timeout(t) => format!("git timed out after {t} seconds"),
+        Fault::Stopped => gitrun::STOPPED.into(),
+        Fault::Io(e) => e.clone(),
+    }
+}
+
+fn failure_text(out: &gitrun::Out, env: &Env) -> String {
+    let text = crate::redact::git_failure(&out.stderr, &crate::redact::env_secrets(env), 240);
+    if text.is_empty() {
+        format!("exit {}", out.code)
+    } else {
+        text
+    }
+}
+
 impl Runner {
     /// (environment, problem) for talking to this bot's GitHub repository: the bot's scoped token, or the
     /// machine's own git access when no GitHub App is connected.
@@ -215,9 +352,6 @@ impl Runner {
     /// Clone the bot's repository when it is assigned here and has no checkout. The readiness problem to show,
     /// or "" when the checkout is now here (or an independent bot has no link).
     pub async fn fetch_repository(&self, bot: &str, entry: &Value, path: &Path) -> String {
-        if let Err(problem) = crate::repo_safety::outside_installation(path) {
-            return problem;
-        }
         let mut repository = text_of(&entry["repository"]);
         let config = &entry["config"];
         let personal = repository.is_empty() && truthy(config.get("shared_from"));
@@ -234,17 +368,33 @@ impl Runner {
             path.display(),
             entry["generation"]
         );
+        // The retry window's answer comes first: the repository-identity checks below run git on every call.
         let last = note(bot);
         if let Some((k, at, problem)) = &last {
             if *k == key && at.elapsed() < Duration::from_secs(FETCH_RETRY_S) {
                 return problem.clone();
             }
         }
+        if let Err(problem) = crate::repo_safety::outside_installation(path) {
+            return problem;
+        }
         if path.join(".git").exists() && empty_clone(path).await {
             discard_partial(path, true); // an older runner's clone of the still-empty repository
         }
         let mut problem = if path.join(".git").exists() {
-            format!("{repository} is checked out here but has no AGENT.md")
+            let healed = match self.github_access(bot, entry).await {
+                Ok(env) => heal_free_checkout(&self.lanes, bot, path, &env).await,
+                Err(why) => why,
+            };
+            if healed.is_empty() {
+                log(&format!(
+                    "Tico runner: {bot}'s checkout at {} got its AGENT.md back from GitHub",
+                    path.display()
+                ));
+                String::new()
+            } else {
+                format!("{repository} is checked out here but has no AGENT.md: {healed}")
+            }
         } else if personal {
             let detail =
                 crate::sessions::clone_shared(path, config, &crate::env::process_environment())

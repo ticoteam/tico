@@ -17,6 +17,7 @@ from fastapi import Path, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import Field
 
+from . import bookkeeper as BK
 from . import company_server, hook_relay
 from .finance import actions as finance
 from .finance import books_link
@@ -1189,6 +1190,9 @@ def install(app, store, auth, mutate):
         is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen. Files it
         attaches must be Library files the asker may read."""
         who = viewer(request)
+        with store.read() as c:
+            if not BK.private_finance_kind_allowed(c, who, body.kind, body.payload):
+                raise Problem("privacy", BK.PRIVATE_FINANCE_REFUSAL, 403)
         readable_files(request, who, body)
         audit_private_read(request, who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
         key = (request.headers.get("idempotency-key") or "").strip()

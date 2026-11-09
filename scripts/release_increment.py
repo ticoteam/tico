@@ -332,9 +332,10 @@ def build_jobs(python, browser, contract_files, conformance, rust, product, desk
     if contract_files:
         jobs.append(job("contracts", "python", contract_files))
     if product:
-        jobs.append(job("product", "product", workers="2", binaries="no"))
+        # The product and desktop parts run hosted_release_check's native_binaries, so their VMs place the release binaries.
+        jobs.append(job("product", "product", workers="2"))
     if desktop:
-        jobs.append(job("desktop", "desktop", workers="2", binaries="no"))
+        jobs.append(job("desktop", "desktop", workers="2"))
     return jobs
 
 

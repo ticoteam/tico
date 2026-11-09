@@ -56,7 +56,7 @@ Update skips before 05:00 company time without using up its cadence, so it can b
 
 ## Spend cap
 
-The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50). The rules' monthly cap (org rule checks, which ask Jev only) is saved here too, as `rules_monthly_cap_usd`; when it is not saved, `TICO_RULES_MONTHLY_USD` applies (default 50).
+One monthly cap covers every decision model call, org rule checks included. It is saved here as `monthly_cap_usd` (Monthly cap, "Decision models"). When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50). Once the month's spend reaches it, Decide carries on without a model and rule checks let outputs through unchecked (`budget`) until the 1st (UTC). A `rules_monthly_cap_usd` saved before rule checks shared this cap is ignored.
 
 ## Who can do what
 
