@@ -22,7 +22,7 @@ interface TfDialog extends TaskDialog {
   tfEl?: HTMLElement | null;
   tfOpen?: {id: string; n: number | null; cmp: number | null} | null;
   tfLoadSeq?: number;
-  taskOpening?: number;
+  taskOpening?: unknown;
   liveTask?: (PropTask & {attachments?: TfAttachment[] | null}) | null;
   taskFiles?: TfFile[] | null;
   canComment?: boolean;

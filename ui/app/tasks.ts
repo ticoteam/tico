@@ -26,6 +26,8 @@ type TaskRelRow = {direction: string; id: string; owner_id: string; status: stri
 interface TaskItem {
   kind: string; key: string; id: string; title: string; slug: string; actor: string; team: string; needs: boolean;
   rank: number | null; lane: string; labels: string[]; updated_at: string; closed: string; task: TaskRow; col: string;
+  // A scheduled item's next run (kind `schedule`).
+  schedule?: {next?: string | null};
 }
 // A column of the board (boardColumnsHTML): a status group, a pipeline step, or a fold.
 interface BoardColumn {
@@ -55,6 +57,9 @@ interface TaskState {
   peekTimer?: number;
   // The stage chosen on a phone, by step id (pipeline-rail.ts).
   pipeStage?: string;
+  // How the peek was opened ('link': from inside the peek), and a save that may have taken its task out of the view.
+  peekVia?: string;
+  pendingFinish?: {key: string; at: number; after: number} | null;
 }
 
 // ----------------------------------------------------------------- tasks (#/tasks)
@@ -98,8 +103,8 @@ const taskParentId = (t: TaskRow | null | undefined): string => { const parent =
 const taskBlockers = (t: PartialTaskRow | null | undefined) => taskRels(t, 'blocks', 'in');
 // The related count a board card shows: everything but its parent (subtasks have their own ring).
 // What holds a task, by kind (docs/tasks.md, Holds): `blocked` (cause manual, dependency, gate…) or `snoozed`.
-const taskHold = (t: TaskRow | null | undefined, kind: string) => (t?.holds || []).find(h => h.kind === kind);
-const taskBlockedHold = (t: TaskRow | null | undefined) => taskHold(t, 'blocked');
+const taskHold = (t: PartialTaskRow | null | undefined, kind: string) => (t?.holds || []).find(h => h.kind === kind);
+const taskBlockedHold = (t: PartialTaskRow | null | undefined) => taskHold(t, 'blocked');
 const taskRelCount = (t: TaskRow | null | undefined) => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
 function taskBlockedReason(t: TaskRow, source = document.activeElement as HTMLElement | null): Promise<string | null> {
   return new Promise(resolve => {
@@ -256,13 +261,13 @@ function taskWaitingOn(t: PartialTaskRow | null | undefined) {
   return actorPerson(t.waiting_on) ? t.waiting_on : actorPerson(t.reconnect?.person) ? t.reconnect?.person : '';
 }
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
-function taskStatusLabel(t: TaskRow | null | undefined) {
+function taskStatusLabel(t: (PartialTaskRow & Pick<TaskRow, 'status'>) | null | undefined) {
   if (!t) return '';
   if (taskBlockedHold(t)) return 'Blocked';
   if (t.step?.name && pipelineTypeId(t) !== 'general') return t.step.name;
   return STATUS_WORD[t.status] || String(t.status || '');
 }
-function taskStatusText(t: TaskRow, label = taskStatusLabel(t)) {
+function taskStatusText(t: PartialTaskRow & Pick<TaskRow, 'status'>, label = taskStatusLabel(t)) {
   return `<span class="task-status" data-status="${esc(t.status || 'open')}" aria-label="${esc(label)}" title="${esc(label)}">${esc(label)}</span>`;
 }
 
