@@ -181,10 +181,10 @@ def _label(conn: sqlite3.Connection, task_id: str) -> str:
 def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     """Who owns a spawned ticket, as a new ticket filed at the target's first stage would be owned: the least busy bot of
     that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the least busy available pool bot
-    over its slots. The pool is the pipeline's role holder (spec A5). A first stage with no assign rule has no pool, and the
-    role holder would resolve only through task_types.role, which holds a role key, not a bot: no stored record links a
-    bot to a role. So when no role holder resolves, the filer owns the ticket. The pipeline's manager is never chosen
-    (spec A5: a manager change does not move a Dev ticket), on a stage with a pool or without one."""
+    over its slots. The pool is the pipeline's role holder (spec A5). When the stage has no pool bot available, or no
+    assign rule at all, the Engineering role holder is looked up (_role_holder) before the filer. The filer owns the ticket
+    only when that lookup resolves to no one. The pipeline's manager is never chosen (spec A5: a manager change does not
+    move a Dev ticket), on a stage with a pool or without one."""
     from . import pipeline_engine, step_flow
 
     first = pipeline_engine.first_stage(conn, pipeline_id)
@@ -194,8 +194,25 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
         rule: Any = flow.get("assign") if step else None
         if step and rule:
             picked = _pool_bot(conn, step, rule) or _pool_bot(conn, step, rule, within_slots=False)
-            return f"bot:{picked}" if picked else filer
-    return filer
+            if picked:
+                return f"bot:{picked}"
+    holder = _role_holder(conn)
+    return f"bot:{holder}" if holder else filer
+
+
+def _role_holder(conn: sqlite3.Connection) -> str | None:
+    """The bot that holds the Engineering role (spec A5), or None when no bot does. The role is resolved through
+    task_types.role: roadmap_flow.role_type finds the first type carrying the engineering role. No stored record then
+    names a bot for that type or role, so the lookup resolves to no one today: task_types.role holds the role key only;
+    task_roles is per task; TYPE_BOTS is a permission (read or work); seats.team names a team; automation_templates
+    ROLES names manager bots, which are never a role holder. The pipeline's manager is never returned."""
+    from . import roadmap_flow
+
+    engineering = roadmap_flow.role_type(conn, roadmap_flow.ENGINEERING)
+    if engineering is None:
+        return None
+    # The bot holding that type's role. No stored record links one (see above), so none resolves.
+    return None
 
 
 def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row, *, within_slots: bool = True) -> str | None:

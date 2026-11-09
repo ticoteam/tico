@@ -1139,6 +1139,50 @@ def test_a_spawn_on_a_stage_with_no_assign_rule_goes_to_the_filer_not_the_manage
     assert owner == H.task(co.c, card)["owner_id"]
 
 
+def test_engineering_config_looks_up_the_role_holder_before_the_filer(co, monkeypatch):
+    """Spec A5, Engineering as the Hub sets it up: its first stage has no assign rule and its manager is another bot. The
+    Engineering role holder is looked up through task_types.role before the filer. It resolves to no one (no stored record
+    links a bot to the role), so the filer owns the ticket, never the manager. The spy shows the lookup ran, found the
+    Engineering type by its role, and returned None."""
+    from backend import roadmap_flow
+
+    H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
+    co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    seen: list[tuple[str | None, str | None]] = []
+    real = pipeline_links._role_holder
+
+    def spy(conn):
+        holder = real(conn)
+        seen.append((roadmap_flow.role_type(conn, roadmap_flow.ENGINEERING), holder))
+        return holder
+
+    monkeypatch.setattr(pipeline_links, "_role_holder", spy)
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    assert seen == [(co.type["Engineering"], None)]
+    owner = H.task(co.c, d41)["owner_id"]
+    assert owner == H.task(co.c, card)["owner_id"]
+    assert owner != "bot:pipeline-manager"
+
+
+def test_a_role_holder_that_resolves_owns_the_spawned_ticket_before_the_filer(co, monkeypatch):
+    """Ordering only: with the same Engineering config, a resolved role holder owns the ticket, not its filer. The lookup
+    is stubbed to show the order; the Hub links no bot to the role (see the test above), so this does not happen today."""
+    H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
+    co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    monkeypatch.setattr(pipeline_links, "_role_holder", lambda conn: "eng")
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    assert H.task(co.c, d41)["owner_id"] == "bot:eng"
+    assert H.task(co.c, d41)["owner_id"] != H.task(co.c, card)["owner_id"]
+
+
 def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_refuses(co):
     """O1: the approval filed the Engineering subtask. Undone while nobody has picked it up, the subtask closes and its
     handoff is returned; a new approval files a new one. Once it is picked up, the undo is refused and nothing changes."""
