@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 
 from backend import blobs, events as E, letters as L
-from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_letters import hq, quote, send, approve, grant, fetch  # noqa: F401
-from backend.tests.test_agents import hermes_bot, bot_id, credential
+from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.letters import hq, quote, send, approve, grant, fetch  # noqa: F401
+from backend.tests.helpers.agents import hermes_bot, bot_id, credential
 from backend.tests.threads_e2e import create_thread
 
 

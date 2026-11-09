@@ -6,28 +6,20 @@ once a month."""
 
 from backend import question_tasks as QT, strategy_merge, strategy_suggest
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_strategy_bot_level import level
-from backend.tests.test_company import bot, with_strategy_bot
-from backend.tests import test_goal_asks
-from backend.tests.test_goal_asks import asks, needs_tasks, sync
-from backend.tests.test_kpis import goal_with_kpi, log
-
-OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.strategy_bot_level import level
+from backend.tests.helpers.company import bot, with_strategy_bot
+from backend.tests.helpers import goal_asks as test_goal_asks
+from backend.tests.helpers.goal_asks import asks, needs_tasks, sync
+from backend.tests.helpers.kpis import goal_with_kpi, log
+from backend.tests.helpers.strategy_bot_suggests import OWNER, STRATEGY_BOT, ask_ana, bot_task
 
 
 def red_goal(api):
     goal, kpi = goal_with_kpi(api)
     log(api, kpi["id"], 10, period_end=H.now())
     return goal
-
-
-def bot_task(api, slug, title, status="open"):
-    with api.app.state.store.transaction() as c:
-        made = H.task_create(c, "bot:" + slug, title, "Work it.", "bot:" + slug, lint=False)
-        if status != "open":
-            H.task_update(c, "bot:" + slug, made["id"], status=status)
-    return made["id"]
 
 
 def recovery(api, goal_id, ops_task, token, expected=200):
@@ -170,16 +162,6 @@ def test_a_retry_approved_while_still_blocked_comes_back_again_and_then_applies(
     assert [t["title"] for t in tasks_of(api, "bot:finance")] == ["Pause the signup campaign"]
 
 
-def ask_ana(api, slug, title):
-    """A bot's task Ana asked for, where the bot asks her a question back: a question task under it, so the task waits
-    on her."""
-    with api.app.state.store.transaction() as c:
-        made = H.task_create(c, OWNER, title, "Please.", "bot:" + slug)
-        QT.ask_plain(c, "bot:" + slug, OWNER, "Which pricing page goes live first?", parent=H.task(c, made["id"]))
-        H.task_update(c, "bot:" + slug, made["id"], status="waiting", waiting_on=OWNER)
-    return made["id"]
-
-
 def card_of(api, task_id):
     """The id of the question task Ana owns that the task waits on."""
     with api.app.state.store.read() as c:
@@ -317,7 +299,7 @@ def test_a_merged_item_names_only_the_originals_its_reader_may_read(api):
     """The merged item's list of originals is the reader's: one Ana can no longer read is left out of it."""
     strategy_token = with_strategy_bot(api)
     asked = ask_ana(api, "ops", "Ship the pricing page")
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

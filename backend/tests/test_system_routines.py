@@ -9,8 +9,8 @@ from backend import ask_deadlines
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_stale_review import FakeDecide, stale  # noqa: F401
-from backend.tests.test_tasks_board import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.stale_review import FakeDecide, stale  # noqa: F401
+from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
 from clients import judge as J
 
 

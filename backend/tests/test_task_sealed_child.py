@@ -5,9 +5,11 @@ import json
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_task_readers import dry_run, refused, run_on, subtask, task
-from backend.tests.test_tasks_board import bot_token
+from backend.tests.helpers.api import get, headers, post
+from backend.tests.test_api import api
+from backend.tests.helpers.task_readers import dry_run, refused, run_on, subtask, task
+from backend.tests.helpers.tasks_board import bot_token
+from backend.tests.helpers.task_sealed_child import ROUTE, carry, run_for, sees
 
 REPAIR = {
     "title": "Fix the upload refusal order",
@@ -15,12 +17,11 @@ REPAIR = {
     "add a test that the store is never called on a refused upload.",
 }
 HEAD = "a2944b52a971f509b51b81d40db92c0207cab734"
-ROUTE = "ask them with `hub task question`, or have them file the subtask"
 
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -28,30 +29,6 @@ def private_tasks_have_an_unrelated_manager(api):
 
 def repair(parent, owner="finance", **extra):
     return {**subtask(parent, owner), **REPAIR, **extra}
-
-
-def carry(api, attempt, row):
-    """The run also carries `row`, as when its prompt brought that task in."""
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
-
-
-def run_for(api, bot):
-    """A run of `bot` on its own computer, on the oldest work waiting for it (a chat when nothing is)."""
-    machine = runner(api)
-    assign(api, machine, bot)
-    ready(api, machine, [bot])
-    with api.app.state.store.read() as c:
-        waiting = c.execute("SELECT 1 FROM jobs WHERE bot_id=? AND state='queued'", (bot,)).fetchone()
-    if not waiting:
-        post(api, "chat/" + bot, {"text": "Please look at your queue."})
-    return claim(api, machine, bot)
-
-
-def sees(api, token, words):
-    r = api.post("/api/v2/sql", json={"sql": "SELECT id,title,body FROM tasks"}, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return words in r.text
 
 
 def test_the_owning_bots_run_hands_a_sealed_subtask_to_a_bot_that_reads_only_that(api):

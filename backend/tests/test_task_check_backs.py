@@ -5,7 +5,8 @@ import pytest
 
 from backend import task_check_backs as CB
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def task(c, **kw):
@@ -70,7 +71,7 @@ def test_a_queued_check_back_wake_is_obsolete_whatever_its_task_says_next(api):
 
 
 def test_an_unstarted_check_back_wake_is_obsolete_at_claim(api):
-    from backend.tests.test_api import assign, claim, ready, runner
+    from backend.tests.helpers.api import assign, claim, ready, runner
 
     r = runner(api)
     assign(api, r, "ops")

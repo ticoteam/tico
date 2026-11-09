@@ -3,8 +3,8 @@ reviews it requires found by their step's kind, and a waiting QA check holding i
 backend/check_blocked.py, backend/step_flow.titled)."""
 
 from backend import hubdb as H
-from backend.tests import test_qa_waivers as waivers
-from backend.tests.test_qa_waivers import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers import qa_waivers as waivers
+from backend.tests.helpers.qa_waivers import api  # noqa: F401  (api is a fixture)
 
 RENAMED = {
     "Review 1": "First look",

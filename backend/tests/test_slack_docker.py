@@ -147,7 +147,7 @@ class FakeClient:
 def test_the_gateway_opens_tokens_the_api_sealed_under_a_kms_key(tmp_path, monkeypatch, capsys):
     from backend.credentials import CredentialCipher, Vault
     from backend.store import Store
-    from backend.tests.test_credentials import FakeKMS
+    from backend.tests.helpers.credentials import FakeKMS
 
     kms = FakeKMS()
     monkeypatch.setattr("boto3.client", lambda name, *a, **k: kms if name == "kms" else pytest.fail(name))
@@ -174,7 +174,7 @@ def test_slack_tokens_saved_before_kms_was_set_open_with_slack_key_and_are_resea
 
     from backend.credentials import CredentialCipher, Vault
     from backend.store import Store
-    from backend.tests.test_credentials import FakeKMS
+    from backend.tests.helpers.credentials import FakeKMS
 
     settings = Settings(db_path=tmp_path / "hub.db", company_name="Acme")
     store = Store(settings)

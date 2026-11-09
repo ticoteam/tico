@@ -19,7 +19,7 @@ from backend.finance.core import budgets as B
 from backend.finance.core.errors import FinanceError
 from backend.finance.store import budgets as SB
 from backend.finance.store import ledger as SL
-from backend.tests.test_finance_fixtures import (
+from backend.tests.helpers.finance_fixtures import (
     open_views,
     AT,
     OWNER,

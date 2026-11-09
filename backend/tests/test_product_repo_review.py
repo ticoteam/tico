@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend import github_app as G
 from backend.app import create_app
-from backend.tests.test_github_app import api, gh, connect, product_repo_request  # noqa: F401
+from backend.tests.helpers.github_app import api, gh, connect, product_repo_request  # noqa: F401
 
 
 def test_product_create_lost_response_keeps_key_bound_to_original_name(api, gh, monkeypatch):

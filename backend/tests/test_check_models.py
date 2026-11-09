@@ -6,86 +6,10 @@ import json
 import pytest
 
 from backend import check_models
-from backend.store import H, encode
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
-from backend import bot_settings as BS
-
-GROK = {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "billing": "api"}
-
-
-def company(api, *enabled):
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='providers'")
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('providers',?)",
-            (encode({"revision": 1, "enabled": list(enabled), "runtime": "claude", "model": "claude-sonnet-5-5"}),),
-        )
-
-
-def heartbeat(api, machine, grok="ready"):
-    post(
-        api,
-        "runners/heartbeat",
-        {
-            "version": "test",
-            "platform": "test",
-            "capabilities": ["task_lanes_v2", "session_roots_v1"],
-            "readiness": {
-                "schema_version": 1,
-                "runtimes": {
-                    "claude": {"installed": True, "authenticated": "ready"},
-                    "grok": {"installed": True, "authenticated": grok},
-                },
-                "bots": {"ops": {"runtime": "claude", "ready": True}},
-            },
-        },
-        token=machine["token"],
-    )
-
-
-def parent_turn(api):
-    """ops on Claude, working a person's task: its claimed turn."""
-    company(api, "anthropic", "xai")
-    with api.app.state.store.transaction() as c:
-        config = BS.read(c, 'ops')
-        config.update(
-            runtime="claude",
-            harness="claude",
-            model="claude-sonnet-5-5",
-            fallback={"harness": "codex", "model": "gpt-6.1-sol"},
-        )
-        BS.write(c, 'ops', config)
-    machine = runner(api)
-    assign(api, machine, "ops")
-    heartbeat(api, machine)
-    parent = post(
-        api, "tasks", {"owner": "ops", "title": "Ship the import fix", "body": "Open the PR and get it reviewed."}
-    )
-    turn = claim(api, machine)
-    assert turn["task"]["id"] == parent["id"] and turn["config"]["runtime"] == "claude"
-    return machine, parent, turn
-
-
-def finish(api, machine, turn, segment=None, during=None):
-    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"][:8]}, machine["token"])
-    if during:
-        during()
-    usage = (
-        {
-            **segment,
-            "input_tokens": 30,
-            "output_tokens": 30,
-            "segments": [{**segment, "input_tokens": 30, "output_tokens": 30}],
-        }
-        if segment
-        else None
-    )
-    post(
-        api,
-        f"attempts/{turn['id']}/complete",
-        {"outcome": "completed", "last_seq": 0, "text": "Done.", **({"usage": usage} if usage else {})},
-        machine["token"],
-    )
+from backend.store import H
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.check_models import GROK, company, finish, heartbeat, parent_turn
 
 
 def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_the_parent(api):
@@ -489,7 +413,7 @@ def test_with_no_next_check_model_the_check_keeps_its_hold(api, monkeypatch):
 
 @pytest.mark.parametrize("recovery", ["completed", "reset"])
 def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, monkeypatch, recovery):
-    from backend.tests.test_maintenance_health import turn as finished_turn
+    from backend.tests.helpers.maintenance_health import turn as finished_turn
 
     machine, sub, check = codex_check(api)
     start = H.now()
@@ -525,7 +449,7 @@ def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, m
 
 
 def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
-    from backend.tests.test_maintenance_health import turn as finished_turn
+    from backend.tests.helpers.maintenance_health import turn as finished_turn
 
     machine, sub, check = codex_check(api)
     finished_turn(
@@ -553,7 +477,7 @@ def test_a_check_on_a_subscription_profile_does_not_move(api, monkeypatch):
 
 def moved_to_grok(api):
     """Two limits in a row on the computer's default Codex login: the check has moved to Grok."""
-    from backend.tests.test_maintenance_health import turn as finished_turn
+    from backend.tests.helpers.maintenance_health import turn as finished_turn
 
     machine, sub, check = codex_check(api)
     finished_turn(
@@ -603,7 +527,7 @@ def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
         turn["token"],
     )
     finish(api, machine, turn)
-    from backend.tests.test_maintenance_health import turn as finished_turn
+    from backend.tests.helpers.maintenance_health import turn as finished_turn
 
     finished_turn(
         api,

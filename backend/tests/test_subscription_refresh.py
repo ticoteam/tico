@@ -1,7 +1,8 @@
 """Only fixture computers and synthetic allowance reports; no provider requests."""
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 
 
 def setup(api):

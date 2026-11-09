@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
 from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.finance import sync
@@ -15,7 +15,7 @@ from backend.finance import reads as FR
 from backend.finance.core import feeds as F
 from backend.finance.store import ap as SAP
 from backend.finance.store import ledger as SL
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     ACME_ADDRESS,
     AT,
     MERCURY,
@@ -29,66 +29,10 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_ap import LATER, _balance, _bill, _events, _ingest, _pnl, _txn, _vendor
 
 PLAIN = "human:eve"  # a web teammate with no grants or rights
-LATER = "2026-10-20T12:00:00.000000Z"
-
-
-def _vendor(c, name="Acme Supplies", **more) -> str:
-    made = act(c, OWNER, "contact_create", {"name": name, "kind": "vendor", **more})
-    assert made.status == "committed", made
-    return str(made.result["contact_id"])
-
-
-def _bill(c, vendor, lines, who=OWNER, day="2026-10-10", **more) -> str:
-    made = act(c, who, "bill_create", {"vendor_id": vendor, "bill_date": day, "lines": lines, **more})
-    assert made.status == "committed", made
-    return str(made.result["bill_id"])
-
-
-def _balance(c, code) -> int:
-    return int(
-        c.execute(
-            "SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
-            "WHERE a.code=?",
-            (code,),
-        ).fetchone()[0]
-    )
-
-
-def _pnl(c, basis, start="2026-10-01", end="2026-12-31") -> dict[str, int]:
-    found = FR.pnl(c, OWNER, start, end, "year", basis, AT)
-    return {str(r["code"]): int(r["total"]) for r in found["rows"] if r["total"]}
-
-
-def _events(c, name) -> list[tuple[str, str]]:
-    return [
-        tuple(r)
-        for r in c.execute("SELECT subject, period_key FROM fin_events WHERE name=? ORDER BY created_at", (name,))
-    ]
-
-
-def _ingest(c, raw, at=AT):
-    from backend.finance import banking
-    from backend.finance.context import load
-
-    cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
-    return banking.ingest(load(c, at), cid, F.mercury_txn(raw, 0))
-
-
-def _txn(raw_id, amount, who="Acme Supplies", day="2026-10-14", kind="outgoingPayment", **extra):
-    return {
-        **MERCURY["txn_bank_fee"],
-        "id": raw_id,
-        "accountId": "acct-chk",
-        "amount": amount,
-        "kind": kind,
-        "createdAt": f"{day}T10:00:00Z",
-        "postedAt": f"{day}T10:00:00Z",
-        "counterpartyName": who,
-        **extra,
-    }
 
 
 def test_every_new_read_answers_on_empty_books_and_refuses_what_the_viewer_cannot_see(books):  # noqa: F811
@@ -334,7 +278,7 @@ def test_vendor_labels_are_contact_names_and_never_ids(books):
     """F: lines a bill, an invoice write-off or any document posts carry the contact's id as their vendor key; the
     drill-down, spend-by and transactions show the contact's name, a plain vendor name as the text it was posted under, and an id with no
     contact behind it as nothing."""
-    from backend.tests.test_finance_fixtures import spend
+    from backend.tests.helpers.finance_fixtures import spend
 
     stray = "0b6a4a52-5d0e-4c1a-9a43-2f2f3f6d1e10"
     with books.transaction() as c:
@@ -824,7 +768,7 @@ def test_marked_paid_from_checking_then_its_bank_row_arrives_posts_cash_once_and
 
 
 def test_a_posting_rule_categorizes_a_tico_card_charge_and_keeps_the_holder_card_use_and_liability(books):
-    from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_use, _card_holds
+    from backend.tests.helpers.finance_banking import _arrives, _card_for_eve, _card_use, _card_holds
 
     fake = FakeMercury()
     fake.balances["credit-io"] = 0
@@ -863,7 +807,7 @@ def test_a_vendor_has_one_key_across_its_bills_and_card_rows(books):
     one vendor budget counts the vendor's bill line and card row once each, and spend-by vendor shows one row. The
     budget was made on the plain name before the contact existed; it matches once the contact does."""
     from backend.finance import budgeting
-    from backend.tests.test_finance_banking import _arrives, _card_for_eve
+    from backend.tests.helpers.finance_banking import _arrives, _card_for_eve
 
     fake = FakeMercury()
     fake.balances["credit-io"] = 0
@@ -918,7 +862,7 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
     stores its id; siblings on one vendor are refused, and so is a rename that would make two count the same spend;
     an inactive contact's name captures no new bank row; a merchant with no contact reads as its newest row's text."""
     from backend.finance import budgeting
-    from backend.tests.test_finance_fixtures import spend
+    from backend.tests.helpers.finance_fixtures import spend
 
     connect(books, FakeMercury())
 
@@ -998,7 +942,7 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
     from backend.finance.core.ledger import name_key
     from backend.finance.store import budgets as SB
     from backend.finance.store import schema
-    from backend.tests.test_finance_fixtures import spend
+    from backend.tests.helpers.finance_fixtures import spend
 
     assert name_key("A" * 79 + "ß") != name_key("A" * 79 + "s")
     assert all(name_key(name_key(x)) == name_key(x) for x in (" ÉCOLE ", "A" * 79 + "ß", "ﬃ STRASSE "))
@@ -1073,7 +1017,7 @@ def test_a_long_vendor_name_whose_key_folds_longer_still_reclassifies_and_settle
     after). A reconciled debit under that name, found as a lost payment, moves to the payment's line and settles:
     lines take back the stored folded key."""
     from backend.finance.core.ledger import name_key
-    from backend.tests.test_finance_payments import _debit, _lost_send, _reconcile
+    from backend.tests.helpers.finance_payments import _debit, _lost_send, _reconcile
     from backend.finance.core import ledger as L
     from backend.finance.core.errors import FinanceError
 

@@ -254,7 +254,7 @@ def test_runs_are_paged_newest_first_by_run_id(api):
 
 def test_the_answers_match_the_published_contract(api):
     """Each automation read and write against its v2 spec shape."""
-    from backend.tests.test_openapi_v2 import conforms
+    from backend.tests.helpers.openapi_v2 import conforms
 
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
     shape = {
@@ -290,8 +290,8 @@ def test_the_librarian_gets_the_market_builtins_which_stand_down_for_the_teams_o
     the Librarian receives; the top pauses them, nobody deletes them, and the team's own Librarian automation for the
     same work runs instead of them, never beside them."""
     from backend import automations
-    from backend.tests.test_api import put
-    from backend.tests.test_market import _librarian
+    from backend.tests.helpers.api import put
+    from backend.tests.helpers.market import _librarian
 
     _librarian(api)
     put(

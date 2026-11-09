@@ -7,8 +7,10 @@ from datetime import datetime, timedelta, timezone
 
 from backend import botkpis, strategy_bot, hubdb, kpis as K
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers.kpis import goal_with_kpi, log
 
 NOW = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)
 
@@ -128,24 +130,6 @@ def test_the_colour_of_a_kpi_is_pace_or_range_and_no_fresh_data_is_gray():
         ]
         == 48
     )
-
-
-# ------------------------------------------------------------------ the API
-def goal_with_kpi(api, target=None, token="ana-test", owner="ana", cadence="daily"):
-    goal = post(api, "goals", {"title": "Raise activation", "owner": owner}, token=token)["goal"]
-    body = {
-        "name": "Activation",
-        "unit": "%",
-        "cadence": cadence,
-        "definition": "Signed-up accounts that finish setup",
-        "goal_id": goal["id"],
-        **(target or {"kind": "improve", "baseline": 40, "target": 70, "deadline": "2099-12-31"}),
-    }
-    return goal, post(api, "kpis", body, token=token)["kpi"]
-
-
-def log(api, kpi_id, value, token="ana-test", **more):
-    return post(api, f"kpis/{kpi_id}/readings", {"value": value, **more}, token=token)["reading"]
 
 
 def goal_of(api, goal_id, token="ana-test"):

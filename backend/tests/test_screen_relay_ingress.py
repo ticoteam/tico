@@ -10,8 +10,8 @@ import time
 import httpx
 import pytest
 
-from backend.tests.test_screen_relay_contract import Service, gateway_origin, relay_binary, service  # noqa: F401
-from backend.tests.test_api import headers
+from backend.tests.helpers.screen_relay_contract import Service, gateway_origin, relay_binary, service  # noqa: F401
+from backend.tests.helpers.api import headers
 
 pytestmark = pytest.mark.slow
 

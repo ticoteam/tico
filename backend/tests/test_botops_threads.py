@@ -6,8 +6,9 @@ from fastapi import Request
 
 from backend import threads
 from backend.botops_act import default_delegable
-from backend.tests.test_api import api, headers  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.api import headers  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
 
 
 def test_thread_writes_run_as_the_person_who_asked_and_botops_messages_do_not():

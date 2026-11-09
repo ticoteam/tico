@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
+from backend.tests.test_api import api  # noqa: F401  (fixture)
 
 REPLAY = Path(__file__).resolve().parents[2] / "evals" / "replay"
 sys.path.insert(0, str(REPLAY))

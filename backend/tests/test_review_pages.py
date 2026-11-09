@@ -7,7 +7,7 @@ import json
 import pytest
 
 from backend import hubdb as H, review_pages as RP
-from backend.tests.test_github import api  # noqa: F401
+from backend.tests.helpers.github import api  # noqa: F401
 
 HEAD = "a" * 40
 

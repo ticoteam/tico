@@ -11,7 +11,8 @@ changes.
 from backend import mailbox_access as MA
 from backend.entities import linker as LK
 from backend.entities import store as ES
-from backend.tests.test_api import api, get, setup_attempt  # noqa: F401  (api is the pytest fixture)
+from backend.tests.helpers.api import get, setup_attempt  # noqa: F401  (api is the pytest fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is the pytest fixture)
 
 ANA = "human:ana"
 

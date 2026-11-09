@@ -5,9 +5,9 @@ import uuid
 
 import pytest
 
-from backend.tests.test_directory import events, roster_of
-from backend.tests.test_onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
-from backend.tests.test_people_access import person_headers
+from backend.tests.helpers.directory import events, roster_of
+from backend.tests.helpers.onboarding import OWNER_EMAIL, environment, signed_in  # noqa: F401
+from backend.tests.helpers.people_access import person_headers
 
 USER = "urn:ietf:params:scim:schemas:core:2.0:User"
 ENTERPRISE = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"

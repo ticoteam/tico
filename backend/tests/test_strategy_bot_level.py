@@ -8,17 +8,15 @@ and puts at most 5 items a day in a person's Needs you."""
 from backend import strategy_bot, strategy_suggest, goals as G, routines
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company import bot, propose_why, with_strategy_bot
-from backend.tests.test_goal_asks import asks, goal_manager, raise_level, sync
-from backend.tests.test_kpis import goal_with_kpi, log
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.company import bot, propose_why, with_strategy_bot
+from backend.tests.helpers.goal_asks import asks, goal_manager, raise_level, sync
+from backend.tests.helpers.kpis import goal_with_kpi, log
+from backend.tests.helpers.strategy_bot_level import level
 
 OWNER = "human:ana"
 REVIEW = "goal-manager:goals-review"
-
-
-def level(api, n, token="ana-test", expected=200):
-    return post(api, "strategy-bot/level", {"level": n}, token=token, expected=expected)
 
 
 def via_assistant(api, confirmed=False, via="assistant"):

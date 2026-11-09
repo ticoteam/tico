@@ -5,7 +5,7 @@ computer it serves with the same computers listed, and "this computer only" take
 import json
 
 from backend.store import H
-from backend.tests.test_computer_keys import (
+from backend.tests.helpers.computer_keys import (
     SHARED,
     call,
     computer as enrol,
@@ -16,8 +16,8 @@ from backend.tests.test_computer_keys import (
     report,
     setup,
 )
-from backend.tests.test_computer_signin import grant, store
-from backend.tests.test_onboarding import as_person, environment  # noqa: F401
+from backend.tests.helpers.computer_signin import grant, store
+from backend.tests.helpers.onboarding import as_person, environment  # noqa: F401
 
 PASTED = "sk-proj-shared-pasted-0123456789"
 

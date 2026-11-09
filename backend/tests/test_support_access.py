@@ -14,8 +14,8 @@ import pytest
 from backend import support, support_access
 from backend.auth import Identity
 from backend.store import H, Problem, digest
-from backend.tests.test_onboarding import as_person, environment, machine, signed_in  # noqa: F401
-from backend.tests.test_support import TICKET_ID, ContractHQ, FakeHQ, documented
+from backend.tests.helpers.onboarding import as_person, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.support import TICKET_ID, ContractHQ, FakeHQ, documented
 
 
 class FakeAccessHQ(FakeHQ):

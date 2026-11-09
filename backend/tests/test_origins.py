@@ -3,8 +3,9 @@
 import shlex
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_automation_api import make  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.automation_api import make  # noqa: F401
 
 
 def test_a_bot_filed_task_names_the_bot_and_stop_commands_parse_and_the_payload_is_small(api):

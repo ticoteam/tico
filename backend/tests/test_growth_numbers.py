@@ -2,9 +2,10 @@
 readings, and the marketing tests that started or finished. Examples use Acme, a home-cleaning company."""
 
 from backend import growth as G
-from backend.tests.test_api import api, get, headers, post, put  # noqa: F401
-from backend.tests.test_company import bot
-from backend.tests.test_openapi_v2 import conforms
+from backend.tests.helpers.api import get, headers, post, put  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.company import bot
+from backend.tests.helpers.openapi_v2 import conforms
 
 ECONOMICS = (
     "spend",

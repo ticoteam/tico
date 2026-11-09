@@ -8,7 +8,7 @@ fixture from backend/tests/test_api.py: a fresh temporary database and a fiction
 import sqlite3
 import time
 
-from backend.tests.test_api import assign, claim, headers, ready, runner
+from backend.tests.helpers.api import assign, claim, headers, ready, runner
 
 OWNER, MEMBER = "ana-test", "cara-test"
 NOTE_STEP = {"id": "tell", "type": "action", "enabled": True, "do": "wake_bot", "args": {"bot": "ops", "text": "Look"}}

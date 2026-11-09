@@ -8,8 +8,9 @@ import json
 
 from backend import updates
 from backend.store import H
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_strategy_bot_chat import strategy_bot
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.strategy_bot_chat import strategy_bot
 
 
 def bot_id(c, slug):
@@ -35,8 +36,8 @@ def claim(api, r, bot, text, token, place="updates"):
 
 
 def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_and_open(api, monkeypatch):
-    from backend.tests.test_api import restrict
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (("sales", "Sales"), ("fixer", "Fixer")):
@@ -76,7 +77,7 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
 
 
 def test_the_default_order_is_a_goal_then_waits_on_you_then_newest(api, monkeypatch):
-    from backend.tests.test_bot_contact import bot, token
+    from backend.tests.helpers.bot_contact import bot, token
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (("boss", "Manager"), ("analyst", "Analyst"), ("writer", "Writer"), ("crier", "Crier")):
@@ -108,8 +109,8 @@ def test_the_default_order_is_a_goal_then_waits_on_you_then_newest(api, monkeypa
 
 
 def test_private_references_in_links_and_prose_never_reach_an_updates_chat_turn(api, monkeypatch):
-    from backend.tests.test_api import restrict
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "fixer", "Fixer")

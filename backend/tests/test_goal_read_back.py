@@ -9,13 +9,11 @@ import pytest
 from backend import goal_read_back as GR
 from backend import goals as G
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_assistant import asked, say, turn_message
-from backend.tests.test_strategy_bot_chat import strategy_bot, turn
-
-
-def goal(api, title, owner="ops", **extra):
-    return post(api, "goals", {"title": title, "owner": owner, **extra})["goal"]
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.assistant import asked, say, turn_message
+from backend.tests.helpers.strategy_bot_chat import strategy_bot, turn
+from backend.tests.helpers.goal_read_back import goal
 
 
 def finish(api, r, attempt, text="Done."):
@@ -491,7 +489,7 @@ def test_each_click_refusal_says_nothing_was_saved_and_where_the_change_is_made(
 
 def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
     strategy_bot(api)
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.assistant import assistant_turn
 
     r, attempt = assistant_turn(api, "ben-test", "Set a goal for Ops")
     read_back(api, attempt, NEW_GOAL, expected=403)
@@ -513,7 +511,7 @@ def test_repeated_changes_are_refused_before_posting_a_draft(api):
 def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch, capsys):
     from clients import hubcli, remotecli
     from clients.tico import APIError
-    from backend.tests.test_api import headers
+    from backend.tests.helpers.api import headers
 
     class TurnClient:
         def __init__(self, *args, **kwargs):
@@ -578,8 +576,8 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
 
 
 def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_cannot_read(api):
-    from backend.tests.test_goal_cards import propose
-    from backend.tests.test_groups_leads import as_bot
+    from backend.tests.helpers.goal_cards import propose
+    from backend.tests.helpers.groups_leads import as_bot
 
     hidden = goal(api, "Private inbox objective", owner="inbox")
     public = goal(api, "Publish the guide")
@@ -627,7 +625,7 @@ def test_a_yes_saves_a_goal_without_optional_measures_and_later_sync_does_not_na
 
 
 def test_unattended_strategy_bot_can_file_a_card_but_cannot_save_a_goal_or_target(api):
-    from backend.tests.test_groups_leads import as_bot
+    from backend.tests.helpers.groups_leads import as_bot
 
     strategy_bot(api)
     as_bot(api, "goal-manager", "strategy-test")
@@ -657,7 +655,7 @@ def test_unattended_strategy_bot_can_file_a_card_but_cannot_save_a_goal_or_targe
 
 
 def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_revoked(api):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     strategy_bot(api)
     r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
@@ -673,7 +671,7 @@ def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_rev
 
 
 def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     strategy_bot(api)
     parent = goal(api, "Financial parent", owner="finance")
@@ -690,7 +688,7 @@ def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
 
 
 def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
-    from backend.tests.test_groups_leads import as_bot
+    from backend.tests.helpers.groups_leads import as_bot
 
     strategy_bot(api)
     as_bot(api, "goal-manager", "strategy-test")
@@ -721,7 +719,7 @@ def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
 
 
 def test_legacy_read_backs_require_a_fresh_draft_before_read_or_save(api):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     strategy_bot(api)
     parent = goal(api, "Private old parent", owner="finance")
@@ -756,7 +754,7 @@ def test_legacy_read_backs_require_a_fresh_draft_before_read_or_save(api):
 
 @pytest.mark.parametrize("change_kind", ["goal", "suggestion"])
 def test_conflicts_do_not_name_a_bot_editor_in_stored_read_or_save(api, change_kind):
-    from backend.tests.test_goal_cards import propose
+    from backend.tests.helpers.goal_cards import propose
 
     strategy_bot(api)
     row = goal(api, "Publish the guide")
@@ -783,7 +781,7 @@ def test_conflicts_do_not_name_a_bot_editor_in_stored_read_or_save(api, change_k
 
 @pytest.mark.parametrize("edited", ["title", "why", "owner", "created_owner"])
 def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     strategy_bot(api)
     r, attempt = turn(api, "coo", "ana-test", "Publish the guide")

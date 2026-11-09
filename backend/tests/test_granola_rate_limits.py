@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from backend.granola_mcp import GranolaMCP
-from backend.tests.test_granola_mcp import BASE, Provider, api, headers  # noqa: F401
+from backend.tests.helpers.granola_mcp import BASE, Provider, api, headers  # noqa: F401
 
 
 PREFIXED_NOTES = '''Here are the shared notes for this meeting:

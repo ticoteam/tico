@@ -1,38 +1,8 @@
 import json
-import os
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from backend.credentials import CredentialCipher
-from backend.tests.test_api import api, post, get, runner, assign, ready, claim, headers
-
-
-class FakeKMS:
-    def __init__(self):
-        self.key = os.urandom(32)
-
-    def generate_data_key(self, **kwargs):
-        assert kwargs['EncryptionContext'] == {'application': 'tico-credentials'}
-        key = os.urandom(32)
-        nonce = os.urandom(12)
-        return {'Plaintext': key, 'CiphertextBlob': nonce + AESGCM(self.key).encrypt(nonce, key, b'kms')}
-
-    def decrypt(self, **kwargs):
-        blob = kwargs['CiphertextBlob']
-        return {'Plaintext': AESGCM(self.key).decrypt(blob[:12], blob[12:], b'kms')}
-
-
-def setup(api):
-    api.app.state.store.settings.credential_kms_key = 'test-key'
-    api.app.state.store.settings.credential_admins = ('ana@acme.example', 'ben@acme.example')
-    api.app.state.vault.cipher = CredentialCipher('test-key', FakeKMS())
-
-
-def create(api, **kwargs):
-    return post(
-        api,
-        'credentials',
-        {'name': 'PostHog', 'secret': 'phx-synthetic-private-987654', 'env': 'POSTHOG_API_KEY', **kwargs},
-    )
+from backend.tests.helpers.api import post, get, runner, assign, ready, claim, headers
+from backend.tests.test_api import api
+from backend.tests.helpers.credentials import create, setup
 
 
 def test_ciphertext_only_and_authorizers_and_validation_redaction(api):
@@ -222,7 +192,7 @@ def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
     post(api, f"credentials/{row['id']}/grants", {'subject': 'bot:finance'}, 'cara-test')
     assert api.delete('/api/v2/credentials/' + row['id'], headers=headers('cara-test')).status_code == 403
     token = post(api, 'me/tokens', {'label': 'QA cleanup'}, 'ben-test')['token']
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     err, out = call(api, 'hub_credential_delete', {'credential': row['name']}, token=token)
     assert not err and out['deleted']
@@ -509,7 +479,7 @@ def test_a_run_that_reads_its_credentials_again_writes_one_reveal_row(api):
 
 
 def test_a_bot_lists_only_the_names_of_what_it_is_granted(api):
-    from backend.tests.test_automation_api import as_bot
+    from backend.tests.helpers.automation_api import as_bot
 
     setup(api)
     mine = create(api)['id']

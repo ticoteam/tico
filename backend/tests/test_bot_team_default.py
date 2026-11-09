@@ -10,7 +10,8 @@ from backend import bot_settings as BS
 from backend import groups as Groups
 from backend import people as P
 from backend.store import H, encode
-from backend.tests.test_api import api, get, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import get, post  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api  # noqa: F401  (the api fixture)
 
 MIGRATION = importlib.import_module("backend.migrations.0061_bot_team_from_manager")
 

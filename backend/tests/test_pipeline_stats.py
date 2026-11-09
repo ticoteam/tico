@@ -9,7 +9,8 @@ from backend import health
 from backend import hubdb as H
 from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
-from backend.tests.test_api import api, assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api  # noqa: F401  (api is a fixture)
 from backend.tests.hold_rows import set_holds
 
 
@@ -188,8 +189,8 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
 
 @pytest.mark.parametrize("scope", ["task", "chat"])
 def test_quarantine_held_work_has_its_own_pipeline_and_health_classification(api, scope):
-    from backend.tests.test_task_lanes import new_task, task_bot
-    from backend.tests.test_task_quarantine import refusals, started
+    from backend.tests.helpers.task_lanes import new_task, task_bot
+    from backend.tests.helpers.task_quarantine import refusals, started
 
     board(api)
     machine = task_bot(api, lanes=True)
@@ -279,8 +280,8 @@ def test_failure_causes():
 def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
     """The Dev 563 shape on Pipeline: a run held for review, then dismissed by BotOps with a note; the row reads the
     decision record, names who and when, and a later decision replaces it. No decision, no row."""
-    from backend.tests.test_api import expire
-    from backend.tests.test_run_view import DEV_563_NOTE, botops_decides, task_attempt
+    from backend.tests.helpers.api import expire
+    from backend.tests.helpers.run_view import DEV_563_NOTE, botops_decides, task_attempt
 
     typ, _ = board(api)
     machine = runner(api, "ana")
@@ -338,8 +339,8 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
 def test_a_decisions_note_is_left_out_for_a_reader_who_cannot_open_the_runs_conversation(api):
     """A person's direct message to the bot is theirs: another reader of the bot counts the held job and sees the
     decision, who and when, but never the decider's note, which may tell what the run was for."""
-    from backend.tests.test_api import expire
-    from backend.tests.test_run_view import DEV_563_NOTE, botops_decides
+    from backend.tests.helpers.api import expire
+    from backend.tests.helpers.run_view import DEV_563_NOTE, botops_decides
 
     board(api)
     machine = runner(api, "ana")

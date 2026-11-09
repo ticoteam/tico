@@ -12,8 +12,8 @@ from backend.finance.core import mirror as M
 from backend.finance.store import ledger as SL
 from backend.finance.core.errors import DENIED, INVALID
 from backend.finance.store import attribution as ATT
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-from backend.tests.test_finance_mirror import FakeBooks, _bank_row, _connection, _drain, _local, _mirror, acct
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_mirror import FakeBooks, _bank_row, _connection, _drain, _local, _mirror, acct
 
 EVE = "human:eve"  # a web teammate who has no attribution right
 COLLEAGUE_BOT = "bot:coder"

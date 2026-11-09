@@ -2,17 +2,10 @@
 
 import uuid
 
-import pytest
 
-from backend.tests.test_api import api, as_member, assign, get, post, restrict, runner  # noqa: F401
-
-
-@pytest.fixture
-def queued_login(monkeypatch):
-    """Exercise dormant queue support without enabling it in the built-in Codex manifest."""
-    from clients.harness_manifests import caps
-
-    monkeypatch.setitem(caps("codex"), "one_turn_per_login", True)
+from backend.tests.helpers.api import as_member, assign, get, post, restrict, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.shared_logins import queued_login
 
 
 def test_codex_bots_on_one_chatgpt_login_do_not_show_a_take_turns_warning(api):
@@ -96,7 +89,7 @@ def test_a_key_login_or_one_whose_kind_is_unknown_is_not_listed_as_shared(api, q
 def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_persons_chat_and_watches_last(tmp_path):
     from backend.execution import login_class
     from backend.store import H
-    from backend.tests.test_hubdb import ANA, CMO, EMPLOYEES, PEOPLE
+    from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, PEOPLE
 
     c = H.connect(tmp_path / "hub.db")
     H.sync_registry(c, EMPLOYEES, PEOPLE)
@@ -129,7 +122,7 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
 
 
 def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswered_and_not_held_for_review(api):
-    from backend.tests.test_api import claim, setup_attempt
+    from backend.tests.helpers.api import claim, setup_attempt
 
     r, origin, a = setup_attempt(api)
     # The lease names the turn's class: the runner yields only for a server that takes the turn back.
@@ -166,7 +159,7 @@ def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswe
 
 
 def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_cleanly(api, queued_login):
-    from backend.tests.test_api import claim, ready
+    from backend.tests.helpers.api import claim, ready
 
     r = runner(api)
     assign(api, r, "ops")
@@ -215,7 +208,7 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
 
 
 def test_a_person_stopping_a_turn_before_it_started_ends_it_unstarted(api):
-    from backend.tests.test_api import claim, ready
+    from backend.tests.helpers.api import claim, ready
 
     r = runner(api)
     assign(api, r, "ops")

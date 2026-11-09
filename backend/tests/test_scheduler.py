@@ -5,9 +5,11 @@ from unittest.mock import Mock
 import pytest
 
 from backend import routines
-from backend.tests.test_api import api, post  # noqa: F401
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
 from backend.scheduler import Scheduler
 from backend.store import H
+from backend.tests.helpers.scheduler import _wake_by_hand
 
 
 def test_failed_computer_retirement_records_failure_and_runs_the_remaining_cleanup(api, monkeypatch, caplog):
@@ -131,7 +133,7 @@ def test_due_reminder_deduplicates_across_scheduler_restart(api):
 @pytest.mark.slow
 def test_idle_claims_do_not_take_the_write_lock_and_never_starve_leases(api):
     import threading, time
-    from backend.tests.test_api import assign, headers, ready, runner
+    from backend.tests.helpers.api import assign, headers, ready, runner
 
     runners = []
     for bot in ("ops", "finance", "cpo"):
@@ -206,8 +208,8 @@ def test_completed_tasks_stay_done_after_scheduler_ticks_and_restarts(api, monke
 
 
 def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, monkeypatch):
-    from backend.tests.test_api import assign, claim, ready, runner
-    from backend.tests.test_member_bots import finish
+    from backend.tests.helpers.api import assign, claim, ready, runner
+    from backend.tests.helpers.member_bots import finish
 
     machine = runner(api)
     assign(api, machine, "ops")
@@ -274,7 +276,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
     from backend.models import Claim
     from backend.execution import bot_readiness, readiness_document
     from backend.statuses import PARKED
-    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner
 
     r = runner(api)
     for bot in ('ops', 'finance', 'cpo'):
@@ -358,21 +360,12 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
 
 def _ops_runner(api):
     from backend.auth import Identity
-    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner
 
     r = runner(api)
     assign(api, r, 'ops')
     ready(api, r, ['ops'])
     return Identity('runner:' + r['runner_id'], 'runner', runner_id=r['runner_id'])
-
-
-def _wake_by_hand(c, message_id, bot):
-    """H.say marks a keeper notice quiet, so it queues no job. This queues it as a notice that wakes the bot: the job
-    enqueue writes for a notice that is not quiet."""
-    c.execute(
-        "INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (message_id, message_id, bot, H.now())
-    )
-    return message_id
 
 
 def _carrier_job(c, message_id):

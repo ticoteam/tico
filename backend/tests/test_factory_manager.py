@@ -6,8 +6,9 @@ from datetime import datetime, timedelta, timezone
 from backend import hubdb as H
 from backend import factory_manager as FM
 from backend import pipeline_manager as PM
-from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_pipeline_manager import ANA, botops_roster, now, pipeline, stamp, step, ticket, visit
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.pipeline_manager import ANA, botops_roster, now, pipeline, stamp, step, ticket, visit
 
 FACTORY = "Product development"
 

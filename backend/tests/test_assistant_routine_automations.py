@@ -2,8 +2,8 @@
 (redesign_migration.adopt), so the owner lists it with its controls, a person who is not above the Assistant does not
 see it, and Run now creates a run. Same rules as every bot's routine (backend/automations.py may_change)."""
 
-from backend.tests.test_builtin_routines import COO, _ensure, _row, _write_assistant_routines  # noqa: F401  (helpers)
-from backend.tests.test_onboarding import TOKEN, as_person, environment, signed_in  # noqa: F401  (the fixture)
+from backend.tests.helpers.builtin_routines import COO, _ensure, _row, _write_assistant_routines  # noqa: F401  (helpers)
+from backend.tests.helpers.onboarding import TOKEN, as_person, environment, signed_in  # noqa: F401  (the fixture)
 
 SWEEP_TITLE = "Daily sweep of each person's queue"
 

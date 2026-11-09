@@ -65,7 +65,7 @@ def test_a_retired_assignment_hands_its_task_back_awake_but_waits_out_a_running_
     left for a later startup."""
     from backend.shared_bots import retire_assignments
     from backend.store import H
-    from backend.tests.test_api import post, runner
+    from backend.tests.helpers.api import post, runner
 
     machine = runner(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Assigned work", "body": "Keep going."})

@@ -6,7 +6,7 @@ import json
 from backend.task_delete import delete_tasks
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401  (the fixture)
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401  (the fixture)
 
 
 def test_delete_removes_imported_tickets_and_refuses_one_with_work_outside_the_list(api):

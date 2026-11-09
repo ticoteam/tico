@@ -2,8 +2,9 @@
 
 import json
 
-from backend.tests.test_api import api, get, runner  # noqa: F401
-from backend.tests.test_task_privacy_reads import traced
+from backend.tests.helpers.api import get, runner  # noqa: F401
+from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.task_privacy_reads import traced
 
 PER_COMPUTER = (
     "runner_harness_choices",
