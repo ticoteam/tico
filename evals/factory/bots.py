@@ -104,6 +104,7 @@ class Bot:
             "at": w.now(),
             "bot": self.slug,
             "news": refs.get("handoff") or refs.get("news") or refs.get("rule") or message.get("kind"),
+            "wake": refs.get("wake"),
             "task": task and task["id"],
             "kind": "noise",
             "stale": self.stale(task, message),
