@@ -1,8 +1,8 @@
 # One release check for one candidate, split across isolated native VMs that run side by side.
 # The VMs are RunsOn instances in Tico's own AWS account (dispatched runs only, never fork code).
 # TICO_CI_HOSTED=true runs them on GitHub-hosted runners instead (docs/releasing.md#tests-on-a-pr).
-# No PR/push tests, schedule or publication: the release window (train.yml), a hotfix (hotfix.yml) or a person dispatches
-# it for an exact commit and version, and release.yml and the release window find the run by its title.
+# No PR/push tests, schedule or publication: the release train (train.yml), a hotfix (hotfix.yml) or a person dispatches
+# it for an exact commit and version, and release.yml and the release train find the run by its title.
 # It builds the release once: the Linux runner and relay binaries and the three images for both architectures, pushed by
 # digest only. The gate tests those binaries and images, and release.yml publishes exactly them for the tag, so what
 # shipped is what was tested. The Mac binaries are built by release.yml after the tag (no gate part runs on a Mac, and a
@@ -51,7 +51,7 @@ concurrency:
 
 jobs:
   # The ceiling on full validations: at most 10 a UTC day, manual dispatches included, counted from GitHub before any
-  # RunsOn VM starts. A hard backstop: the automatic window already dispatches at most one full validation a day
+  # RunsOn VM starts. A hard backstop: the automatic train already dispatches at most one full validation a day
   # (scripts/release_increment.py full_within_day). Incremental runs are not counted; every job that starts a VM waits here.
   ceiling:
     runs-on: ubuntu-24.04

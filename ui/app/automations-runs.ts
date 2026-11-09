@@ -16,14 +16,6 @@ interface AuStepView {
   cost: unknown;
   outputs: Record<string, unknown>;
 }
-/** A step of an automation's flow, as automations-flow.js's auFind returns it: the fields the log reads. */
-interface AuFlowStep {
-  do?: unknown;
-  as?: unknown;
-  bot?: unknown;
-  rules?: Array<{ when?: unknown; match?: unknown; then?: unknown }>;
-  paths?: Array<{ name?: unknown }>;
-}
 
 const AU_RUNS_PAGE = 25;
 const AU_RUN_STATUS: Record<string, string> = {ok: 'Done', failed: 'Failed', skipped: 'Skipped', empty: 'Nothing found', waiting: 'Waiting', running: 'Running',
@@ -51,8 +43,8 @@ function auRunSteps(run: AuRunRow): AuStepView[] {
   return (run.steps || []).map(auStepView);
 }
 // The step with this id in an automation's flow (automations-flow.js auFind), or undefined.
-function auFlowStep(flow: unknown[], id: unknown): AuFlowStep | undefined {
-  const hit: { step?: AuFlowStep } | undefined = auFind(flow, id);
+function auFlowStep(flow: AuStep[], id: unknown): AuStep | undefined {
+  const hit: AuFindHit | null = auFind(flow, id);
   return hit?.step;
 }
 // automations-flow.js's word tables, read by any key: a key the table does not have reads as undefined, as it always did.

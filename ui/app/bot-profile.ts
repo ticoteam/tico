@@ -56,7 +56,7 @@ async function profileMount(rows: ParentNode | null | undefined, slug: string): 
 
 // One save for the editor and a branch: the bot's revision goes with it. Leaving Custom deletes the rules it copied;
 // the server answers 409 until that is confirmed, and the confirm says how many.
-async function profileSave(slug: string, body: Record<string, unknown>, revision: number): Promise<BpState | null> {
+async function profileSave(slug: string, body: Record<string, unknown>, revision: number | undefined): Promise<BpState | null> {
   try { return await post(`/v2/bots/${encodeURIComponent(slug)}/profile`, {...body, expected_revision: revision}); }
   catch (error) {
     if (errorStatus(error) !== 409 || errorCode(error) === 'version_conflict' || body.confirm_drop_rules) throw error;

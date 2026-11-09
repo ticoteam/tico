@@ -158,7 +158,12 @@ def suggestions_receiver(c):
         if state == 'active':
             return chosen, 'chosen'
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
-    for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
+    for template, states in (
+        ('product-manager', ('active', 'planned')),
+        ('product-lead', ('active',)),
+        ('product-team-manager', ('active',)),
+        ('segment-product-owner', ('active',)),
+    ):
         row = c.execute(
             f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
             f"WHERE s.template=? AND b.state IN (" + ','.join('?' * len(states)) + ") "

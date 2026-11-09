@@ -189,7 +189,7 @@ class Inbound:
         from .support import hq_url
 
         self.url = (os.environ.get('TICO_INBOUND_URL', '').strip() or hq_url()).rstrip('/')
-        self.off = settings.demo or settings.rehearsal or not self.key
+        self.off = settings.demo or settings.demo_build or settings.rehearsal or not self.key
         parsed = urlparse(self.url)
         if parsed.scheme != 'https' and parsed.hostname not in ('127.0.0.1', 'localhost', '::1'):
             self.off = True
