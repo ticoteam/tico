@@ -244,6 +244,16 @@ runner hears of it on its event stream and claims it, does one run (prompt = `AG
 your message and attachments), and streams the reply back. The thread shows *Saved — queued*,
 *Starting*, *Working*, then the reply. Closing the browser changes nothing.
 
+**While all bots are paused, no new turn starts.** A task with work waiting shows this label:
+
+*Saved — waiting: all bots are paused by <name>. Resume to start.*
+
+Tico also adds one comment to that task, once for each pause. The comment wakes no bot:
+
+*Held: all bots on <company> are paused by <name> since <time>. The owner or an admin can resume them; this task starts when they do.*
+
+The task stays in its column. When the pause is lifted, its queued work starts in queue order.
+
 **A routine fires.** The server (America/Los_Angeles unless the routine says otherwise) creates one
 task for the bot with the saved instructions and version. Missed occurrences coalesce; a task still
 open from the last occurrence absorbs the next one. The runner claims it like any task. Like any task
