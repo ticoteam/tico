@@ -8,7 +8,8 @@
 'use strict';
 
 interface OfPipeline { id: string; name: string; goal: string | null; manager_id: string | null; factory_id: string | null; cards: number; overdue: number; for_you: number; live: number; }
-interface OfFactory { id: string; name: string; goal: string | null; manager_id: string | null; done: number; overdue: number; live: number; }
+interface OfScoreboard { merges_per_hour: number; queued_to_merged_median_minutes: number | null; merged_to_production_median_minutes: number | null; queue_size: number; }
+interface OfFactory { id: string; name: string; goal: string | null; manager_id: string | null; done: number; overdue: number; live: number; scoreboard?: OfScoreboard; }
 interface OfEdge { from: string; to: string; mode: string; count: number; median_age_minutes: number | null; }
 /** A cycle of pipelines: laps completed round it, and the median lap in minutes (null under three laps). */
 interface OfLoop { pipelines: string[]; laps: number; median_lap_minutes: number | null; }
@@ -92,8 +93,22 @@ function ofHTML(map: OfMap): string {
   const names = new Map(map.pipelines.map(p => [p.id, p.name] as [string, string]));
   const live = ofGroups(map);
   const inputsFor = (id: string): OfInput[] => map.inputs.filter(i => i.to === id);
+  const scoreboard = (factory: OfFactory | undefined): string => {
+    if (!factory?.scoreboard) return '';
+    const s = factory.scoreboard;
+    const value = (minutes: number | null): string => minutes == null ? '—' : ofAge(minutes);
+    return `<section class="of-scoreboard" aria-label="Factory scoreboard">
+      <p class="of-scoreboard-window">Last 24 hours</p><dl class="of-scoreboard-grid">
+      <div><dt>Merges / hour</dt><dd class="tnum">${s.merges_per_hour.toFixed(2)}</dd></div>
+      <div><dt>Queued to merged median</dt><dd class="tnum">${value(s.queued_to_merged_median_minutes)}</dd></div>
+      <div><dt>Merged to production median</dt><dd class="tnum">${value(s.merged_to_production_median_minutes)}</dd></div>
+      <div><dt title="Cards currently at In QA or Review 2">Queue size</dt><dd class="tnum">${s.queue_size}</dd></div>
+    </dl></section>`;
+  };
+  const factoryById = new Map(map.factories.map(f => [f.id, f]));
   const box = (g: OfGroup, n: number): string => `<section class="of-factory" aria-label="${esc(g.name)}">
       <header><h2>${esc(g.name)}</h2><span class="of-sub">${g.sub}</span>${ofChatHTML('f:' + g.id, g.manager, g.name)}</header>
+      ${scoreboard(factoryById.get(g.id))}
       <div class="of-row">${g.pipelines.map(p => ofNodeHTML(p, inputsFor(p.id), map.edges.filter(e => e.from === p.id), names)).join('')}</div></section>${n < live.length - 1 ? '<div class="of-gap" aria-hidden="true"></div>' : ''}`;
   const inputs = map.inputs.map(i => `<span class="of-input" data-of-in="${esc(i.to)}"><span class="of-dot tnum">${i.count}</span><span class="of-in-l">${esc(i.label)}</span></span>`).join('');
   return `${inputs ? `<div class="of-inputs" aria-label="Where work comes in">${inputs}</div>` : ''}

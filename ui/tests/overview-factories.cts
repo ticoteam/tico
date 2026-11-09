@@ -14,7 +14,9 @@ const {html, isUiPath, serveUi} = require('./support/page.cts') as import('./sup
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 const map = {
-  factories: [{id: 'f1', name: 'Lead factory', goal: null, manager_id: 'bot:lead', done: 12, overdue: 2, live: 1}],
+  factories: [{id: 'f1', name: 'Lead factory', goal: null, manager_id: 'bot:lead', done: 12, overdue: 2, live: 1,
+    scoreboard: {merges_per_hour: 0.13, queued_to_merged_median_minutes: 180,
+      merged_to_production_median_minutes: 60, queue_size: 4}}],
   pipelines: [
     {id: 'camp', name: 'Campaigns', goal: null, manager_id: 'bot:lead', factory_id: 'f1', cards: 5, overdue: 2, for_you: 1, live: 1},
     {id: 'sales', name: 'Sales', goal: null, manager_id: 'sales', factory_id: 'f1', cards: 9, overdue: 0, for_you: 0, live: 0},
@@ -62,6 +64,9 @@ async function desktop(browser: import('playwright').Browser) {
   await page.locator('.of-node').first().waitFor();
   assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Factories');
   assert.deepEqual(await page.locator('.of-factory h2').allInnerTexts(), ['Lead factory', 'Other pipelines']);
+  assert.deepEqual(await page.locator('.of-scoreboard dt').allInnerTexts(),
+    ['Merges / hour', 'Queued to merged median', 'Merged to production median', 'Queue size (now)']);
+  assert.deepEqual(await page.locator('.of-scoreboard dd').allInnerTexts(), ['0.13', '3h', '1h', '4']);
   assert.deepEqual(await page.locator('.of-name').allInnerTexts(), ['Campaigns', 'Sales', 'Help desk']);
   assert.match(await page.locator('[data-of-pl=camp]').innerText(), /5 open.*2 Late.*1 running.*1 for you/s);
   assert.equal(await page.locator('.of-loop, .of-loops').count(), 0);

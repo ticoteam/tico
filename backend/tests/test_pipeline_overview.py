@@ -291,6 +291,100 @@ def test_a_factory_with_no_links_renders_cleanly(api):
     assert week["factories"][0]["done"] == 0
 
 
+def test_engineering_factory_scoreboard_uses_last_day_stage_and_merge_times(api):
+    factory = make_factory(api, "Engineering")
+    typ, steps = make_type(
+        api,
+        "Engineering",
+        [
+            {"name": "Building", "status": "doing"},
+            {"name": "In QA", "status": "review"},
+            {"name": "Watch 24h", "status": "review"},
+        ],
+        factory=factory,
+        role="engineering",
+    )
+    now = H.parse_ts(H.now())
+    assert now
+
+    def stamp(hours_ago: float) -> str:
+        return (now - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+    cards = [card(api, typ, steps["Building"]) for _ in range(3)]
+    # These three cards provide hand-checkable queue->merge times of 180, 360,
+    # and 30 minutes, and merge->production times of 120, 60, and 30 minutes.
+    for task, queued_h, merged_h, produced_h, number in zip(
+        cards,
+        (23, 17, 6),
+        (20, 11, 5.5),
+        (18, 10, 5),
+        (901, 902, 903),
+        strict=True,
+    ):
+        with api.app.state.store.transaction() as c:
+            H.history_event(
+                c,
+                "task",
+                task["id"],
+                "human:ana",
+                "step",
+                old=steps["Building"],
+                new=steps["In QA"],
+                created_at=stamp(queued_h),
+            )
+            H.history_event(
+                c,
+                "task",
+                task["id"],
+                "human:ana",
+                "step",
+                old=steps["In QA"],
+                new=steps["Watch 24h"],
+                created_at=stamp(produced_h),
+            )
+            c.execute("UPDATE tasks SET step_id=?, status='review' WHERE id=?", (steps["Watch 24h"], task["id"]))
+            c.execute(
+                "INSERT INTO task_links(id,task_id,kind,url,state,created_at,pr_merged_at) VALUES(?,?,?,?,?,?,?)",
+                (
+                    f"score-pr-{number}",
+                    task["id"],
+                    "pr",
+                    f"https://github.com/ticoteam/tico/pull/{number}",
+                    "merged",
+                    stamp(merged_h),
+                    stamp(merged_h),
+                ),
+            )
+    waiting = card(api, typ, steps["In QA"])
+    assert waiting["id"]
+
+    scoreboard = next(f for f in overview(api, "1d")["factories"] if f["id"] == factory)["scoreboard"]
+    assert scoreboard == {
+        "merges_per_hour": 0.13,
+        "queued_to_merged_median_minutes": 180,
+        "merged_to_production_median_minutes": 60,
+        "queue_size": 1,
+    }
+
+
+def test_engineering_factory_with_no_window_data_has_zero_and_empty_medians(api):
+    factory = make_factory(api, "Quiet engineering")
+    make_type(
+        api,
+        "Quiet engineering",
+        [{"name": "In QA", "status": "review"}, {"name": "Watch 24h", "status": "review"}],
+        factory=factory,
+        role="engineering",
+    )
+    scoreboard = next(f for f in overview(api)["factories"] if f["id"] == factory)["scoreboard"]
+    assert scoreboard == {
+        "merges_per_hour": 0.0,
+        "queued_to_merged_median_minutes": None,
+        "merged_to_production_median_minutes": None,
+        "queue_size": 0,
+    }
+
+
 def move(api, task, token="ana-test", **fields):
     """A real ticket update (POST /api/v2/tasks/{id}) with the version the ticket has now."""
     version = get(api, "tasks/" + task, token)["task"]["version"]

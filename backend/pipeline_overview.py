@@ -16,6 +16,7 @@ MAX_LABELS per factory, with the rest added up to "Other".
 
 from collections import defaultdict
 from datetime import timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from statistics import median
 from typing import TYPE_CHECKING, Any, cast
 
@@ -129,6 +130,7 @@ def _pipelines(c: "sqlite3.Connection", actor: str) -> list[Row]:
         "manager" if "manager" in have else "NULL AS manager",
         "manager_seat" if "manager_seat" in have else "NULL AS manager_seat",
         "pipeline_visibility" if "pipeline_visibility" in have else "'company' AS pipeline_visibility",
+        "role" if "role" in have else "NULL AS role",
     ]
     rows = _rows(c, f"SELECT {', '.join(pick)} FROM task_types WHERE id<>'general' ORDER BY created_at, id")
     shown = pipeline_rights.visible_pipeline_ids(c, actor, [r["id"] for r in rows])
@@ -476,6 +478,105 @@ def _inputs(c: "sqlite3.Connection", firsts: dict[str, str], seen: str, since: s
     return out
 
 
+def _factory_scoreboard(
+    c: "sqlite3.Connection", engineering: dict[str, list[str]], seen: str, since: str, now: str
+) -> dict[str, Row]:
+    """The Engineering factory's last-day throughput and current Review 2 queue.
+
+    The former In QA/Post Release QA steps were renamed Review 2/Watch 24h by the
+    2026-11-09 factory ruling. Keep the old names readable for boards that have not
+    yet adopted those names. Durations are cohort-based: queue-to-merge ends at a
+    merge in the window; merge-to-production ends at a production-stage entry in it.
+    """
+    result: dict[str, Row] = {
+        fid: {
+            "merges_per_hour": 0.0,
+            "queued_to_merged_median_minutes": None,
+            "merged_to_production_median_minutes": None,
+            "queue_size": 0,
+        }
+        for fid in engineering
+    }
+    if not engineering:
+        return result
+
+    queue_names = ("In QA", "Review 2")
+    production_names = ("Post Release QA", "Watch 24h")
+    factory_types = {pid: fid for fid, pids in engineering.items() for pid in pids}
+    ids = list(factory_types)
+    marks = _marks(ids)
+    stage_rows = _rows(c, f"SELECT id, type_id, name FROM task_steps WHERE type_id IN ({marks})", ids)
+    queue_steps = [str(s["id"]) for s in stage_rows if s["name"] in queue_names]
+    production_steps = [str(s["id"]) for s in stage_rows if s["name"] in production_names]
+
+    if queue_steps:
+        for row in _rows(
+            c,
+            f"SELECT type_id, COUNT(*) AS n FROM tasks WHERE ({seen}) AND type_id IN ({marks}) "
+            f"AND step_id IN ({_marks(queue_steps)}) AND status NOT IN ({_marks(FINISHED)}) GROUP BY type_id",
+            [*ids, *queue_steps, *FINISHED],
+        ):
+            fid = factory_types[str(row["type_id"])]
+            result[fid]["queue_size"] += int(row["n"] or 0)
+
+    queue_select = (
+        "(SELECT max(e.created_at) FROM history_events e WHERE e.subject_type='task' AND e.subject_id=l.task_id "
+        f"AND e.kind='step' AND e.created_at<=l.pr_merged_at AND e.new IN ({_marks(queue_steps)})) AS queued_at"
+        if queue_steps
+        else "NULL AS queued_at"
+    )
+    merged = _rows(
+        c,
+        f"SELECT l.task_id, t.type_id, l.pr_merged_at, {queue_select} FROM task_links l "
+        "JOIN tasks t ON t.id=l.task_id "
+        f"WHERE l.kind='pr' AND l.state IN ('merged','shipped') AND l.pr_merged_at>=? AND l.pr_merged_at<=? "
+        f"AND t.type_id IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE ({seen})) ORDER BY l.pr_merged_at",
+        [*queue_steps, since, now, *ids],
+    )
+    merge_durations: dict[str, list[float]] = defaultdict(list)
+    for row in merged:
+        fid = factory_types[str(row["type_id"])]
+        merged_at = H.parse_ts(row["pr_merged_at"])
+        if not merged_at:
+            continue
+        result[fid]["merges_per_hour"] += 1 / 24
+        queued_at = H.parse_ts(row["queued_at"]) if row["queued_at"] else None
+        if queued_at and queued_at <= merged_at:
+            merge_durations[fid].append(max(0.0, (merged_at - queued_at).total_seconds() / 60))
+
+    production_durations: dict[str, list[float]] = defaultdict(list)
+    if production_steps:
+        events = _rows(
+            c,
+            "SELECT e.subject_id, e.created_at, t.type_id, (SELECT max(l.pr_merged_at) FROM task_links l "
+            "WHERE l.task_id=e.subject_id AND l.kind='pr' AND l.state IN ('merged','shipped') "
+            "AND l.pr_merged_at<=e.created_at) AS merged_at FROM history_events e "
+            "JOIN tasks t ON t.id=e.subject_id "
+            f"WHERE e.subject_type='task' AND e.kind='step' AND e.created_at>=? AND e.created_at<=? "
+            f"AND e.new IN ({_marks(production_steps)}) AND t.type_id IN ({marks}) "
+            f"AND t.id IN (SELECT id FROM tasks WHERE ({seen}))",
+            [since, now, *production_steps, *ids],
+        )
+        for event in events:
+            produced_at = H.parse_ts(event["created_at"])
+            if not produced_at:
+                continue
+            prior_merge = H.parse_ts(event["merged_at"]) if event["merged_at"] else None
+            if prior_merge and prior_merge <= produced_at:
+                fid = factory_types[str(event["type_id"])]
+                production_durations[fid].append(max(0.0, (produced_at - prior_merge).total_seconds() / 60))
+
+    for fid, durations in merge_durations.items():
+        result[fid]["queued_to_merged_median_minutes"] = round(median(durations))
+    for fid, durations in production_durations.items():
+        result[fid]["merged_to_production_median_minutes"] = round(median(durations))
+    for metrics in result.values():
+        metrics["merges_per_hour"] = float(
+            Decimal(str(metrics["merges_per_hour"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        )
+    return result
+
+
 def read(
     c: "sqlite3.Connection", actor: str, period: str = "7d", visible_sql: str | None = None
 ) -> dict[str, list[Any]]:
@@ -570,6 +671,17 @@ def read(
         }
         for fid in factory_order
     ]
+    engineering: dict[str, list[str]] = defaultdict(list)
+    for pipeline in shown:
+        fid = str(pipeline["factory_id"] or "")
+        if fid and pipeline.get("role") == "engineering":
+            engineering[fid].append(str(pipeline["id"]))
+    scoreboard = _factory_scoreboard(
+        c, engineering, seen, _stamp(H.parse_ts(now) - timedelta(hours=24)), _stamp(H.parse_ts(now))
+    )
+    for factory in drawn:
+        if str(factory["id"]) in scoreboard:
+            factory["scoreboard"] = scoreboard[str(factory["id"])]
 
     edges = [
         {
