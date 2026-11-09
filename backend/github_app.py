@@ -1957,8 +1957,9 @@ def install_github_app(app, settings, store):
         if "text/html" in request.headers.get("accept", ""):
             sign_in = _sign_in_path(getattr(app.state, "auth", None))
             if sign_in:
-                # The sign-in comes back to this same return, which the owner's session then finishes.
-                back = CALLBACK_PATH + "?" + urlencode({"code": code, "state": state})
+                # The sign-in comes back to this same return with the state alone (the code stays parked, out of the
+                # sign-in's URLs), and the owner's session then finishes it from the parked code.
+                back = CALLBACK_PATH + "?" + urlencode({"state": state})
                 return RedirectResponse(sign_in + "?" + urlencode({"next": back}), status_code=302)
             return RedirectResponse("/#/tools/github?github=finish", status_code=302)
         return {"parked": True, "finish": FINISH_PATH}
@@ -1976,6 +1977,7 @@ def install_github_app(app, settings, store):
             return park(request, code, state)
         if time.time() - row["created_at"] > STATE_TTL or not secrets.compare_digest(row["nonce"], state):
             raise invalid_state()
+        code = code or row["code"] or ""  # back from the sign-in with the state alone: the code parked before it
         if not code:
             raise Problem("github_exchange", "GitHub did not send a setup code", 400)
         conversion = exchange_and_save(who.actor, row, code)

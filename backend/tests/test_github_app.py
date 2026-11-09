@@ -1818,5 +1818,10 @@ def test_a_browser_return_with_no_session_goes_to_the_owner_link_and_back_to_the
     target = urlparse(r.headers["location"])
     assert target.path == "/auth/owner-link"
     back = urlparse(parse_qs(target.query)["next"][0])
-    assert back.path == CALLBACK and parse_qs(back.query) == {"code": ["the-code"], "state": [state]}
+    assert back.path == CALLBACK and parse_qs(back.query) == {"state": [state]}  # the code stays parked, out of the URL
     assert parked_code(api, state) == ("the-code",)
+    # Signed in, the owner comes back with the state alone and the parked code finishes the setup.
+    done = api.get(CALLBACK, params={"state": state}, headers=auth(), follow_redirects=False)
+    assert done.status_code == 302, done.text
+    assert done.headers["location"].startswith("https://github.com/apps/acme-tico/installations/new?state=")
+    assert len(gh.of("/conversions")) == 1
