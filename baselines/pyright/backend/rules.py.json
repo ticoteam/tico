@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/rules.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 75,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 28,
+                    "endColumn": 34,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 36,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

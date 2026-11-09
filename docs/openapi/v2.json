@@ -17080,7 +17080,8 @@
                 "price_increases",
                 "unattributed",
                 "ad_spend",
-                "per_conversion"
+                "per_conversion",
+                "subscriptions_monthly"
               ],
               "type": "string",
               "title": "Name"
@@ -17679,6 +17680,117 @@
         ]
       }
     },
+    "/api/v2/finance/receipts": {
+      "get": {
+        "summary": "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+        "operationId": "listFinanceReceipts",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "unread",
+                    "suggested",
+                    "unmatched",
+                    "attached",
+                    "rejected"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceReceipts"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/recipients": {
       "get": {
         "summary": "Current payment recipients, last 4 only, for teammates who may pay",
@@ -17826,7 +17938,8 @@
                 "ap_aging",
                 "ar_aging",
                 "spend_by",
-                "campaigns"
+                "campaigns",
+                "subscriptions"
               ],
               "type": "string",
               "title": "Kind"
@@ -18104,7 +18217,8 @@
                     "estimate",
                     "account",
                     "vendor",
-                    "campaign"
+                    "campaign",
+                    "subscription"
                   ],
                   "type": "string"
                 },
@@ -18557,6 +18671,87 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceStatements"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/subscriptions": {
+      "get": {
+        "summary": "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the monthly total of the active ones. status narrows them",
+        "operationId": "listFinanceSubscriptions",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "suggested",
+                    "active",
+                    "ignored",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceSubscriptions"
                 }
               }
             }
@@ -59566,6 +59761,153 @@
         ],
         "additionalProperties": true
       },
+      "FinanceReceipts": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "read": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "vendor": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "date",
+                    "vendor"
+                  ],
+                  "additionalProperties": true
+                },
+                "match": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "feed": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        },
+                        "amount": {
+                          "type": "integer"
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "amount",
+                        "date",
+                        "description",
+                        "id"
+                      ],
+                      "additionalProperties": true
+                    },
+                    "confidence": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "confidence",
+                    "feed"
+                  ],
+                  "additionalProperties": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "as_of": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "as_of",
+                "file",
+                "id",
+                "match",
+                "read",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "next",
+          "rows"
+        ],
+        "additionalProperties": true
+      },
       "FinanceRecipients": {
         "type": "object",
         "properties": {
@@ -60074,6 +60416,128 @@
         },
         "required": [
           "statements"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSubscriptionRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cadence": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "monthly": {
+            "type": "integer"
+          },
+          "seats": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "next_charge_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "card": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "attribution": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string"
+                },
+                "share": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "share",
+                "to"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "attribution",
+          "cadence",
+          "card",
+          "id",
+          "monthly",
+          "next_charge_on",
+          "status",
+          "vendor"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSubscriptions": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinanceSubscriptionRow"
+            }
+          },
+          "monthly_total": {
+            "type": "integer"
+          },
+          "as_of": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "as_of",
+          "monthly_total",
+          "rows"
         ],
         "additionalProperties": true
       },
@@ -67374,6 +67838,19 @@
             ],
             "title": "Monthly Cap Usd"
           },
+          "rules_monthly_cap_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules Monthly Cap Usd"
+          },
           "steps": {
             "anyOf": [
               {
@@ -71959,10 +72436,14 @@
           },
           "github_connected": {
             "type": "boolean"
+          },
+          "github_installed": {
+            "type": "boolean"
           }
         },
         "required": [
           "github_connected",
+          "github_installed",
           "new_bot_default",
           "repositories"
         ],

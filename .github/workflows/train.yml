@@ -1,6 +1,6 @@
-# Tico's own release windows (docs/releasing.md#release-windows). Windows open at 07:30, 11:00, 14:00 and 20:30 Los
-# Angeles time on weekdays, and at 07:30 and 15:00 on weekends, and stay open until a vX.Y.Z release is published after
-# them.
+# Tico's own release windows (docs/releasing.md#release-windows). Windows open every hour on the hour, 07:00 to 21:00
+# Los Angeles time, every day (15 a day). A window releases only when main moved since the newest release and the
+# candidate is green; no new commit means no release.
 # Nothing is stored: each run works the window out from GitHub (scripts/release_train.py).
 #   - At the open (schedule), on a manual run and at the backstop: promote the canary's (Tico Team) release to stable
 #     (TIDY) once it is approved, not held and healthy (docs/releasing.md#approval).
@@ -28,17 +28,25 @@ run-name: >-
 
 on:
   schedule:
-    # Every UTC time a window starts at, under PDT or PST. A cron that is not a real window's start (the off-season
-    # twin of another) does what a push does; scripts/release_train.py decides which ones open a window.
-    - cron: '30 3 * * *'         # 20:30 PDT, the evening before
-    - cron: '30 4 * * *'         # 20:30 PST, the evening before
-    - cron: '30 14 * * *'        # 07:30 PDT
-    - cron: '30 15 * * *'        # 07:30 PST
-    - cron: '0 18 * * *'         # 11:00 PDT
-    - cron: '0 19 * * *'         # 11:00 PST
-    - cron: '0 21 * * *'         # 14:00 PDT
-    - cron: '0 22 * * *'         # 14:00 PST, and 15:00 PDT at weekends
-    - cron: '0 23 * * *'         # 15:00 PST at weekends
+    # Every UTC hour a window can start at, under PDT (UTC-7) or PST (UTC-8): 14 to 23 and 0 to 5. A cron that is
+    # not a real window's start (the off-season twin of another) does what a push does; scripts/release_train.py
+    # decides which ones open a window.
+    - cron: '0 14 * * *'
+    - cron: '0 15 * * *'
+    - cron: '0 16 * * *'
+    - cron: '0 17 * * *'
+    - cron: '0 18 * * *'
+    - cron: '0 19 * * *'
+    - cron: '0 20 * * *'
+    - cron: '0 21 * * *'
+    - cron: '0 22 * * *'
+    - cron: '0 23 * * *'
+    - cron: '0 0 * * *'
+    - cron: '0 1 * * *'
+    - cron: '0 2 * * *'
+    - cron: '0 3 * * *'
+    - cron: '0 4 * * *'
+    - cron: '0 5 * * *'
     - cron: '5-59/20 * * * *'    # backstop: a step in an open window if an event was missed; never opens one
   push:
     branches: [main]

@@ -28,7 +28,9 @@ from . import (
     handlers,
     jobs,
     mirror,
+    receipts,
     payments,
+    subscriptions,
 )
 from . import prepaids, purchasing, topups
 from . import posting
@@ -142,6 +144,8 @@ PLANNERS: dict[str, handlers.Planner] = {
     **topups.PLANNERS,
     **attribution.PLANNERS,
     **campaigns.PLANNERS,
+    **receipts.PLANNERS,
+    **subscriptions.PLANNERS,
     **vendors.PLANNERS,
 }
 assert set(PLANNERS) == set(K.LIVE)
@@ -958,6 +962,7 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 amortize_prepaids = jobs.amortize
 watch_documents = jobs.watch
+detect_subscriptions = subscriptions.detect  # the daily look (scheduler finance_tick)
 grant_defaults = rights.grant_defaults
 RIGHT_RULES = R.RULES  # the one right an install from before RIGHTS_VERSION 2 is granted (bookkeeper)
 
@@ -1083,7 +1088,7 @@ DEV_COPY_KEPT = (
     "fin_books",
     "fin_budget_versions",
     "fin_budgets",
-    "fin_contacts",
+    "fin_book_entities",
     "fin_dimensions",
     "fin_entries",
     "fin_events",
@@ -1109,7 +1114,6 @@ DEV_COPY_KEPT = (
     "fin_settlements",
     "fin_cash_rollups",
     "fin_credit_refunds",
-    "fin_vendor_aliases",
     "fin_vendor_labels",
     "fin_vendor_legacy",
     "fin_view_defaults",
@@ -1127,10 +1131,12 @@ DEV_COPY_KEPT = (
     "fin_invoice_reminders",
     "fin_ad_accounts",
     "fin_ad_campaigns",
+    "fin_receipts",
     "fin_ad_spends",
     "fin_ad_warnings",
     "fin_attributions",
     "fin_attribution_rules",
+    "fin_subscriptions",
 )
 # Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
 # inbox, cards and their authorizations, payees and payments, the ad spend imports) and spend holds. In the order they

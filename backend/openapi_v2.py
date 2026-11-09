@@ -5165,6 +5165,16 @@ STABLE.extend(
             "FinanceConnectionResult",
         ),
         (
+            "/api/v2/finance/subscriptions",
+            "get",
+            "Finance",
+            "listFinanceSubscriptions",
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each "
+            "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
+            "monthly total of the active ones. status narrows them",
+            "FinanceSubscriptions",
+        ),
+        (
             "/api/v2/finance/campaigns",
             "get",
             "Finance",
@@ -5172,6 +5182,15 @@ STABLE.extend(
             "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when "
             "it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
             "FinanceCampaigns",
+        ),
+        (
+            "/api/v2/finance/receipts",
+            "get",
+            "Finance",
+            "listFinanceReceipts",
+            "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and "
+            "its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+            "FinanceReceipts",
         ),
         (
             "/api/v2/finance/ad-accounts",
@@ -6322,6 +6341,40 @@ SCHEMAS.update(
             },
             required=["lines", "start", "end", "as_of", "view_version"],
         ),
+        "FinanceSubscriptionRow": obj(
+            {
+                "id": "s",
+                "vendor": obj({"id": "s", "name": "s"}),
+                "status": "s",
+                "cadence": "s",
+                "amount": "i",
+                "monthly": "i",
+                "seats": {"type": ["integer", "null"]},
+                "next_charge_on": "n",
+                "card": {
+                    "type": ["object", "null"],
+                    "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+                },
+                "attribution": items(obj({"to": "s", "share": "f"})),
+                "source": "s",
+                "as_of": "s",
+            },
+            required=[
+                "id",
+                "vendor",
+                "status",
+                "cadence",
+                "amount",
+                "monthly",
+                "next_charge_on",
+                "card",
+                "attribution",
+            ],
+        ),
+        "FinanceSubscriptions": obj(
+            {"rows": items(ref("FinanceSubscriptionRow")), "monthly_total": "i", "as_of": "s"},
+            required=["rows", "monthly_total", "as_of"],
+        ),
         "FinanceCampaigns": obj(
             {
                 "month": "s",
@@ -6356,6 +6409,39 @@ SCHEMAS.update(
                 "as_of": "s",
             },
             required=["month", "campaigns", "totals", "as_of"],
+        ),
+        "FinanceReceipts": obj(
+            {
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "file": obj({"id": "s", "name": "s"}),
+                            "read": obj(
+                                {
+                                    "amount": {"type": ["integer", "null"]},
+                                    "date": {"type": ["string", "null"]},
+                                    "vendor": {**obj({"id": "s", "name": "s"}), "type": ["object", "null"]},
+                                }
+                            ),
+                            "match": {
+                                **obj(
+                                    {
+                                        "feed": obj({"id": "s", "date": "s", "amount": "i", "description": "s"}),
+                                        "confidence": {"type": ["number", "null"]},
+                                    }
+                                ),
+                                "type": ["object", "null"],
+                            },
+                            "status": "s",
+                            "as_of": "s",
+                        }
+                    )
+                ),
+                "next": {"type": ["string", "null"]},
+                "as_of": "s",
+            },
+            required=["rows", "next", "as_of"],
         ),
         "FinanceMetric": obj(
             {
@@ -6895,6 +6981,7 @@ SCHEMAS.update(
                 "repositories": items(ref("Repository")),
                 "new_bot_default": {"enum": ["own", "all"]},
                 "github_connected": "b",
+                "github_installed": "b",
             }
         ),
         # The workflow options are present only when on; a request's access defaults to write.

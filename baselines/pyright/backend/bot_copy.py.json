@@ -1,0 +1,94 @@
+{
+    "files": {
+        "./backend/bot_copy.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 44,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 75,
+                    "endColumn": 88,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 50,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 55,
+                    "endColumn": 68,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 85,
+                    "endColumn": 108,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 44,
+                    "endColumn": 67,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 51,
+                    "endColumn": 69,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 37,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 28,
+                    "endColumn": 46,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 42,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 33,
+                    "endColumn": 51,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -30,12 +30,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import baseline_merge  # scripts/ is on sys.path when this runs as a script; the layout check uses its renderer
+import pyright_baseline  # scripts/ is on sys.path when this runs as a script; the baseline is read through it
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = "pyrightconfig.json"
 LEGACY = "scripts/pyright-legacy-modules.txt"
-BASELINE = ".basedpyright/baseline.json"
 DIRECTIVE_LINES = 10
 MIGRATIONS = "backend/migrations/"  # run-once scripts: checked at standard level, never forced strict
 DIRECTIVE = re.compile(r"^\s*#\s*pyright\s*:\s*(.*?)\s*$")
@@ -95,13 +94,6 @@ def read_list(text):
     return [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
 
-def baseline_counts(text):
-    counts = collections.Counter()
-    for path, entries in json.loads(text).get("files", {}).items():
-        counts[path[2:] if path.startswith("./") else path] += len(entries)
-    return counts
-
-
 def new_module_problems(path, text):
     directives = list(pyright_directives(text))
     if not any(number <= DIRECTIVE_LINES and directive == "strict" for number, directive in directives):
@@ -119,9 +111,9 @@ def new_module_problems(path, text):
 
 def growth(ref, config, legacy):
     """Problems versus git ref `ref`. Skipped while the ref has no baseline (the first PR that adds one)."""
-    old_baseline = git_show(ref, BASELINE)
-    if old_baseline is None:
-        print(f"pyright ratchet: {ref} has no {BASELINE} yet; growth checks skipped")
+    old_files = pyright_baseline.layout_at(ref)  # either layout: the single file of before the split, or the pieces
+    if old_files is None:
+        print(f"pyright ratchet: {ref} has no type baseline yet; growth checks skipped")
         return []
     renames = {}  # old path -> new path, for each file git sees as renamed since ref
     for line in git("diff", "--name-status", "-M", ref).stdout.splitlines():
@@ -130,15 +122,16 @@ def growth(ref, config, legacy):
             renames[fields[1]] = fields[2]
     problems = []
     old_counts = collections.Counter()
-    for path, count in baseline_counts(old_baseline).items():
-        old_counts[renames.get(path, path)] += count
-    current = (ROOT / BASELINE).read_text(encoding="utf-8") if (ROOT / BASELINE).exists() else '{"files": {}}'
-    for path, count in sorted(baseline_counts(current).items()):
+    for key, entries in old_files.items():
+        path = pyright_baseline.rel_of(key)
+        old_counts[renames.get(path, path)] += len(entries)
+    for key, entries in sorted(pyright_baseline.load_layout().items()):
+        path = pyright_baseline.rel_of(key)
         if not (ROOT / path).exists():
             continue  # a key for a deleted or renamed file: basedpyright's lock mode already fails on it
-        if count > old_counts.get(path, 0):
+        if len(entries) > old_counts.get(path, 0):
             problems.append(
-                f"baseline grew: {path} has {count} entries, {ref} had {old_counts.get(path, 0)}; "
+                f"baseline grew: {path} has {len(entries)} entries, {ref} had {old_counts.get(path, 0)}; "
                 "fix the error instead of baselining it"
             )
     old_legacy = git_show(ref, LEGACY)
@@ -177,21 +170,8 @@ def init(config, found):
     return 0
 
 
-def layout_problems():
-    """The baseline must be in the one layout scripts/baseline_merge.py writes; its merge driver depends on it."""
-    path = ROOT / BASELINE
-    if not path.exists():
-        return []
-    text = path.read_text(encoding="utf-8")
-    if text != baseline_merge.render_pyright(baseline_merge.parse_pyright(text)):
-        return [
-            f"{BASELINE} is not in the layout scripts/baseline_merge.py writes; run scripts/check_types.sh --writebaseline"
-        ]
-    return []
-
-
 def check(config, found, base):
-    problems = layout_problems()
+    problems = pyright_baseline.layout_problems()
     legacy_text = (ROOT / LEGACY).read_text(encoding="utf-8") if (ROOT / LEGACY).exists() else None
     if legacy_text is None:
         return [f"missing {LEGACY}; create it once with `python3 scripts/check_pyright_ratchet.py --init`"]

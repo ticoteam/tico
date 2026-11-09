@@ -104,7 +104,8 @@ function finPnlPage() {
     ${filters}` + finSplit(view === 'expenses'
       // The org-chart picker: a column beside the table on a wide screen, "+ Filter" on a phone (finance.css).
       ? `<div class="fin-exp"><div class="fin-tree fin-tree-col" id="fin-tree-col" role="group" aria-label="Filter"></div><div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div></div>`
-      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown');
+      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown')
+    + '<section class="fin-subs" id="fin-subs" aria-label="Subscriptions" hidden></section>';
   const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
   body.onclick = ev => finPnlClick(ev);
   body.ondblclick = ev => { const td = eventElement(ev)?.closest<HTMLElement>('td[data-fin-budget]'); if (td) finPnlEdit(td); };
@@ -127,6 +128,7 @@ function finPnlPage() {
   });
   if (view === 'expenses') finFiltersDraw();
   void finPnlLoad();
+  void finSubsLoad();
 }
 function finPnlClick(ev: Event) {
   const p = FIN_PNL, t = eventElement(ev);
@@ -463,7 +465,7 @@ function finImportedCols(data: FinPnlData, cols: FinPnlCol[]) {
   });
 }
 // A closed month's snapshot (a window inside one closed month) and how many restatements it has taken since.
-function finMarksDraw(box: HTMLElement | null, data: FinPnlData | null) {
+function finMarksDraw(box: HTMLElement | null, data: FinPnlData | FinBsData | null) {
   if (!box) return;
   const snap = data?.snapshot;
   box.innerHTML = snap ? `<span class="pill ok">Closed</span>${snap.restatements ? `<span class="pill waiting" title="${esc(snap.month)}">Restated · ${snap.restatements}</span>` : ''}` : '';
