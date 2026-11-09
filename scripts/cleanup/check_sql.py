@@ -17,9 +17,14 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DIRS = ("backend", "clients", "scripts", "e2e", "runner")
-SKIP = ("backend/migrations/", "backend/tests/fixtures/", "scripts/cleanup/", "backend/tests/test_schema_renames.py",
-        "backend/tests/test_hubdb_upgrade")
+DIRS = ("backend", "clients", "scripts", "e2e", "runner_support")
+SKIP = (
+    "backend/migrations/",
+    "backend/tests/fixtures/",
+    "scripts/cleanup/",
+    "backend/tests/test_schema_renames.py",
+    "backend/tests/test_hubdb_upgrade",
+)
 DML = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|WITH|REPLACE)\b", re.I)
 MISSING = re.compile(r"no such column|has no column named", re.I)
 FIELDS = ("?", "", "1", "1=1")
@@ -29,6 +34,7 @@ def fresh_database(path):
     sys.path.insert(0, str(ROOT))
     from backend.config import Settings
     from backend.store import Store
+
     Store(Settings(db_path=path)).initialize()
 
 
@@ -70,7 +76,7 @@ def verdict(conn, node):
         try:
             conn.execute("EXPLAIN " + text)
             return "ok", None
-        except sqlite3.ProgrammingError:       # it compiled; the bindings are what is missing
+        except sqlite3.ProgrammingError:  # it compiled; the bindings are what is missing
             return "ok", None
         except (sqlite3.OperationalError, sqlite3.Warning, ValueError) as e:
             if MISSING.search(str(e)):
@@ -87,7 +93,9 @@ def main():
         fresh_database(path)
         conn = sqlite3.connect(path)
         counts = {"ok": 0, "missing": 0, "unchecked": 0}
-        files = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True, check=False).stdout.split()
+        files = subprocess.run(
+            ["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True, check=False
+        ).stdout.split()
         for rel in files:
             if not rel.startswith(DIRS) or rel.startswith(SKIP):
                 continue
@@ -103,8 +111,10 @@ def main():
                 elif result == "unchecked" and args.list_unchecked:
                     print(f"unchecked {rel}:{lineno}: {text_of(node, '?')[:120]!r}")
         conn.close()
-    print(f"{counts['ok']} statements compile, {counts['missing']} name a missing column, "
-          f"{counts['unchecked']} could not be checked")
+    print(
+        f"{counts['ok']} statements compile, {counts['missing']} name a missing column, "
+        f"{counts['unchecked']} could not be checked"
+    )
     return 1 if counts["missing"] else 0
 
 

@@ -1,4 +1,5 @@
 """Team repositories and bot grants shared by local and cloud migrations."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS repositories(
  id TEXT PRIMARY KEY, full_name TEXT UNIQUE COLLATE NOCASE,

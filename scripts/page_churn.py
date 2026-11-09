@@ -8,6 +8,7 @@ Take each copy after a checkpoint (or with the server stopped), then compare:
 
 The guard test (backend/tests/test_start_page_churn.py) and scripts/litestream_restart_check.py use these functions.
 """
+
 import hashlib
 import os
 import sqlite3
@@ -61,17 +62,36 @@ def fill_synthetic(path, messages=15000, events=5000):
         db.executemany(
             "INSERT INTO conversations(id,kind,subject,task_id,participants,created_at,last_message_at,scope) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            [(f"conv-{i:06d}", "chat", "Synthetic " + text(24), None, '["human:owen"]', stamp(i), stamp(i), "direct")
-             for i in range(conversations)])
+            [
+                (f"conv-{i:06d}", "chat", "Synthetic " + text(24), None, '["human:owen"]', stamp(i), stamp(i), "direct")
+                for i in range(conversations)
+            ],
+        )
         db.executemany(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,public) "
             "VALUES(?,?,?,?,?,?,?,?,?)",
-            [(f"msg-{i:08d}", f"conv-{i % conversations:06d}", "human:owen", "human:owen", "chat", text(1200), "{}",
-              stamp(i), 0) for i in range(messages)])
+            [
+                (
+                    f"msg-{i:08d}",
+                    f"conv-{i % conversations:06d}",
+                    "human:owen",
+                    "human:owen",
+                    "chat",
+                    text(1200),
+                    "{}",
+                    stamp(i),
+                    0,
+                )
+                for i in range(messages)
+            ],
+        )
         db.executemany(
             "INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)",
-            [(f"evt-{i:08d}", stamp(i), "human:owen", "synthetic.row", f"msg-{i:08d}", '{"n": "' + text(200) + '"}')
-             for i in range(events)])
+            [
+                (f"evt-{i:08d}", stamp(i), "human:owen", "synthetic.row", f"msg-{i:08d}", '{"n": "' + text(200) + '"}')
+                for i in range(events)
+            ],
+        )
 
 
 def main(argv=None):

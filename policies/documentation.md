@@ -56,7 +56,7 @@ wiki.
 External documentation is customer-, partner-, candidate-, or public-facing content, including
 documentation that ships from a product repository such as `acme/website`.
 
-A bot may research, edit, validate, merge and deploy external documentation within the requested work and its Tools. Public content stays a draft until `outbound_send` is on. Verify the current head, docs-only scope and required checks, and use GitHub's matching-head merge guard without bypassing branch protection. Recheck a changed head. Do not make unrelated changes.
+A bot may research, edit, validate, merge and deploy external documentation within the requested work and its Tools. Public content stays a draft until the bot's sending policy in Tico lets it send (`shared-rules.md`, Outbound sends). Verify the current head, docs-only scope and required checks, and use GitHub's matching-head merge guard without bypassing branch protection. Recheck a changed head. Do not make unrelated changes.
 
 Before opening a pull request, list the target repository's open pull requests and look for an
 existing compatible documentation-update pull request. If one exists, add the new documentation

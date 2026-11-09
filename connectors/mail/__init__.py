@@ -10,14 +10,14 @@ from pathlib import Path
 
 try:
     from zoneinfo import ZoneInfo
-except ImportError:                                     # pragma: no cover - py<3.9
+except ImportError:  # pragma: no cover - py<3.9
     ZoneInfo = None
 try:
     import yaml
-except ImportError:                                     # pragma: no cover
+except ImportError:  # pragma: no cover
     yaml = None
 
-HUB = Path(__file__).resolve().parents[2]               # .../tico
+HUB = Path(__file__).resolve().parents[2]  # .../tico
 
 
 def locations(env=None, hub=HUB):
@@ -29,7 +29,7 @@ def locations(env=None, hub=HUB):
     return projects, runtime
 
 
-PROJECTS, RUNTIME = locations()                         # .../tico-work, .../runtime/mail
+PROJECTS, RUNTIME = locations()  # .../tico-work, .../runtime/mail
 DB_PATH = RUNTIME / "mail.db"
 AUDIT_PATH = RUNTIME / "audit.jsonl"
 # An environment keeps its own registry; TICO_REGISTRY_DIR names it (backend/config.py does the same).
@@ -37,15 +37,16 @@ REGISTRY = Path(os.environ.get("TICO_REGISTRY_DIR") or HUB / "registry")
 RULES_FILE = REGISTRY / "mail-rules.yaml"
 DEFAULT_KEY = PROJECTS / "secrets" / "google-sa.json"
 DEFAULT_TZ = "America/Los_Angeles"
-MAX_BODY = 32 * 1024                                    # characters, per docs/mail-service.md
+MAX_BODY = 32 * 1024  # characters, per docs/mail-service.md
 TRUNCATED = "\n\n[... truncated at %d characters ...]" % MAX_BODY
 INTERNAL_DOMAIN = "acme.example"
 
-JSON_ERRORS = False                                     # set by --json
+JSON_ERRORS = False  # set by --json
 
 
 class Failure(Exception):
     """Something went wrong (missing key, network, Google said no). Exit 1."""
+
     def __init__(self, msg, hint="", status=None):
         super().__init__(msg)
         self.msg, self.hint, self.status = msg, hint, status
@@ -68,6 +69,7 @@ def report(e, kind):
 # The connectors run on their own, so this repeats clients/manifest.py: bot.yaml (older employee.yaml), the manifest's
 # `tools:` (older `access:`), the folder bot-<slug> (older emp-<slug>) and HUB_BOT (older HUB_EMPLOYEE).
 
+
 def repo_dir(projects, slug):
     """The bot's folder under the projects directory: for this run's own bot the folder the runner names (HUB_BOT_FOLDER:
     a bot made with a UUID id is not in bot-<id>, and a rename keeps its folder), else bot-<slug> if it exists, else
@@ -86,7 +88,7 @@ def bot_folders(projects):
     found = {}
     for prefix in ("emp-", "bot-"):
         for d in Path(projects).glob(prefix + "*"):
-            found[d.name[len(prefix):]] = d
+            found[d.name[len(prefix) :]] = d
     return sorted(found.items())
 
 
@@ -112,10 +114,10 @@ def hub_bot(env=None):
 
 # ---------------------------------------------------------------- yaml
 
+
 def load_yaml(path, what):
-    if yaml is None:                                    # pragma: no cover
-        raise Failure("PyYAML is missing",
-                      "scripts/mail.sh builds a venv with it: run the command through that.")
+    if yaml is None:  # pragma: no cover
+        raise Failure("PyYAML is missing", "scripts/mail.sh builds a venv with it: run the command through that.")
     p = Path(path)
     if not p.exists():
         raise Refused(f"{what} not found at {p}")
@@ -128,14 +130,26 @@ def load_yaml(path, what):
 # ---------------------------------------------------------------- time (pure)
 
 REL_RE = re.compile(r"^(\d+)\s*(m|min|mins|minutes|h|hr|hrs|hours|d|day|days|w|week|weeks)$")
-REL_UNITS = {"m": 60, "min": 60, "mins": 60, "minutes": 60,
-             "h": 3600, "hr": 3600, "hrs": 3600, "hours": 3600,
-             "d": 86400, "day": 86400, "days": 86400,
-             "w": 604800, "week": 604800, "weeks": 604800}
+REL_UNITS = {
+    "m": 60,
+    "min": 60,
+    "mins": 60,
+    "minutes": 60,
+    "h": 3600,
+    "hr": 3600,
+    "hrs": 3600,
+    "hours": 3600,
+    "d": 86400,
+    "day": 86400,
+    "days": 86400,
+    "w": 604800,
+    "week": 604800,
+    "weeks": 604800,
+}
 
 
 def zone(name=DEFAULT_TZ):
-    if ZoneInfo is None:                                # pragma: no cover
+    if ZoneInfo is None:  # pragma: no cover
         return timezone.utc
     try:
         return ZoneInfo(name or DEFAULT_TZ)
@@ -168,9 +182,11 @@ def parse_since(text, now=None, tz_name=DEFAULT_TZ):
     try:
         dt = datetime.fromisoformat(str(text).strip().replace("Z", "+00:00"))
     except ValueError:
-        raise Failure(f"cannot read time {text!r}",
-                      "Use an ISO date/time (2026-09-01, 2026-09-01T09:00), a relative window "
-                      "(24h, 7d), 'today', or 'yesterday'.")
+        raise Failure(
+            f"cannot read time {text!r}",
+            "Use an ISO date/time (2026-09-01, 2026-09-01T09:00), a relative window "
+            "(24h, 7d), 'today', or 'yesterday'.",
+        )
     return dt.replace(tzinfo=tz) if dt.tzinfo is None else dt.astimezone(tz)
 
 
@@ -183,6 +199,7 @@ def stamp(dt=None):
 
 
 # ---------------------------------------------------------------- owner
+
 
 def owner_handle():
     """The owner's roster handle: the identity that holds every verb (`--as <handle>`).
@@ -197,15 +214,21 @@ def owner_handle():
     email = (os.environ.get("TICO_OWNER_EMAIL") or "").strip().lower()
     try:
         if not email:
-            email = str((yaml.safe_load((REGISTRY / "hub-access.yaml").read_text()) or {}).get("owner")
-                        or "").strip().lower()
+            email = (
+                str((yaml.safe_load((REGISTRY / "hub-access.yaml").read_text()) or {}).get("owner") or "")
+                .strip()
+                .lower()
+            )
         if email:
             people = (yaml.safe_load((REGISTRY / "people.yaml").read_text()) or {}).get("people") or []
             for person in people:
-                if isinstance(person, dict) and str(person.get("email") or "").strip().lower() == email \
-                        and person.get("id"):
+                if (
+                    isinstance(person, dict)
+                    and str(person.get("email") or "").strip().lower() == email
+                    and person.get("id")
+                ):
                     return str(person["id"]).strip().lower()
             return email.split("@")[0]
-    except Exception:                                   # missing files or PyYAML: fall through
+    except Exception:  # missing files or PyYAML: fall through
         pass
     return "owner"

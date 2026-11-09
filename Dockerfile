@@ -45,6 +45,17 @@ RUN fetch-tool litestream /out
 FROM download AS node
 RUN fetch-tool node /opt/node
 
+# The UI's TypeScript files compiled to JavaScript (scripts/build-ui.cjs, backend/ui_build.py). The server image has
+# no Node, so only build/ui goes on from here. npm ci installs the lock's pinned esbuild and runs no package scripts.
+FROM node AS ui-build
+ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY scripts/build-ui.cjs scripts/
+COPY ui ui
+RUN node scripts/build-ui.cjs
+
 FROM download AS gh
 RUN fetch-tool gh /out
 
@@ -88,6 +99,7 @@ ARG TICO_COMMIT
 ARG TICO_REPOSITORY
 WORKDIR /opt/tico
 COPY . /opt/tico
+COPY --from=ui-build /src/build/ui /opt/tico/build/ui
 # Deployed task completion needs the source commit, not just the version label.
 RUN python - <<'PY'
 import json
@@ -110,8 +122,9 @@ PY
 RUN chmod -R go-w,go+rX /opt/tico
 # The venv is only mounted here, so this stage's /opt/tico holds the source alone.
 RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
-    .venv/bin/python -c 'import backend.app, runner.connectors, runner.close_calls, runner.importers.service, clients.environments, yaml; yaml.CSafeLoader' \
-    && .venv/bin/python -m compileall -q backend runner clients
+    .venv/bin/python -c 'import backend.app, runner_support.connectors, runner_support.close_calls, runner_support.importers.service, runner.engine, clients.environments, yaml; yaml.CSafeLoader' \
+    && .venv/bin/python -m backend.ui_build --check \
+    && .venv/bin/python -m compileall -q backend runner_support runner clients
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
@@ -121,9 +134,9 @@ ARG TICO_VERSION=dev
 WORKDIR /src/runner-rs
 COPY runner-rs/Cargo.toml runner-rs/Cargo.lock runner-rs/build.rs ./
 COPY runner-rs/src ./src
-# The harness manifests are compiled in (harness_tools.rs BUILT_IN), from ../runner/harnesses, and are part of
-# the source fingerprint (build.rs, `tico-runner --build-id`).
-COPY runner/harnesses /src/runner/harnesses
+# The harness manifests are compiled in (harness_tools.rs BUILT_IN) and are part of the source fingerprint
+# (build.rs, `tico-runner --build-id`).
+COPY runner-rs/harnesses ./harnesses
 COPY LICENSE /src/LICENSE
 RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner \
     && { [ "$TICO_VERSION" = dev ] || [ "$(/out/tico-runner --release)" = "${TICO_VERSION#v}" ]; }
@@ -164,7 +177,7 @@ RUN ln -s /opt/node/bin/node /opt/node/bin/npm /opt/node/bin/npx /usr/local/bin/
 COPY docker/runner-entrypoint.sh /usr/local/bin/tico-runner-entrypoint
 COPY docker/gitconfig /etc/gitconfig
 COPY docker/profile-turn.sh /etc/profile.d/tico-turn.sh
-# Two users share /home/runner (SECURITY.md, runner/isolation.py). The supervisor stays `ticorun` (10002,
+# Two users share /home/runner (SECURITY.md, runner_support/isolation.py). The supervisor stays `ticorun` (10002,
 # what every earlier image ran as, so runner.json, state-* and tools/ keep their owner and an older image
 # can still start on the volume). Every process that runs bot code is `bot` (10003), in the same group so
 # the workspace and model logins work for both, but with no access to the supervisor's 0600/0700 files.

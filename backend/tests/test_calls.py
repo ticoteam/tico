@@ -1,12 +1,22 @@
 """Tico Meet calls: synthetic speech becomes a transcript and a bot reply in the thread, and access to a call follows the
 thread. LiveKit and the Gateway are fakes here, and every name is synthetic (Acme, acme.example)."""
+
 import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import (audit_log, call_items, call_media, calls, events, gateway_connection, live_privacy,
-                     teammate_access, threads)
+from backend import (
+    audit_log,
+    call_items,
+    call_media,
+    calls,
+    events,
+    gateway_connection,
+    live_privacy,
+    teammate_access,
+    threads,
+)
 from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401
@@ -21,11 +31,12 @@ SYNTHETIC_SPEECH = "The rollout needs a reliability review"
 
 class FakeMedia:
     """A stand-in for LiveKit: rooms are sets of identities, and the recorder is a callback the test feeds."""
+
     url = "wss://meet.acme.example"
 
     def __init__(self):
         self.rooms, self.removed, self.recorders, self.ended = {}, [], {}, []
-        self.down = False            # LiveKit unreachable: every call to it is refused until the test clears this
+        self.down = False  # LiveKit unreachable: every call to it is refused until the test clears this
 
     def _reachable(self):
         if self.down:
@@ -63,11 +74,16 @@ class FakeMedia:
 def meet(live, monkeypatch):
     live.app.state.call_media = FakeMedia()
     monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio: SYNTHETIC_SPEECH)
-    monkeypatch.setattr(gateway_connection, "target",
-                        lambda c, vault, settings=None: ("synthetic-gateway-key", "https://gateway.acme.example/v1", "x"))
+    monkeypatch.setattr(
+        gateway_connection,
+        "target",
+        lambda c, vault, settings=None: ("synthetic-gateway-key", "https://gateway.acme.example/v1", "x"),
+    )
     live.app.state.live_meeting_decider = lambda state, questions, label: {
-        "model": "synthetic-decider", "ms": 1,
-        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+        "model": "synthetic-decider",
+        "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions},
+    }
     return live
 
 
@@ -115,8 +131,12 @@ def join(api, call_id, token="ana-test"):
 
 def private_lanes_ready(api, machine, bot):
     """A current runner that takes a private meeting's turns: a call is a private meeting (execution.PRIVATE_LANES)."""
-    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                "capabilities": ["private_lanes_v1"], "readiness": {bot: True}}, token=machine["token"])
+    return post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "test", "capabilities": ["private_lanes_v1"], "readiness": {bot: True}},
+        token=machine["token"],
+    )
 
 
 def bot_reply_by_run(api, bot, text):
@@ -126,8 +146,12 @@ def bot_reply_by_run(api, bot, text):
     private_lanes_ready(api, machine, bot)
     attempt = post(api, "jobs/claim", {"bot": bot}, token=machine["token"])["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-call-turn"}, token=machine["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": text, "last_seq": 0},
-         token=machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": text, "last_seq": 0},
+        token=machine["token"],
+    )
     return attempt
 
 
@@ -149,8 +173,10 @@ def test_synthetic_speech_becomes_a_transcript_and_a_bot_reply_in_the_thread(mee
     meet.app.state.calls.drain(call_id)
     settle(meet)
     with meet.app.state.store.read() as c:
-        transcript = [row["text"] for row in c.execute(
-            "SELECT text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (meeting_id,))]
+        transcript = [
+            row["text"]
+            for row in c.execute("SELECT text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (meeting_id,))
+        ]
     assert transcript == [SYNTHETIC_SPEECH] * 4
 
     bot_reply_by_run(meet, "ops", "Ops can take the review.")
@@ -164,7 +190,8 @@ def test_synthetic_speech_becomes_a_transcript_and_a_bot_reply_in_the_thread(mee
 
 
 def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_and_the_action_items(
-        meet, live_media, fake_rtc, monkeypatch):
+    meet, live_media, fake_rtc, monkeypatch
+):
     cid = thread(meet)
     call = start_call(meet, cid)
     call_id, meeting_id = call["id"], call["meeting_id"]
@@ -173,16 +200,26 @@ def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_
     join(meet, call_id, "ana-test")
     join(meet, call_id, "ben-test")
     post(meet, f"calls/{call_id}/bots", {"bots": ["ops"]}, token="ana-test")
-    fake_rtc.hear(live_media.loop, recorder, "human:ana", [PCM_ONE_SECOND] * 32)     # four 8-second clips
+    fake_rtc.hear(live_media.loop, recorder, "human:ana", [PCM_ONE_SECOND] * 32)  # four 8-second clips
     wait_until(lambda: len(_chunks(meet, meeting_id)) == 4)
     settle(meet)
     assert _chunks(meet, meeting_id) == [SYNTHETIC_SPEECH] * 4
 
     bot_reply_by_run(meet, "ops", "Ops can take the review.")
 
-    monkeypatch.setattr(gateway, "relay", lambda method, url, body=None, headers=None, timeout=None: (200, drafted([
-        {"title": "Schedule the reliability review with Ops", "quote": SYNTHETIC_SPEECH},
-        {"title": "Invented task", "quote": "Nobody said this on the call"}])))
+    monkeypatch.setattr(
+        gateway,
+        "relay",
+        lambda method, url, body=None, headers=None, timeout=None: (
+            200,
+            drafted(
+                [
+                    {"title": "Schedule the reliability review with Ops", "quote": SYNTHETIC_SPEECH},
+                    {"title": "Invented task", "quote": "Nobody said this on the call"},
+                ]
+            ),
+        ),
+    )
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
 
     texts = thread_texts(meet, cid)
@@ -190,7 +227,8 @@ def test_the_recorder_hears_the_room_and_the_thread_gets_the_transcript_a_reply_
     assert len(transcripts) == 1 and SYNTHETIC_SPEECH in transcripts[0]
     assert "Ops can take the review." in texts
     assert [text for text in texts if text.startswith("Action items:")] == [
-        "Action items: Acme launch call\n- Schedule the reliability review with Ops"]
+        "Action items: Acme launch call\n- Schedule the reliability review with Ops"
+    ]
     assert _restricted(meet, "Call transcript") == [1] and _restricted(meet, "Action items") == [1]
     assert room not in fake_rtc.rooms and not live_media.running(call_id)
     assert get(meet, f"calls/{call_id}")["state"] == "ended"
@@ -212,9 +250,14 @@ def test_a_gateway_that_does_not_answer_keeps_the_transcript_and_posts_no_action
 def _owed(api, call_id):
     """The call's action-item bookkeeping, as the sweep leaves it."""
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT finalized_at,wrapped_up_at,action_items_posted_at,action_items_attempts,"
-                              "action_items_retry_at,action_items_failed_at,action_items_given_up_at "
-                              "FROM calls WHERE id=?", (call_id,)).fetchone())
+        return dict(
+            c.execute(
+                "SELECT finalized_at,wrapped_up_at,action_items_posted_at,action_items_attempts,"
+                "action_items_retry_at,action_items_failed_at,action_items_given_up_at "
+                "FROM calls WHERE id=?",
+                (call_id,),
+            ).fetchone()
+        )
 
 
 def _ago(hours):
@@ -244,7 +287,7 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
     assert len(drafts) == 1 and owed["finalized_at"] is None and owed["action_items_attempts"] == 1
     assert owed["action_items_retry_at"] > _ago(0) and owed["action_items_given_up_at"] is None
 
-    meet.app.state.calls.sweep()                 # the wait is not up yet: the Gateway is not asked again
+    meet.app.state.calls.sweep()  # the wait is not up yet: the Gateway is not asked again
     assert len(drafts) == 1
 
     with meet.app.state.store.transaction() as c:
@@ -253,9 +296,11 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
     assert len(drafts) == 2 and _owed(meet, call_id)["action_items_attempts"] == 2
 
     with meet.app.state.store.transaction() as c:
-        c.execute("UPDATE calls SET action_items_failed_at=?,action_items_retry_at=? WHERE id=?",
-                  (_ago(25), _ago(0.01), call_id))
-    meet.app.state.calls.sweep()                 # a day since the first failure: give up, with one line in the thread
+        c.execute(
+            "UPDATE calls SET action_items_failed_at=?,action_items_retry_at=? WHERE id=?",
+            (_ago(25), _ago(0.01), call_id),
+        )
+    meet.app.state.calls.sweep()  # a day since the first failure: give up, with one line in the thread
     texts = thread_texts(meet, cid)
     notes = [text for text in texts if text.startswith("Action items for Acme launch call could not be made")]
     assert len(notes) == 1 and f"/api/v2/calls/{call_id}/action-items/retry" in notes[0]
@@ -268,7 +313,8 @@ def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a
     meet.app.state.calls.sweep()
     texts = thread_texts(meet, cid)
     assert [text for text in texts if text.startswith("Action items:")] == [
-        "Action items: Acme launch call\n- Schedule the reliability review"]
+        "Action items: Acme launch call\n- Schedule the reliability review"
+    ]
     assert _owed(meet, call_id)["finalized_at"] and _owed(meet, call_id)["action_items_posted_at"]
 
 
@@ -284,23 +330,31 @@ def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold
         return real_post(*args, **kwargs)
 
     monkeypatch.setattr(threads, "post", refuse_call_posts)
-    monkeypatch.setattr(call_items, "draft",
-                        lambda base, key, model, rows: [{"title": "Schedule the review", "quote": SYNTHETIC_SPEECH}])
+    monkeypatch.setattr(
+        call_items,
+        "draft",
+        lambda base, key, model, rows: [{"title": "Schedule the review", "quote": SYNTHETIC_SPEECH}],
+    )
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
     join(meet, call_id, "ana-test")
     meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
     settle(meet)
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
-    assert len(refused) == 2                     # the transcript, then the action items: each tried once
+    assert len(refused) == 2  # the transcript, then the action items: each tried once
 
     holds = get(meet, f"calls/{call_id}")["holds"]
-    assert [(hold["kind"], hold["reason"]) for hold in holds] == [("transcript", "forbidden"),
-                                                                 ("action_items", "forbidden")]
+    assert [(hold["kind"], hold["reason"]) for hold in holds] == [
+        ("transcript", "forbidden"),
+        ("action_items", "forbidden"),
+    ]
     assert get(meet, f"calls/{call_id}", token="ben-test")["holds"] == []
     with meet.app.state.store.read() as c:
-        refusals = [row for row in audit_log.rows(c, obj=f"call:{call_id}")["rows"]
-                    if row["after"]["kind"] == "call.post_refused"]
+        refusals = [
+            row
+            for row in audit_log.rows(c, obj=f"call:{call_id}")["rows"]
+            if row["after"]["kind"] == "call.post_refused"
+        ]
     assert len(refusals) == 2
 
     meet.app.state.calls.sweep()
@@ -385,8 +439,9 @@ def test_a_call_cannot_ask_for_spoken_replies_the_gateway_cannot_speak(meet):
     quiet = start_call(meet, cid)
     assert quiet["speak_replies"] is False
     post(meet, f"calls/{quiet['id']}/end", {}, token="ana-test")
-    refused = post(meet, f"threads/{cid}/calls", {"title": "Acme call", "speak_replies": True}, token="ana-test",
-                   expected=422)
+    refused = post(
+        meet, f"threads/{cid}/calls", {"title": "Acme call", "speak_replies": True}, token="ana-test", expected=422
+    )
     assert "text-to-speech" in json.dumps(refused)
     assert get(meet, f"calls/{quiet['id']}")["speak_replies"] is False
 
@@ -398,11 +453,12 @@ def test_the_call_list_pages_and_stays_under_its_byte_cap(meet, monkeypatch):
         call_id = start_call(meet, cid, title=f"Acme call {index}")["id"]
         post(meet, f"calls/{call_id}/end", {}, token="ana-test")
         ids.append(call_id)
-    monkeypatch.setattr(calls, "CALL_LIST_BYTES", 1)     # every call is over the cap, so each page holds one call
+    monkeypatch.setattr(calls, "CALL_LIST_BYTES", 1)  # every call is over the cap, so each page holds one call
     seen, before = [], ""
     for _ in range(5):
-        response = meet.get(f"/api/v2/threads/{cid}/calls", params={"limit": 10, "before": before},
-                            headers=headers("ana-test"))
+        response = meet.get(
+            f"/api/v2/threads/{cid}/calls", params={"limit": 10, "before": before}, headers=headers("ana-test")
+        )
         assert response.status_code == 200, response.text
         page = response.json()
         assert len(page["calls"]) == 1
@@ -418,7 +474,7 @@ def test_a_call_change_reaches_the_threads_topic_of_members_only(meet):
     call_id = start_call(meet, cid)["id"]
     ben = _threads_events(meet, "human:ben")
     started = [event for event in ben if event["kind"] == "call.started" and event["call_id"] == call_id]
-    assert len(started) == 1 and started[0]["thread_id"] == cid       # one event per change, not one per handler
+    assert len(started) == 1 and started[0]["thread_id"] == cid  # one event per change, not one per handler
     assert not [event for event in _threads_events(meet, "human:cara") if event.get("call_id") == call_id]
 
 
@@ -426,7 +482,7 @@ def test_a_tico_restart_brings_the_recorder_back_from_the_database(meet):
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
     join(meet, call_id, "ana-test")
-    meet.app.state.call_media.recorders.pop(call_id)     # the process restarted and lost its recorder
+    meet.app.state.call_media.recorders.pop(call_id)  # the process restarted and lost its recorder
     meet.app.state.calls.sweep()
     assert meet.app.state.call_media.running(call_id)
     assert get(meet, f"calls/{call_id}")["state"] == "live"
@@ -447,14 +503,20 @@ def _changes(api):
 
 def _chunks(api, meeting_id):
     with api.app.state.store.read() as c:
-        return [row["text"] for row in c.execute(
-            "SELECT text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (meeting_id,))]
+        return [
+            row["text"]
+            for row in c.execute("SELECT text FROM live_meeting_chunks WHERE meeting_id=? ORDER BY seq", (meeting_id,))
+        ]
 
 
 def _restricted(api, prefix):
     with api.app.state.store.read() as c:
-        return [row["restricted"] for row in c.execute(
-            "SELECT restricted FROM messages WHERE body LIKE ? ORDER BY created_at", (prefix + "%",))]
+        return [
+            row["restricted"]
+            for row in c.execute(
+                "SELECT restricted FROM messages WHERE body LIKE ? ORDER BY created_at", (prefix + "%",)
+            )
+        ]
 
 
 def _threads_events(api, actor):
@@ -472,8 +534,9 @@ class HubClient:
         self.api, self.token = api, token
 
     def _send(self, method, path, body=None, query=None, key=None):
-        response = self.api.request(method, "/api/v2/" + path, params=query or None, json=body,
-                                    headers=headers(self.token, key))
+        response = self.api.request(
+            method, "/api/v2/" + path, params=query or None, json=body, headers=headers(self.token, key)
+        )
         assert response.status_code < 300, response.text
         return response.json()
 
@@ -497,7 +560,7 @@ def test_the_call_tools_run_the_same_routes_the_rest_api_has(meet):
 
     cid = thread(meet)
     call_id = tool("hub_call_start", {"thread_id": cid, "title": "Acme standup", "operation_id": "op-start"})["id"]
-    with pytest.raises(AssertionError):                  # one live call per thread: the second start is refused
+    with pytest.raises(AssertionError):  # one live call per thread: the second start is refused
         tool("hub_call_start", {"thread_id": cid, "operation_id": "op-start-again"})
     assert [row["id"] for row in tool("hub_call_list", {"thread_id": cid})["calls"]] == [call_id]
     assert tool("hub_call_show", {"call_id": call_id})["state"] == "live"
@@ -561,9 +624,9 @@ def test_leaving_drops_the_person_from_the_room_and_a_refused_drop_is_retried(me
     media.rooms[room].add("human:ben")
     media.down = True
     post(meet, f"calls/{call_id}/leave", {}, token="ben-test")
-    assert media.removed == []                      # the drop was refused, so it stays pending
+    assert media.removed == []  # the drop was refused, so it stays pending
     media.down = False
-    meet.app.state.calls.sweep()                    # the sweep keeps the removal until LiveKit confirms it
+    meet.app.state.calls.sweep()  # the sweep keeps the removal until LiveKit confirms it
     assert media.removed == [(room, "human:ben")] and "human:ben" not in media.rooms[room]
     assert [p for p in get(meet, f"calls/{call_id}")["participants"] if p["actor"] == "human:ben"][0]["left_at"]
 
@@ -581,8 +644,8 @@ def test_a_media_restart_before_the_first_sweep_ends_the_call(meet):
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]
     media = meet.app.state.call_media
-    assert media.running(call_id)                   # the recorder started, so the call's media has been seen
-    media.rooms.pop("tico-call-" + call_id)         # LiveKit restarted and lost the room; no sweep has run since
+    assert media.running(call_id)  # the recorder started, so the call's media has been seen
+    media.rooms.pop("tico-call-" + call_id)  # LiveKit restarted and lost the room; no sweep has run since
     meet.app.state.calls.sweep()
     ended = get(meet, f"calls/{call_id}")
     assert ended["state"] == "ended" and ended["end_reason"] == "media_lost"
@@ -597,7 +660,7 @@ def test_a_call_whose_room_will_not_close_is_finished_once_the_sweep_can_reach_t
     assert not [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]
     media.down = False
     meet.app.state.calls.sweep()
-    meet.app.state.calls.sweep()                    # a second pass posts nothing more
+    meet.app.state.calls.sweep()  # a second pass posts nothing more
     transcripts = [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]
     assert len(transcripts) == 1
     with meet.app.state.store.read() as c:
@@ -625,8 +688,11 @@ def test_a_bot_attached_by_someone_who_loses_the_thread_leaves_the_call_and_its_
     meet.app.state.calls.sweep()
     assert get(meet, f"calls/{call_id}")["bots"] == []
     with meet.app.state.store.read() as c:
-        open_turns = c.execute("SELECT COUNT(*) FROM live_meeting_turns WHERE meeting_id=? AND bot='ops' "
-                               "AND status IN ('pending','claimed')", (meeting_id,)).fetchone()[0]
+        open_turns = c.execute(
+            "SELECT COUNT(*) FROM live_meeting_turns WHERE meeting_id=? AND bot='ops' "
+            "AND status IN ('pending','claimed')",
+            (meeting_id,),
+        ).fetchone()[0]
     assert open_turns == 0
 
 
@@ -670,9 +736,11 @@ def test_a_rejoined_person_who_later_loses_the_thread_is_taken_out_of_the_room_a
     post(meet, f"calls/{call_id}/leave", {}, token="ben-test")
     assert (room, "human:ben") in media.removed
     join(meet, call_id, "ben-test")
-    media.rooms[room].add("human:ben")                # Ben reconnects to the room
+    media.rooms[room].add("human:ben")  # Ben reconnects to the room
     before = len(media.removed)
     _remove_from_thread(meet, cid, "human:ben")
     meet.app.state.calls.sweep()
-    assert (room, "human:ben") in media.removed[before:], "the sweep takes Ben out of the room after he loses the thread"
+    assert (room, "human:ben") in media.removed[before:], (
+        "the sweep takes Ben out of the room after he loses the thread"
+    )
     assert "human:ben" not in media.rooms[room]

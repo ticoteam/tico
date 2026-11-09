@@ -1,4 +1,4 @@
-// Offline browser regression: a bot-owned task talks in its own room. In the Assistant's chat (ui/app/chat.js, the one
+// Offline browser regression: a bot-owned task talks in its own room. In the Assistant's chat (ui/app/chat.ts, the one
 // chat that still folds them) a task's start and its milestone reports are one quiet row each, and a tap opens the
 // task's thread; what is typed there goes to the task (POST /v2/tasks/{id}/comments), never to the main chat.
 const {chromium} = require('playwright');
@@ -41,10 +41,10 @@ async function run(viewport, shot) {
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);

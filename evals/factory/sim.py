@@ -1,5 +1,6 @@
 """The simulation loop: every tick moves the clock, runs the real scheduler pass, lets each available bot claim and run
 its queued turns, and records what the board and the queues look like."""
+
 import datetime as dt
 import random
 from collections import Counter, defaultdict
@@ -9,8 +10,9 @@ from . import bots as B
 from .board import dev_board
 from .world import PRIMARY, Refusal, World
 
-PRICE = {"claude-opus-5-5": (4.0, 0.20, 20.0)}   # $ per million: uncached input, cached input, output
-SHORT_ROUNDS = 40     # a run reads the reasons of at most this many short claim rounds (see Run.reasons)
+PRICE = {"claude-opus-5-5": (4.0, 0.20, 20.0)}  # $ per million: uncached input, cached input, output
+SHORT_ROUNDS = 40  # a run reads the reasons of at most this many short claim rounds (see Run.reasons)
+
 
 @dataclass
 class Team:
@@ -29,10 +31,15 @@ class Team:
 
 
 TEAM = {  # slug: (role, family)
-    "builder-claude": ("builder", "claude"), "builder-openai": ("builder", "gpt"),
-    "reviewer-gpt": ("reviewer", "gpt"), "reviewer-xai": ("reviewer", "grok"), "reviewer-muse": ("reviewer", "muse"),
-    "qa-claude": ("qa", "claude"), "qa-xai": ("qa", "grok"),
-    "release-manager": ("other", "claude"), "engineering-lead": ("lead", "claude"),
+    "builder-claude": ("builder", "claude"),
+    "builder-openai": ("builder", "gpt"),
+    "reviewer-gpt": ("reviewer", "gpt"),
+    "reviewer-xai": ("reviewer", "grok"),
+    "reviewer-muse": ("reviewer", "muse"),
+    "qa-claude": ("qa", "claude"),
+    "qa-xai": ("qa", "grok"),
+    "release-manager": ("other", "claude"),
+    "engineering-lead": ("lead", "claude"),
 }
 ARCHITECT = {"architect": ("architect", "claude")}
 
@@ -50,20 +57,20 @@ class Run:
     def __init__(self, scenario, seed):
         self.scenario, self.seed = scenario, seed
         self.rng = random.Random(seed)
-        self.samples = []          # per tick: {bot: queued}
+        self.samples = []  # per tick: {bot: queued}
         self.violations = defaultdict(list)
-        self.merged_at = {}        # ticket id -> when it first reached a merged step
+        self.merged_at = {}  # ticket id -> when it first reached a merged step
         self.peak_doing = Counter()
-        self.claims = Counter()    # claim replies by HTTP status: an exception the app raised counts as a 500
-        self.paused = set()        # bots the scenario paused: the work they hold waits on their owner, not the board
-        self.marks = []            # per runner claim round: free slots, the bots it could hand out, turns started
+        self.claims = Counter()  # claim replies by HTTP status: an exception the app raised counts as a 500
+        self.paused = set()  # bots the scenario paused: the work they hold waits on their owner, not the board
+        self.marks = []  # per runner claim round: free slots, the bots it could hand out, turns started
         self.lost_probe = None
-        self.probe_seen = set()    # probe jobs a login's hold named after a round's claims, read from the hold records
-        self.back_check = None     # set by the scenario when a computer comes back: its readiness is read on that tick
-        self.back_lines = []       # what the server held for the returning computer's bot on its first round back
-        self.short_rounds = 0      # short rounds whose reasons were read (at most SHORT_ROUNDS)
-        self.stale_busy = None     # a bot a scenario keeps naming busy for its first rounds (see stale_round)
-        self.stale_named = None    # the bot stale_round names busy in the current claim round, if any
+        self.probe_seen = set()  # probe jobs a login's hold named after a round's claims, read from the hold records
+        self.back_check = None  # set by the scenario when a computer comes back: its readiness is read on that tick
+        self.back_lines = []  # what the server held for the returning computer's bot on its first round back
+        self.short_rounds = 0  # short rounds whose reasons were read (at most SHORT_ROUNDS)
+        self.stale_busy = None  # a bot a scenario keeps naming busy for its first rounds (see stale_round)
+        self.stale_named = None  # the bot stale_round names busy in the current claim round, if any
 
     def team(self, w):
         styles = self.scenario.styles
@@ -72,10 +79,22 @@ class Run:
         for slug, (role, family) in self.members().items():
             rng = random.Random(f"{self.seed}:{slug}")
             style = styles.get(slug, styles.get(role, {}))
-            kind = {"builder": B.Builder, "reviewer": B.Reviewer, "qa": B.QA, "lead": B.Lead,
-                    "architect": B.Architect}.get(role, B.Quiet)
-            made[slug] = kind(w, slug, role, rng, style=style, family=family,
-                              **({"slots": self.scenario.slots} if role == "builder" else {}))
+            kind = {
+                "builder": B.Builder,
+                "reviewer": B.Reviewer,
+                "qa": B.QA,
+                "lead": B.Lead,
+                "architect": B.Architect,
+            }.get(role, B.Quiet)
+            made[slug] = kind(
+                w,
+                slug,
+                role,
+                rng,
+                style=style,
+                family=family,
+                **({"slots": self.scenario.slots} if role == "builder" else {}),
+            )
         team.reviewers = [b for b in made.values() if b.role == "reviewer"]
         team.qa = [b for b in made.values() if b.role == "qa"]
         team.builders = [b for b in made.values() if b.role == "builder"]
@@ -92,8 +111,15 @@ class Run:
     def go(self):
         s = self.scenario
         board = s.board()
-        with World(board, self.members(), tick_minutes=s.tick_minutes, rng=random.Random(f"{self.seed}:world"),
-                   ci_fail=s.ci_fail, signed_in=s.signed_in, capacity=s.capacity) as w:
+        with World(
+            board,
+            self.members(),
+            tick_minutes=s.tick_minutes,
+            rng=random.Random(f"{self.seed}:world"),
+            ci_fail=s.ci_fail,
+            signed_in=s.signed_in,
+            capacity=s.capacity,
+        ) as w:
             self.w = w
             team = self.team(w)
             self.t = team
@@ -106,11 +132,13 @@ class Run:
                 if i >= ticks and all(t["id"] in self.merged_at or self.shipped(t) for t in w.tickets()):
                     break
                 s.arrive(self, w, team, i)
-                w.advance(ready=[b.slug for b in team.all if b.available],
-                          beat=lambda: [b.renew() for b in team.all if b.available])
+                w.advance(
+                    ready=[b.slug for b in team.all if b.available],
+                    beat=lambda: [b.renew() for b in team.all if b.available],
+                )
                 ready_before = {b.slug for b in team.all if b.available}
                 s.during(self, w, team, i)
-                if w.down:      # the server is stopped: the runner's calls wait for it, so this tick claims nothing
+                if w.down:  # the server is stopped: the runner's calls wait for it, so this tick claims nothing
                     continue
                 ready_now = [b.slug for b in team.all if b.available]
                 if set(ready_now) != ready_before:
@@ -120,16 +148,20 @@ class Run:
                 self.release(w, i)
                 self.assign(w, team)
                 w.scheduler_pass()
+                # A parked turn asks for its computer place again before this tick's claims, the earliest parked first:
+                # the server grants places in claim order (start_places.reserve).
+                for bot in sorted((b for b in team.all if b.parked and b.available), key=lambda b: b.parked_since):
+                    bot.retry_start()
                 bots = list(team.all)
                 self.rng.shuffle(bots)
                 for bot in bots:
                     if bot.running and not bot.available:
-                        bot.lose()   # its computer went off under the run: the lease lapses
+                        bot.lose()  # its computer went off under the run: the lease lapses
                     if bot.available:
                         bot.recover()
                     if s.claim == "bot":
                         self.bot_turns(w, bot)
-                    elif bot.running and w.now() >= bot.ends:
+                    elif bot.due(w.now()):
                         bot.end()
                 if s.claim == "runner":
                     self.sweep(w)
@@ -142,7 +174,7 @@ class Run:
     def bot_turns(self, w, bot):
         """One bot's turns under per-bot claims: finish the running one, then claim the next while the bot is free."""
         for _ in range(8):
-            if bot.running and w.now() >= bot.ends:
+            if bot.due(w.now()):
                 bot.end()
             if bot.running or not bot.available:
                 break
@@ -156,6 +188,7 @@ class Run:
         """The history sweep (read_deps.sweep), run once per tick. The server's loop runs it every 10 seconds; here a
         tick is the step the claim rounds run on, so each round meets the index the sweep kept on that tick."""
         from backend import read_deps
+
         with w.store.read() as c:
             read_deps.sweep(c, gate=w.store.writer)
 
@@ -169,7 +202,7 @@ class Run:
         (reasons)."""
         self.stale_round(w.now())
         body = self.runner_body(team)
-        free = w.capacity - sum(1 for b in team.all if b.running)
+        free = w.capacity - self.places_used(team)
         if self.back_check:
             # The computer's readiness as the heartbeat before this round's claims told the server it (the sim sends
             # that heartbeat once the scenario changes who is available).
@@ -178,7 +211,11 @@ class Run:
         pool = self.pool(team, body)
         before, held = self.queued_before(w, pool)
         started, started_bots, started_jobs, answers, fallback = 0, [], [], [], 0
-        for _ in range(max(0, free)):
+        claims = 0
+        # The claims go on while the computer holds fewer places than its capacity. A parked turn holds no place, so a
+        # round may claim past its free places, up to the server's bound on leased work (runner-rs runner.rs claim_next).
+        while claims < 2 * w.capacity and self.places_used(team) < w.capacity:
+            claims += 1
             body = self.runner_body(team)
             _, reply = self.claim_once(w, body)
             answers.append(reply)
@@ -186,31 +223,49 @@ class Run:
             if not attempt:
                 break
             bot = team.bot(attempt["bot"])
-            bot.start(attempt)
-            started += 1
+            if bot.start(attempt):
+                started += 1
             started_bots.append(bot.slug)
             started_jobs.append(attempt.get("job_id"))
             fallback += bot.runtime != PRIMARY
         queued = self.queued_now(w, pool)
         candidates = sorted(set(queued.values()) | set(started_bots))
         ready, blocked = self.readiness(w, candidates, started_bots)
-        mark = {"at": w.now(), "free": free, "held": held, "started_at": started, "fallback": fallback,
-                "queued": len(candidates), "slugs": candidates, "ready": ready, "blocked": blocked}
+        mark = {
+            "at": w.now(),
+            "free": free,
+            "held": held,
+            "started_at": started,
+            "fallback": fallback,
+            "queued": len(candidates),
+            "slugs": candidates,
+            "ready": ready,
+            "blocked": blocked,
+        }
         if free and ready and started < min(free, len(ready)) and self.short_rounds < SHORT_ROUNDS:
             self.short_rounds += 1
             gone = [job for job in before if job not in queued and job not in started_jobs]
             lines = self.reasons(w, [b for b in candidates if b not in started_bots], blocked)
-            lines.append(f"{len(gone)} job(s) left the queue during the claims "
-                         f"({', '.join(sorted({before[job] for job in gone})) or 'none'}); the last claim answered "
-                         f"{answers[-1] if answers else None}")
+            lines.append(
+                f"{len(gone)} job(s) left the queue during the claims "
+                f"({', '.join(sorted({before[job] for job in gone})) or 'none'}); the last claim answered "
+                f"{answers[-1] if answers else None}"
+            )
             mark["why"] = " | ".join(lines)
         self.marks.append(mark)
+
+    def places_used(self, team):
+        """The computer's places in use: its running turns, less the parked ones, which hold no place."""
+        return sum(1 for b in team.all if b.running and not b.parked)
 
     def pool(self, team, body):
         """The bots a round may hand work to: available on this computer, not running a turn (its lane is busy), not
         named busy by the body, and not paused by their owner."""
-        return sorted(b.slug for b in team.all if b.available and not b.running and b.slug not in body["busy_bots"]
-                      and b.slug not in self.paused)
+        return sorted(
+            b.slug
+            for b in team.all
+            if b.available and not b.running and b.slug not in body["busy_bots"] and b.slug not in self.paused
+        )
 
     def queued_before(self, w, bots):
         """Before a round's claims: the queued jobs of `bots` that are not held, as {job: bot}, and how many are
@@ -219,7 +274,9 @@ class Run:
             return {}, 0
         marks = ",".join("?" * len(bots))
         with w.store.read() as c:
-            rows = c.execute(f"SELECT id,bot_id,held FROM jobs WHERE state='queued' AND bot_id IN ({marks})", bots).fetchall()
+            rows = c.execute(
+                f"SELECT id,bot_id,held FROM jobs WHERE state='queued' AND bot_id IN ({marks})", bots
+            ).fetchall()
         return {r["id"]: r["bot_id"] for r in rows if not r["held"]}, sum(1 for r in rows if r["held"])
 
     def queued_now(self, w, bots):
@@ -228,30 +285,39 @@ class Run:
         them per call, so one still queued is not work the round could hand out."""
         from backend import execution as X
         from backend.store import H
+
         if not bots:
             return {}
         marks = ",".join("?" * len(bots))
         with w.store.read() as c:
-            obsolete = {r[0] for r in c.execute("SELECT j.id " + X.obsolete_notices_sql(),
-                                                (w.runner["runner_id"], H.KEEPER, H.now()))}
-            rows = c.execute(f"SELECT id,bot_id FROM jobs WHERE state='queued' AND held=0 AND bot_id IN ({marks})",
-                             bots).fetchall()
+            obsolete = {
+                r[0]
+                for r in c.execute(
+                    "SELECT j.id " + X.obsolete_notices_sql(c), (w.runner["runner_id"], H.KEEPER, H.now())
+                )
+            }
+            rows = c.execute(
+                f"SELECT id,bot_id FROM jobs WHERE state='queued' AND held=0 AND bot_id IN ({marks})", bots
+            ).fetchall()
         return {r["id"]: r["bot_id"] for r in rows if r["id"] not in obsolete}
 
     def readiness(self, w, bots, started):
         """Each candidate bot's readiness now, from the records and never from a claim's answer. A bot is ready when its
         computer is awake (execution.Execution.awake), and a login it can run on is free: its own, when no hold keeps it
         (login_holds.holding: a hold before its end, or a probe out after it) and it is not cooling off
-        (execution.cooling_off), or a fallback login the computer reports signed in that no hold keeps. A bot that
-        started this round was ready. Returns (ready, blocked): blocked maps each other bot to what the records keep it
-        from. Each probe a login's hold names is recorded in probe_seen, read after the round's claims, so a probe the
-        round started is seen too."""
-        from backend import execution as X, login_holds
+        (execution.cooling_off), or a fallback login the computer reports signed in that no hold keeps. A bot a usage
+        limit holds is not ready either: the product's own check (usage_limits.blocked, which the claim refuses with
+        "limit") says it cannot start, so a round it passes over is no stall. A bot that started this round was ready.
+        Returns (ready, blocked): blocked maps each other bot to what the records keep it from. Each probe a login's hold
+        names is recorded in probe_seen, read after the round's claims, so a probe the round started is seen too."""
+        from backend import execution as X, login_holds, usage_limits
         from backend.store import H
+
         rid = w.runner["runner_id"]
         ready, blocked = [], {}
         with w.store.read() as c:
             now = H.now()
+            pools = usage_limits.company(c)  # one Default for every bot's check, so the pool reads are shared
             runner = c.execute(X.RUNNER_SQL, (rid,)).fetchone()
             awake = bool(runner) and X.Execution.awake(X.Execution.waking(runner, now), now)
             login = login_holds.canonical(c, rid, "", PRIMARY)
@@ -272,6 +338,9 @@ class Run:
                     ready.append(bot)
                 elif not awake:
                     blocked[bot] = "computer waking"
+                elif capped := usage_limits.blocked(c, bot, default=pools):
+                    # The same check the claim makes before it looks at a bot's work (execution._claim_refusal "limit").
+                    blocked[bot] = f"{capped} usage limit"
                 else:
                     # The probe's own bot is let through its login's probe (execution.login_wait).
                     held = None if own == "probing" and prober and prober["bot_id"] == bot else own
@@ -279,9 +348,11 @@ class Run:
                     if login_ready(held, cooling, bool(fallbacks)):
                         ready.append(bot)
                     else:
-                        blocked[bot] = ", ".join(([f"own login {held}"] if held else [])
-                                                 + (["cooling off"] if cooling else [])
-                                                 + ([] if fallbacks else ["no fallback free"]))
+                        blocked[bot] = ", ".join(
+                            ([f"own login {held}"] if held else [])
+                            + (["cooling off"] if cooling else [])
+                            + ([] if fallbacks else ["no fallback free"])
+                        )
         return sorted(ready), blocked
 
     def reasons(self, w, bots, blocked=None):
@@ -290,28 +361,34 @@ class Run:
         server's own reason for its oldest queued job (execution.queued_reasons: the bot's refusal, then the job's, then
         its login's wait) and the readiness the records gave it. No check judges these lines."""
         from backend import execution as X, performance, runner_versions, start_places
+
         rid = w.runner["runner_id"]
         blocked = blocked or {}
         lines = []
         with w.store.read() as c:
             try:
-                cap = c.execute("SELECT capacity FROM runners WHERE id=?", (rid,)).fetchone()
-                lines.append(f"computer: turns held {sum(X.turns_here(c, rid).values())} "
-                             f"of capacity {cap['capacity']}, "
-                             f"places held {sum(start_places.held(c, rid).values())}, starts waiting "
-                             f"{start_places.ready_waiting(c, rid)}, overloaded "
-                             f"{performance.load_status(c, rid)['overloaded']}, paused "
-                             f"{runner_versions.paused(c, rid)}, company waits "
-                             f"{c.execute('SELECT count(*) FROM org_turn_waits').fetchone()[0]}")
-            except Exception as error:      # a diagnostic never stops the run
+                cap = c.execute("SELECT capacity FROM runners_with_state WHERE id=?", (rid,)).fetchone()
+                lines.append(
+                    f"computer: turns held {sum(X.turns_here(c, rid).values())} "
+                    f"of capacity {cap['capacity']}, "
+                    f"places held {sum(start_places.held(c, rid).values())}, starts waiting "
+                    f"{start_places.ready_waiting(c, rid)}, overloaded "
+                    f"{performance.load_status(c, rid)['overloaded']}, paused "
+                    f"{runner_versions.paused(c, rid)}, company waits "
+                    f"{c.execute('SELECT count(*) FROM org_turn_waits').fetchone()[0]}"
+                )
+            except Exception as error:  # a diagnostic never stops the run
                 lines.append(f"computer: diagnostic error {error!r}")
             for bot in bots:
                 try:
                     first = next(iter(X.queued_reasons(c, w.store.settings, rid, bot, oldest=True)), None)
-                    text = (f"{bot} oldest job {first[0]['id'][:6]} {first[1] or 'hands out'}" if first
-                            else f"{bot} has no queued job")
+                    text = (
+                        f"{bot} oldest job {first[0]['id'][:6]} {first[1] or 'hands out'}"
+                        if first
+                        else f"{bot} has no queued job"
+                    )
                     lines.append(text + (f"; readiness {blocked[bot]}" if bot in blocked else ""))
-                except Exception as error:      # a diagnostic never stops the run
+                except Exception as error:  # a diagnostic never stops the run
                     lines.append(f"{bot}: diagnostic error {error!r}")
         return lines
 
@@ -319,8 +396,9 @@ class Run:
         """Diagnostic only: the readiness the server holds for one bot of this computer, as its heartbeat last reported
         it, with the reasons its queued work gets on this round."""
         from backend.execution import readiness_document
+
         with w.store.read() as c:
-            row = c.execute("SELECT readiness FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (w.runner["runner_id"],)).fetchone()
         doc = readiness_document(row["readiness"]) if row else {}
         ready = ((doc.get("bots") or {}).get(slug) or {}).get("ready")
         return {"at": w.now(), "bot_id": slug, "server_ready": ready, "reasons": self.reasons(w, [slug])}
@@ -346,8 +424,12 @@ class Run:
         its one lane. A computer that is off names nothing: the server holds its bots by readiness. The sim advertises
         no lanes. The stale bot of stale_round is named too while it is set."""
         busy = sorted({b.slug for b in team.all if b.running} | ({self.stale_named} if self.stale_named else set()))
-        return {"next_run": True, "busy_bots": busy, "busy_lanes": [f"{slug}|main" for slug in busy],
-                "start_places": True}
+        return {
+            "next_run": True,
+            "busy_bots": busy,
+            "busy_lanes": [f"{slug}|main" for slug in busy],
+            "start_places": True,
+        }
 
     def claim_once(self, w, body):
         """One claim, its status counted. A 5xx is recorded by the world (with its body, or the traceback when the app
@@ -428,22 +510,35 @@ class Run:
         for t in self.final:
             if self.shipped(t):
                 continue
-            out.append(f"{t['title']} @ {t['step']} ({t['status']}, {t['owner_id']})"
-                       + (f" blocked: {t['blocked_since']}" if t["blocked_since"] else ""))
+            out.append(
+                f"{t['title']} @ {t['step']} ({t['status']}, {t['owner_id']})"
+                + (f" blocked: {t['blocked_since']}" if t["blocked_since"] else "")
+            )
             for c in self.w.checks(t["id"]):
-                out.append(f"  {c['title']}: {c['owner_id']} {c['status']} verdict={c['verdict']} head={str(c['verdict_head'])[:7]}")
-            for e in self.w.sql("SELECT e.created_at, e.actor, e.field, coalesce(s.name, e.new) new, e.note FROM task_events e "
-                                "LEFT JOIN task_steps s ON s.id=e.new WHERE e.task_id=? AND e.field IN ('step','verdict_move',"
-                                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.created_at, e.rowid",
-                                (t["id"],)):
-                out.append(f"  {e['created_at'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}")
+                out.append(
+                    f"  {c['title']}: {c['owner_id']} {c['status']} verdict={c['verdict']} head={str(c['verdict_head'])[:7]}"
+                )
+            for e in self.w.sql(
+                "SELECT e.created_at, e.actor_id AS actor, e.kind AS field, coalesce(s.name, e.new) new, e.note FROM history_events e "
+                "LEFT JOIN task_steps s ON s.id=e.new WHERE e.subject_type='task' AND e.subject_id=? AND e.kind IN ('step','verdict_move',"
+                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.created_at, e.rowid",
+                (t["id"],),
+            ):
+                out.append(
+                    f"  {e['created_at'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}"
+                )
             pr = self.w.pr_of(t["id"])
             if pr:
-                out.append(f"  PR #{pr} head={self.w.prs[pr]['head'][:7]} ci={self.w.ci_state(pr)} merged={self.w.prs[pr]['merged']}")
-            for j in self.w.sql("SELECT j.bot_id, j.state, j.held, j.wake_class, m.refs FROM jobs j "
-                                "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task') IN "
-                                "(SELECT ? UNION SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent') "
-                                "AND j.state NOT IN ('done','canceled')", (t["id"], t["id"])):
+                out.append(
+                    f"  PR #{pr} head={self.w.prs[pr]['head'][:7]} ci={self.w.ci_state(pr)} merged={self.w.prs[pr]['merged']}"
+                )
+            for j in self.w.sql(
+                "SELECT j.bot_id, j.state, j.held, j.wake_class, m.refs FROM jobs j "
+                "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task') IN "
+                "(SELECT ? UNION SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent') "
+                "AND j.state NOT IN ('done','canceled')",
+                (t["id"], t["id"]),
+            ):
                 out.append(f"  job {j['bot_id']} {j['state']} held={j['held']} {j['wake_class'] or ''}")
         out += self.diagnostics()
         return out
@@ -456,20 +551,30 @@ class Run:
             lp = self.lost_probe
             posts = [p for p in w.attempt_posts if p[1].startswith(f"attempts/{lp['attempt']}/")]
             off = [p for p in posts if not p[4]]
-            out.append(f"lost probe {lp['job'][:6]} bot {lp['bot_id']} attempt {lp['attempt'][:6]} ({lp['mode']} at "
-                       f"{lp['at']:%H:%M}): {len(posts)} sim posts to it, {len(off)} sent while its bot was off")
+            out.append(
+                f"lost probe {lp['job'][:6]} bot {lp['bot_id']} attempt {lp['attempt'][:6]} ({lp['mode']} at "
+                f"{lp['at']:%H:%M}): {len(posts)} sim posts to it, {len(off)} sent while its bot was off"
+            )
         for b in self.back_lines:
-            out.append(f"back {b['bot_id']} at {b['at']:%H:%M}: server_ready {b['server_ready']}; "
-                       + " | ".join(b["reasons"]))
+            out.append(
+                f"back {b['bot_id']} at {b['at']:%H:%M}: server_ready {b['server_ready']}; " + " | ".join(b["reasons"])
+            )
         for win in w.limit_windows:
-            out.append(f"limit {win['bot_id']} since {win['since']} until {win['until']} ({win['source']}, "
-                       f"streak {win['streak']})")
+            out.append(
+                f"limit {win['bot_id']} since {win['since']} until {win['until']} ({win['source']}, "
+                f"streak {win['streak']})"
+            )
         for job in sorted(self.probe_seen):
-            for row in w.sql("SELECT id,state,created_at,started_at,finished_at,lease_until FROM attempts "
-                             "WHERE job_id=? ORDER BY created_at", (job,)):
-                out.append(f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created_at']} "
-                           f"started {row['started_at']} finished {row['finished_at']} "
-                           f"lease {row['lease_until']}")
+            for row in w.sql(
+                "SELECT id,state,created_at,started_at,finished_at,lease_until FROM attempts "
+                "WHERE job_id=? ORDER BY created_at",
+                (job,),
+            ):
+                out.append(
+                    f"probe {job[:6]} attempt {row['id'][:6]} {row['state']} created {row['created_at']} "
+                    f"started {row['started_at']} finished {row['finished_at']} "
+                    f"lease {row['lease_until']}"
+                )
         return out
 
     def summary(self):
@@ -481,10 +586,18 @@ class Run:
             for bot, (n, _) in queued.items():
                 peak_queue[bot] = max(peak_queue[bot], n)
         return {
-            "turns": len(turns), "work": kinds["work"] + kinds["review"], "noise": kinds["noise"],
-            "stale": sum(1 for r in turns if r["stale"]), "silent": kinds["silent"], "crash": kinds["crash"],
-            "limited": kinds["limited"], "cost": round(self.cost(), 2), "steps": dict(steps),
-            "peak_queue": dict(peak_queue.most_common(4)), "peak_doing": dict(self.peak_doing),
+            "turns": len(turns),
+            "work": kinds["work"] + kinds["review"],
+            "noise": kinds["noise"],
+            "stale": sum(1 for r in turns if r["stale"]),
+            "parked": sum(1 for r in turns if r.get("parked")),
+            "silent": kinds["silent"],
+            "crash": kinds["crash"],
+            "limited": kinds["limited"],
+            "cost": round(self.cost(), 2),
+            "steps": dict(steps),
+            "peak_queue": dict(peak_queue.most_common(4)),
+            "peak_doing": dict(self.peak_doing),
             "refused": sum(1 for r in turns if str(r["action"]).startswith("refused")),
             "fallbacks": dict(Counter(f[3].split(":")[0] for f in self.w.fallbacks)),
             "lead_time_h": self.lead_time(),
@@ -493,8 +606,12 @@ class Run:
 
     def lead_time(self):
         """Median hours from a ticket's creation to its merge."""
-        hours = sorted((when - self.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
-                       for t in self.final for tid, when in self.merged_at.items() if tid == t["id"])
+        hours = sorted(
+            (when - self.w.H.parse_ts(t["created_at"])).total_seconds() / 3600
+            for t in self.final
+            for tid, when in self.merged_at.items()
+            if tid == t["id"]
+        )
         return round(hours[len(hours) // 2], 1) if hours else None
 
 
@@ -504,22 +621,22 @@ class Scenario:
     about: str
     setup: object
     during: object = lambda run, w, team, i: None
-    arrive: object = lambda run, w, team, i: None   # before the tick's clock moves and its heartbeat
-    checks: list = field(default_factory=list)   # (name, ticket, fn(run) -> (ok, detail))
+    arrive: object = lambda run, w, team, i: None  # before the tick's clock moves and its heartbeat
+    checks: list = field(default_factory=list)  # (name, ticket, fn(run) -> (ok, detail))
     styles: dict = field(default_factory=dict)
     hours: float = 12
-    drain_hours: float = 6   # then up to this long more, until every ticket has merged
+    drain_hours: float = 6  # then up to this long more, until every ticket has merged
     tick_minutes: int = 5
     slots: int = 4
     release_every_hours: float = 4
-    ci_fail: float = 0.0     # chance CI fails on a new head
+    ci_fail: float = 0.0  # chance CI fails on a new head
     board: object = dev_board
     architect: bool = False  # a senior architect builders ask to plan major tickets
-    major: float = 0.0       # share of tickets tagged major
-    claim: str = "bot"       # "runner": one claim round as a runner makes it (no bot named) instead of one claim per bot
-    signed_in: tuple = ()    # runtimes the computer reports signed in (empty: the plain per-bot readiness map)
-    capacity: int = 4        # the computer's slots, as its heartbeat says
-    fleet: int = 0           # extra bots beyond the team, for a backlog (their turns do nothing)
+    major: float = 0.0  # share of tickets tagged major
+    claim: str = "bot"  # "runner": one claim round as a runner makes it (no bot named) instead of one claim per bot
+    signed_in: tuple = ()  # runtimes the computer reports signed in (empty: the plain per-bot readiness map)
+    capacity: int = 4  # the computer's slots, as its heartbeat says
+    fleet: int = 0  # extra bots beyond the team, for a backlog (their turns do nothing)
 
 
 def tickets(run, w, n, owner=None, step=None, title="Ticket"):
@@ -531,9 +648,19 @@ def tickets(run, w, n, owner=None, step=None, title="Ticket"):
             owner = run.t.builders[i % len(run.t.builders)].slug
         tags = ["major"] if run.rng.random() < run.scenario.major else []
         # A task always has an owner: an unassigned ticket is the person's until the board hands it to a bot.
-        made.append(w.post("tasks", {"owner": owner or "ana", "title": f"{title} {i + 1}",
-                                     "body": "Build it.", "type": w.dev["id"], "step": step or first.name,
-                                     "labels": tags}))
+        made.append(
+            w.post(
+                "tasks",
+                {
+                    "owner": owner or "ana",
+                    "title": f"{title} {i + 1}",
+                    "body": "Build it.",
+                    "type": w.dev["id"],
+                    "step": step or first.name,
+                    "labels": tags,
+                },
+            )
+        )
     return [m.get("task", m) for m in made]
 
 

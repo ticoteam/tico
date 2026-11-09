@@ -1,4 +1,4 @@
-/* Rules (ui/app/org-rules.js): filters | list | side panel on a computer; on a phone the filters are a strip of pills,
+/* Rules (ui/app/org-rules.ts): filters | list | side panel on a computer; on a phone the filters are a strip of pills,
    the rows stack, and a panel is a full-screen sheet. Internal is the Reach map and its panel instead (below). The bot's
    Rules tab reuses the rows. */
 #main.ru-layout{max-width:none;padding:0;overflow:hidden;height:100%}
@@ -248,6 +248,8 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 .rr-cap{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:var(--t-base)}
 .rr-cap input{width:76px;font-variant-numeric:tabular-nums}
 .rr-cap input::placeholder{color:var(--muted);opacity:.75}
+.rr-from{color:var(--muted);font-size:var(--t-xs);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ru-txt .rr-from::before{content:"· "}
 .rr-sec{display:flex;flex-direction:column;gap:6px}
 .rr-sec>header{display:flex;align-items:center;gap:8px;min-height:28px}
 .rr-sec>header h3{flex:1;margin:0}

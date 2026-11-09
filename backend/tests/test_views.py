@@ -1,7 +1,17 @@
-
-
 from backend.store import H
-from backend.tests.test_api import api, as_member, headers, get, post, restrict, setup_attempt, runner, ready, assign, claim
+from backend.tests.test_api import (
+    api,
+    as_member,
+    headers,
+    get,
+    post,
+    restrict,
+    setup_attempt,
+    runner,
+    ready,
+    assign,
+    claim,
+)
 
 
 def test_revocation_invalidates_running_bot_credential(api):
@@ -26,16 +36,19 @@ def test_bot_execution_cannot_read_another_humans_personal_chat(api):
     get(api, f"conversations/{secret['conversation_id']}/messages", attempt["token"], expected=404)
     assert secret["id"] not in {row["id"] for row in get(api, "inbox", attempt["token"])["messages"]}
     post(api, "messages", {"to": "human:ana", "text": "Use an old private chat"}, attempt["token"], expected=404)
-    question = post(api, "messages", {"to": "finance", "text": "What is the budget?", "kind": "ask"}, attempt["token"])
+    question = post(
+        api, "messages", {"to": "finance", "text": "What is the budget?", "needs_action": True}, attempt["token"]
+    )
     assert get(api, f"conversations/{question['conversation_id']}/messages", attempt["token"])
 
 
 def test_tico_fleet_snapshot_is_bound_to_the_initiating_human(api):
     as_member(api, "ben@acme.example")
-    with api.app.state.store.transaction() as c:      # finance takes requests from Ana alone
+    with api.app.state.store.transaction() as c:  # finance takes requests from Ana alone
         restrict(c, "finance", people=["ana"])
-    post(api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner": "cpo"},
-         "ben-test")
+    post(
+        api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner": "cpo"}, "ben-test"
+    )
     post(api, "tasks", {"title": "What is blocked?", "body": "List it", "owner": "coo"}, "ben-test")
     machine = runner(api)
     assign(api, machine, "coo")
@@ -74,4 +87,3 @@ def test_message_pagination_preserves_all_history_with_timestamp_ties(api):
     assert len(older["messages"]) == 41 and not older["has_more"]
     assert older["messages"][0]["id"] == msg["id"]
     assert len({m["id"] for m in older["messages"] + newest["messages"]}) == 241
-

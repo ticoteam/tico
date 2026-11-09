@@ -4,6 +4,7 @@ A row takes one value from each dimension. A pair of values is required when som
 the rules that make a row invalid (CONTRACT refuses it, or it cannot be built). The plan is a greedy cover: each step
 adds the best of a random sample of valid rows, or one row built to cover a chosen uncovered pair, whichever covers
 the most uncovered pairs. The seed fixes every draw, so the same seed gives the same plan."""
+
 import functools
 import itertools
 import random
@@ -14,8 +15,20 @@ DIMENSIONS = {
     "first": ["none", "filter", "decide", "filter+decide", "find"],
     "shape": ["straight", "two-paths", "four-paths", "nested"],
     "worker": ["none", "llm-assistant", "llm-bot", "bot-turn"],
-    "action": ["archive", "leave-for-you", "draft-reply", "send-reply", "create-task", "label", "forward",
-               "wake-bot", "note", "post-update", "call-webhook", "assign"],
+    "action": [
+        "archive",
+        "leave-for-you",
+        "draft-reply",
+        "send-reply",
+        "create-task",
+        "label",
+        "forward",
+        "wake-bot",
+        "note",
+        "post-update",
+        "call-webhook",
+        "assign",
+    ],
     "condition": ["is", "is-min", "is-not", "is-not-min", "gte", "lte", "contains", "matches"],
     "outcome": ["ok", "step-fails", "spend-cap", "switched-off", "no-match"],
 }
@@ -38,22 +51,26 @@ def gated(c):
 # Each rule names why a row is invalid. A row that breaks any rule is never generated, so no pair is required that
 # only such rows hold.
 SKIP = [
-    ("find pulls from a list, so only a schedule can run it",
-     lambda c: c["first"] == "find" and c["trigger"] != "schedule"),
-    ("mail and chat actions need an email or Slack trigger",
-     lambda c: c["action"] in MAIL and c["trigger"] not in CHAT),
-    ("min needs a Decide step to take a confidence from",
-     lambda c: c["condition"] in MIN and not decides(c)),
-    ("score comparisons need a Decide step",
-     lambda c: c["condition"] in SCORE and not decides(c)),
-    ("a condition needs a Filter or a path shape to hold it",
-     lambda c: not gated(c)),
-    ("a schedule has no input that can fail a condition",
-     lambda c: c["trigger"] == "schedule" and c["outcome"] == "no-match"),
-    ("step-fails needs a Decide step (the judge is the step that fails)",
-     lambda c: c["outcome"] == "step-fails" and not decides(c)),
-    ("spend-cap stops only LLM and Bot turn steps",
-     lambda c: c["outcome"] == "spend-cap" and c["worker"] == "none"),
+    (
+        "find pulls from a list, so only a schedule can run it",
+        lambda c: c["first"] == "find" and c["trigger"] != "schedule",
+    ),
+    (
+        "mail and chat actions need an email or Slack trigger",
+        lambda c: c["action"] in MAIL and c["trigger"] not in CHAT,
+    ),
+    ("min needs a Decide step to take a confidence from", lambda c: c["condition"] in MIN and not decides(c)),
+    ("score comparisons need a Decide step", lambda c: c["condition"] in SCORE and not decides(c)),
+    ("a condition needs a Filter or a path shape to hold it", lambda c: not gated(c)),
+    (
+        "a schedule has no input that can fail a condition",
+        lambda c: c["trigger"] == "schedule" and c["outcome"] == "no-match",
+    ),
+    (
+        "step-fails needs a Decide step (the judge is the step that fails)",
+        lambda c: c["outcome"] == "step-fails" and not decides(c),
+    ),
+    ("spend-cap stops only LLM and Bot turn steps", lambda c: c["outcome"] == "spend-cap" and c["worker"] == "none"),
 ]
 
 

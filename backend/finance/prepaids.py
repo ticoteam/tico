@@ -2,6 +2,7 @@
 expenses, 1150) and comes out as expense month by month. A month that has come due posts Dr the line's expense
 account (its tags kept) / Cr prepaid, on accrual only (a noncash journal: the cash view still counts the bill as it
 is paid). A month posts once; its row in fin_prepaid_postings is the record of it."""
+
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -36,6 +37,7 @@ def account(ctx: Ctx, who: str) -> L.Account:
     if found is not None:
         return found
     from .banking import new_account
+
     code, name, type_, subtype = ACCOUNT
     return new_account(ctx, code, name, type_, subtype, who)
 
@@ -43,15 +45,15 @@ def account(ctx: Ctx, who: str) -> L.Account:
 def in_lines(payload: Mapping[str, object]) -> bool:
     """Whether a request's bill lines carry a prepaid schedule (refused where the books are a provider's)."""
     lines = payload.get("lines")
-    return isinstance(lines, list) and any(isinstance(x, Mapping) and "prepaid" in x
-                                           for x in cast(list[object], lines))
+    return isinstance(lines, list) and any(isinstance(x, Mapping) and "prepaid" in x for x in cast(list[object], lines))
 
 
 def schedule(row: Any) -> list[tuple[str, int]]:
     """Each month of a prepaid line's schedule, with the expense it takes."""
     start, months = str(row["prepaid_start"]), int(row["prepaid_months"])
-    return [(AP.prepaid_month(start, n), amount)
-            for n, amount in enumerate(AP.prepaid_amounts(int(row["amount"]), months))]
+    return [
+        (AP.prepaid_month(start, n), amount) for n, amount in enumerate(AP.prepaid_amounts(int(row["amount"]), months))
+    ]
 
 
 def due_months(c: Any, ctx: Ctx) -> list[tuple[str, str]]:
@@ -72,6 +74,7 @@ def amortize_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     write the line's expense account and tags."""
     from .banking import open_day
     from .documents import sees_doc
+
     if ctx.book.mode == "mirror":
         raise FinanceError(NOT_AVAILABLE, "prepaid expenses are not available while the books are a provider's")
     V.only(p, ("bill_line_id", "month"))
@@ -102,20 +105,49 @@ def amortize_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if who != SYSTEM and not may_write(ctx, who, expense.id, tags):
         raise denied("a line's account or tags are outside your view")
     base = ctx.book.base_currency
-    e = L.Entry(book_id=ctx.book.id, entry_date=day, memo=memo[:200], source="bill", source_id=f"{line_id}:{month}",
-                basis="accrual",
-                lines=(L.Line(account_id=expense.id, amount=amount, currency=base, original_amount=amount,
-                              contact_id=contact, description=str(row["description"] or "")[:200], tags=tags),
-                       L.Line(account_id=prepaid.id, amount=-amount, currency=base, original_amount=-amount,
-                              contact_id=contact)))
+    e = L.Entry(
+        book_id=ctx.book.id,
+        entry_date=day,
+        memo=memo[:200],
+        source="bill",
+        source_id=f"{line_id}:{month}",
+        basis="accrual",
+        lines=(
+            L.Line(
+                account_id=expense.id,
+                amount=amount,
+                currency=base,
+                original_amount=amount,
+                contact_id=contact,
+                description=str(row["description"] or "")[:200],
+                tags=tags,
+            ),
+            L.Line(account_id=prepaid.id, amount=-amount, currency=base, original_amount=-amount, contact_id=contact),
+        ),
+    )
 
     def apply(aid: str) -> Result:
         entry_id, _ = posting.post(ctx, e, by=who, action_id=aid)
-        SPP.insert(ctx.c, {"bill_line_id": line_id, "month": month, "amount": amount, "entry_id": entry_id,
-                           "action_id": aid, "created_at": ctx.at, "created_by": who})
+        SPP.insert(
+            ctx.c,
+            {
+                "bill_line_id": line_id,
+                "month": month,
+                "amount": amount,
+                "entry_id": entry_id,
+                "action_id": aid,
+                "created_at": ctx.at,
+                "created_by": who,
+            },
+        )
         return {"bill_line_id": line_id, "month": month, "entry_id": entry_id, "amount": amount}
-    return Plan(K.default_gate(ctx.org, who, KIND), f"Expense {month} of a prepaid bill line", apply,
-                facts={"amount": amount, "counterparty": str(row["vendor_name"] or ""), "accounts": [expense.code]})
+
+    return Plan(
+        K.default_gate(ctx.org, who, KIND),
+        f"Expense {month} of a prepaid bill line",
+        apply,
+        facts={"amount": amount, "counterparty": str(row["vendor_name"] or ""), "accounts": [expense.code]},
+    )
 
 
 def unpost(ctx: Ctx, bill_id: str, who: str, action_id: str, memo: str) -> None:
@@ -123,11 +155,13 @@ def unpost(ctx: Ctx, bill_id: str, who: str, action_id: str, memo: str) -> None:
     that date is closed (§4.1, as the bill's own entry is), so each month's expense leaves in the period it posted to and
     the prepaid asset is back where the bill's own entry left it in every period."""
     from .banking import open_day
+
     for entry_id in SPP.posted_entries(ctx.c, bill_id):
         row = SL.entry_row(ctx.c, entry_id)
         if row is not None and str(row["status"]) == "posted":
-            posting.reverse(ctx, entry_id, day=open_day(ctx, str(row["entry_date"])), memo=memo, by=who,
-                            action_id=action_id)
+            posting.reverse(
+                ctx, entry_id, day=open_day(ctx, str(row["entry_date"])), memo=memo, by=who, action_id=action_id
+            )
 
 
 def ask_not_posted(ctx: Ctx, line_id: str, month: str, reason: str) -> None:
@@ -135,13 +169,18 @@ def ask_not_posted(ctx: Ctx, line_id: str, month: str, reason: str) -> None:
     and tico reuses an open item with the same title, so a month that keeps failing keeps one item. The look tries
     it again each time (amortize), so the item is current until the month posts."""
     from .payments import admin_person
+
     row = SPP.line(ctx.c, ctx.book.id, line_id)
     if row is None:
         return
     bill = str(row["number"] or row["bill_id"])
-    tico.needs_you(ctx.c, admin_person(ctx), f"Prepaid {month} not expensed: line {line_id}",
-                   f"{month} of the prepaid schedule for bill {bill} did not post: {reason[:300]}. Fix it; the month "
-                   "posts on the next look.")
+    tico.needs_you(
+        ctx.c,
+        admin_person(ctx),
+        f"Prepaid {month} not expensed: line {line_id}",
+        f"{month} of the prepaid schedule for bill {bill} did not post: {reason[:300]}. Fix it; the month "
+        "posts on the next look.",
+    )
 
 
 PLANNERS = {KIND: amortize_plan}

@@ -1,5 +1,6 @@
 """Record shapes that need no I/O. Callers check their own rights and accounts and turn a RecordError into their own
 error."""
+
 from collections.abc import Sequence
 
 LOCATION_KINDS = ("store", "office", "warehouse", "plant", "customer_site", "vehicle", "other")

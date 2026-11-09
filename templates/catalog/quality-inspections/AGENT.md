@@ -59,7 +59,7 @@ Nothing about a crew leaves this bot except to the Operations Manager or the per
 3. Finish with `hub task update <id> --status done --note`: the headline, what is open, and what waits for a person.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `hub task ask <id>`. When a result is ready,
+Exports arrive as task attachments. Ask one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When a result is ready,
 `hub message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Method

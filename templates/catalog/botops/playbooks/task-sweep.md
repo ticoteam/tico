@@ -39,7 +39,7 @@ Keep the rows whose owner is a human (`human:...`). For each, check whether what
 | decide something | their answer is on the task, or a newer task or message supersedes it |
 
 - **Already true or superseded:** `hub task close <id> --note "Done: <one line: what is now true, or what replaced it>"`.
-- **Cannot tell:** ask once, on the task: `hub task ask <id> "Is this still needed?"`. If a question from you is
+- **Cannot tell:** ask once, on the task: `hub task question "Is this still needed?" --on <person> --parent <id>`. If a question from you is
   already the last thing on it, leave it; never ask twice.
 - **Still waiting:** leave it, but if its title or note breaks the rules in `human-tasks.md` (a long
   note, IDs, a list of inputs, "message BotOps with ..."), rewrite them: `hub task update <id> --title "..." --note "..."`.

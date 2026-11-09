@@ -17,6 +17,7 @@ def block_outside_network(monkeypatch, reason):
         if host in ("localhost", "127.0.0.1", "::1"):
             return real(host, *args, **kwargs)
         raise socket.gaierror(-2, reason)
+
     monkeypatch.setattr(socket, "getaddrinfo", local_only)
 
 

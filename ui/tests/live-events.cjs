@@ -1,4 +1,4 @@
-// Live events (ui/app/live.js, GET /api/v2/events), offline: the fixture holds each stream open until the test sends
+// Live events (ui/app/live.ts, GET /api/v2/events), offline: the fixture holds each stream open until the test sends
 // what changed, as the server does when a write commits.
 //  - the Assistant's chat follows its conversation on the page's one stream and reads its snapshot once per change, not
 //    on a timer;
@@ -45,10 +45,10 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []},
       {name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
@@ -160,13 +160,20 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   // A page with no task on it is sent no task changes; one open task there, only its own.
   assert.deepEqual(await page.evaluate(() => {
     const route = S.route, open = TASK_CHAT;
-    S.route = '#/meetings';
+    S.route = '#/settings';
     const none = new URL(liveUrl(), location.href).searchParams.get('topics').split(',');
     TASK_CHAT = {id: 't9'};
     const one = new URL(liveUrl(), location.href).searchParams;
     S.route = route; TASK_CHAT = open; LIVE.taskKey = liveTaskKey(liveTaskScope());
     return [none.includes('tasks'), one.get('task'), one.get('topics').includes('tasks')];
   }), [false, 't9', true]);
+  assert.equal(await page.evaluate(() => {
+    const route = S.route;
+    S.route = '#/meetings';
+    const topics = new URL(liveUrl(), location.href).searchParams.get('topics');
+    S.route = route; LIVE.taskKey = liveTaskKey(liveTaskScope());
+    return topics.includes('tasks');
+  }), true, 'meeting details follow tasks so new links can arrive');
   await page.locator('#task-body', {hasText: 'Draft the final release notes'}).waitFor();
   assert.equal(reads.tasks, listed, 'the change came with the event');
   // A new task arrives whole too: a busy team's bots create tasks every few seconds, and every open tab gets each one.

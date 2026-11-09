@@ -60,7 +60,7 @@ Never copy a shareholder's home address, tax id or bank details into a file.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Meetings: `hub calendar list`, and `hub meeting search "board"` and `hub meeting read <id>` for an imported board meeting. Past documents: `hub doc search "<entity> consent"`. A question for
-the requester is `hub task ask <id>`, one open question per task.
+the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Minutes record outcomes, not conversation.** Date, place, attendance and quorum, conflicts declared, each

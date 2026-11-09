@@ -71,7 +71,7 @@ Always:
 Read data with `hub db list`, `hub db <name> "<select>" --csv` and `hub sql`, read only, with a row limit.
 Exports that arrive on tasks are read from the attachment. Launch dates come from `knowledge/launches.md`
 and merged pull requests where GitHub is readable. Goals: `hub goal list --all`. A question for the requester
-is `hub task ask <id>`. A number for the Strategy Bot goes as a note with its query, only on request.
+is `hub task question "<question>" --on <person> --parent <id>`. A number for the Strategy Bot goes as a note with its query, only on request.
 
 ## Quality standards
 - **Answer first.** The first line is the answer with its number and period, not the method.

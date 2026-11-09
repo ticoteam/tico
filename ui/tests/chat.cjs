@@ -1,4 +1,4 @@
-// The Assistant's chat, offline: the one old chat left (ui/app/chat.js), at #/assistant. A bot's page is Home and DM now
+// The Assistant's chat, offline: the one old chat left (ui/app/chat.ts), at #/assistant. A bot's page is Home and DM now
 // (ui/tests/threads.cjs). Fixtures only, no network.
 //  - touch copy and the bot switcher: on touch a tap on a message shows its copy button, off the words; the round menu
 //    button beside the switcher opens the side menu.
@@ -31,7 +31,7 @@ async function touchCopy(browser) {
     const p=new URL(route.request().url()).pathname;
     const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     if(p==='/')return route.fulfill({contentType:'text/html',body:html});
-    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if(ui){
       const file=uiFile(ui[1]);
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});
@@ -109,7 +109,7 @@ async function liveReply(browser) {
     const url=new URL(route.request().url()),p=url.pathname;
     const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     if(p==='/')return route.fulfill({contentType:'text/html',body:html});
-    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if(ui){const file=uiFile(ui[1]);
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
@@ -234,7 +234,7 @@ async function outlineJump(browser) {
     const url=new URL(route.request().url()),p=url.pathname;
     const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     if(p==='/')return route.fulfill({contentType:'text/html',body:html});
-    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if(ui){const file=uiFile(ui[1]);
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
@@ -317,7 +317,7 @@ async function activityFold(browser) {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType:'text/html',body:html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType:ui[1].endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(uiFile('vendor/marked.min.js'),'utf8')});
     if (p === '/api/me') return json({id:'ana',name:'Ana',role:'owner',cloud:true});
@@ -436,7 +436,7 @@ async function sideThreads(browser) {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -548,7 +548,7 @@ async function stickToBottom(browser) {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -614,7 +614,7 @@ async function stickToBottom(browser) {
 }
 
 // A message waiting on setup links to the Settings tab that fixes it, and the link lands on that tab, not on the last
-// one open (one listener for every data-gs-tab link, ui/getting-started.js; the Goal Manager's is in goals.cjs).
+// one open (one listener for every data-gs-tab link, ui/getting-started.ts; the Goal Manager's is in goals.cjs).
 async function settingsLinks(browser) {
   const page = await browser.newPage({viewport:{width:1200,height:800},serviceWorkers:'block'});
   const errors=[];
@@ -627,7 +627,7 @@ async function settingsLinks(browser) {
     const url=new URL(route.request().url()),p=url.pathname;
     const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
     if(p==='/')return route.fulfill({contentType:'text/html',body:html});
-    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui=p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if(ui){const file=uiFile(ui[1]);
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
@@ -645,8 +645,8 @@ async function settingsLinks(browser) {
     reason=why;
     // Settings was last left on another tab, which a plain link to #/settings would reopen.
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-tabs [data-settings-tab=repos]').click();
-    await page.locator('#settings-tabs [data-settings-tab=repos][aria-selected=true]').waitFor();
+    await page.locator('#settings-tabs [data-settings-tab=tasks]').click();
+    await page.locator('#settings-tabs [data-settings-tab=tasks][aria-selected=true]').waitFor();
     await page.goto('https://tico-ui.test/#/assistant');
     await page.locator('.conv-run.chat .thinking').getByRole('link',{name,exact:true}).click();
     await page.locator(`#settings-tabs [data-settings-tab=${tab}][aria-selected=true]`).waitFor();

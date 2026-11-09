@@ -10,6 +10,7 @@ It serves GET /v1/account, GET /v1/balance and GET /v1/balance_transactions (new
   POST /_fake/payout {"amount": 9680}                                                              (cents)
   POST /_fake/reset  forget everything
 Balance transactions carry `net` = `amount` - `fee`, and the balance is the sum of the nets."""
+
 import argparse
 import json
 import threading
@@ -20,7 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 
 LOCK = threading.Lock()
 ACCOUNT = "acct_fake000001"
-TXNS: list[dict[str, Any]] = []      # oldest first; served newest first
+TXNS: list[dict[str, Any]] = []  # oldest first; served newest first
 COUNTER = [0]
 NOW = [int(time.time()) - 3600]
 
@@ -50,15 +51,25 @@ def _source(kind: str, link: str, billing_name: str) -> dict[str, Any]:
 
 def _add(kind: str, amount: int, fee: int, billing_name: str, link: str = "") -> dict[str, Any]:
     NOW[0] += 60
-    txn = {"id": _new_id("txn"), "object": "balance_transaction", "type": kind, "amount": amount, "fee": fee,
-           "net": amount - fee, "currency": "usd", "status": "available", "created_at": NOW[0],
-           "description": f"{kind} {billing_name}".strip(), "source": _source(kind, link, billing_name)}
+    txn = {
+        "id": _new_id("txn"),
+        "object": "balance_transaction",
+        "type": kind,
+        "amount": amount,
+        "fee": fee,
+        "net": amount - fee,
+        "currency": "usd",
+        "status": "available",
+        "created_at": NOW[0],
+        "description": f"{kind} {billing_name}".strip(),
+        "source": _source(kind, link, billing_name),
+    }
     TXNS.append(txn)
     return txn
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, fmt: str, *args: object) -> None:       # quiet: the caller's log is the one that matters
+    def log_message(self, fmt: str, *args: object) -> None:  # quiet: the caller's log is the one that matters
         return
 
     def _send(self, status: int, body: dict[str, Any]) -> None:
@@ -81,8 +92,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"object": "account", "id": ACCOUNT, "livemode": False})
             if url.path == "/v1/balance":
                 net = sum(int(t["net"]) for t in TXNS)
-                return self._send(200, {"object": "balance", "available": [{"amount": net, "currency": "usd"}],
-                                        "pending": [{"amount": 0, "currency": "usd"}], "livemode": False})
+                return self._send(
+                    200,
+                    {
+                        "object": "balance",
+                        "available": [{"amount": net, "currency": "usd"}],
+                        "pending": [{"amount": 0, "currency": "usd"}],
+                        "livemode": False,
+                    },
+                )
             if url.path == "/v1/balance_transactions":
                 query = parse_qs(url.query)
                 limit = min(int(query.get("limit", ["10"])[0]), 100)
@@ -94,9 +112,16 @@ class Handler(BaseHTTPRequestHandler):
                     if after not in ids:
                         return self._send(400, {"error": {"message": "No such balance_transaction"}})
                     start = ids.index(after) + 1
-                page = newest[start:start + limit]
-                return self._send(200, {"object": "list", "data": page,
-                                        "has_more": start + limit < len(newest), "url": "/v1/balance_transactions"})
+                page = newest[start : start + limit]
+                return self._send(
+                    200,
+                    {
+                        "object": "list",
+                        "data": page,
+                        "has_more": start + limit < len(newest),
+                        "url": "/v1/balance_transactions",
+                    },
+                )
         return self._send(404, {"error": {"message": "Unknown endpoint"}})
 
     def do_POST(self) -> None:
@@ -104,8 +129,13 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{}") if length else {}
         with LOCK:
             if self.path == "/_fake/txn":
-                txn = _add(str(body.get("type", "charge")), int(body["amount"]), int(body.get("fee", 0)),
-                           str(body.get("billing_name", "")), str(body.get("link", "")))
+                txn = _add(
+                    str(body.get("type", "charge")),
+                    int(body["amount"]),
+                    int(body.get("fee", 0)),
+                    str(body.get("billing_name", "")),
+                    str(body.get("link", "")),
+                )
                 return self._send(200, {"id": txn["id"], "net": txn["net"], "source": txn["source"]["id"]})
             if self.path == "/_fake/payout":
                 txn = _add("payout", -int(body["amount"]), 0, "")

@@ -1,5 +1,5 @@
 //! `tico-runner`: the Tico local runner. launchd and systemd units that start `python -m runner run` reach it through
-//! runner/engine.py. It keeps the registration file, state directory, lock and outbox, and registers and checks this
+//! runner/__main__.py and runner_support/engine.py. It keeps the registration file, state directory, lock and outbox, and registers and checks this
 //! computer itself (`enroll`, `adopt`, `doctor`, crate::commands).
 
 // A turn's failure carries its whole report, and the caches key on tuples: both read better as they are.
@@ -27,47 +27,51 @@ mod appdriver;
 mod backlog;
 mod browser_exit;
 mod capture;
+mod checkout_groups;
 mod client;
 mod cloud_machine;
 mod commands;
+mod company_skills;
 mod config;
+mod continuity;
 mod credential_imports;
 mod credential_migration;
 mod declared_access;
+mod device_id;
+mod disk_clean;
+mod drain;
+mod drive;
 mod env;
 mod events;
-mod drive;
-mod drain;
 mod execute;
 mod fallback;
+mod fetchrepo;
+mod files_publish;
 mod flight;
 mod follow;
-mod fetchrepo;
 mod gateway_relay;
+mod gitcred;
+mod gitlocks;
 mod gitrun;
 #[cfg(test)]
 mod gittests;
-mod files_publish;
-mod gitcred;
+mod goals;
 mod harness_memory;
 mod harness_tools;
-mod goals;
 mod hosts;
+mod idle_load;
+mod isolation;
 mod lanes;
 mod lease;
-mod login_turns;
 mod lock;
 mod login;
-mod profiles;
-mod isolation;
-mod turn_users;
-mod checkout_groups;
+mod login_turns;
 mod mail_key;
 mod manifest;
+mod mcp;
 mod memory_history;
 mod memory_tidy;
 mod memory_tidy_keep;
-mod mcp;
 mod model_subscriptions;
 mod op;
 mod panics;
@@ -76,37 +80,40 @@ mod perf;
 mod placement;
 mod playbook;
 mod product_files;
+mod profiles;
 mod prompt;
-mod reap;
-mod continuity;
 mod readiness;
 mod readiness_extra;
+mod reap;
 mod redact;
+mod regular_file;
 mod relays;
+mod repo_safety;
 mod repositories;
-mod worktrees;
 mod run_diagnostics;
 mod runner;
-mod sessions;
-mod source_resume;
 mod safegit;
 mod screen;
+mod sessions;
 mod sidejobs;
 mod signin;
+mod source_resume;
 mod state;
-mod tls;
 mod subscription_refresh;
-mod watchers;
+mod tls;
+mod turn_users;
 mod util;
 mod warm;
+mod watchers;
 mod wire;
+mod worktrees;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
-/// The source fingerprint of this build (build.rs; runner/engine.py `source_id`).
+/// The source fingerprint of this build (build.rs; runner_support/engine.py `source_id`).
 pub const BUILD_ID: &str = env!("TICO_BUILD_ID");
 
 #[derive(Parser)]
@@ -201,7 +208,9 @@ enum ScreenAction {
 fn screen_main(action: ScreenAction, config: &mut config::Config) -> i32 {
     if let ScreenAction::On | ScreenAction::Off = action {
         let on = matches!(action, ScreenAction::On);
-        config.data.insert("screen".into(), serde_json::Value::Bool(on));
+        config
+            .data
+            .insert("screen".into(), serde_json::Value::Bool(on));
         if let Err(e) = config.save() {
             fail(&e);
         }
@@ -210,7 +219,9 @@ fn screen_main(action: ScreenAction, config: &mut config::Config) -> i32 {
     let missing = if on { screen::missing_tools() } else { vec![] };
     let mut out = serde_json::json!({"screen": if on { "on" } else { "off" }, "set_by": source});
     if let Some(report) = screen::report(on, std::env::consts::OS, &missing, None, true) {
-        out.as_object_mut().unwrap().extend(report.as_object().cloned().unwrap_or_default());
+        out.as_object_mut()
+            .unwrap()
+            .extend(report.as_object().cloned().unwrap_or_default());
     }
     if source == "TICO_SCREEN" && !matches!(action, ScreenAction::Status) {
         out["note"] = serde_json::json!("TICO_SCREEN is set and wins over this setting");
@@ -237,39 +248,75 @@ enum ProfileAction {
     Login { name: String, runtime: String },
 }
 
-/// `profile add|list|login` (runner/__main__.py profile_command): local to this computer, no network.
+/// `profile add|list|login` (runner_support/__main__.py profile_command): local to this computer, no network.
 fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
     let result = match action {
-        ProfileAction::Add { name, share_operator } => profiles::command(config, "add", Some(&name), share_operator),
+        ProfileAction::Add {
+            name,
+            share_operator,
+        } => profiles::command(config, "add", Some(&name), share_operator),
         ProfileAction::List => profiles::command(config, "list", None, false),
         ProfileAction::Login { name, runtime } => {
             let choices = harness_tools::profile_runtimes();
             if !choices.contains(&runtime) {
-                fail(&format!("argument runtime: invalid choice: '{runtime}' (choose from {})", choices.join(", ")));
+                fail(&format!(
+                    "argument runtime: invalid choice: '{runtime}' (choose from {})",
+                    choices.join(", ")
+                ));
             }
-            let entry = config.data.get("profiles").and_then(|p| p.get(&name)).filter(|e| util::truthy(Some(e))).cloned();
-            let Some(entry) = entry else { fail("No such profile on this registration; add it with `profile add`") };
+            let entry = config
+                .data
+                .get("profiles")
+                .and_then(|p| p.get(&name))
+                .filter(|e| util::truthy(Some(e)))
+                .cloned();
+            let Some(entry) = entry else {
+                fail("No such profile on this registration; add it with `profile add`")
+            };
             // One login per tool per computer: only the computer's own (its default profile) signs in here.
-            if config.data.get("default_profile").map(util::text_of).as_deref() != Some(name.as_str()) {
+            if config
+                .data
+                .get("default_profile")
+                .map(util::text_of)
+                .as_deref()
+                != Some(name.as_str())
+            {
                 fail(&format!("Profile {name} is not this computer's login: each computer has one login per AI tool, used by all its bots; for a different account, add another runner"));
             }
-            let profile = profiles::Profile::new(&name, &util::text_of(&entry["dir"]), util::truthy(entry.get("share_operator")));
+            let profile = profiles::Profile::new(
+                &name,
+                &util::text_of(&entry["dir"]),
+                util::truthy(entry.get("share_operator")),
+            );
             if profile.share_operator {
-                fail(&format!("Profile {name} shares the operator's own logins; sign in normally"));
+                fail(&format!(
+                    "Profile {name} shares the operator's own logins; sign in normally"
+                ));
             }
             let home = profile.home(&runtime).unwrap_or_default();
             let command = profiles::login_command(&runtime).unwrap_or_default();
             if command.is_empty() && harness_tools::caps(&runtime, "").api_keys == "bot" {
                 let secrets = config.projects_dir().join("secrets");
-                let key = harness_tools::api_key_env(&runtime).into_iter().next().unwrap_or_default();
+                let key = harness_tools::api_key_env(&runtime)
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default();
                 let name = harness_tools::name_for(&runtime);
                 println!("{name} authenticates with an API key, not an interactive login: put {key} in {}/_shared.env or <bot>.env. This profile's {name} sessions live in {}.", secrets.display(), home.display());
                 return 0;
             }
-            if command.is_empty() || env::which(&command[0], &std::env::var("PATH").unwrap_or_default()).is_none() {
-                fail(&format!("{} is not on PATH", command.first().unwrap_or(&runtime)));
+            if command.is_empty()
+                || env::which(&command[0], &std::env::var("PATH").unwrap_or_default()).is_none()
+            {
+                fail(&format!(
+                    "{} is not on PATH",
+                    command.first().unwrap_or(&runtime)
+                ));
             }
-            println!("Signing in to {runtime} for profile {name} in {}", home.display());
+            println!(
+                "Signing in to {runtime} for profile {name} in {}",
+                home.display()
+            );
             // Interactive on purpose: the CLI owns the browser flow and prints its own instructions.
             let status = std::process::Command::new(&command[0])
                 .args(&command[1..])
@@ -290,7 +337,11 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
 }
 
 fn flight_summary(dir: &std::path::Path, since: &str) -> i32 {
-    let Some(seconds) = flight::parse_since(since) else { fail(&format!("argument --since: not a duration: '{since}' (e.g. 30m, 1h, 2d)")) };
+    let Some(seconds) = flight::parse_since(since) else {
+        fail(&format!(
+            "argument --since: not a duration: '{since}' (e.g. 30m, 1h, 2d)"
+        ))
+    };
     print!("{}", flight::summary(dir, seconds, util::epoch_s()));
     0
 }
@@ -303,7 +354,11 @@ fn fail(message: &str) -> ! {
 fn main() {
     // A turn's `gh` is this binary under that name (gitcred::shim_dir).
     let argv: Vec<String> = std::env::args().collect();
-    if argv.first().and_then(|a| std::path::Path::new(a).file_name()).is_some_and(|n| n == "gh") {
+    if argv
+        .first()
+        .and_then(|a| std::path::Path::new(a).file_name())
+        .is_some_and(|n| n == "gh")
+    {
         std::process::exit(gitcred::gh_main(argv[1..].to_vec()));
     }
     if argv.get(1).is_some_and(|a| a == reap::FLAG) {
@@ -315,7 +370,7 @@ fn main() {
         std::process::exit(0);
     }
     if argv.get(1).is_some_and(|a| a == "--build-id") {
-        // The source fingerprint build.rs stamped in: runner/engine.py rebuilds when the checkout's differs.
+        // The source fingerprint build.rs stamped in: runner_support/engine.py rebuilds when the checkout's differs.
         println!("{}", BUILD_ID);
         std::process::exit(0);
     }
@@ -327,14 +382,37 @@ fn main() {
         std::process::exit(gitcred::git_credential_main(socket.clone()));
     }
     util::start_clock();
-    if let Command::Flight { action: FlightAction::Summary { since, dir: Some(dir) } } = &cli.command {
+    if let Command::Flight {
+        action: FlightAction::Summary {
+            since,
+            dir: Some(dir),
+        },
+    } = &cli.command
+    {
         std::process::exit(flight_summary(dir, since));
     }
     let path = cli.config.unwrap_or_else(commands::default_config);
-    if let Command::Enroll { url, code_file, label, projects, environment } = &cli.command {
+    if let Command::Enroll {
+        url,
+        code_file,
+        label,
+        projects,
+        environment,
+    } = &cli.command
+    {
         // Before Config::load: enrolling is what writes it.
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
-        match rt.block_on(commands::enroll(&path, url, code_file, label, projects, environment)) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        match rt.block_on(commands::enroll(
+            &path,
+            url,
+            code_file,
+            label,
+            projects,
+            environment,
+        )) {
             Ok(out) => println!("{}", util::py_dumps(&out)),
             Err((2, message)) => fail(&message),
             Err((code, message)) => {
@@ -345,6 +423,8 @@ fn main() {
         std::process::exit(0);
     }
     let mut config = config::Config::load(&path).unwrap_or_else(|e| fail(&e));
+    gitlocks::own(&[config.projects_dir(), config.state_dir(), env::root()]);
+    gitlocks::own_checkout(&env::root());
     // Before any thread starts, and before `profile login` looks for its harness.
     harness_tools::expose_if_owned(&config);
     if let Command::Profile { action } = cli.command {
@@ -353,24 +433,37 @@ fn main() {
     if let Command::Screen { action } = cli.command {
         std::process::exit(screen_main(action, &mut config));
     }
-    if let Command::Flight { action: FlightAction::Summary { since, .. } } = &cli.command {
+    if let Command::Flight {
+        action: FlightAction::Summary { since, .. },
+    } = &cli.command
+    {
         std::process::exit(flight_summary(&config.state_dir(), since));
     }
     if let Command::Run | Command::Doctor = cli.command {
         // Puts the tools bin on PATH, so it runs before any thread reads the environment. Doctor keeps its own
         // harness state, as Python's did, so a check never rewrites the running runner's.
         match cli.command {
-            Command::Doctor => harness_tools::init_at(&config, path.parent().unwrap_or(std::path::Path::new(".")).join("harnesses-doctor.json")),
+            Command::Doctor => harness_tools::init_at(
+                &config,
+                path.parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("harnesses-doctor.json"),
+            ),
             _ => harness_tools::init(&config),
         };
         hosts::musecode::set_state_dir(&config.state_dir());
     }
-    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("tokio runtime");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
     std::process::exit(rt.block_on(async move { start(cli.command, config).await }));
 }
 
 async fn start(command: Command, config: config::Config) -> i32 {
-    let client = client::Client::new(&config.url(), &config.token(), 10, 1).unwrap_or_else(|e| fail(&e));
+    let client =
+        client::Client::new(&config.url(), &config.token(), 10, 1).unwrap_or_else(|e| fail(&e));
     let refused = |(code, message): commands::Refusal| {
         if code == 2 {
             fail(&message);
@@ -403,7 +496,12 @@ async fn start(command: Command, config: config::Config) -> i32 {
         _ => {}
     }
     if let Command::Status = command {
-        let read = async { Ok::<_, client::ApiError>((client.get("runners/assignments").await?, client.get("runners/eligible").await?)) };
+        let read = async {
+            Ok::<_, client::ApiError>((
+                client.get("runners/assignments").await?,
+                client.get("runners/eligible").await?,
+            ))
+        };
         return match read.await {
             Ok((assignments, eligible)) => {
                 let out = serde_json::json!({"runner_id": config.runner_id(), "assignments": assignments, "eligible": eligible});
@@ -434,12 +532,17 @@ async fn start(command: Command, config: config::Config) -> i32 {
     if isolation::enabled() {
         // Sign-ins a person ran as root (`docker exec`) go to the bot user, who runs the harnesses.
         let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        isolation::adopt_store(&[".codex", ".claude", ".claude.json", ".gemini", ".config"].map(|p| home.join(p)));
+        isolation::adopt_store(
+            &[".codex", ".claude", ".claude.json", ".gemini", ".config"].map(|p| home.join(p)),
+        );
         hosts::grok::hand_login_to_bot();
         // Subscription profiles made before their homes were the bot user's, or by `profile add` without isolation.
         for profile in profiles::configured(&config.data) {
             if let Err(e) = profiles::hand_to_bot(&profile) {
-                util::log(&format!("Tico runner: subscription profile {}: {e}", profile.name));
+                util::log(&format!(
+                    "Tico runner: subscription profile {}: {e}",
+                    profile.name
+                ));
             }
         }
     }
@@ -447,7 +550,9 @@ async fn start(command: Command, config: config::Config) -> i32 {
     let mut service = runner::Runner::new(config, client.clone(), state);
     match gitcred::CredentialSocket::serve(client.clone(), service.tokens.clone()) {
         Ok(socket) => service.socket = Some(socket),
-        Err(e) => util::log(&format!("Tico runner: credential socket unavailable ({e}); turns use per-turn GitHub tokens")),
+        Err(e) => util::log(&format!(
+            "Tico runner: credential socket unavailable ({e}); turns use per-turn GitHub tokens"
+        )),
     }
     let service = Arc::new(service);
     let stopper = service.clone();
@@ -460,10 +565,16 @@ async fn start(command: Command, config: config::Config) -> i32 {
             tokio::select! { _ = term.recv() => stopper.shut_down(), _ = int.recv() => {} }
         }
         tokio::select! { _ = term.recv() => {}, _ = int.recv() => {} }
-        stopper.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        stopper
+            .stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         stopper.events.wake.notify_one();
     });
-    util::log(&format!("Tico runner {} (rust) started for {}", runner::RUNNER_RELEASE, service.config.runner_id()));
+    util::log(&format!(
+        "Tico runner {} (rust) started for {}",
+        runner::RUNNER_RELEASE,
+        service.config.runner_id()
+    ));
     tls::announce(util::log);
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
@@ -480,11 +591,17 @@ async fn start(command: Command, config: config::Config) -> i32 {
 
 #[cfg(test)]
 mod build_id_tests {
-    /// build.rs's SHA-256 and file list agree with `ring` here and with runner/engine.py `source_id`.
+    /// build.rs's SHA-256 and file list agree with `ring` here and with runner_support/engine.py `source_id`.
     #[test]
     fn the_build_id_is_the_checkouts_source_id() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let mut names = vec!["runner-rs/build.rs".to_string(), "runner-rs/Cargo.toml".into(), "runner-rs/Cargo.lock".into()];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let mut names = vec![
+            "runner-rs/build.rs".to_string(),
+            "runner-rs/Cargo.toml".into(),
+            "runner-rs/Cargo.lock".into(),
+        ];
         let mut stack = vec![root.join("runner-rs/src")];
         while let Some(dir) = stack.pop() {
             for p in std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()) {
@@ -495,7 +612,11 @@ mod build_id_tests {
                 }
             }
         }
-        for p in std::fs::read_dir(root.join("runner/harnesses")).unwrap().flatten().map(|e| e.path()) {
+        for p in std::fs::read_dir(root.join("runner-rs/harnesses"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+        {
             if p.extension().is_some_and(|e| e == "toml") {
                 names.push(p.strip_prefix(root).unwrap().display().to_string());
             }
@@ -508,15 +629,22 @@ mod build_id_tests {
             data.extend_from_slice(&bytes);
         }
         let digest = ring::digest::digest(&ring::digest::SHA256, &data);
-        let id: String = digest.as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect();
+        let id: String = digest.as_ref()[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         assert_eq!(super::BUILD_ID, id);
         let python = std::process::Command::new("python3")
-            .args(["-c", "import sys; from runner.engine import source_id; print(source_id(__import__('pathlib').Path(sys.argv[1])))"])
+            .args(["-c", "import sys; from runner_support.engine import source_id; print(source_id(__import__('pathlib').Path(sys.argv[1])))"])
             .arg(root)
             .current_dir(root)
             .output();
         if let Ok(out) = python {
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
             assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), id);
         }
     }

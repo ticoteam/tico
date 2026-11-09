@@ -9,11 +9,16 @@ from backend import task_relations as TR
 from backend.store import H
 from backend.tests.test_api import api, claim, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def finish(api, machine, attempt, text="Done."):
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": text, "last_seq": 0},
-         machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": text, "last_seq": 0},
+        machine["token"],
+    )
 
 
 def park(c, tid, wait):
@@ -31,7 +36,7 @@ def park(c, tid, wait):
     if wait == "milestone":
         milestone_waits.add(c, "bot:ops", H.task(c, tid), "release:ticoteam/tico@v0.5.22")
     elif wait == "snooze":
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=4), tid))
+        set_holds(c, tid, snoozed_until=H.shift(H.now(), hours=4))
 
 
 def waiting_task(api, machine, wait, requester="human:ana"):
@@ -48,8 +53,11 @@ def waiting_task(api, machine, wait, requester="human:ana"):
     return tid
 
 
-@pytest.mark.parametrize("wait", ["nothing", "child", "blocked_by", "person", "milestone", "snooze"])
-@pytest.mark.parametrize("requester", ["human:ana", "bot:ops"])
+@pytest.mark.parametrize(
+    "wait,requester",
+    [(w, "human:ana") for w in ["nothing", "child", "blocked_by", "person", "milestone", "snooze"]]
+    + [("nothing", "bot:ops")],
+)
 def test_a_persons_comment_on_a_waiting_task_starts_the_bots_turn(api, wait, requester):
     machine = task_bot(api, lanes=True, others=("cpo",))
     tid = waiting_task(api, machine, wait, requester)

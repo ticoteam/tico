@@ -30,7 +30,9 @@ def test_deploy_caddy_creates_tagged_locked_down_resources():
     ports = {p["FromPort"] for p in ing["IpPermissions"]}
     assert ports == {80, 443} and 22 not in ports
     assert ec2.called("associate_address")[0]["InstanceId"] == "i-1"
-    assert json.loads(iam.called("put_role_policy")[0]["PolicyDocument"])["Statement"][0]["Resource"].endswith(":parameter/tico/tico-example-com/env")
+    assert json.loads(iam.called("put_role_policy")[0]["PolicyDocument"])["Statement"][0]["Resource"].endswith(
+        ":parameter/tico/tico-example-com/env"
+    )
 
 
 def test_env_goes_to_a_secure_string_parameter_and_never_into_user_data():
@@ -48,12 +50,20 @@ OURS = [{"Key": "ManagedBy", "Value": "tico-setup"}, {"Key": "tico-setup-name", 
 def test_discover_and_destroy_touch_only_tagged_resources():
     stranger = {"InstanceId": "i-other", "Tags": [{"Key": "tico-setup-name", "Value": "tico-example-com"}]}
     mine = {"InstanceId": "i-mine", "Tags": OURS}
-    ec2 = FakeEC2(extra_instances=[stranger, mine], extra_sgs=[{"GroupId": "sg-other", "Tags": []}, {"GroupId": "sg-mine", "Tags": OURS}])
+    ec2 = FakeEC2(
+        extra_instances=[stranger, mine],
+        extra_sgs=[{"GroupId": "sg-other", "Tags": []}, {"GroupId": "sg-mine", "Tags": OURS}],
+    )
     ec2.eips = [{"AllocationId": "eip-mine", "Tags": OURS}, {"AllocationId": "eip-other", "Tags": []}]
     iam, ssm = FakeIAM(role_tags=OURS), FakeSSM(param_tags=OURS)
     found = aws.discover(ec2, iam, ssm, "tico-example-com")
-    assert found == {"instance": ["i-mine"], "elastic-ip": ["eip-mine"], "security-group": ["sg-mine"],
-                     "iam-role": ["tico-tico-example-com"], "ssm-parameter": ["/tico/tico-example-com/env"]}
+    assert found == {
+        "instance": ["i-mine"],
+        "elastic-ip": ["eip-mine"],
+        "security-group": ["sg-mine"],
+        "iam-role": ["tico-tico-example-com"],
+        "ssm-parameter": ["/tico/tico-example-com/env"],
+    }
     aws.destroy(ec2, iam, ssm, found, say=lambda m: None, sleep=lambda s: None)
     assert ec2.called("terminate_instances") == [{"InstanceIds": ["i-mine"]}]
     assert ec2.called("release_address") == [{"AllocationId": "eip-mine"}]
@@ -74,18 +84,30 @@ NAT = {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "nat-1"}
 IGW = {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1"}
 
 
-
 def test_hosted_runner_sizes_use_matching_images_and_boundary_without_ingress():
-    for size, arch, disk in (('t4g.medium','arm64',30),('m8i-flex.xlarge','amd64',100),('m8i-flex.2xlarge','amd64',200)):
+    for size, arch, disk in (
+        ('t4g.medium', 'arm64', 30),
+        ('m8i-flex.xlarge', 'amd64', 100),
+        ('m8i-flex.2xlarge', 'amd64', 200),
+    ):
         ec2, iam, ssm, _ = aws_clients()
-        p = aws.plan_aws(domain='https://acme.tico.dev', front_door='none', region='us-east-2',
-            instance_type=size, name='pv-bot', role='runner', boundary='arn:aws:iam::123456789012:policy/boundary')
+        p = aws.plan_aws(
+            domain='https://acme.tico.dev',
+            front_door='none',
+            region='us-east-2',
+            instance_type=size,
+            name='pv-bot',
+            role='runner',
+            boundary='arn:aws:iam::123456789012:policy/boundary',
+        )
         d = deployer(p, ec2, iam, ssm)
         names = []
         original = ssm.get_parameter
+
         def get_parameter(**kw):
             names.append(kw['Name'])
             return original(**kw)
+
         ssm.get_parameter = get_parameter
         d.launch_or_reuse(d.prepare(), '#!/bin/bash\n')
         assert arch in names[0]
@@ -93,5 +115,33 @@ def test_hosted_runner_sizes_use_matching_images_and_boundary_without_ingress():
         assert ec2.called('run_instances')[0]['InstanceType'] == size
         assert ec2.called('run_instances')[0]['BlockDeviceMappings'][0]['Ebs']['VolumeSize'] == disk
         assert f'{disk} GiB encrypted gp3' in p.lines()[0]
-        assert p.monthly_usd == round(aws.HOURLY[size] * aws.HOURS + disk * aws.EBS_GB_MONTH + aws.PUBLIC_IPV4_HOUR * aws.HOURS, 2)
+        assert p.monthly_usd == round(
+            aws.HOURLY[size] * aws.HOURS + disk * aws.EBS_GB_MONTH + aws.PUBLIC_IPV4_HOUR * aws.HOURS, 2
+        )
         assert not ec2.called('authorize_security_group_ingress')
+
+
+def test_a_full_boot_script_over_ec2s_16_kb_cap_launches_gzipped():
+    import gzip
+    from pathlib import Path
+
+    from setup import remote
+
+    compose = (Path(aws.__file__).resolve().parent.parent / "compose.yaml").read_bytes()
+    script = remote.bootstrap_script(
+        os_family="ubuntu",
+        domain="tico.example.com",
+        front_door="caddy",
+        compose=compose,
+        compose_url="",
+        env_param=("/tico/tico-example-com/env", "us-east-1"),
+        wait_for_ip="203.0.113.9",
+    )
+    assert len(script.encode()) > aws.USER_DATA_LIMIT  # what made every hosted AWS launch fail
+    ec2, iam, ssm, _ = aws_clients()
+    d = deployer(plan("caddy"), ec2, iam, ssm)
+    d.launch_or_reuse(d.prepare(), script)
+    sent = ec2.raw_user_data
+    assert isinstance(sent, bytes) and len(sent) <= aws.USER_DATA_LIMIT
+    assert gzip.decompress(sent).decode() == script == ec2.called("run_instances")[0]["UserData"]
+    assert aws.fit_user_data("#!/bin/bash\n") == "#!/bin/bash\n"  # small scripts stay plain text

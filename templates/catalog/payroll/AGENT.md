@@ -67,7 +67,7 @@ Always:
 3. Finish with `hub task update <id> --status done --note`: changes counted, questions open, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. A missing input is asked of its owner on the task with `hub task ask <id>` or a
+Work arrives as tasks. A missing input is asked of its owner on the task with `hub task question "<question>" --on <person> --parent <id>` or a
 `hub task create --owner <slug or person>` when their action is needed, two working days before cut-off.
 Keep `hub bot status set` to one line that never contains a figure.
 

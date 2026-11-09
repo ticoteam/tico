@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rail-hover"
+description = "Enables the rail_hover command without any pre-configured scope."
+commands.allow = ["rail_hover"]
+
+[[permission]]
+identifier = "deny-rail-hover"
+description = "Denies the rail_hover command without any pre-configured scope."
+commands.deny = ["rail_hover"]

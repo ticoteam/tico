@@ -6,8 +6,20 @@ from backend.tests.test_api import api, get, headers, post, put  # noqa: F401
 from backend.tests.test_company import bot
 from backend.tests.test_openapi_v2 import conforms
 
-ECONOMICS = ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180", "expected_months", "ltv",
-             "ltv_cac", "payback_months", "quality")
+ECONOMICS = (
+    "spend",
+    "bot_cost",
+    "new_customers",
+    "cac",
+    "kept_d30",
+    "kept_d90",
+    "kept_d180",
+    "expected_months",
+    "ltv",
+    "ltv_cac",
+    "payback_months",
+    "quality",
+)
 MONEY = ("revenue_month", "margin_pct")
 FIGURES = ECONOMICS + MONEY
 
@@ -33,12 +45,18 @@ def marked(api, token="ana-test"):
 
 
 def test_an_empty_company_reads_empty_numbers(api):
-    assert get(api, "growth/numbers") == {"months": [], "series": [], "channels": [],
-                                          "kpis": {"north_star": None, "inputs": [], "guardrails": [], "other": []},
-                                          "markers": [], "may_edit": True}
+    assert get(api, "growth/numbers") == {
+        "months": [],
+        "series": [],
+        "channels": [],
+        "kpis": {"north_star": None, "inputs": [], "guardrails": [], "other": []},
+        "markers": [],
+        "may_edit": True,
+    }
     add_channel(api)
     assert get(api, "growth/numbers")["channels"] == [
-        {"slug": "google-search", "name": "Google Search", "stage": "idea", "owner_ref": None, "series": []}]
+        {"slug": "google-search", "name": "Google Search", "stage": "idea", "owner_ref": None, "series": []}
+    ]
 
 
 def test_a_figure_not_recorded_is_null_never_zero(api):
@@ -53,10 +71,33 @@ def test_the_total_is_economics_total_over_the_months_cohorts(api):
     put(api, "growth/settings", {"revenue_month": 90, "margin_pct": 40})
     add_channel(api)
     add_channel(api, slug="referrals", name="Referrals")
-    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "spend": 3400, "bot_cost": 260,
-                                "new_customers": 71, "kept_d30": 81, "kept_d90": 64, "kept_d180": 52})
-    put(api, "growth/cohorts", {"channel": "referrals", "month": "2026-10", "spend": 500, "new_customers": 20,
-                                "kept_d30": 70, "revenue_month": 120, "margin_pct": 30})
+    put(
+        api,
+        "growth/cohorts",
+        {
+            "channel": "google-search",
+            "month": "2026-10",
+            "spend": 3400,
+            "bot_cost": 260,
+            "new_customers": 71,
+            "kept_d30": 81,
+            "kept_d90": 64,
+            "kept_d180": 52,
+        },
+    )
+    put(
+        api,
+        "growth/cohorts",
+        {
+            "channel": "referrals",
+            "month": "2026-10",
+            "spend": 500,
+            "new_customers": 20,
+            "kept_d30": 70,
+            "revenue_month": 120,
+            "margin_pct": 30,
+        },
+    )
     put(api, "growth/cohorts", {"channel": "unknown", "month": "2026-10", "new_customers": 18, "kept_d30": 70})
     with api.app.state.store.read() as c:
         expected = G.economics_total(G.cohorts(c, month="2026-10"), G.settings(c))
@@ -65,13 +106,19 @@ def test_the_total_is_economics_total_over_the_months_cohorts(api):
     numbers = get(api, "growth/numbers")
     total = numbers["series"][0]
     assert {key: total[key] for key in ECONOMICS} == {key: expected[key] for key in ECONOMICS}
-    assert {key: total[key] for key in MONEY} == {key: money[key] for key in MONEY} == {"revenue_month": 95.5,
-                                                                                       "margin_pct": 37.7}
+    assert (
+        {key: total[key] for key in MONEY}
+        == {key: money[key] for key in MONEY}
+        == {"revenue_month": 95.5, "margin_pct": 37.7}
+    )
     assert total["new_customers"] == 109 and total["cac"] == round((3400 + 500 + 260) / 109, 2)
     # Each channel's own cohort: referrals sets its own revenue and margin, google search takes the settings.
     referrals = next(ch for ch in numbers["channels"] if ch["slug"] == "referrals")["series"][0]
-    assert {key: referrals[key] for key in MONEY} == {key: referrals_own[key] for key in MONEY} == {
-        "revenue_month": 120, "margin_pct": 30}
+    assert (
+        {key: referrals[key] for key in MONEY}
+        == {key: referrals_own[key] for key in MONEY}
+        == {"revenue_month": 120, "margin_pct": 30}
+    )
     google = next(ch for ch in numbers["channels"] if ch["slug"] == "google-search")["series"][0]
     assert (google["revenue_month"], google["margin_pct"]) == (90, 40)
 
@@ -101,7 +148,10 @@ def test_channels_are_live_in_their_order_each_with_its_own_months_and_unknown_l
     post(api, "growth/channels/flyers/retire", {})
     numbers = get(api, "growth/numbers")
     assert [(ch["slug"], [s["month"] for s in ch["series"]]) for ch in numbers["channels"]] == [
-        ("google-search", ["2026-09", "2026-10"]), ("seo", []), ("unknown", ["2026-10"])]
+        ("google-search", ["2026-09", "2026-10"]),
+        ("seo", []),
+        ("unknown", ["2026-10"]),
+    ]
     assert numbers["channels"][2]["name"] == "Unknown"
     # A retired channel's customers stay in the total, as its cohorts do.
     assert [s["new_customers"] for s in numbers["series"]] == [5, 11]
@@ -111,8 +161,17 @@ def test_kpis_group_by_growth_role_and_carry_their_last_24_readings_for_whoever_
     north = post(api, "kpis", {"name": "Active customers"})["kpi"]
     post(api, f"kpis/{north['id']}", {"growth_role": "north_star"})
     booked = post(api, "kpis", {"name": "Bookings"})["kpi"]
-    post(api, f"kpis/{booked['id']}", {"parent_kpi_id": north["id"], "growth_role": "input", "stage": "acquire",
-                                       "loop_name": "Referral", "loop_step": 2})
+    post(
+        api,
+        f"kpis/{booked['id']}",
+        {
+            "parent_kpi_id": north["id"],
+            "growth_role": "input",
+            "stage": "acquire",
+            "loop_name": "Referral",
+            "loop_step": 2,
+        },
+    )
     triage = post(api, "kpis", {"name": "Inbox triage"})["kpi"]
     post(api, f"kpis/{triage['id']}", {"growth_role": "input"})
     refunds = post(api, "kpis", {"name": "Refund rate", "unit": "%"})["kpi"]
@@ -134,7 +193,11 @@ def test_kpis_group_by_growth_role_and_carry_their_last_24_readings_for_whoever_
     assert [k["name"] for k in kpis["other"]] == ["Sign-ups", "Shares"]
     bookings = kpis["inputs"][0]
     assert (bookings["parent_kpi_id"], bookings["stage"], bookings["loop_name"], bookings["loop_step"]) == (
-        north["id"], "acquire", "Referral", 2)
+        north["id"],
+        "acquire",
+        "Referral",
+        2,
+    )
     assert bookings["latest"] == 26 and [p["value"] for p in bookings["series"]] == list(range(3, 27))
     assert bookings["series"][-1]["at"].startswith("2026-10-26")
     assert [k["name"] for k in get(api, "growth/numbers", "cara-test")["kpis"]["inputs"]] == ["Bookings"]
@@ -147,46 +210,73 @@ def test_a_kpi_series_is_the_sparkline_rule_one_value_per_period_without_partial
 
     def log(value, period, **more):
         return post(api, f"kpis/{kpi['id']}/readings", {"value": value, "period_end": period, **more})["reading"]
+
     log(1, "2026-10-01T00:00:00Z")
     log(2, "2026-10-02T00:00:00Z", quality="partial")
     first = log(3, "2026-10-03T00:00:00Z")
     # A correction names the reading it supersedes, which then drops out of the series.
     log(30, "2026-10-03T00:00:00Z", supersedes=first["id"], note="Recounted the day's bookings")
     log(4, "2026-10-04T00:00:00Z")
-    log(40, "2026-10-04T00:00:00Z")   # a second reading of the same period: the later one is the value
+    log(40, "2026-10-04T00:00:00Z")  # a second reading of the same period: the later one is the value
     series = get(api, "growth/numbers")["kpis"]["inputs"][0]["series"]
-    assert series == [{"at": "2026-10-01T00:00:00.000000Z", "value": 1},
-                      {"at": "2026-10-03T00:00:00.000000Z", "value": 30},
-                      {"at": "2026-10-04T00:00:00.000000Z", "value": 40}]
+    assert series == [
+        {"at": "2026-10-01T00:00:00.000000Z", "value": 1},
+        {"at": "2026-10-03T00:00:00.000000Z", "value": 30},
+        {"at": "2026-10-04T00:00:00.000000Z", "value": 40},
+    ]
 
 
 def test_a_test_gives_a_started_and_a_finished_marker_newest_first(api):
-    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops",
-                              "type": "idea"})["id"]
+    tid = post(
+        api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops", "type": "idea"}
+    )["id"]
     move(api, tid, "idea-doing")
     move(api, tid, "idea-won")
     found = get(api, "growth/numbers")["markers"]
     assert [(m["kind"], m["outcome"], m["task_id"], m["title"]) for m in found] == [
-        ("finished", "won", tid, "Weekend discount"), ("started", None, tid, "Weekend discount")]
+        ("finished", "won", tid, "Weekend discount"),
+        ("started", None, tid, "Weekend discount"),
+    ]
     assert found[0]["at"] > found[1]["at"] and found[0]["channels"] == [] and found[0]["goal_id"] is None
 
 
 def test_a_task_moved_twice_gives_two_markers_with_its_channel_and_goal(api):
     goal = post(api, "goals", {"title": "Raise activation", "owner": "ana"})["goal"]["id"]
-    tid = post(api, "tasks", {"title": "Door hangers in Elm Park", "body": "Print and place them.", "owner": "ops",
-                              "type": "idea", "labels": ["channel:seo"], "goal_id": goal})["id"]
+    tid = post(
+        api,
+        "tasks",
+        {
+            "title": "Door hangers in Elm Park",
+            "body": "Print and place them.",
+            "owner": "ops",
+            "type": "idea",
+            "labels": ["channel:seo"],
+            "goal_id": goal,
+        },
+    )["id"]
     move(api, tid, "idea-doing")
     move(api, tid, "idea-paused")
     move(api, tid, "idea-doing")
     found = get(api, "growth/numbers")["markers"]
     assert [(m["kind"], m["task_id"], m["channels"], m["goal_id"]) for m in found] == [
-        ("started", tid, ["seo"], goal)] * 2
+        ("started", tid, ["seo"], goal)
+    ] * 2
 
 
 def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api):
     add_fay(api)
-    tid = post(api, "tasks", {"title": "Cold email to dentists", "body": "Test a cold email.", "owner": "cara",
-                              "type": "idea", "private": True, "labels": ["channel:email"]})["id"]
+    tid = post(
+        api,
+        "tasks",
+        {
+            "title": "Cold email to dentists",
+            "body": "Test a cold email.",
+            "owner": "cara",
+            "type": "idea",
+            "private": True,
+            "labels": ["channel:email"],
+        },
+    )["id"]
     move(api, tid, "idea-doing", token="cara-test")
     assert tid in marked(api, "cara-test")
     get(api, "tasks/" + tid, "fay-test", expected=404)
@@ -197,8 +287,9 @@ def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api
 
 
 def test_a_deleted_task_leaves_the_markers(api):
-    tid = post(api, "tasks", {"title": "Flyers at the farmers market", "body": "Try it.", "owner": "ops",
-                              "type": "idea"})["id"]
+    tid = post(
+        api, "tasks", {"title": "Flyers at the farmers market", "body": "Try it.", "owner": "ops", "type": "idea"}
+    )["id"]
     move(api, tid, "idea-doing")
     assert tid in marked(api)
     post(api, f"tasks/{tid}/delete", {})
@@ -214,14 +305,27 @@ def test_anyone_signed_in_reads_and_may_edit_is_for_admins_and_bots(api):
 
 def test_the_live_answer_matches_the_declared_contract(api):
     add_channel(api)
-    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "spend": 3400, "bot_cost": 260,
-                                "new_customers": 71, "kept_d30": 81, "kept_d90": 64, "kept_d180": 52})
+    put(
+        api,
+        "growth/cohorts",
+        {
+            "channel": "google-search",
+            "month": "2026-10",
+            "spend": 3400,
+            "bot_cost": 260,
+            "new_customers": 71,
+            "kept_d30": 81,
+            "kept_d90": 64,
+            "kept_d180": 52,
+        },
+    )
     put(api, "growth/cohorts", {"channel": "unknown", "month": "2026-10", "new_customers": 18})
     north = post(api, "kpis", {"name": "Active customers"})["kpi"]
     post(api, f"kpis/{north['id']}", {"growth_role": "north_star"})
     post(api, f"kpis/{north['id']}/readings", {"value": 412, "period_end": "2026-10-31T00:00:00Z"})
-    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops",
-                              "type": "idea"})["id"]
+    tid = post(
+        api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops", "type": "idea"}
+    )["id"]
     move(api, tid, "idea-doing")
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
     operation = document["paths"]["/api/v2/growth/numbers"]["get"]["responses"]["200"]

@@ -20,10 +20,12 @@ Within a minute the Slack card on Tools and Settings > Health say **Connected**.
 the tokens belong to; to pin it in advance, set `SLACK_TEAM_ID` in `.env`. To change workspace, disconnect and
 paste the new tokens. Invite Tico to a channel with `/invite @Tico`.
 
-**An app created before a scope was added** (the latest is `files:read`, which lets bots open screenshots and other
-files people share in Slack): on the app's **App Manifest** page paste the current manifest over the old one, then
-**Install App > Reinstall to Workspace**, and paste the new Bot User OAuth Token in Tools > Slack. Until then the
-gateway's log names the missing scope, and a bot that tries to open a file is told the app needs `files:read`.
+**An app created before a scope was added** (the latest are `links:read` and `links:write`, which show a preview under
+a pasted link to a task; before them `files:read`, which lets bots open screenshots and other files people share in
+Slack): on the app's **App Manifest** page paste the current manifest over the old one (the one Tools > Slack hands out
+has this server's host in `unfurl_domains`), then **Install App > Reinstall to Workspace**, and paste the new Bot User
+OAuth Token in Tools > Slack. Until then the gateway's log names the missing scope, task links get no preview, and a
+bot that tries to open a file is told the app needs `files:read`.
 
 ## Choose the channels bots use
 
@@ -73,7 +75,7 @@ A channel can be linked to a Tico thread, and the two carry each other's message
 - History is opt-in (`history: true`): the last 30 days, up to 5,000 messages, from members who map to roster people.
   Nothing wakes a bot for it.
 
-In the app, an owner or an admin links a thread in Library > Connections > Slack (Link a thread), or in the thread's
+In the app, an owner or an admin links a thread in Tools > Slack (Link a thread), or in the thread's
 Who can read sheet. The same list shows each link's state, with Resume and Unlink. Elsewhere: `hub thread link-slack
 <thread> [<channel>]` (CLI), the `hub_thread_link_slack` tool (MCP), or the API. Resume is `hub thread slack-resume <link-id>`. `GET /api/v2/slack/links` reads a page
 at a time (`limit`, `cursor`; follow `next_cursor`).

@@ -1,0 +1,6 @@
+if [ -n "${TICO_TURN_BASH_ENV:-}" ] && [ -r "$TICO_TURN_BASH_ENV" ]; then
+  . "$TICO_TURN_BASH_ENV"
+fi
+if [ -n "${TICO_TURN_PATH:-}" ]; then
+  export PATH="$TICO_TURN_PATH"
+fi

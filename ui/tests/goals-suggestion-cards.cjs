@@ -1,4 +1,4 @@
-// Goal suggestion cards say what yes does (ui/goals-kpis.js goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
+// Goal suggestion cards say what yes does (ui/goals-kpis.ts goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
 // Strategy Bot suggestion cards"): Add a KPI names the measure, says what it counts, its target or "No target yet" and
 // a
 // missing data source, and folds away the goal editor's target fields; each yes button says what it does, the no button
@@ -54,7 +54,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/v2/events') return;
       if (p === '/api/employees') return json(bots);

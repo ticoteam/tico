@@ -1,4 +1,4 @@
-//! Keep the secrets a turn was granted out of what the runner writes down (`runner/redact.py`).
+//! Keep the secrets a turn was granted out of what the runner writes down (`runner_support/redact.py`).
 //!
 //! One redactor per turn holds its granted values and the common ways each turns up (URL-encoded, base64
 //! with and without padding, the password half of `user:password`) and replaces them with `••••`, longest
@@ -18,8 +18,23 @@ use serde_json::Value;
 pub const MASK: &str = "••••";
 pub const MIN_LENGTH: usize = 8;
 const COMMON: &[&str] = &[
-    "localhost", "127.0.0.1", "production", "development", "password", "username", "enabled", "disabled", "undefined",
-    "identity", "anonymous", "internal", "external", "default", "standard", "true", "false",
+    "localhost",
+    "127.0.0.1",
+    "production",
+    "development",
+    "password",
+    "username",
+    "enabled",
+    "disabled",
+    "undefined",
+    "identity",
+    "anonymous",
+    "internal",
+    "external",
+    "default",
+    "standard",
+    "true",
+    "false",
 ];
 const TEXT_LIMIT: u64 = 2_000_000;
 
@@ -28,7 +43,9 @@ pub fn quote(value: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -90,9 +107,15 @@ fn build(secrets: &[String]) -> Built {
     let matcher = if forms.is_empty() {
         None
     } else {
-        AhoCorasickBuilder::new().match_kind(MatchKind::LeftmostLongest).build(forms.iter()).ok()
+        AhoCorasickBuilder::new()
+            .match_kind(MatchKind::LeftmostLongest)
+            .build(forms.iter())
+            .ok()
     };
-    Built { values: vals, matcher }
+    Built {
+        values: vals,
+        matcher,
+    }
 }
 
 pub struct Redactor {
@@ -101,7 +124,9 @@ pub struct Redactor {
 
 impl Redactor {
     pub fn new(secrets: &[String]) -> Redactor {
-        Redactor { inner: RwLock::new(build(secrets)) }
+        Redactor {
+            inner: RwLock::new(build(secrets)),
+        }
     }
 
     /// Holds the redactor for `d`, the way a scrub stuck in git or in a large file holds its thread; `held` hears
@@ -124,7 +149,10 @@ impl Redactor {
 
     pub fn add(&self, secrets: &[String]) {
         let mut inner = self.inner.write().unwrap();
-        let fresh: Vec<String> = values(secrets).into_iter().filter(|v| !inner.values.contains(v)).collect();
+        let fresh: Vec<String> = values(secrets)
+            .into_iter()
+            .filter(|v| !inner.values.contains(v))
+            .collect();
         if fresh.is_empty() {
             return;
         }
@@ -153,7 +181,9 @@ impl Redactor {
     /// no string in it holds a secret. Otherwise a copy in which only the strings holding one are masked.
     pub fn scrub_json<'a>(&self, v: &'a Value) -> Cow<'a, Value> {
         let inner = self.inner.read().unwrap();
-        let Some(m) = inner.matcher.as_ref() else { return Cow::Borrowed(v) };
+        let Some(m) = inner.matcher.as_ref() else {
+            return Cow::Borrowed(v);
+        };
         if !json_holds(v, m) {
             return Cow::Borrowed(v);
         }
@@ -181,7 +211,11 @@ impl Redactor {
         if self.is_empty() || !root.join(".git").exists() {
             return result;
         }
-        let changed = git(root, &["status", "--porcelain", "-z", "--untracked-files=all"]).unwrap_or_default();
+        let changed = git(
+            root,
+            &["status", "--porcelain", "-z", "--untracked-files=all"],
+        )
+        .unwrap_or_default();
         for name in changed_paths(&changed) {
             let path = root.join(&name);
             match std::fs::symlink_metadata(&path) {
@@ -196,7 +230,17 @@ impl Redactor {
         }
         if !since.is_empty() {
             let range = format!("{since}..HEAD");
-            if let Some(patch) = git(root, &["log", "-p", "--no-ext-diff", "--no-textconv", "--format=", &range]) {
+            if let Some(patch) = git(
+                root,
+                &[
+                    "log",
+                    "-p",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--format=",
+                    &range,
+                ],
+            ) {
                 result.committed = !patch.is_empty() && self.holds(&patch);
             }
         }
@@ -218,7 +262,10 @@ pub fn changed_paths(out: &[u8]) -> Vec<PathBuf> {
     let mut paths = vec![];
     let mut fields = out.split(|&b| b == 0);
     while let Some(record) = fields.next() {
-        let (Some(&x), Some(&y), Some(&b' ')) = (record.first(), record.get(1), record.get(2)) else { continue };
+        let (Some(&x), Some(&y), Some(&b' ')) = (record.first(), record.get(1), record.get(2))
+        else {
+            continue;
+        };
         if [x, y].iter().any(|c| *c == b'R' || *c == b'C') {
             fields.next(); // the source path
         }
@@ -238,7 +285,13 @@ impl Dir {
     fn open_at(parent: Option<&Dir>, name: &std::ffi::CStr) -> std::io::Result<Dir> {
         use std::os::fd::{AsRawFd, FromRawFd};
         let at = parent.map_or(libc::AT_FDCWD, |d| d.0.as_raw_fd());
-        let fd = unsafe { libc::openat(at, name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+        let fd = unsafe {
+            libc::openat(
+                at,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -252,7 +305,8 @@ impl Dir {
 }
 
 fn cstr(bytes: &[u8]) -> std::io::Result<std::ffi::CString> {
-    std::ffi::CString::new(bytes).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    std::ffi::CString::new(bytes)
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
 }
 
 fn stat_at(dir: &Dir, name: &std::ffi::CStr) -> std::io::Result<libc::stat> {
@@ -279,12 +333,20 @@ impl Redactor {
         use std::os::fd::FromRawFd;
         use std::os::unix::ffi::OsStrExt;
         let anchored = root.canonicalize()?.join(name);
-        let parts: Vec<&std::ffi::OsStr> = anchored.components().filter_map(|c| match c {
-            std::path::Component::Normal(p) => Some(p),
-            _ => None,
-        }).collect();
-        let Some((file, parents)) = parts.split_last() else { return Ok(Scrubbed::LeftOut) };
-        if name.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        let parts: Vec<&std::ffi::OsStr> = anchored
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        let Some((file, parents)) = parts.split_last() else {
+            return Ok(Scrubbed::LeftOut);
+        };
+        if name
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
             return Ok(Scrubbed::LeftOut); // `..` or an absolute name is never followed out of the checkout
         }
         let mut dir = Dir::open_at(None, c"/")?;
@@ -292,7 +354,13 @@ impl Redactor {
             dir = Dir::open_at(Some(&dir), &cstr(part.as_bytes())?)?;
         }
         let leaf = cstr(file.as_bytes())?;
-        let fd = unsafe { libc::openat(dir.raw(), leaf.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+        let fd = unsafe {
+            libc::openat(
+                dir.raw(),
+                leaf.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        };
         if fd < 0 {
             let err = std::io::Error::last_os_error();
             // A symlink is not scrubbed through: what it points at is not the checkout's.
@@ -310,7 +378,9 @@ impl Redactor {
             return Ok(Scrubbed::LeftOut);
         }
         let mut data = vec![];
-        Read::by_ref(&mut stream).take(TEXT_LIMIT + 1).read_to_end(&mut data)?;
+        Read::by_ref(&mut stream)
+            .take(TEXT_LIMIT + 1)
+            .read_to_end(&mut data)?;
         drop(stream);
         if !self.holds(&data) {
             return Ok(Scrubbed::Clean);
@@ -322,7 +392,12 @@ impl Redactor {
         let mode = (info.mode() & 0o7777) as libc::mode_t;
         let temporary = cstr(format!(".tico-scrub-{}", uuid::Uuid::new_v4().simple()).as_bytes())?;
         let fd = unsafe {
-            libc::openat(dir.raw(), temporary.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC, mode as libc::c_uint)
+            libc::openat(
+                dir.raw(),
+                temporary.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                mode as libc::c_uint,
+            )
         };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
@@ -338,7 +413,9 @@ impl Redactor {
             if (current.st_dev as u64, current.st_ino as u64) != (info.dev(), info.ino()) {
                 return Ok(Scrubbed::LeftOut); // replaced since it was read
             }
-            if unsafe { libc::renameat(dir.raw(), temporary.as_ptr(), dir.raw(), leaf.as_ptr()) } != 0 {
+            if unsafe { libc::renameat(dir.raw(), temporary.as_ptr(), dir.raw(), leaf.as_ptr()) }
+                != 0
+            {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(Scrubbed::Rewritten)
@@ -365,10 +442,22 @@ fn credential_shapes() -> &'static [(regex::Regex, &'static str)] {
     SHAPES.get_or_init(|| {
         [
             (r#"(?i)([a-z][a-z0-9+.-]*://)[^/\s@'"]+@"#, "${1}••••@"),
-            (r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})", "••••"),
-            (r"(?i)\b((?:proxy-)?authorization\s*:\s*)(?:(?:basic|bearer|token)\s+)?\S+", "${1}••••"),
-            (r"(?i)\b(basic|bearer)\s+[A-Za-z0-9+/._~-]{8,}=*", "${1} ••••"),
-            (r"(?i)\b(password|oauth_refresh_token|access_token|token)\s*=\s*\S+", "${1}=••••"),
+            (
+                r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})",
+                "••••",
+            ),
+            (
+                r"(?i)\b((?:proxy-)?authorization\s*:\s*)(?:(?:basic|bearer|token)\s+)?\S+",
+                "${1}••••",
+            ),
+            (
+                r"(?i)\b(basic|bearer)\s+[A-Za-z0-9+/._~-]{8,}=*",
+                "${1} ••••",
+            ),
+            (
+                r"(?i)\b(password|oauth_refresh_token|access_token|token)\s*=\s*\S+",
+                "${1}=••••",
+            ),
         ]
         .into_iter()
         .map(|(p, r)| (regex::Regex::new(p).expect("credential shape"), r))
@@ -418,7 +507,9 @@ pub fn scrub_credentials(text: &str, secrets: &[String]) -> String {
 /// The secret values in a git environment: its tokens, by name and in TICO_GITHUB_TOKENS (redact.py env_secrets).
 pub fn env_secrets(env: &std::collections::BTreeMap<String, String>) -> Vec<String> {
     let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    for_turn(&pairs, &[]).map(|r| r.values()).unwrap_or_default()
+    for_turn(&pairs, &[])
+        .map(|r| r.values())
+        .unwrap_or_default()
 }
 
 /// Why a git command failed, in git's words and safe to show (redact.py git_failure): the last meaningful lines
@@ -447,15 +538,25 @@ pub fn git_failure(stderr: &str, secrets: &[String], limit: usize) -> String {
         picked = lines.iter().collect();
     }
     let start = picked.len().saturating_sub(3);
-    let text = picked[start..].iter().map(|l| l.chars().take(200).collect::<String>()).collect::<Vec<_>>().join(" / ");
+    let text = picked[start..]
+        .iter()
+        .map(|l| l.chars().take(200).collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" / ");
     if text.chars().count() <= limit {
         text
     } else {
-        format!("{}…", text.chars().take(limit.saturating_sub(1)).collect::<String>().trim_end())
+        format!(
+            "{}…",
+            text.chars()
+                .take(limit.saturating_sub(1))
+                .collect::<String>()
+                .trim_end()
+        )
     }
 }
 
-/// git with the clean environment `runner/safe_git.py` uses: no global or system config.
+/// git with the clean environment `runner_support/safe_git.py` uses: no global or system config.
 pub fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let mut argv: Vec<String> = vec!["git".into()];
     argv.extend(crate::safegit::args(root));
@@ -464,18 +565,27 @@ pub fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let ran = crate::isolation::std_command("git")
         .args(&argv[1..])
         .env_clear()
-        .envs(crate::safegit::clean_environment(&crate::env::process_environment()))
+        .envs(crate::safegit::clean_environment(
+            &crate::env::process_environment(),
+        ))
         .stdin(std::process::Stdio::null())
         .output();
     // The scrub's git calls are in the flight file like gitrun's: a slow `status` or `log -p` names itself.
-    crate::flight::git(&argv, began.elapsed().as_millis() as u64, ran.as_ref().ok().and_then(|o| o.status.code()), ran.as_ref().err().map(|_| "io"));
+    crate::flight::git(
+        &argv,
+        began.elapsed().as_millis() as u64,
+        ran.as_ref().ok().and_then(|o| o.status.code()),
+        ran.as_ref().err().map(|_| "io"),
+    );
     let out = ran.ok()?;
     out.status.success().then_some(out.stdout)
 }
 
 /// The checkout's current commit, or "" when it has none.
 pub fn head(root: &Path) -> String {
-    git(root, &["rev-parse", "--verify", "-q", "HEAD"]).map(|o| String::from_utf8_lossy(&o).trim().to_string()).unwrap_or_default()
+    git(root, &["rev-parse", "--verify", "-q", "HEAD"])
+        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
+        .unwrap_or_default()
 }
 
 /// The turn's redactor, or None when it holds nothing worth hiding: the granted values, any variable whose
@@ -484,7 +594,10 @@ pub fn for_turn(env: &[(String, String)], vault_values: &[String]) -> Option<Arc
     let mut secrets: Vec<String> = vault_values.to_vec();
     for (k, v) in env {
         let upper = k.to_uppercase();
-        if ["TOKEN", "SECRET", "PASSWORD", "API_KEY"].iter().any(|s| upper.contains(s)) {
+        if ["TOKEN", "SECRET", "PASSWORD", "API_KEY"]
+            .iter()
+            .any(|s| upper.contains(s))
+        {
             secrets.push(v.clone());
         }
         if k == "TICO_GITHUB_TOKENS" {
@@ -518,7 +631,10 @@ pub fn release(aid: &str) {
 
 /// A log line with every running turn's secrets taken out.
 pub fn scrub_log(line: &str) -> String {
-    let list: Vec<Arc<Redactor>> = active().lock().map(|l| l.iter().map(|(_, r)| r.clone()).collect()).unwrap_or_default();
+    let list: Vec<Arc<Redactor>> = active()
+        .lock()
+        .map(|l| l.iter().map(|(_, r)| r.clone()).collect())
+        .unwrap_or_default();
     let mut out = line.to_string();
     for r in list {
         out = r.scrub_text(&out).into_owned();
@@ -532,24 +648,53 @@ mod tests {
 
     #[test]
     fn a_secret_is_masked_in_every_form_and_short_or_common_values_are_not() {
-        let r = Redactor::new(&["s3cr3t-value/x".into(), "short".into(), "password".into(), "user:hunter2hunter2".into()]);
+        let r = Redactor::new(&[
+            "s3cr3t-value/x".into(),
+            "short".into(),
+            "password".into(),
+            "user:hunter2hunter2".into(),
+        ]);
         let b64 = base64::engine::general_purpose::STANDARD.encode("s3cr3t-value/x");
-        let text = format!("a s3cr3t-value/x b {} c {} d hunter2hunter2 e short password", quote("s3cr3t-value/x"), b64);
-        assert_eq!(r.scrub_text(&text), "a •••• b •••• c •••• d •••• e short password");
-        assert!(Redactor::new(&["aaaaaaaaaaaa".into()]).is_empty(), "fewer than three distinct characters");
+        let text = format!(
+            "a s3cr3t-value/x b {} c {} d hunter2hunter2 e short password",
+            quote("s3cr3t-value/x"),
+            b64
+        );
+        assert_eq!(
+            r.scrub_text(&text),
+            "a •••• b •••• c •••• d •••• e short password"
+        );
+        assert!(
+            Redactor::new(&["aaaaaaaaaaaa".into()]).is_empty(),
+            "fewer than three distinct characters"
+        );
     }
 
     #[test]
     fn a_renamed_non_ascii_file_is_parsed_and_scrubbed_in_place() {
         // The source path of a rename is its own field; reading it as a record split a UTF-8 character.
         let out = "R  new.txt\0漢字.txt\0 M a b.txt\0?? 漢字2.txt\0 D gone.txt\0".as_bytes();
-        let names: Vec<String> = changed_paths(out).iter().map(|p| p.display().to_string()).collect();
+        let names: Vec<String> = changed_paths(out)
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
         assert_eq!(names, ["new.txt", "a b.txt", "漢字2.txt"]);
         assert!(changed_paths(b"R").is_empty() && changed_paths("漢".as_bytes()).is_empty());
 
-        let root = std::env::temp_dir().join(format!("tico-scrub-{}", uuid::Uuid::new_v4().simple()));
+        let root =
+            std::env::temp_dir().join(format!("tico-scrub-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&root).unwrap();
-        let sh = |cmd: &str| assert!(Command::new("sh").arg("-c").arg(cmd).current_dir(&root).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap().status.success());
+        let sh = |cmd: &str| {
+            assert!(Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(&root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap()
+                .status
+                .success())
+        };
         sh("git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init");
         let body = "a line that stays the same\n".repeat(20);
         std::fs::write(root.join("漢字.txt"), &body).unwrap();
@@ -559,20 +704,31 @@ mod tests {
         std::fs::write(root.join("新しい.txt"), &text).unwrap();
         sh("git add -A");
         let status = git(&root, &["status", "--porcelain", "-z"]).unwrap();
-        assert!(status.starts_with(b"R  "), "{}", String::from_utf8_lossy(&status));
+        assert!(
+            status.starts_with(b"R  "),
+            "{}",
+            String::from_utf8_lossy(&status)
+        );
         let tree = Redactor::new(&["granted-secret-value".into()]).scrub_tree(&root, "");
         assert_eq!(tree.rewritten.len(), 1, "{tree:?}");
         let written = std::fs::read(root.join("新しい.txt")).unwrap();
-        assert!(written.ends_with(b"key=\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2 \xff\n"), "non-UTF-8 bytes kept, secret masked");
+        assert!(
+            written.ends_with(b"key=\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2 \xff\n"),
+            "non-UTF-8 bytes kept, secret masked"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn the_python_redactor_agrees() {
-        let secrets = ["granted-file-secret-fixture", "Zm9vYmFyYmF6cXV4", "a:b c+d/e=fghij"];
+        let secrets = [
+            "granted-file-secret-fixture",
+            "Zm9vYmFyYmF6cXV4",
+            "a:b c+d/e=fghij",
+        ];
         let sample = "x granted-file-secret-fixture y Z3JhbnRlZC1maWxlLXNlY3JldC1maXh0dXJl z a%3Ab%20c%2Bd%2Fe%3Dfghij w b c+d/e=fghij";
         let r = Redactor::new(&secrets.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
+        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner_support.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let out = Command::new("python3")
             .args(["-c", script])
@@ -581,8 +737,15 @@ mod tests {
             .arg(sample)
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        assert_eq!(r.scrub_text(sample), String::from_utf8_lossy(&out.stdout).trim_end_matches('\n'));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            r.scrub_text(sample),
+            String::from_utf8_lossy(&out.stdout).trim_end_matches('\n')
+        );
     }
 
     #[test]
@@ -595,9 +758,13 @@ mod tests {
         assert_eq!(clean["kind"], "tool");
         assert_eq!(clean["input"]["argv"][1], "clone");
         assert_eq!(clean["input"]["env"]["NOTE"], "fine");
-        let plain = json!({"kind": "delta", "text": "no secret here", "n": 3, "list": [null, true]});
+        let plain =
+            json!({"kind": "delta", "text": "no secret here", "n": 3, "list": [null, true]});
         let untouched = r.scrub_json(&plain);
-        assert!(matches!(untouched, Cow::Borrowed(_)), "a value with no secret is borrowed, not copied");
+        assert!(
+            matches!(untouched, Cow::Borrowed(_)),
+            "a value with no secret is borrowed, not copied"
+        );
         assert_eq!(*untouched, plain);
         assert!(matches!(r.scrub_text("no secret here"), Cow::Borrowed(_)));
     }
@@ -611,14 +778,19 @@ mod tests {
         let r = Redactor::new(&["granted-secret-value".into()]);
         let delta = |i: usize, text: &str| json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": format!("token {i} {text}")});
         let plain: Vec<Value> = (0..10_000).map(|i| delta(i, "of the answer ")).collect();
-        let leaky: Vec<Value> = (0..10_000).map(|i| delta(i, "granted-secret-value ")).collect();
+        let leaky: Vec<Value> = (0..10_000)
+            .map(|i| delta(i, "granted-secret-value "))
+            .collect();
         for (name, events) in [("no secret", &plain), ("secret in each", &leaky)] {
             let asked = crate::util::alloc_probe::requested();
             for e in events {
                 let v = r.scrub_json(e);
                 std::hint::black_box(&v);
             }
-            eprintln!("scrub_json, 10,000 deltas, {name}: bytes requested {}", crate::util::alloc_probe::requested() - asked);
+            eprintln!(
+                "scrub_json, 10,000 deltas, {name}: bytes requested {}",
+                crate::util::alloc_probe::requested() - asked
+            );
         }
     }
 }

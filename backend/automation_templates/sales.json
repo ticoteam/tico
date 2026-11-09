@@ -1,0 +1,54 @@
+{
+  "id": "sales",
+  "name": "Sales",
+  "summary": "A sales inbox. Promotions are archived; four questions send each message to sales, support or the archive; the last step routes what is left and drafts a reply for review.",
+  "sort": {
+    "instructions": "Where does this message belong? Pick the one that fits best.",
+    "criteria": {
+      "me": "Unclear, or the founder has to decide",
+      "sales": "A new buyer asks about pricing, a quote or a demo",
+      "support": "An existing customer asks for help or about their account",
+      "archive": "A cold pitch, or nothing is asked of anyone"
+    }
+  },
+  "destinations": [
+    {"id": "me", "name": "Me", "color": "amber",
+     "then": [{"do": "leave_for_you", "args": {}}]},
+    {"id": "sales", "name": "Sales", "color": "blue",
+     "then": [{"do": "create_task", "args": {
+       "title": "Lead: {{message.subject}}",
+       "body": "From {{message.from}}.",
+       "owner": {"role": "sales_lead"}}}]},
+    {"id": "support", "name": "Support", "color": "teal",
+     "then": [{"do": "create_task", "args": {
+       "title": "Customer: {{message.subject}}",
+       "body": "From {{message.from}}.",
+       "owner": {"role": "support_lead"}}}]},
+    {"id": "archive", "name": "Archive", "color": "gray",
+     "then": [{"do": "archive", "args": {}}]}
+  ],
+  "steps": [
+    {"id": "rules", "type": "filter", "rules": [
+      {"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
+       "to": "archive", "next": "end", "stop": true}
+    ]},
+    {"id": "ask", "type": "decide", "level": "low", "out": "q", "questions": {
+      "lead": {"type": "noul", "instructions": "Is someone new asking about buying, pricing, a quote or a demo?"},
+      "customer": {"type": "noul", "instructions": "Is an existing customer asking for help or about their account?"},
+      "pitch": {"type": "noul", "instructions": "Is it a vendor pitch or cold outreach?"},
+      "nothing": {"type": "noul", "instructions": "Does it need nothing from anyone?"}}},
+    {"id": "route", "type": "filter", "rules": [
+      {"when": [{"field": "q.lead", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "sales", "next": "end", "stop": true},
+      {"when": [{"field": "q.customer", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "support", "next": "end", "stop": true},
+      {"when": [{"field": "q.pitch", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "archive", "next": "end", "stop": true},
+      {"when": [{"field": "q.nothing", "op": "is", "value": "yes", "min": 0.75}],
+       "to": "archive", "next": "end", "stop": true}
+    ]},
+    {"id": "draft", "type": "llm", "out": "draft",
+     "prompt": "Route this message first: sales for someone new asking about buying, pricing, a quote or a demo; support for an existing customer; archive for a cold pitch or when nothing is asked of anyone; me when unsure. For a new buyer, write a short reply in the sales voice as the body, asking what they need. Never quote prices or promise dates. Leave the body empty when no reply is needed.",
+     "choose": {"to": ["me", "sales", "support", "archive"], "default": "me", "mode": "draft"}}
+  ]
+}

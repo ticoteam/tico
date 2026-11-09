@@ -4,7 +4,6 @@ labels: [owner:engineering-manager]
 reads: []
 reasoning_effort: medium
 max_run_minutes: 60
-outbound_send: false
 routines:
   - id: daily-delivery-check
     title: Daily delivery check
