@@ -17,6 +17,7 @@ TICO_SAMPLE_COMPANY=on, which loads it on the first start whose owner is on the 
 already set up alone, and both keep a team name already set (the recommended install sets TICO_TEAM_NAME); the
 sample's own name, Sample Co, is used only when there is none, and its tasks and goals say whichever it is.
 """
+
 from pathlib import Path
 
 import yaml
@@ -49,8 +50,10 @@ def team():
     """The sample company file: its draft (company_file.from_yaml, so it stays a file Tico can import) and, by bot
     id, what only the sample uses: `runs_on`, and the starter tasks."""
     text = FILE.read_text()
-    extra = {row["id"]: {"runs_on": row.get("runs_on") or "", "tasks": row.get("starter_tasks") or []}
-             for row in yaml.safe_load(text)["employees"]}
+    extra = {
+        row["id"]: {"runs_on": row.get("runs_on") or "", "tasks": row.get("starter_tasks") or []}
+        for row in yaml.safe_load(text)["employees"]
+    }
     return from_yaml(text), extra
 
 
@@ -87,39 +90,66 @@ def load(onboarding, c, who):
     name = team_name(settings, record) or company["name"]
     ours = lambda text: text.replace(company["name"], name)
     record["names"] = {**record["names"], "company_name": name}
-    record["answers"] = {**record["answers"], "what_we_do": ours(company["about"]), "customers": "businesses",
-                         "team_size": "1 (just me)", "software_product": "yes",
-                         "departments": [b["dept"] for b in draft["bots"] if b is not assistant]}
+    record["answers"] = {
+        **record["answers"],
+        "what_we_do": ours(company["about"]),
+        "customers": "businesses",
+        "team_size": "1 (just me)",
+        "software_product": "yes",
+        "departments": [b["dept"] for b in draft["bots"] if b is not assistant],
+    }
     names = O.display_names(settings, record)
     # The assistant is a required card: complete() makes it (or keeps the one there is) under the company's own name.
     record["selected"] = {
-        slugs[b["id"]]: {"template": cards[b["template"]]["template"], "display_name": b["title"],
-                         "instructions": O.render(cards[b["template"]], names, b["title"])["instructions"],
-                         "reports_to": slugs.get(b.get("reports_to"), "")}
-        for b in draft["bots"] if b is not assistant}
+        slugs[b["id"]]: {
+            "template": cards[b["template"]]["template"],
+            "display_name": b["title"],
+            "instructions": O.render(cards[b["template"]], names, b["title"])["instructions"],
+            "reports_to": slugs.get(b.get("reports_to"), ""),
+        }
+        for b in draft["bots"]
+        if b is not assistant
+    }
     onboarding._store(c, record, who.actor)
     chosen = providers.load(c, settings)["enabled"]
-    models = {slugs[bot_id]: providers.recommended(RUNS_ON[row["runs_on"]])["id"]
-              for bot_id, row in extra.items() if RUNS_ON.get(row["runs_on"]) in chosen}
-    onboarding.complete(c, who, models=models, seats=False)   # the sample is a working team, not a chart to recruit into
+    models = {
+        slugs[bot_id]: providers.recommended(RUNS_ON[row["runs_on"]])["id"]
+        for bot_id, row in extra.items()
+        if RUNS_ON.get(row["runs_on"]) in chosen
+    }
+    onboarding.complete(c, who, models=models, seats=False)  # the sample is a working team, not a chart to recruit into
     for slug in record["selected"]:
         onboarding.onboarded(c, who, slug, arm=False)
     owner = H.actor_id(who.actor)
+    # The bots exist now: their ids (new bots get their own, not their slug) are the actors that own goals and tasks.
+    ids = {slug: (H.resolve_bot(c, slug) or {}).get("id", slug) for slug in set(slugs.values())}
     goals = {}
     for goal in draft["goals"]:
-        made = G.create(c, who.actor, ours(goal["title"]), "bot:" + slugs[goal["owner"]], body=name + "'s goal.")
+        made = G.create(c, who.actor, ours(goal["title"]), "bot:" + ids[slugs[goal["owner"]]], body=name + "'s goal.")
         goals.setdefault(goal["owner"], made["id"])
     tasks = []
     for bot_id, row in extra.items():
         for task in row["tasks"]:
             body = ours(task["body"].rstrip() + ASK.format(what=task["approve"], owner=owner))
-            made = H.task_create(c, who.actor, ours(task["title"]), body, "bot:" + slugs[bot_id], allow_planned=True,
-                                 goal_id=goals.get(bot_id))
+            made = H.task_create(
+                c,
+                who.actor,
+                ours(task["title"]),
+                body,
+                "bot:" + ids[slugs[bot_id]],
+                allow_planned=True,
+                goal_id=goals.get(bot_id),
+            )
             tasks.append(made["id"])
     record = O.load(c)
     setup = {slugs[b["id"]]: state(name, b, H.now()[:10]) for b in draft["bots"] if b is not assistant}
-    record["sample"] = {"loaded": H.now(), "by": who.actor, "bots": sorted(slugs.values()), "tasks": tasks,
-                        "setup": setup}
+    record["sample"] = {
+        "loaded": H.now(),
+        "by": who.actor,
+        "bots": sorted(slugs.values()),
+        "tasks": tasks,
+        "setup": setup,
+    }
     onboarding._store(c, record, who.actor)
     H.event(c, who.actor, "onboarding.sample_loaded", "", {"bots": sorted(slugs.values()), "tasks": len(tasks)})
     return onboarding.view(c, who)
@@ -129,11 +159,15 @@ def state(name, bot, today):
     """The state.md sections a role bot's repository is made with (clients/catalog.materialize): its setup done from
     the sample's answers, so it works its starter task instead of asking the setup questions, and its routine off."""
     return {
-        "Setup": (f"Done {today}. You are the {bot['title']} at {name}, Tico's sample company: a made-up team for "
-                  "trying Tico. The sample's own answers stood in for the setup questions, so do not ask them."),
+        "Setup": (
+            f"Done {today}. You are the {bot['title']} at {name}, Tico's sample company: a made-up team for "
+            "trying Tico. The sample's own answers stood in for the setup questions, so do not ask them."
+        ),
         "Answers": f"- {today}: {bot['reason']}\n- {today}: The company is in `knowledge/company.md`.",
-        "Routine": ("Your first routine is off. The sample company keeps it off until a person turns it on in Tico; "
-                    "do not turn it on yourself."),
+        "Routine": (
+            "Your first routine is off. The sample company keeps it off until a person turns it on in Tico; "
+            "do not turn it on yourself."
+        ),
         "Next": "Do your starter task, then ask the owner the one Yes/No question it ends with. Then work your open tasks.",
     }
 
@@ -151,8 +185,14 @@ def _providers(c, settings, who):
     before = providers.load(c, settings)
     if providers.configured(before):
         return
-    before, after = providers.save(c, who.actor, {"enabled": ["anthropic", "openai"],
-                                                  "expected_revision": before["revision"]}, H.now())
+    before, after = providers.save(
+        c, who.actor, {"enabled": ["anthropic", "openai"], "expected_revision": before["revision"]}, H.now()
+    )
     keys = ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models")
-    H.event(c, who.actor, "providers.updated", "", {"before": {k: before[k] for k in keys},
-                                                     "after": {k: after[k] for k in keys}, "sample": True})
+    H.event(
+        c,
+        who.actor,
+        "providers.updated",
+        "",
+        {"before": {k: before[k] for k in keys}, "after": {k: after[k] for k in keys}, "sample": True},
+    )

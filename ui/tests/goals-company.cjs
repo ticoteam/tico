@@ -1,4 +1,4 @@
-// No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.js
+// No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.ts
 // goalWhyHtml). A goal with no Why says "Not tied to the vision"; the Strategy Bot's
 // proposal is accepted as it is or edited, and an Accept on a line the Strategy Bot has since replaced is refused and
 // shows
@@ -14,6 +14,11 @@ const bot = (name, display_name, org_parent, over) => ({name, display_name, org_
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 
+// What waits is one line on Goals; Review opens its cards in a sheet.
+async function review(page) {
+  await page.locator('#goal-needs-line [data-needs-review]').click();
+  await page.locator('#goal-needs-sheet[open] #goal-needs').waitFor();
+}
 async function open(browser, {role = 'owner', strategy = null, needs = []} = {}) {
   const server = {};
   const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
@@ -21,8 +26,8 @@ async function open(browser, {role = 'owner', strategy = null, needs = []} = {})
   page.on('pageerror', e => errors.push(e.message));
   const state = {
     goals: [
-      {id: 'g-top', title: 'Grow rentals 30%', owner: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: [], why: ''},
-      {id: 'g-cmo', title: 'Double organic signups', owner: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [],
+      {id: 'g-top', title: 'Grow rentals 30%', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: [], why: ''},
+      {id: 'g-cmo', title: 'Double organic signups', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [],
        why: 'More landlords find Tico on their own.'},
     ],
     proposals: [{id: 'p-why', kind: 'goal_why', goal_id: 'g-top', kpi_id: null, payload: {why: 'More rentals is the vision\'s first step.'},
@@ -34,7 +39,7 @@ async function open(browser, {role = 'owner', strategy = null, needs = []} = {})
     const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
@@ -70,6 +75,7 @@ async function open(browser, {role = 'owner', strategy = null, needs = []} = {})
   });
   await page.goto('http://tico-ui.test/#/goals');
   await page.locator('#goal-tree .gt-row').first().waitFor();
+  if (needs.length) await review(page);
   return {page, errors, posted, state, server};
 }
 // The Strategy Bot proposes a new line for a goal: a new proposal, and the one waiting is closed (backend/goals.py
@@ -195,6 +201,7 @@ const panelFor = async (page, owner) => {
       await rows.nth(0).click();
       await page.waitForFunction(() => location.hash === '#/strategy');
       await page.evaluate(() => { location.hash = '#/goals'; });
+      await review(page);
       await page.locator('#goal-needs li').nth(1).waitFor();
       await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').click();
       await page.locator('#goal-panel[open] .gp-body').waitFor();
@@ -209,7 +216,7 @@ const panelFor = async (page, owner) => {
       const recovery = {id: 'p-rec', kind: 'recovery', goal_id: 'g-cmo', kpi_id: null, status: 'pending', reason: 'Red two weeks running.',
         proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(),
         payload: {evidence: 'Signups 40 against 120.', pick: 1, options: [{label: 'Pause the newsletter', actions: []}, {label: 'Push SEO first', actions: []}]}};
-      const needs = [{kind: 'recovery', ref: 'p-rec', owner: 'human:ana', proposal: recovery, goal_id: 'g-cmo', goal_title: 'Double organic signups',
+      const needs = [{kind: 'recovery', ref: 'p-rec', owner_id: 'human:ana', proposal: recovery, goal_id: 'g-cmo', goal_title: 'Double organic signups',
         task: {id: 't-rec'}, options: [
           {label: 'Pause the newsletter', pick: false, actions: [{text: 'Move "Weekly newsletter" to the bottom', note: 'Head of Marketing is paused right now'}]},
           {label: 'Push SEO first', pick: true, actions: [{text: 'New task for Head of Marketing: "Fix the pricing page SEO"', note: ''}]}]}];

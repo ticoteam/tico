@@ -5,6 +5,8 @@ help: a bet tripped, a weekly review with no lens in 90 days. A lens is a short 
 strategy, answered once, and the server writes the result (`hub lens list` shows them; `docs/lenses.md` explains them).
 Budget 15 minutes.
 
+Inputs: the owner's ask or the trigger, `hub lens list`, and the published strategy (`hub strategy show`).
+
 **Never publish and never write the draft.** A lens run you start files one `strategy_draft` proposal at most, and the
 server files it, not you. The owner confirms or rejects it. **Never start a run unasked**: a weekly review only
 suggests one.
@@ -14,7 +16,8 @@ suggests one.
 ## 1. Pick the lens
 
 `hub lens list` for the ids and what each is for. Scenarios or Pre-mortem fit a tripped bet; Blue Ocean fits "are we
-different enough"; Seven Powers fits "what stops a bigger company copying us". If the owner named one, use it. A
+different enough"; Seven Powers fits "what stops a bigger company copying us"; Startup idea check fits a young company asking "is this
+worth building". If the owner named one, use it. A
 market lens (Where to Play, Five Forces) is the Librarian's, not yours.
 
 ## 2. Answer from the record
@@ -36,3 +39,5 @@ It waits up to a minute and prints the run. If it is still running, `hub lens sh
 If the run filed a proposal, its id is on the run (`proposal_id`) and the owner's Decide card says it came from the
 lens. If it did not, the lens found nothing to change, and that is a finding. Finish with
 `hub task update <id> --status done --note "<lens, run id, proposal id or none>"` and one line in `state.md`.
+
+**Done when:** the run's result is read, its proposal (if any) is named in the note, and the task is done.

@@ -2,14 +2,29 @@
 // an older one, a launch plan on Dana's task and a signup funnel CSV (seed `pages`). Library › Files lists them, a kind
 // filter and a search narrow it, a page opens full size with Tico's status line, a replaced page links on, the task
 // shows the pages pinned to it at the top, the search box finds a file by its words, and the owner deletes a page for good. This hub
-// has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports,
-// cut at a card's size. Phone, then desktop.
+// has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports in
+// the full view, and a card holds its size's fixed height and fades the cut. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, api, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
 const FRAME = 'https://visuals.acme.example/visuals/acme-page.sig';
 const TALL = '<!doctype html><html><body style="margin:0"><div style="height:600px;background:#dfe">Tall page</div>'
   + '<script>parent.postMessage({ticoVisualHeight: 600}, "*")</script></body></html>';
+
+// The filter popover (Library › Files): open it if it is shut, pick the item whose set and label match, or close it.
+async function openFilters(page) {
+  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop').matches(':popover-open')))) await page.locator('.lf-fbtn').click();
+  await page.locator('#lf-filter-pop').waitFor({state: 'visible', timeout: t(5000)});
+}
+async function pick(page, set, label) {
+  await openFilters(page);
+  await page.locator(`#lf-filter-pop [data-lf-set="${set}"]`, {hasText: label}).click();
+}
+async function closeFilters(page) {
+  if (!(await page.evaluate(() => document.getElementById('lf-filter-pop').matches(':popover-open')))) return;
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.getElementById('lf-filter-pop').matches(':popover-open'), null, {timeout: t(5000)});
+}
 
 run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/library/files'});
@@ -23,35 +38,42 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   for (const want of ['Engineering weekly', 'Engineering weekly (old)', 'Launch plan', 'Signup funnel'])
     assert.ok(titles.includes(want), `${tag}: lists ${want} (${titles})`);
   if (!phone) await page.locator('#side a[data-nav="files"].cur').waitFor({state: 'attached', timeout: t(5000)});
+  // A computer lists a file on one line; a phone gives each file two (the name, then Kind · Bot · time).
   const h = await rows.first().evaluate(el => el.getBoundingClientRect().height);
-  assert.ok(h < 64, `${tag}: one dense row (${h}px)`);
+  if (phone) assert.ok(h >= 48 && h <= 76, `${tag}: two lines a row (${h}px)`);
+  else assert.ok(h >= 36 && h <= 44, `${tag}: one line a row (${h}px)`);
   assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
-  assert.ok((await page.locator('.lf-meta').allInnerTexts()).every(x => x.includes('Engineering Lead')), `${tag}: the bot's name`);
+  const bots = await page.locator(phone ? '.lf-meta' : '.lf-by-n').allInnerTexts();
+  assert.ok(bots.every(x => x.includes('Engineering Lead')), `${tag}: the bot's name`);
   assert.deepEqual(await page.locator('.lf-pins').allInnerTexts(), ['Pinned', 'Pinned'], `${tag}: one pin each, no count`);
-  // The filters never run off the screen: they fit, or scroll sideways with the right edge faded.
-  const frow = await page.locator('.lf-frow').evaluate(el => ({right: el.getBoundingClientRect().right, width: innerWidth,
-    over: el.scrollWidth > el.clientWidth + 1, fade: el.classList.contains('more')}));
-  assert.ok(frow.right <= frow.width && frow.over === frow.fade, `${tag}: filters fit or fade (${JSON.stringify(frow)})`);
+  // The search and the filter button share the top row.
+  const q = await page.locator('.lf-q').boundingBox(), f = await page.locator('.lf-fbtn').boundingBox();
+  assert.ok(Math.abs(q.y + q.height / 2 - (f.y + f.height / 2)) < 4, `${tag}: search and filter on one row`);
   await shot(page, `${tag}-01-files`);
 
   // Team: the team's bots' files and the files on its tasks.
-  const teams = await page.locator('.lf-team option').allInnerTexts();
-  assert.ok(['Engineering', 'Release'].every(x => teams.includes(x)), `${tag}: the teams (${teams})`);
-  await page.locator('.lf-team').selectOption({label: 'Release'});
+  await openFilters(page);
+  const teams = await page.locator('#lf-filter-pop [data-lf-set="team"]').allInnerTexts();
+  assert.ok(['Engineering', 'Release'].every(x => teams.some(y => y.includes(x))), `${tag}: the teams (${teams})`);
+  await pick(page, 'team', 'Release');
   await page.locator('.lf-list', {hasText: 'Nothing matches.'}).waitFor({timeout: t(5000)});
-  await page.locator('.lf-team').selectOption({label: 'Engineering'});
+  await pick(page, 'team', 'Engineering');
   await page.waitForFunction(() => location.hash.includes('team=') && document.querySelectorAll('.lf-row').length === 4,
     null, {timeout: t(5000)});
-  await page.locator('.lf-team').selectOption('');
+  await pick(page, 'team', 'All teams');
+  await page.waitForFunction(() => !location.hash.includes('team=') && document.querySelectorAll('.lf-row').length === 4,
+    null, {timeout: t(5000)});
 
   // Kind narrows the list and rides in the address.
-  await page.locator('.lf-kind').selectOption('page');
+  await pick(page, 'kind', 'Pages');
   await page.waitForFunction(() => location.hash.includes('kind=page') && document.querySelectorAll('.lf-row').length === 3,
     null, {timeout: t(5000)});
   assert.ok(!(await page.locator('.lf-title').allInnerTexts()).includes('Signup funnel'), `${tag}: no CSV under Pages`);
-  await page.locator('.lf-kind').selectOption('');
+  await pick(page, 'kind', 'All kinds');
+  await closeFilters(page);
 
   // Search finds a CSV by a word in its header, with an excerpt.
+  await closeFilters(page);
   await page.locator('.lf-q').fill('visitors');
   await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 1
     && /visitors/.test(document.querySelector('.lf-excerpt')?.textContent || ''), null, {timeout: t(5000)});
@@ -106,7 +128,9 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   assert.equal(await pinned.getAttribute('href'), '#/task/' + launch.task_id);
 
   // The search box finds files by their words.
-  await page.locator(phone ? '#mobile-search' : '#search-open').click();
+  // On a phone with threads, Threads takes Search's place in the bottom bar (ui/app/threads.ts): open it as the menu does.
+  if (phone && await page.locator('#mobile-search').isHidden()) await page.evaluate(() => searchOpen());
+  else await page.locator(phone ? '#mobile-search' : '#search-open').click();
   await page.locator('#search-input').fill('funnel');
   const hit = page.locator('#search-results li', {hasText: 'Signup funnel'});
   await hit.waitFor({timeout: t(5000)});
@@ -131,15 +155,21 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
     await frame.waitFor({timeout: t(5000)});
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
     await page.waitForFunction(() => document.querySelector('#pg-view iframe.page-frame')?.style.height === '600px', null, {timeout: t(5000)});
+    assert.equal(await frame.getAttribute('src'), FRAME + '#tico-view=full&tico-size=full', 'the full view says full');
     const small = await page.evaluate(([p, src]) => {
       const card = pageCard({...p, src}, {size: 'small'});
       card.id = 'probe'; document.querySelector('#pg-view').append(card);
-      return {tap: !!card.querySelector('a.pg-tap'),
-        bar: card.classList.contains('pg-framed') && card.firstElementChild.classList.contains('pg-status')};
+      return {tap: !!card.querySelector('a.pg-tap'), expand: card.querySelector('a.pg-expand')?.getAttribute('href'),
+        bar: card.classList.contains('pg-framed') && card.firstElementChild.classList.contains('pg-status'),
+        src: card.querySelector('iframe').getAttribute('src')};
     }, [weekly, FRAME]);
     assert.ok(small.tap, 'a card opens its page on a tap');
+    assert.equal(small.expand, '#/page/' + weekly.file_id, 'its expand icon opens the full view');
     assert.ok(small.bar, 'a framed card carries its status line as its top bar');
-    await page.waitForFunction(() => document.querySelector('#probe iframe.page-frame')?.style.height === '180px', null, {timeout: t(5000)});
+    assert.equal(small.src, FRAME + '#tico-view=card&tico-size=small', 'the frame says it is in a small card');
+    // The 600px page is cut at the card's fixed 180, with the fade.
+    await page.waitForFunction(() => document.querySelector('#probe iframe.page-frame')?.style.height === '180px'
+      && document.querySelector('#probe .pg-box')?.classList.contains('pg-cut'), null, {timeout: t(5000)});
     await shot(page, `${tag}-06-framed`);
     await page.unrouteAll({behavior: 'wait'});
 

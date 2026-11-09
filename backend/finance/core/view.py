@@ -1,11 +1,13 @@
 """View access: what a teammate can see (spec §7.5). A view is the default from where they sit on the org chart, plus
 active grants, minus private lines. Every read and every action resolves one and asks it about each object.
 
-Default (company setting, seeded): the owner sees everything; managers the expenses of the teams they lead and the
-teams under them, and of everyone who reports to them, directly or not; everyone else their own expenses (lines tagged
-with them). Revenue, the balance sheet, payables, receivables and sources are owner-only unless granted. Unattributed
-lines show only in company-wide views.
+Default (company setting, seeded): the owner sees everything and nobody else sees anything until granted. The owner
+can open the defaults up: managers the expenses of the teams they lead and the teams under them, and of everyone who
+reports to them, directly or not, or their own expenses; everyone else their own expenses (lines tagged with them).
+Revenue, the balance sheet, payables, receivables and sources are owner-only unless granted. Unattributed lines show
+only in company-wide views.
 """
+
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -20,37 +22,38 @@ WHOSE = ("own", "team", "company")
 FLAGS = ("payables", "receivables", "sources")
 LINE_GRANTS = ("pnl_lines", "bs_lines")
 GRANT_STATES = ("active", "suspended", "expired", "revoked")
-MANAGER_DEFAULTS = ("team_expenses", "own_expenses")
+MANAGER_DEFAULTS = ("team_expenses", "own_expenses", "none")
 MEMBER_DEFAULTS = ("own_expenses", "none")
 PAYROLL_DEFAULTS = ("totals", "hidden")
 OTHERS_SEE = ("totals", "hidden")
 # What each role sees by default (`fin_view_defaults`, spec §7.5); the owner always sees everything.
-MANAGER_POLICIES = ("team_expenses", "own_expenses")
+MANAGER_POLICIES = ("team_expenses", "own_expenses", "none")
 MEMBER_POLICIES = ("own_expenses", "none")
 PAYROLL_POLICIES = ("totals", "hidden")
 PRIVATE_LABEL = "Payroll (private)"
-MIN_PAID = 3                         # a department's payroll cell shows only with at least this many paid people
+MIN_PAID = 3  # a department's payroll cell shows only with at least this many paid people
 
 
 @dataclass(frozen=True)
 class Defaults:
     """The company's default views (`fin_view_defaults`)."""
-    manager: str = "team_expenses"
-    member: str = "own_expenses"
-    manager_payroll: str = "totals"   # "hidden": managers never see their department's payroll total
+
+    manager: str = "none"  # Finance is the owner's alone until they open it up or grant
+    member: str = "none"
+    manager_payroll: str = "totals"  # "hidden": managers never see their department's payroll total
 
 
 @dataclass(frozen=True)
 class Grant:
     id: str
-    subject_kind: str               # teammate | team
-    subject: str                    # an actor, or a team id
+    subject_kind: str  # teammate | team
+    subject: str  # an actor, or a team id
     what: str
-    whose: str = "company"          # own | team | company
+    whose: str = "company"  # own | team | company
     whose_team: str = ""
     account_ids: frozenset[str] = frozenset()
     new_members: bool = False
-    members: frozenset[str] = frozenset()   # a team grant's teammates when it was made
+    members: frozenset[str] = frozenset()  # a team grant's teammates when it was made
     granted_by: str = ""
     expires_at: str = ""
     status: str = "active"
@@ -68,6 +71,7 @@ class Slice:
     """Part of the P&L a viewer sees: which accounts (`expense`, `pnl`, or the explicit `ids`) and whose lines
     (`company`: all, unattributed included; `teams`: lines tagged with one of `teams`; `mates`: tagged with one of
     `mates`, a manager's reports; `own`: tagged with the viewer)."""
+
     accounts: str
     whose: str
     teams: frozenset[str] = frozenset()
@@ -101,7 +105,7 @@ class View:
     payables: bool = False
     receivables: bool = False
     sources: bool = False
-    full_detail: frozenset[str] = frozenset()   # private accounts this viewer sees line by line
+    full_detail: frozenset[str] = frozenset()  # private accounts this viewer sees line by line
     department_payroll: bool = True
     version: int = 0
     grant_ids: tuple[str, ...] = field(default=())
@@ -121,6 +125,18 @@ class View:
         if account.type not in PNL_TYPES:
             return self.balance_sheet or account.id in self.bs_lines
         return any(s.covers_account(account) for s in self.slices)
+
+    def sees_anything(self) -> bool:
+        """Whether the viewer has a finance view at all: some P&L slice, balance sheet lines, or a side or source."""
+        return bool(
+            self.everything
+            or self.slices
+            or self.balance_sheet
+            or self.bs_lines
+            or self.payables
+            or self.receivables
+            or self.sources
+        )
 
     def company_wide(self, account: Account) -> bool:
         """Whether this viewer sees every line on `account`, unattributed ones included."""
@@ -172,7 +188,8 @@ def default_slices(org: Org, viewer: str, defaults: Defaults) -> tuple[Slice, ..
             out.append(Slice(accounts="expense", whose="teams", teams=led))
         if mates:
             out.append(Slice(accounts="expense", whose="mates", mates=mates))
-    if led or mates or defaults.member == "own_expenses":
+    manages = bool(led or mates) and defaults.manager != "none"
+    if manages or defaults.member == "own_expenses":
         out.append(Slice(accounts="expense", whose="own"))
     return tuple(out)
 
@@ -182,16 +199,28 @@ def live(grant: Grant, at: str) -> bool:
 
 
 def applies(org: Org, grant: Grant, viewer: str) -> bool:
-    """Whether `grant` reaches `viewer`: its teammate, or a member of its team (a later joiner only if it says so)."""
+    """Whether `grant` reaches `viewer` now: its teammate, or a member of its team. A team grant reaches the members it
+    was made for (`members`, a snapshot) only while they are still on the team, so anyone who leaves loses it at once.
+    A later joiner gets it only with new_members, which reads the team as it is now (spec §7.5)."""
     if grant.subject_kind == "teammate":
         return grant.subject == viewer
+    on_team = org.team_of.get(viewer, "") in org.below(grant.subject)
     if grant.new_members:
-        return org.team_of.get(viewer, "") in org.below(grant.subject)
-    return viewer in grant.members
+        return on_team
+    return viewer in grant.members and on_team
 
 
-def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Defaults,
-            private: Mapping[str, PrivateLine], accounts: Mapping[str, Account], at: str, version: int = 0) -> View:
+def resolve(
+    org: Org,
+    viewer: str,
+    *,
+    grants: Iterable[Grant],
+    defaults: Defaults,
+    private: Mapping[str, PrivateLine],
+    accounts: Mapping[str, Account],
+    at: str,
+    version: int = 0,
+) -> View:
     """The viewer's view now. System work sees everything; the owner sees everything, private detail included."""
     if viewer == SYSTEM or (org.owner and viewer == org.owner):
         return View(viewer=viewer, everything=True, full_detail=frozenset(private), version=version)
@@ -204,8 +233,11 @@ def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Default
             continue
         used.append(grant.id)
         below = org.below(grant.whose_team) if grant.whose == "team" else frozenset[str]()
-        ids = frozenset[str]().union(*(descendants(accounts, a) for a in grant.account_ids)) if grant.account_ids \
+        ids = (
+            frozenset[str]().union(*(descendants(accounts, a) for a in grant.account_ids))
+            if grant.account_ids
             else frozenset[str]()
+        )
         if grant.what == "everything":
             everything = True
         elif grant.what == "pnl":
@@ -226,9 +258,20 @@ def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Default
             sources = True
     detail = frozenset(a for a, p in private.items() if viewer in p.full_detail)
     manager_payroll = not org.manages(viewer) or defaults.manager_payroll == "totals"
-    return View(viewer=viewer, everything=everything, slices=tuple(slices), balance_sheet=balance_sheet,
-                bs_lines=frozenset(bs_lines), payables=payables, receivables=receivables, sources=sources,
-                full_detail=detail, department_payroll=manager_payroll, version=version, grant_ids=tuple(used))
+    return View(
+        viewer=viewer,
+        everything=everything,
+        slices=tuple(slices),
+        balance_sheet=balance_sheet,
+        bs_lines=frozenset(bs_lines),
+        payables=payables,
+        receivables=receivables,
+        sources=sources,
+        full_detail=detail,
+        department_payroll=manager_payroll,
+        version=version,
+        grant_ids=tuple(used),
+    )
 
 
 # ------------------------------------------------------------------------------------------------- who may grant
@@ -304,6 +347,15 @@ def unstanding(org: Org, grants: Iterable[Grant], defaults: Defaults, accounts: 
     return [g.id for g in grants if g.status == "active" and not standing(org, g, defaults, accounts)]
 
 
+def left_team(org: Org, grant: Grant) -> frozenset[str]:
+    """The members a team grant was made for who are no longer on its team (spec §7.5: they lose it at once). Such a
+    member is forgotten from the grant's snapshot, so rejoining the team does not bring the grant back."""
+    if grant.subject_kind != "team" or grant.new_members:
+        return frozenset()
+    below = org.below(grant.subject)
+    return frozenset(m for m in grant.members if org.team_of.get(m, "") not in below)
+
+
 def may_revoke(org: Org, actor: str, grant: Grant) -> bool:
     return actor == grant.granted_by or bool(org.owner) and actor == org.owner
 
@@ -312,25 +364,39 @@ def may_revoke(org: Org, actor: str, grant: Grant) -> bool:
 @dataclass(frozen=True)
 class Cell:
     """A total behind a read: one account on one day for one team, teammate and vendor."""
+
     account_id: str
     day: str
     team: str
     teammate: str
     vendor: str
     amount: int
-    linked: bool = False            # settled private payroll lines were netted out of it (reads._cells); totals say so
+    linked: bool = False  # settled private payroll lines were netted out of it (reads._cells); totals say so
+    location: str = ""  # the location, class and project tag values of its lines ("" when none)
+    class_id: str = ""
+    project: str = ""
+    lines: int = 0  # the lines this total is made of (a rollup's line_count; 0 for a linked cell)
 
 
 @dataclass(frozen=True)
 class Suppressed:
     cells: tuple[Cell, ...]
-    hidden: frozenset[str]          # private accounts with something cut: they show as "Payroll (private)"
-    excluded: bool                  # totals built from `cells` are "excl. payroll"
+    hidden: frozenset[str]  # private accounts with something cut: they show as "Payroll (private)"
+    excluded: bool  # totals built from `cells` are "excl. payroll"
 
 
-def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts: Mapping[str, Account],
-             cells: Iterable[Cell], narrow: bool, *, window: tuple[date, date], closed: frozenset[str],
-             fiscal_start: int = 1) -> Suppressed:
+def suppress(
+    view: View,
+    org: Org,
+    private: Mapping[str, PrivateLine],
+    accounts: Mapping[str, Account],
+    cells: Iterable[Cell],
+    narrow: bool,
+    *,
+    window: tuple[date, date],
+    closed: frozenset[str],
+    fiscal_start: int = 1,
+) -> Suppressed:
     """The one suppression function every surface uses (spec §7.5). It returns the cells in `window`.
 
     Without full detail a private account (payroll by person) shows only as fixed cells: department x pay run, where a
@@ -349,6 +415,7 @@ def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts:
 
     def inside(day: str) -> bool:
         return lo <= day <= hi
+
     kept: list[Cell] = []
     cut: set[str] = set()
     own: list[Cell] = []
@@ -368,8 +435,9 @@ def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts:
             continue
         department = org.department(cell.team) if cell.team else ""
         account = accounts.get(cell.account_id)
-        whole = account is not None and department != "" and \
-            view.covers_team(account, department, org.below(department))
+        whole = (
+            account is not None and department != "" and view.covers_team(account, department, org.below(department))
+        )
         if rule.others_see == "hidden" or narrow or not view.department_payroll or not whole:
             _unshown(view, [cell], inside, own, cut)
             continue
@@ -386,8 +454,7 @@ def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts:
             _unshown(view, group, inside, own, cut)
     for (account_id, department, start, end), group in quarters.items():
         months = {dates.add_months(start, n).isoformat()[:7] for n in range(3)}
-        if inside(end.isoformat()) and months <= closed and \
-                len({x.teammate for x in group if x.teammate}) >= MIN_PAID:
+        if inside(end.isoformat()) and months <= closed and len({x.teammate for x in group if x.teammate}) >= MIN_PAID:
             shown.append(Cell(account_id, end.isoformat(), department, "", "", sum(x.amount for x in group)))
         else:
             _unshown(view, group, inside, own, cut)
@@ -401,8 +468,7 @@ def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts:
     return Suppressed(cells=tuple(kept), hidden=frozenset(cut), excluded=bool(cut) or settled)
 
 
-def _unshown(view: View, group: Iterable[Cell], inside: Callable[[str], bool], own: list[Cell],
-             cut: set[str]) -> None:
+def _unshown(view: View, group: Iterable[Cell], inside: Callable[[str], bool], own: list[Cell], cut: set[str]) -> None:
     """Private cells in the window that no department cell shows: the viewer's own wait in `own`, the rest are cut."""
     for cell in group:
         if not inside(cell.day):

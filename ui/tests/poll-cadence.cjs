@@ -1,4 +1,4 @@
-// The app's polls while the live stream is down (ui/app/boot.js, ui/app/notices.js, ui/health.js): status, config and
+// The app's polls while the live stream is down (ui/app/boot.ts, ui/app/notices.ts, ui/health.ts): status, config and
 // Health each read every 2 minutes, not every 30 s or minute, so many open tabs do not multiply the load on a hub that
 // is already busy. A Health tab shown again reads once at once, and that read restarts its 2-minute timer, so the
 // next tick does not read again. Every request is intercepted; the page's clock is faked.
@@ -22,19 +22,19 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.3.0', app_name: 'Tico'};
       if (p === '/api/v2/events') return route.fulfill({status: 503, body: ''});   // the live stream is down
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') { reads.config++; return json(config); }
       if (p === '/api/v2/health') { reads.health++; return json(health); }
-      if (p === '/api/v2/health-monitor') return json({state: 'active', on: true, findings: []});
+      if (p === '/api/v2/health/findings') return json({findings: [], botops: true, reports_without_asking: false});
       if (p === '/api/v2/system/metrics') return json({});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
@@ -47,8 +47,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     });
     await page.clock.install({time: new Date('2026-10-27T12:00:00Z')});
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=health]').click();
+    await page.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
     await page.locator('#hl-page').waitFor({timeout: t(5000)});
     assert.equal(await page.evaluate(() => liveConnected()), false, 'the live stream should be down in this test');
     await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);

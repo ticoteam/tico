@@ -1,0 +1,7 @@
+# The demo's dates are relative to when it was built, so it is built again once a day (deploy/demo/tico-demo rotate).
+[Unit]
+Description=Tico public demo: build it again with today's dates
+
+[Service]
+Type=oneshot
+ExecStart=/srv/tico-demo/tools/current/deploy/demo/tico-demo rotate

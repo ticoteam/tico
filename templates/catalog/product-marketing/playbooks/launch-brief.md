@@ -10,7 +10,7 @@ Triggered by a task naming a launch. Budget 40 minutes. The outcome is one brief
     hub task show <id>
 
 Read `knowledge/positioning.md`, `knowledge/tiers.md` and `knowledge/launches.md`. Ask the requester
-once (`hub task ask <id>`) if the launch, its date or its owner is unclear, and stop.
+once (`hub task question "<question>" --on <person> --parent <id>`) if the launch, its date or its owner is unclear, and stop.
 
 ## 2. Size it
 

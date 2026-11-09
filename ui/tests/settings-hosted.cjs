@@ -1,6 +1,6 @@
 // Settings > Computers' hosted servers against a fake server (paused-start, d8f8efaa): the owner sees the Tico server
 // and the bot computer, Start on the stopped one; a start while the company is paused for credit says "Paused: out of
-// credit. Add credit to start this computer." with "Ask for more credit" opening the account page, and stays on screen
+// credit. Add credit to start this computer." with "Contact support for more credit" opening the account page, and stays on screen
 // through Settings' reloads; once credit is added the start goes through. An install HQ hosts nothing for has no
 // section, and a member never asks. No sideways scroll on a phone. Every request is intercepted. TICO_SHOTS=<dir>
 // saves screenshots of the refusal (desktop and phone, dark and light).
@@ -30,12 +30,12 @@ const shots = process.env.TICO_SHOTS || '';
     await page.route('**/*', route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.3.0', app_name: 'Tico'};
       if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -82,7 +82,7 @@ const shots = process.env.TICO_SHOTS || '';
     await note.locator('.hosted-paused').waitFor();
     assert.equal(await note.locator('.hosted-paused').innerText(), PAUSED);
     const ask = note.locator('[data-hosted-credit]');
-    assert.equal(await ask.innerText(), 'Ask for more credit');
+    assert.equal(await ask.innerText(), 'Contact support for more credit');
     assert.equal(await ask.getAttribute('href'), 'https://app.tico.dev');
     assert.equal(await ask.getAttribute('target'), '_blank');
     assert.equal(await card.locator(`[data-hosted-start="${BOTS}"]`).isDisabled(), false, 'Start can be tried again');

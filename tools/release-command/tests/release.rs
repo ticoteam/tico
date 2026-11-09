@@ -144,8 +144,8 @@ fn a_lost_notes_task_response_is_reported_instead_of_filed_twice() {
     assert_eq!(f.writer_tasks(), 1);
 }
 #[test]
-fn cancelled_validation_is_rerun_once_then_tagged() {
-    let f = Fixture::new(json!({"cancelled_watches":1}));
+fn canceled_validation_is_rerun_once_then_tagged() {
+    let f = Fixture::new(json!({"canceled_watches":1}));
     passed(f.freeze());
     passed(f.publish());
     assert_eq!(f.reruns(), "run rerun 42 --repo acme/product\n");
@@ -155,10 +155,10 @@ fn cancelled_validation_is_rerun_once_then_tagged() {
     assert_eq!(f.writer_tasks(), 1);
 }
 #[test]
-fn validation_cancelled_three_times_refuses_after_two_reruns() {
-    let f = Fixture::new(json!({"cancelled_watches":3}));
+fn validation_canceled_three_times_refuses_after_two_reruns() {
+    let f = Fixture::new(json!({"canceled_watches":3}));
     passed(f.freeze());
-    refused(&f, f.publish(), "cancelled after 2 reruns");
+    refused(&f, f.publish(), "canceled after 2 reruns");
     assert_eq!(f.reruns().lines().count(), 2);
     assert_eq!(f.watches(), 3);
     assert_eq!(f.writer_tasks(), 0);

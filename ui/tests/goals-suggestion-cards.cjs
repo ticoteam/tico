@@ -1,4 +1,4 @@
-// Goal suggestion cards say what yes does (ui/goals-kpis.js goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
+// Goal suggestion cards say what yes does (ui/goals-kpis.ts goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
 // Strategy Bot suggestion cards"): Add a KPI names the measure, says what it counts, its target or "No target yet" and
 // a
 // missing data source, and folds away the goal editor's target fields; each yes button says what it does, the no button
@@ -44,7 +44,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
         {changes: [{label: 'Title', now: GOAL, proposed: 'Double organic signups by June'}, {label: 'Description', now: '', proposed: LONG}]}),
       prop('p-flag', 'flag', {issue: 'duplicate', note: 'Same words as Grow signups'}, {}),
     ].map(p => ({kind: 'proposal', proposal: p, goal_title: GOAL, kpi_name: p.card.kpi_name || null, task: {id: 't-' + p.id, title: 'x', status: 'open'}}));
-    const goals = [{id: 'g-cmo', title: GOAL, owner: 'bot:cmo', parent_id: null, status: 'yellow', status_source: 'auto', rank: 0, kpis: [], why: 'More landlords find us.'}];
+    const goals = [{id: 'g-cmo', title: GOAL, owner_id: 'bot:cmo', parent_id: null, status: 'yellow', status_source: 'auto', rank: 0, kpis: [], why: 'More landlords find us.'}];
     const panelProp = {...prop('p-panel', 'goal_kpi', {kpi: {name: 'Signups'}, target: {kind: 'maintain', min: 40}},
       {measure: measure('Signups', {definition: 'New accounts', source_note: 'Stripe'}), target_label: 'range 40+'}), may_decide: true};
     // A recovery is out of this card's scope: in a goal's panel it keeps the recovery card's words.
@@ -54,7 +54,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/v2/events') return;
       if (p === '/api/employees') return json(bots);
@@ -83,6 +83,8 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/#/goals');
+    assert.match(await page.locator('#goal-needs-line').innerText(), /^\d+ suggestions\s*·\s*Review$/, 'one quiet line');
+    await page.locator('#goal-needs-line [data-needs-review]').click();
     await page.locator('#goal-needs .kpi-prop').first().waitFor();
     const card = id => page.locator(`#goal-needs [data-proposal="${id}"]`);
     const buttons = id => card(id).locator('.kpi-prop-do button').allInnerTexts();

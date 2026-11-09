@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/demo_sections/services.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 76,
+                    "endColumn": 79,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

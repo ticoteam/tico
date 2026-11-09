@@ -13,8 +13,8 @@ import time
 
 LOG = logging.getLogger("tico.call_slots")
 BREAKER_FAILURES, BREAKER_SECONDS = 5, 60
-NEUTRAL = ("spend_cap", "invalid")    # failures that say nothing of the provider's health: they never trip the breaker
-REFUSED = ("busy", "breaker")         # refusals at admission: no call was made
+NEUTRAL = ("spend_cap", "invalid")  # failures that say nothing of the provider's health: they never trip the breaker
+REFUSED = ("busy", "breaker")  # refusals at admission: no call was made
 
 
 class Calls:
@@ -54,6 +54,10 @@ class Calls:
                 self.failures += 1
                 if self.failures >= BREAKER_FAILURES:
                     if self.failures == BREAKER_FAILURES or probe:
-                        LOG.warning("%s pause for %ss after %s failed calls in a row", self.label, BREAKER_SECONDS,
-                                    self.failures)
+                        LOG.warning(
+                            "%s pause for %ss after %s failed calls in a row",
+                            self.label,
+                            BREAKER_SECONDS,
+                            self.failures,
+                        )
                     self.until = time.monotonic() + BREAKER_SECONDS

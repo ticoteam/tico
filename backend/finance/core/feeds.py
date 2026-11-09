@@ -1,8 +1,10 @@
 """Bank and card feed rows as Finance reads them (spec §4.3, §9), with no I/O: a provider's transaction normalized to
 signed cents, the webhook signature check, statement balances, and the hash that makes changed payee details a new
 recipient. Mercury is the first provider; its documented gaps are settled here, once, in tested functions."""
+
 import hashlib
 import hmac
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -11,24 +13,48 @@ from typing import Any, cast
 
 from .errors import invalid
 
-SIGNATURE_TOLERANCE = 300            # seconds a signed delivery may be old (Mercury recommends 5 minutes)
-# Mercury transaction statuses: pending is an authorization or an in-flight transfer; sent has posted. The rest end it.
+SIGNATURE_TOLERANCE = 300  # seconds a signed delivery may be old (Mercury recommends 5 minutes)
+# Mercury transaction statuses, in Mercury's spelling: pending is an authorization or an in-flight transfer; sent has
+# posted. The rest end it.
 POSTED, PENDING = "sent", "pending"
 VOID = ("cancelled", "failed", "blocked")
 REVERSED = "reversed"
-RECLASS = "reclass"     # a found payment's reconciled debit moved to its line (banking._reclass): `<feed id>:reclass`
+GONE = (*VOID, REVERSED)  # the bank ended it: its row is set aside (banking.undo), not a person's ignore
+RECLASS = "reclass"  # a found payment's reconciled debit moved to its line (banking._reclass): `<feed id>:reclass`
 
 
 def reclass_of(source: str, source_id: str) -> str:
     """The feed row a reclassification entry moved the spend of, else ""."""
     parts = source_id.split(":")
     return parts[0] if source == "bank" and len(parts) > 1 and parts[1] == RECLASS else ""
+
+
 # Mercury IO statements dated after this day carry charges positive (its changelog); earlier ones carry what is owed
 # negative (its endpoint page). Normalized once, in `credit_owed`.
 CREDIT_SIGN_FLIP = "2026-06-15"
-TRANSFER_KINDS = ("internalTransfer", "treasuryTransfer")
-CARD_KINDS = ("creditCardTransaction", "debitCardTransaction", "creditCardCredit", "debitCardCredit",
-              "cardInternationalTransactionFee")
+TRANSFER_KINDS = ("internalTransfer", "treasuryTransfer", "BOOK_TRANSFER", "INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER")
+# Brex card transactions (brex_card_txn). A charge and a credit back are card rows, as Mercury's card kinds are. Brex's
+# COLLECTION (a payment toward the card) is not a card row and carries no card: it is one side of a card payment whose
+# other side is the bank's CARD_COLLECTION debit (a cash row). banking._brex_payment pairs them, or posts the bank side
+# alone as a transfer to the card liability, so a payment never becomes an expense.
+BREX_CHARGES = ("PURCHASE", "BNPL_FEE")  # money the card owes: negative on the card
+BREX_CREDITS = ("REFUND", "CHARGEBACK", "REWARDS_CREDIT")  # money back to the card: positive
+BREX_COLLECTION = "COLLECTION"  # a payment toward the card: positive on the card
+BREX_CASH_CARD_PAYMENT = "CARD_COLLECTION"  # the bank's debit for that payment (a cash transaction)
+BREX_CARD_PAYMENTS = (BREX_COLLECTION, BREX_CASH_CARD_PAYMENT)  # the two sides of a card payment
+BREX_BOOK_TRANSFERS = ("BOOK_TRANSFER", "INTRA_CUSTOMER_ACCOUNT_BOOK_TRANSFER")  # money between the company's accounts
+BREX_KNOWN = (*BREX_CHARGES, *BREX_CREDITS, BREX_COLLECTION)  # the Brex card types Finance maps
+BREX_OTHER = "brexCardOther"  # a Brex card type not in BREX_KNOWN: a card row with Brex's sign, never a payment
+CARD_KINDS = (
+    "creditCardTransaction",
+    "debitCardTransaction",
+    "creditCardCredit",
+    "debitCardCredit",
+    "cardInternationalTransactionFee",
+    *BREX_CHARGES,
+    *BREX_CREDITS,
+    BREX_OTHER,
+)
 
 
 def cents(value: object) -> int:
@@ -64,6 +90,7 @@ def day_of(stamp: object) -> str:
 class FeedTxn:
     """One provider transaction. `amount` is signed from the account's side: negative is money out of a bank account
     or a charge added to a card balance; positive is money in or a card refund or payment."""
+
     provider_id: str
     account_id: str
     amount: int
@@ -112,16 +139,26 @@ def mercury_txn(raw: dict[str, Any], version: int = 0) -> FeedTxn:
     card = str(raw.get("cardId") or "")
     if not card:
         card = str(_dict(details.get("debitCardInfo") or details.get("creditCardInfo")).get("id") or "")
-    return FeedTxn(provider_id=tid, account_id=account, amount=cents(raw.get("amount")), txn_date=day_of(when),
-                   status=status, kind=str(raw.get("kind") or ""),
-                   counterparty=str(raw.get("counterpartyNickname") or raw.get("counterpartyName") or "")[:200],
-                   description=str(raw.get("bankDescription") or raw.get("externalMemo") or "")[:500],
-                   card_id=card, request_id=str(raw.get("requestId") or ""), note=str(raw.get("note") or "")[:500],
-                   version=version, raw=raw)
+    return FeedTxn(
+        provider_id=tid,
+        account_id=account,
+        amount=cents(raw.get("amount")),
+        txn_date=day_of(when),
+        status=status,
+        kind=str(raw.get("kind") or ""),
+        counterparty=str(raw.get("counterpartyNickname") or raw.get("counterpartyName") or "")[:200],
+        description=str(raw.get("bankDescription") or raw.get("externalMemo") or "")[:500],
+        card_id=card,
+        request_id=str(raw.get("requestId") or ""),
+        note=str(raw.get("note") or "")[:500],
+        version=version,
+        raw=raw,
+    )
 
 
-def verify_signature(header: str, body: bytes, secret: str, now: float,
-                     tolerance: int = SIGNATURE_TOLERANCE) -> tuple[bool, str]:
+def verify_signature(
+    header: str, body: bytes, secret: str, now: float, tolerance: int = SIGNATURE_TOLERANCE
+) -> tuple[bool, str]:
     """Mercury's `Mercury-Signature: t=<unix>,v1=<hex>`: HMAC-SHA256 of `<t>.<raw body>` under the endpoint secret,
     compared in constant time, refused when older than `tolerance`. (ok, why not)."""
     if not secret:
@@ -182,8 +219,23 @@ def last4(number: object) -> str:
     return digits[-4:]
 
 
-REQUEST_STATUS = {"pendingApproval": "awaiting_bank_approval", "approved": "submitted", "rejected": "cancelled",
-                  "cancelled": "cancelled"}
+def bare_name(name: object, four: object) -> str:
+    """An account's name without a trailing copy of its own last four ("Mercury Checking ••9801" -> "Mercury
+    Checking"): Mercury's names carry them, and Finance shows the last four on their own."""
+    text, digits = str(name or "").strip(), str(four or "")
+    if len(digits) != 4 or not digits.isdigit():
+        return text
+    cut = re.sub(rf"(?:\s*[•·*.#…\-–—]+\s*|\s+)\(?(?<!\d){digits}\)?$", "", text).strip()
+    return cut or text
+
+
+# Mercury's approval request statuses, in its spelling, and Tico's own.
+REQUEST_STATUS = {
+    "pendingApproval": "awaiting_bank_approval",
+    "approved": "submitted",
+    "rejected": "canceled",
+    "cancelled": "canceled",
+}
 
 
 def request_status(value: object) -> str:
@@ -192,12 +244,12 @@ def request_status(value: object) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ Stripe
-STRIPE_PAYOUT = "payout"                                    # the balance moved to the bank: a transfer, never income
-STRIPE_PAYOUT_BACK = ("payout_failure", "payout_cancel")    # a payout that came back to the balance
-STRIPE_CHARGES = ("charge", "payment")                      # sales: income, or the invoice they pay
-STRIPE_UNWINDS = ("refund", "payment_refund", "refund_failure", "adjustment")   # reverse or restore a sale (disputes)
-STRIPE_COSTS = ("stripe_fee", "network_cost", "tax_fee")    # Stripe's own charges: expense, no income
-STRIPE_LINKED = (*STRIPE_CHARGES, STRIPE_PAYOUT, *STRIPE_PAYOUT_BACK)   # kinds whose source object is the link itself
+STRIPE_PAYOUT = "payout"  # the balance moved to the bank: a transfer, never income
+STRIPE_PAYOUT_BACK = ("payout_failure", "payout_cancel")  # a payout that came back to the balance
+STRIPE_CHARGES = ("charge", "payment")  # sales: income, or the invoice they pay
+STRIPE_UNWINDS = ("refund", "payment_refund", "refund_failure", "adjustment")  # reverse or restore a sale (disputes)
+STRIPE_COSTS = ("stripe_fee", "network_cost", "tax_fee")  # Stripe's own charges: expense, no income
+STRIPE_LINKED = (*STRIPE_CHARGES, STRIPE_PAYOUT, *STRIPE_PAYOUT_BACK)  # kinds whose source object is the link itself
 
 
 def _int(value: object) -> int:
@@ -233,13 +285,99 @@ def stripe_txn(raw: dict[str, Any], account: str) -> FeedTxn:
     source_id = str(obj.get("id") or (source if isinstance(source, str) else "") or "")[:200]
     billing = _dict(obj.get("billing_details"))
     description = str(raw.get("description") or "")[:500]
-    keep: dict[str, Any] = {"id": tid, "type": kind, "amount": gross, "fee": fee, "net": net,
-                            "currency": str(raw.get("currency") or ""), "created": created,
-                            "description": description, "source": source_id, "link": _link(kind, obj, source_id)}
-    return FeedTxn(provider_id=tid, account_id=account, amount=net, txn_date=day, status=POSTED, kind=kind,
-                   counterparty=str(billing.get("name") or "")[:200], description=description, version=1, raw=keep)
+    keep: dict[str, Any] = {
+        "id": tid,
+        "type": kind,
+        "amount": gross,
+        "fee": fee,
+        "net": net,
+        "currency": str(raw.get("currency") or ""),
+        "created": created,
+        "description": description,
+        "source": source_id,
+        "link": _link(kind, obj, source_id),
+    }
+    return FeedTxn(
+        provider_id=tid,
+        account_id=account,
+        amount=net,
+        txn_date=day,
+        status=POSTED,
+        kind=kind,
+        counterparty=str(billing.get("name") or "")[:200],
+        description=description,
+        version=1,
+        raw=keep,
+    )
 
 
 def stripe_parts(raw: Mapping[str, Any]) -> tuple[int, int]:
     """A stored Stripe balance transaction's (gross, fee) in cents."""
     return _int(raw.get("amount")), _int(raw.get("fee"))
+
+
+# ------------------------------------------------------------------------------------------------ Brex
+def _money_cents(value: object, what: str) -> int:
+    """A Brex Money object's amount: whole minor units, signed as sent. Refused when missing or not a whole number, never
+    rounded."""
+    if not isinstance(value, dict):
+        raise invalid(f"{what} has an amount")
+    amount = cast(dict[str, Any], value).get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise invalid(f"{what} has a whole-cent amount")
+    return amount
+
+
+def brex_card_txn(raw: dict[str, Any], account: str) -> FeedTxn:
+    """A Brex card transaction on its card account (the one card account Finance maps). Brex documents amounts as signed
+    but not which sign a purchase carries, so the direction comes from the type: a charge (PURCHASE, BNPL_FEE) is negative
+    on the card; a credit back (REFUND, CHARGEBACK, REWARDS_CREDIT) and a payment toward the card (COLLECTION) are positive.
+    The size is the amount's magnitude, so either sign Brex sends gives the same entry. A type not listed is not guessed: it
+    is posted with Brex's sign under BREX_OTHER (its Brex type stays in raw), so it is never paired as a payment, and the
+    sync notes it. The day is the posting day (posted_at_date). Brex lists settled transactions only: there is no pending row."""
+    tid = str(raw.get("id") or "")
+    if not tid or not account:
+        raise invalid("a transaction has an id and an account")
+    kind = str(raw.get("type") or "")
+    amount = _money_cents(raw.get("amount"), "a card transaction")
+    if kind in BREX_CHARGES:
+        signed, stored = -abs(amount), kind
+    elif kind in (*BREX_CREDITS, BREX_COLLECTION):
+        signed, stored = abs(amount), kind
+    else:
+        signed, stored = amount, BREX_OTHER
+    merchant = _dict(raw.get("merchant"))
+    card = (
+        "" if kind == BREX_COLLECTION else str(raw.get("card_id") or "")
+    )  # a payment toward the card is no card's row
+    return FeedTxn(
+        provider_id=tid,
+        account_id=account,
+        amount=signed,
+        txn_date=day_of(raw.get("posted_at_date")),
+        status=POSTED,
+        kind=stored,
+        counterparty=str(merchant.get("raw_descriptor") or raw.get("description") or "")[:200],
+        description=str(raw.get("description") or "")[:500],
+        card_id=card,
+        raw=raw,
+    )
+
+
+def brex_cash_txn(raw: dict[str, Any], account: str) -> FeedTxn:
+    """A Brex cash transaction on its cash account. Its amount is taken with the sign Brex sends: negative is money out of
+    the account, positive money in. Brex documents the sign only as "signed", so this is the one assumption to confirm
+    against a live account. The day is the posting day (posted_at_date)."""
+    tid = str(raw.get("id") or "")
+    if not tid or not account:
+        raise invalid("a transaction has an id and an account")
+    return FeedTxn(
+        provider_id=tid,
+        account_id=account,
+        amount=_money_cents(raw.get("amount"), "a cash transaction"),
+        txn_date=day_of(raw.get("posted_at_date")),
+        status=POSTED,
+        kind=str(raw.get("type") or ""),
+        description=str(raw.get("description") or "")[:500],
+        raw=raw,
+    )

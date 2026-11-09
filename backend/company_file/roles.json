@@ -77,6 +77,81 @@
    "default": false
   },
   {
+   "slug": "affiliates",
+   "template": "affiliates",
+   "name": "Affiliates Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the self-serve affiliate and referral program: checks applications, follows each affiliate's referrals and commissions, recomputes every payout from the published terms and flags likely fraud. It drafts each payout list and each reply; a person pays and decides.",
+   "when": "A team that pays people a commission for the customers they refer through a program anyone can join, and that has no one checking the payouts or the referrals each week.",
+   "tags": [
+    "affiliates",
+    "referrals",
+    "commissions",
+    "payouts",
+    "fraud",
+    "b2c",
+    "ecommerce",
+    "saas"
+   ],
+   "pains": [
+    "we don't know which affiliates actually bring customers",
+    "commission payouts are late or wrong",
+    "coupon codes turn up on sites we never approved",
+    "affiliate applications sit for weeks",
+    "we pay for referrals that are the referrer's own sign-ups"
+   ],
+   "recommend_when": [
+    "sells_products",
+    "sells_to_consumers",
+    "sells_software"
+   ],
+   "first_routine": "Weekly affiliate review · Fridays at 09:00 team time",
+   "tools": [
+    "docs",
+    "mail",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "app-store",
+   "template": "app-store",
+   "name": "App Store Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Looks after the app's listings on the iOS App Store and Google Play: listing conversion, copy and screenshot drafts, keyword checks, the rating trend, and a draft reply to each store review. Listing changes and replies stay drafts until a person publishes them in the store console.",
+   "when": "A team with a mobile app on the Apple App Store or Google Play that gets installs from search or browse and watches its ratings.",
+   "tags": [
+    "app-store",
+    "google-play",
+    "mobile",
+    "aso",
+    "ratings",
+    "reviews",
+    "consumer"
+   ],
+   "pains": [
+    "people see our app listing and do not install it",
+    "our rating dropped and nobody knows why",
+    "store reviews go unanswered for weeks",
+    "we don't know which search terms bring installs",
+    "our screenshots were made once and never tested"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "sells_to_consumers"
+   ],
+   "first_routine": "Weekly app store review · Thursdays at 09:00 team time",
+   "tools": [
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "ar-followup",
    "template": "ar-followup",
    "name": "Accounts Receivable Specialist",
@@ -235,38 +310,33 @@
    "default": false
   },
   {
-   "slug": "brand",
-   "template": "brand",
-   "name": "Brand Manager",
-   "department": "marketing",
+   "slug": "builder",
+   "template": "builder",
+   "name": "Builder",
+   "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Keeps the brand rules written down, reviews copy and assets against them, checks new names, and audits what went public each month with three fixes. It changes no live page or asset itself.",
-   "when": "A team whose website, emails, decks and posts no longer sound or look like one team, or that is naming a new product.",
+   "summary": "Takes a Dev ticket that Head of Engineering has put on its step, builds the change on a branch with a test that proves it, opens the pull request and carries the ticket through review and QA fixes. It merges only when the team's merge rules allow it and the checks pass at the head.",
+   "when": "Offer when GitHub is connected and the team turns Dev tickets into code.",
    "tags": [
-    "brand",
-    "voice",
-    "naming",
-    "design",
-    "consistency",
-    "b2c",
-    "retail"
+    "saas",
+    "github",
+    "code",
+    "developer-tools"
    ],
    "pains": [
-    "every team describes our team differently",
-    "our logo and colours are used wrong",
-    "new copy never sounds like us",
-    "we have no brand guidelines anyone follows"
+    "bugs and small changes wait in a queue before anyone starts on them",
+    "a fix goes back and forth between the author and the reviewers for days",
+    "a change is merged without a test that would have caught the bug",
+    "nobody can say which ticket a pull request came from or what it was meant to do"
    ],
    "recommend_when": [
-    "publishes_content",
-    "sells_to_consumers",
-    "sells_to_businesses"
+    "sells_software",
+    "uses_slack"
    ],
-   "first_routine": "Monthly brand consistency audit · The 1st of each month at 10:00 team time",
+   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
    "tools": [
-    "docs",
-    "web"
+    "github"
    ],
    "default": false
   },
@@ -491,7 +561,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Every human's private Assistant: finds meetings, docs, files and tasks, makes tasks, hands work to the right bot and asks BotOps for new ones, always as that human and never more. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
+   "summary": "Every human's private Assistant: does what that human asks, as them and never more, and reports what it did with the way to undo it. Finds meetings, docs, files and tasks, makes tasks, hands work to the right bot, and clears pile-ups at their source. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
    "when": "Built in: every human gets a private Assistant that finds things and does them for them, and it routes work nobody was named for (Slack, meetings).",
    "tags": [],
    "pains": [],
@@ -533,6 +603,44 @@
     "calendar",
     "docs",
     "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "cro",
+   "template": "cro",
+   "name": "Conversion Rate Optimization Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Finds the step that loses the most visitors on the team's site each week, from the landing page to the signup, trial or purchase, and proposes one test with a written hypothesis and a stop rule. It reads each result honestly and never calls a winner early. Changes to the site stay drafts until a person ships them.",
+   "when": "A team whose visitors arrive steadily but whose signups, trials or sales do not, and that changes its site without checking whether the change helped.",
+   "tags": [
+    "conversion",
+    "funnel",
+    "landing-pages",
+    "signup",
+    "ab-tests",
+    "ecommerce",
+    "saas"
+   ],
+   "pains": [
+    "we get visitors but few of them sign up or buy",
+    "we don't know which step of the site loses the most people",
+    "we changed the page and never checked whether it helped",
+    "our A/B tests get called early and then reversed",
+    "nobody owns the signup or checkout flow"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "sells_software"
+   ],
+   "first_routine": "Weekly conversion review · Wednesdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "docs",
+    "web"
    ],
    "default": false
   },
@@ -1153,7 +1261,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Owns the strategy, the shape of the team and the goals. It proposes the Strategy page as claims the owner keeps or strikes, from the market pages and what the team already does; the owner writes and publishes it, never the bot. When a bet's wrong-if trips, it puts one card in front of the owner: retire, rewrite or keep. It is the steward of every KPI: it computes each one on its cadence, posts the reading with its evidence, and says when data is stale or missing instead of guessing. Goals link to the strategy's bets and get their colour from their KPIs, pace and deadline; a colour a human set stays theirs. When a KPI slips it asks the goal's owner what is happening and records the answer. It flags vague, duplicate and unmeasured goals, and every change to a definition or a target is a proposal the owner confirms.",
+   "summary": "Owns the strategy, the team's shape and the goals. Proposes the Strategy page as claims the owner keeps or strikes; the owner writes and publishes it, never the bot. When a bet's wrong-if trips, puts one card to the owner: retire, rewrite or keep. Computes each KPI on its cadence and posts the reading with its evidence; says when data is stale or missing instead of guessing. Sets each goal's colour from its KPIs, pace and deadline, unless a human set it. Asks a goal's owner what is happening when one slips, and flags vague or duplicate goals; measures are optional. Every change to a target or definition is a proposal the owner confirms.",
    "when": "Built in: proposes the team's strategy to the owner and keeps its bets honest against the market and the results, keeps every KPI up to date with evidence, sets goals' colours from them, asks a goal's owner what is happening when one slips, and proposes clearer goals and measures.",
    "tags": [],
    "pains": [],
@@ -1228,6 +1336,40 @@
    "tools": [
     "chat",
     "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "initiative-owner",
+   "template": "initiative-owner",
+   "name": "Initiative Owner",
+   "department": "leadership",
+   "lead": false,
+   "core": false,
+   "summary": "Runs one strategy bet's weekly check-in: its plan, progress against its wrong-if test, the next step with an owner and a date, and who is blocked. When the evidence says the bet looks wrong, it says so with the evidence and puts the decision to the owner. It never writes or changes the strategy.",
+   "when": "A company that has written its strategy bets in Tico and wants each bet's progress and its wrong-if test looked at every week, by one seat that does nothing else.",
+   "tags": [
+    "strategy",
+    "initiatives",
+    "bets",
+    "planning",
+    "leadership"
+   ],
+   "pains": [
+    "we set a bet and nobody checks it again until the year ends",
+    "we keep funding a bet after the evidence turned against it",
+    "nobody can say what moved on our biggest initiative this week",
+    "initiative updates are all optimism and no numbers",
+    "the blocker on an initiative sits in a thread nobody reads"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers"
+   ],
+   "first_routine": "Weekly initiative check-in · Fridays at 15:00 team time",
+   "tools": [
+    "docs",
+    "meetings"
    ],
    "default": false
   },
@@ -1369,6 +1511,43 @@
    "tools": [
     "chat",
     "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "lead-generation",
+   "template": "lead-generation",
+   "name": "Lead Generation Owner",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the supply of qualified leads steady each week: says which sources bring the leads Sales accepts, drafts the forms and lead magnets that capture them, and builds sourced target lists. It never sends: first touch belongs to the Sales Development Representative, and every message stays a draft until a person turns mail sending on for this bot in Tico.",
+   "when": "A team that wants more qualified leads each week and has no one counting which sources bring the ones its sellers accept.",
+   "tags": [
+    "b2b",
+    "lead-generation",
+    "lead-magnets",
+    "forms",
+    "lists",
+    "pipeline",
+    "saas",
+    "smb"
+   ],
+   "pains": [
+    "we don't know which lead sources actually produce customers",
+    "sales says the leads we send are not good enough",
+    "our forms and lead magnets are out of date",
+    "we run out of new leads every quarter",
+    "nobody builds lists of the buyers we want to reach"
+   ],
+   "recommend_when": [
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly lead generation review · Mondays at 08:30 team time",
+   "tools": [
+    "crm",
+    "docs",
+    "web"
    ],
    "default": false
   },
@@ -2036,6 +2215,44 @@
    "tools": [
     "docs",
     "mail"
+   ],
+   "default": false
+  },
+  {
+   "slug": "pipeline",
+   "template": "pipeline",
+   "name": "Pipeline Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the path from a merged change to users. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. It never reruns, cancels, deploys, rolls back or merges on its own.",
+   "when": "A software team whose merged changes wait days to reach users, whose merge queue is slow or distrusted, or who cut releases by hand and need one seat to get each release ready and out.",
+   "tags": [
+    "saas",
+    "github",
+    "delivery",
+    "merge-queue",
+    "releases",
+    "changelog",
+    "rollbacks",
+    "deploys"
+   ],
+   "pains": [
+    "a merged change waits days before users see it",
+    "the merge queue is slow and people stop trusting it",
+    "we release rarely because every release feels risky",
+    "release notes are written by hand at the last minute, or not at all",
+    "a rollback takes an afternoon and nobody is sure how",
+    "customers do not know what changed in each release"
+   ],
+   "recommend_when": [
+    "sells_software"
+   ],
+   "first_routine": "Weekly delivery pipeline report · Mondays at 09:30 team time",
+   "tools": [
+    "chat",
+    "docs",
+    "github"
    ],
    "default": false
   },

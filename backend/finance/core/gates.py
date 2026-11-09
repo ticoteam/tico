@@ -1,7 +1,8 @@
-"""Gate rules (spec §6.2, §6.3), with no I/O. A rule is plain words, a `when` condition in Tico's `when_json` shape
+"""Gate rules (spec §6.2, §6.3), with no I/O. A rule is plain words, a `when` condition in Tico's `condition` shape
 (every key must match, a list means any of) with gt/gte/lt/lte/not/matches for money and text, an outcome, and
 examples that must pass before it is saved. Every matching rule runs and the strictest wins:
 deny > needs_approval > limit > allow; the lowest limit binds; one approval from the highest named approver."""
+
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -13,14 +14,14 @@ from .errors import invalid
 
 OUTCOMES = ("allow", "deny", "needs_approval", "limit")
 RANK = {"allow": 0, "limit": 1, "needs_approval": 2, "deny": 3}
-WHO = ("manager", "finance_admin", "owner")          # lowest to highest
+WHO = ("manager", "finance_admin", "owner")  # lowest to highest
 # Who decides, lowest to highest. A parent budget's owner (budget_owner) is not a rule's choice, but a parent raise
 # asks them, and that outranks the manager a missing right sends to (§4.4).
 RANK_WHO = ("manager", "budget_owner", "finance_admin", "owner")
 OPS = ("gt", "gte", "lt", "lte", "not", "matches")
 PERIODS = ("action", "day", "week", "month")
 SUBJECTS = ("company", "actor", "recipient")
-STALE_MINUTES = 15                                    # money out reads nothing older than this (§6.3)
+STALE_MINUTES = 15  # money out reads nothing older than this (§6.3)
 MAX_KEYS, MAX_EXAMPLES, MAX_PATTERN = 20, 20, 200
 KEY = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$")
 # Inputs whose source can go stale, and how old each is, live in facts["_ages"] (minutes; None when unknown).
@@ -47,6 +48,7 @@ class Rule:
 @dataclass(frozen=True)
 class Hit:
     """One rule's say on one action: its outcome, why, and for a limit the counter it moves."""
+
     rule: str
     outcome: str
     who: str = ""
@@ -64,7 +66,7 @@ class Verdict:
     reason: str = ""
     stale: bool = False
     hits: tuple[Hit, ...] = ()
-    counts: tuple[Hit, ...] = field(default=())      # limits that fit: their counters move when the action commits
+    counts: tuple[Hit, ...] = field(default=())  # limits that fit: their counters move when the action commits
 
 
 # ------------------------------------------------------------------------------------------------ parsing
@@ -132,15 +134,24 @@ def parse_outcome(raw: object) -> dict[str, object]:
     return out
 
 
-def rule_of(rid: str, name: str, when: Mapping[str, object], outcome: Mapping[str, object],
-            active: bool = True) -> Rule:
+def rule_of(
+    rid: str, name: str, when: Mapping[str, object], outcome: Mapping[str, object], active: bool = True
+) -> Rule:
     limit = outcome.get("limit")
     stale = outcome.get("stale_minutes")
-    return Rule(id=rid, name=name, when=when, outcome=str(outcome.get("outcome") or "allow"),
-                who=str(outcome.get("who") or ""), reason=str(outcome.get("reason") or ""),
-                limit=limit if isinstance(limit, int) else None, per=str(outcome.get("per") or "action"),
-                subject=str(outcome.get("subject") or "company"),
-                stale_minutes=stale if isinstance(stale, int) else STALE_MINUTES, active=active)
+    return Rule(
+        id=rid,
+        name=name,
+        when=when,
+        outcome=str(outcome.get("outcome") or "allow"),
+        who=str(outcome.get("who") or ""),
+        reason=str(outcome.get("reason") or ""),
+        limit=limit if isinstance(limit, int) else None,
+        per=str(outcome.get("per") or "action"),
+        subject=str(outcome.get("subject") or "company"),
+        stale_minutes=stale if isinstance(stale, int) else STALE_MINUTES,
+        active=active,
+    )
 
 
 # ------------------------------------------------------------------------------------------------ matching
@@ -162,8 +173,9 @@ def _scalar(want: object, value: object) -> bool:
 
 def _op(op: str, arg: object, value: object) -> bool:
     if op == "not":
-        return not (any(_scalar(x, value) for x in cast(list[object], arg)) if isinstance(arg, list)
-                    else _scalar(arg, value))
+        return not (
+            any(_scalar(x, value) for x in cast(list[object], arg)) if isinstance(arg, list) else _scalar(arg, value)
+        )
     if op == "matches":
         return isinstance(value, str) and re.search(str(arg), value, re.IGNORECASE) is not None
     if isinstance(value, bool) or not isinstance(value, int) or isinstance(arg, bool) or not isinstance(arg, int):
@@ -239,14 +251,22 @@ def evaluate(rules: Sequence[Rule], facts: Facts, day: date, used: Used | None =
         if old:
             # A stale value can neither dismiss a rule nor satisfy an allow: when the rest of the condition holds,
             # the rule asks (a deny that matches in full still denies).
-            if not matches({k: v for k, v in r.when.items() if k not in old}, facts) or \
-                    (r.outcome == "allow" and not full):
+            if not matches({k: v for k, v in r.when.items() if k not in old}, facts) or (
+                r.outcome == "allow" and not full
+            ):
                 continue
             if r.outcome == "deny" and full:
                 hits.append(Hit(r.id, "deny", r.who, r.reason or r.name))
                 continue
-            hits.append(Hit(r.id, "needs_approval", r.who if r.outcome == "needs_approval" and r.who else
-                            "finance_admin", f"{r.name}: its data is stale", stale=True))
+            hits.append(
+                Hit(
+                    r.id,
+                    "needs_approval",
+                    r.who if r.outcome == "needs_approval" and r.who else "finance_admin",
+                    f"{r.name}: its data is stale",
+                    stale=True,
+                )
+            )
             continue
         if not full:
             continue
@@ -255,8 +275,15 @@ def evaluate(rules: Sequence[Rule], facts: Facts, day: date, used: Used | None =
             before = used(r, key, subject) if used is not None and r.per != "action" else 0
             limit = r.limit or 0
             if before + spend > limit:
-                hits.append(Hit(r.id, "deny", reason=r.reason or f"{r.name}: over its limit of {limit / 100:.2f}"
-                                + (f" per {r.per}" if r.per != "action" else "")))
+                hits.append(
+                    Hit(
+                        r.id,
+                        "deny",
+                        reason=r.reason
+                        or f"{r.name}: over its limit of {limit / 100:.2f}"
+                        + (f" per {r.per}" if r.per != "action" else ""),
+                    )
+                )
             else:
                 hit = Hit(r.id, "limit", reason=r.reason or r.name, period_key=key, subject=subject)
                 hits.append(hit)
@@ -274,11 +301,19 @@ def strictest(hits: Sequence[Hit], counts: Sequence[Hit] = ()) -> Verdict:
     winners = [h for h in hits if RANK[h.outcome] == top]
     if top == RANK["needs_approval"]:
         best = max(winners, key=lambda h: WHO.index(h.who) if h.who in WHO else 0)
-        return Verdict("needs_approval", best.who or "finance_admin", best.rule, best.reason,
-                       any(h.stale for h in winners), tuple(hits), tuple(counts))
+        return Verdict(
+            "needs_approval",
+            best.who or "finance_admin",
+            best.rule,
+            best.reason,
+            any(h.stale for h in winners),
+            tuple(hits),
+            tuple(counts),
+        )
     first = winners[0]
-    return Verdict(first.outcome, "", first.rule, first.reason, False, tuple(hits),
-                   tuple(counts) if top < RANK["deny"] else ())
+    return Verdict(
+        first.outcome, "", first.rule, first.reason, False, tuple(hits), tuple(counts) if top < RANK["deny"] else ()
+    )
 
 
 def higher(a: str, b: str) -> str:
@@ -336,52 +371,116 @@ def words_for(when: Mapping[str, object], outcome: Mapping[str, object]) -> str:
 # edit or turn it off (FIXED), and kinds.default_gate enforces it whatever the row says. (id, name, words, when, outcome,
 # examples)
 DEFAULTS: tuple[tuple[str, str, str, dict[str, object], dict[str, object], list[dict[str, object]]], ...] = (
-    ("rule:new-recipient", "New recipient", "Paying a recipient (or changed payment details) for the first time asks "
-     "a finance admin.", {"kind": "payment_create", "recipient.known": False},
-     {"outcome": "needs_approval", "who": "finance_admin"},
-     [{"input": {"kind": "payment_create", "recipient.known": False, "amount": 5000}, "expect": "needs_approval"},
-      {"input": {"kind": "payment_create", "recipient.known": True, "amount": 5000}, "expect": "allow"}]),
-    ("rule:payment-over-1000", "Payments over $1,000", "A payment over $1,000 asks the owner.",
-     {"kind": "payment_create", "amount": {"gt": 100000}}, {"outcome": "needs_approval", "who": "owner"},
-     [{"input": {"kind": "payment_create", "amount": 100001}, "expect": "needs_approval"},
-      {"input": {"kind": "payment_create", "amount": 100000}, "expect": "allow"}]),
-    ("rule:bot-card-standing", "Standing bot cards", "A standing card for a bot asks a finance admin; single-use cards "
-     "up to $200 inside the bot's budget do not.",
-     {"kind": "card_create", "holder.kind": "bot", "card.kind": {"not": "single_use"}},
-     {"outcome": "needs_approval", "who": "finance_admin"},
-     [{"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "person", "amount": 5000},
-       "expect": "needs_approval"},
-      {"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 5000},
-       "expect": "allow"},
-      {"input": {"kind": "card_create", "holder.kind": "human", "card.kind": "person", "amount": 5000},
-       "expect": "allow"}]),
-    ("rule:bot-card-single-use-over-200", "Single-use bot cards over $200", "A single-use card for a bot over $200 "
-     "asks a finance admin.",
-     {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": {"gt": 20000}},
-     {"outcome": "needs_approval", "who": "finance_admin"},
-     [{"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 20001},
-       "expect": "needs_approval"},
-      {"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 20000},
-       "expect": "allow"}]),
-    ("rule:bot-books-over-5000", "Bot bookkeeping over $5,000", "A bot categorizing or posting more than $5,000 in "
-     "one action asks a finance admin.",
-     {"kind": ["categorize", "journal"], "actor.kind": "bot", "amount": {"gt": 500000}},
-     {"outcome": "needs_approval", "who": "finance_admin"},
-     [{"input": {"kind": "categorize", "actor.kind": "bot", "amount": 500001}, "expect": "needs_approval"},
-      {"input": {"kind": "journal", "actor.kind": "bot", "amount": 500000}, "expect": "allow"},
-      {"input": {"kind": "categorize", "actor.kind": "human", "amount": 900000}, "expect": "allow"}]),
-    ("rule:bot-new-account", "Bot adds an account", "A bot adding a line to the chart of accounts asks a finance "
-     "admin.", {"kind": "account_create", "actor.kind": "bot"}, {"outcome": "needs_approval", "who": "finance_admin"},
-     [{"input": {"kind": "account_create", "actor.kind": "bot"}, "expect": "needs_approval"},
-      {"input": {"kind": "account_create", "actor.kind": "human"}, "expect": "allow"}]),
-    ("rule:close-reopen-owner", "Closing or reopening a period", "Closing or reopening a period asks the owner, unless "
-     "the owner does it.", {"kind": ["close_period", "reopen_period"], "actor.kind": {"not": "system"},
-                            "actor.owner": False},
-     {"outcome": "needs_approval", "who": "owner"},
-     [{"input": {"kind": "close_period", "actor.kind": "human", "actor.owner": False}, "expect": "needs_approval"},
-      {"input": {"kind": "reopen_period", "actor.kind": "bot", "actor.owner": False}, "expect": "needs_approval"},
-      {"input": {"kind": "close_period", "actor.kind": "human", "actor.owner": True}, "expect": "allow"},
-      {"input": {"kind": "close_period", "actor.kind": "system", "actor.owner": False}, "expect": "allow"}]),
+    (
+        "rule:new-recipient",
+        "New recipient",
+        "Paying a recipient (or changed payment details) for the first time asks a finance admin.",
+        {"kind": "payment_create", "recipient.known": False},
+        {"outcome": "needs_approval", "who": "finance_admin"},
+        [
+            {"input": {"kind": "payment_create", "recipient.known": False, "amount": 5000}, "expect": "needs_approval"},
+            {"input": {"kind": "payment_create", "recipient.known": True, "amount": 5000}, "expect": "allow"},
+        ],
+    ),
+    (
+        "rule:payment-over-1000",
+        "Payments over $1,000",
+        "A payment over $1,000 asks the owner.",
+        {"kind": "payment_create", "amount": {"gt": 100000}},
+        {"outcome": "needs_approval", "who": "owner"},
+        [
+            {"input": {"kind": "payment_create", "amount": 100001}, "expect": "needs_approval"},
+            {"input": {"kind": "payment_create", "amount": 100000}, "expect": "allow"},
+        ],
+    ),
+    (
+        "rule:po-over-1000",
+        "Purchase orders over $1,000",
+        "A purchase order over $1,000 asks the owner.",
+        {"kind": "po_approve", "amount": {"gt": 100000}},
+        {"outcome": "needs_approval", "who": "owner"},
+        [
+            {"input": {"kind": "po_approve", "amount": 100001}, "expect": "needs_approval"},
+            {"input": {"kind": "po_approve", "amount": 100000}, "expect": "allow"},
+        ],
+    ),
+    (
+        "rule:bot-card-standing",
+        "Standing bot cards",
+        "A standing card for a bot asks a finance admin; single-use cards up to $200 inside the bot's budget do not.",
+        {"kind": "card_create", "holder.kind": "bot", "card.kind": {"not": "single_use"}},
+        {"outcome": "needs_approval", "who": "finance_admin"},
+        [
+            {
+                "input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "person", "amount": 5000},
+                "expect": "needs_approval",
+            },
+            {
+                "input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 5000},
+                "expect": "allow",
+            },
+            {
+                "input": {"kind": "card_create", "holder.kind": "human", "card.kind": "person", "amount": 5000},
+                "expect": "allow",
+            },
+        ],
+    ),
+    (
+        "rule:bot-card-single-use-over-200",
+        "Single-use bot cards over $200",
+        "A single-use card for a bot over $200 asks a finance admin.",
+        {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": {"gt": 20000}},
+        {"outcome": "needs_approval", "who": "finance_admin"},
+        [
+            {
+                "input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 20001},
+                "expect": "needs_approval",
+            },
+            {
+                "input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 20000},
+                "expect": "allow",
+            },
+        ],
+    ),
+    (
+        "rule:bot-books-over-5000",
+        "Bot bookkeeping over $5,000",
+        "A bot categorizing or posting more than $5,000 in one action asks a finance admin.",
+        {"kind": ["categorize", "journal"], "actor.kind": "bot", "amount": {"gt": 500000}},
+        {"outcome": "needs_approval", "who": "finance_admin"},
+        [
+            {"input": {"kind": "categorize", "actor.kind": "bot", "amount": 500001}, "expect": "needs_approval"},
+            {"input": {"kind": "journal", "actor.kind": "bot", "amount": 500000}, "expect": "allow"},
+            {"input": {"kind": "categorize", "actor.kind": "human", "amount": 900000}, "expect": "allow"},
+        ],
+    ),
+    (
+        "rule:bot-new-account",
+        "Bot adds an account",
+        "A bot adding a line to the chart of accounts asks a finance admin.",
+        {"kind": "account_create", "actor.kind": "bot"},
+        {"outcome": "needs_approval", "who": "finance_admin"},
+        [
+            {"input": {"kind": "account_create", "actor.kind": "bot"}, "expect": "needs_approval"},
+            {"input": {"kind": "account_create", "actor.kind": "human"}, "expect": "allow"},
+        ],
+    ),
+    (
+        "rule:close-reopen-owner",
+        "Closing or reopening a period",
+        "Closing or reopening a period asks the owner, unless the owner does it.",
+        {"kind": ["close_period", "reopen_period"], "actor.kind": {"not": "system"}, "actor.owner": False},
+        {"outcome": "needs_approval", "who": "owner"},
+        [
+            {
+                "input": {"kind": "close_period", "actor.kind": "human", "actor.owner": False},
+                "expect": "needs_approval",
+            },
+            {"input": {"kind": "reopen_period", "actor.kind": "bot", "actor.owner": False}, "expect": "needs_approval"},
+            {"input": {"kind": "close_period", "actor.kind": "human", "actor.owner": True}, "expect": "allow"},
+            {"input": {"kind": "close_period", "actor.kind": "system", "actor.owner": False}, "expect": "allow"},
+        ],
+    ),
 )
 
 # §6.4 rule 4 (budget at its limit with decline denies new holds and freezes the budget's cards) is an event reaction,
@@ -389,8 +488,12 @@ DEFAULTS: tuple[tuple[str, str, str, dict[str, object], dict[str, object], list[
 # code enforces it: budgeting denies holds at a decline budget, and jobs.drain freezes its cards on the cutoff event.
 # (id, name, words, where)
 FLOORS: tuple[tuple[str, str, str, str], ...] = (
-    ("floor:budget-cutoff-freeze", "Budget at limit", "A budget at its limit with decline denies new holds and freezes "
-     "its cards.", "finance.budget.cutoff with at limit decline"),
+    (
+        "floor:budget-cutoff-freeze",
+        "Budget at limit",
+        "A budget at its limit with decline denies new holds and freezes its cards.",
+        "finance.budget.cutoff with at limit decline",
+    ),
 )
 # Rules nobody can change or turn off: the code keeps them (kinds.default_gate). Editing one is refused.
 FIXED = ("rule:close-reopen-owner",)

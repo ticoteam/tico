@@ -75,7 +75,7 @@ Read public threads with `hub doc fetch <url>`. Read GitHub discussions and issu
 `gh search issues` in the repositories the owner has listed. Check every answer against the product's docs with
 `hub doc search` and `hub doc ask`, and against the code. A requested reply goes out with its channel, thread link
 and exact text, and only when a person has turned mail sending on in Tico. Until then it stays a draft on the task.
-A question for the requester is `hub task ask <id>`, one open question per task.
+A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Method
 Each run follows one loop: sweep the channels, answer from the docs and the code, run any code, tag each question

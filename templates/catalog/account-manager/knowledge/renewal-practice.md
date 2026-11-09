@@ -9,7 +9,7 @@ disagree, the team's own signed terms win.
 - The date that matters is the last day a notice can be given, not the renewal date. Read the notice clause in the signed
   contract: how many days, in writing, to whom. Count back from the anchor the clause names (the renewal date or the term end date) and record both dates.
 - Start the renewal conversation early enough that the customer's procurement and signature fit before the notice date.
-- Check the notice clause for auto-renewal terms. Some contracts renew unless cancelled before the notice date; the CRM
+- Check the notice clause for auto-renewal terms. Some contracts renew unless canceled before the notice date; the CRM
   field may say "auto-renew" without the notice days.
 
 ## Timing

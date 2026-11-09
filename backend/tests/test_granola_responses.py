@@ -1,4 +1,5 @@
 """Documented MCP text responses, including Granola's deliberately non-XML markdown."""
+
 import json
 from datetime import datetime, timezone
 
@@ -21,8 +22,13 @@ GET_MEETINGS = '''<meetings_data from="Feb 4, 2026" to="Feb 4, 2026" count="1">
 </summary>
 </meeting>
 </meetings_data>'''
-LIST_MEETINGS = GET_MEETINGS.replace('  <summary>\n## Key Decisions\n- Budget < 15% & roadmap approved\n</summary>\n', '')
-FREE_TRANSCRIPT = {"content": [{"type": "text", "text": "Transcripts are only available to paid Granola tiers"}], "isError": True}
+LIST_MEETINGS = GET_MEETINGS.replace(
+    '  <summary>\n## Key Decisions\n- Budget < 15% & roadmap approved\n</summary>\n', ''
+)
+FREE_TRANSCRIPT = {
+    "content": [{"type": "text", "text": "Transcripts are only available to paid Granola tiers"}],
+    "isError": True,
+}
 PAID_TRANSCRIPT = '<transcript meeting_id="0dba4400-...">[00:00:15] John: ...</transcript>'
 SUMMARY = "## Key Decisions\n- Budget < 15% & roadmap approved"
 
@@ -34,8 +40,10 @@ def text_result(raw):
 def test_documented_meeting_text_and_private_notes():
     listed = GranolaMCP.content(text_result(LIST_MEETINGS))["meetings"][0]
     assert "summary" not in listed
-    assert listed["attendees"] == [{"name": "John Doe", "email": "john@acme.com"},
-                                   {"name": "Jane Smith", "email": "jane@acme.com"}]
+    assert listed["attendees"] == [
+        {"name": "John Doe", "email": "john@acme.com"},
+        {"name": "Jane Smith", "email": "jane@acme.com"},
+    ]
     raw = GET_MEETINGS.replace('</meeting>', '<private_notes><summary>Never import</summary></private_notes></meeting>')
     note = GranolaMCP.content(text_result(raw))["meetings"][0]
     item = GranolaMCP.item(note)
@@ -45,9 +53,13 @@ def test_documented_meeting_text_and_private_notes():
     assert GranolaMCP.content(text_result(PAID_TRANSCRIPT))["transcript"] == "[00:00:15] John: ..."
 
 
-@pytest.mark.parametrize("value,expected", [
-    ("2026-02-04T19:30:00-08:00", "2026-02-04T19:30:00-08:00"), ("Feb 31, 2026", None),
-])
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("2026-02-04T19:30:00-08:00", "2026-02-04T19:30:00-08:00"),
+        ("Feb 31, 2026", None),
+    ],
+)
 def test_provider_dates_are_utc_and_unknown_dates_keep_meetings(value, expected):
     item = GranolaMCP.item({"id": "meeting", "summary": "Shared notes", "date": value})
     assert item.started_at == expected
@@ -55,7 +67,9 @@ def test_provider_dates_are_utc_and_unknown_dates_keep_meetings(value, expected)
 
 def test_summary_markup_is_preserved_and_nested_private_fields_are_ignored():
     summary = 'Budget < 15% & example <notes>shared</notes> <meeting id="example">markup</meeting>'
-    raw = '<meetings><meeting id="shared"><private_notes><summary>Private</summary><meeting id="secret"/></private_notes>'
+    raw = (
+        '<meetings><meeting id="shared"><private_notes><summary>Private</summary><meeting id="secret"/></private_notes>'
+    )
     raw += '<unknown><summary>Also private</summary></unknown><summary>' + summary + '</summary></meeting></meetings>'
     value = GranolaMCP.xml_content(raw)
     assert len(value["meetings"]) == 1
@@ -82,12 +96,16 @@ def test_documented_free_and_paid_sync_with_broken_meeting(api, paid):
             name = json.loads(request.content).get("params", {}).get("name")
             if name == "list_meetings":
                 raw = LIST_MEETINGS.replace('<meeting id=', '<meeting title="Broken">\n<meeting id=', 1)
-                raw = raw.replace('</meetings_data>', '<meeting id="outside-window" date="Jan 1, 2026"/></meetings_data>')
+                raw = raw.replace(
+                    '</meetings_data>', '<meeting id="outside-window" date="Jan 1, 2026"/></meetings_data>'
+                )
                 return httpx.Response(200, json={"result": text_result(raw)})
             if name == "get_meetings":
                 assert "outside-window" not in json.loads(request.content)["params"]["arguments"]["meeting_ids"]
                 # Several notes ensure a free-tier denial stops after the first request.
-                raw = GET_MEETINGS.replace('</meetings_data>', '<meeting id="second"><summary>Shared notes</summary></meeting></meetings_data>')
+                raw = GET_MEETINGS.replace(
+                    '</meetings_data>', '<meeting id="second"><summary>Shared notes</summary></meeting></meetings_data>'
+                )
                 return httpx.Response(200, json={"result": text_result(raw)})
             if name == "get_meeting_transcript":
                 transcript_calls.append(request)
@@ -97,18 +115,22 @@ def test_documented_free_and_paid_sync_with_broken_meeting(api, paid):
     provider.service.transport = httpx.MockTransport(handle)
     provider.sync()
     status = api.get(BASE, headers=headers("ana-test")).json()
-    assert status["last_sync"] and status["imported_count"] == 2 and status["skipped"] == 1
+    assert status["last_synced_at"] and status["imported_count"] == 2 and status["skipped"] == 1
     assert status["plan_hint"] == ("paid" if paid else "free")
     assert status["last_error"] == "bad_response: list_meetings"
     assert len(transcript_calls) == (2 if paid else 1)
     assert provider.service.load("human:ana")[1]["transcripts_unavailable"] is (not paid)
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT m.notes,m.metadata_json FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
-                        "WHERE r.source='granola' AND r.external_id='human:ana:0dba4400-...'").fetchone()
-        meeting = json.loads(row["metadata_json"])
+        row = c.execute(
+            "SELECT m.notes,m.metadata FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
+            "WHERE r.source='granola' AND r.external_id='human:ana:0dba4400-...'"
+        ).fetchone()
+        meeting = json.loads(row["metadata"])
         assert row["notes"] == SUMMARY and meeting["started"].startswith("2026-02-04T19:30:00")
         assert [(p["name"], p["email"]) for p in meeting["participants"]] == [
-            ("John Doe", "john@acme.com"), ("Jane Smith", "jane@acme.com")]
+            ("John Doe", "john@acme.com"),
+            ("Jane Smith", "jane@acme.com"),
+        ]
         assert bool(meeting.get("turns")) is paid
     provider.sync()
     assert len(transcript_calls) == (4 if paid else 2)  # Recheck access after an upgrade.
@@ -127,8 +149,12 @@ def test_failures_name_the_step_and_log_only_a_fixed_code(api, caplog, step):
             body = json.loads(request.content)
             name = body.get("params", {}).get("name") or body["method"]
             if name == step:
-                return httpx.Response(200, json={"result": {"content": [{"type": "text", "text": "fake-access-sensitive"}]}}
-                                      if step in ("list_meetings", "get_meetings") else {"result": []})
+                return httpx.Response(
+                    200,
+                    json={"result": {"content": [{"type": "text", "text": "fake-access-sensitive"}]}}
+                    if step in ("list_meetings", "get_meetings")
+                    else {"result": []},
+                )
         return previous(request)
 
     provider.service.transport = httpx.MockTransport(handle)

@@ -1,6 +1,6 @@
 // A stand-in hub for the Strategy content scripts (ui/tests/strategy-*.cjs): the org chart's groups and moves
-// (redesign CONTRACT §3), Market › Listening's stats with
-// `daily` and `recent`, and the latest market briefing, over fixtures/redesign-{org,listening,briefing}.json (the Acme
+// (redesign CONTRACT §3), Market's spend, value chain, companies and a note, Listening's stats with `daily` and
+// `recent`, and the latest market briefing, over fixtures/redesign-{org,market,listening,briefing}.json (the Acme
 // example) and goals, plus the boot stubs. Writes change what a page reads back and are recorded in `writes`.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,8 +25,10 @@ function listeningStats(now = new Date()) {
 
 // One page on the fake hub. viewer: who is signed in (ana owns Acme; ben leads Sales and so Outbound below it; cara
 // is in Engineering).
-// briefing: false answers {briefing: null}. listening: 403 answers the stats with that status.
-async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200} = {}) {
+// briefing: false answers {briefing: null}. listening: 403 answers the stats with that status. market: false is a
+// market with nothing in it yet.
+async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org', viewer = 'ana', briefing = true, listening = 200, market = true} = {}) {
+  const mk = fixture('redesign-market.json');
   const fx = fixture('redesign-org.json');
   const person = fx.people.find(p => p.id === viewer);
   const me = viewer === fx.me.id ? fx.me : {id: viewer, name: person?.name || viewer, email: viewer + '@acme.example',
@@ -34,9 +36,9 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
   const config = {company_name: 'Acme'};
   // Goals: the company's, one with a measure that has a target, and Sales Lead's (goal_routes.py shapes, no rights).
   const goals = [
-    {id: 'g-co', title: 'Reach 100 paying customers', owner: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 1,
+    {id: 'g-co', title: 'Reach 100 paying customers', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 1,
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
-    {id: 'g-sales', title: 'Book 40 demos a month', owner: 'bot:sales-lead', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
+    {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:sales-lead', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
   const db = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals};
   const writes = [];
@@ -58,7 +60,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push({method, path: p, body});
@@ -93,7 +95,11 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     if (p === '/api/v2/listening/destinations') return json(fixture('redesign-listening.json').destinations);
     if (p === '/api/v2/market/briefings/latest') return json(briefing ? fixture('redesign-briefing.json') : {briefing: null});
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
-    if (p === '/api/v2/market/entities') return json({entities: [], total: 0});
+    if (p === '/api/v2/market/entities') return json(market ? mk.entities : {entities: [], total: 0});
+    if (p.startsWith('/api/v2/market/entities/')) return json(mk.note);
+    if (p === '/api/v2/market/spend') return json(market ? mk.spend[url.searchParams.get('dimension') || 'offering'] : {segments: [], total: {spend_usd: 0}});
+    if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
+    if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: null});
     // The Strategy Bot beside the tabs, and Goals.
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
@@ -102,7 +108,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/goals' && method === 'POST') {
-      const g = {id: 'g-' + (db.goals.length + 1), title: body.title, owner: body.owner, parent_id: body.parent_id || null, status: 'gray', rank: 9, kpis: []};
+      const g = {id: 'g-' + (db.goals.length + 1), title: body.title, owner_id: body.owner, parent_id: body.parent_id || null, status: 'gray', rank: 9, kpis: []};
       db.goals.push(g);
       return json({goal: g});
     }
@@ -112,7 +118,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
       if (m[2] === '/status') goal.status = body.status;
       else if (m[3]) Object.assign(goal.kpis.find(k => k.id === m[3]).link, body);
       else if (m[2]) goal.kpis.push({id: 'k-' + (goal.kpis.length + 1), name: body.name, status: 'gray', link: {kind: body.kind, target: body.target ?? null, deadline: body.deadline ?? null}});
-      else Object.assign(goal, body, body.parent_id === '' ? {parent_id: null} : {});
+      else Object.assign(goal, body, body.owner ? {owner_id: body.owner} : {}, body.parent_id === '' ? {parent_id: null} : {});
       return json({goal});
     }
     return json(unrouted(p));
@@ -129,7 +135,7 @@ async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, {recursive: true});
-  await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
   await page.screenshot({path: path.join(dir, name + '.png')});
 }
 

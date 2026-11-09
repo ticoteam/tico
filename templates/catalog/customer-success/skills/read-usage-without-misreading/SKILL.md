@@ -10,7 +10,7 @@ Steps:
 1. Name the source and its date: a dashboard read, an export, the support queue or a note. Write when it was taken.
 2. Check coverage. Does the source see every way the customer uses the product? A login count misses people who work through an integration or an API, or through a shared login. Write what the source cannot see.
 3. Check the window. Compare equal lengths of time: the last 30 days against the 30 days before, or against the prior 90 when the team's rule says so. One week of change is an observation, not a trend.
-4. Check the lifecycle. A new account has no baseline yet. A paused or cancelling account shows falling use by design. Read it against its stage.
+4. Check the lifecycle. A new account has no baseline yet. A paused or canceling account shows falling use by design. Read it against its stage.
 5. Treat silence as unknown until the feed is checked. No login for a month can mean the customer left, the feed stopped, or the use happens elsewhere. Check the feed's last update before you read a drop.
 6. Keep counts and rates apart. "14 of 22 seats active" is a rate with a stated base. "Usage down 30%" needs its base and window.
 7. Write each number with its source, window and base, in that order.

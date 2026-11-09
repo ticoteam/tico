@@ -20,7 +20,7 @@ const SCENE = `export function createBuilding(data) {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [], replays = [], mode = {fail: false, cut: false};
     page.on('pageerror', e => errors.push(e.message));
-    const bot = (name, over) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', operator: 'ana', can_chat: true,
+    const bot = (name, over) => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', owner_id: 'ana', can_chat: true,
       machine: {runner_id: 'alpha', label: 'Garden Mac'}, my_access: {see: true, read: true}, ...over});
     const bots = [bot('writer'), bot('editor'), bot('vault', {my_access: {see: true, read: false}})];
     await page.route('**/*', async route => {
@@ -28,11 +28,11 @@ const SCENE = `export function createBuilding(data) {
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      if (p === '/tico/ui/overview/building.js') return route.fulfill({contentType: 'application/javascript', body: SCENE});
+      if (p === '/tico/ui/overview/building.ts') return route.fulfill({contentType: 'application/javascript', body: SCENE});
       if (p.startsWith('/tico/ui/')) {
         const name = p.slice('/tico/ui/'.length), file = uiFile(name);
         if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
-          : name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'application/javascript' : 'application/octet-stream'});
+          : name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
       }
       if (p === '/api/employees') return json(bots);
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], org_groups: []});

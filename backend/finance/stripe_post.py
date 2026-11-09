@@ -7,6 +7,7 @@ already summarized adds an adjusting entry. A refund, dispute or returned refund
 lines in proportion, and gives back its share of any invoice the sale paid. A payout posts on its day to payouts in
 transit and clears when the bank deposit of the same amount arrives: a deposit that looks like Stripe's, and no other
 receipt. Called from banking's settle step and from the sync worker, inside the caller's transaction."""
+
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
@@ -26,17 +27,18 @@ from .store import ledger as SL
 INCOME_CODE = "4000"
 FEES_CODE, FEES_NAME = "6200", "Payment processing fees"
 TRANSIT_CODE, TRANSIT_NAME = "1060", "Stripe payouts in transit"
-STALE_DAYS = 7                   # an item still waiting after this many days is asked about
-SUMMARY = "summary"              # the raw copy's mark: the row posts in its day's summary entry
-COUNTER = "counter"              # a summarized sale's own counter lines: [account, amount, tags, contact] each
-GAVE = "gave"                    # a refund's shares: settlement id -> what it gave that settlement (negative: took back)
-SUMMARY_ENTRY = "summary_entry"  # a row that left its summary: the summary entry it was in (reversed; its period holds it)
-WAITING = (*F.STRIPE_UNWINDS, *F.STRIPE_PAYOUT_BACK)     # rows that wait for the sale or payout they are about
+STALE_DAYS = 7  # an item still waiting after this many days is asked about
+SUMMARY = "summary"  # the raw copy's mark: the row posts in its day's summary entry
+COUNTER = "counter"  # a summarized sale's own counter lines: [account, amount, tags, contact] each
+GAVE = "gave"  # a refund's shares: settlement id -> what it gave that settlement (negative: took back)
+SUMMARY_ENTRY = (
+    "summary_entry"  # a row that left its summary: the summary entry it was in (reversed; its period holds it)
+)
+WAITING = (*F.STRIPE_UNWINDS, *F.STRIPE_PAYOUT_BACK)  # rows that wait for the sale or payout they are about
 WAITING_MOST = 200
 FAR_PAST = "0000-01-01"
 
-Share = tuple[str, int, dict[str, str], str]     # (account id, amount, tags, contact id) of one line to post
-
+Share = tuple[str, int, dict[str, str], str]  # (account id, amount, tags, contact id) of one line to post
 
 
 def settle(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
@@ -107,7 +109,7 @@ def fee_of(row: Any) -> int:
     """What a Stripe sale's fee took out of its net, in cents; 0 for any other row (a refund, a payout, a cost)."""
     if str(row["kind"]) not in F.STRIPE_CHARGES:
         return 0
-    return F.stripe_parts(SK.loads(row["raw_json"]))[1]
+    return F.stripe_parts(SK.loads(row["raw"]))[1]
 
 
 def fee_line(ctx: Ctx, row: Any) -> dict[str, object] | None:
@@ -166,8 +168,15 @@ def _ordinary(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int) -> None:
     if rule is None:
         counter: list[Share] = [(_income(ctx).id, -gross, {}, "")]
     elif rule.then.outcome == "post" and posting_rules.usable(ctx, rule.then):
-        counter = [(str(line["account_id"]), cast(int, line["amount"]), cast(dict[str, str], line["tags"]),
-                    str(line.get("contact_id") or "")) for line in posting_rules.lines_for(ctx, facts, rule)]
+        counter = [
+            (
+                str(line["account_id"]),
+                cast(int, line["amount"]),
+                cast(dict[str, str], line["tags"]),
+                str(line.get("contact_id") or ""),
+            )
+            for line in posting_rules.lines_for(ctx, facts, rule)
+        ]
     else:
         _ask(ctx, fid, "a posting rule asks a person about this sale")
         return
@@ -177,8 +186,16 @@ def _ordinary(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int) -> None:
 def _settle_invoice(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int, doc: Any) -> None:
     """The sale pays the invoice: the receivable settles on the gross, the fee posts as an expense."""
     entry = _post_sale(ctx, row, money, t, gross, fee, documents.control(ctx, "invoice").id, doc)
-    documents.settle(ctx, "invoice", str(doc["id"]), amount=gross, day=str(row["txn_date"]), from_kind="feed",
-                     from_id=str(row["id"]), entry_id=entry)
+    documents.settle(
+        ctx,
+        "invoice",
+        str(doc["id"]),
+        amount=gross,
+        day=str(row["txn_date"]),
+        from_kind="feed",
+        from_id=str(row["id"]),
+        entry_id=entry,
+    )
 
 
 def _credit(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int, doc: Any) -> None:
@@ -202,10 +219,10 @@ def _post_sale(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: in
 def _to_summary(ctx: Ctx, row: Any, counter: Sequence[Share] | None = None) -> None:
     """Marks the row for its day's summary entry (see _summarize_day), which posts it with the day's other ordinary rows.
     A sale carries the counter lines it posts to; a Stripe charge of its own (a cost) carries none."""
-    raw = {**SK.loads(row["raw_json"]), SUMMARY: True}
+    raw = {**SK.loads(row["raw"]), SUMMARY: True}
     if counter is not None:
         raw[COUNTER] = [[account, amount, dict(tags), contact] for account, amount, tags, contact in counter]
-    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"raw_json": SK.dump(raw), "updated_at": ctx.at})
+    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"raw": SK.dump(raw), "updated_at": ctx.at})
 
 
 def _summarize(ctx: Ctx, money: Any) -> None:
@@ -242,15 +259,17 @@ def _journals(ctx: Ctx, rows: list[Any]) -> list[list[Any]]:
     return out
 
 
-SummaryKey = tuple[str, tuple[tuple[str, str], ...], str]     # (account id, tags, contact id) of one summary line
+SummaryKey = tuple[str, tuple[tuple[str, str], ...], str]  # (account id, tags, contact id) of one summary line
 
 
 def _row_keys(ctx: Ctx, r: Any) -> set[SummaryKey]:
     """The summary lines a row adds: none for a cost, its counter lines for a charge."""
     if str(r["kind"]) not in F.STRIPE_CHARGES:
         return set()
-    return {(account, tuple(sorted(tags.items())), contact) for account, _, tags, contact
-            in _carried(ctx, SK.loads(r["raw_json"]))}
+    return {
+        (account, tuple(sorted(tags.items())), contact)
+        for account, _, tags, contact in _carried(ctx, SK.loads(r["raw"]))
+    }
 
 
 def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
@@ -259,7 +278,7 @@ def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
     counter: dict[SummaryKey, int] = {}
     fees = net = 0
     for r in rows:
-        raw = SK.loads(r["raw_json"])
+        raw = SK.loads(r["raw"])
         gross, fee = F.stripe_parts(raw)
         net += int(r["amount"])
         fees += fee
@@ -269,8 +288,11 @@ def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
                 counter[key] = counter.get(key, 0) + amount
         else:
             fees -= gross
-    lines: list[dict[str, object]] = [banking.feed_line(account, amount, dict(tags), contact)
-                                      for (account, tags, contact), amount in sorted(counter.items()) if amount]
+    lines: list[dict[str, object]] = [
+        banking.feed_line(account, amount, dict(tags), contact)
+        for (account, tags, contact), amount in sorted(counter.items())
+        if amount
+    ]
     if fees:
         lines.append(banking.feed_line(_fees(ctx).id, fees))
     roles: dict[int, str] = {}
@@ -282,9 +304,18 @@ def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
         source_id = base
     else:
         source_id = banking.fresh_source(ctx, "sync", f"stripe:adjust:{money['id']}:{day}:{rows[0]['id']}")
-    done = posting.post_entry(ctx.c, {"date": banking.open_day(ctx, day), "source": "sync", "source_id": source_id,
-                                      "memo": f"Stripe sales and fees, {day}", "lines": banking.vendor_lines(ctx, lines)},
-                              at=ctx.at, roles=roles)
+    done = posting.post_entry(
+        ctx.c,
+        {
+            "date": banking.open_day(ctx, day),
+            "source": "sync",
+            "source_id": source_id,
+            "memo": f"Stripe sales and fees, {day}",
+            "lines": banking.vendor_lines(ctx, lines),
+        },
+        at=ctx.at,
+        roles=roles,
+    )
     banking.mark_posted(ctx, [str(r["id"]) for r in rows], str(done["entry_id"]))
 
 
@@ -294,8 +325,10 @@ def _carried(ctx: Ctx, raw: Mapping[str, Any]) -> list[Share]:
     if not lines:
         gross, _ = F.stripe_parts(raw)
         return [(_income(ctx).id, -gross, {}, "")]
-    return [(str(account), int(amount), {str(k): str(v) for k, v in dict(tags).items()}, str(contact))
-            for account, amount, tags, contact in lines]
+    return [
+        (str(account), int(amount), {str(k): str(v) for k, v in dict(tags).items()}, str(contact))
+        for account, amount, tags, contact in lines
+    ]
 
 
 # ------------------------------------------------------------------------------------------------ refunds and disputes
@@ -338,8 +371,10 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
     # The plain part is what this refund takes from the sale itself: the refunds so far, less what settlements gave back.
     before = SK.stripe_refunded(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link) - sum(given.values())
     plain = -gross - sum(move for _, move in shares)
-    lines = [banking.feed_line(account, amount, tags, contact) for account, amount, tags, contact
-             in _reversal(counter, before, before + plain)]
+    lines = [
+        banking.feed_line(account, amount, tags, contact)
+        for account, amount, tags, contact in reversal_shares(counter, before, before + plain)
+    ]
     lines += [_reopened(ctx, s, move) for s, move in shares if move]
     if fee:
         lines.append(banking.feed_line(_fees(ctx).id, fee))
@@ -347,8 +382,8 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
     banking.mark_posted(ctx, [fid], entry)
     gave = _give_back(ctx, row, shares, entry)
     if gave:
-        raw = {**SK.loads(row["raw_json"]), GAVE: gave}
-        SK.update(ctx.c, "fin_feed_txns", fid, {"raw_json": SK.dump(raw), "updated_at": ctx.at})
+        raw = {**SK.loads(row["raw"]), GAVE: gave}
+        SK.update(ctx.c, "fin_feed_txns", fid, {"raw": SK.dump(raw), "updated_at": ctx.at})
 
 
 def _shares(ctx: Ctx, original: Any, gross: int, given: Mapping[str, int]) -> list[tuple[Any, int]]:
@@ -363,7 +398,7 @@ def _shares(ctx: Ctx, original: Any, gross: int, given: Mapping[str, int]) -> li
 def _restores(ctx: Ctx, original: Any, failed: Any) -> list[tuple[Any, int]]:
     """What a restore takes back from each settlement: exactly what the refund it undoes gave that settlement (kept on
     that refund as `gave`). A refund that gave nothing back restores nothing, whatever the other refunds gave."""
-    gave = cast(Mapping[str, int], cast(Mapping[str, Any], SK.loads(failed["raw_json"])).get(GAVE) or {})
+    gave = cast(Mapping[str, int], cast(Mapping[str, Any], SK.loads(failed["raw"])).get(GAVE) or {})
     live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
     return [(s, -int(gave.get(str(s["id"]), 0))) for s in live]
 
@@ -373,8 +408,9 @@ def _reopened(ctx: Ctx, settlement: Any, move: int) -> dict[str, object]:
     the settlement moved it (a receivable is a debit, a payable a credit), so the books match the document."""
     kind = str(settlement["to_kind"])
     doc = SAP.get(ctx.c, SAP.DOCS[kind][0], str(settlement["to_id"]))
-    return banking.feed_line(documents.control(ctx, kind).id, -documents.SIGN[kind] * move, {},
-                             str(doc[f"{documents.CONTACT_OF[kind]}_id"]))
+    return banking.feed_line(
+        documents.control(ctx, kind).id, -documents.SIGN[kind] * move, {}, str(doc[f"{documents.CONTACT_OF[kind]}_id"])
+    )
 
 
 def _give_back(ctx: Ctx, row: Any, shares: Sequence[tuple[Any, int]], entry: str) -> dict[str, int]:
@@ -384,32 +420,43 @@ def _give_back(ctx: Ctx, row: Any, shares: Sequence[tuple[Any, int]], entry: str
     for s, move in shares:
         if move:
             gave[str(s["id"])] = move
-            documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=-move, day=str(row["txn_date"]),
-                             from_kind="feed", from_id=str(row["id"]), entry_id=entry)
+            documents.settle(
+                ctx,
+                str(s["to_kind"]),
+                str(s["to_id"]),
+                amount=-move,
+                day=str(row["txn_date"]),
+                from_kind="feed",
+                from_id=str(row["id"]),
+                entry_id=entry,
+            )
     return gave
 
 
 def _counter(ctx: Ctx, original: Any) -> list[Share] | None:
     """The counter lines a sale posted (negative), to be reversed. A summarized sale has no lines of its own (the day's
     entry is shared), so its carried lines are what it posted to. None while the sale is not posted yet."""
-    raw = SK.loads(original["raw_json"])
+    raw = SK.loads(original["raw"])
     if raw.get(SUMMARY):
         return _carried(ctx, raw)
     if not original["entry_id"]:
         return None
-    return [(line.account_id, line.amount, dict(line.tags), line.contact_id)
-            for _, line in SL.entry_lines(ctx.c, str(original["entry_id"]))
-            if line.role != L.MONEY_ROLE and line.amount < 0]
+    return [
+        (line.account_id, line.amount, dict(line.tags), line.contact_id)
+        for _, line in SL.entry_lines(ctx.c, str(original["entry_id"]))
+        if line.role != L.MONEY_ROLE and line.amount < 0
+    ]
 
 
-def _reversal(counter: Sequence[Share], before: int, now: int) -> list[Share]:
+def reversal_shares(counter: Sequence[Share], before: int, now: int) -> list[Share]:
     """The counter lines a refund reverses: each line's share of what the sale has refunded in all, so far, less its
     share before this refund. The shares are cumulative, so separate refunds add up to the same as one, to the cent.
     Counter lines are credits, so a refund debits them."""
     weights = [abs(amount) for _, amount, _, _ in counter]
     out: list[Share] = []
-    for (account, amount, tags, contact), new, old in zip(counter, _allocate(now, weights), _allocate(before, weights),
-                                                           strict=True):
+    for (account, amount, tags, contact), new, old in zip(
+        counter, _allocate(now, weights), _allocate(before, weights), strict=True
+    ):
         part = (new - old) if amount < 0 else (old - new)
         if part:
             out.append((account, part, tags, contact))
@@ -465,20 +512,36 @@ def _clear(ctx: Ctx, payout: Any, deposit: Any, bank: Any) -> None:
     amount = int(deposit["amount"])
     day = max(str(payout["txn_date"]), str(deposit["txn_date"]))
     lines = [banking.feed_line(_gl_of(ctx, bank).id, amount), banking.feed_line(_transit(ctx).id, -amount)]
-    done = posting.post_entry(ctx.c, {
-        "date": banking.open_day(ctx, day), "source": "bank",
-        "source_id": banking.fresh_source(ctx, "bank", f"stripe:clear:{payout['id']}"),
-        "memo": f"Stripe payout to {bank['name']}"[:200], "lines": lines}, at=ctx.at, roles={0: L.MONEY_ROLE})
+    done = posting.post_entry(
+        ctx.c,
+        {
+            "date": banking.open_day(ctx, day),
+            "source": "bank",
+            "source_id": banking.fresh_source(ctx, "bank", f"stripe:clear:{payout['id']}"),
+            "memo": f"Stripe payout to {bank['name']}"[:200],
+            "lines": lines,
+        },
+        at=ctx.at,
+        roles={0: L.MONEY_ROLE},
+    )
     banking.mark_posted(ctx, [str(deposit["id"])], str(done["entry_id"]))
 
 
 # ------------------------------------------------------------------------------------------------ shared
 def _txn(row: Any) -> F.FeedTxn:
     """A stored Stripe row as the balance transaction it was taken in from (what settle reads)."""
-    return F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
-                     txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
-                     counterparty=str(row["counterparty"] or ""), description=str(row["description"] or ""),
-                     version=int(row["version"]), raw=SK.loads(row["raw_json"]))
+    return F.FeedTxn(
+        provider_id=str(row["provider_id"]),
+        account_id="",
+        amount=int(row["amount"]),
+        txn_date=str(row["txn_date"]),
+        status=F.POSTED,
+        kind=str(row["kind"]),
+        counterparty=str(row["counterparty"] or ""),
+        description=str(row["description"] or ""),
+        version=int(row["version"]),
+        raw=SK.loads(row["raw"]),
+    )
 
 
 def _ask(ctx: Ctx, fid: str, why: str, key: str = "") -> None:

@@ -63,7 +63,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: false};
     const bots = [{name: 'editor', display_name: 'Editor', host: 'keeper', status: 'active', can_chat: true}];
     const url = (id, n, part = '') => `/api/v2/files/${id}${part}?v=${n}`;
-    const version = (id, n, over) => ({n, size: 2048, mime: '', sha256: 'x' + n, created: at(200 - n * 30), by: 'bot:editor', comment_id: null, note: null,
+    const version = (id, n, over) => ({n, size: 2048, mime: '', sha256: 'x' + n, created_at: at(200 - n * 30), by: 'bot:editor', comment_id: null, note: null,
       ask: null, answers: [], width: null, height: null, duration_ms: null, media_state: 'none', url: url(id, n), poster_url: null, thumb_url: null, ...over});
     const verdict = {questions: [{id: 'verdict', header: 'Rough cut', question: 'Is v3 ready to publish?',
       options: [{label: 'Approve'}, {label: 'Request changes', description: 'Say what to change'}], multi: false, other: true}], who: null};
@@ -83,28 +83,28 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     ];
     const scripts = {1: '# Script\n\nIntro line.\n\nScene one.\nScene two.\n', 2: '# Script\n\nA tighter intro line.\n\nScene one.\nScene two.\nScene three.\n'};
     const csv = 'shot,length\n' + Array.from({length: 260}, (_, i) => `s${i + 1},${i % 7 + 1}s`).join('\n');
-    const task = {id: 't1', title: 'Cut the launch video', owner: 'bot:editor', requester: 'human:ana', status: 'review', lane: 'company', rank: 1,
-      labels: [], links: [], parts: {total: 0, done: 0}, version: 4, created: at(400), updated: at(5), open_asks: 1,
+    const task = {id: 't1', title: 'Cut the launch video', owner_id: 'bot:editor', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1,
+      labels: [], links: [], parts: {total: 0, done: 0}, version: 4, created_at: at(400), updated_at: at(5), open_asks: 1,
       body: 'Reference frame: ![frame](https://img.example.com/ref.png)\n\nMood: https://img.example.com/mood.jpg',
       attachments: [{id: 'f-frame', name: 'frame.png', content_type: 'image/png', size: 2048, url: '/api/v2/files/f-frame'}]};
-    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], body: 'Captions for the cut.', updated: at(60)};
+    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], body: 'Captions for the cut.', updated_at: at(60)};
     // t2 is one Ana may read but not comment on; one of its questions was answered by an older runner: {by, text, at}
     const plainComments = [
-      {id: 'p1', kind: 'ask', from_actor: 'bot:editor', body: 'Which tone?', created: at(50), answers: [{by: 'human:sam', text: 'Keep it warm and short.', at: at(40)}],
+      {id: 'p1', kind: 'ask', sender_id: 'bot:editor', body: 'Which tone?', created_at: at(50), answers: [{by: 'human:sam', text: 'Keep it warm and short.', at: at(40)}],
         refs: {task: 't2', questions: [{id: 'tone', question: 'Which tone?', options: [{label: 'Warm'}, {label: 'Plain'}], other: true}]}},
-      {id: 'p2', kind: 'ask', from_actor: 'bot:editor', body: 'Which font?', created: at(30), answers: [],
+      {id: 'p2', kind: 'ask', sender_id: 'bot:editor', body: 'Which font?', created_at: at(30), answers: [],
         refs: {task: 't2', questions: [{id: 'font', question: 'Which font?', options: [{label: 'Serif'}, {label: 'Sans'}], other: true}]}},
     ];
     const plainFiles = [{id: 'f-notes', name: 'captions.md', mime: 'text/markdown', current_version: 1, archived: false,
       versions: [version('f-notes', 1, {mime: 'text/markdown', ask: {questions: [{id: 'ok', question: 'Good to go?', options: [{label: 'Yes'}, {label: 'No'}]}], who: null}})]}];
     const comments = [
-      {id: 'm1', kind: 'say', from_actor: 'bot:editor', body: 'Second pass and a frame grab.', created: at(140), refs: {task: 't1', comment: true}},
-      {id: 'm2', kind: 'ask', from_actor: 'bot:editor', body: 'Which music and thumbnail?', created: at(90), answers: [], refs: {task: 't1',
+      {id: 'm1', kind: 'say', sender_id: 'bot:editor', body: 'Second pass and a frame grab.', created_at: at(140), refs: {task: 't1', comment: true}},
+      {id: 'm2', kind: 'ask', sender_id: 'bot:editor', body: 'Which music and thumbnail?', created_at: at(90), answers: [], refs: {task: 't1',
         questions: [{id: 'music', header: 'Music', question: 'Which tracks fit?', options: [{label: 'Upbeat'}, {label: 'Calm'}, {label: 'None'}], multi: true, other: true},
           {id: 'thumb', header: 'Thumbnail', question: 'Which thumbnail?', options: [{label: 'A', file: 'f-frame@1'}, {label: 'B', file: 'f-still@1'}], multi: false, other: false}]}},
-      {id: 'm3', kind: 'ask', from_actor: 'bot:editor', body: 'Ship today?', created: at(80), answers: [], refs: {task: 't1',
+      {id: 'm3', kind: 'ask', sender_id: 'bot:editor', body: 'Ship today?', created_at: at(80), answers: [], refs: {task: 't1',
         questions: [{id: 'ship', question: 'Ship today?', options: [{label: 'Yes'}, {label: 'No'}], multi: false, other: false}]}},
-      {id: 'm4', kind: 'ask', from_actor: 'human:ana', body: 'Captions too?', created: at(70), answers: [], refs: {task: 't1',
+      {id: 'm4', kind: 'ask', sender_id: 'human:ana', body: 'Captions too?', created_at: at(70), answers: [], refs: {task: 't1',
         questions: [{id: 'cap', question: 'Captions too?', options: [{label: 'Yes'}, {label: 'No'}]}]}},
     ];
     let prefs = {};
@@ -115,10 +115,10 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       if (u.origin === 'https://img.example.com') { requested.push(u.href); return route.fulfill({contentType: 'image/png', body: p.includes('mood') ? AMBER : TEAL}); }
       if (u.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
-        contentType: p.endsWith('.js') ? 'application/javascript' : p.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream'});
+        contentType: /\.(?:js|ts)$/.test(p) ? 'application/javascript' : p.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream'});
       if (p === '/api/me') return json(me);
       if (p === '/api/employees') return json(bots);
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'sam', name: 'Sam', email: 'sam@acme.example'}]});
@@ -181,7 +181,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
           text = body.dismiss ? 'Ana dismissed the question.' : `Ana answered "${c.refs.questions[0].question}": ${Object.values(body.answers).flat().join(', ')}.`;
         }
         task.open_asks = Math.max(0, task.open_asks - 1);
-        comments.push({id: 'a' + comments.length, kind: 'answer', from_actor: 'human:ana', body: text, created: new Date().toISOString(), answer, refs: {task: 't1'}});
+        comments.push({id: 'a' + comments.length, kind: 'answer', sender_id: 'human:ana', body: text, created_at: new Date().toISOString(), answer, refs: {task: 't1'}});
         return json({comment: comments.at(-1)});
       }
       const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
@@ -218,19 +218,23 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
 
     // ---- Pin to sidebar, and unpin from its ✕
     assert.equal(await page.locator('#nav-pins').isHidden(), true);
+    const pinItem = async () => { await page.locator('#task-more').click(); return (await page.locator('#task-pin').innerText()).trim(); };
+    assert.equal(await pinItem(), 'Pin to sidebar');
     await page.locator('#task-pin').click();
     await page.locator('#pin-list a[href="#/tasks?type=general&view=board"]').waitFor();
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`board-covers-desktop-${mode}`); }
     await theme('dark');
     assert.equal(await page.locator('#nav-pins-h').textContent(), 'Pipelines');
     assert.match(await page.locator('#pin-list').innerText(), /General/);
-    assert.equal(await page.locator('#task-pin').getAttribute('aria-pressed'), 'true');
+    assert.equal(await pinItem(), 'Unpin', 'the ⋯ menu offers Unpin for a pinned view');
+    await page.keyboard.press('Escape');
     assert.deepEqual(posted.at(-1).body.value.items, [{hash: '#/tasks?type=general&view=board', name: 'General'}]);
     await page.locator('#pin-list .pin-row').hover();
     await page.locator('#pin-list [data-unpin="0"]').click();
     await page.waitForFunction(() => document.querySelector('#nav-pins').hidden);
     assert.deepEqual(posted.at(-1).body.value.items, []);
-    assert.equal(await page.locator('#task-pin').getAttribute('aria-pressed'), 'false');
+    assert.equal(await pinItem(), 'Pin to sidebar');
+    await page.keyboard.press('Escape');
 
     // ---- the strip: one tile per file at its newest version, sized, a skeleton until the thumb arrives
     { let release; thumbHold = {held: new Promise(r => { release = r; })}; thumbHold.release = release; }
@@ -301,7 +305,13 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     // ---- a tile opens in place: the video at v3 with its poster, the versions, who added it and its note
     await m1.locator('.tc-file[data-tf-jump="f-cut"]').click();
     const view = modal.locator('.tf-view');
+    // the viewer is a modal over the task: fold the open file before reaching a tile or a comment under it
+    const fold = async () => { if (await view.isVisible()) { await page.keyboard.press('Escape'); await view.waitFor({state: 'hidden'}); } };
+    const openTile = async id => { await fold(); await modal.locator(`.tf-tile[data-tf-file="${id}"]`).click(); };
     await view.locator('video').waitFor();
+    assert.equal(await view.evaluate(d => d.matches(':modal')), true, 'the file opens in its own modal');
+    const box = await view.boundingBox(), vp = page.viewportSize();
+    assert(box.width >= Math.min(1200, vp.width - 48) - 2 && box.height >= vp.height - 50, `near full screen ${JSON.stringify(box)}`);
     assert.equal(await view.locator('video').getAttribute('src'), '/api/v2/files/f-cut?v=2', 'the comment\'s chip opens its version');
     await view.locator('[data-tf-v="3"]').click();
     assert.equal(await view.locator('video').getAttribute('src'), '/api/v2/files/f-cut?v=3');
@@ -333,33 +343,34 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.deepEqual(await view.locator('.tf-diff-lines .del').allTextContents(), ['- Intro line.']);
     assert.deepEqual(await view.locator('.tf-diff-lines .add').allTextContents(), ['+ A tighter intro line.', '+ Scene three.']);
     // CSV: the first 200 rows under a header that stays put
-    await modal.locator('.tf-tile[data-tf-file="f-rows"]').click();
+    await openTile('f-rows');
     await view.locator('table.csv').waitFor();
     assert.equal(await view.locator('table.csv tbody tr').count(), 200);
     assert.equal(await view.locator('table.csv th').first().evaluate(th => getComputedStyle(th).position), 'sticky');
     // SVG: a download card only
-    await modal.locator('.tf-tile[data-tf-file="f-logo"]').click();
+    await openTile('f-logo');
     assert.equal(await view.locator('.tf-card a[download]').getAttribute('href'), '/api/v2/files/f-logo?v=1');
     assert.equal(await view.locator('img, iframe, object').count(), 0);
     // HTML: shown as it looks in the sandboxed frame, no script; over the limit, a download card
-    await modal.locator('.tf-tile[data-tf-file="f-page"]').click();
+    await openTile('f-page');
     const pageFrame = view.locator('.tf-html iframe.html-view');
     assert.equal(await pageFrame.getAttribute('sandbox'), 'allow-popups allow-popups-to-escape-sandbox');
     const landing = page.frameLocator('.tf-html iframe.html-view');
     assert.equal(await landing.locator('h1').innerText(), 'Landing');
     assert.equal(await landing.locator('body').getAttribute('data-ran'), null);
-    await modal.locator('.tf-tile[data-tf-file="f-site"]').click();
+    await openTile('f-site');
     assert.equal(await view.locator('.tf-card .tf-glyph').innerText(), 'HTML');
     assert.equal(await view.locator('.tf-card a[download]').getAttribute('href'), '/api/v2/files/f-site?v=1');
     assert.equal(await view.locator('iframe').count(), 0);
     // images: full size, ←/→ through the task's images
-    await modal.locator('.tf-tile[data-tf-file="f-frame"]').click();
+    await openTile('f-frame');
     await view.locator('.tf-media.image.ready').waitFor();
     await page.keyboard.press('ArrowRight');
     await page.waitForFunction(() => document.querySelector('#task-modal .tf-view img')?.getAttribute('src') === '/api/v2/files/f-still?v=1');
     await page.keyboard.press('ArrowRight');
     await page.waitForFunction(() => document.querySelector('#task-modal .tf-view img')?.getAttribute('src') === '/api/v2/files/f-frame?v=1');
-    await modal.locator('.tf-tile[data-tf-file="f-frame"]').click();
+    // a press on the backdrop folds it too
+    await page.mouse.click(4, 4);
     await view.waitFor({state: 'hidden'});
 
     // ---- answering: one question, one click; the thread shows the answer comment and the ask folds to its answers
@@ -371,6 +382,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.match(await view.locator('.ask-answers').innerText(), /You\s*Approve|Ana\s*Approve/);
     assert.equal(await view.locator('.ask .ask-opt').first().isVisible(), false, 'answered: folded to its answers');
     assert.equal(await cutTile.locator('.ask-dot').count(), 0);
+    await fold();
     // two questions: multi-select with Other, then Send
     const m2 = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="music"]')});
     assert.equal(await m2.locator('.ask-opt .ask-pic').count(), 2, 'variants that point at a file show it');
@@ -399,8 +411,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
 
     // ---- the modal's poll brings a new file and version; a playing video and a half-filled answer wait for it
     const video = view.locator('video');
-    await video.evaluate(v => { v.dataset.keep = '1'; Object.defineProperty(v, 'paused', {configurable: true, get: () => false}); });
-    comments.push({id: 'm6', kind: 'ask', from_actor: 'bot:editor', body: 'Which end card?', created: new Date().toISOString(), answers: [], refs: {task: 't1',
+    comments.push({id: 'm6', kind: 'ask', sender_id: 'bot:editor', body: 'Which end card?', created_at: new Date().toISOString(), answers: [], refs: {task: 't1',
       questions: [{id: 'end', question: 'Which end card?', options: [{label: 'Logo'}, {label: 'Link'}], multi: true, other: true}]}});
     // readDone: every answer the app has read in full (its handler runs in the same turn)
     await page.evaluate(() => {
@@ -416,11 +427,13 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await m6.locator('.ask-opt', {hasText: 'Logo'}).click();
     await m6.locator('.ask-other').fill('Short');
     await page.evaluate(() => document.activeElement.blur());
+    await cutTile.click();
+    await video.evaluate(v => { v.dataset.keep = '1'; Object.defineProperty(v, 'paused', {configurable: true, get: () => false}); });
     files.push({id: 'f-new', name: 'end-card.png', mime: 'image/png', current_version: 1, archived: false,
       versions: [version('f-new', 1, {mime: 'image/png', width: 160, height: 90, thumb_url: url('f-new', 1, '/thumb')})]});
     files[0].versions.unshift(version('f-cut', 4, {mime: 'video/mp4', width: 1920, height: 1080, media_state: 'ready', poster_url: url('f-cut', 4, '/poster'), thumb_url: url('f-cut', 4, '/thumb')}));
     files[0].current_version = 4;
-    comments.push({id: 'm7', kind: 'say', from_actor: 'bot:editor', body: 'End card added.', created: new Date().toISOString(), refs: {task: 't1', comment: true}});
+    comments.push({id: 'm7', kind: 'say', sender_id: 'bot:editor', body: 'End card added.', created_at: new Date().toISOString(), refs: {task: 't1', comment: true}});
     await modal.locator('.tf-tile[data-tf-file="f-new"]').waitFor();
     // two more polls of the files and the comments have been read and handled
     const polled = () => page.evaluate(() => [readDone.filter(p => p === '/api/v2/tasks/t1/files').length, readDone.filter(p => p === '/api/v2/tasks/t1').length]);
@@ -432,10 +445,9 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.equal(await m6.locator('.ask-opt[aria-pressed="true"]').count(), 1, 'the picked choice stays');
     assert.equal(await m6.locator('.ask-other').inputValue(), 'Short');
     assert.equal(await modal.locator('.tcomment', {hasText: 'End card added.'}).count(), 0, 'the thread waits for the answer');
-    // the answer is cleared and the video stops: the next poll catches up
-    await m6.locator('.ask-opt', {hasText: 'Logo'}).click();
-    await m6.locator('.ask-other').fill('');
-    await page.evaluate(() => document.activeElement.blur());
+    // the answer is cleared (under the open file, so by script) and the video stops: the next poll catches up
+    await m6.locator('.ask-opt', {hasText: 'Logo'}).dispatchEvent('click');
+    await m6.locator('.ask-other').evaluate(el => { el.value = ''; el.dispatchEvent(new Event('input', {bubbles: true})); });
     await video.evaluate(v => { delete v.paused; });
     await view.locator('[data-tf-v="4"]').waitFor();
     await modal.locator('.tcomment', {hasText: 'End card added.'}).waitFor();
@@ -449,6 +461,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await noSideways('phone, task with an open video');
     for (const mode of ['dark', 'light']) { await theme(mode); await modal.evaluate(d => { d.scrollTop = 0; }); await shot(`task-files-strip-phone-${mode}`); await view.scrollIntoViewIfNeeded(); await shot(`task-video-versions-phone-${mode}`); }
     // the multi ask, re-opened for a later answer, at phone width
+    await fold();
     await m2.locator('[data-ask-again]').click();
     await noSideways('phone, an open ask');
     for (const mode of ['dark', 'light']) { await theme(mode); await m2.scrollIntoViewIfNeeded(); await shot(`task-open-ask-phone-${mode}`); }
@@ -477,6 +490,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       await view.locator('.ask-q[data-qid="ok"]').waitFor();
       assert.equal(await view.locator('.ask button, .ask input').count(), 0);
       await noSideways(`${where}, a reader's task`);
+      await fold();
       for (const mode of ['dark', 'light']) { await theme(mode); await legacy.scrollIntoViewIfNeeded(); await shot(`legacy-answer-${where}-${mode}`); }
       await modal.locator('[data-modal-close]').click();
     }

@@ -3,14 +3,15 @@ under it ("Security: confirm the vendor contract"), or the builder's manager ask
 the ticket Waiting on another owner's open subtask. The check's verdict must still reach the builder at once
 (docs/tasks.md: a Waiting parent's other open subtasks never hold one subtask's result back), the person finishes her
 check-titled subtask with no verdict, and once she has, the verdict that came in meanwhile moves the ticket on."""
+
 import json
 
 from ..board import MERGE
 from ..scenarios import Scenario, standard, tickets, at
 from ..world import START, Refusal
 
-WATCH_FROM, WATCH_UNTIL = at(1), at(4)   # tickets whose check is out in this window get a person's subtask
-ANSWER_AFTER = at(2)                     # the person finishes hers this long after filing it
+WATCH_FROM, WATCH_UNTIL = at(1), at(4)  # tickets whose check is out in this window get a person's subtask
+ANSWER_AFTER = at(2)  # the person finishes hers this long after filing it
 CHILD = "Security: confirm the vendor contract"
 ASK = "Is the vendor contract signed?"
 DELIVERY = "subtask results past a Waiting parent's open subtasks"
@@ -20,10 +21,18 @@ RESUME = "verdict moves on a hold's return"
 def _open_check(w, t):
     """The bot check out on ticket `t` at its check step, or None."""
     step = w.board.step(t["step"])
-    if not step or not step.check or t["blocked_since"] or not str(t["owner"]).startswith("bot:"):
+    if not step or not step.check or t["blocked_since"] or not str(t["owner_id"]).startswith("bot:"):
         return None
-    return next((c for c in w.checks(t["id"]) if str(c["owner"]).startswith("bot:") and c["status"] not in
-                 ("done", "closed", "declined") and w.check_step(c) == step.name), None)
+    return next(
+        (
+            c
+            for c in w.checks(t["id"])
+            if str(c["owner_id"]).startswith("bot:")
+            and c["status"] not in ("done", "closed", "declined")
+            and w.check_step(c) == step.name
+        ),
+        None,
+    )
 
 
 def _file(run, w):
@@ -35,13 +44,20 @@ def _file(run, w):
         if len(run.asked) >= 2 or t["id"] in run.asked or not _open_check(w, t):
             continue
         if not run.asked:
-            child = w.post("tasks", {"owner": "ana", "title": CHILD, "body": "Confirm the contract covers this.",
-                                     "relations": [{"task": t["id"], "kind": "parent"}]})
+            child = w.post(
+                "tasks",
+                {
+                    "owner": "ana",
+                    "title": CHILD,
+                    "body": "Confirm the contract covers this.",
+                    "relations": [{"task": t["id"], "kind": "parent"}],
+                },
+            )
             child = child.get("task", child)
         else:
             # Ana manages the builders: she may say whom their ticket waits on, which files the ask as her subtask.
             w.update(t["id"], status="waiting", waiting_on="ana", note=ASK)
-            child = next((c for c in reversed(w.checks(t["id"])) if c["owner"] == "human:ana"), {})
+            child = next((c for c in reversed(w.checks(t["id"])) if c["owner_id"] == "human:ana"), {})
         run.asked[t["id"]] = {"child": child.get("id"), "title": child.get("title"), "at": w.now()}
 
 
@@ -62,15 +78,18 @@ def _watch_results(run, w):
     reason it gives, as it would answer the builder's claim now). A builder busy with another turn, or a computer
     with no free turn, only delays it; the claim holding it back is what the check counts."""
     from backend import execution as E
+
     with w.store.read() as c:
-        runner = c.execute("SELECT * FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
-        ready = E.readiness_document(runner["readiness_json"])
-        rows = c.execute("SELECT j.*, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.state='queued' AND json_extract(m.refs_json,'$.subtask') IS NOT NULL "
-                         "AND json_extract(m.refs_json,'$.verdict') IS NOT NULL").fetchall()
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (w.runner["runner_id"],)).fetchone()
+        ready = E.readiness_document(runner["readiness"])
+        rows = c.execute(
+            "SELECT j.*, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.state='queued' AND json_extract(m.refs,'$.subtask') IS NOT NULL "
+            "AND json_extract(m.refs,'$.verdict') IS NOT NULL"
+        ).fetchall()
         for job in map(dict, rows):
-            ticket = w.parent_of(json.loads(job.pop("refs_json"))["subtask"])
-            if ticket not in run.asked or w.H.parse_ts(job["created"]) >= w.now() - w.tick:
+            ticket = w.parent_of(json.loads(job.pop("refs"))["subtask"])
+            if ticket not in run.asked or w.H.parse_ts(job["created_at"]) >= w.now() - w.tick:
                 continue
             why = E.job_refusal(c, job, {}, ready, set(), E.lanes_on(runner), E.roots_on(runner))
             if why:
@@ -87,15 +106,23 @@ def _watch_settled(run, w):
         pr = w.pr_of(t["id"])
         if not step or not step.check or t["blocked_since"] or not pr or w.prs[pr]["merged"]:
             continue
-        judged = [c for c in w.checks(t["id"]) if str(c["owner"]).startswith("bot:") and c["verdict"]
-                  and c["status"] == "done" and w.check_step(c) == step.name]
+        judged = [
+            c
+            for c in w.checks(t["id"])
+            if str(c["owner_id"]).startswith("bot:")
+            and c["verdict"]
+            and c["status"] == "done"
+            and w.check_step(c) == step.name
+        ]
         if not judged or judged[-1]["verdict_head"] != w.prs[pr]["head"]:
             continue
         if step.check.passed == MERGE and judged[-1]["verdict"] in ("approve", "pass"):
             continue
-        since = w.sql("SELECT max(ts) ts FROM (SELECT max(ts) ts FROM task_events WHERE task_id=? AND field='step' "
-                      "UNION ALL SELECT max(ts) FROM task_events WHERE task_id=? AND field='status' AND new='done')",
-                      (t["id"], judged[-1]["id"]))[0]["ts"]
+        since = w.sql(
+            "SELECT max(created_at) created_at FROM (SELECT max(created_at) created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
+            "UNION ALL SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done')",
+            (t["id"], judged[-1]["id"]),
+        )[0]["created_at"]
         if since and w.H.parse_ts(since) < now - w.tick:
             run.violations["verdict_sat"].append((now, f"{t['title']} @ {step.name}"))
 
@@ -115,24 +142,31 @@ def held_with_verdicts(run):
     least one while it waited."""
     during_wait = []
     for ticket in run.asked:
-        holds = run.w.sql("SELECT ts, new FROM task_events WHERE task_id=? AND field='blocked_since' ORDER BY ts, rowid",
-                          (ticket,))
+        holds = run.w.sql(
+            "SELECT created_at, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='blocked_since' ORDER BY created_at, rowid",
+            (ticket,),
+        )
         for c in run.w.checks(ticket):
-            if not (str(c["owner"]).startswith("bot:") and c["verdict"]):
+            if not (str(c["owner_id"]).startswith("bot:") and c["verdict"]):
                 continue
-            given = run.w.sql("SELECT ts FROM task_events WHERE task_id=? AND field='verdict' ORDER BY ts LIMIT 1",
-                              (c["id"],))
-            if given and _held_at(holds, given[0]["ts"]):
+            given = run.w.sql(
+                "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict' ORDER BY created_at LIMIT 1",
+                (c["id"],),
+            )
+            if given and _held_at(holds, given[0]["created_at"]):
                 during_wait.append(run.w.title(ticket))
     ok = len(run.asked) == 2 and bool(during_wait)
-    return ok, f"{len(run.asked)} tickets held; verdicts while waiting on {', '.join(sorted(set(during_wait))) or 'none'}"
+    return (
+        ok,
+        f"{len(run.asked)} tickets held; verdicts while waiting on {', '.join(sorted(set(during_wait))) or 'none'}",
+    )
 
 
 def _held_at(holds, ts):
     """Whether a ticket's hold history (blocked_since events: set, then cleared) has it held at `ts`."""
     held = False
     for h in holds:
-        if h["ts"] > ts:
+        if h["created_at"] > ts:
             break
         held = bool(h["new"])
     return held
@@ -144,20 +178,27 @@ def verdicts_reach_builder(run):
     passed one over for more than a tick."""
     missing = []
     for ticket in run.asked:
-        owner = run.w.sql("SELECT owner FROM tasks WHERE id=?", (ticket,))[0]["owner"]
+        owner = run.w.sql("SELECT owner_id FROM tasks WHERE id=?", (ticket,))[0]["owner_id"]
         for c in run.w.checks(ticket):
-            if not (str(c["owner"]).startswith("bot:") and c["verdict"]):
+            if not (str(c["owner_id"]).startswith("bot:") and c["verdict"]):
                 continue
-            notices = run.w.sql("SELECT j.state, j.attempt_id, EXISTS (SELECT 1 FROM attempt_inputs a WHERE "
-                                "a.message_id=m.id) folded FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
-                                "WHERE m.to_actor=? AND json_extract(m.refs_json,'$.subtask')=?", (owner, c["id"]))
+            notices = run.w.sql(
+                "SELECT j.state, j.attempt_id, EXISTS (SELECT 1 FROM attempt_inputs a WHERE "
+                "a.message_id=m.id) folded FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
+                "WHERE m.recipient_id=? AND json_extract(m.refs,'$.subtask')=?",
+                (owner, c["id"]),
+            )
             if not notices or any(n["state"] and not n["attempt_id"] and not n["folded"] for n in notices):
-                missing.append(f"{run.w.title(ticket)}: {c['title']} "
-                               f"({', '.join(str(n['state'] or 'quiet') for n in notices) or 'no notice'})")
+                missing.append(
+                    f"{run.w.title(ticket)}: {c['title']} "
+                    f"({', '.join(str(n['state'] or 'quiet') for n in notices) or 'no notice'})"
+                )
     held = run.violations["result_held"]
     detail = [f"never delivered: {', '.join(missing[:4])}"] if missing else []
     if held:
-        detail.append(f"claim held it {len(held)} ticks: " + ", ".join(sorted({f'{t} {when:%H:%M}' for when, t in held})[:4]))
+        detail.append(
+            f"claim held it {len(held)} ticks: " + ", ".join(sorted({f'{t} {when:%H:%M}' for when, t in held})[:4])
+        )
     return not missing and not held, "; ".join(detail)
 
 
@@ -182,13 +223,18 @@ def watched_merge(run):
 
 
 SCENARIOS = [
-    Scenario("verdict_past_open_sibling",
-             "Tickets wait on a person's own subtask while their review is out: the verdict still reaches the "
-             "builder, she finishes her Security subtask without a verdict, and the ticket moves on and merges.",
-             setup=lambda run, w, team: tickets(run, w, 6), during=during,
-             checks=standard(("tickets held on a person's subtask with a verdict in meanwhile", None, held_with_verdicts),
-                             ("every verdict reaches the builder, never held past a tick", DELIVERY, verdicts_reach_builder),
-                             ("no ticket sits at a check step with its verdict in", RESUME, no_settled_check_waits),
-                             ("a person's check-titled subtask finishes without a verdict", None, person_child_finishes),
-                             ("the held tickets merge", None, watched_merge))),
+    Scenario(
+        "verdict_past_open_sibling",
+        "Tickets wait on a person's own subtask while their review is out: the verdict still reaches the "
+        "builder, she finishes her Security subtask without a verdict, and the ticket moves on and merges.",
+        setup=lambda run, w, team: tickets(run, w, 6),
+        during=during,
+        checks=standard(
+            ("tickets held on a person's subtask with a verdict in meanwhile", None, held_with_verdicts),
+            ("every verdict reaches the builder, never held past a tick", DELIVERY, verdicts_reach_builder),
+            ("no ticket sits at a check step with its verdict in", RESUME, no_settled_check_waits),
+            ("a person's check-titled subtask finishes without a verdict", None, person_child_finishes),
+            ("the held tickets merge", None, watched_merge),
+        ),
+    ),
 ]
