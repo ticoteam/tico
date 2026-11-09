@@ -260,3 +260,29 @@ def test_a_parent_whose_child_waits_on_a_person_is_not_stuck(api):
         # Past a day the child is stuck and its own manager hears it; the parent is still not woken.
         assert stuck_cards.sweep(c, later(25))["woken"] == [ticket["id"]]
         assert wakes(c, epic["id"], "bot:cpo") == []
+
+
+def status(c, bot, state, ended=None):
+    """The bot's status now, and when given, one earlier usage limit that ended at `ended`."""
+    c.execute("INSERT OR REPLACE INTO bot_status (bot, state, changed_at) VALUES (?,?,?)", (bot, state, H.now()))
+    if ended:
+        c.execute(
+            "INSERT INTO bot_status_history (id, bot, state, started_at, ended_at) VALUES (?,?,'limited',?,?)",
+            (H.new_id(), bot, H.now(), ended),
+        )
+
+
+def test_a_usage_limit_is_not_stuck_and_its_end_starts_the_clock_and_a_limited_manager_waits(api):
+    with api.app.state.store.transaction() as c:
+        pid = pipeline(c)
+        row = card(c, pid)
+        status(c, "ops", "limited")
+        assert stuck_cards.sweep(c, later(5))["woken"] == []  # the owner waits out its limit
+        status(c, "ops", "idle", ended=later(4))
+        assert stuck_cards.sweep(c, later(7))["woken"] == []  # 3 h since the limit lifted
+        status(c, "coo", "limited")
+        assert stuck_cards.sweep(c, later(9))["woken"] == []  # stuck, but its manager is limited too
+        status(c, "coo", "idle")
+        assert stuck_cards.sweep(c, later(9))["woken"] == [row["id"]]
+        [notice] = wakes(c, row["id"])
+        assert "No progress in 5 h." in notice

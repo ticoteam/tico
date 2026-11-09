@@ -8,7 +8,8 @@ A pipeline rule for every pipeline that has a manager bot (task_types.manager). 
   card with nothing tracked to wait on (hold cause `stranded`) at once. Progress is a stage or status move, a new owner,
   a turn of the card's owner on it (its checkpoint, or a run going now), a comment, note or room message from anyone but
   Tico and the manager, a receipt or a stage decision, and a hold that began or changed to a new reason
-  (task_holds.reason_changed_at). Progress on a card's open child tasks (any pipeline) counts as the card's own. A card
+  (task_holds.reason_changed_at), and the end of its owner bot's usage limit. A card whose owner bot is in a usage
+  limit is not stuck (the limit ends on its own; Health shows it), and a manager in one is woken once it is back. Progress on a card's open child tasks (any pipeline) counts as the card's own. A card
   that waits on a named person with a question or an approval asked under PERSON_WAIT_HOURS ago is not stuck, nor is a
   snoozed card, one On ice, or one with an open child that is stuck on its own pipeline (that manager hears it).
 - At stuck: the pipeline's manager bot is woken once for the stuck spell, on the card, with its hold, and asked to unblock,
@@ -197,6 +198,16 @@ def _running(c: "sqlite3.Connection", card: Row) -> bool:
     )
 
 
+def _limit(c: "sqlite3.Connection", bot: str) -> tuple[bool, str | None]:
+    """Whether the bot is in a usage limit now, and when its last one ended. A limit ends on its own and Health shows it,
+    so a card whose owner waits one out is not stuck, and its clock starts again when the limit lifts."""
+    now = c.execute("SELECT state FROM bot_status WHERE bot=?", (bot,)).fetchone()
+    lifted = c.execute(
+        "SELECT max(ended_at) FROM bot_status_history WHERE bot=? AND state='limited'", (bot,)
+    ).fetchone()
+    return bool(now and now[0] == "limited"), (lifted[0] if lifted else None)
+
+
 def _hold(card: Row) -> str | None:
     """The card's hold in words, as the board shows it, or None."""
     return card.get("blocked_reason") if card.get("status") == "waiting" else None
@@ -208,6 +219,13 @@ def stuck(c: "sqlite3.Connection", card: Row, last: str | None, at: str, after_h
 
     if H.TS.snoozed(card, at) or _waits_on_person(c, card, at):
         return None
+    owner = card.get("owner_id") or ""
+    if H.is_bot(owner):
+        limited, lifted = _limit(c, H.actor_id(owner))
+        if limited:
+            return None
+        if lifted and (not last or lifted > last):
+            last = lifted
     stranded = card.get("status") == "waiting" and (
         card.get("blocked_kind") == "stranded" or (card.get("blocked_reason") or "").startswith(task_holds.NOTHING)
     )
@@ -403,7 +421,9 @@ def sweep(c: "sqlite3.Connection", when: str | None = None) -> dict[str, list[st
                         )
                     ),
                 )
-            if manager and not spell.get("manager_woken_at") and woken < WAKES_PER_PASS:
+            # A manager in a usage limit is woken on a later pass, once it can act: a wake queued behind the limit is
+            # out of date by the time it runs.
+            if manager and not spell.get("manager_woken_at") and woken < WAKES_PER_PASS and not _limit(c, manager)[0]:
                 if _wake_manager(c, card, manager, spell, at):
                     spell["manager_woken_at"] = at
                     woken += 1

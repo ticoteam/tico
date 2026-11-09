@@ -816,6 +816,8 @@ the [Heartbeat](heartbeat.md) (`backend/stuck_cards.py`); no model is called.
 - A card waiting on a named person, with a question or approval asked under 24 hours ago, is not stuck. Nor is a
   snoozed card, one On ice, or one with an open child that is stuck itself: the child's pipeline manager hears about
   that one, so the parent's manager is not woken too.
+- A card whose owner bot is in a usage limit is not stuck: the limit ends on its own and Health shows it. Its clock starts
+  again when the limit lifts. A manager in a usage limit is woken once it is back.
 - When a card becomes stuck, its pipeline's manager bot is woken once, on the card, with the card's hold. It is asked to
   unblock, reassign, split or close the card and to leave one line saying which. It is not woken again until the card
   moves and gets stuck again (a new spell, one row of `stuck_spells`).
