@@ -26,8 +26,9 @@ declare global {
     S: {config: {hosted: boolean}};
     writes: LoginWrite[];
     row: LoginRow;
-    post: (url: string, body: LoginWrite['body']) => Promise<LoginRow>;
-    get: () => Promise<LoginRow>;
+    // Shared with other specs' Window augmentations, so the signatures must match theirs exactly.
+    post: (url: string, body?: unknown) => Promise<unknown>;
+    get: (url: string) => Promise<unknown>;
   }
 }
 declare let row: LoginRow;
@@ -49,11 +50,12 @@ async function check(engine: import('playwright').BrowserType) {
       await page.setContent('<!doctype html><html><head></head><body></body></html>');
       await page.addStyleTag({content: css});
       await page.evaluate(() => {
-        window.S = {config: {hosted: false}};
+        // The shared S type (tasks-page.d.cts) also requires me, v2 and route. The sign-in dialog reads only config.
+        window.S = {config: {hosted: false}, me: {id: 'fixture'}, v2: {needs: []}, route: '/'};
         window.writes = [];
         window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
-        window.post = async (url: string, body: LoginWrite['body']) => {
-          writes.push({url, body});
+        window.post = async (url: string, body?: unknown) => {
+          writes.push({url, body: body as LoginWrite['body']});
           if (url.endsWith('/cancel')) row.state = 'canceled';
           if (url.endsWith('/code')) row.code_sent = true;
           return {...row};

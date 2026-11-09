@@ -548,7 +548,7 @@ const rrLead = (id: string) => ((ruOpen().reach.groups || S.orgGroups || []).fin
 function rrGroupBlock(by: Parameters<typeof rdoNode>[0], g: OrgGroup, ctx: Parameters<typeof rdoNode>[2], depth: number) {
   const kids = rdoSorted(by['g:' + g.id] || [], g.id, rrLead(g.id));
   return `<section class="rdo-g" data-rr-team="group:${esc(g.id)}"><button type="button" class="rdo-tab" data-rr-party="group:${esc(g.id)}" title="${esc(g.name)}"><span class="rdo-tn">${esc(g.name)}</span></button>
-    <div class="rdo-gb">${kids.map((k: {kind: string}) => `<div class="rdo-gi${k.kind === 'group' ? ' is-g' : ''}">${rdoNode(by, k, ctx, depth + 1)}</div>`).join('')}</div></section>`;
+    <div class="rdo-gb">${kids.map((k: OrgNode) => `<div class="rdo-gi${k.kind === 'group' ? ' is-g' : ''}">${rdoNode(by, k, ctx, depth + 1)}</div>`).join('')}</div></section>`;
 }
 const rrChartHtml = () => rdoChartHtml(rdoTree(rrLead), {seen: new Set(), group: rrGroupBlock});
 // A card's ref (rdoCard: person:<id> or bot:<id>) as a party.

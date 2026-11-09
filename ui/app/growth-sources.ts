@@ -83,6 +83,6 @@ async function gsrcDialog(state: GrState, s: GrSource | null | undefined = null)
     if (s) await patch(`/v2/growth/sources/${encodeURIComponent(s.id)}`, out); else await post('/v2/growth/sources', out);
     toast('Saved'); void gsrcRead(state);
   });
-  const retire = dlg.querySelector('[data-retire]');
+  const retire = dlg.querySelector<HTMLButtonElement>('[data-retire]');
   if (retire && s) grRetireButton(retire, dlg, `/v2/growth/sources/${encodeURIComponent(s.id)}/retire`, () => void gsrcRead(state));
 }

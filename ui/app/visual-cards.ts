@@ -61,7 +61,7 @@ const visualPageSrc = (src: string) => { const ok = visualSrc({src}); return ok 
 // An ACK can arrive after a live snapshot painted chips. Every place that draws visuals draws again from the data it
 // already holds: no new read, draft reset or whole-page refresh.
 // A page's Open card keeps the page it was drawn from (pageCard, ui/app/pages.ts).
-interface VisualPageCard extends HTMLElement { pageData?: unknown; pageSize?: string }
+interface VisualPageCard extends HTMLElement { pageData?: import('../types/api').Page; pageSize?: string }
 function nativeVisualRepaint() {
   if (typeof V2C !== 'undefined' && V2C) v2ChatRender(V2C);
   if (typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.data && taskChatCurrent(TASK_CHAT))
@@ -76,7 +76,7 @@ function nativeVisualRepaint() {
   // neither while an answer from it is on its way, so its controls stay off.
   if (typeof DEC !== 'undefined' && DEC && !DEC.busy) decidePaintBody(DEC);
   if (typeof qcardRedraw === 'function')
-    for (const box of document.querySelectorAll('[data-qcard]:not([aria-busy="true"])'))
+    for (const box of document.querySelectorAll<HTMLElement>('[data-qcard]:not([aria-busy="true"])'))
       if (qcardShown(box)) { qcardDraft(box); qcardRedraw(box); }
 }
 const visualRef = (f: VisualFile) => `${f.file_id}@${Number(f.version)}`;
@@ -209,7 +209,7 @@ function visualFail(card: HTMLElement | null | undefined, message = "Couldn't sh
 function visualOpen(card: HTMLElement, version = Number(card.dataset.version)) {
   const d = card.closest<TfDialog>('dialog');
   if (d?.tfEl && tfOpen(d, card.dataset.file, version, {scroll: true})) return;
-  VIEW = {items: [{fileId: card.dataset.file, version, name: card.dataset.name, kind: viewKindOf(card.dataset.name)}], index: 0};
+  VIEW = {items: [{fileId: card.dataset.file, version, name: card.dataset.name ?? '', kind: viewKindOf(card.dataset.name)}], index: 0};
   void viewerShow();
 }
 document.addEventListener('click', ev => {
