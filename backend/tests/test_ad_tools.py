@@ -4,6 +4,7 @@ services existed its service."""
 
 import importlib
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -53,13 +54,34 @@ def test_meta_is_checked_with_a_bearer_call_and_google_ads_stays_on_computers():
     assert google["name"] == "Google Ads" and google["base_url"] == "" and google["check_path"] == ""
 
 
-def test_the_migration_gives_an_old_ad_tool_its_service_and_leaves_the_rest(tmp_path):
-    path = tmp_path / "old.sqlite"
+def upgraded(path):
+    """The last release's hub (schema_old_main.sql), upgraded by a boot."""
     conn = sqlite3.connect(path)
     conn.executescript(FIXTURE.read_text())
     conn.commit()
     conn.close()
     Store(Settings(db_path=path)).initialize()
+    return path
+
+
+def copy_of(source, target):
+    with closing(sqlite3.connect(source)) as s, closing(sqlite3.connect(target)) as t:
+        s.backup(t)
+    return target
+
+
+def test_the_tool_migrations_on_an_upgraded_hub(tmp_path, subtests):
+    """The upgrade boots once (most of a minute on CI); each migration then runs on its own copy of the upgraded hub."""
+    old = upgraded(tmp_path / "old.sqlite")
+    for check in (
+        _the_migration_gives_an_old_ad_tool_its_service_and_leaves_the_rest,
+        _the_migration_moves_a_legacy_brex_tool_to_finances_host,
+    ):
+        with subtests.test(check.__name__):
+            check(copy_of(old, tmp_path / (check.__name__ + ".sqlite")))
+
+
+def _the_migration_gives_an_old_ad_tool_its_service_and_leaves_the_rest(path):
     conn = sqlite3.connect(path)
     now = "2026-11-05T00:00:00Z"
     tools = (
@@ -113,13 +135,7 @@ def test_brex_tool_uses_the_host_and_variable_finance_uses():
     assert tool_services.match(env="BREX_API_KEY") == "brex"  # the old variable still lands on Brex
 
 
-def test_the_migration_moves_a_legacy_brex_tool_to_finances_host(tmp_path):
-    path = tmp_path / "old.sqlite"
-    conn = sqlite3.connect(path)
-    conn.executescript(FIXTURE.read_text())
-    conn.commit()
-    conn.close()
-    Store(Settings(db_path=path)).initialize()
+def _the_migration_moves_a_legacy_brex_tool_to_finances_host(path):
     conn = sqlite3.connect(path)
     now = "2026-11-05T00:00:00Z"
     for tid, base in (("brex", "https://platform.brexapis.com"), ("brex-own", "http://127.0.0.1:9000")):
