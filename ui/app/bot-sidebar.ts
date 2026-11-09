@@ -370,7 +370,7 @@ function botSidebarBind(slug: string) {
       // Both places hold a tab: `to` is checked above and `at` is the focused pill's own.
       [BOT_EDIT.tabs[at], BOT_EDIT.tabs[to]] = [BOT_EDIT.tabs[to], BOT_EDIT.tabs[at]] as [BotSidebarTab, BotSidebarTab];
       botTaskTabsPaint(slug);
-      $('#bot-tab-t-' + botTaskTabList(slug)[to].key)?.focus();
+      $('#bot-tab-t-' + botTaskTabList(slug)[to]!.key)?.focus();
     }
   });
 }
