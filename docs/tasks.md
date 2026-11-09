@@ -810,10 +810,12 @@ the [Heartbeat](heartbeat.md) (`backend/stuck_cards.py`); no model is called.
 
 - A card is stuck when it is open and has had no progress for 4 hours. Progress is a stage or status move, a new owner,
   a turn of its owner on it (a run going now, or its checkpoint), a comment or receipt, a stage decision, or a hold that
-  began or changed to a new reason. Tico's notices and the manager's own comments are not progress.
+  began or changed to a new reason. Tico's notices and the manager's own comments are not progress. Progress on any
+  of the card's open child tasks, on any pipeline, counts as the card's own: a Product card moves on its Dev tickets.
 - A card waiting with **Nothing tracked to wait on** is stuck at once.
 - A card waiting on a named person, with a question or approval asked under 24 hours ago, is not stuck. Nor is a
-  snoozed card or one On ice.
+  snoozed card, one On ice, or one with an open child that is stuck itself: the child's pipeline manager hears about
+  that one, so the parent's manager is not woken too.
 - When a card becomes stuck, its pipeline's manager bot is woken once, on the card, with the card's hold. It is asked to
   unblock, reassign, split or close the card and to leave one line saying which. It is not woken again until the card
   moves and gets stuck again (a new spell, one row of `stuck_spells`).

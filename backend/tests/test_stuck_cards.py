@@ -211,3 +211,30 @@ def test_the_settings_api_reads_and_writes_the_rule_and_null_goes_back_to_the_de
     assert api.patch(path, json={"stuck_after_hours": 2}, headers=headers("cara-test")).status_code in (403, 404)
     cleared = api.patch(path, json={"stuck_after_hours": None}, headers=headers("ana-test")).json()
     assert cleared["stuck_after_hours"] is None and cleared["ask_person_after_hours"] == 12
+
+
+def test_a_parent_moves_with_its_open_children_and_is_not_woken_when_a_child_is_stuck(api):
+    with api.app.state.store.transaction() as c:
+        product, dev = pipeline(c, "Launch plans", manager="cpo"), pipeline(c, "Launch builds")
+        epic = card(c, product, "Design the launch")
+        ticket = H.task_create(
+            c, ANA, "Build the launch page", "", "bot:ops", parent_id=epic["id"], type=dev, step="Building", lint=False
+        )
+        for row in (epic, ticket):
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (later(-10), row["id"]))
+            c.execute(
+                "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
+                (later(-10), row["id"]),
+            )
+        # The child just moved: that is the parent's progress too, so neither is stuck.
+        H.task_update(c, ANA, ticket["id"], step="Review")
+        assert stuck_cards.sweep(c)["woken"] == []
+        # Five hours on, the child is stuck: Engineering's manager hears it, Product's manager does not.
+        done = stuck_cards.sweep(c, later(5))
+        assert done["woken"] == [ticket["id"]]
+        assert wakes(c, epic["id"], "bot:cpo") == []
+        assert stuck_cards.sweep(c, later(30))["woken"] == []
+        assert wakes(c, epic["id"], "bot:cpo") == []
+        # The child finishes and the parent sits: now the parent is stuck on its own.
+        H.task_update(c, ANA, ticket["id"], status="done", note="Shipped")
+        assert stuck_cards.sweep(c, later(5))["woken"] == [epic["id"]]

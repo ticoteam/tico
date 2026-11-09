@@ -8,8 +8,9 @@ A pipeline rule for every pipeline that has a manager bot (task_types.manager). 
   card with nothing tracked to wait on (hold cause `stranded`) at once. Progress is a stage or status move, a new owner,
   a turn of the card's owner on it (its checkpoint, or a run going now), a comment, note or room message from anyone but
   Tico and the manager, a receipt or a stage decision, and a hold that began or changed to a new reason
-  (task_holds.reason_changed_at). A card that waits on a named person with a question or an approval asked under
-  PERSON_WAIT_HOURS ago is not stuck, nor is a snoozed card or one On ice.
+  (task_holds.reason_changed_at). Progress on a card's open child tasks (any pipeline) counts as the card's own. A card
+  that waits on a named person with a question or an approval asked under PERSON_WAIT_HOURS ago is not stuck, nor is a
+  snoozed card, one On ice, or one with an open child that is stuck on its own pipeline (that manager hears it).
 - At stuck: the pipeline's manager bot is woken once for the stuck spell, on the card, with its hold, and asked to unblock,
   reassign, split or close it and to leave one line saying which. A spell is one row of `stuck_spells`; it ends when the
   card makes progress, finishes or leaves the pipeline. The manager's own comments do not end it, so it is not woken
@@ -91,17 +92,37 @@ def _max(found: dict[str, str], key: str, value: Any) -> None:
         found[key] = str(value)
 
 
-def progress(c: "sqlite3.Connection", cards: list[Row], manager: str | None) -> dict[str, str]:
-    """{card id: when it last made progress}, in a few reads for all of them (see the module's list)."""
-    out: dict[str, str] = {}
-    for card in cards:
-        _max(out, card["id"], card.get("created_at"))
-        if card.get("checkpoint_by_id") and card.get("checkpoint_by_id") == card.get("owner_id"):
-            _max(out, card["id"], card.get("checkpoint_at"))
-    quiet = (H.KEEPER, manager or "")
-    ids = [card["id"] for card in cards]
-    rooms = {card["conversation_id"]: card["id"] for card in cards if card.get("conversation_id")}
+def _children(c: "sqlite3.Connection", ids: list[str]) -> list[Row]:
+    """The open child tasks of these cards (task_relations kind 'parent', any pipeline), each with its card as
+    `parent_task`. Question tasks are left out: a question to a person is a wait (_waits_on_person), not progress."""
+    found: list[Row] = []
+    status = ",".join("?" * len(H.ACTIVE_STATUSES))
     for part in H.chunks(ids):
+        marks = ",".join("?" * len(part))
+        found += H._rows(
+            c.execute(
+                "SELECT r.to_task AS parent_task, t.id, t.created_at, t.checkpoint_at, t.checkpoint_by_id, t.owner_id, "
+                "t.conversation_id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                f"WHERE r.kind='parent' AND r.to_task IN ({marks}) AND t.status IN ({status}) AND t.questions IS NULL",
+                (*part, *H.ACTIVE_STATUSES),
+            )
+        )
+    return found
+
+
+def progress(c: "sqlite3.Connection", cards: list[Row], manager: str | None) -> dict[str, str]:
+    """{card id: when it last made progress}, in a few reads for all of them (see the module's list). A card's open child
+    tasks count too: the work of a card often moves on its children (a Product card on its Dev tickets)."""
+    out: dict[str, str] = {}
+    subjects = [*cards, *_children(c, [card["id"] for card in cards])]
+    card_of = {str(row["id"]): str(row.get("parent_task") or row["id"]) for row in subjects}
+    for row in subjects:
+        _max(out, card_of[row["id"]], row.get("created_at"))
+        if row.get("checkpoint_by_id") and row.get("checkpoint_by_id") == row.get("owner_id"):
+            _max(out, card_of[row["id"]], row.get("checkpoint_at"))
+    quiet = (H.KEEPER, manager or "")
+    rooms = {str(row["conversation_id"]): card_of[row["id"]] for row in subjects if row.get("conversation_id")}
+    for part in H.chunks(list(card_of)):
         marks = ",".join("?" * len(part))
         moves = ",".join("?" * len(MOVES))
         words = ",".join("?" * len(WORDS))
@@ -110,20 +131,20 @@ def progress(c: "sqlite3.Connection", cards: list[Row], manager: str | None) -> 
             f"AND (kind IN ({moves}) OR (kind IN ({words}) AND coalesce(actor_id,'') NOT IN (?,?))) GROUP BY subject_id",
             (*part, *MOVES, *WORDS, *quiet),
         ):
-            _max(out, task_id, at)
+            _max(out, card_of[task_id], at)
         for table in ("requirement_attachments", "stage_decisions"):
             if H._has_table(c, table):
                 for task_id, at in c.execute(
                     f"SELECT task_id, max(created_at) FROM {table} WHERE task_id IN ({marks}) GROUP BY task_id", part
                 ):
-                    _max(out, task_id, at)
+                    _max(out, card_of[task_id], at)
         for task_id, began, changed, cleared in c.execute(
             f"SELECT task_id, created_at, reason_changed_at, cleared_at FROM task_holds WHERE task_id IN ({marks}) "
             "AND kind='blocked' AND released_at IS NULL",
             part,
         ):
             for at in (began, changed, cleared):
-                _max(out, task_id, at)
+                _max(out, card_of[task_id], at)
     for part in H.chunks(list(rooms)):
         marks = ",".join("?" * len(part))
         for room, at in c.execute(
@@ -133,6 +154,12 @@ def progress(c: "sqlite3.Connection", cards: list[Row], manager: str | None) -> 
         ):
             _max(out, rooms[room], at)
     return out
+
+
+def _covered(c: "sqlite3.Connection", candidates: list[str], stuck_now: set[str]) -> set[str]:
+    """The candidate cards with an open child that is stuck on its own pipeline: that pipeline's manager already hears
+    about it, so its parent is not woken too."""
+    return {str(row["parent_task"]) for row in _children(c, candidates) if row["id"] in stuck_now}
 
 
 def _waits_on_person(c: "sqlite3.Connection", card: Row, at: str) -> bool:
@@ -316,6 +343,9 @@ def sweep(c: "sqlite3.Connection", when: str | None = None) -> dict[str, list[st
     done: dict[str, list[str]] = {"woken": [], "asked": [], "relayed": [], "ended": []}
     if not H._has_table(c, "stuck_spells"):
         return done
+    # First every pipeline's stuck cards, then what to do: a card whose open child is stuck on its own pipeline is left
+    # to that pipeline's manager, whichever pipeline this pass reads first.
+    plans: list[tuple[Row, dict[str, int], str | None, list[Row], dict[str, Row], dict[str, str | None]]] = []
     for pipeline in _pipelines(c):
         rule = settings(pipeline)
         manager = PM.manager_bot(c, pipeline)
@@ -327,12 +357,18 @@ def sweep(c: "sqlite3.Connection", when: str | None = None) -> dict[str, list[st
                 _end(c, spell, at, "left")  # finished, closed, On ice or moved to another pipeline
                 done["ended"].append(task_id)
         last = progress(c, cards, H.bot_actor(manager) if manager else None)
+        found = {card["id"]: stuck(c, card, last.get(card["id"]), at, rule["stuck_after_hours"]) for card in cards}
+        plans.append((pipeline, rule, manager, cards, spells, found))
+    stuck_now = {task_id for plan in plans for task_id, since in plan[5].items() if since}
+    covered = _covered(c, sorted(stuck_now), stuck_now)
+    for pipeline, rule, manager, cards, spells, found in plans:
         woken = asked = 0
         for card in cards:
             spell = spells.get(card["id"])
-            since = stuck(c, card, last.get(card["id"]), at, rule["stuck_after_hours"])
+            since = None if card["id"] in covered else found[card["id"]]
             if spell and (since is None or since > spell["stuck_since"]):
-                _end(c, spell, at, "moved" if since is None else "moved, then stopped again")
+                reason = "a subtask is stuck" if card["id"] in covered else "moved"
+                _end(c, spell, at, reason if since is None else "moved, then stopped again")
                 done["ended"].append(card["id"])
                 spell = None
             if since is None:
