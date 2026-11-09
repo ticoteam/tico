@@ -1,12 +1,12 @@
-// Automations step editors (ui/app/automations-editors.ts) against the fake hub in support/automations-fake.cjs: Filter
+// Automations step editors (ui/app/automations-editors.ts) against the fake hub in support/automations-fake.cts: Filter
 // rules, Decide (set, level, questions, the last run's bars) and LLM (runs as, prompt) each save the flow with one PATCH
 // that makes a new version; Versions restores one; on a computer the spend chip, "+" between steps (no Paths except at the
 // end of a list), a step's own switch and Delete step. A phone edits in a sheet from the bottom; a computer in the right panel.
 import type {Browser, Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 type Question = {type: string; instructions: string; criteria: Record<string, string>};
 type Step = {id: string; type: string; enabled: boolean; set: string; level: string; prompt: string; do: string;

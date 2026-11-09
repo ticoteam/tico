@@ -6,7 +6,7 @@
 //   - a subtask shows its body, acceptance criteria and files, with an Open link to the task;
 //   - Done on a subtask sends the note typed in its box, as the task page saves a note on Done.
 import type {Browser, Page} from 'playwright';
-import type {PipelineInstallOptions} from './support/pipeline-fixture.cjs';
+import type {PipelineInstallOptions} from './support/pipeline-fixture.cts';
 const {chromium} = require('playwright');
 
 // Page globals the review's held-form checks read (declared here: each spec is its own module).
@@ -14,7 +14,7 @@ declare var S: {v2: Record<string, unknown>};
 declare var QC_HELD: Map<string, {kind: string; ask: {refs: {questions: {question: string}[]}}}>;
 declare function qcardItem(row: {id: string}): {it?: {ask?: {refs?: {questions?: {question?: string}[]}}}} | null;
 const assert = require('node:assert/strict');
-const {install} = require('./support/pipeline-fixture.cjs');
+const {install} = require('./support/pipeline-fixture.cts');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
 const PHONE = {width: 390, height: 844};

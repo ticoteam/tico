@@ -4,12 +4,12 @@
 // attached". "Why you" names the requirement and the pipeline. The footer names the card by its title, never its id. The two
 // Message buttons name their bots and fit. A markdown file on the ticket shows as text. GC_SHOTS=<dir> writes screenshots there.
 import type {Browser, Page} from 'playwright';
-import type {PipelineInstallOptions} from './support/pipeline-fixture.cjs';
+import type {PipelineInstallOptions} from './support/pipeline-fixture.cts';
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {install} = require('./support/pipeline-fixture.cjs');
+const {install} = require('./support/pipeline-fixture.cts');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
 const SHOTS = process.env.GC_SHOTS || '';

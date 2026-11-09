@@ -8,7 +8,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {install} = require('./support/pipeline-fixture.cjs');
+const {install} = require('./support/pipeline-fixture.cts');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
 const SHOTS = process.env.GC_SHOTS || '';

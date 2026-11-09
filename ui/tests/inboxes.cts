@@ -1,5 +1,5 @@
 // Offline browser regression: the inbox kinds under Tools (ui/app/inboxes.ts and its kind files) over fakes of every
-// kind's routes (ui/tests/support/mailboxes-fake.cjs). The old Settings > Inboxes, Mailboxes, Email & Phone, Mail and
+// kind's routes (ui/tests/support/mailboxes-fake.cts). The old Settings > Inboxes, Mailboxes, Email & Phone, Mail and
 // Google addresses open their Tools pages. Tools › Settings has a section a channel with every setting, and Coming soon
 // where another change fills it; What Tico may do never loses a pending save to an older read. Add tool > Email (Google)
 // connects a mailbox. Phone width has no sideways scroll, light and dark. TICO_SHOTS=<dir> saves Settings and a page.
@@ -7,7 +7,7 @@
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
-const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
+const {mailboxesFake, open, shot} = require('./support/mailboxes-fake.cts') as import('./support/mailboxes-fake.cts').Api;
 type Page = import('playwright').Page;
 type Route = import('playwright').Route;
 declare function inboxesRender(): unknown;

@@ -1,13 +1,13 @@
 // Paths in an automation's flow (ui/app/automations-flow.ts, automations-editors.ts) against the fake hub in
-// support/automations-fake.cjs: a phone swipes through the paths with a dot per path (the dots follow the swipe; a tap
+// support/automations-fake.cts: a phone swipes through the paths with a dot per path (the dots follow the swipe; a tap
 // on one scrolls to it), and nothing scrolls the page sideways; a path's name opens the Paths editor at that path, where
 // "+ Path" and "+ Condition" add a path with its condition, saved as one PATCH. A computer shows the paths side by side
 // and stops offering "+ Path" at 10.
 import type {Page} from 'playwright';
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 type Flow = {steps: {paths: unknown[]}[]};
 

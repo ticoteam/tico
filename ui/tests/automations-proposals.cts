@@ -1,12 +1,12 @@
-// Automations without a bot beside them (ui/app/automations*.js) against the fake hub in support/automations-fake.cjs.
+// Automations without a bot beside them (ui/app/automations*.js) against the fake hub in support/automations-fake.cts.
 // A bot's proposal (a pending version) shows "Proposed" on the version chip and waits in Versions: View diff, Discard
 // (DELETE), Turn on (restore). A draft (off, its first version pending) shows Pending in the list, and Turn on turns it
 // on. The + makes a blank one, off, at once; the header has no Ask. An old #/automations/bot link opens the list.
 // Computer, then phone.
-import type * as AutomationsFakeSupport from './support/automations-fake.cjs';
+import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cjs') as typeof AutomationsFakeSupport;
+const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 (async () => {
   const browser = await chromium.launch();
@@ -71,7 +71,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       await page.waitForFunction(() => (document.querySelector('#au-root') as HTMLElement).dataset.screen === 'detail' && /New automation/.test(document.querySelector('.au-name')?.textContent!));
       const made = writes.filter(w => w.method === 'POST' && w.path === '/api/v2/automations');
       assert.equal(made.length, 1);
-      assert.equal(made[0]!.body.enabled, false);
+      assert.equal(made[0]!.body!.enabled, false);
       const sw = page.locator('.au-hd [data-on-cur]');
       assert.equal(await sw.isVisible(), true, 'the switch shows on a phone');
       assert.equal(await sw.isChecked(), false);

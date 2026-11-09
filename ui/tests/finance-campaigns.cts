@@ -9,7 +9,7 @@ const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {mailboxesFake, open} = require('./support/mailboxes-fake.cjs') as typeof import('./support/mailboxes-fake.cjs');
+const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as import('./support/mailboxes-fake.cts').Api;
 const {googleFake} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
 
 type ActionBody = {kind: string; payload: {campaign_id: string; teammate?: string | undefined; team?: string | undefined}};
