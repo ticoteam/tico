@@ -1,7 +1,8 @@
 """Route planner for the delivery runner: the company's own script, not Tico's."""
+
 import json
 
-STANDING_INSTRUCTIONS = "standing instructions: whites first"   # a coworker's note
+STANDING_INSTRUCTIONS = "standing instructions: whites first"  # a coworker's note
 HUB = {"name": "Hub docs", "path": "hub/docs"}
 
 

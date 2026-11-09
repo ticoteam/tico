@@ -53,9 +53,16 @@ def test_a_bot_hands_a_message_to_another_bot_that_needs_action_and_the_other_bo
     r, _, ops = setup_attempt(api)
     assign(api, r, "cpo")
     ready(api, r, ["ops", "cpo"])
-    handoff = post(api, "messages", {"to": "cpo", "text": "QA update: the release candidate passed group 3. "
-                                                          "Please write the release note.",
-                                     "needs_action": True}, token=ops["token"])
+    handoff = post(
+        api,
+        "messages",
+        {
+            "to": "cpo",
+            "text": "QA update: the release candidate passed group 3. Please write the release note.",
+            "needs_action": True,
+        },
+        token=ops["token"],
+    )
     job = job_for(api, handoff["id"])
     assert job["bot_id"] == "cpo" and job["state"] == "queued"
 
@@ -71,12 +78,12 @@ def test_an_approval_a_bot_asks_for_is_decided_by_its_owner_and_consumed_once(ap
     path = "approvals/" + approval["id"]
     assert get(api, path, token="ana-test")["decision"] in (None, "")
 
-    post(api, path, {"decision": "approved"}, token="ben-test", expected=403)      # not the decider
+    post(api, path, {"decision": "approved"}, token="ben-test", expected=403)  # not the decider
     post(api, path, {"decision": "approved"})
     assert get(api, path, token="ana-test")["decision"] == "approved"
 
     result = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], key="send-1")
     assert result["consumed_at"]
     again = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], key="send-1")
-    assert again == result                                                          # a repeat is a replay
+    assert again == result  # a repeat is a replay
     post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], expected=422)

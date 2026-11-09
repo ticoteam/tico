@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/demo_sections/threads_rules.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 23,
+                    "endColumn": 46,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

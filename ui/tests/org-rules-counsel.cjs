@@ -1,4 +1,4 @@
-// Counsel on the Rules page (ui/app/org-rules.js, docs/rules-plan.md §2, §5) on a real hub with Counsel on and a vendor's
+// Counsel on the Rules page (ui/app/org-rules.ts, docs/rules-plan.md §2, §5) on a real hub with Counsel on and a vendor's
 // terms in Files (evals/redesign/seeds.py `counsel`): Counsel is in no bot list and its bot page has no composer; Dana
 // adds the terms on External and a private Counsel task opens (asked again, the same task); Counsel's suggestions, one
 // with no Who, wait in Suggested with no quote on the rows; Add all adds only the rows with a Who; the one with no Who

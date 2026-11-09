@@ -16,20 +16,33 @@ from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_stale_review import FakeDecide
 
-TIMED = {"stale_review", "kpi_asks", "ask_deadlines", "task_manager_report",
-         "bookkeeper_check", "memory_tidy"}   # the jobs with a schedule preset
+TIMED = {
+    "stale_review",
+    "kpi_asks",
+    "task_manager_report",
+    "bookkeeper_check",
+}  # the jobs with a schedule preset; Ask go-ahead's is on its Heartbeat step
 
 
 def rows(api, token="ana-test"):
     return {job["key"]: job for job in get(api, "system-routines", token=token)["jobs"]}
 
 
+def hidden(api):
+    """The jobs that cannot run on this install, which the list leaves out (Job.applies): with no Bookkeeper,
+    Books check."""
+    store = api.app.state.store
+    with store.read() as c:
+        return SR.not_applying(c, store.settings)
+
+
 def test_admin_sees_a_switch_and_a_schedule_on_the_timed_jobs_and_housekeeping_has_none(api):
     jobs = rows(api, "ben-test")
+    here = TIMED - hidden(api)
     timed = {k for k, j in jobs.items() if j["presets"]}
-    assert timed == TIMED | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == TIMED | {"topic_fresh", "task-rule-close-after-done"}
-    for key in TIMED:
+    assert timed == here | {"task-rule-close-after-done"}
+    assert {k for k, j in jobs.items() if j["switch"]} == here | {"topic_fresh", "task-rule-close-after-done"}
+    for key in here:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
         if job["needed"]:
@@ -45,17 +58,17 @@ def test_ai_jobs_are_never_offered_every_15_minutes_and_the_server_refuses_it(ap
     put(api, "system-routines/stale_review", {"preset": "15m"}, expected=422)
     put(api, "system-routines/learnings", {"preset": "hourly"}, expected=404)
     put(api, "system-routines/kpi_asks", {"preset": "daily", "at": "25:00"}, expected=422)
-    put(api, "system-routines/cleanup", {"on": False}, expected=404)        # housekeeping has no controls
+    put(api, "system-routines/cleanup", {"on": False}, expected=404)  # housekeeping has no controls
 
 
 def test_a_member_sees_the_list_with_nothing_to_change_and_the_server_refuses_them(api):
     jobs = rows(api, "cara-test")
-    assert len(jobs) == len(SR.JOBS) + 1
+    assert len(jobs) == len(SR.JOBS) - len(hidden(api)) + 1
     assert not any(j["can_change"] for j in jobs.values())
     put(api, "system-routines/stale_review", {"on": True}, token="cara-test", expected=403)
     put(api, "system-routines/kpi_asks", {"preset": "4h"}, token="cara-test", expected=403)
     post(api, "system-routines/kpi_asks/run", {}, token="cara-test", expected=403)
-    post(api, "learnings/run", {}, token="cara-test", expected=403)      # the Learnings API's run is the same run
+    post(api, "learnings/run", {}, token="cara-test", expected=403)  # the Learnings API's run is the same run
 
 
 def test_health_scan_is_replaced_by_the_maintenance_step(api):
@@ -67,12 +80,15 @@ def test_health_scan_is_replaced_by_the_maintenance_step(api):
 
 def test_an_old_saved_health_scan_schedule_cannot_bypass_paused_maintenance(api, monkeypatch):
     from backend import maintenance, maintenance_health
+
     store = api.app.state.store
     scans = []
     monkeypatch.setattr(maintenance_health, "check", lambda *args, **kwargs: scans.append(True) or {})
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                  (SR.CONFIG_KEY, json.dumps({"health_scan": {"on": True, "preset": "15m", "at": "09:00"}})))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (SR.CONFIG_KEY, json.dumps({"health_scan": {"on": True, "preset": "15m", "at": "09:00"}})),
+        )
         maintenance.save_settings(c, "human:ana", paused=True)
     scheduler = Scheduler(store, api.app.state.execution)
     at = datetime.now(timezone.utc)
@@ -109,6 +125,7 @@ def test_a_plain_job_runs_on_its_saved_preset_not_hourly(api):
     def runs():
         with store.read() as c:
             return c.execute("SELECT count(*) FROM system_runs WHERE job='kpi_asks'").fetchone()[0]
+
     scheduler.tick(at)
     assert runs() == 1
     for hours in (1, 2, 3):
@@ -125,7 +142,7 @@ def test_a_restarted_scheduler_reads_the_last_run_and_does_not_run_early(api):
     store = api.app.state.store
     at = datetime.now(timezone.utc)
     Scheduler(store, api.app.state.execution).tick(at)
-    Scheduler(store, api.app.state.execution).tick(at + timedelta(minutes=30))     # a fresh process, half an hour on
+    Scheduler(store, api.app.state.execution).tick(at + timedelta(minutes=30))  # a fresh process, half an hour on
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='kpi_asks'").fetchone()[0] == 1
 
@@ -138,8 +155,9 @@ def test_daily_at_a_time_runs_once_a_day_after_that_time():
     assert not SR.due(cfg, morning, ran)
     assert SR.due(cfg, morning + timedelta(minutes=1), ran)
     assert not SR.due(cfg, morning + timedelta(hours=5), morning + timedelta(minutes=1, seconds=5))
-    assert SR.next_due(cfg, morning + timedelta(minutes=1, seconds=5), morning + timedelta(hours=5)) == \
-        datetime(2026, 10, 23, 9, 0, tzinfo=pt)
+    assert SR.next_due(cfg, morning + timedelta(minutes=1, seconds=5), morning + timedelta(hours=5)) == datetime(
+        2026, 10, 23, 9, 0, tzinfo=pt
+    )
 
 
 def test_three_daily_presets_anchor_to_the_next_company_time():
@@ -154,12 +172,16 @@ def test_three_daily_presets_anchor_to_the_next_company_time():
 
 def test_the_old_roundup_timer_stays_off_even_with_its_saved_switch_on(api, monkeypatch):
     from backend import maintenance, task_roundup
+
     sent = []
     monkeypatch.setattr(task_roundup, "discover", lambda c, at: sent.append(at) or [])
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
-                  "value=excluded.value", (json.dumps({"task_roundup": {"on": True, "preset": "three_daily"}}),))
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('system_routines',?) ON CONFLICT(key) DO UPDATE SET "
+            "value=excluded.value",
+            (json.dumps({"task_roundup": {"on": True, "preset": "three_daily"}}),),
+        )
         maintenance.save_settings(c, H.human_actor("ana"), paused=True)
     pt = SR.zone()
     scheduler = Scheduler(store, api.app.state.execution)
@@ -176,8 +198,11 @@ def test_the_old_roundup_timer_stays_off_even_with_its_saved_switch_on(api, monk
 
 def test_the_retired_roundup_control_redirects_run_now_to_find_stuck_and_keeps_its_switch(api, monkeypatch):
     from backend import maintenance
+
     store = api.app.state.store
-    monkeypatch.setattr(maintenance, "_start", lambda s, a, run_id, only, wait: maintenance._execute(s, a, run_id, only))
+    monkeypatch.setattr(
+        maintenance, "_start", lambda s, a, run_id, only, wait: maintenance._execute(s, a, run_id, only)
+    )
     assert "task_roundup" not in rows(api)
     put(api, "system-routines/task_roundup", {"on": False}, expected=404)
     put(api, "system-routines/task_roundup", {"preset": "daily"}, expected=404)
@@ -215,7 +240,7 @@ def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows
             row = H.task_create(c, "human:ana", f"Old export task {n}", "x", "bot:ops")
             when = H.shift(H.now(), days=-10)
             c.execute("UPDATE tasks SET status='open',updated_at=?,created_at=? WHERE id=?", (when, when, row["id"]))
-        stale_review._set_watermark(c, H.now())          # a pass just ran: Run now runs anyway
+        stale_review._set_watermark(c, H.now())  # a pass just ran: Run now runs anyway
 
     def run_once():
         before = (rows(api)["stale_review"]["last"] or {}).get("started_at")
@@ -226,17 +251,19 @@ def test_run_now_on_stale_review_makes_at_most_30_decide_calls_and_the_row_shows
                 return last
             time.sleep(0.05)
         raise AssertionError("the run never finished")
+
     last = run_once()
     assert len(model.calls) == stale_review.CALLS_PER_HOUR == 30, "the hourly cap bites a manual run too"
     assert last["ok"] and "checked" in last["result"], last
-    run_once()                                           # a second Run now in the same hour gets what is left: none
+    run_once()  # a second Run now in the same hour gets what is left: none
     assert len(model.calls) == 30
 
 
 def test_run_now_on_a_plain_job_lands_its_result_on_the_row_and_is_refused_while_off(api):
     reply = post(api, "system-routines/ask_deadlines/run", {}, token="ben-test")
     assert reply["running"] is False
-    assert reply["job"]["last"]["result"] == "No asks past their deadline"
+    assert reply["job"]["last_result"] == "No asks past their deadline", "a Heartbeat step: its step row"
+    assert reply["job"]["switch"] is True and reply["job"]["on"] is True
     put(api, "system-routines/kpi_asks", {"on": False}, token="ben-test")
     post(api, "system-routines/kpi_asks/run", {}, token="ben-test", expected=409)
     post(api, "system-routines/topic_fresh/run", {}, token="ben-test", expected=422)
@@ -245,12 +272,12 @@ def test_run_now_on_a_plain_job_lands_its_result_on_the_row_and_is_refused_while
 def test_moved_switches_keep_their_values_and_write_the_same_team_rules(api, monkeypatch):
     store = api.app.state.store
     jobs = rows(api)
-    assert jobs["stale_review"]["on"] is False and jobs["topic_fresh"]["on"] is False   # off by default elsewhere
-    monkeypatch.setenv("TICO_STALE_REVIEW", "1")                                       # Tico Team's own server
+    assert jobs["stale_review"]["on"] is False and jobs["topic_fresh"]["on"] is False  # off by default elsewhere
+    monkeypatch.setenv("TICO_STALE_REVIEW", "1")  # Tico Team's own server
     assert rows(api)["stale_review"]["on"] is True
     monkeypatch.delenv("TICO_STALE_REVIEW")
     with store.transaction() as c:
-        team_rules.save(c, "human:ana", {"topic_fresh": True})                          # set in General > Team before
+        team_rules.save(c, "human:ana", {"topic_fresh": True})  # set in General > Team before
     assert rows(api)["topic_fresh"]["on"] is True
     assert put(api, "system-routines/stale_review", {"on": True}, token="ben-test")["job"]["on"] is True
     assert put(api, "system-routines/topic_fresh", {"on": False}, token="ben-test")["job"]["on"] is False
@@ -264,22 +291,32 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     store = api.app.state.store
     with store.transaction() as c:
         row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
-        roster = {**(json.loads(row[0]) if row else {}), "org_groups": {
-            "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"}, "finance": {"name": "Finance"},
-            "web": {"name": "Web", "parent": "engineering"}}}
-        c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
-                  "value=excluded.value", (json.dumps(roster),))
+        roster = {
+            **(json.loads(row[0]) if row else {}),
+            "org_groups": {
+                "engineering": {"name": "Engineering"},
+                "marketing": {"name": "Marketing"},
+                "finance": {"name": "Finance"},
+                "web": {"name": "Web", "parent": "engineering"},
+            },
+        }
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps(roster),),
+        )
     data = get(api, "system-routines")
     assert {"Engineering", "Marketing"} <= set(data["departments"])
     assert "Web" not in data["departments"], "only fixed departments, never arbitrary subgroups"
     for job in data["jobs"]:
         assert job["when"] and job["then"], job["key"]
-        books = job["key"].startswith("bookkeeper_")
-        assert job["department"]["name"] == ("Finance" if books else "Engineering") and job["department"]["in_chart"], job["key"]
+        books = getattr(SR.BY_KEY.get(job["key"]), "department", "") == SR.FINANCE
+        assert job["department"]["name"] == ("Finance" if books else "Engineering") and job["department"]["in_chart"], (
+            job["key"]
+        )
     jobs = {j["key"]: j for j in data["jobs"]}
     assert jobs["stale_review"]["when"] == ["every hour"]
     assert jobs["stale_review"]["then"][0] == "check stale tickets"
     assert jobs["topic_fresh"]["when"] == ["a message in a direct chat changes the topic"]
     done = {k for k, j in jobs.items() if "done" in j["search"]}
-    assert {"stale_review", "approval_expiry"} <= done
-    assert "close" in jobs["stale_review"]["search"] and "remind" in jobs["due_reminders"]["search"]
+    assert "stale_review" in done
+    assert "close" in jobs["stale_review"]["search"] and "remind" in jobs["heartbeat"]["search"]

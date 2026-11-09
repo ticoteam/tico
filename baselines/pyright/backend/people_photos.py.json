@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/people_photos.py": [
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 26,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportMissingImports",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 38,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

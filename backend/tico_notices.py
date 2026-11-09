@@ -16,21 +16,22 @@ The trigger `_tico` has no address a sender can use: its stored secret hash is r
 `triggers.receive` refuses anything but the relay. Only the relay HQ lists with `system: true` (`trigger_relays`,
 recorded from that list, never from a delivery) may feed it, so another relay naming `_tico` is ignored.
 """
+
 import json
 import re
 import secrets
 
 from . import hubdb as H
 
-ID = "_tico"                     # the built-in trigger, its event is `webhook._tico`; the underscore is not a valid
-                                 # trigger id (triggers.ID), so nobody can make one that collides
+ID = "_tico"  # the built-in trigger, its event is `webhook._tico`; the underscore is not a valid
+# trigger id (triggers.ID), so nobody can make one that collides
 NAME = "Tico Team"
 EVENT = "tico.notice"
 KINDS = ("info", "security", "billing")
-RULE_PREFIX = "tico-notice-"     # the built-in rows; rules.delete keeps them
-RULE_POSITION = 90_000           # after any owner rule: a new team rule goes after the last position below this
+RULE_PREFIX = "tico-notice-"  # the built-in rows; rules.delete keeps them
+RULE_POSITION = 90_000  # after any owner rule: a new team rule goes after the last position below this
 BOTOPS = "botops"
-SHOWN_DAYS = 14                  # a relayed notice stays in the banner this long
+SHOWN_DAYS = 14  # a relayed notice stays in the banner this long
 SHOWN = 5
 KEEP_DAYS = 90
 LISTED = 50
@@ -48,17 +49,33 @@ def ensure(c, owner=None):
     trigger and all rules exist."""
     now = H.now()
     # The secret hash is random and never shown, so no address can reach this trigger; it is only fed by the relay.
-    c.execute("INSERT OR IGNORE INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,preset,type_from,unheard) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?)",
-              (ID, NAME, "webhook", secrets.token_hex(32), H.KEEPER, now, now, "none", "/kind", "log"))
+    c.execute(
+        "INSERT OR IGNORE INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,preset,type_from,unheard) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (ID, NAME, "webhook", secrets.token_hex(32), H.KEEPER, now, now, "none", "/kind", "log"),
+    )
     c.execute("UPDATE triggers SET deleted_at=NULL WHERE id=? AND deleted_at IS NOT NULL", (ID,))
     if not owner:
         return False
     for row in RULES:
-        c.execute("INSERT OR IGNORE INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
-                  "position,note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
-                  (row["id"], "team", "", EVENT, json.dumps(row["when"], sort_keys=True), row["then"],
-                   json.dumps(row["params"], sort_keys=True), RULE_POSITION + row["order"], row["note"], owner, now, now))
+        c.execute(
+            "INSERT OR IGNORE INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
+            "position,note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
+            (
+                row["id"],
+                "team",
+                "",
+                EVENT,
+                json.dumps(row["when"], sort_keys=True),
+                row["then"],
+                json.dumps(row["params"], sort_keys=True),
+                RULE_POSITION + row["order"],
+                row["note"],
+                owner,
+                now,
+                now,
+            ),
+        )
     # The owner can change; their built-in rows keep asking whoever is the owner now.
     c.execute("UPDATE rules SET created_by=? WHERE id LIKE ? AND created_by<>?", (owner, RULE_PREFIX + "%", owner))
     return True
@@ -66,12 +83,15 @@ def ensure(c, owner=None):
 
 def complete(c, owner):
     """Whether `ensure` has nothing left to do: a cheap read for the pull loop."""
-    if not c.execute("SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL AND created_by=?", (ID, H.KEEPER)).fetchone():
+    if not c.execute(
+        "SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL AND created_by=?", (ID, H.KEEPER)
+    ).fetchone():
         return False
     if not owner:
         return True
-    return c.execute("SELECT count(*) FROM rules WHERE id LIKE ? AND created_by=?",
-                     (RULE_PREFIX + "%", owner)).fetchone()[0] >= len(RULES)
+    return c.execute(
+        "SELECT count(*) FROM rules WHERE id LIKE ? AND created_by=?", (RULE_PREFIX + "%", owner)
+    ).fetchone()[0] >= len(RULES)
 
 
 def _row(name, when, then, params, note, order):
@@ -79,17 +99,42 @@ def _row(name, when, then, params, note, order):
 
 
 RULES = (
-    _row("security-wake", {"type": "security"}, "action",
-         {"action": "wake_bot", "bot": BOTOPS,
-          "text": "Tico Team sent a security notice: {{payload.body}} Check whether this server is affected and what to do."},
-         "A security notice from Tico Team wakes BotOps", 0),
-    _row("security-ask", {"type": "security"}, "ask", {"text": "Tico Team sent a security notice: {{payload.body}}"},
-         "A security notice from Tico Team asks the owner", 1),
-    _row("info-note", {"type": "info"}, "note",
-         {"bot": BOTOPS, "text": "Tico Team sent a notice: {{payload.body}}"},
-         "An info notice from Tico Team goes to BotOps as a note", 2),
-    _row("billing-ask", {"type": "billing"}, "ask", {"text": "Tico Team sent a billing notice: {{payload.body}}"},
-         "A billing notice from Tico Team asks the owner", 3),
+    _row(
+        "security-wake",
+        {"type": "security"},
+        "action",
+        {
+            "action": "wake_bot",
+            "bot": BOTOPS,
+            "text": "Tico Team sent a security notice: {{payload.body}} Check whether this server is affected and what to do.",
+        },
+        "A security notice from Tico Team wakes BotOps",
+        0,
+    ),
+    _row(
+        "security-ask",
+        {"type": "security"},
+        "ask",
+        {"text": "Tico Team sent a security notice: {{payload.body}}"},
+        "A security notice from Tico Team asks the owner",
+        1,
+    ),
+    _row(
+        "info-note",
+        {"type": "info"},
+        "note",
+        {"bot": BOTOPS, "text": "Tico Team sent a notice: {{payload.body}}"},
+        "An info notice from Tico Team goes to BotOps as a note",
+        2,
+    ),
+    _row(
+        "billing-ask",
+        {"type": "billing"},
+        "ask",
+        {"text": "Tico Team sent a billing notice: {{payload.body}}"},
+        "A billing notice from Tico Team asks the owner",
+        3,
+    ),
 )
 RULE_IDS = frozenset(r["id"] for r in RULES)
 
@@ -112,8 +157,11 @@ def record_relay(c, relay_id):
     if relay(c) == relay_id:
         return True
     c.execute("DELETE FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (ID,))
-    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
-              "VALUES(?,?,?,?,?,NULL,0)", (relay_id, ID, "", H.KEEPER, H.now()))
+    c.execute(
+        "INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
+        "VALUES(?,?,?,?,?,NULL,0)",
+        (relay_id, ID, "", H.KEEPER, H.now()),
+    )
     return True
 
 
@@ -135,8 +183,13 @@ def parse(body):
     ident = got.get("id")
     ident = str(ident)[:80] if isinstance(ident, (str, int)) and not isinstance(ident, bool) else ""
     kind = str(got.get("kind") or "info").strip().lower()
-    return {"id": ident, "kind": kind[:20], "body": got["body"].strip()[:500],
-            "url": _https(got.get("url")), "sent_at": str(got.get("sent_at") or "")[:40]}
+    return {
+        "id": ident,
+        "kind": kind[:20],
+        "body": got["body"].strip()[:500],
+        "url": _https(got.get("url")),
+        "sent_at": str(got.get("sent_at") or "")[:40],
+    }
 
 
 def _https(value):
@@ -151,39 +204,67 @@ def arrived(c, found, delivery, type_, via, body, payload, content, judge):
     if not notice:
         return []
     notice_id = notice["id"] or delivery
-    c.execute("INSERT OR IGNORE INTO tico_notices(notice_id,kind,body,url,sent_at,received_at,delivery) VALUES(?,?,?,?,?,?,?)",
-              (notice_id, notice["kind"], notice["body"], notice["url"], notice["sent_at"], H.now(), delivery))
+    c.execute(
+        "INSERT OR IGNORE INTO tico_notices(notice_id,kind,body,url,sent_at,received_at,delivery) VALUES(?,?,?,?,?,?,?)",
+        (notice_id, notice["kind"], notice["body"], notice["url"], notice["sent_at"], H.now(), delivery),
+    )
     c.execute("DELETE FROM tico_notices WHERE received_at<?", (H.shift(H.now(), days=-KEEP_DAYS),))
-    return judge(c, {"trigger": found["id"], "trigger_name": found["name"], "type": type_, "delivery": delivery,
-                     "via": via, "payload": payload, "content": content, "kind": notice["kind"],
-                     "notice_id": notice_id}, EVENT)
+    return judge(
+        c,
+        {
+            "trigger": found["id"],
+            "trigger_name": found["name"],
+            "type": type_,
+            "delivery": delivery,
+            "via": via,
+            "payload": payload,
+            "content": content,
+            "kind": notice["kind"],
+            "notice_id": notice_id,
+        },
+        EVENT,
+    )
 
 
 # ----------------------------------------------------------------------------- what people see
 def _view(row, source="relay"):
-    return {"id": row["notice_id"], "kind": row["kind"], "body": row["body"], "url": row["url"],
-            "sent_at": row["sent_at"], "received_at": row["received_at"], "source": source}
+    return {
+        "id": row["notice_id"],
+        "kind": row["kind"],
+        "body": row["body"],
+        "url": row["url"],
+        "sent_at": row["sent_at"],
+        "received_at": row["received_at"],
+        "source": source,
+    }
 
 
 def listing(c):
-    return [_view(r) for r in c.execute("SELECT * FROM tico_notices ORDER BY received_at DESC LIMIT ?", (LISTED,)).fetchall()]
+    return [
+        _view(r)
+        for r in c.execute("SELECT * FROM tico_notices ORDER BY received_at DESC LIMIT ?", (LISTED,)).fetchall()
+    ]
 
 
 def banner(c, message):
     """What the banner shows: recent relayed notices, then `message` (what `GET /v1/latest` has for this version).
     A relayed notice whose id `GET /v1/latest` also carries shows once, as the one from `/v1/latest`."""
     from . import releases
+
     extras = releases.CHECKER.extras
     latest = {str(n["id"]) for n in (extras or {}).get("notices", [])}
     if message:
         latest.add(str(message["id"]))
     since = H.shift(H.now(), days=-SHOWN_DAYS)
     out = []
-    for row in c.execute("SELECT * FROM tico_notices WHERE received_at>? ORDER BY received_at DESC LIMIT ?",
-                         (since, SHOWN + len(latest))).fetchall():
+    for row in c.execute(
+        "SELECT * FROM tico_notices WHERE received_at>? ORDER BY received_at DESC LIMIT ?", (since, SHOWN + len(latest))
+    ).fetchall():
         if row["notice_id"] in latest or len(out) >= SHOWN:
             continue
-        out.append({"id": row["notice_id"], "versions": "", "body": row["body"], "url": row["url"], "kind": row["kind"]})
+        out.append(
+            {"id": row["notice_id"], "versions": "", "body": row["body"], "url": row["url"], "kind": row["kind"]}
+        )
     return out + ([message] if message else [])
 
 
@@ -191,8 +272,17 @@ def notices(c, message):
     """The list `GET /api/v2/notices` gives: relayed notices, and the one from `/v1/latest` unless it also came by relay."""
     out = listing(c)
     if message and str(message["id"]) not in {n["id"] for n in out}:
-        out.append({"id": str(message["id"]), "kind": "", "body": message["body"], "url": message["url"], "sent_at": "",
-                    "received_at": "", "source": "latest"})
+        out.append(
+            {
+                "id": str(message["id"]),
+                "kind": "",
+                "body": message["body"],
+                "url": message["url"],
+                "sent_at": "",
+                "received_at": "",
+                "source": "latest",
+            }
+        )
     return out
 
 
@@ -207,5 +297,6 @@ def install(app, store):
         if request.state.identity.role not in ("human", "owner", "bot"):
             raise Problem("forbidden", "Only people and bots read notices", 403)
         from . import releases
+
         with store.read() as c:
             return {"notices": notices(c, releases.notice().get("message"))}

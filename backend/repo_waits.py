@@ -10,20 +10,21 @@ publishes the local history into it (runner_support/git_credentials.publish_hist
 Triggers: the GitHub App's installation webhooks (a permission accepted, repositories added), the
 owner's "Check again" in Tools > GitHub, and a scheduler tick every few minutes while anything waits.
 """
+
 import json
 import logging
 import threading
 import time
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 from . import hubdb as H
 from .store import Problem
 
 log = logging.getLogger("tico.repo_waits")
 
-KEY = "github-repo-waits"            # registry_metadata: {bot: {"repository", "task_id", "template", "since"}}
-OWNER_KEY = "github-app-owner"       # registry_metadata: {"login", "type"} of the account that owns the App
-CHECK_EVERY = 300                    # seconds between scheduler checks while a bot waits
+KEY = "github-repo-waits"  # registry_metadata: {bot: {"repository", "task_id", "template", "since"}}
+OWNER_KEY = "github-app-owner"  # the owner's account type once lived here; the App's row holds it now, so a disconnect clears it
+CHECK_EVERY = 300  # seconds between scheduler checks while a bot waits
 _lock = threading.Lock()
 _last = {"at": 0.0}
 
@@ -38,19 +39,14 @@ def _load(c, key):
 
 
 def _save(c, key, value):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (key, json.dumps(value, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, json.dumps(value, sort_keys=True)),
+    )
 
 
 def waits(c):
     return _load(c, KEY)
-
-
-def remember_owner(c, conversion):
-    """The account that owns the App, as GitHub's manifest conversion reports it: its settings pages differ
-    for an organization and a user."""
-    owner = conversion.get("owner") if isinstance(conversion.get("owner"), dict) else {}
-    _save(c, OWNER_KEY, {"login": str(owner.get("login") or ""), "type": str(owner.get("type") or "")})
 
 
 def forget(c):
@@ -58,13 +54,10 @@ def forget(c):
 
 
 def permissions_url(c, row):
-    """The App's permissions page on GitHub, where Administration is turned on. Tico registers apps through the
-    organization manifest flow, so an app with no recorded owner type is the organization's."""
-    owner = _load(c, OWNER_KEY)
-    slug = quote(str(row["slug"]), safe="")
-    if owner.get("type") == "User":
-        return f"https://github.com/settings/apps/{slug}/permissions"
-    return f"https://github.com/organizations/{quote(str(row['org']), safe='')}/settings/apps/{slug}/permissions"
+    """The App's permissions page on GitHub, where Administration is turned on (backend/github_app.py `links`)."""
+    from .github_app import links
+
+    return links(row)["permissions_url"]
 
 
 def create_url(org, name=""):
@@ -76,30 +69,51 @@ def create_url(org, name=""):
 
 
 def fixes(c, row, slug=""):
-    """The two ways out, as links: create the repository (prefilled), or let BotOps create repositories."""
-    name = H.bot_repository_name(c, slug) if slug else ""      # named for the bot, id or slug in
-    return {"repository": f"{row['org']}/{name}" if name else "",
-            "create_url": create_url(row["org"], name), "permissions_url": permissions_url(c, row)}
+    """The two ways out, as links: create the repository (prefilled), or let BotOps create repositories. A personal
+    account has only the first: Tico does not create repositories in one yet."""
+    from .github_app import account_kind
+
+    name = H.bot_repository_name(c, slug) if slug else ""  # named for the bot, id or slug in
+    return {
+        "repository": f"{row['org']}/{name}" if name else "",
+        "account_type": account_kind(row),
+        "create_url": create_url(row["org"], name),
+        "permissions_url": permissions_url(c, row),
+    }
 
 
 def _body(found):
     repository = found["repository"]
-    return (f"BotOps could not create the GitHub repository {repository}: the GitHub App was set up without "
-            "permission to create repositories. The bot is built and waits on its computer until one of these "
-            "is done. Either is enough:\n\n"
+    if found.get("account_type") == "User":
+        return (
+            f"BotOps could not create the GitHub repository {repository}: Tico does not create repositories in a personal "
+            "account yet. The bot is built and waits on its computer until the repository exists:\n\n"
             f"1. Create {repository} on GitHub as an empty private repository (no README, no licence): "
-            f"{found['create_url']}\n"
-            f"2. Let BotOps create repositories: turn on Administration (Read and write) on {found['permissions_url']}, "
-            "then accept the new permission for the organisation when GitHub asks.\n\n"
-            "Tico checks every few minutes and finishes on its own: it creates the repository if needed, the bot's "
-            "computer publishes its history, and this task closes. If the app is installed on selected "
-            "repositories only, also add the new repository to the installation.")
+            f"{found['create_url']}\n\n"
+            "Tico checks every few minutes and finishes on its own: the bot's computer publishes its history, and this "
+            "task closes. If the app is installed on selected repositories only, also add the new repository to the "
+            "installation."
+        )
+    return (
+        f"BotOps could not create the GitHub repository {repository}: the GitHub App was set up without "
+        "permission to create repositories. The bot is built and waits on its computer until one of these "
+        "is done. Either is enough:\n\n"
+        f"1. Create {repository} on GitHub as an empty private repository (no README, no licence): "
+        f"{found['create_url']}\n"
+        f"2. Let BotOps create repositories: turn on Administration (Read and write) on {found['permissions_url']}, "
+        "then accept the new permission for the organisation when GitHub asks.\n\n"
+        "Tico checks every few minutes and finishes on its own: it creates the repository if needed, the bot's "
+        "computer publishes its history, and this task closes. If the app is installed on selected "
+        "repositories only, also add the new repository to the installation."
+    )
 
 
 def raise_item(c, bot, row, owner_id, template=""):
     """One Needs-you task per waiting bot, for `owner_id` (the owner, else an Admin). A repeated attempt finds the
     open one and returns it. With nobody who can change the app, no task is filed and Health's alert stands."""
-    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)     # the waits are keyed by the bot's id, not the slug it was asked by
+    bot = (H.resolve_bot(c, bot) or {}).get(
+        "id", bot
+    )  # the waits are keyed by the bot's id, not the slug it was asked by
     found = fixes(c, row, bot)
     every = waits(c)
     current = every.get(bot) or {}
@@ -110,13 +124,24 @@ def raise_item(c, bot, row, owner_id, template=""):
     task_id = None
     if owner:
         try:
-            made = H.task_create(c, H.KEEPER, f"Create {found['repository']} on GitHub, or let BotOps create repositories",
-                                 _body(found), H.human_actor(owner), lint=False)
+            made = H.task_create(
+                c,
+                H.KEEPER,
+                f"Create {found['repository']} on GitHub"
+                + ("" if found["account_type"] == "User" else ", or let BotOps create repositories"),
+                _body(found),
+                H.human_actor(owner),
+                lint=False,
+            )
             task_id = made["id"]
         except H.Refused:
             log.warning("Could not file the Needs-you task for %s's repository", bot)
-    every[bot] = {"repository": found["repository"], "task_id": task_id, "template": template or "",
-                  "since": current.get("since") or H.now()}
+    every[bot] = {
+        "repository": found["repository"],
+        "task_id": task_id,
+        "template": template or "",
+        "since": current.get("since") or H.now(),
+    }
     _save(c, KEY, every)
     H.event(c, H.KEEPER, "github.repo_waiting", bot, {"repository": found["repository"], "task": task_id})
     return {**found, "task_id": task_id, "created": True}
@@ -186,8 +211,13 @@ def _resume_one(service, row, allowed, bot, wait):
             service.create_repo(bot, template, empty=not template)
             how = f"BotOps created {repository}; the bot's computer publishes its history on its next run."
             with service.store.transaction() as c:
-                H.event(c, H.KEEPER, "github.repo_created", repository,
-                        {"template": template, "resumed": True} if template else {"empty": True, "resumed": True})
+                H.event(
+                    c,
+                    H.KEEPER,
+                    "github.repo_created",
+                    repository,
+                    {"template": template, "resumed": True} if template else {"empty": True, "resumed": True},
+                )
         except Problem as problem:
             if problem.code == "github_repo_exists":
                 how = f"{repository} exists on GitHub now; the bot's computer publishes its history on its next run."

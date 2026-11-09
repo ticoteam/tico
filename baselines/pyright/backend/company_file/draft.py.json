@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/company_file/draft.py": [
+            {
+                "code": "reportUnusedExpression",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportUnusedExpression",
+                "range": {
+                    "startColumn": 4,
+                    "endColumn": 32,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

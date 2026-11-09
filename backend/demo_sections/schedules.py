@@ -22,8 +22,10 @@ from .automations_learnings import _hold_queued, _keep_focus, _release_held
 
 WINDOW = timedelta(days=7)
 START_LAG = timedelta(seconds=12)  # a run's start after its time: the pass fires it and the run's step starts its turn
-CLAIM_POLL = timedelta(seconds=5)   # the gap between two claim polls on the demo clock (a computer takes work after 120 s)
-CLAIM_TRIES = 60                    # polls a computer makes for a bot's job before it gives up
+CLAIM_POLL = timedelta(
+    seconds=5
+)  # the gap between two claim polls on the demo clock (a computer takes work after 120 s)
+CLAIM_TRIES = 60  # polls a computer makes for a bot's job before it gives up
 # Occurrences this close to the build's now are not played: their runs (a few minutes each, one after another) would
 # finish after now (the three at 9:00 Los Angeles on a weekday take up to 25 minutes). Their schedule's next time is
 # still its first one after now.
@@ -31,18 +33,26 @@ SETTLE = timedelta(hours=1)
 
 # Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian and BotOps bots.
 EXTRA_SUMMARIES = {
-    "goal-manager:kpi-pass": ("Checked forty goals; the Q4 bookings goal moved to amber.",
-                              "All forty goal colours unchanged.",
-                              "Checked forty goals; two need an update from their owner."),
-    "librarian:curate-the-market": ("Curated four market items; one went to the weekly delta.",
-                                    "No new market items; yesterday's list stands.",
-                                    "Curated six items for the weekly delta; two were duplicates."),
-    "librarian:refresh-the-map": ("Refreshed the docs map: 214 pages, three moved.",
-                                  "Docs map unchanged; no pages moved.",
-                                  "Refreshed the docs map; two broken links fixed."),
-    "botops:task-sweep": ("Swept every bot: two stuck tasks handed to their owners.",
-                          "No stuck tasks on either computer.",
-                          "One task is waiting on a login; flagged to Ben."),
+    "goal-manager:kpi-pass": (
+        "Checked forty goals; the Q4 bookings goal moved to amber.",
+        "All forty goal colours unchanged.",
+        "Checked forty goals; two need an update from their owner.",
+    ),
+    "librarian:curate-the-market": (
+        "Curated four market items; one went to the weekly delta.",
+        "No new market items; yesterday's list stands.",
+        "Curated six items for the weekly delta; two were duplicates.",
+    ),
+    "librarian:refresh-the-map": (
+        "Refreshed the docs map: 214 pages, three moved.",
+        "Docs map unchanged; no pages moved.",
+        "Refreshed the docs map; two broken links fixed.",
+    ),
+    "botops:task-sweep": (
+        "Swept every bot: two stuck tasks handed to their owners.",
+        "No stuck tasks on either computer.",
+        "One task is waiting on a login; flagged to Ben.",
+    ),
 }
 SUMMARIES = {f"{bot}:{key}": quiet for bot, key, _title, _cron, _text, quiet in D.ROUTINES} | EXTRA_SUMMARIES
 
@@ -105,10 +115,13 @@ def _pending_schedules(c, start):
     """The enabled schedules that have no run since the window started. The nightly and the weekly numbers keep
     their own runs, so they are left alone."""
     rows = []
-    for row in c.execute("SELECT id, flow FROM automations WHERE trigger_type='schedule' AND enabled=1 "
-                         "AND deleted_at IS NULL ORDER BY id").fetchall():
-        if c.execute("SELECT 1 FROM automation_runs WHERE automation_id=? AND started_at>=? LIMIT 1",
-                     (row["id"], _stamp(start))).fetchone():
+    for row in c.execute(
+        "SELECT id, flow FROM automations WHERE trigger_type='schedule' AND enabled=1 "
+        "AND deleted_at IS NULL ORDER BY id"
+    ).fetchall():
+        if c.execute(
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND started_at>=? LIMIT 1", (row["id"], _stamp(start))
+        ).fetchone():
             continue
         flow = json.loads(row["flow"])
         rows.append({"id": row["id"], "flow": flow, "trigger": flow["trigger"]})
@@ -162,24 +175,35 @@ def _pass(c, store, due, ids):
         row = c.execute("SELECT * FROM automations WHERE id=? AND deleted_at IS NULL AND enabled=1", (aid,)).fetchone()
         trigger = automations.flow_of(row)["trigger"]
         zone = trigger.get("tz") or "UTC"
-        if why := (cloud_access.routines_paused(c) or automations._bot_away(c, row)
-                   or automations._no_input(c, row, settings, due, zone)):
+        if why := (
+            cloud_access.routines_paused(c)
+            or automations._bot_away(c, row)
+            or automations._no_input(c, row, settings, due, zone)
+        ):
             automations._count(c, aid, "dropped")
             H.event(c, H.KEEPER, "automation.skipped", aid, {"at": stamp, "reason": why})
         else:
-            automations.fire(c, "schedule", {"schedule": {"at": stamp, "cron": trigger["cron"], "tz": zone}},
-                             f"schedule:{stamp}", only=aid)
-        c.execute("UPDATE automations SET next_due_at=? WHERE id=?",
-                  (_stamp(next_due(trigger["cron"], due, zone)), aid))
+            automations.fire(
+                c,
+                "schedule",
+                {"schedule": {"at": stamp, "cron": trigger["cron"], "tz": zone}},
+                f"schedule:{stamp}",
+                only=aid,
+            )
+        c.execute(
+            "UPDATE automations SET next_due_at=? WHERE id=?", (_stamp(next_due(trigger["cron"], due, zone)), aid)
+        )
 
 
 def _runs_at(b, due, ids):
     """The runs the scheduler fired at `due` for the schedules `ids` (their trigger is the schedule's time): run id ->
     automation id. Another run at the same time (a routine's run the growth section wrote) is not one of them."""
     with b.store.read() as c:
-        rows = c.execute(f"SELECT id, automation_id FROM automation_runs WHERE trigger_ref=? "
-                         f"AND automation_id IN ({','.join('?' * len(ids))})",
-                         (f"schedule:{_stamp(due)}", *ids)).fetchall()
+        rows = c.execute(
+            f"SELECT id, automation_id FROM automation_runs WHERE trigger_ref=? "
+            f"AND automation_id IN ({','.join('?' * len(ids))})",
+            (f"schedule:{_stamp(due)}", *ids),
+        ).fetchall()
     return {row["id"]: row["automation_id"] for row in rows}
 
 
@@ -205,8 +229,11 @@ def _work(b, runs, occurrences):
         # Every run of a routine is a task, and the bot closes it when it is done; until then the schedule absorbs
         # its next occurrence (automations._absorbed), so the bot closes it with its answer as its note.
         if task := (claim.get("task") or {}).get("id"):
-            b.write(lambda c, slug=slug, task=task, note=body["text"]:
-                    H.task_update(c, H.bot_actor(slug), task, status="done", note=note))
+            b.write(
+                lambda c, slug=slug, task=task, note=body["text"]: H.task_update(
+                    c, H.bot_actor(slug), task, status="done", note=note
+                )
+            )
         _keep_focus(b, slug)
 
 
@@ -243,7 +270,16 @@ def _turn(flow, slug, index):
     cached = uncached * 2 // 3
     output = (900 + ((index * 3 + len(source)) % 5) * 400) * D.RUN_REQUESTS
     minutes = 2 + (index + len(source)) % 5
-    body = {"outcome": "completed", "text": text, "last_seq": 0,
-            "usage": {"input_tokens": uncached, "cached_tokens": cached, "output_tokens": output,
-                      "model": model, "billing": billing}}
+    body = {
+        "outcome": "completed",
+        "text": text,
+        "last_seq": 0,
+        "usage": {
+            "input_tokens": uncached,
+            "cached_tokens": cached,
+            "output_tokens": output,
+            "model": model,
+            "billing": billing,
+        },
+    }
     return minutes, body

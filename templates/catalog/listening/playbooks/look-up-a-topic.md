@@ -14,7 +14,7 @@ Done when: the note is on the task with the answer first, the coverage line (ret
     hub task show <id>
 
 Name the topic, the window (default: the last 14 days) and who will read the answer. Ask once with
-`hub task ask <id>` if the topic is ambiguous, and stop.
+`hub task question "<question>" --on <person> --parent <id>` if the topic is ambiguous, and stop.
 
 ## 2. Query the sources
 

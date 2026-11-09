@@ -344,6 +344,15 @@ async function hostedHandshake(browser, current) {
     await loaded;
     assert.equal(await page.evaluate(() => NATIVE_VISUAL_FILES), FILES);
     assert.ok(reads.length > 0);
+    // A pinned page's frame carries its view marker only to a shell that follows it (visualView); an older shell
+    // would cancel the frame and open it in the browser, so it gets the bare address.
+    assert.equal(await page.evaluate(() => pageViewSrc('/visuals/x', 'small')), '/visuals/x#tico-view=card&tico-size=small');
+    assert.equal(await page.evaluate(() => pageViewSrc('/visuals/x', 'full')), '/visuals/x#tico-view=full&tico-size=full');
+    assert.equal(await page.evaluate(() => {
+      const all = window.ticoNativeFeatures;
+      window.ticoNativeFeatures = all.filter(f => f !== 'visualView');
+      try { return pageViewSrc('/visuals/x', 'small'); } finally { window.ticoNativeFeatures = all; }
+    }), '/visuals/x', 'an older shell gets no marker');
   } else {
     await page.locator('figure.vcard[data-state="open"]').waitFor();
     assert.equal(await page.locator('iframe.vcard-frame').count(), 0);

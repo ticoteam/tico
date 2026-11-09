@@ -5,6 +5,7 @@ for each user line on stdin, the way runner-rs/src/hosts/antigravity.rs reads it
 deltas, then a `result` whose usage is the process's running total. Every turn is appended to $FAKE_LOG as one JSON
 line (argv, pid, the prompt, the granted variables and the token HUB_TOKEN's file held at that moment). A prompt
 containing HANG streams one delta and answers nothing more, once per $FAKE_LOG; the process exits when stdin closes."""
+
 import json
 import os
 import sys
@@ -27,7 +28,7 @@ def lease_token():
     value = os.environ.get("HUB_TOKEN") or ""
     if not value.startswith("tico-file:"):
         return value
-    with open(value[len("tico-file:"):]) as token:
+    with open(value[len("tico-file:") :]) as token:
         return token.read()
 
 
@@ -44,15 +45,25 @@ def main():
         except (ValueError, KeyError, TypeError):
             continue
         turns += 1
-        record({"harness": "antigravity", "argv": args, "pid": os.getpid(), "prompt": text, "token": lease_token(),
-                "env": {k: os.environ.get(k) for k in GRANTED}})
+        record(
+            {
+                "harness": "antigravity",
+                "argv": args,
+                "pid": os.getpid(),
+                "prompt": text,
+                "token": lease_token(),
+                "env": {k: os.environ.get(k) for k in GRANTED},
+            }
+        )
         send({"event": "init", "conversation_id": conversation})
         marker = os.environ["FAKE_LOG"] + ".hung"
         if "HANG" in text and not os.path.exists(marker):
             open(marker, "w").close()
-            send({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Working on it"}})
+            send(
+                {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Working on it"}}
+            )
             continue
-        if "PUBLISH" in text:                    # a deliverable the runner publishes as a Tico file
+        if "PUBLISH" in text:  # a deliverable the runner publishes as a Tico file
             os.makedirs("reports", exist_ok=True)
             with open(os.path.join("reports", "acme.md"), "w") as report:
                 report.write("# Acme report\n")
@@ -61,8 +72,17 @@ def main():
             reply += " The key is " + os.environ["ACME_API_KEY"]
         for chunk in (reply[:5], reply[5:]):
             send({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": chunk}})
-        send({"event": "result", "result": {"status": "SUCCESS", "response": reply, "conversation_id": conversation,
-              "usage": {"input_tokens": 10 * turns, "output_tokens": 2 * turns, "cache_read_tokens": 3 * turns}}})
+        send(
+            {
+                "event": "result",
+                "result": {
+                    "status": "SUCCESS",
+                    "response": reply,
+                    "conversation_id": conversation,
+                    "usage": {"input_tokens": 10 * turns, "output_tokens": 2 * turns, "cache_read_tokens": 3 * turns},
+                },
+            }
+        )
 
 
 if __name__ == "__main__":

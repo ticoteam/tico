@@ -7,9 +7,25 @@ related news, and its sections. The owner writes and
 publishes it; the [Strategy Bot](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
 **Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
 
-**Market views.** The Market tab shows the market in views: Players (the graph), Spend, Buyers, Value chain and
-Size vs growth. Spend is the default once a segment is sized. How the market is defined, cut into segments and sized
-is in [Librarian](librarian.md#market-spend).
+**The Market page.** The Market tab is one page that reads top to bottom. Under the market's name are three tiles:
+yearly spend (with its growth, and **Sure** or **Estimated**), the fastest-growing segment, and our share of the
+spend. Then five questions, each with a one-line answer the Librarian writes with the briefing
+([Market briefing](market-briefing.md)), and each left out when there is nothing to show:
+
+- **What changed?** The latest briefing's items, with their kind and the bets they touch. **Read** opens the briefing.
+- **Where is the money going?** The treemap of spend by offering or by buyer, beside size against growth. A box or a dot
+  opens its arithmetic. Before anything is sized, the owner describes the market in a sentence here and the Librarian
+  sizes it.
+- **Who are we up against?** The players in the segments with what they sell, their revenue and share where known, and
+  the briefing's last word on each. A row opens the player's note.
+- **How does it reach buyers?** The value chain, with spend or revenue on each node where known.
+- **What are buyers saying?** Listening's posts a day and the newest posts, for those who can read them. Owners and
+  admins see **Settings** for where posts go.
+
+**Open map** opens the graph and its notes (`#/strategy/market/map`); a note link opens the map at that note. The old
+view addresses (`#/strategy/market/briefing`, `/spend`, `/buyers`, `/growth`, `/value-chain`, `/listening`) open the page
+at their question, and `/players` opens the map. How the market is defined, cut into segments and sized is in
+[Librarian](librarian.md#market-spend).
 
 Three activities make one loop:
 
@@ -36,7 +52,7 @@ removes a thing.
   Library Files) and examples. It is versioned on its own and published by the owner; growth-facing bots get it in their
   run context. `hub brand check` runs the cheap checks on a draft (avoided words, naming, `claims.never` phrases) and runs
   no model, so a bot checks claims missing from the allowed list itself.
-- **Growth.** A place of cards (`#/growth`, under Strategy in the sidebar): each channel's spend, customers and
+- **Growth.** A place of cards (`#/growth`, under Company in the sidebar): each channel's spend, customers and
   retention by month, the economics, and **Sources**, where each number comes from, linked from the page. Marketing tasks are on the Tasks page, type Marketing.
   The KPI views (Tree, Loops, Journey) are on the Goals tab. See [Growth](growth.md).
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the

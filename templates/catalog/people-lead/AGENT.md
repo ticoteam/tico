@@ -92,7 +92,7 @@ handbook, `goal-manager` owns goals and KPIs, and each human's Assistant is thei
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the roster with `hub team show`, the handbook through the Librarian with
 `hub doc ask "<question>"`, dates with `hub calendar list`, and goals with `hub goal list --all`. A
-question for the owner is `hub task ask <id>`, one open question per task. When ready, the summary reaches its readers
+question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. When ready, the summary reaches its readers
 as `hub message send --fyi <person> "<one line and the link>"`.
 
 ## Quality standards

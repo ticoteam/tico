@@ -34,9 +34,42 @@ APPLIED_WAVES = (1,)
 
 # Names SQLite refuses as bare identifiers in ordinary statements (tested: to, when, values, order, group, limit),
 # plus keywords that parse but read as SQL (end, start, with): an M2 result here takes the override instead.
-SQL_UNSAFE = {"to", "when", "values", "order", "group", "limit", "end", "start", "with", "from", "select", "where",
-              "table", "index", "default", "check", "references", "primary", "unique", "null", "not", "and", "or",
-              "in", "is", "as", "on", "by", "case", "then", "else", "join", "set", "into"}
+SQL_UNSAFE = {
+    "to",
+    "when",
+    "values",
+    "order",
+    "group",
+    "limit",
+    "end",
+    "start",
+    "with",
+    "from",
+    "select",
+    "where",
+    "table",
+    "index",
+    "default",
+    "check",
+    "references",
+    "primary",
+    "unique",
+    "null",
+    "not",
+    "and",
+    "or",
+    "in",
+    "is",
+    "as",
+    "on",
+    "by",
+    "case",
+    "then",
+    "else",
+    "join",
+    "set",
+    "into",
+}
 
 # M2 results that need a different name: (table, old) -> (new, why). CHECK marks a name the owner should confirm.
 OVERRIDES = {
@@ -115,15 +148,46 @@ M3_UNIFORM = {
 # M3, per table (bare ts/at/since/until/seen/...): judgment per table, all CHECK until reviewed. Wave 2b.
 M3_PER_TABLE = {
     # events, logs and samples: the row's own time -> created_at
-    **{(t, "ts"): ("created_at", "row time") for t in (
-        "events", "task_events", "goal_events", "market_events", "company_events", "deltas", "refusals",
-        "goal_checkins", "support_access_log", "flight_requests", "flight_slow", "flight_process", "flight_sql",
-        "flight_db", "flight_events", "runner_load_samples", "perf_points", "perf_usage")},
+    **{
+        (t, "ts"): ("created_at", "row time")
+        for t in (
+            "events",
+            "task_events",
+            "goal_events",
+            "market_events",
+            "company_events",
+            "deltas",
+            "refusals",
+            "goal_checkins",
+            "support_access_log",
+            "flight_requests",
+            "flight_slow",
+            "flight_process",
+            "flight_sql",
+            "flight_db",
+            "flight_events",
+            "runner_load_samples",
+            "perf_points",
+            "perf_usage",
+        )
+    },
     ("kpi_readings", "ts"): ("measured_at", "the reading's time (cleanup-spec)"),
     ("kpi_definitions", "ts"): ("created_at", "when this definition version was written"),
-    **{(t, "at"): ("created_at", "row time") for t in (
-        "audit_log", "automation_effects", "automation_holds", "automation_turn_answers", "automation_versions",
-        "changes", "google_signin_refusals", "market_turn_sources", "strategy_events", "webhook_attempts")},
+    **{
+        (t, "at"): ("created_at", "row time")
+        for t in (
+            "audit_log",
+            "automation_effects",
+            "automation_holds",
+            "automation_turn_answers",
+            "automation_versions",
+            "changes",
+            "google_signin_refusals",
+            "market_turn_sources",
+            "strategy_events",
+            "webhook_attempts",
+        )
+    },
     ("credential_uses", "at"): ("used_at", "newest use, not row creation"),
     ("mail_reads", "at"): ("read_at", ""),
     ("milestones", "at"): ("reached_at", ""),
@@ -152,23 +216,53 @@ M3_PER_TABLE = {
 # counters, and booleans that are fine Rails names (enabled, archived, private, public).
 
 # Wave 3 (proposed, not applied): actor columns in the stable SQL set, plus operator/grp/dept.
-STABLE = ("tasks", "messages", "conversations", "bots", "humans", "principals", "jobs", "attempts", "automations",
-          "automation_runs", "goals", "goal_kpis", "kpis", "kpi_readings", "bot_files", "pages", "meetings",
-          "approvals", "cards", "docs", "task_types", "task_steps", "runners")
+STABLE = (
+    "tasks",
+    "messages",
+    "conversations",
+    "bots",
+    "humans",
+    "principals",
+    "jobs",
+    "attempts",
+    "automations",
+    "automation_runs",
+    "goals",
+    "goal_kpis",
+    "kpis",
+    "kpi_readings",
+    "bot_files",
+    "pages",
+    "meetings",
+    "approvals",
+    "cards",
+    "docs",
+    "task_types",
+    "task_steps",
+    "runners",
+)
 ACTOR_NAMES = {"owner": "owner_id", "requester": "requester_id", "bot": "bot_id", "actor": "actor_id"}
-NOT_ACTOR_BY = {("tasks", "carried_by"): "the attempt id that carried the task, not an actor",
-                ("meetings", "owner"): "an email, not an actor; Release 2 names it",
-                ("meetings", "recorded_by"): "an email or a runner id, not an actor; Release 2 names it",
-                ("meetings", "uploaded_by"): "an email or a runner id, not an actor; Release 2 names it"}
+NOT_ACTOR_BY = {
+    ("tasks", "carried_by"): "the attempt id that carried the task, not an actor",
+    ("meetings", "owner"): "an email, not an actor; Release 2 names it",
+    ("meetings", "recorded_by"): "an email or a runner id, not an actor; Release 2 names it",
+    ("meetings", "uploaded_by"): "an email or a runner id, not an actor; Release 2 names it",
+}
 # Named like a time, holds something else: left alone. task_reconnects.ended is how the card ended (fixed, canceled, retired);
 # turns.rotated is why the run left its session (a reason, "tokens" or "turns").
 M3_KEPT = {("task_reconnects", "ended"), ("turns", "rotated")}
 
 WAVE3_NOTES = {("pages", "replaced_by"): "holds the replacing page's file id, not an actor"}
 # Later renames of a column an applied wave already renamed: (table, name now) -> (new, wave, why).
-FOLLOW_UPS = {("automation_runs", "state"): ("saved_state", "3", "the run's saved engine state (JSON); `state` is kept for lifecycle"),
-              ("notes", "cancelled_at"): ("canceled_at", "4", "one spelling: canceled"),
-              ("notes", "cancelled_by"): ("canceled_by", "4", "one spelling: canceled")}
+FOLLOW_UPS = {
+    ("automation_runs", "state"): (
+        "saved_state",
+        "3",
+        "the run's saved engine state (JSON); `state` is kept for lifecycle",
+    ),
+    ("notes", "cancelled_at"): ("canceled_at", "4", "one spelling: canceled"),
+    ("notes", "cancelled_by"): ("canceled_by", "4", "one spelling: canceled"),
+}
 # Wave 5 (migration 0034): a response's own role name for a column that still said its source.
 WAVE5 = {("goal_checkins", "source_actor"): ("sender_id", "the actor whose words the check-in is; the answer's sender")}
 WAVE3_SPECIAL = {
@@ -180,10 +274,19 @@ WAVE3_SPECIAL = {
     ("runners", "operator"): "owner_id",
     ("enrollments", "operator"): "owner_id",
 }
-API_FIELDS = {"attempt_id": "run_id", "attempt": "run", "from_actor_name": "sender_name",
-              "to_actor_name": "recipient_name", "operator_name": "owner_name", "source_actor_name": "sender_name",
-              "last_sync": "last_synced_at", "why_by": "why_by_id",
-              "ts": "created_at", "at": "created_at", "since": "changed_at"}
+API_FIELDS = {
+    "attempt_id": "run_id",
+    "attempt": "run",
+    "from_actor_name": "sender_name",
+    "to_actor_name": "recipient_name",
+    "operator_name": "owner_name",
+    "source_actor_name": "sender_name",
+    "last_sync": "last_synced_at",
+    "why_by": "why_by_id",
+    "ts": "created_at",
+    "at": "created_at",
+    "since": "changed_at",
+}
 # A renamed column's old name the API still says for something else (a hand-built key, a count, a table outside wave 3).
 API_KEPT = ["actor", "bot", "last_run", "next", "queued", "state", "status_by", "updated_by"]
 # Where one golden says a name differently from the rest (forms: e2e/renames.py).
@@ -196,6 +299,16 @@ GOLDEN_FIELDS = {
     "kpis": {"actor": "actor_id"},
     "pages": {"bot": "bot_id"},
     "task_detail": {"execution.bot": "bot_id"},
+}
+# Market tables that become the Directory's (track 1 of the Directory build): old name -> (new name, why). A table rename
+# has its own wave: backend/migrations/renames.py applies it only where a caller names that wave (the directory
+# migration), so the earlier column waves on a fresh database never rename a table an older migration still reads.
+TABLE_WAVE = "directory"
+TABLE_RENAMES = {
+    "market_entities": ("entities", "the Directory entity table; the market graph's nodes"),
+    "market_edges": ("entity_links", "the links between entities (a relation is a link_key)"),
+    "market_entity_keys": ("entity_identifiers", "names, domains and aliases an entity can be found by"),
+    "market_watches": ("entity_watches", "page watches on an entity"),
 }
 # Keys an answer gained: a conversation's owner_id now gets a display name, as every owner_id does.
 GOLDEN_ADDED = {"conversations": ["conversations.owner_name"], "messages": ["conversation.owner_name"]}
@@ -233,9 +346,18 @@ def _one_schema(sql_path):
     return tables, virtual
 
 
+def check_tables(tables):
+    """Every table rename names a table the pre-cleanup schema has and a name nothing else holds."""
+    for old, (new, _why) in TABLE_RENAMES.items():
+        if old not in tables:
+            raise SystemExit(f"table rename: {old} is not in the pre-cleanup schema")
+        if new in tables:
+            raise SystemExit(f"table rename: {new} already exists in the pre-cleanup schema")
+
+
 def build(tables, virtual):
-    columns = {}          # (table, old) -> new
-    notes = {}            # (table, old) -> comment
+    columns = {}  # (table, old) -> new
+    notes = {}  # (table, old) -> comment
     waves = {"1": [], "2": [], "2s": [], "2b": [], "3": [], "4": [], "5": []}
     collisions = []
 
@@ -324,27 +446,34 @@ def scopes(columns, waves, tables):
 
 
 def q(s):
-    return f'"{s}"' if any(ch in s for ch in ":#{}[],&*?|-<>=!%@`'\" ") or s in ("yes", "no", "on", "off", "null") \
-        else s
+    return (
+        f'"{s}"' if any(ch in s for ch in ":#{}[],&*?|-<>=!%@`'\" ") or s in ("yes", "no", "on", "off", "null") else s
+    )
 
 
 def render_yaml(columns, notes, waves, collisions, by_scope):
-    rules = {"1": "M2: every *_json column drops the suffix (stored encoding unchanged)",
-             "2": "M1 created/updated -> created_at/updated_at; M3 uniform bare time columns -> <verb>_at",
-             "2s": "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not "
-                   "applied: most sites cannot be told apart from counters, statuses and flags)",
-             "2b": "M3 per table: bare ts/at/since/until/seen -> named times (needs review, not applied)",
-             "3": "actor columns in the stable SQL set -> <role>_id; operator -> owner_id; grp -> group_id; "
-                  "dept -> department (needs review, not applied)",
-             "4": "one spelling: notes.cancelled_at and cancelled_by -> canceled_at and canceled_by (migration 0032)",
-             "5": "a response's role name: goal_checkins.source_actor -> sender_id (migration 0034)"}
+    rules = {
+        "1": "M2: every *_json column drops the suffix (stored encoding unchanged)",
+        "2": "M1 created/updated -> created_at/updated_at; M3 uniform bare time columns -> <verb>_at",
+        "2s": "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not "
+        "applied: most sites cannot be told apart from counters, statuses and flags)",
+        "2b": "M3 per table: bare ts/at/since/until/seen -> named times (needs review, not applied)",
+        "3": "actor columns in the stable SQL set -> <role>_id; operator -> owner_id; grp -> group_id; "
+        "dept -> department (needs review, not applied)",
+        "4": "one spelling: notes.cancelled_at and cancelled_by -> canceled_at and canceled_by (migration 0032)",
+        "5": "a response's role name: goal_checkins.source_actor -> sender_id (migration 0034)",
+    }
     lines = [
         "# Generated by scripts/cleanup/gen_map.py from backend/tests/fixtures/schema_pre_cleanup.sql and the rules",
         "# in cleanup-spec.md. Do not edit by hand: change the tables in gen_map.py and regenerate.",
         "# `# CHECK` marks a name the integration owner should confirm before the map is frozen.",
         f"base: {BASE}",
         f"applied_waves: [{', '.join(str(w) for w in APPLIED_WAVES)}]",
-        "tables: {}",
+        "tables:",
+    ]
+    for old, (new, why) in TABLE_RENAMES.items():
+        lines.append(f"  {old}: {{new: {new}, wave: {TABLE_WAVE}}}  # {why}")
+    lines += [
         "columns:",
     ]
     for (table, old), new in sorted(columns.items()):
@@ -354,8 +483,10 @@ def render_yaml(columns, notes, waves, collisions, by_scope):
     lines += [f"  {k}: {v}" for k, v in API_FIELDS.items()]
     lines.append(f"api_kept: [{', '.join(API_KEPT)}]")
     lines.append("golden_fields:")
-    lines += [f"  {name}: {{{', '.join(f'{q(k)}: {v}' for k, v in fields.items())}}}"
-              for name, fields in GOLDEN_FIELDS.items()]
+    lines += [
+        f"  {name}: {{{', '.join(f'{q(k)}: {v}' for k, v in fields.items())}}}"
+        for name, fields in GOLDEN_FIELDS.items()
+    ]
     lines.append("golden_added:")
     lines += [f"  {name}: [{', '.join(keys)}]" for name, keys in GOLDEN_ADDED.items()]
     lines.append("waves:")
@@ -379,16 +510,21 @@ def render_yaml(columns, notes, waves, collisions, by_scope):
 
 
 def render_data(columns, waves):
-    applied = [(t, o, columns[(t, o)], w) for w in waves for t, o in waves[w]
-               if w in {str(a) for a in APPLIED_WAVES}]
-    lines = ['"""Generated by scripts/cleanup/gen_map.py from scripts/cleanup/renames.yaml: do not edit.',
-             "",
-             "The column and table renames backend/migrations/renames.py applies at startup, as (table, old, new, wave).",
-             '"""',
-             "",
-             "TABLES = ()",
-             "",
-             "COLUMNS = ("]
+    applied = [(t, o, columns[(t, o)], w) for w in waves for t, o in waves[w] if w in {str(a) for a in APPLIED_WAVES}]
+    lines = [
+        '"""Generated by scripts/cleanup/gen_map.py from scripts/cleanup/renames.yaml: do not edit.',
+        "",
+        "The renames backend/migrations/renames.py applies: TABLES as (old, new, wave), COLUMNS as (table, old, new, wave).",
+        '"""',
+        "",
+        "TABLES = (",
+    ]
+    lines += [f"    ({old!r}, {new!r}, {TABLE_WAVE!r})," for old, (new, _why) in TABLE_RENAMES.items()]
+    lines += [
+        ")",
+        "",
+        "COLUMNS = (",
+    ]
     lines += [f"    ({t!r}, {o!r}, {n!r}, {w!r})," for t, o, n, w in sorted(applied)]
     lines += [")", ""]
     return "\n".join(lines)
@@ -398,6 +534,7 @@ def refresh_fixture():
     """Rebuild the fixture from the current tree (run it on main, before any rename)."""
     from backend.config import Settings
     from backend.store import Store
+
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "hub.sqlite"
         Store(Settings(db_path=db)).initialize()
@@ -408,7 +545,9 @@ def refresh_fixture():
     FIXTURE.write_text(
         "-- The schema and seed rows of a fresh database before the cleanup renames (backend/migrations/renames.py).\n"
         "-- backend/tests/test_schema_renames.py upgrades it; scripts/cleanup/gen_map.py reads the schema from it.\n"
-        + dump + f"\nPRAGMA user_version={version};\n")
+        + dump
+        + f"\nPRAGMA user_version={version};\n"
+    )
 
 
 def main():
@@ -427,10 +566,13 @@ def main():
         sys.path.insert(0, str(ROOT))
         refresh_fixture()
     tables, virtual = load_schema(FIXTURE)
+    check_tables(tables)
     columns, notes, waves, collisions = build(tables, virtual)
     by_scope = scopes(columns, waves, tables)
-    outputs = {YAML_OUT: render_yaml(columns, notes, waves, collisions, by_scope),
-               DATA_OUT: render_data(columns, waves)}
+    outputs = {
+        YAML_OUT: render_yaml(columns, notes, waves, collisions, by_scope),
+        DATA_OUT: render_data(columns, waves),
+    }
     stale = [p for p, text in outputs.items() if not p.exists() or p.read_text() != text]
     if args.check:
         for p in stale:

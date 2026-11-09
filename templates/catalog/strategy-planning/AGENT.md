@@ -73,7 +73,7 @@ Always:
 ## Talking to {{app_name}}
 Read, never guess: `hub goal list --all`, `hub goal show <id>`, `hub kpi show <kpi id>`, `hub update list
 --kind weekly`, `hub meeting search`, `hub doc search "<strategy>"`, `hub team show`. A question for the
-owner is `hub task ask <id>`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
+owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
 `chief-of-staff` with `hub task create --owner chief-of-staff` and do not chase it yourself.
 Investor numbers belong to `board-updates`; hand it the graded scorecard, not a copy.
 

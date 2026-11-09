@@ -35,7 +35,7 @@ async function phonePublish(browser) {
   publish.decision_owner = 'human:' + await page.evaluate(() => S.me.id);
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [publish]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   const row = page.locator('[data-need-card="approval:ap-pub"]');
   assert.equal(await row.locator('.tl-age').textContent(), '2h');
   await row.click();
@@ -141,7 +141,7 @@ async function phoneSupport(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [report]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   const row = page.locator('[data-need-card="approval:ap-sup"]');
   assert.match(await row.locator('.tl-title').textContent(), /^Support: Send this to Tico support\?$/);
   await row.click();
@@ -176,7 +176,7 @@ async function phoneRedesignKinds(browser) {
     ap('ap-lim', 'spend_limit', {bot: 'bot:engineer', daily_usd: 25, monthly_usd: 400})];
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-  await page.locator('#task-view [data-view="foryou"]').click();
+  await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
   const want = {'ap-cap': ['Task cap: Engineer → Support', ['From', 'To', 'Per day']], 'ap-lim': ['Spend limit: Engineer', ['For', 'Day', 'Month']]};
   assert.deepEqual(await page.locator('[data-need-card] .tl-title').allTextContents(), Object.values(want).map(([t]) => 'Analyst: ' + t),
     'a title that names it');
@@ -217,7 +217,7 @@ async function frozenEmailPreview(browser) {
       return route.fulfill({contentType:'application/json',body:'{}'});
     });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
     await page.locator('[data-need-card="approval:frozen-approval"]').click();
     const approve = page.locator('#need-card [data-dc="yes"]');
     assert.equal(await approve.isDisabled(), true);
@@ -259,7 +259,7 @@ async function frozenEmailPreview(browser) {
     });
     await page.route('**/api/v2/approvals/ap-1', route => { decided.push(route.request().postDataJSON()); return route.fulfill({contentType: 'application/json', body: '{}'}); });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
-    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
     // One line in the list; nothing unfolds there. A tap opens its card, a modal on a wide screen.
     const row = page.locator('[data-group="asks"] [data-need-card="approval:ap-1"]');
     assert.equal(await page.locator('#task-body details.req').count(), 0, 'no dropdown rows');

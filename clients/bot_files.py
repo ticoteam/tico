@@ -14,37 +14,91 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 MB = 1024 * 1024
-MAX_BYTES = 25 * MB                  # every kind but video and audio
-MEDIA_MAX_BYTES = 2048 * MB          # video and audio: the server's upload limit (TICO_UPLOAD_MAX_BYTES) by default
+MAX_BYTES = 25 * MB  # every kind but video and audio
+MEDIA_MAX_BYTES = 2048 * MB  # video and audio: the server's upload limit (TICO_UPLOAD_MAX_BYTES) by default
 MEDIA_KINDS = ("video", "audio")
 DEFAULT_FOLDERS = ("reports/", "artifacts/")
 
 TYPES = {
-    ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
-    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".ogg": "audio/ogg",
-    ".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".csv": "text/csv",
-    ".tsv": "text/tab-separated-values", ".json": "application/json", ".yaml": "text/yaml",
-    ".yml": "text/yaml", ".html": "text/html", ".htm": "text/html", ".pdf": "application/pdf",
-    ".rtf": "application/rtf", ".doc": "application/msword",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".json": "application/json",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".pdf": "application/pdf",
+    ".rtf": "application/rtf",
+    ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xls": "application/vnd.ms-excel",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".ppt": "application/vnd.ms-powerpoint",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ".odt": "application/vnd.oasis.opendocument.text", ".ods": "application/vnd.oasis.opendocument.spreadsheet",
-    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
-    ".svg": "image/svg+xml", ".m4v": "video/x-m4v", ".aac": "audio/aac",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".m4v": "video/x-m4v",
+    ".aac": "audio/aac",
 }
-KINDS = {".mp4": "video", ".webm": "video", ".mov": "video", ".mp3": "audio", ".wav": "audio", ".m4a": "audio", ".ogg": "audio",".md": "document", ".markdown": "document", ".txt": "document", ".pdf": "document", ".rtf": "document",
-         ".doc": "document", ".docx": "document", ".odt": "document", ".html": "document", ".htm": "document",
-         ".csv": "spreadsheet", ".tsv": "spreadsheet", ".xls": "spreadsheet", ".xlsx": "spreadsheet",
-         ".ods": "spreadsheet", ".json": "data", ".yaml": "data", ".yml": "data",
-         ".ppt": "slides", ".pptx": "slides", ".png": "image", ".jpg": "image", ".jpeg": "image",
-         ".gif": "image", ".webp": "image", ".svg": "image", ".m4v": "video", ".aac": "audio"}
+KINDS = {
+    ".mp4": "video",
+    ".webm": "video",
+    ".mov": "video",
+    ".mp3": "audio",
+    ".wav": "audio",
+    ".m4a": "audio",
+    ".ogg": "audio",
+    ".md": "document",
+    ".markdown": "document",
+    ".txt": "document",
+    ".pdf": "document",
+    ".rtf": "document",
+    ".doc": "document",
+    ".docx": "document",
+    ".odt": "document",
+    ".html": "document",
+    ".htm": "document",
+    ".csv": "spreadsheet",
+    ".tsv": "spreadsheet",
+    ".xls": "spreadsheet",
+    ".xlsx": "spreadsheet",
+    ".ods": "spreadsheet",
+    ".json": "data",
+    ".yaml": "data",
+    ".yml": "data",
+    ".ppt": "slides",
+    ".pptx": "slides",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".webp": "image",
+    ".svg": "image",
+    ".m4v": "video",
+    ".aac": "audio",
+}
 # A name that suggests a credential is never published, whatever its extension.
 CREDENTIAL_NAME = re.compile(
     r"(^|[._\-\s])(env|credentials?|secrets?|passwords?|passwd|api[-_ ]?keys?|private[-_ ]?keys?|"
-    r"id_rsa|id_ed25519|netrc|npmrc|pypirc|kubeconfig)($|[._\-\s])|\.(pem|key|p12|pfx|keystore|jks)$", re.I)
+    r"id_rsa|id_ed25519|netrc|npmrc|pypirc|kubeconfig)($|[._\-\s])|\.(pem|key|p12|pfx|keystore|jks)$",
+    re.I,
+)
 
 
 class Refused(ValueError):
@@ -74,8 +128,17 @@ def is_media(name):
 
 
 # The first bytes each video and audio extension must have: a renamed file is refused, not published under a new name.
-MEDIA_SIGNATURES = {".mp4": "ftyp", ".m4v": "ftyp", ".mov": "ftyp", ".m4a": "ftyp", ".webm": "ebml",
-                    ".mp3": "mp3", ".wav": "riff", ".ogg": "ogg", ".aac": "adts"}
+MEDIA_SIGNATURES = {
+    ".mp4": "ftyp",
+    ".m4v": "ftyp",
+    ".mov": "ftyp",
+    ".m4a": "ftyp",
+    ".webm": "ebml",
+    ".mp3": "mp3",
+    ".wav": "riff",
+    ".ogg": "ogg",
+    ".aac": "adts",
+}
 
 
 def media_matches(name, head):
@@ -84,7 +147,7 @@ def media_matches(name, head):
     kind = MEDIA_SIGNATURES.get(Path(str(name)).suffix.lower())
     if kind is None:
         return True
-    if kind == "ftyp":          # MP4, M4V, M4A and MOV start with a box whose type is ftyp (or an old QuickTime box)
+    if kind == "ftyp":  # MP4, M4V, M4A and MOV start with a box whose type is ftyp (or an old QuickTime box)
         return len(head) >= 8 and head[4:8] in (b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot")
     if kind == "ebml":
         return head[:4] == b"\x1a\x45\xdf\xa3"
@@ -94,7 +157,7 @@ def media_matches(name, head):
         return head[:4] == b"RIFF" and head[8:12] == b"WAVE"
     if kind == "ogg":
         return head[:4] == b"OggS"
-    return len(head) >= 2 and head[0] == 0xFF and head[1] & 0xF6 == 0xF0      # ADTS (AAC)
+    return len(head) >= 2 and head[0] == 0xFF and head[1] & 0xF6 == 0xF0  # ADTS (AAC)
 
 
 def check_size(size, name=""):
@@ -134,7 +197,7 @@ def local_file(root, rel, extra_types=()):
         raise Refused(f"{'/'.join(parts)} is not a regular file")
     if root not in walk.resolve().parents:
         raise Refused("That path is outside the bot's checkout")
-    if Path(walk.name).suffix.lower() in extra_types:      # e.g. a font a visual page embeds (clients/visual_embed.py)
+    if Path(walk.name).suffix.lower() in extra_types:  # e.g. a font a visual page embeds (clients/visual_embed.py)
         if CREDENTIAL_NAME.search(walk.name) or walk.name.lower().startswith(".env"):
             raise Refused(f"{walk.name} looks like a credential, which is never published")
     else:
@@ -176,8 +239,9 @@ def checkout_root(cwd=None):
     """The git checkout the command runs in (a bot's repository), else the directory itself."""
     cwd = Path(cwd or os.getcwd())
     try:
-        top = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True,
-                             text=True, timeout=10)
+        top = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10
+        )
         if top.returncode == 0 and top.stdout.strip():
             return Path(top.stdout.strip())
     except (OSError, subprocess.SubprocessError):
@@ -187,8 +251,10 @@ def checkout_root(cwd=None):
 
 def pushed_commit(root, rel):
     """The commit a file is committed at, once that commit is on the remote; "" otherwise."""
+
     def git(*args):
         return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=15)
+
     try:
         if git("ls-files", "--error-unmatch", "--", rel).returncode != 0:
             return ""
@@ -204,12 +270,20 @@ def pushed_commit(root, rel):
 
 
 # ----------------------------------------------------------------------------- links
-GOOGLE_PATHS = {"document": "document", "spreadsheets": "spreadsheet", "presentation": "slides", "forms": "form",
-                "file": "file", "drawings": "image"}
-PROVIDERS = (("google", "Google", ("docs.google.com", "drive.google.com", "sheets.google.com", "slides.google.com")),
-             ("notion", "Notion", ("notion.so", "notion.site")),
-             ("figma", "Figma", ("figma.com",)),
-             ("github", "GitHub", ("github.com",)))
+GOOGLE_PATHS = {
+    "document": "document",
+    "spreadsheets": "spreadsheet",
+    "presentation": "slides",
+    "forms": "form",
+    "file": "file",
+    "drawings": "image",
+}
+PROVIDERS = (
+    ("google", "Google", ("docs.google.com", "drive.google.com", "sheets.google.com", "slides.google.com")),
+    ("notion", "Notion", ("notion.so", "notion.site")),
+    ("figma", "Figma", ("figma.com",)),
+    ("github", "GitHub", ("github.com",)),
+)
 TRACKING = re.compile(r"^(utm_|fbclid$|gclid$|mc_)", re.I)
 
 
@@ -291,6 +365,7 @@ def fetch_s3(uri, client=None, run=subprocess.run):
     def take(body):
         # Reads at most the cap plus one byte, so a larger object is refused without being held.
         data.extend(body.read(MAX_BYTES + 1))
+
     etag = _s3_etag(_s3_fetch(bucket, key, client, run, take))
     check_size(len(data))
     if not etag:
@@ -307,12 +382,14 @@ def fetch_s3_file(uri, workdir, client=None, run=subprocess.run):
     name, content_type = check_name(posixpath.basename(key))
     path = Path(workdir) / ("object" + Path(name).suffix.lower())
     with path.open("wb") as out:
+
         def take(body):
             copied = 0
             while chunk := body.read(MB):
                 copied += len(chunk)
                 check_size(copied, name)
                 out.write(chunk)
+
         head = _s3_fetch(bucket, key, client, run, take, path=path)
     size = path.stat().st_size
     check_size(size, name)
@@ -330,6 +407,7 @@ def _s3_fetch(bucket, key, client, run, take, path=None):
     if client is None:
         try:
             import boto3
+
             client = boto3.client("s3")
         except ImportError:
             client = None
@@ -345,8 +423,11 @@ def _s3_fetch(bucket, key, client, run, take, path=None):
         def aws(*args):
             done = run(["aws", *args], capture_output=True, timeout=3600 if path else 300)
             if done.returncode != 0:
-                raise Refused("The aws CLI could not read that object: " + done.stderr.decode("utf-8", "replace")[-200:])
+                raise Refused(
+                    "The aws CLI could not read that object: " + done.stderr.decode("utf-8", "replace")[-200:]
+                )
             return done.stdout
+
         head = json.loads(aws("s3api", "head-object", "--bucket", bucket, "--key", key, "--output", "json") or b"{}")
         check_size(int(head.get("ContentLength") or 0), posixpath.basename(key))
         if path is None:

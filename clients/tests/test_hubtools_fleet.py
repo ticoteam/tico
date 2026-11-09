@@ -3,6 +3,7 @@ from clients import hubtools
 
 class _Api:
     """One route answers `hub_health_check` for everyone: the server picks what the caller gets."""
+
     def __init__(self):
         self.calls = []
 
@@ -17,12 +18,17 @@ class _Api:
 
 class _Groups:
     """The group tools: a person's own token writes to the routes itself; a bot (BotOps) is the requester."""
+
     def __init__(self, actor="human:ana"):
         self.actor, self.calls = actor, []
 
     def get(self, path, **query):
         self.calls.append(("GET", path, None))
-        return {"actor": self.actor, "role": "bot" if self.actor.startswith("bot:") else "human"} if path == "me" else [{"id": "seo"}]
+        return (
+            {"actor": self.actor, "role": "bot" if self.actor.startswith("bot:") else "human"}
+            if path == "me"
+            else [{"id": "seo"}]
+        )
 
     def post(self, path, body=None, key=None):
         self.calls.append(("POST", path, body))
@@ -45,7 +51,12 @@ def test_group_tools_list_create_and_update_and_botops_acts_as_the_requester():
     fn["hub_group_update"]["fn"](api, {"group": "seo", "parent": "", "remove_humans": ["cara"]})
     assert [call for call in api.calls if call[1] != "me"][1:] == [
         ("POST", "groups", {"name": "SEO", "add": {"people": [], "bots": ["seo"]}, "parent": "marketing"}),
-        ("PATCH", "groups/seo", {"add": {"people": [], "bots": []}, "remove": {"people": ["cara"], "bots": []}, "parent": ""})]
+        (
+            "PATCH",
+            "groups/seo",
+            {"add": {"people": [], "bots": []}, "remove": {"people": ["cara"], "bots": []}, "parent": ""},
+        ),
+    ]
     botops = _Groups("bot:botops")
     fn["hub_group_update"]["fn"](botops, {"group": "seo", "name": "Search"})
     assert botops.calls[-1][:2] == ("PATCH", "groups/seo") and botops.calls[-1][3] is True
@@ -65,14 +76,22 @@ def test_the_strategy_bot_makes_an_asked_for_org_change_citing_the_persons_words
     fn["hub_group_delete"]["fn"](api, {"group": "seo", "on_behalf_of": "turn"})
     fn["hub_org_reports_to"]["fn"](api, {"teammate": "human:cara", "reports_to": "human:ana", "on_behalf_of": "turn"})
     assert api.calls[-3:] == [
-        ("PATCH", "groups/seo", {"add": {"people": [], "bots": []}, "remove": {"people": [], "bots": []}, "lead": "bot:writer"}, "turn"),
-        ("DELETE", "groups/seo", None, "turn"), ("POST", "humans/cara", {"reports_to": "ana"}, "turn")]
+        (
+            "PATCH",
+            "groups/seo",
+            {"add": {"people": [], "bots": []}, "remove": {"people": [], "bots": []}, "lead": "bot:writer"},
+            "turn",
+        ),
+        ("DELETE", "groups/seo", None, "turn"),
+        ("POST", "humans/cara", {"reports_to": "ana"}, "turn"),
+    ]
 
 
 def test_reports_to_for_a_bot_sends_its_revision():
     class _Bots(_Groups):
         def get(self, path, **query):
             return [{"slug": "writer", "revision": 7}] if path == "bots" else super().get(path, **query)
+
     api = _Bots()
     hubtools.BY_NAME["hub_org_reports_to"]["fn"](api, {"teammate": "bot:writer", "reports_to": "cmo"})
     assert api.calls[-1] == ("POST", "bots/writer/definition", {"reports_to": "cmo", "expected_revision": 7})
@@ -90,7 +109,9 @@ def test_org_order_reads_and_sets_and_botops_sets_as_the_requester():
     fn(api, {"manager": "engineering-lead"})
     fn(api, {"manager": "human:ana", "set": ["bot:cmo", "ben"]})
     assert [call for call in api.calls if call[1] != "me"] == [
-        ("GET", "org/order/engineering-lead", None), ("PUT", "org/order/human:ana", {"reports": ["bot:cmo", "ben"]}, False)]
+        ("GET", "org/order/engineering-lead", None),
+        ("PUT", "org/order/human:ana", {"reports": ["bot:cmo", "ben"]}, False),
+    ]
     botops = _Groups("bot:botops")
     fn(botops, {"manager": "cmo", "set": ["writer"]})
     assert botops.calls[-1][:2] == ("PUT", "org/order/cmo") and botops.calls[-1][3] is True
@@ -102,32 +123,49 @@ def test_tool_add_and_remove_are_the_requesters_when_botops_calls_them():
     person, botops = _Groups(), _Groups("bot:botops")
     fn["hub_tool_add"]["fn"](person, entry)
     fn["hub_tool_remove"]["fn"](person, {"bot": "inbox-manager", "id": "gmail"})
-    assert [c[:2] for c in person.calls if c[1] != "me"] == [("POST", "bots/inbox-manager/tools"),
-                                                            ("POST", "bots/inbox-manager/tools/gmail/delete")]
+    assert [c[:2] for c in person.calls if c[1] != "me"] == [
+        ("POST", "bots/inbox-manager/tools"),
+        ("POST", "bots/inbox-manager/tools/gmail/delete"),
+    ]
     fn["hub_tool_add"]["fn"](botops, entry)
     fn["hub_tool_remove"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail"})
     assert [c[:2] + (c[3],) for c in botops.calls if c[1] != "me"] == [
-        ("POST", "bots/inbox-manager/tools", True), ("POST", "bots/inbox-manager/tools/gmail/delete", True)]
+        ("POST", "bots/inbox-manager/tools", True),
+        ("POST", "bots/inbox-manager/tools/gmail/delete", True),
+    ]
     assert "botops" in hubtools.offered_to(fn["hub_tool_add"]) and "bot" not in hubtools.offered_to(fn["hub_tool_add"])
 
 
 def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops_calls_it():
     fn = hubtools.BY_NAME
     person, botops = _Groups(), _Groups("bot:botops")
-    args = {"bot": "inbox-manager", "id": "gmail", "can": "read, draft,send", "scope": ["mailbox=a@acme.example", "sites="],
-            "note": ""}
+    args = {
+        "bot": "inbox-manager",
+        "id": "gmail",
+        "can": "read, draft,send",
+        "scope": ["mailbox=a@acme.example", "sites="],
+        "note": "",
+    }
     fn["hub_tool_update"]["fn"](person, args)
-    assert [c for c in person.calls if c[1] != "me"] == [("POST", "bots/inbox-manager/tools/gmail/update", {
-        "can": ["read", "draft", "send"], "scope": {"mailbox": "a@acme.example", "sites": ""}, "note": ""})]
+    assert [c for c in person.calls if c[1] != "me"] == [
+        (
+            "POST",
+            "bots/inbox-manager/tools/gmail/update",
+            {"can": ["read", "draft", "send"], "scope": {"mailbox": "a@acme.example", "sites": ""}, "note": ""},
+        )
+    ]
     fn["hub_tool_update"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail", "note": "sends on Fridays"})
     assert [c for c in botops.calls if c[1] != "me"] == [
-        ("POST", "bots/inbox-manager/tools/gmail/update", {"note": "sends on Fridays"}, True)]
+        ("POST", "bots/inbox-manager/tools/gmail/update", {"note": "sends on Fridays"}, True)
+    ]
     try:
         fn["hub_tool_update"]["fn"](person, {"bot": "inbox-manager", "id": "gmail"})
         raise AssertionError("an update that changes nothing is refused")
     except ValueError as exc:
         assert "Say what changes" in str(exc)
-    assert "botops" in hubtools.offered_to(fn["hub_tool_update"]) and "bot" not in hubtools.offered_to(fn["hub_tool_update"])
+    assert "botops" in hubtools.offered_to(fn["hub_tool_update"]) and "bot" not in hubtools.offered_to(
+        fn["hub_tool_update"]
+    )
 
 
 def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
@@ -138,13 +176,18 @@ def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
             asked.append((path, query))
             return {"actor": "bot:botops"} if path == "me" else {"tasks": [{"id": "t1"}]}
 
-    assert hubtools.BY_NAME["hub_task_list"]["fn"](Api(), {"requester": "me", "status": ["open", "waiting"]}) == [{"id": "t1"}]
-    assert asked[-1] == ("tasks", {"owner": None, "requester": "bot:botops", "status": "open,waiting", "lane": None, "label": None})
-
+    assert hubtools.BY_NAME["hub_task_list"]["fn"](Api(), {"requester": "me", "status": ["open", "waiting"]}) == [
+        {"id": "t1"}
+    ]
+    assert asked[-1] == (
+        "tasks",
+        {"owner": None, "requester": "bot:botops", "status": "open,waiting", "lane": None, "label": None},
+    )
 
 
 class _Sync:
     """external/sync on a server with or without `inbox`: one from before it refuses the field."""
+
     def __init__(self, knows_inbox):
         self.knows_inbox, self.bodies = knows_inbox, []
 
@@ -163,5 +206,5 @@ def test_only_the_new_sync_tool_takes_the_inbox_and_an_older_server_still_syncs(
         assert hubtools.BY_NAME["hub_external_sync"]["fn"](api, {"provider": "grokbot", "bots": bots}) == {"bots": []}
         assert [b.get("inbox") for b in api.bodies] == ([True] if knows else [True, None])
     api = _Sync(True)
-    hubtools.BY_NAME["hub_grokbot_sync"]["fn"](api, {"bots": bots})     # routines from before the inbox ignore it
+    hubtools.BY_NAME["hub_grokbot_sync"]["fn"](api, {"bots": bots})  # routines from before the inbox ignore it
     assert api.bodies == [{"provider": "grokbot", "bots": bots}]
