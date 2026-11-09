@@ -68,7 +68,7 @@ Always:
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub task show`, `hub task list`, `hub meeting search "<customer>"`,
-`hub meeting read <id>`, `hub calendar list`. A question is `hub task ask <id>`, one open question per task.
+`hub meeting read <id>`, `hub calendar list`. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 A human's job (a training call, a data import on the customer's side) is `hub task create --owner
 <person>` after the owner agrees. A handover at go-live is `hub task create --owner customer-success`.
 

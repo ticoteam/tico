@@ -8,13 +8,21 @@ from backend import openapi_v2
 
 # Method and path of every thread route that contract section 10 lists (docs/dev/threads-contract.md).
 CONTRACT = {
-    ("get", "/api/v2/threads"), ("post", "/api/v2/threads"), ("get", "/api/v2/threads/search"),
-    ("get", "/api/v2/threads/{thread}"), ("patch", "/api/v2/threads/{thread}"),
-    ("get", "/api/v2/threads/{thread}/timeline"), ("post", "/api/v2/threads/{thread}/read"),
-    ("post", "/api/v2/threads/{thread}/read-all"), ("get", "/api/v2/threads/{thread}/members"),
-    ("post", "/api/v2/threads/{thread}/members"), ("delete", "/api/v2/threads/{thread}/members/{actor}"),
-    ("put", "/api/v2/threads/{thread}/follow"), ("delete", "/api/v2/threads/{thread}/follow"),
-    ("post", "/api/v2/threads/{thread}/messages"), ("patch", "/api/v2/messages/{mid}"),
+    ("get", "/api/v2/threads"),
+    ("post", "/api/v2/threads"),
+    ("get", "/api/v2/threads/search"),
+    ("get", "/api/v2/threads/{thread}"),
+    ("patch", "/api/v2/threads/{thread}"),
+    ("get", "/api/v2/threads/{thread}/timeline"),
+    ("post", "/api/v2/threads/{thread}/read"),
+    ("post", "/api/v2/threads/{thread}/read-all"),
+    ("get", "/api/v2/threads/{thread}/members"),
+    ("post", "/api/v2/threads/{thread}/members"),
+    ("delete", "/api/v2/threads/{thread}/members/{actor}"),
+    ("put", "/api/v2/threads/{thread}/follow"),
+    ("delete", "/api/v2/threads/{thread}/follow"),
+    ("post", "/api/v2/threads/{thread}/messages"),
+    ("patch", "/api/v2/messages/{mid}"),
     ("delete", "/api/v2/messages/{mid}"),
 }
 THREAD_ROWS = [row for row in openapi_v2.STABLE if row[2] == "Threads"]

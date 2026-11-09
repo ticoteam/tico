@@ -58,7 +58,7 @@ Use `hub_assistant_read` and `hub_assistant_send` for your private Assistant DM.
 for `hub_message_send`. These always use your own DM; another human's Assistant DM stays private.
 
 Tools that need a local repository or make a local network call are available only on a Computer: `hub_bot_copy`,
-`hub_bot_update_from_original`, `hub_bot_suggest_to_original`, `hub_skill_copy` and `hub_doc_fetch`. Run them on the Computer
+`hub_bot_update_from_original`, `hub_bot_suggest_to_original`, `hub_skill_copy`, `hub_skill_submit` (docs/skills.md) and `hub_doc_fetch`. Run them on the Computer
 holding the repository, or ask BotOps. The server explains this when one is called.
 
 For a complete Needs you walkthrough, see [Needs you batches](needs-you-batches.md).
@@ -136,6 +136,45 @@ The result is a personal token: the agent is you, with your rights, and nothing 
 Computers > API tokens** named after the agent and the day; **Revoke** there stops it and its refresh at once. The
 owner's rule that limits personal tokens to admins limits this too. Every machine-facing path is under `/api/v2/`, so a
 runner hostname that passes only `/api/v2` needs nothing more; `/oauth/authorize` is on the team's own address.
+
+## Handed over from setup
+
+On a server Tico hosts, your own coding agent can finish setup for you with nobody signed in. The install gives the
+server a one-time setup secret (the installer reads it from `TICO_SETUP_HANDOFF` in its environment, never a command
+line argument, and the server keeps only its hash, `TICO_SETUP_HANDOFF_HASH`); Tico's team passes the secret to your
+agent. The agent trades it once for a personal token of the owner:
+
+```
+POST <team URL>/api/v2/setup/handoff        (no sign-in; the secret is the credential)
+{"secret": "<the setup secret>"}
+
+200 {"token": "tico_pt_...", "token_id": "...", "label": "Setup agent · 2026-11-07", "expires_at": "...",
+     "mcp_url": "https://<team hostname>/api/v2/mcp", "team_url": "https://<team hostname>"}
+```
+
+Then it connects as [any other agent](#the-server) with `Authorization: Bearer <token>`. The token is the owner's own: it
+is named `Setup agent · <date>`, lasts 90 days, is listed under **Settings > Computers > API tokens**, and **Revoke**
+there stops it at once. It has the owner's rights and the limits of every personal token (it cannot make or revoke
+tokens). The owner's person row exists from the server's first start, so this works before the owner has ever signed in.
+
+- The secret works once and for 7 days after the server first starts. It is refused after that, and after the owner turns
+  it off (`POST /api/v2/setup/handoff/off` from a signed-in browser, which also revokes the token it made). `GET
+  /api/v2/setup/handoff` tells the owner where it stands: `none`, `waiting`, `used`, `expired` or `off`.
+- Every refusal is the same `410 gone`, whether the secret is wrong, used, expired or off. A wrong secret more than 10 times
+  in 15 minutes from one address answers `429 rate_limited`. A server that was given no secret answers `404`.
+- The secret is never logged, shown or kept: the server stores its hash and the token's hash, and the audit trail records
+  only that a token was made.
+
+What the agent can do from there, for each part of **Finish setup**:
+
+| Step | How |
+|---|---|
+| See where setup stands | `hub_setup_show`: whether the welcome wizard is finished, its saved answers, the people the company file names, and the getting-started checklist |
+| Finish the welcome wizard | `hub_setup_complete` (the wizard's Create my team); the picks are saved first with `hub_api` `PUT /api/v2/setup`, or come from the company file or sample company the install was given |
+| Invite the people from the company file | `hub_setup_invite` with `person_key` (from `hub_setup_show`) and `email`. They go on the roster, and Tico mails them when the install signs people in with a Tico account |
+| Choose models (your subscriptions or the Gateway default) | `hub_settings_set` on `models.providers` (`hub_settings_find` and `hub_settings_show` read it first); the Gateway's own setting is `models.gateway` |
+| Add a Tico Cloud computer | `hub_api` `POST /api/v2/bots/<bot>/cloud-machine` with `{"mode": "cloud", "placement": "shared"}`: the company's shared cloud machine is made when its first bot runs there. `hub_bot_place` puts a bot on a computer that is already connected |
+| Skip an optional getting-started step | `hub_api` `POST /api/v2/getting-started/state` with `{"skip": "github"}`. The other steps tick by themselves as they come true |
 
 ## An agent that is a bot, not you
 

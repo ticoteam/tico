@@ -1,13 +1,24 @@
 """The claim's work path reads a runner's bots as sets: its statements do not grow with the number of bots it has queued
 work for (execution.candidate, claim_loads.read). Measured on the store's connections, as the claim makes them."""
+
 import contextlib
 
+from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.test_api import assign, headers, post, ready, runner
 
-CAPABILITIES = ["task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
-                "turns_at_once_v1", "private_lanes_v1", "browser_exit_v1", "threads_v1"]
+CAPABILITIES = [
+    "task_lanes_v2",
+    "session_roots_v1",
+    "task_goals_v1",
+    "capacity_continue_v1",
+    "source_continue_v1",
+    "turns_at_once_v1",
+    "private_lanes_v1",
+    "browser_exit_v1",
+    "threads_v1",
+]
 
 
 def seed(api, prefix, count):
@@ -15,11 +26,14 @@ def seed(api, prefix, count):
     store = api.app.state.store
     slugs = [f"{prefix}-{n:02d}" for n in range(count)]
     with store.transaction() as c:
-        H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
-                        {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben")]})
+        H.sync_registry(
+            c,
+            {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
+            {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben")]},
+        )
         for s in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (s, '{"name": "%s", "runtime": "fake"}' % s))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (s,))
+            BS.write(c, s, {"name": s, "runtime": "fake"})
     machine = runner(api, label=f"Statements {prefix}")
     for s in slugs:
         assign(api, machine, s)
@@ -43,6 +57,7 @@ def traced(api):
                 yield c
             finally:
                 c.set_trace_callback(None)
+
     store.read = borrowed
     try:
         yield seen
@@ -53,8 +68,9 @@ def traced(api):
 def claim(api, machine):
     """POST the claim as the computer: (answer, statements)."""
     with traced(api) as seen:
-        response = api.post("/api/v2/jobs/claim", json={"bot": None, "start_places": True},
-                            headers=headers(machine["token"]))
+        response = api.post(
+            "/api/v2/jobs/claim", json={"bot": None, "start_places": True}, headers=headers(machine["token"])
+        )
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 
@@ -72,10 +88,10 @@ def handed_run(api, machine, answer):
 
 def work_claim_statements(api, count, prefix):
     machine = seed(api, prefix, count)
-    answer, _ = claim(api, machine)            # the first claim may do the company's first-time reads
+    answer, _ = claim(api, machine)  # the first claim may do the company's first-time reads
     handed_run(api, machine, answer)
     answer, statements = claim(api, machine)
-    assert answer.get("attempt"), answer     # the measured claim hands out a run: it took the work path
+    assert answer.get("attempt"), answer  # the measured claim hands out a run: it took the work path
     return statements
 
 

@@ -10,17 +10,19 @@ Tico reads both for one release (the new name wins), and a template refresh rena
   groups.yaml  <- departments.yaml         the template catalog's groups
   group:       <- department:              a catalog card's group
 
-Nothing else here: no I/O beyond checking which name exists.
+Repository folders are checked against the active Tico installation after resolving links.
 """
+
 from pathlib import Path
 from typing import Any
+from clients.repo_safety import outside_installation
 
 MANIFEST = "bot.yaml"
 OLD_MANIFEST = "employee.yaml"
 GROUPS_FILE = "groups.yaml"
 OLD_GROUPS_FILE = "departments.yaml"
-REPO_PREFIX = "bot-"                 # new bot repositories
-OLD_REPO_PREFIX = "emp-"             # existing ones keep their names
+REPO_PREFIX = "bot-"  # new bot repositories
+OLD_REPO_PREFIX = "emp-"  # existing ones keep their names
 
 
 def manifest_path(folder):
@@ -60,7 +62,9 @@ def repo_dir(root, slug):
     root = Path(root)
     for prefix in (REPO_PREFIX, OLD_REPO_PREFIX):
         if (root / (prefix + slug)).exists():
+            outside_installation(root / (prefix + slug))
             return root / (prefix + slug)
+    outside_installation(root / (REPO_PREFIX + slug))
     return root / (REPO_PREFIX + slug)
 
 
@@ -71,14 +75,16 @@ def folder_dir(root, folder, slug=""):
     folder = str(folder or "").strip()
     if not folder or folder in (".", "..") or not all((ch.isascii() and ch.isalnum()) or ch in "-_." for ch in folder):
         return repo_dir(root, slug) if slug else None
-    return repo_dir(root, folder[len(REPO_PREFIX):]) if folder.startswith(REPO_PREFIX) else Path(root) / folder
+    path = repo_dir(root, folder[len(REPO_PREFIX) :]) if folder.startswith(REPO_PREFIX) else Path(root) / folder
+    outside_installation(path)
+    return path
 
 
 def bot_slug_of_repo(name):
     """`bot-x` or `emp-x` -> `x`; anything else unchanged."""
     for prefix in (REPO_PREFIX, OLD_REPO_PREFIX):
         if name.startswith(prefix):
-            return name[len(prefix):]
+            return name[len(prefix) :]
     return name
 
 

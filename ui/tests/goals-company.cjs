@@ -1,4 +1,4 @@
-// No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.js
+// No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.ts
 // goalWhyHtml). A goal with no Why says "Not tied to the vision"; the Strategy Bot's
 // proposal is accepted as it is or edited, and an Accept on a line the Strategy Bot has since replaced is refused and
 // shows
@@ -39,7 +39,7 @@ async function open(browser, {role = 'owner', strategy = null, needs = []} = {})
     const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});

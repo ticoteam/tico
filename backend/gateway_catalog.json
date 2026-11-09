@@ -1,0 +1,1310 @@
+{
+ "schema": 2,
+ "as_of": "2026-11-06",
+ "levels": [
+  {
+   "id": "xlow",
+   "name": "X-Low"
+  },
+  {
+   "id": "low",
+   "name": "Low"
+  },
+  {
+   "id": "medium",
+   "name": "Medium"
+  },
+  {
+   "id": "high",
+   "name": "High"
+  },
+  {
+   "id": "xhigh",
+   "name": "X-High"
+  }
+ ],
+ "models": [
+  {
+   "id": "tico-xlow",
+   "level": "xlow",
+   "fast": false,
+   "name": "X-Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-xlow-1.0",
+     "model": "DeepSeek V4 Flash",
+     "inputs": [
+      "text"
+     ],
+     "price": {
+      "input": 0.14,
+      "output": 0.27,
+      "cached_input": 0.027
+     },
+     "long_prompt": null,
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-xlow-fast",
+   "level": "xlow",
+   "fast": true,
+   "name": "X-Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-xlow-fast-1.0",
+     "model": "Inception Mercury 3",
+     "inputs": [
+      "text"
+     ],
+     "price": {
+      "input": 0.3,
+      "output": 1.05,
+      "cached_input": 0.03
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-low",
+   "level": "low",
+   "fast": false,
+   "name": "Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-low-fast",
+   "level": "low",
+   "fast": true,
+   "name": "Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "inputs": [
+      "text"
+     ],
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-medium",
+   "level": "medium",
+   "fast": false,
+   "name": "Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-medium-fast",
+   "level": "medium",
+   "fast": true,
+   "name": "Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-high",
+   "level": "high",
+   "fast": false,
+   "name": "High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-high-1.0",
+     "model": "Claude Opus 5.5",
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-high-fast",
+   "level": "high",
+   "fast": true,
+   "name": "High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-xhigh",
+   "level": "xhigh",
+   "fast": false,
+   "name": "X-High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-xhigh-1.0",
+     "model": "Claude Fable 5.1",
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "price": {
+      "input": 12.5,
+      "output": 62.5,
+      "cached_input": 1.25
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-xhigh-fast",
+   "level": "xhigh",
+   "fast": true,
+   "name": "X-High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-xhigh-fast-1.0",
+     "model": "Claude Fable 5.1",
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "price": {
+      "input": 12.5,
+      "output": 62.5,
+      "cached_input": 1.25
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-11-06"
+    }
+   ]
+  },
+  {
+   "id": "tico-meeting",
+   "level": null,
+   "fast": false,
+   "name": "Meeting",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-meeting-1.0",
+     "model": "Inception Mercury 3",
+     "inputs": [
+      "text"
+     ],
+     "price": {
+      "input": 0.3,
+      "output": 1.05,
+      "cached_input": 0.03
+     },
+     "long_prompt": null,
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-29"
+    }
+   ]
+  }
+ ],
+ "decisions": [
+  {
+   "id": "tico-decide-low",
+   "level": "low",
+   "name": "Decide · Low",
+   "current": "1.1",
+   "types": [
+    "noul",
+    "choice",
+    "score"
+   ],
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-decide-low-1.0",
+     "model": "Jev 1.13",
+     "price": {
+      "input": 0.06,
+      "output": 0.0,
+      "cached_input": 0.006
+     }
+    },
+    {
+     "version": "1.1",
+     "id": "tico-decide-low-1.1",
+     "model": "Jev 1.14",
+     "price": {
+      "input": 0.06,
+      "output": 0.0,
+      "cached_input": 0.006
+     }
+    }
+   ]
+  },
+  {
+   "id": "tico-decide-medium",
+   "level": "medium",
+   "name": "Decide · Medium",
+   "current": "1.0",
+   "types": [
+    "noul",
+    "choice",
+    "score"
+   ],
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-decide-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     }
+    }
+   ]
+  },
+  {
+   "id": "tico-decide-high",
+   "level": "high",
+   "name": "Decide · High",
+   "current": "1.0",
+   "types": [
+    "noul",
+    "choice",
+    "score"
+   ],
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-decide-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     }
+    }
+   ]
+  }
+ ],
+ "services": [
+  {
+   "id": "decide",
+   "name": "Decide",
+   "for": "Answer yes/no, choice and score questions about a state",
+   "price": "From $0.06 per 1M input tokens",
+   "status": "live",
+   "tools": [
+    "hub_decision_ask",
+    "hub_decision_readout",
+    "hub_decision_outcome"
+   ],
+   "details": [
+    {
+     "label": "Low",
+     "value": "Jev 1.14 · $0.06 per 1M input"
+    },
+    {
+     "label": "Medium",
+     "value": "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M"
+    },
+    {
+     "label": "High",
+     "value": "Claude Opus 5.5 · $5 / $25 per 1M"
+    }
+   ]
+  },
+  {
+   "id": "inbox.email",
+   "name": "Inbox · Email",
+   "for": "Receive sign-in codes and notices",
+   "price": "Free addresses · $0.14 per 1,000 received",
+   "status": "live",
+   "tools": [
+    "hub_inbound_create_email",
+    "hub_inbound_wait"
+   ],
+   "details": [
+    {
+     "label": "Addresses",
+     "value": "Free"
+    },
+    {
+     "label": "Received",
+     "value": "$0.14 per 1,000"
+    }
+   ]
+  },
+  {
+   "id": "inbox.numbers",
+   "name": "Inbox · Texts",
+   "for": "A US number that receives texts, like sign-in codes",
+   "price": "From $14 per 30 days",
+   "status": "approval",
+   "tools": [],
+   "details": [
+    {
+     "label": "Number",
+     "value": "From $14 per 30 days"
+    },
+    {
+     "label": "Sending",
+     "value": "Receive only"
+    }
+   ]
+  },
+  {
+   "id": "alerts",
+   "name": "Alerts",
+   "for": "Urgent texts and calls to your own phone",
+   "price": "$1 per alert",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Alert",
+     "value": "$1, texts and calls included"
+    },
+    {
+     "label": "Phone check",
+     "value": "Free code to confirm your number"
+    },
+    {
+     "label": "Sent from",
+     "value": "One Tico number"
+    }
+   ]
+  },
+  {
+   "id": "search",
+   "name": "Search",
+   "for": "Search the web and read what it finds",
+   "price": "$0.00875 per search, plus tokens at $0.15 / $0.75 per 1M",
+   "status": "live",
+   "tools": [
+    "hub_gateway_search"
+   ],
+   "details": [
+    {
+     "label": "Search",
+     "value": "$0.00875 each"
+    },
+    {
+     "label": "Tokens",
+     "value": "$0.15 / $0.75 per 1M, like Low"
+    },
+    {
+     "label": "Engines",
+     "value": "Exa, then Parallel"
+    }
+   ]
+  },
+  {
+   "id": "fetch",
+   "name": "Fetch",
+   "for": "Read a web page or PDF",
+   "price": "$1.25 per 1,000 pages + tokens",
+   "status": "live",
+   "tools": [
+    "hub_gateway_fetch"
+   ],
+   "details": [
+    {
+     "label": "Pages",
+     "value": "$1.25 per 1,000"
+    },
+    {
+     "label": "Reads",
+     "value": "Web pages and PDFs"
+    }
+   ]
+  },
+  {
+   "id": "images",
+   "name": "Images",
+   "for": "Make an image from a prompt and reference images",
+   "price": "Per image, at cost + 25%",
+   "status": "live",
+   "tools": [
+    "hub_gateway_image"
+   ],
+   "details": [
+    {
+     "label": "Low",
+     "value": "Gemini 3.1 Flash Image"
+    },
+    {
+     "label": "High",
+     "value": "GPT-5.4 Image 2 for photo and graphic, Gemini 3 Pro Image for character"
+    },
+    {
+     "label": "Price",
+     "value": "At cost + 25%"
+    }
+   ]
+  },
+  {
+   "id": "svg",
+   "name": "SVG",
+   "for": "Make a vector image (SVG) from a prompt, scalable without loss",
+   "price": "Per image, at cost + 25%",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Standard",
+     "value": "Recraft v4.1 Vector"
+    },
+    {
+     "label": "Pro",
+     "value": "Recraft v4.1 Pro Vector"
+    },
+    {
+     "label": "Price",
+     "value": "At cost + 25%"
+    }
+   ]
+  },
+  {
+   "id": "video",
+   "name": "Video",
+   "for": "Make a short video from a prompt, with optional first and last frames",
+   "price": "Per second, at cost + 25%",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Model",
+     "value": "Gemini Omni 1.2 Flash"
+    },
+    {
+     "label": "Length",
+     "value": "3 to 15 seconds"
+    },
+    {
+     "label": "Resolution",
+     "value": "360p to 4K, with audio"
+    },
+    {
+     "label": "Price",
+     "value": "At cost + 25%"
+    }
+   ]
+  },
+  {
+   "id": "signals",
+   "name": "Signals",
+   "for": "Watch pages and releases for changes",
+   "price": "10 watches included, then $2 per watch a month",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Kinds",
+     "value": "Pages, releases"
+    },
+    {
+     "label": "Checks",
+     "value": "Pages daily, releases every 6 hours"
+    },
+    {
+     "label": "Price",
+     "value": "10 watches included, then $2 per watch a month"
+    }
+   ]
+  },
+  {
+   "id": "digest",
+   "name": "Digest",
+   "for": "Group many items into one summary",
+   "price": "Tokens at Low prices",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Model",
+     "value": "Low"
+    },
+    {
+     "label": "Price",
+     "value": "Tokens at Low prices"
+    }
+   ]
+  },
+  {
+   "id": "transcribe",
+   "name": "Transcribe",
+   "for": "Turn a recording into text, and live speech into text",
+   "price": "$0.33 per audio hour · live text $0.30 per audio hour",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "Recordings",
+     "value": "ElevenLabs Scribe v2 · $0.33 per hour"
+    },
+    {
+     "label": "Live",
+     "value": "xAI · $0.30 per hour"
+    }
+   ]
+  },
+  {
+   "id": "mail.physical",
+   "name": "Mail",
+   "for": "A street address for letters, scanned and read, with a registered agent",
+   "price": "Address $10 a month per state · Own box at cost + 25%",
+   "status": "live",
+   "tools": [
+    "hub_mail_list",
+    "hub_mail_read"
+   ],
+   "details": [
+    {
+     "label": "States",
+     "value": "DE, CA · others on request"
+    },
+    {
+     "label": "Address",
+     "value": "$10 a month per state, on Tico's box"
+    },
+    {
+     "label": "Own box",
+     "value": "The box's cost + 25%"
+    },
+    {
+     "label": "Scans",
+     "value": "$1 a letter up to 10 pages, then $0.25 a page"
+    },
+    {
+     "label": "Forwarding",
+     "value": "Postage + 25%"
+    },
+    {
+     "label": "Registered agent",
+     "value": "On request"
+    }
+   ]
+  },
+  {
+   "id": "letters",
+   "name": "Send letters",
+   "for": "Print and mail letters, First-Class or Certified",
+   "price": "Print and postage at cost + 25%",
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "email.send",
+   "name": "Send email",
+   "for": "Send a message from a Tico address",
+   "price": null,
+   "status": "later",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "enrich",
+   "name": "Enrich",
+   "for": "Look up a company or a person",
+   "price": null,
+   "status": "later",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "voice",
+   "name": "Voice",
+   "for": "Speak and listen on a call",
+   "price": null,
+   "status": "later",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "storage.s3",
+   "name": "Object Storage",
+   "for": "S3-compatible storage for files and backups",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "finance.accounting",
+   "name": "Accounting",
+   "for": "On-demand accounting for invoices, bills, payments, and financial reports",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "legal.software",
+   "name": "Legal",
+   "for": "On-demand software for legal matters, documents, and deadlines",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "crm.software",
+   "name": "CRM",
+   "for": "A workspace for customer accounts, contacts, opportunities, and sales follow-up",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "support.software",
+   "name": "Customer Support",
+   "for": "A support desk for customer requests, shared inboxes, and ticket follow-up",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  },
+  {
+   "id": "marketing.software",
+   "name": "Marketing",
+   "for": "Marketing tools and bots for campaigns and market intelligence",
+   "price": null,
+   "status": "next",
+   "tools": [],
+   "details": []
+  }
+ ],
+ "benchmarks": {
+  "models": [
+   {
+    "name": "Claude Haiku 5.5",
+    "price_in": 0.1,
+    "price_out": 0.5,
+    "fast": false,
+    "tico_level": "low",
+    "tps": 143.0,
+    "ttft_s": 1.65,
+    "scores": {
+     "intelligence": 43.4,
+     "arena": 1425,
+     "terminal_bench": 32.8,
+     "gdpval": 56.0,
+     "vals_finance": 57.45,
+     "vals_legal": 70.27,
+     "hle": 44.4
+    }
+   },
+   {
+    "name": "Claude Sonnet 5.5",
+    "price_in": 2.0,
+    "price_out": 10.0,
+    "fast": false,
+    "tico_level": "medium",
+    "tps": 95.0,
+    "ttft_s": 1.74,
+    "scores": {
+     "intelligence": 56.0,
+     "arena": 1478,
+     "terminal_bench": 63.6,
+     "gdpval": 66.9,
+     "vals_finance": 64.53,
+     "vals_legal": 68.02,
+     "hle": 55.0
+    }
+   },
+   {
+    "name": "Claude Opus 5.5",
+    "price_in": 4.0,
+    "price_out": 20.0,
+    "fast": false,
+    "tico_level": "high",
+    "tps": 79.0,
+    "ttft_s": 3.19,
+    "scores": {
+     "intelligence": 57.6,
+     "arena": 1509,
+     "terminal_bench": 59.6,
+     "gdpval": 68.3,
+     "vals_finance": 65.59,
+     "vals_legal": 72.33,
+     "hle": 61.4
+    }
+   },
+   {
+    "name": "Claude Opus 5.5 (fast mode)",
+    "price_in": 8.0,
+    "price_out": 40.0,
+    "fast": true,
+    "tico_level": "high-fast",
+    "tps": 220,
+    "ttft_s": 1.52,
+    "scores": {
+     "intelligence": 57.6,
+     "arena": 1509,
+     "terminal_bench": 59.6,
+     "gdpval": 68.3,
+     "vals_finance": 65.59,
+     "vals_legal": 72.33,
+     "hle": 61.4
+    }
+   },
+   {
+    "name": "GPT-6 Astra",
+    "price_in": 10.0,
+    "price_out": 50.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 40.0,
+    "ttft_s": 4.34,
+    "scores": {
+     "intelligence": 52.7,
+     "arena": 1476,
+     "terminal_bench": 59.1,
+     "gdpval": 53.7,
+     "vals_finance": 55.64,
+     "vals_legal": 68.39,
+     "hle": 54.7
+    }
+   },
+   {
+    "name": "GPT-6.1 Sol",
+    "price_in": 2.0,
+    "price_out": 10.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 45.0,
+    "ttft_s": 7.83,
+    "scores": {
+     "intelligence": 51.8,
+     "arena": 1480,
+     "terminal_bench": 56.1,
+     "gdpval": 54.8,
+     "vals_finance": 55.81,
+     "vals_legal": 68.72,
+     "hle": 52.9
+    }
+   },
+   {
+    "name": "GPT-6 Luna",
+    "price_in": 0.1,
+    "price_out": 0.5,
+    "fast": false,
+    "tico_level": null,
+    "tps": 120.0,
+    "ttft_s": 2.23,
+    "scores": {
+     "intelligence": 38.1,
+     "arena": 1442,
+     "terminal_bench": 12.6,
+     "gdpval": 46.6,
+     "vals_finance": 53.05,
+     "vals_legal": 62.2,
+     "hle": 38.5
+    }
+   },
+   {
+    "name": "Gemini 4 Argon",
+    "price_in": 2.0,
+    "price_out": 10.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 45.0,
+    "ttft_s": 4.48,
+    "scores": {
+     "intelligence": 52.6,
+     "arena": 1517,
+     "terminal_bench": 57.1,
+     "gdpval": 56.2,
+     "vals_finance": 64.89,
+     "vals_legal": 76.72,
+     "hle": 57.1
+    }
+   },
+   {
+    "name": "Gemini 3.8 Flash",
+    "price_in": 0.825,
+    "price_out": 4.125,
+    "fast": false,
+    "tico_level": null,
+    "tps": 75.0,
+    "ttft_s": 2.58,
+    "scores": {
+     "intelligence": 40.9,
+     "arena": 1496,
+     "terminal_bench": 19.7,
+     "gdpval": 46.8,
+     "vals_finance": 60.46,
+     "vals_legal": 69.78,
+     "hle": 47.8
+    }
+   },
+   {
+    "name": "Gemini 3.5 Flash-Lite",
+    "price_in": 0.3,
+    "price_out": 2.5,
+    "fast": false,
+    "tico_level": null,
+    "tps": 136.0,
+    "ttft_s": 0.72,
+    "scores": {
+     "intelligence": 22.2,
+     "arena": 1455,
+     "terminal_bench": 1.0,
+     "gdpval": 24.2,
+     "hle": 18.8
+    }
+   },
+   {
+    "name": "Grok 4.7",
+    "price_in": 2.0,
+    "price_out": 6.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 72.0,
+    "ttft_s": 1.67,
+    "scores": {
+     "intelligence": 46.4,
+     "arena": 1441,
+     "terminal_bench": 25.8,
+     "gdpval": 60.7,
+     "vals_finance": 58.46,
+     "vals_legal": 72.6,
+     "hle": 43.1
+    }
+   },
+   {
+    "name": "DeepSeek V4.1 Flash 1017",
+    "price_in": 0.3,
+    "price_out": 1.2,
+    "fast": true,
+    "tico_level": "low-fast",
+    "tps": 245.0,
+    "ttft_s": 0.26,
+    "scores": {
+     "intelligence": 45.1,
+     "terminal_bench": 33.8,
+     "gdpval": 62.3,
+     "vals_finance": 60.89,
+     "vals_legal": 71.86,
+     "hle": 43.3
+    }
+   },
+   {
+    "name": "DeepSeek V4.1 Flash",
+    "price_in": 0.02,
+    "price_out": 1.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 297.0,
+    "ttft_s": 0.32,
+    "scores": {
+     "arena": 1476,
+     "vals_finance": 57.08
+    }
+   },
+   {
+    "name": "Kimi K3.1 Pro",
+    "price_in": 2.0,
+    "price_out": 10.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 32.0,
+    "ttft_s": 4.28,
+    "scores": {
+     "intelligence": 55.1,
+     "terminal_bench": 67.2,
+     "gdpval": 67.3,
+     "vals_finance": 56.01,
+     "vals_legal": 67.04,
+     "hle": 52.5
+    }
+   },
+   {
+    "name": "Qwen3.8 Max (0902)",
+    "price_in": 2.0,
+    "price_out": 6.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 39.0,
+    "ttft_s": 1.94,
+    "scores": {
+     "intelligence": 45.4,
+     "arena": 1483,
+     "terminal_bench": 38.9,
+     "gdpval": 58.3,
+     "vals_finance": 61.66,
+     "vals_legal": 73.9,
+     "hle": 43.1
+    }
+   },
+   {
+    "name": "Qwen3.8 27B",
+    "price_in": 0.2,
+    "price_out": 2.5,
+    "fast": false,
+    "tico_level": null,
+    "tps": 531.0,
+    "ttft_s": 0.19,
+    "scores": {
+     "intelligence": 33.7,
+     "arena": 1437,
+     "terminal_bench": 5.6,
+     "gdpval": 45.9,
+     "hle": 33.9
+    }
+   },
+   {
+    "name": "GLM-5.3",
+    "price_in": 0.079,
+    "price_out": 1.4,
+    "fast": false,
+    "tico_level": null,
+    "tps": 117.0,
+    "ttft_s": 0.87,
+    "scores": {
+     "intelligence": 44.8,
+     "arena": 1481,
+     "terminal_bench": 41.9,
+     "gdpval": 57.5,
+     "vals_finance": 60.54,
+     "vals_legal": 74.58,
+     "hle": 42.3
+    }
+   },
+   {
+    "name": "GLM-5.3 Flash",
+    "price_in": 0.15,
+    "price_out": 0.5,
+    "fast": false,
+    "tico_level": null,
+    "tps": 172.0,
+    "ttft_s": 1.05,
+    "scores": {
+     "intelligence": 41.8,
+     "arena": 1476,
+     "terminal_bench": 32.8,
+     "gdpval": 57.1,
+     "vals_finance": 55.83,
+     "vals_legal": 71.05,
+     "hle": 39.9
+    }
+   },
+   {
+    "name": "MiniMax M3.1 Flash",
+    "price_in": 0.15,
+    "price_out": 0.6,
+    "fast": false,
+    "tico_level": null,
+    "tps": 197.0,
+    "ttft_s": 0.49,
+    "scores": {
+     "intelligence": 42.7,
+     "terminal_bench": 25.8,
+     "gdpval": 47.9,
+     "vals_finance": 55.91,
+     "vals_legal": 67.07,
+     "hle": 48.0
+    }
+   },
+   {
+    "name": "MiMo V2.6 Flash",
+    "price_in": 0.14,
+    "price_out": 0.28,
+    "fast": false,
+    "tico_level": null,
+    "tps": 121.0,
+    "ttft_s": 0.69,
+    "scores": {
+     "intelligence": 37.9,
+     "arena": 1448,
+     "terminal_bench": 22.7,
+     "gdpval": 55.4,
+     "vals_finance": 57.15,
+     "vals_legal": 68.99,
+     "hle": 35.1
+    }
+   },
+   {
+    "name": "Step 5 Preview",
+    "price_in": 1.0,
+    "price_out": 2.7,
+    "fast": false,
+    "tico_level": null,
+    "tps": 211.0,
+    "ttft_s": 0.77,
+    "scores": {
+     "intelligence": 43.7,
+     "arena": 1448,
+     "terminal_bench": 33.3,
+     "gdpval": 54.3,
+     "vals_finance": 55.43,
+     "hle": 46.5
+    }
+   },
+   {
+    "name": "Muse Wonder",
+    "price_in": 4.0,
+    "price_out": 20.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 69.0,
+    "ttft_s": 4.45,
+    "scores": {
+     "intelligence": 52.4,
+     "arena": 1509,
+     "terminal_bench": 52.0,
+     "gdpval": 63.5,
+     "vals_finance": 61.23,
+     "vals_legal": 75.26,
+     "hle": 50.1
+    }
+   },
+   {
+    "name": "Mercury 3",
+    "price_in": 0.1,
+    "price_out": 0.35,
+    "fast": false,
+    "tico_level": null,
+    "tps": 293.0,
+    "ttft_s": 1.03,
+    "scores": {
+     "vals_finance": 47.22,
+     "vals_legal": 62.96
+    }
+   },
+   {
+    "name": "Mercury 2.5",
+    "price_in": 0.04,
+    "price_out": 0.15,
+    "fast": false,
+    "tico_level": null,
+    "tps": 142.0,
+    "ttft_s": 0.36,
+    "scores": {
+     "intelligence": 12.3,
+     "terminal_bench": 0,
+     "gdpval": 0,
+     "hle": 11.8
+    }
+   },
+   {
+    "name": "Nemotron 3.5 Super VL",
+    "price_in": 0.15,
+    "price_out": 0.5,
+    "fast": false,
+    "tico_level": null,
+    "tps": 127.0,
+    "ttft_s": 0.46,
+    "scores": {
+     "intelligence": 26.5,
+     "arena": 1413,
+     "terminal_bench": 0,
+     "gdpval": 33.1,
+     "hle": 30.7
+    }
+   },
+   {
+    "name": "Beam 1.0",
+    "price_in": 0.25,
+    "price_out": 1.0,
+    "fast": false,
+    "tico_level": null,
+    "tps": 87.0,
+    "ttft_s": 0.9,
+    "scores": {
+     "intelligence": 30.3,
+     "arena": 1436,
+     "terminal_bench": 3.0,
+     "gdpval": 33.9,
+     "vals_finance": 46.5,
+     "vals_legal": 61.8,
+     "hle": 34.7
+    }
+   },
+   {
+    "name": "Ling 3.1 Flash",
+    "price_in": 0.075,
+    "price_out": 0.225,
+    "fast": false,
+    "tico_level": null,
+    "tps": 60.0,
+    "ttft_s": 1.26,
+    "scores": {
+     "intelligence": 41.1,
+     "terminal_bench": 33.3,
+     "gdpval": 55.9,
+     "hle": 39.4
+    }
+   },
+   {
+    "name": "gpt-oss-120b",
+    "price_in": 0.15,
+    "price_out": 0.6,
+    "fast": false,
+    "tico_level": null,
+    "tps": 936.0,
+    "ttft_s": 0.15,
+    "scores": {
+     "intelligence": 11.6,
+     "arena": 1352,
+     "terminal_bench": 0,
+     "gdpval": 5.4,
+     "hle": 19.6
+    }
+   }
+  ]
+ },
+ "changes": [
+  {
+   "date": "2026-10-25",
+   "text": "Department tiers with Low, Medium, High and Fast."
+  },
+  {
+   "date": "2026-10-25",
+   "text": "Decide Medium and High, Search, and a Gateway MCP server."
+  },
+  {
+   "date": "2026-10-25",
+   "text": "Images and PDFs as input on every tier but Low Fast."
+  },
+  {
+   "date": "2026-10-25",
+   "text": "Fetch: read a web page or PDF. Search falls back to a second engine."
+  },
+  {
+   "date": "2026-11-05",
+   "text": "Physical mail and Alerts live; every service lists its details."
+  },
+  {
+   "date": "2026-11-06",
+   "text": "Five levels, X-Low to X-High, each with Fast. Departments removed. Decide Low on Jev 1.14."
+  }
+ ]
+}

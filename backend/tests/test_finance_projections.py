@@ -1,5 +1,6 @@
 """Default projections from posted history: a trend never goes below zero, a run rate scales to the month's length,
 and a line with no history has no default at all."""
+
 from backend.finance.core import projections as PJ
 
 

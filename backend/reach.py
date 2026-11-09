@@ -18,6 +18,7 @@
 
 Tables: backend/migrations/0040_reach.sql (0045_reach_nearby.sql adds the `nearby` mode).
 """
+
 import dataclasses
 import os
 from datetime import timedelta
@@ -45,16 +46,27 @@ def bot_mode():
     something else `open`, since most test companies put their bots on no chart)."""
     mode = os.environ.get("TICO_REACH_DEFAULT", "")
     return mode if mode in ("open", "nearby", "closed") else DEFAULTS["mode"]
+
+
 PERSON_MODE = "open"
 MODES = ("open", "nearby", "closed")
-LINES_MAX = 2000            # the lines one company keeps; the map answers them all at once
+LINES_MAX = 2000  # the lines one company keeps; the map answers them all at once
+
 
 # ----------------------------------------------------------------------------------------------- the roster
 def context(c):
     """What one read or check needs, read once: the roster, the bots' configs, the stored settings and lines."""
     roster = G._roster(c)
-    return {"c": c, "roster": roster, "configs": G._configs(c), "settings": _settings(c), "lines": _lines(c),
-            "owner": owner(c), "led": {}, "bots": {b["id"]: b for b in H.bots(c)}}
+    return {
+        "c": c,
+        "roster": roster,
+        "configs": G._configs(c),
+        "settings": _settings(c),
+        "lines": _lines(c),
+        "owner": owner(c),
+        "led": {},
+        "bots": {b["id"]: b for b in H.bots(c)},
+    }
 
 
 def _settings(c):
@@ -68,6 +80,7 @@ def _lines(c):
 def owner(c):
     """The company owner as an actor: never limited."""
     from .automations import top_person
+
     pid = top_person(c)
     return "human:" + pid if pid else None
 
@@ -106,8 +119,11 @@ def effective(ctx, party):
                 out[field], came[field] = row[field], at
                 break
         else:
-            default = PERSON_MODE if field == "mode" and party.startswith("human:") else (
-                bot_mode() if field == "mode" else DEFAULTS[field])
+            default = (
+                PERSON_MODE
+                if field == "mode" and party.startswith("human:")
+                else (bot_mode() if field == "mode" else DEFAULTS[field])
+            )
             out[field], came[field] = default, None
     return {**out, "from": came}
 
@@ -154,6 +170,7 @@ def _led(ctx, actor):
     """The teams `actor` leads, and every team nested under one."""
     if actor not in ctx["led"]:
         from .task_caps import actor as ref_actor
+
         roster, configs = ctx["roster"], ctx["configs"]
         out = set()
         for gid in roster.get("org_groups") or {}:
@@ -178,8 +195,9 @@ def may_edit(c, auth, who, party, ctx):
         return True
     if kind in ("human", "bot") and _team(ctx, party) in led and _team(ctx, party):
         return True
-    return kind == "bot" and who.role == "human" and \
-        auth.bot_manager(c, who, (H.bot(c, ident) or {}).get("slug") or ident)
+    return (
+        kind == "bot" and who.role == "human" and auth.bot_manager(c, who, (H.bot(c, ident) or {}).get("slug") or ident)
+    )
 
 
 def _require_edit(c, auth, who, party, ctx):
@@ -188,14 +206,21 @@ def _require_edit(c, auth, who, party, ctx):
     if party == ctx["owner"]:
         raise Problem("validation", "The company owner is never limited", 422)
     if not may_edit(c, auth, who, party, ctx):
-        raise Problem("forbidden", "Only the owner, an admin, the team's lead or the bot's manager changes this reach",
-                      403)
+        raise Problem(
+            "forbidden", "Only the owner, an admin, the team's lead or the bot's manager changes this reach", 403
+        )
 
 
 # ----------------------------------------------------------------------------------------------- views
 def _setting_view(row):
-    return {"party": row["party_id"], "mode": row["mode"], "chats_per_day": row["chats_per_day"],
-            "tasks_per_day": row["tasks_per_day"], "updated_at": row["updated_at"], "updated_by": row["updated_by_id"]}
+    return {
+        "party": row["party_id"],
+        "mode": row["mode"],
+        "chats_per_day": row["chats_per_day"],
+        "tasks_per_day": row["tasks_per_day"],
+        "updated_at": row["updated_at"],
+        "updated_by": row["updated_by_id"],
+    }
 
 
 def _line_row(c, line_id):
@@ -206,8 +231,13 @@ def _line_row(c, line_id):
 
 
 def _line_core(row):
-    return {"id": row["id"], "sender": row["sender_id"], "receiver": row["receiver_id"], "per_day": row["per_day"],
-            "rule_id": row["org_rule_id"]}
+    return {
+        "id": row["id"],
+        "sender": row["sender_id"],
+        "receiver": row["receiver_id"],
+        "per_day": row["per_day"],
+        "rule_id": row["org_rule_id"],
+    }
 
 
 def _rule_of(c, row):
@@ -218,15 +248,23 @@ def _rule_of(c, row):
 
 
 def line_view(c, auth, who, row, ctx):
-    return {"id": row["id"], "sender": row["sender_id"], "receiver": row["receiver_id"], "per_day": row["per_day"],
-            "rule": _rule_of(c, row), "may_edit": may_edit(c, auth, who, row["sender_id"], ctx),
-            "created_at": row["created_at"], "updated_at": row["updated_at"]}
+    return {
+        "id": row["id"],
+        "sender": row["sender_id"],
+        "receiver": row["receiver_id"],
+        "per_day": row["per_day"],
+        "rule": _rule_of(c, row),
+        "may_edit": may_edit(c, auth, who, row["sender_id"], ctx),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def listing(c, auth, who):
     """GET /api/v2/reach: the defaults, the stored settings, each party's effective values, the lines, and the parties
     the caller may change. A setting, line or party naming a teammate the caller may not See is left out."""
     from . import teammate_access as TA
+
     auth.domain(who)
     ctx = context(c)
     hidden = TA.hidden(c, who, "see", auth=auth)
@@ -245,8 +283,9 @@ def listing(c, auth, who):
         "owner": ctx["owner"],
         "settings": [_setting_view(r) for p, r in sorted(ctx["settings"].items()) if shown(p)],
         "effective": effective_view,
-        "lines": [line_view(c, auth, who, r, ctx) for r in ctx["lines"]
-                  if shown(r["sender_id"]) and shown(r["receiver_id"])],
+        "lines": [
+            line_view(c, auth, who, r, ctx) for r in ctx["lines"] if shown(r["sender_id"]) and shown(r["receiver_id"])
+        ],
         "may_edit": [p for p in parties if may_edit(c, auth, who, p, ctx)],
     }
 
@@ -273,14 +312,17 @@ def save_setting(c, auth, who, party_value, changes):
     if all(after[f] is None for f in FIELDS):
         c.execute("DELETE FROM reach_settings WHERE party_id=?", (party,))
     elif before:
-        c.execute("UPDATE reach_settings SET mode=?, chats_per_day=?, tasks_per_day=?, updated_at=?, updated_by_id=? "
-                  "WHERE party_id=?", (after["mode"], after["chats_per_day"], after["tasks_per_day"], now, who.actor,
-                                        party))
+        c.execute(
+            "UPDATE reach_settings SET mode=?, chats_per_day=?, tasks_per_day=?, updated_at=?, updated_by_id=? "
+            "WHERE party_id=?",
+            (after["mode"], after["chats_per_day"], after["tasks_per_day"], now, who.actor, party),
+        )
     else:
-        c.execute("INSERT INTO reach_settings(id, party_id, mode, chats_per_day, tasks_per_day, created_at, updated_at, "
-                  "updated_by_id) VALUES(?,?,?,?,?,?,?,?)",
-                  (H.new_id(), party, after["mode"], after["chats_per_day"], after["tasks_per_day"], now, now,
-                   who.actor))
+        c.execute(
+            "INSERT INTO reach_settings(id, party_id, mode, chats_per_day, tasks_per_day, created_at, updated_at, "
+            "updated_by_id) VALUES(?,?,?,?,?,?,?,?)",
+            (H.new_id(), party, after["mode"], after["chats_per_day"], after["tasks_per_day"], now, now, who.actor),
+        )
     core_before = {"party": party, **{f: before[f] for f in FIELDS}} if before else None
     core_after = None if all(after[f] is None for f in FIELDS) else {"party": party, **after}
     if core_before != core_after:
@@ -288,8 +330,10 @@ def save_setting(c, auth, who, party_value, changes):
         H.event(c, who.actor, "reach.setting_changed", "reach_setting:" + party, {"fields": sorted(changes)})
     ctx = context(c)
     row = ctx["settings"].get(party)
-    return {"setting": _setting_view(row) if row else {"party": party, **{f: None for f in FIELDS}},
-            "effective": effective(ctx, party)}
+    return {
+        "setting": _setting_view(row) if row else {"party": party, **{f: None for f in FIELDS}},
+        "effective": effective(ctx, party),
+    }
 
 
 def _rule_identity(who):
@@ -317,9 +361,13 @@ def _rule_write(c, auth, who, row, text, moved=False):
     """The line's rule after a change: added, edited or retired through org_rules, and its id (None for none). `moved`:
     the line's sender or receiver changed, so its rule's Who and With follow."""
     from . import org_rules as O
+
     acting = _rule_identity(who)
-    current = c.execute("SELECT id, text, status, version FROM org_rules WHERE id=?",
-                        (row["org_rule_id"],)).fetchone() if row.get("org_rule_id") else None
+    current = (
+        c.execute("SELECT id, text, status, version FROM org_rules WHERE id=?", (row["org_rule_id"],)).fetchone()
+        if row.get("org_rule_id")
+        else None
+    )
     live = current if current and current["status"] != "retired" else None
     if text is None:
         if live:
@@ -332,14 +380,29 @@ def _rule_write(c, auth, who, row, text, moved=False):
         if change:
             O.edit_rule(c, auth, acting, live["id"], {**change, "version": live["version"]})
         return live["id"]
-    made = O.add_rule(c, auth, acting, {"kind": "internal", "text": text, "who": _scope(row["sender_id"]),
-                                         "with": _with(row["receiver_id"]), "if_broken": "warn"})
+    made = O.add_rule(
+        c,
+        auth,
+        acting,
+        {
+            "kind": "internal",
+            "text": text,
+            "who": _scope(row["sender_id"]),
+            "with": _with(row["receiver_id"]),
+            "if_broken": "warn",
+        },
+    )
     return made["id"]
 
 
 def _line_event(c, who, action, row, detail=None):
-    H.event(c, who.actor, "reach.line_" + action, "reach_line:" + row["id"],
-            {"sender": row["sender_id"], "receiver": row["receiver_id"], **(detail or {})})
+    H.event(
+        c,
+        who.actor,
+        "reach.line_" + action,
+        "reach_line:" + row["id"],
+        {"sender": row["sender_id"], "receiver": row["receiver_id"], **(detail or {})},
+    )
 
 
 def add_line(c, auth, who, body, via=None):
@@ -356,9 +419,11 @@ def add_line(c, auth, who, body, via=None):
     now = H.now()
     row = {"id": H.new_id(), "sender_id": sender, "receiver_id": receiver, "per_day": per_day, "org_rule_id": None}
     rule_id = _rule_write(c, auth, who, row, _rule_text(body.get("rule")))
-    c.execute("INSERT INTO reach_lines(id, sender_id, receiver_id, per_day, org_rule_id, created_at, updated_at, "
-              "created_by_id, updated_by_id) VALUES(?,?,?,?,?,?,?,?,?)",
-              (row["id"], sender, receiver, per_day, rule_id, now, now, who.actor, who.actor))
+    c.execute(
+        "INSERT INTO reach_lines(id, sender_id, receiver_id, per_day, org_rule_id, created_at, updated_at, "
+        "created_by_id, updated_by_id) VALUES(?,?,?,?,?,?,?,?,?)",
+        (row["id"], sender, receiver, per_day, rule_id, now, now, who.actor, who.actor),
+    )
     stored = _line_row(c, row["id"])
     audit_log.write(c, who.actor, "reach_line:" + row["id"], None, _line_core(stored), via or _via(who))
     _line_event(c, who, "added", stored, {"per_day": per_day})
@@ -380,10 +445,12 @@ def edit_line(c, auth, who, line_id, changes, via=None):
         if sender == receiver:
             raise Problem("validation", "A line runs between two parties", 422)
         _require_edit(c, auth, who, sender, ctx)
-        if c.execute("SELECT 1 FROM reach_lines WHERE sender_id=? AND receiver_id=? AND id<>?",
-                     (sender, receiver, line_id)).fetchone():
-            raise Problem("conflict", "There is already a line from that sender to that receiver: change it instead",
-                          409)
+        if c.execute(
+            "SELECT 1 FROM reach_lines WHERE sender_id=? AND receiver_id=? AND id<>?", (sender, receiver, line_id)
+        ).fetchone():
+            raise Problem(
+                "conflict", "There is already a line from that sender to that receiver: change it instead", 409
+            )
         sets["sender_id"], sets["receiver_id"] = sender, receiver
     if "per_day" in changes:
         sets["per_day"] = changes["per_day"]
@@ -391,14 +458,17 @@ def edit_line(c, auth, who, line_id, changes, via=None):
     if "rule" in changes:
         sets["org_rule_id"] = _rule_write(c, auth, who, moved_row, _rule_text(changes["rule"]), moved)
     elif moved and row["org_rule_id"]:
-        current = c.execute("SELECT text FROM org_rules WHERE id=? AND status<>'retired'",
-                            (row["org_rule_id"],)).fetchone()
+        current = c.execute(
+            "SELECT text FROM org_rules WHERE id=? AND status<>'retired'", (row["org_rule_id"],)
+        ).fetchone()
         if current:
             _rule_write(c, auth, who, moved_row, current["text"], moved)
     if not sets or all(row[k] == v for k, v in sets.items()):
         return row
-    c.execute(f"UPDATE reach_lines SET {', '.join(k + '=?' for k in sets)}, updated_at=?, updated_by_id=? WHERE id=?",
-              (*sets.values(), H.now(), who.actor, line_id))
+    c.execute(
+        f"UPDATE reach_lines SET {', '.join(k + '=?' for k in sets)}, updated_at=?, updated_by_id=? WHERE id=?",
+        (*sets.values(), H.now(), who.actor, line_id),
+    )
     stored = _line_row(c, line_id)
     audit_log.write(c, who.actor, "reach_line:" + line_id, before, _line_core(stored), via or _via(who))
     _line_event(c, who, "changed", stored, {"fields": sorted(changes)})
@@ -422,9 +492,19 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
 # may reach them (a bot that needs a fix asks BotOps). The Assistant's slug is the install's own (TICO_ASSISTANT_BOT).
 # The built-in bots of Auth.system_bot plus the support helper, except the Health Monitor: its tasks to people far from
 # it are what nearby reach is for, so it is checked like any bot.
-HELPERS = ("botops", "task-manager", "goal-manager", "librarian", "support", "assistant", "bookkeeper", H.COUNSEL)
-SOLICITED_DAYS = 7          # how far back a teammate's message to a bot makes the bot's answer to them solicited
-NAMES_SHOWN = 6             # the teammates a refusal names as the ones the bot does reach
+HELPERS = (
+    "botops",
+    "task-manager",
+    "goal-manager",
+    "librarian",
+    "support",
+    "assistant",
+    "bookkeeper",
+    H.COUNSEL,
+    H.BRAND_OWNER,
+)
+SOLICITED_DAYS = 7  # how far back a teammate's message to a bot makes the bot's answer to them solicited
+NAMES_SHOWN = 6  # the teammates a refusal names as the ones the bot does reach
 
 
 def helpers():
@@ -531,6 +611,7 @@ def name(ctx, actor):
 class Decision:
     """`why` says what let it through (person, self, system, helper, task, solicited, open, line, manager, report,
     peer, team) or, refused, is the code (reach_closed, reach_line, reach_cap). `via`: who to send it to instead."""
+
     allowed: bool
     why: str
     message: str = ""
@@ -538,12 +619,25 @@ class Decision:
     can_reach: tuple = ()
 
 
-def decide(ctx, sender, receiver, kind="task", *, system=False, on_task=False, solicited=False, count=None,
-           unseen=frozenset()):
+def decide(
+    ctx,
+    sender,
+    receiver,
+    kind="task",
+    *,
+    system=False,
+    on_task=False,
+    solicited=False,
+    own=False,
+    count=None,
+    unseen=frozenset(),
+):
     """Whether `sender` may reach `receiver` with one write. Pure: the context's roster, configs, settings and lines,
     the write's facts, and `count(scope)` for what was already sent today (scope `("line", line)`, `("task",)` or
     `("chat",)`; none counted when it is None). `kind` is `task` (a task made, handed or asked on) or `chat` (a message
-    or a note). Only a bot is ever refused; the owner as receiver is not exempt."""
+    or a note). Only a bot is ever refused; the owner as receiver is not exempt. A person receiver is only opened by
+    `own` (a reply to their message, a conversation they wrote to the bot in, a task they handed it: person_asked):
+    `on_task` and `solicited` do not open a person."""
     count = count or (lambda scope: 0)
     if not H.is_bot(sender):
         return Decision(True, "person")
@@ -553,9 +647,12 @@ def decide(ctx, sender, receiver, kind="task", *, system=False, on_task=False, s
         return Decision(True, "system")
     if is_helper(ctx, sender) or is_helper(ctx, receiver):
         return Decision(True, "helper")
-    if on_task:
+    if str(receiver).startswith("human:"):
+        if own:
+            return Decision(True, "solicited")
+    elif on_task:
         return Decision(True, "task")
-    if solicited:
+    elif solicited:
         return Decision(True, "solicited")
     eff = effective(ctx, sender)
     line, why = line_for(ctx, sender, receiver), "open"
@@ -590,24 +687,38 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
     the bot may not See (`unseen`) are never named, its manager included; the receiver it named itself."""
     boss = _managers(ctx).get(sender)
     via = boss if boss and boss != receiver and boss not in unseen else None
-    reached = [a for a in _reached(ctx, sender, mode) if a != receiver and a not in unseen and not
-               (a.startswith("group:") and a in unseen)]
+    reached = [
+        a
+        for a in _reached(ctx, sender, mode)
+        if a != receiver and a not in unseen and not (a.startswith("group:") and a in unseen)
+    ]
     s, r = name(ctx, sender), name(ctx, receiver)
     if code == "reach_cap":
         field, limit = cap
         what = "tasks" if field == "tasks_per_day" else "chats"
         head = f"{s} has sent its {limit} {what} for today, its limit. Nothing was sent."
-        tail = (" The count starts again at midnight: do not send more before then. A person who manages "
-                f"{s} can raise the limit on Rules › Internal.")
+        tail = (
+            " The count starts again at midnight: do not send more before then. A person who manages "
+            f"{s} can raise the limit on Rules › Internal."
+        )
         return Decision(False, code, head + tail, via, tuple(reached))
-    shown = ", ".join(name(ctx, a) for a in reached[:NAMES_SHOWN]) + (" and others" if len(reached) > NAMES_SHOWN
-                                                                       else "")
+    shown = ", ".join(name(ctx, a) for a in reached[:NAMES_SHOWN]) + (
+        " and others" if len(reached) > NAMES_SHOWN else ""
+    )
     if code == "reach_line":
-        head = (f"A line on Rules › Internal blocks {s} from reaching {r}." if line["per_day"] == 0 else
-                f"{s} has reached {r} {line['per_day']} times today, the most its line on Rules › Internal allows.")
+        head = (
+            f"A line on Rules › Internal blocks {s} from reaching {r}."
+            if line["per_day"] == 0
+            else f"{s} has reached {r} {line['per_day']} times today, the most its line on Rules › Internal allows."
+        )
     elif mode == "nearby":
-        boss_is = ("the owner (it has no manager on the chart)" if boss and boss == ctx.get("owner") and not
-                   _ref(ctx, (ctx["configs"].get(H.actor_id(sender)) or {}).get("reports_to")) else "its manager")
+        boss_is = (
+            "the owner (it has no manager on the chart)"
+            if boss
+            and boss == ctx.get("owner")
+            and not _ref(ctx, (ctx["configs"].get(H.actor_id(sender)) or {}).get("reports_to"))
+            else "its manager"
+        )
         head = f"{r} is outside {s}'s reach: it reaches only {boss_is}, its reports, its peers and its team"
         head += f" ({shown})." if shown else "."
     else:
@@ -618,8 +729,10 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
     elif reached:
         step = f" {s} has no manager to pass it on: send it to one it reaches."
     else:
-        step = (f" {s} has no manager and reaches no one: tell the person who runs it, in its own chat, that it needs a "
-                "manager on the chart.")
+        step = (
+            f" {s} has no manager and reaches no one: tell the person who runs it, in its own chat, that it needs a "
+            "manager on the chart."
+        )
     again = " Do not retry: sending it again is refused the same way."
     return Decision(False, code, head + " Nothing was sent." + step + again, via, tuple(reached))
 
@@ -627,15 +740,19 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
 # ----------------------------------------------------------------------------------------------- the write's facts
 def midnight():
     from .task_caps import _midnight
+
     return _midnight()
 
 
 def _held(c, task_id, field, current, before):
-    """Who held a task's `field` (owner, waiting_on) at any point before `before`, and at that moment: the values its
+    """Who held a task's `field` (owner, the waiting_on it stored before step 6b) at any point before `before`, and at that moment: the values its
     changes moved between, and its value then (the one the first later change moved away from, else today's)."""
     out, later = set(), None
-    for r in c.execute("SELECT old, new, created_at FROM task_events WHERE task_id=? AND field=? ORDER BY created_at",
-                       (task_id, field)):
+    for r in c.execute(
+        "SELECT old, new, created_at FROM history_events WHERE subject_type='task' AND subject_id=? "
+        "AND kind=? ORDER BY created_at",
+        (task_id, field),
+    ):
         if before and r["created_at"] >= before:
             later = r["old"] if later is None else later
             continue
@@ -645,23 +762,41 @@ def _held(c, task_id, field, current, before):
 
 
 def task_parties(c, task_id, before=None):
-    """Everyone a task is shared with: its owner, requester, the one it waits on, its guest, everyone who owned it, and
+    """Everyone a task is shared with: its owner, requester, the one it waits on, its readers (a group's by its members), everyone who owned it, and
     whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
     are left out, as their joins are not dated)."""
-    row = c.execute("SELECT owner_id, requester_id, waiting_on, guest, conversation_id FROM tasks WHERE id=?",
-                    (task_id,)).fetchone() if task_id else None
+    row = (
+        c.execute(
+            "SELECT id, status, owner_id, requester_id, readers, conversation_id FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()
+        if task_id
+        else None
+    )
     if not row:
         return set()
-    out = {row["requester_id"], row["guest"]}
+    from . import question_tasks as QT
+
+    out = {row["requester_id"]} | H.reader_actors(c, dict(row))
     out |= _held(c, task_id, "owner", row["owner_id"], before)
-    out |= _held(c, task_id, "waiting_on", row["waiting_on"], before)
+    # Who it waits on now is derived (question_tasks.waiting_on); history keeps who it waited on before.
+    out |= _held(c, task_id, "waiting_on", QT.waiting_on(c, dict(row)), before)
     if row["conversation_id"]:
-        out |= {r[0] for r in c.execute("SELECT DISTINCT sender_id FROM messages WHERE conversation_id=?"
-                                        + (" AND created_at<?" if before else "") + " LIMIT 500",
-                                        (row["conversation_id"], *((before,) if before else ())))}
+        out |= {
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT sender_id FROM messages WHERE conversation_id=?"
+                + (" AND created_at<?" if before else "")
+                + " LIMIT 500",
+                (row["conversation_id"], *((before,) if before else ())),
+            )
+        }
         if not before and H._has_table(c, "thread_members"):
-            out |= {r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=? LIMIT 500",
-                                            (row["conversation_id"],))}
+            out |= {
+                r[0]
+                for r in c.execute(
+                    "SELECT actor FROM thread_members WHERE thread_id=? LIMIT 500", (row["conversation_id"],)
+                )
+            }
     return {a for a in out if a}
 
 
@@ -671,19 +806,27 @@ def on_task(c, task_id, sender, receiver, before=None):
     return sender in parties and receiver in parties
 
 
-def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, before=None):
+def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, before=None, person=False):
     """The receiver came to the sender first: it gave the sender an open task, or (in the last SOLICITED_DAYS) wrote
     to it, here when the write names a conversation (addressed to it or @mentioning it), or this is a reply to the
     receiver's message. `conversation_id` and `in_reply_to` may each be several (a sub-thread and its parent thread; a
     reply and the message its sub-thread hangs from). `before`: only what was written before then (the dry-run's
-    history)."""
+    history). `person`: the receiver is a person, so only what they wrote to the sender in these conversations counts
+    (no open task they gave it, nothing written elsewhere). In a DM named by the write, any person's message there
+    counts, so a group DM people opened with the bot keeps working."""
     for message_id in _many(in_reply_to):
         row = c.execute("SELECT sender_id FROM messages WHERE id=?", (message_id,)).fetchone()
         if row and row["sender_id"] == receiver:
             return True
-    if c.execute("SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
-                 + (" AND created_at<?" if before else "") + " LIMIT 1",
-                 (receiver, sender, *((before,) if before else ()))).fetchone():
+    if (
+        not person
+        and c.execute(
+            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
+            + (" AND created_at<?" if before else "")
+            + " LIMIT 1",
+            (receiver, sender, *((before,) if before else ())),
+        ).fetchone()
+    ):
         return True
     until = before or H.now()
     since = (H.parse_ts(until) - timedelta(days=SOLICITED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -694,6 +837,8 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
         args.append(sender)
     where += ")"
     places = _many(conversation_id)
+    if person and not places:
+        return False
     if places:
         where += f" AND m.conversation_id IN ({','.join('?' * len(places))})"
         args.extend(places)
@@ -702,17 +847,49 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
     # A DM the bot is in: what the receiver wrote there was written to the bot, and a person who wrote there brought
     # its members together.
     dms = [p for p in places if _is_dm(c, p)]
-    return bool(dms) and c.execute(
-        f"SELECT 1 FROM messages WHERE (sender_id=? OR sender_id LIKE 'human:%') AND created_at>=? AND created_at<? "
-        f"AND conversation_id IN ({','.join('?' * len(dms))}) LIMIT 1", (receiver, since, until, *dms)).fetchone() \
+    others = "(sender_id=? OR sender_id LIKE 'human:%')"
+    return (
+        bool(dms)
+        and c.execute(
+            f"SELECT 1 FROM messages WHERE {others} AND created_at>=? AND created_at<? "
+            f"AND conversation_id IN ({','.join('?' * len(dms))}) LIMIT 1",
+            (receiver, since, until, *dms),
+        ).fetchone()
         is not None
+    )
+
+
+def handed(c, sender, receiver, task_id, before=None):
+    """The person `receiver` handed `sender` this exact open task: they asked for it and the bot owns it."""
+    return bool(task_id) and (
+        c.execute(
+            "SELECT 1 FROM tasks WHERE id=? AND requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
+            + (" AND created_at<?" if before else ""),
+            (task_id, receiver, sender, *((before,) if before else ())),
+        ).fetchone()
+        is not None
+    )
+
+
+def person_asked(c, sender, receiver, task_id=None, conversation_id=None, in_reply_to=None, before=None):
+    """What lets a bot write to a person who is not adjacent to it, and only this: a direct reply to the person's own
+    message, a write in a conversation where the person wrote to the bot in the last SOLICITED_DAYS, or a write on a
+    task the person handed this bot. Being on the task in any other way (reader, former owner, thread member, an
+    ancestor's party) or having given the bot some other task does not count."""
+    return solicited(c, sender, receiver, conversation_id, in_reply_to, before, person=True) or handed(
+        c, sender, receiver, task_id, before
+    )
 
 
 def _is_dm(c, conversation_id):
     from . import threads as T
+
     thread = T.thread_row(c, conversation_id)
-    return bool(thread) and not thread.get("parent_id") and T.audience_of(T.root_of(c, thread)) in ("personal",
-                                                                                                    "participants")
+    return (
+        bool(thread)
+        and not thread.get("parent_id")
+        and T.audience_of(T.root_of(c, thread)) in ("personal", "participants")
+    )
 
 
 def _many(value):
@@ -752,28 +929,39 @@ def counted(c, ctx, sender, scope, since=None, until=None, exclude=None):
     until = until or "9999"
     exclude = exclude or ""
     if scope[0] == "task":
-        return c.execute("SELECT COUNT(*) FROM task_cap_log WHERE sender=? AND sent_at>=? AND sent_at<?",
-                         (sender, since, until)).fetchone()[0]
+        return c.execute(
+            "SELECT COUNT(*) FROM task_cap_log WHERE sender=? AND sent_at>=? AND sent_at<?", (sender, since, until)
+        ).fetchone()[0]
     if scope[0] == "chat":
         return c.execute(
             "SELECT COUNT(*) FROM messages m LEFT JOIN conversations v ON v.id=m.conversation_id WHERE m.sender_id=? "
             "AND m.created_at>=? AND m.created_at<? AND m.id<>? AND v.task_id IS NULL AND coalesce(v.owner_id,'')<>? AND EXISTS("
             "SELECT 1 FROM message_deliveries d WHERE d.message_id=m.id AND d.recipient<>? "
             "AND (d.recipient LIKE 'bot:%' OR d.recipient LIKE 'human:%'))",
-            (sender, since, until, exclude, sender, sender)).fetchone()[0]
+            (sender, since, until, exclude, sender, sender),
+        ).fetchone()[0]
     line = scope[1]
     froms, tos = members(ctx, line["sender_id"]), members(ctx, line["receiver_id"])
     total = 0
     args = [since, until]
-    total += c.execute(f"SELECT COUNT(*) FROM task_cap_log WHERE sent_at>=? AND sent_at<? AND sender<>receiver AND "
-                       f"{_in('sender', froms, args)} AND {_in('receiver', tos, args)}", args).fetchone()[0]
+    total += c.execute(
+        f"SELECT COUNT(*) FROM task_cap_log WHERE sent_at>=? AND sent_at<? AND sender<>receiver AND "
+        f"{_in('sender', froms, args)} AND {_in('receiver', tos, args)}",
+        args,
+    ).fetchone()[0]
     args = [since, until, exclude]
-    total += c.execute(f"SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE "
-                       f"m.created_at>=? AND m.created_at<? AND m.id<>? AND d.recipient<>m.sender_id AND "
-                       f"{_in('m.sender_id', froms, args)} AND {_in('d.recipient', tos, args)}", args).fetchone()[0]
+    total += c.execute(
+        f"SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE "
+        f"m.created_at>=? AND m.created_at<? AND m.id<>? AND d.recipient<>m.sender_id AND "
+        f"{_in('m.sender_id', froms, args)} AND {_in('d.recipient', tos, args)}",
+        args,
+    ).fetchone()[0]
     args = [since, until]
-    total += c.execute(f"SELECT COUNT(*) FROM notes WHERE created_at>=? AND created_at<? AND message_id IS NULL AND "
-                       f"{_in('from_actor', froms, args)} AND {_in('to_actor', tos, args)}", args).fetchone()[0]
+    total += c.execute(
+        f"SELECT COUNT(*) FROM notes WHERE created_at>=? AND created_at<? AND message_id IS NULL AND "
+        f"{_in('from_actor', froms, args)} AND {_in('to_actor', tos, args)}",
+        args,
+    ).fetchone()[0]
     return total
 
 
@@ -783,11 +971,15 @@ class Refused(Problem):
     written: the write's transaction goes with it."""
 
     def __init__(self, decision, receiver):
-        super().__init__(decision.why, decision.message, 409, extra={
-            "receiver": receiver, "via": decision.via, "can_reach": list(decision.can_reach[:20])})
+        super().__init__(
+            decision.why,
+            decision.message,
+            409,
+            extra={"receiver": receiver, "via": decision.via, "can_reach": list(decision.can_reach[:20])},
+        )
 
 
-REPLAY_AGENT = "org-rule-hold"   # org_rule_check.replay_identity: a held write a person chose to Send anyway
+REPLAY_AGENT = "org-rule-hold"  # org_rule_check.replay_identity: a held write a person chose to Send anyway
 
 
 def _sender(who):
@@ -798,11 +990,13 @@ def _sender(who):
     return None if getattr(who, "agent", "") == REPLAY_AGENT else who.actor
 
 
-def check(c, who, receiver, kind="task", *, task_id=None, conversation_id=None, in_reply_to=None, ctx=None,
-          exclude=None):
+def check(
+    c, who, receiver, kind="task", *, task_id=None, conversation_id=None, in_reply_to=None, ctx=None, exclude=None
+):
     """Refuse (409, nothing written) a bot's task, hand-off, question or message to a teammate out of its reach. The
-    exemptions that need the database (a task they share, a teammate who came to the bot first) are read only when the
-    write would be refused without them."""
+    exemptions that need the database are read only when the write would be refused without them: for a bot teammate,
+    a task they share or a teammate who came to the bot first; for a person, only person_asked (a reply to them, a
+    conversation they wrote in, a task they handed the bot)."""
     sender = _sender(who)
     receiver = str(receiver or "")
     if not sender or receiver == sender or not receiver.startswith(("bot:", "human:")):
@@ -820,10 +1014,15 @@ def check(c, who, receiver, kind="task", *, task_id=None, conversation_id=None, 
     if found.allowed:
         return
     task_id = task_of(c, task_id, _many(conversation_id)[0] if _many(conversation_id) else None)
-    if (task_id and on_task(c, task_id, sender, receiver)) or solicited(c, sender, receiver, conversation_id,
-                                                                        in_reply_to):
+    if receiver.startswith("human:"):
+        if person_asked(c, sender, receiver, task_id, conversation_id, in_reply_to):
+            return
+    elif (task_id and on_task(c, task_id, sender, receiver)) or solicited(
+        c, sender, receiver, conversation_id, in_reply_to
+    ):
         return
     from .teammate_access import hidden
+
     unseen = hidden(c, who)
     if unseen:
         found = decide(ctx, sender, receiver, kind, count=count, unseen=frozenset(unseen))
@@ -850,6 +1049,7 @@ def check_post(c, who, thread, mentioned, target, in_reply_to=None, ctx=None):
     a sub-thread's earlier posters are not counted: they follow the thread themselves. In a task's thread each is
     checked against the task, so writing to those already on it passes."""
     from . import threads as T
+
     if not _sender(who):
         return
     root = T.root_of(c, thread)
@@ -873,6 +1073,7 @@ def check_thread(c, who, thread_id, text, to=None, parent_message_id=None):
     """check_post before the write, from what a post names: its thread (the sub-thread under `parent_message_id`
     once there is one), the @mentions in its text and who it is addressed to."""
     from . import threads as T
+
     if not _sender(who):
         return
     thread = T.thread_row(c, thread_id)
@@ -881,9 +1082,15 @@ def check_thread(c, who, thread_id, text, to=None, parent_message_id=None):
     if parent_message_id:
         sub = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
         thread = T.thread_row(c, sub[0]) if sub else thread
-    target = H.resolve_actor(c, to) if to else None      # a DM's other members check_post finds itself
-    check_post(c, who, thread, [a for a, _ in T.mentions(c, thread, text, author=who.actor)], target,
-               in_reply_to=parent_message_id)
+    target = H.resolve_actor(c, to) if to else None  # a DM's other members check_post finds itself
+    check_post(
+        c,
+        who,
+        thread,
+        [a for a, _ in T.mentions(c, thread, text, author=who.actor)],
+        target,
+        in_reply_to=parent_message_id,
+    )
 
 
 def check_edit(c, who, message_id, text, viewer=None):
@@ -891,21 +1098,28 @@ def check_edit(c, who, message_id, text, viewer=None):
     must be in its reach, as on a post. The message must first be one the bot reads and wrote (`viewer`, as the edit
     itself checks): anything else is the edit's 404 or 403, never a refusal that names who it would reach."""
     from . import threads as T
+
     if not _sender(who):
         return
     actor, v = T._actor_of(viewer if viewer is not None else who)
-    message = T._own_say(c, actor, v, message_id)
+    message = T._own_say(c, actor, v, message_id, check_writer=False)
     thread = T.thread_row(c, message["conversation_id"])
     if thread is None:
         return
-    had = {r[0] for r in c.execute("SELECT actor FROM message_mentions WHERE message_id=? AND in_audience=1",
-                                   (message_id,))} if H._has_table(c, "message_mentions") else set()
+    had = (
+        {
+            r[0]
+            for r in c.execute("SELECT actor FROM message_mentions WHERE message_id=? AND in_audience=1", (message_id,))
+        }
+        if H._has_table(c, "message_mentions")
+        else set()
+    )
     added = [a for a, _ in T.mentions(c, thread, text, author=who.actor) if a not in had]
     if added:
         check_post(c, who, thread, added, None, in_reply_to=message.get("in_reply_to"))
 
 
-DELIVERED = ("dm", "mention", "ask", "assign", "addressed", "home")   # the deliveries a bot's post reaches someone by
+DELIVERED = ("dm", "mention", "ask", "assign", "addressed", "home")  # the deliveries a bot's post reaches someone by
 
 
 def check_delivered(c, who, message_id, task_id=None, conversation_id=None, in_reply_to=None):
@@ -914,18 +1128,32 @@ def check_delivered(c, who, message_id, task_id=None, conversation_id=None, in_r
     if not _sender(who) or not H._has_table(c, "message_deliveries"):
         return
     marks = ",".join("?" * len(DELIVERED))
-    receivers = [r[0] for r in c.execute(
-        f"SELECT DISTINCT recipient FROM message_deliveries WHERE message_id=? AND reason IN ({marks})",
-        (message_id, *DELIVERED))]
+    receivers = [
+        r[0]
+        for r in c.execute(
+            f"SELECT DISTINCT recipient FROM message_deliveries WHERE message_id=? AND reason IN ({marks})",
+            (message_id, *DELIVERED),
+        )
+    ]
     ctx = context(c) if receivers else None
-    for receiver in receivers:        # it is already written: today's counts leave it out, so a cap of 1 allows one
-        check(c, who, receiver, "chat", task_id=task_id, conversation_id=conversation_id, in_reply_to=in_reply_to,
-              ctx=ctx, exclude=message_id)
+    for receiver in receivers:  # it is already written: today's counts leave it out, so a cap of 1 allows one
+        check(
+            c,
+            who,
+            receiver,
+            "chat",
+            task_id=task_id,
+            conversation_id=conversation_id,
+            in_reply_to=in_reply_to,
+            ctx=ctx,
+            exclude=message_id,
+        )
 
 
 # ----------------------------------------------------------------------------------------------- HTTP
 class ReachSetting(Contract):
     """Any of the three; null clears it (the party takes it from above again)."""
+
     mode: Literal["open", "nearby", "closed"] | None = None
     chats_per_day: int | None = Field(default=None, ge=0, le=MAX)
     tasks_per_day: int | None = Field(default=None, ge=0, le=MAX)
@@ -940,6 +1168,7 @@ class ReachLine(Contract):
 
 class ReachLineEdit(Contract):
     """The fields sent change: a full body (as the editor sends) may flip or move the pair too."""
+
     sender: str | None = Field(default=None, min_length=1, max_length=210)
     receiver: str | None = Field(default=None, min_length=1, max_length=210)
     per_day: int | None = Field(default=None, ge=0, le=MAX)
@@ -973,6 +1202,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return save_setting(c, auth, who, party, changes)
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/reach/lines")
@@ -984,6 +1214,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             return {"id": add_line(c, auth, who, body.model_dump())["id"]}
+
         made = mutate(request, body, work)
         return {"line": fresh(who, made["id"])}
 
@@ -997,6 +1228,7 @@ def install(app, store, auth, mutate):
         def work(c):
             edit_line(c, auth, who, line_id, changes)
             return {"id": line_id}
+
         mutate(request, body, work)
         return {"line": fresh(who, line_id)}
 
@@ -1008,4 +1240,15 @@ def install(app, store, auth, mutate):
         return mutate(request, _Nothing(), lambda c: remove_line(c, auth, who, line_id))
 
 
-__all__ = ["check", "check_delivered", "check_edit", "check_post", "decide", "effective", "install", "listing", "nearby", "precheck"]
+__all__ = [
+    "check",
+    "check_delivered",
+    "check_edit",
+    "check_post",
+    "decide",
+    "effective",
+    "install",
+    "listing",
+    "nearby",
+    "precheck",
+]

@@ -21,6 +21,7 @@ A watcher prints ordinary lines (a log) and lines that start with `tico-event ` 
 task and wakes the bot; when the task is finished or closed it opens a new one from `title` and `body`. `done` tells
 the bot the thing ended elsewhere. `ref` makes a `comment` idempotent.
 """
+
 import json
 import re
 import shlex
@@ -100,7 +101,7 @@ def events(output):
     for line in str(output).splitlines():
         if line.startswith(EVENT_PREFIX):
             try:
-                event = json.loads(line[len(EVENT_PREFIX):])
+                event = json.loads(line[len(EVENT_PREFIX) :])
             except ValueError:
                 event = None
             clean = check(event) if isinstance(event, dict) else None

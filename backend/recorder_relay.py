@@ -38,7 +38,7 @@ CLOSE_CODES = (1000, 1001, 1008, 1011, 1013)
 OFF = {"transcribe": False, "assist": False, "stream": False}
 
 _services, _services_lock = {}, threading.Lock()
-_now = time.monotonic     # tests move it
+_now = time.monotonic  # tests move it
 
 
 def _gateway(store, vault, settings):
@@ -55,10 +55,15 @@ def _meeting_model(store, settings):
 def _check(settings, key):
     """The Problem a relay refuses with before it reaches the Gateway, or None."""
     if settings.rehearsal:
-        return Problem("rehearsal", "The recorder's speech is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        return Problem(
+            "rehearsal", "The recorder's speech is off in rehearsal mode; nothing is sent to the Gateway", 503
+        )
     if not key:
-        return Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
-                       "Settings > Computers", 409)
+        return Problem(
+            "gateway_not_connected",
+            "The Tico AI Gateway is not connected; the owner saves a gateway key in Settings > Computers",
+            409,
+        )
     return None
 
 
@@ -106,7 +111,7 @@ def stream_url(base, query):
     """The Gateway's live speech stream address for `query` (the same query as xAI's): wss, or ws to this computer."""
     base = G.safe_base(base)
     scheme = "wss" if base.startswith("https://") else "ws"
-    return scheme + base[base.index("://"):] + "/audio/stream" + ("?" + query if query else "")
+    return scheme + base[base.index("://") :] + "/audio/stream" + ("?" + query if query else "")
 
 
 def _passed_on(status, body):
@@ -132,8 +137,14 @@ def install_recorder_relay(app, store, auth, settings):
         refused = _check(settings, key)
         if refused:
             raise refused
-        status, answer = await asyncio.to_thread(G.relay, "POST", base + "/audio/transcriptions", body,
-                                                 {"Authorization": "Bearer " + key}, TRANSCRIBE_TIMEOUT)
+        status, answer = await asyncio.to_thread(
+            G.relay,
+            "POST",
+            base + "/audio/transcriptions",
+            body,
+            {"Authorization": "Bearer " + key},
+            TRANSCRIBE_TIMEOUT,
+        )
         return _passed_on(status, answer)
 
     @app.post("/api/v2/recorder/chat/completions")
@@ -152,9 +163,14 @@ def install_recorder_relay(app, store, auth, settings):
             raise refused
         model = await asyncio.to_thread(_meeting_model, store, settings)
         body = {**{name: payload[name] for name in CHAT_FIELDS if name in payload}, "model": model, "stream": False}
-        status, answer = await asyncio.to_thread(G.relay, "POST", base + "/chat/completions",
-                                                 json.dumps(body).encode(), {"Authorization": "Bearer " + key},
-                                                 CHAT_TIMEOUT)
+        status, answer = await asyncio.to_thread(
+            G.relay,
+            "POST",
+            base + "/chat/completions",
+            json.dumps(body).encode(),
+            {"Authorization": "Bearer " + key},
+            CHAT_TIMEOUT,
+        )
         return _passed_on(status, answer)
 
     @app.websocket("/api/v2/recorder/stream")
@@ -177,11 +193,19 @@ def install_recorder_relay(app, store, auth, settings):
             return
         await websocket.accept()
         try:
-            upstream = await connect_upstream(address, additional_headers={"Authorization": "Bearer " + key},
-                                              user_agent_header=G.user_agent(), open_timeout=10)
+            upstream = await connect_upstream(
+                address,
+                additional_headers={"Authorization": "Bearer " + key},
+                user_agent_header=G.user_agent(),
+                open_timeout=10,
+            )
         except InvalidStatus as exc:
             # The Gateway refuses the stream (503 stream_unavailable when it has no live speech service).
-            reason = "stream_unavailable" if exc.response.status_code == 503 else f"stream_refused_{exc.response.status_code}"
+            reason = (
+                "stream_unavailable"
+                if exc.response.status_code == 503
+                else f"stream_refused_{exc.response.status_code}"
+            )
             await websocket.close(code=1011, reason=reason)
             return
         except (WebSocketException, OSError, TimeoutError):
@@ -192,6 +216,7 @@ def install_recorder_relay(app, store, auth, settings):
 
 async def _relay(websocket, upstream):
     """Frames both ways, unchanged, until either side closes. The other side then closes with the Gateway's outcome."""
+
     async def from_recorder():
         while True:
             message = await websocket.receive()
@@ -219,7 +244,7 @@ async def _relay(websocket, upstream):
         await asyncio.gather(recorder, gateway, return_exceptions=True)
         await upstream.close()
     if not gateway_first:
-        return                                   # the recorder left: there is no one to send a close frame to
+        return  # the recorder left: there is no one to send a close frame to
     try:
         # A close code a close frame may carry; an abnormal one (1006) is reported as a server error.
         code = upstream.close_code if upstream.close_code in CLOSE_CODES else 1011

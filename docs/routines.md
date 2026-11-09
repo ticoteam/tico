@@ -11,7 +11,9 @@ An install that had routines moved them once, on the upgrade to Automations; see
 ## Making one
 
 - **The site.** **Automations** in the sidebar → **New automation**. Pick the trigger, add a Bot turn step, and save.
-  An automation's page shows its **Runs** and **Versions**.
+  An automation's page shows its **Runs** and **Versions**. On **Runs**, click a run to see its steps. A failed step
+  shows its reason after the word failed: the first line of its error, or the detail of its first failed action,
+  cut at 80 characters.
 - **The `hub` CLI, from a person or a bot.** `hub automation guide` prints the flow format and every trigger, step and
   action. Write the flow as JSON and pass it with `--file` (`-` reads stdin):
 
@@ -77,8 +79,12 @@ hub automation stats [--range 24h]
 ```
 
 These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
-`GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result
-fold into one row (`count`).
+`GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result,
+and failures with the same reason, fold into one row (`count`). The System job rows follow what this server runs: a job
+Tico adds gets its row on the next automations tick, a retired job's row goes, a task rule's row takes its name and
+switch, the Health Monitor's row comes back when its bot is restored, and a job that cannot run here (Directory sync with no directory
+connected, say) is left out of the list, runs and counts until its feature is set up. Maintenance runs are listed and counted too, under `automation_id` `maintenance` (trigger
+`system`, owner `tico`, run ids `mnt_<id>`); anyone signed in sees them.
 
   A Bot turn step can also name the model its run's task runs on, with `"model"`, and optionally `"effort"` and
   `"harness"` (`"model": "<model id>", "effort": "high"`). The task the run opens is stamped with that choice
@@ -109,7 +115,7 @@ An automation that keeps starting runs for 20 minutes (more than 120, spread ove
 starts more than 500 in 10 minutes, is put **on hold**. That is most often a loop, but a slow catch-up after an outage looks the
 same, so nothing is lost: its queued runs, any run whose wait ends meanwhile, and up to 500 new ones wait as **Held**
 instead of running (past that a trigger is counted as dropped, and the hold shows how many). A run mid-step finishes
-that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and the Health Monitor
+that step first. **Run now** is refused while it is on hold, and manual runs never count toward the guard. Its owner gets one Needs-you task, and BotOps
 one notice. The automation's page shows **On hold · N held**: fix what starts it, then **Release** (the held runs
 queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting it skips them too.
 
@@ -129,7 +135,7 @@ see [Meetings](meetings.md)), `release.published`, `market.insight.urgent`, `str
 
 ## Webhooks
 
-An incoming webhook (Settings → Webhooks → Incoming) gives an address anything can POST to. An automation with a
+An incoming webhook (Automations → Incoming webhooks) gives an address anything can POST to. An automation with a
 Webhook trigger runs on each call; add `filters` to the trigger (for example `webhook.type` is `invoice.paid`) to act on
 some calls only. Signatures, presets, the hourly limit, kept calls and **Run again** are on [Webhooks](webhooks.md).
 Recipes: [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).
@@ -140,3 +146,20 @@ A template's `bot.yaml` may still declare `routines:` (`id`, `title`, `cron` or 
 playbook path, and optionally `enabled: false`). `hub bot create` seeds them once, and each becomes an automation for the
 new bot. After that the automations are what run; editing the file changes nothing. `clients/preflight.py` still checks
 the block.
+
+## Inbox templates
+
+A new inbox can start from one of four templates: Founder, Support, Sales and Blank. `hub automation templates` lists
+them, and `hub automation template <id> --owner <ref> --inbox <address>` fills one in for an owner. The fill is a flow
+like any other: its roles (`legal_lead`, `support_lead`, ...) are resolved on the org chart, and what the owner cannot
+use is taken out. A role goes to the first active bot on the chart that can take the work: one that is still onboarding,
+takes no tasks under its profile, or runs on a synced harness is passed over. A wake the owner may not tell becomes a
+task for the first bot that takes one. A destination no bot can reach goes, with the rules and questions that point at
+it. A group owner gets Sort (a choice over the destinations, one route each and a default) where a person or a bot gets
+choose. A bot gets choose only if it can run its own turn: an onboarding bot, one whose profile is Responder, or one on a
+synced harness gets Sort instead. The choose's prompt names the message (its subject and body by mail, its text in
+Slack), and so does each task body and wake text the template hands on. A wake's text is quoted as data; a task body is
+substituted as plain text, so the message reaches it unquoted. In Slack, a bot that cannot take a non-routine task (a
+draft is one) gets no draft actions, and its choose becomes Sort. A group with no lead to act as loses the actions that need one (tasks, replies); when nothing it would do can run
+in its Slack channel, the fill is refused with a 422. Nothing is saved: the filled flow comes back off, and `hub automation create --file -` saves it.
+The same fill is `GET /api/v2/automations/templates/{id}?owner=...&inbox=...`.

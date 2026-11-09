@@ -12,7 +12,7 @@ headline and the export dates used.
 ## 1. Get this week's data
 
 The sales and stock exports on the task. If they are missing or older than 7 days, ask once with
-`hub task ask <id>` and build the list from the last exports, saying so in the first line.
+`hub task question "<question>" --on <person> --parent <id>` and build the list from the last exports, saying so in the first line.
 
 ## 2. Update the item plan
 

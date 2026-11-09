@@ -1,5 +1,5 @@
-/* ui/styles/strategy.css — the Strategy section (ui/strategy-page.js): its heading and tabs, shared with the Market tab
-   (ui/market-page.js), the page's cards (the line on top, Where we play, the bets, Competitors, Related news, the
+/* ui/styles/strategy.css — the Strategy section (ui/strategy-page.ts): its heading and tabs, shared with the Market tab
+   (ui/market-page.ts), the page's cards (the line on top, Where we play, the bets, Competitors, Related news, the
    sections), the bet form Setup uses, and the Versions drawer. */
 #main.strategy-layout{max-width:none}
 /* one height on every tab, with or without a button in it: a control (--ctl), the 8px under it and the rule */
@@ -137,6 +137,8 @@ button.strat-pill:hover{filter:brightness(1.1)}
 .strat-tm{display:block;padding:5px 7px;border:2px solid var(--surface);border-radius:5px;background:var(--surface2);color:var(--g7);font-size:var(--t-xs);line-height:var(--lh-tight);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .strat-tm b{font-weight:600;color:var(--ink)}
 .strat-tm span{color:var(--muted)}
+.strat-tm .strat-src{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.strat-tm .strat-src a{color:inherit;text-decoration:underline}
 .strat-tm em{margin-right:6px;font-style:normal;font-weight:700}
 .strat-tm.ours{background:var(--accent);color:var(--accent-ink)}
 .strat-tm.ours :is(b,span){color:var(--accent-ink)}

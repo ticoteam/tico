@@ -7,6 +7,7 @@ is appended to $FAKE_LOG as one JSON line (argv, the prompt, the granted variabl
 {"harness": "pi", "steer": text}. A prompt containing HANG streams one delta and then waits, once per $FAKE_LOG, until
 an `abort` or its parent goes away; SLOW streams one delta and answers after $FAKE_SLOW seconds (2), with what was
 steered in meanwhile delivered first, as pi does before its next model call."""
+
 import json
 import os
 import select
@@ -28,8 +29,13 @@ def record(entry):
 
 
 def delta(text):
-    send({"type": "message_update", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
-          "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": text}})
+    send(
+        {
+            "type": "message_update",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
+            "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": text},
+        }
+    )
 
 
 class Pi:
@@ -93,8 +99,16 @@ class Pi:
 
     def prompt(self, command):
         text = command["message"]
-        record({"harness": "pi", "argv": self.args, "prompt": text, "cwd": os.getcwd(), "pid": os.getpid(),
-                "env": {k: os.environ.get(k) for k in GRANTED}})
+        record(
+            {
+                "harness": "pi",
+                "argv": self.args,
+                "prompt": text,
+                "cwd": os.getcwd(),
+                "pid": os.getpid(),
+                "env": {k: os.environ.get(k) for k in GRANTED},
+            }
+        )
         self.reply(command, {"disposition": "started"})
         send({"type": "agent_start"})
         self.aborted = False
@@ -112,10 +126,12 @@ class Pi:
             delta("Working on it")
             self.until(lambda: self.aborted, float(os.environ.get("FAKE_SLOW") or 2))
             for steered in self.queue:
-                send({"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": steered}]}})
+                send(
+                    {"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": steered}]}}
+                )
             self.queue.clear()
             self.queued()
-        if "PUBLISH" in text:                    # a deliverable the runner publishes as a Tico file
+        if "PUBLISH" in text:  # a deliverable the runner publishes as a Tico file
             os.makedirs("reports", exist_ok=True)
             with open(os.path.join("reports", "acme.md"), "w") as report:
                 report.write("# Acme report\n")
@@ -124,8 +140,11 @@ class Pi:
             reply += " The key is " + os.environ["ACME_API_KEY"]
         for chunk in (reply[:5], reply[5:]):
             delta(chunk)
-        message = {"role": "assistant", "content": [{"type": "text", "text": reply}],
-                   "usage": {"input": 7, "output": 2, "cacheRead": 3, "cacheWrite": 0, "totalTokens": 12}}
+        message = {
+            "role": "assistant",
+            "content": [{"type": "text", "text": reply}],
+            "usage": {"input": 7, "output": 2, "cacheRead": 3, "cacheWrite": 0, "totalTokens": 12},
+        }
         send({"type": "message_end", "message": message})
         send({"type": "turn_end", "message": message, "toolResults": []})
         send({"type": "agent_end", "messages": []})

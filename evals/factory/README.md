@@ -5,6 +5,10 @@ the real server, in-process, on a fake clock: real API calls with each bot's own
 for pull requests, and the real scheduler pass every five simulated minutes. Only the bots' replies and time are made
 up, so a run tells you what the queue, the wake rules and the board do with a whole team over a day, in seconds.
 
+Maintenance finishes within each simulated scheduler pass before runners claim work. Its production worker runs on a
+thread; letting that thread outlive a fake-clock pass can put new work in the queue after the last claim but before
+the round's readiness snapshot, falsely reporting starvation. The claim-round checks keep their full capacity rule.
+
 - `world.py`: the disposable hub, the Dev tickets type, one runner for every bot, and a fake GitHub.
 - `bots.py`: simulated bots by role (Builder, reviewer, QA, Head of Engineering). A bot's `style` sets how its model
   behaves: asks for changes, fails, garbles its reply, goes silent, crashes, can't test, goes off script. Turn
@@ -26,6 +30,12 @@ It runs on RunsOn by default, never on this computer: `python -m evals.factory.r
 once through `scripts/remote.py` against the pushed HEAD, and prints the results together. A short run is rarely
 reclaimed, and a group whose VM was runs once more. `--local` runs here instead; `--save-timings` refreshes the
 times after scenarios change. Release validation runs seeds 1-3 (docs/releasing.md).
+
+The merge queue runs seed 1 of every scenario, in the same VM groups (`--shard i/n`), when a change reaches what the
+sim runs. `call_path.json` lists those files: the Python files a run executes (module bodies included), the non-Python
+files it reads and the folders it lists. `--save-call-path` rewrites it from a RunsOn run of seeds 1-3, so run it
+after the sim's reach changes (a new import, a new data file). `scripts/pr_checks.py` (`factory_reason`) says why a
+change runs it.
 
 The simulation is not part of the test suite. Run it before and after a change to the wake rules, the queue, the
 review gate, the Dev steps or usage limits, and compare.

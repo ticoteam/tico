@@ -11,14 +11,24 @@ import pytest
 
 from backend import hubdb as H
 from backend import slack_gateway as G
+from backend import task_check_backs
 from backend.config import Settings
 from backend.store import Store, encode
 from clients import judge as J
+from backend import bot_settings as BS
 
 TEAM, APP, BOT_USER, BOT_ID = "T02F3S2SD", "A0BU75YSGT1", "U0BUS6WA4SY", "B0BUNG973DY"
 MARKETING, DM = "C0000000001", "D0AAAAAAA"
-SCOPES = ("channels:history", "groups:history", "chat:write", "chat:write.customize", "app_mentions:read",
-          "im:history", "users:read", "users:read.email")
+SCOPES = (
+    "channels:history",
+    "groups:history",
+    "chat:write",
+    "chat:write.customize",
+    "app_mentions:read",
+    "im:history",
+    "users:read",
+    "users:read.email",
+)
 PEOPLE = [
     {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]},
     {"id": "ben", "name": "Ben", "email": "ben@acme.example", "team": "product", "primary_for": ["product"]},
@@ -28,10 +38,20 @@ PEOPLE = [
 ]
 BOTS = {
     "coo": {"display_name": "Tico", "description": "The assistant.", "reports_to": None, "status": "active"},
-    "legal": {"display_name": "Legal", "description": "Contracts, terms and legal risk.", "reports_to": None, "status": "active"},
+    "legal": {
+        "display_name": "Legal",
+        "description": "Contracts, terms and legal risk.",
+        "reports_to": None,
+        "status": "active",
+    },
     "cmo": {"display_name": "CMO", "description": "Marketing strategy.", "reports_to": None, "status": "active"},
     "seo": {"display_name": "SEO", "description": "Organic search.", "reports_to": "cmo", "status": "active"},
-    "content-social": {"display_name": "Content & Social", "description": "Posts and social.", "reports_to": "cmo", "status": "active"},
+    "content-social": {
+        "display_name": "Content & Social",
+        "description": "Posts and social.",
+        "reports_to": "cmo",
+        "status": "active",
+    },
     "cto": {"display_name": "CTO", "description": "Engineering alerts.", "reports_to": None, "status": "active"},
     "finance": {"display_name": "Finance", "description": "Money.", "reports_to": None, "status": "paused"},
 }
@@ -40,7 +60,13 @@ USERS = {
     "U2": {"id": "U2", "team_id": TEAM, "name": "ben", "profile": {"email": "ben@acme.example"}},
     "U3": {"id": "U3", "team_id": TEAM, "name": "contractor", "profile": {"email": "contractor@example.com"}},
     "U4": {"id": "U4", "team_id": TEAM, "name": "newhire", "profile": {"email": "newhire@acme.example"}},
-    "U5": {"id": "U5", "team_id": TEAM, "name": "guest", "is_restricted": True, "profile": {"email": "guest@acme.example"}},
+    "U5": {
+        "id": "U5",
+        "team_id": TEAM,
+        "name": "guest",
+        "is_restricted": True,
+        "profile": {"email": "guest@acme.example"},
+    },
     "U6": {"id": "U6", "team_id": TEAM, "name": "gone", "deleted": True, "profile": {"email": "cara@acme.example"}},
     "U7": {"id": "U7", "team_id": TEAM, "name": "somebot", "is_bot": True, "profile": {"email": ""}},
     # A Slack Connect member of another workspace, with a acme.example address on the roster.
@@ -58,10 +84,16 @@ class FakeSlack:
     def __init__(self, team=TEAM, app=APP, scopes=SCOPES):
         self.team, self.app, self.scopes = team, app, scopes
         self.posts, self.failures, self.calls, self.unfurls = [], [], [], []
-        self.pages, self.threads, self.unreadable = {}, {}, set()      # what history and replies return
+        self.pages, self.threads, self.unreadable = {}, {}, set()  # what history and replies return
 
     def auth_test(self):
-        return {"ok": True, "team_id": self.team, "user_id": BOT_USER, "bot_id": BOT_ID, "url": "https://acme.slack.com/"}
+        return {
+            "ok": True,
+            "team_id": self.team,
+            "user_id": BOT_USER,
+            "bot_id": BOT_ID,
+            "url": "https://acme.slack.com/",
+        }
 
     def bots_info(self, bot_id):
         assert bot_id == BOT_ID
@@ -83,13 +115,17 @@ class FakeSlack:
         self.calls.append(("conversations.history", channel, oldest))
         if channel in self.unreadable:
             raise G.SlackError("conversations.history", "not_in_channel")
-        return sorted((m for m in self.pages.get(channel, []) if float(m["ts"]) > float(oldest or 0)),
-                      key=lambda m: float(m["ts"]))[:limit]
+        return sorted(
+            (m for m in self.pages.get(channel, []) if float(m["ts"]) > float(oldest or 0)),
+            key=lambda m: float(m["ts"]),
+        )[:limit]
 
     def replies(self, channel, thread_ts, oldest="", limit=200):
         self.calls.append(("conversations.replies", channel, thread_ts, oldest))
-        return sorted((m for m in self.threads.get((channel, thread_ts), []) if float(m["ts"]) > float(oldest or 0)),
-                      key=lambda m: float(m["ts"]))[:limit]
+        return sorted(
+            (m for m in self.threads.get((channel, thread_ts), []) if float(m["ts"]) > float(oldest or 0)),
+            key=lambda m: float(m["ts"]),
+        )[:limit]
 
     def conversations_open(self, user_id):
         self.calls.append(("conversations.open", user_id))
@@ -106,8 +142,16 @@ class FakeSlack:
         self.calls.append(("chat.postMessage", channel))
         if self.failures:
             raise self.failures.pop(0)
-        self.posts.append({"channel": channel, "thread_ts": thread_ts, "text": text, "username": username,
-                           "icon_emoji": icon_emoji, "icon_url": icon_url})
+        self.posts.append(
+            {
+                "channel": channel,
+                "thread_ts": thread_ts,
+                "text": text,
+                "username": username,
+                "icon_emoji": icon_emoji,
+                "icon_url": icon_url,
+            }
+        )
         return {"ok": True, "ts": f"{1700000000 + len(self.posts)}.000100"}
 
 
@@ -125,7 +169,12 @@ class FakeJudge:
         if callable(answer):
             answer = answer(state)
         # The engine shape (`clients/judge.py`): the answers inside a result with the model and usage.
-        return {"model": "judge-1.13.0", "answers": answer, "usage": {"input_tokens": 500, "output_tokens": 0}, "ms": 210}
+        return {
+            "model": "judge-1.13.0",
+            "answers": answer,
+            "usage": {"input_tokens": 500, "output_tokens": 0},
+            "ms": 210,
+        }
 
 
 def answers(asks=0.9, reply_to_last=0.1, names_bot=0.1, **bots):
@@ -151,18 +200,33 @@ def hub(tmp_path):
     registry = tmp_path / "hub-registry"
     registry.mkdir()
     (registry / "hub-access.yaml").write_text("owner: ana@acme.example\nallowed_domains: [acme.example]\n")
-    settings = Settings(db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry, assistant_name="Tico")
+    settings = Settings(
+        db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry, assistant_name="Tico"
+    )
     store = Store(settings)
     store.initialize()
     with store.transaction() as c:
-        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", **entry} for slug, entry in BOTS.items()},
-                        {"people": PEOPLE})
-        c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({
-            "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
-            "people": PEOPLE}),))
+        H.sync_registry(
+            c, {slug: {"name": slug, "runtime": "fake", **entry} for slug, entry in BOTS.items()}, {"people": PEOPLE}
+        )
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('people',?)",
+            (
+                encode(
+                    {
+                        "default_user": "ana",
+                        "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
+                        "people": PEOPLE,
+                    }
+                ),
+            ),
+        )
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute(
+                'INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)',
+                (slug, None, 'ana', entry['description'], entry['reports_to']),
+            )
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     return store
 
 
@@ -178,8 +242,18 @@ def gateway(hub):
 COUNTER = {"n": 0}
 
 
-def envelope(text, channel=MARKETING, user="U1", thread_ts=None, kind="app_mention", event_id=None, ts=None,
-             team=TEAM, app=APP, **event_fields):
+def envelope(
+    text,
+    channel=MARKETING,
+    user="U1",
+    thread_ts=None,
+    kind="app_mention",
+    event_id=None,
+    ts=None,
+    team=TEAM,
+    app=APP,
+    **event_fields,
+):
     COUNTER["n"] += 1
     ts = ts or f"{1690000000 + COUNTER['n']}.000100"
     event = {"type": kind, "user": user, "channel": channel, "ts": ts, "text": text, **event_fields}
@@ -187,8 +261,13 @@ def envelope(text, channel=MARKETING, user="U1", thread_ts=None, kind="app_menti
         event["channel_type"] = "im"
     if thread_ts:
         event["thread_ts"] = thread_ts
-    return {"type": "event_callback", "team_id": team, "api_app_id": app,
-            "event_id": event_id or f"Ev{COUNTER['n']:08d}", "event": event}
+    return {
+        "type": "event_callback",
+        "team_id": team,
+        "api_app_id": app,
+        "event_id": event_id or f"Ev{COUNTER['n']:08d}",
+        "event": event,
+    }
 
 
 def rows(hub, sql, *args):
@@ -220,12 +299,19 @@ def test_startup_refuses_another_workspace_or_app_and_reports_missing_scopes(hub
         G.Gateway(hub, FakeSlack(app="A0OTHER")).verify_app()
     with pytest.raises(RuntimeError, match="SLACK_TEAM_ID"):
         G.Gateway(Store(Settings(db_path=hub.settings.db_path)), FakeSlack()).verify_app()
-    limited = G.Gateway(hub, FakeSlack(scopes=("chat:write", "im:history", "channels:history", "groups:history",
-                                               "users:read", "users:read.email")))
+    limited = G.Gateway(
+        hub,
+        FakeSlack(
+            scopes=("chat:write", "im:history", "channels:history", "groups:history", "users:read", "users:read.email")
+        ),
+    )
     verified = limited.verify_app()
-    assert verified == {"team_id": TEAM, "app_id": APP, "bot_user_id": BOT_USER,
-                        "missing_scopes": ["app_mentions:read", "chat:write.customize", "files:read", "links:read",
-                                           "links:write"]}
+    assert verified == {
+        "team_id": TEAM,
+        "app_id": APP,
+        "bot_user_id": BOT_USER,
+        "missing_scopes": ["app_mentions:read", "chat:write.customize", "files:read", "links:read", "links:write"],
+    }
     assert limited.customize is False
 
 
@@ -237,9 +323,25 @@ def test_only_verified_admitted_roster_humans_in_internal_channels_get_through(g
     assert gateway.receive(envelope("hi", bot_id="B0X")) == "bot_or_subtype"
     assert gateway.receive(envelope("hi", subtype="message_changed")) == "bot_or_subtype"
     assert gateway.receive(envelope("hi", user=BOT_USER)) == "bot_or_subtype"
-    assert gateway.receive({**envelope("hi", kind="message"), "event": {**envelope("hi", kind="message")["event"], "channel_type": "mpim"}}) == "not_dm"
+    assert (
+        gateway.receive(
+            {
+                **envelope("hi", kind="message"),
+                "event": {**envelope("hi", kind="message")["event"], "channel_type": "mpim"},
+            }
+        )
+        == "not_dm"
+    )
     # A plain channel message is stored for the channel's readers, never routed (see the channel tests).
-    assert gateway.receive({**envelope("hi", kind="message"), "event": {**envelope("hi", kind="message")["event"], "channel_type": "channel"}}) == "stored"
+    assert (
+        gateway.receive(
+            {
+                **envelope("hi", kind="message"),
+                "event": {**envelope("hi", kind="message")["event"], "channel_type": "channel"},
+            }
+        )
+        == "stored"
+    )
     assert [e["state"] for e in events(hub)] == ["stored"] and slack.calls == []
     with hub.transaction() as c:
         c.execute("DELETE FROM slack_events")
@@ -256,12 +358,17 @@ def test_only_verified_admitted_roster_humans_in_internal_channels_get_through(g
         "other workspace, by DM": send(gateway, "hello", user="U8", channel=DM, kind="message"),
     }
     reasons = {name: result["reason"] for name, result in denied.items()}
-    assert reasons == {"guest": "sender is a guest", "deactivated": "sender is deactivated",
-                       "bot user": "sender is a bot", "not admitted": "sender is not admitted by hub-access",
-                       "not on roster": "sender is not on the roster", "unknown user": "users.info: user_not_found",
-                       "slack connect": "channel is shared outside the workspace",
-                       "other workspace": "sender is outside the workspace",
-                       "other workspace, by DM": "sender is outside the workspace"}
+    assert reasons == {
+        "guest": "sender is a guest",
+        "deactivated": "sender is deactivated",
+        "bot user": "sender is a bot",
+        "not admitted": "sender is not admitted by hub-access",
+        "not on roster": "sender is not on the roster",
+        "unknown user": "users.info: user_not_found",
+        "slack connect": "channel is shared outside the workspace",
+        "other workspace": "sender is outside the workspace",
+        "other workspace, by DM": "sender is outside the workspace",
+    }
     assert not any(call == ("conversations.info", DM) for call in slack.calls), "a DM is never looked up as a channel"
     assert {e["state"] for e in events(hub)} == {"denied"}
     assert slack.posts == [] and jobs(hub) == []
@@ -298,8 +405,90 @@ def routed_reply(gateway, hub, text="Done."):
     thread = rows(hub, "SELECT * FROM slack_threads")[0]
     with hub.transaction() as c:
         message = rows(hub, "SELECT id FROM messages WHERE conversation_id=?", thread["conversation_id"])[0]
-        reply = H.say(c, "bot:legal", "human:ana", text, conversation_id=thread["conversation_id"], in_reply_to=message["id"])
+        reply = H.say(
+            c, "bot:legal", "human:ana", text, conversation_id=thread["conversation_id"], in_reply_to=message["id"]
+        )
     return reply["id"]
+
+
+def test_a_follow_up_answers_the_bots_open_question_task_asked_since_the_person_last_wrote(gateway, hub):
+    """No asks since step 6c: a bot's question to a person is a question task, and their Slack follow-up to the bot's
+    last line answers it when it is the one asked since they last wrote in that thread."""
+    from backend import question_tasks as QT
+
+    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
+    with hub.transaction() as c:
+        old = QT.ask_alone(c, "bot:legal", "human:ana", "Is the contract signed?")  # asked before Ana last wrote
+        c.execute(
+            "UPDATE tasks SET asked_at='2020-01-01T00:00:00Z', created_at='2020-01-01T00:00:00Z' WHERE id=?",
+            (old["id"],),
+        )
+        card = QT.ask_alone(c, "bot:legal", "human:ana", "Which state's law applies?")
+        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
+        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
+    with hub.read() as c:
+        # One wake: the reply is the bot's one new message, with no "done" notice after it.
+        assert [
+            r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:legal' AND rowid>?", (mark,))
+        ] == ["Delaware."]
+        row = H.task(c, card["id"])
+        assert row["status"] == "done" and "Delaware." in (row["note"] or "")
+        assert QT.is_open(H.task(c, old["id"]))
+        assert c.execute("SELECT count(*) FROM messages WHERE kind IN ('ask','answer')").fetchone()[0] == 0
+    with hub.transaction() as c:
+        # A second follow-up, with nothing asked since Ana last wrote, closes nothing.
+        H.say(c, "bot:legal", "human:ana", "Thanks.", conversation_id=thread["conversation_id"])
+        G.say_to_bot(c, "human:ana", "legal", event, "Also Texas.", {}, H.now())
+    with hub.read() as c:
+        assert QT.is_open(H.task(c, old["id"]))
+
+
+def test_a_reply_closes_no_question_while_two_are_open_and_the_bot_still_hears_it(gateway, hub):
+    """Two open questions from the bot since Ana last wrote: her reply to its last line closes neither, and the bot
+    still gets the reply."""
+    from backend import question_tasks as QT
+
+    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
+    with hub.transaction() as c:
+        first = QT.ask_alone(c, "bot:legal", "human:ana", "Is the contract signed?")
+        second = QT.ask_alone(c, "bot:legal", "human:ana", "Which state's law applies?")
+        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
+        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
+    with hub.read() as c:
+        assert QT.is_open(H.task(c, first["id"])) and QT.is_open(H.task(c, second["id"]))
+        assert [
+            r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:legal' AND rowid>?", (mark,))
+        ] == ["Delaware."]
+
+
+def test_one_slack_answer_to_a_subtask_question_wakes_its_bot_once(gateway, hub):
+    """A question task under the bot's own task: Ana's reply closes it, and the bot is woken once, by the reply, not
+    again on its task for the same answer."""
+    from backend import question_tasks as QT
+
+    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
+    thread = rows(hub, "SELECT * FROM slack_threads")[0]
+    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
+    with hub.transaction() as c:
+        review = H.task_create(c, "human:ana", "Review the contract", "", "bot:legal", lint=False)
+        card = QT.ask_plain(c, "bot:legal", "human:ana", "Which state's law applies?", parent=review)
+        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
+        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
+    with hub.read() as c:
+        assert H.task(c, card["id"])["status"] == "done"
+        woke = c.execute(
+            "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE m.recipient_id='bot:legal' AND m.rowid>?",
+            (mark,),
+        ).fetchone()[0]
+        assert woke == 1, woke
 
 
 class BothJudges:
@@ -320,10 +509,15 @@ def test_a_direct_message_the_org_rules_hold_reaches_no_bot_until_the_hold_is_se
     from backend import org_rules as R
     from backend.auth import Auth, Identity
     from backend.tests.test_org_rule_check import COLOR, Judge
+
     owner = Identity("human:ben", "owner", email="ben@acme.example")
     with hub.transaction() as c:
-        R.add_rule(c, Auth(hub), owner, {"kind": "internal", "text": COLOR, "who": {"everyone": True},
-                                         "with": {}, "if_broken": "block"})
+        R.add_rule(
+            c,
+            Auth(hub),
+            owner,
+            {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "with": {}, "if_broken": "block"},
+        )
     gateway._judge = BothJudges(Judge(hub), gateway.engine)
     send(gateway, "The favorite color is teal", judge_answer=answers(legal=0.9), channel=DM, kind="message")
     assert rows(hub, "SELECT id FROM messages WHERE sender_id='human:ana'") == []
@@ -334,6 +528,7 @@ def test_a_direct_message_the_org_rules_hold_reaches_no_bot_until_the_hold_is_se
 def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_and_said_so(gateway, hub, held):
     """Legal is paused or quarantined while the decision model reads the roster: the new thread's message is kept for
     Legal, the person is told in Slack that it waits, and it is one queued job that runs when Legal is back."""
+
     def hold(state):
         with hub.transaction() as c:
             if held == "quarantined":
@@ -350,9 +545,14 @@ def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_an
     assert ("until about" if held == "quarantined" else "until a person resumes it") in kept["held"]
     assert [p["text"] for p in gateway.slack.posts] == [kept["held"]] and gateway.slack.posts[0]["channel"] == DM
     message = rows(hub, "SELECT * FROM messages WHERE id=?", kept["message_id"])[0]
-    assert (message["sender_id"], message["recipient_id"], message["body"]) == ("human:ana", "bot:legal",
-                                                                             "please review the vendor terms")
-    assert rows(hub, "SELECT bot_id,state FROM jobs WHERE message_id=?", kept["message_id"]) == [{"bot_id": "legal", "state": "queued"}]
+    assert (message["sender_id"], message["recipient_id"], message["body"]) == (
+        "human:ana",
+        "bot:legal",
+        "please review the vendor terms",
+    )
+    assert rows(hub, "SELECT bot_id,state FROM jobs WHERE message_id=?", kept["message_id"]) == [
+        {"bot_id": "legal", "state": "queued"}
+    ]
     # Nothing else woke up for it, and it is not sent again: the assistant got nothing, one job waits for Legal.
     assert jobs(hub) == [{"bot_id": "legal", "state": "queued"}]
     with hub.transaction() as c:
@@ -391,10 +591,20 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
     assert rows(hub, "SELECT attempts FROM slack_posts")[0]["attempts"] == 2, "not before Retry-After"
     clock.advance(6)
     gateway.tick()
-    assert rows(hub, "SELECT state,attempts,slack_ts FROM slack_posts")[0] == {"state": "sent", "attempts": 3, "slack_ts": "1700000001.000100"}
+    assert rows(hub, "SELECT state,attempts,slack_ts FROM slack_posts")[0] == {
+        "state": "sent",
+        "attempts": 3,
+        "slack_ts": "1700000001.000100",
+    }
     # A definite refusal is failed, not retried.
     with hub.transaction() as c:
-        H.say(c, "bot:legal", "human:ana", "One more thing.", conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"])
+        H.say(
+            c,
+            "bot:legal",
+            "human:ana",
+            "One more thing.",
+            conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"],
+        )
     slack.failures.append(G.SlackError("chat.postMessage", "channel_not_found"))
     gateway.tick()
     assert [p["state"] for p in rows(hub, "SELECT state FROM slack_posts ORDER BY created_at")] == ["sent", "failed"]
@@ -408,7 +618,13 @@ def test_a_bot_reply_is_escaped_so_it_cannot_page_the_channel_or_lose_prose(gate
     gateway.tick()
     assert gateway.slack.posts[0]["text"] == "&lt;!channel&gt; R&amp;D says x &lt; y and y &gt; z\n\n(sent from Legal)"
     with hub.transaction() as c:
-        H.say(c, "bot:legal", "human:ana", "<!everyone> <!here>", conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"])
+        H.say(
+            c,
+            "bot:legal",
+            "human:ana",
+            "<!everyone> <!here>",
+            conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"],
+        )
     gateway.tick()
     assert gateway.slack.posts[1]["text"] == "&lt;!everyone&gt; &lt;!here&gt;\n\n(sent from Legal)"
 
@@ -444,24 +660,38 @@ channels:
     purpose: "Nobody reads this one."
     post: false
 """)
-    settings = Settings(db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry,
-                        slack_digest_cap=5)
+    settings = Settings(
+        db_path=tmp_path / "hub.db", slack_team_id=TEAM, slack_app_id=APP, registry_dir=registry, slack_digest_cap=5
+    )
     store = Store(settings)
     store.initialize()
     with store.transaction() as c:
-        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", **entry} for slug, entry in BOTS.items()},
-                        {"people": PEOPLE})
-        c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({
-            "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
-            "people": PEOPLE}),))
+        H.sync_registry(
+            c, {slug: {"name": slug, "runtime": "fake", **entry} for slug, entry in BOTS.items()}, {"people": PEOPLE}
+        )
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('people',?)",
+            (
+                encode(
+                    {
+                        "default_user": "ana",
+                        "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
+                        "people": PEOPLE,
+                    }
+                ),
+            ),
+        )
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute(
+                'INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)',
+                (slug, None, 'ana', entry['description'], entry['reports_to']),
+            )
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     slack, engine, clock = FakeSlack(), FakeJudge(), Clock()
     gw = G.Gateway(store, slack, judge_engine=engine, clock=clock)
     gw.verify_app()
     gw.engine = engine
-    gw.tick()                                   # the first pass: cursors start at now, nothing is delivered
+    gw.tick()  # the first pass: cursors start at now, nothing is delivered
     assert digests(store) == []
     return gw
 
@@ -476,8 +706,11 @@ def channel_message(text, channel=MARKETING, user="U1", thread_ts=None, subtype=
 
 
 def digests(hub):
-    return rows(hub, "SELECT d.reader,d.count,d.skipped,d.channels,m.body,m.refs,m.sender_id,m.recipient_id "
-                     "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created_at, d.reader")
+    return rows(
+        hub,
+        "SELECT d.reader,d.count,d.skipped,d.channels,m.body,m.refs,m.sender_id,m.recipient_id "
+        "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created_at, d.reader",
+    )
 
 
 def cursors(hub):
@@ -486,8 +719,9 @@ def cursors(hub):
 
 def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_pass(readers):
     gw, hub = readers, readers.store
-    assert set(cursors(hub)) == {(MARKETING, "cmo"), (MARKETING, "seo"), (RELEASE, "cto")}, \
+    assert set(cursors(hub)) == {(MARKETING, "cmo"), (MARKETING, "seo"), (RELEASE, "cto")}, (
         "a paused bot, an unknown slug and a channel with no readers get no cursor"
+    )
     assert gw.receive(channel_message("Launch copy is ready for review")) == "stored"
     assert gw.receive(channel_message("Deploy 4.2 went out", channel=RELEASE, user="U2")) == "stored"
     assert gw.receive(channel_message("Nobody reads this", channel=QUIET)) == "stored"
@@ -495,12 +729,19 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     assert gw.tick()["digests"] is None, "not due yet"
     gw.clock.advance(3600)
     out = gw.tick()["digests"]
-    assert [(d["reader"], d["state"], d["count"]) for d in out] == [("cmo", "sent", 1), ("cto", "sent", 1), ("seo", "sent", 1)]
+    assert [(d["reader"], d["state"], d["count"]) for d in out] == [
+        ("cmo", "sent", 1),
+        ("cto", "sent", 1),
+        ("seo", "sent", 1),
+    ]
     sent = digests(hub)
     assert [d["reader"] for d in sent] == ["cmo", "cto", "seo"]
     cmo = sent[0]
     assert cmo["sender_id"] == "keeper" and cmo["recipient_id"] == "bot:cmo"
-    assert "## #marketing — Marketing work log." in cmo["body"] and "Ana Rivera: Launch copy is ready for review" in cmo["body"]
+    assert (
+        "## #marketing — Marketing work log." in cmo["body"]
+        and "Ana Rivera: Launch copy is ready for review" in cmo["body"]
+    )
     assert "Deploy 4.2" not in cmo["body"] and "Nobody reads this" not in cmo["body"]
     assert "Ben: Deploy 4.2 went out" in sent[1]["body"]
     refs = json.loads(cmo["refs"])["slack"]
@@ -508,7 +749,10 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     assert refs["digest"]["count"] == 1 and len(refs["digest"]["event_ids"]) == 1
     assert [j["bot_id"] for j in jobs(hub)] == ["cmo", "cto", "seo"], "each reader gets one turn"
     assert rows(hub, "SELECT subject,scope,participants FROM conversations ORDER BY created_at")[0] == {
-        "subject": "Slack channels", "scope": "direct", "participants": '["keeper", "bot:cmo"]'}
+        "subject": "Slack channels",
+        "scope": "direct",
+        "participants": '["keeper", "bot:cmo"]',
+    }
     # The cursors moved with the delivery; nothing new means nothing sent and no turn.
     gw.clock.advance(3600)
     assert [d["state"] for d in gw.tick()["digests"]] == ["nothing"] * 3
@@ -517,9 +761,11 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     gw.receive(channel_message("Second post"))
     gw.clock.advance(3600)
     gw.tick()
-    assert len({r["conversation_id"] for r in rows(hub, "SELECT conversation_id FROM slack_digests WHERE reader='cmo'")}) == 1
+    assert (
+        len({r["conversation_id"] for r in rows(hub, "SELECT conversation_id FROM slack_digests WHERE reader='cmo'")})
+        == 1
+    )
     assert "Second post" in digests(hub)[-1]["body"] and "Launch copy" not in digests(hub)[-1]["body"]
-
 
 
 # ----------------------------------------------------------------------------- the question cap
@@ -531,21 +777,36 @@ class CappedJudge:
 
     def __call__(self, state, questions, label=None):
         self.calls.append(list(questions))
-        J.validate(state, questions, label)           # more than J.MAX_QUESTIONS is refused, as the real call does
+        J.validate(state, questions, label)  # more than J.MAX_QUESTIONS is refused, as the real call does
         if self.fail:
             raise self.fail
-        return {"model": "judge-1.13.0", "usage": {}, "ms": 1,
-                "answers": {qid: {"noul": self.scores.get(qid, 0.05)} for qid in questions}}
+        return {
+            "model": "judge-1.13.0",
+            "usage": {},
+            "ms": 1,
+            "answers": {qid: {"noul": self.scores.get(qid, 0.05)} for qid in questions},
+        }
 
 
 def add_bots(hub, count):
     with hub.transaction() as c:
-        H.sync_registry(c, {f"bot-{n:02d}": {"name": f"bot-{n:02d}", "runtime": "fake", "status": "active",
-                                              "display_name": f"Bot {n:02d}"} for n in range(count)}, {})
+        H.sync_registry(
+            c,
+            {
+                f"bot-{n:02d}": {
+                    "name": f"bot-{n:02d}",
+                    "runtime": "fake",
+                    "status": "active",
+                    "display_name": f"Bot {n:02d}",
+                }
+                for n in range(count)
+            },
+            {},
+        )
 
 
 def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_routed(gateway, hub):
-    add_bots(hub, 56 - 6)                     # the fixture already has six active bots
+    add_bots(hub, 56 - 6)  # the fixture already has six active bots
     with hub.read() as c:
         assert len(gateway.fleet(c)) == 56
     gateway._judge = engine = CappedJudge({"asks": 0.9, "bot:bot-49": 0.95, "bot:legal": 0.7})
@@ -553,8 +814,9 @@ def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_ro
     assert result["state"] == "routed", result
     assert [r["bot"] for r in result["decision"]["recipients"]] == ["bot-49", "legal"]
     assert [len(call) for call in engine.calls] == [40, 19], "56 bots and the three fixed questions, split at the cap"
-    assert sorted(q for call in engine.calls for q in call) == sorted(set(q for call in engine.calls for q in call)), \
+    assert sorted(q for call in engine.calls for q in call) == sorted(set(q for call in engine.calls for q in call)), (
         "no question is asked twice"
+    )
     assert len(result["decision"]["scores"]) == 56
     assert events(hub)[0]["state"] == "routed"
 
@@ -567,7 +829,9 @@ def test_a_persons_message_the_model_reads_as_asking_for_nothing_still_reaches_t
 
 
 def test_a_decision_outage_retries_for_ten_minutes_and_then_fails_instead_of_looping(gateway, hub):
-    gateway._judge = CappedJudge({}, fail=J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True))
+    gateway._judge = CappedJudge(
+        {}, fail=J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True)
+    )
     assert send(gateway, "hello there", channel=DM, kind="message")["state"] == "received"
     assert gateway.slack.posts == [], "a short outage tells nobody"
     gateway.clock.advance(G.RETRY_SECONDS)
@@ -612,8 +876,10 @@ def test_task_results_are_one_tico_dm_per_task_status(gateway, hub):
     assert restarted.deliver() == []
     post = gateway.slack.posts[0]
     label = 'Finished' if status == 'done' else 'Declined'
-    assert post['text'] == (f'{label}: Write the summary\nby {"Legal" if owner.startswith("bot:") else "Ben"}'
-                            f'\nReady &lt;now&gt;\n<https://tico.example.com/#/task/{made["id"]}|Open task>')
+    assert post['text'] == (
+        f'{label}: Write the summary\nby {"Legal" if owner.startswith("bot:") else "Ben"}'
+        f'\nReady &lt;now&gt;\n<https://tico.example.com/#/task/{made["id"]}|Open task>'
+    )
     assert post['channel'] == 'D0U1' and post['thread_ts'] is None
     assert post['username'] is None
     with hub.transaction() as c:
@@ -642,9 +908,13 @@ def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(g
     gateway.mirror()
     with hub.transaction() as c:
         # Days later, Legal's unprompted digest lands in the same chat; Ana is no longer talking there.
-        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=? AND sender_id='human:ana'",
-                  (H.shift(H.now(), days=-2), thread["conversation_id"]))
-        muted = H.say(c, "bot:legal", "human:ana", "Weekly contract digest.", conversation_id=thread["conversation_id"])["id"]
+        c.execute(
+            "UPDATE messages SET created_at=? WHERE conversation_id=? AND sender_id='human:ana'",
+            (H.shift(H.now(), days=-2), thread["conversation_id"]),
+        )
+        muted = H.say(
+            c, "bot:legal", "human:ana", "Weekly contract digest.", conversation_id=thread["conversation_id"]
+        )["id"]
     gateway.originate()
     gateway.mirror()
     posts = {r["message_id"]: r["state"] for r in rows(hub, "SELECT * FROM slack_posts")}
@@ -664,8 +934,14 @@ def test_task_result_skips(gateway, hub, skip):
 
 def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_gets_the_message(gateway, hub):
     hub.settings.decisions_daily_calls_human = 1
-    first = send(gateway, "please review the vendor terms", judge_answer=answers(legal=0.9), channel=DM,
-                 kind="message", user="U2")
+    first = send(
+        gateway,
+        "please review the vendor terms",
+        judge_answer=answers(legal=0.9),
+        channel=DM,
+        kind="message",
+        user="U2",
+    )
     assert first["state"] == "routed"
     audit = rows(hub, "SELECT actor,target,detail FROM events WHERE action='judge.call'")
     assert [(r["actor"], r["target"]) for r in audit] == [("human:ben", G.JUDGE_LABEL)]
@@ -674,6 +950,7 @@ def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_
     assert kept["bot:legal"] == {"type": "noul", "value": 0.9, "confidence": 0.8}
     assert kept["asks"] == {"type": "noul", "value": 0.9, "confidence": 0.8}
     from backend.decide_readout import readout
+
     with hub.read() as c:
         out = readout(c, hub.settings)
     (row,) = [r for r in out["sets"] if r["set"] == "slack-route"]
@@ -688,6 +965,7 @@ def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_
 
 def test_a_routing_retry_is_one_short_http_attempt_and_one_audited_call(hub, monkeypatch):
     from backend import judge as B
+
     attempts = []
 
     def opener(request, timeout=None):
@@ -711,9 +989,20 @@ def test_a_routing_retry_is_one_short_http_attempt_and_one_audited_call(hub, mon
 
 def test_a_shared_screenshot_reaches_the_bot_as_a_file_line_it_can_open():
     shot = {"id": "F0SHOT1", "name": "checkout-error.png", "mimetype": "image/png"}
-    payload = {"event_id": "Ev1", "team_id": "T1", "api_app_id": "A1",
-               "event": {"type": "message", "channel_type": "im", "channel": "D1", "user": "U1", "ts": "1.1",
-                         "text": "checkout breaks, see screenshot", "files": [shot]}}
+    payload = {
+        "event_id": "Ev1",
+        "team_id": "T1",
+        "api_app_id": "A1",
+        "event": {
+            "type": "message",
+            "channel_type": "im",
+            "channel": "D1",
+            "user": "U1",
+            "ts": "1.1",
+            "text": "checkout breaks, see screenshot",
+            "files": [shot],
+        },
+    }
     event, why = G.event_from(payload, "UBOT")
     assert why is None
     assert event["text"] == "checkout breaks, see screenshot\n[file F0SHOT1] checkout-error.png"
@@ -722,8 +1011,10 @@ def test_a_shared_screenshot_reaches_the_bot_as_a_file_line_it_can_open():
     assert G.message_text({"text": "", "files": [shot]}) == "[file F0SHOT1] checkout-error.png"
     assert G.message_text({"text": "", "files": [{"name": "no-id.png"}]}) == "(a file with no text)"
     assert "files:read" in G.NEEDED_SCOPES
-    assert G.message_text({"text": "", "files": [{"id": "F1", "name": "a.png\n[file F2] b.pdf"}]}) == \
-        "[file F1] a.png [file F2] b.pdf"
+    assert (
+        G.message_text({"text": "", "files": [{"id": "F1", "name": "a.png\n[file F2] b.pdf"}]})
+        == "[file F1] a.png [file F2] b.pdf"
+    )
 
 
 # ----------------------------------------------------------------------------- visuals: one line, never the visual (Dev 248)
@@ -731,28 +1022,42 @@ def visual(kind="image", n=1):
     return {"file_id": f"f{n}", "version": 1, "title": f"Chart {n}", "kind": kind, "name": f"chart{n}.png"}
 
 
-@pytest.mark.parametrize("attachments, line", [
-    ([visual()], "1 visual - view in Tico"),
-    ([visual(n=1), visual("page", 2)], "2 visuals - view in Tico"),
-    ([visual(k, i) for i, k in enumerate(["image", "svg", "page", "video", "audio"])], "5 visuals - view in Tico"),
-    # A plain file (a PDF, an oversize picture kept as a chip) is not a visual; nor is an older attachment with no kind.
-    ([visual(), {"file_id": "f9", "version": 1, "kind": "file", "name": "terms.pdf"}, {"id": "legacy"}],
-     "1 visual - view in Tico"),
-])
+@pytest.mark.parametrize(
+    "attachments, line",
+    [
+        ([visual()], "1 visual - view in Tico"),
+        ([visual(n=1), visual("page", 2)], "2 visuals - view in Tico"),
+        ([visual(k, i) for i, k in enumerate(["image", "svg", "page", "video", "audio"])], "5 visuals - view in Tico"),
+        # A plain file (a PDF, an oversize picture kept as a chip) is not a visual; nor is an older attachment with no kind.
+        (
+            [visual(), {"file_id": "f9", "version": 1, "kind": "file", "name": "terms.pdf"}, {"id": "legacy"}],
+            "1 visual - view in Tico",
+        ),
+    ],
+)
 def test_a_reply_with_visuals_reaches_slack_as_its_text_plus_one_line_to_the_message(gateway, hub, attachments, line):
     hub.settings.public_url = "https://tico.example.com"
     first = routed_reply(gateway, hub)
     thread = rows(hub, "SELECT * FROM slack_threads")[0]
     with hub.transaction() as c:
-        reply = H.say(c, "bot:legal", "human:ana", "Revenue doubled <fast>.", conversation_id=thread["conversation_id"],
-                      in_reply_to=first, refs={"attachments": attachments})["id"]
+        reply = H.say(
+            c,
+            "bot:legal",
+            "human:ana",
+            "Revenue doubled <fast>.",
+            conversation_id=thread["conversation_id"],
+            in_reply_to=first,
+            refs={"attachments": attachments},
+        )["id"]
     gateway.tick()
     text = gateway.slack.posts[-1]["text"]
     # The whole text, then the line linking to the message in that bot's chat room (no task here), then the footer. Slack
     # wants `&` escaped inside a link too, and opens it as `&`.
-    assert text == ("Revenue doubled &lt;fast&gt;.\n\n"
-                    f"<https://tico.example.com/?bot=legal&amp;conversation={thread['conversation_id']}&amp;message={reply}|{line}>"
-                    "\n\n(sent from Legal)")
+    assert text == (
+        "Revenue doubled &lt;fast&gt;.\n\n"
+        f"<https://tico.example.com/?bot=legal&amp;conversation={thread['conversation_id']}&amp;message={reply}|{line}>"
+        "\n\n(sent from Legal)"
+    )
     assert "chart" not in text.lower()
 
 
@@ -760,18 +1065,35 @@ def test_a_reply_with_no_visual_or_only_files_has_no_line(gateway, hub):
     first = routed_reply(gateway, hub)
     thread = rows(hub, "SELECT * FROM slack_threads")[0]
     with hub.transaction() as c:
-        H.say(c, "bot:legal", "human:ana", "Terms attached.", conversation_id=thread["conversation_id"], in_reply_to=first,
-              refs={"attachments": [{"file_id": "f9", "version": 1, "kind": "file", "name": "terms.pdf"}]})
+        H.say(
+            c,
+            "bot:legal",
+            "human:ana",
+            "Terms attached.",
+            conversation_id=thread["conversation_id"],
+            in_reply_to=first,
+            refs={"attachments": [{"file_id": "f9", "version": 1, "kind": "file", "name": "terms.pdf"}]},
+        )
     gateway.tick()
-    assert [p["text"] for p in gateway.slack.posts] == ["Done.\n\n(sent from Legal)", "Terms attached.\n\n(sent from Legal)"]
+    assert [p["text"] for p in gateway.slack.posts] == [
+        "Done.\n\n(sent from Legal)",
+        "Terms attached.\n\n(sent from Legal)",
+    ]
 
 
 def test_a_long_reply_with_a_visual_keeps_the_line_after_the_cut(gateway, hub):
     first = routed_reply(gateway, hub)
     thread = rows(hub, "SELECT * FROM slack_threads")[0]
     with hub.transaction() as c:
-        H.say(c, "bot:legal", "human:ana", "x" * (G.POST_CHARS + 50), conversation_id=thread["conversation_id"],
-              in_reply_to=first, refs={"attachments": [visual()]})
+        H.say(
+            c,
+            "bot:legal",
+            "human:ana",
+            "x" * (G.POST_CHARS + 50),
+            conversation_id=thread["conversation_id"],
+            in_reply_to=first,
+            refs={"attachments": [visual()]},
+        )
     gateway.tick()
     text = gateway.slack.posts[-1]["text"]
     assert text.endswith("|1 visual - view in Tico>\n\n(sent from Legal)") and "x …\n\n<" in text
@@ -780,25 +1102,38 @@ def test_a_long_reply_with_a_visual_keeps_the_line_after_the_cut(gateway, hub):
 def task_reply(hub, private, attachments):
     """Legal, owner of a task Ana asked for, answers her in the task's conversation."""
     with hub.transaction() as c:
-        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False, private=private)
+        made = H.task_create(
+            c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False, private=private
+        )
         cid = H.task(c, made["id"])["conversation_id"]
-        reply = H.say(c, "bot:legal", "human:ana", "Here is the quarter.", conversation_id=cid,
-                      refs={"attachments": attachments})["id"]
+        reply = H.say(
+            c, "bot:legal", "human:ana", "Here is the quarter.", conversation_id=cid, refs={"attachments": attachments}
+        )["id"]
     return made["id"], reply
+
+
+def set_follow_up(hub, task):
+    """Ana sets the task's follow-up time: an explicit time, which the footer shows. Returns it."""
+    with hub.transaction() as c:
+        task_check_backs.set_time(
+            c, H.task(c, task), H.shift(H.now(), hours=5), "Look at the chart", actor=H.human_actor("ana")
+        )
+        return H.task(c, task)["check_back_at"]
 
 
 def test_a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, hub):
     link_task_requester(hub)
     task, reply = task_reply(hub, False, [visual(), visual("svg", 2)])
-    with hub.read() as c:
-        followup = H.task(c, task)["check_back_at"]
+    followup = set_follow_up(hub, task)
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
     [post] = gateway.slack.posts
-    assert post["text"] == ("Here is the quarter.\n\n"
-                            f"<https://tico.example.com/?task={task}&amp;message={reply}|2 visuals - view in Tico>"
-                            f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)\nFollow up by {followup}")
+    assert post["text"] == (
+        "Here is the quarter.\n\n"
+        f"<https://tico.example.com/?task={task}&amp;message={reply}|2 visuals - view in Tico>"
+        f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)\nFollow up by {followup}"
+    )
 
 
 def test_a_task_reply_names_and_links_its_task(gateway, hub):
@@ -807,13 +1142,54 @@ def test_a_task_reply_names_and_links_its_task(gateway, hub):
     task, _ = task_reply(hub, False, [])
     with hub.transaction() as c:
         c.execute("UPDATE tasks SET number=19332, title=? WHERE id=?", ("Voice <tokens> & keys", task))
-        followup = H.task(c, task)["check_back_at"]
+    followup = set_follow_up(hub, task)
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
     [post] = gateway.slack.posts
-    assert post["text"] == ("Here is the quarter.\n\n"
-                            f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)\nFollow up by {followup}")
+    assert post["text"] == (
+        "Here is the quarter.\n\n"
+        f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)\nFollow up by {followup}"
+    )
+
+
+def test_a_task_reply_with_no_follow_up_time_has_no_follow_up_line(gateway, hub):
+    """Tico sets no follow-up time of its own, so a task nobody set one on gets no follow-up line in the footer."""
+    link_task_requester(hub)
+    task, reply = task_reply(hub, False, [visual()])
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    [post] = gateway.slack.posts
+    assert post["text"] == (
+        "Here is the quarter.\n\n"
+        f"<https://tico.example.com/?task={task}&amp;message={reply}|1 visual - view in Tico>"
+        f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)"
+    )
+
+
+def test_a_task_reply_shows_the_follow_up_line_only_for_a_time_a_person_set(gateway, hub):
+    """A check-back time nobody set explicitly is not a follow-up, so no line; once a person sets one, the line shows."""
+    link_task_requester(hub)
+    task, _ = task_reply(hub, False, [])
+    with hub.transaction() as c:
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), hours=3), task))
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    [first] = gateway.slack.posts
+    assert "Follow up by" not in first["text"]
+    followup = set_follow_up(hub, task)
+    with hub.transaction() as c:
+        H.say(c, "bot:legal", "human:ana", "Still on it.", conversation_id=H.task(c, task)["conversation_id"])
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    assert gateway.slack.posts[-1]["text"] == (
+        "Still on it.\n\n"
+        f"(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)\n"
+        f"Follow up by {followup}"
+    )
 
 
 def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
@@ -838,8 +1214,15 @@ def test_a_slack_thread_reply_links_to_its_own_room_not_the_bots_usual_chat(gate
     threads = [r["conversation_id"] for r in rows(hub, "SELECT * FROM slack_threads ORDER BY created_at")]
     assert len(set(threads + [usual])) == 3
     with hub.transaction() as c:
-        reply = H.say(c, "bot:legal", "human:ana", "The chart.", conversation_id=threads[0], in_reply_to=first,
-                      refs={"attachments": [visual()]})["id"]
+        reply = H.say(
+            c,
+            "bot:legal",
+            "human:ana",
+            "The chart.",
+            conversation_id=threads[0],
+            in_reply_to=first,
+            refs={"attachments": [visual()]},
+        )["id"]
     gateway.tick()
     text = [p["text"] for p in gateway.slack.posts if p["text"].startswith("The chart.")][0]
     assert f"conversation={threads[0]}&amp;message={reply}|1 visual - view in Tico>" in text
@@ -856,8 +1239,9 @@ def test_a_task_done_post_counts_the_owners_visual_result_and_links_to_that_comm
     with hub.transaction() as c:
         made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
         old = H.task_comment(c, "bot:legal", made["id"], "First cut.", extra_refs={"attachments": [visual(n=7)]})
-        chart = H.task_comment(c, "bot:legal", made["id"], "Here it is.",
-                               extra_refs={"attachments": [visual(), visual("svg", 2)]})
+        chart = H.task_comment(
+            c, "bot:legal", made["id"], "Here it is.", extra_refs={"attachments": [visual(), visual("svg", 2)]}
+        )
         H.task_comment(c, "bot:legal", made["id"], "Numbers checked twice.")
         H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
     assert gateway.task_completions() == 1
@@ -866,8 +1250,10 @@ def test_a_task_done_post_counts_the_owners_visual_result_and_links_to_that_comm
     with hub.read() as c:
         shown = [m["id"] for m in H.task_comments(c, made["id"])]
     assert chart["id"] in shown
-    assert text.endswith(f"\n<https://tico.example.com/?task={made['id']}&amp;message={chart['id']}|2 visuals - view in Tico>"
-                         f"\n<https://tico.example.com/#/task/{made['id']}|Open task>")
+    assert text.endswith(
+        f"\n<https://tico.example.com/?task={made['id']}&amp;message={chart['id']}|2 visuals - view in Tico>"
+        f"\n<https://tico.example.com/#/task/{made['id']}|Open task>"
+    )
     # Reopened and then declined with no new visual: the first result's visuals are not announced again.
     with hub.transaction() as c:
         H.task_update(c, "human:ana", made["id"], status="open")
@@ -886,23 +1272,51 @@ def test_a_task_done_post_without_a_visual_result_has_no_line(gateway, hub):
     assert "visual" not in gateway.slack.posts[0]["text"]
 
 
+def test_a_task_done_notice_whose_task_ref_is_a_list_still_posts_its_result_and_link(gateway, hub):
+    """A saved notice may name its task as a list (what a bot sends). Its first task is the one it is about, so the post
+    still shows the owner's result and the Open task link, and the delivery pass does not fail on it."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        H.task_comment(c, "bot:legal", made["id"], "Here it is.", extra_refs={"attachments": [visual()]})
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute(
+            "UPDATE messages SET refs=json_set(refs,'$.task',json_array(?)) "
+            "WHERE json_extract(refs,'$.task_completion.notify')=1",
+            (made["id"],),
+        )
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    text = gateway.slack.posts[0]["text"]
+    assert "1 visual - view in Tico" in text
+    assert text.endswith(f"\n<https://tico.example.com/#/task/{made['id']}|Open task>")
+
+
 def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_after_it_was_made(readers, monkeypatch):
     """The readers' copy of a channel message is what a message automation on that channel hears: offered once, only
     while the redesign is on, and never the backlog from before the automation existed. The row stays `stored`, so
     the readers, the edit path and an @-mention that promotes it are unchanged."""
     from backend import automations
+
     gw, hub = readers, readers.store
     heard = []
-    monkeypatch.setattr(automations, "on_slack", lambda c, event, person, channel, settings=None: (
-        heard.append((event["text"], person["id"], channel["name"])) or ["run_1"]))
+    monkeypatch.setattr(
+        automations,
+        "on_slack",
+        lambda c, event, person, channel, settings=None: (
+            heard.append((event["text"], person["id"], channel["name"])) or ["run_1"]
+        ),
+    )
     with hub.transaction() as c:
         c.execute("INSERT INTO registry_metadata(key,value) VALUES('redesign',?)", ('{"enabled": true}',))
     assert gw.receive(channel_message("Before the automation")) == "stored"
     gw.clock.advance(60)
     with hub.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
-                  ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
+            "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+            ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()),
+        )
     gw.clock.advance(60)
     assert gw.receive(channel_message("After the automation")) == "stored"
     out = gw.tick()["events"]
@@ -917,19 +1331,27 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     assert states[1]["processed_at"] is not None
 
 
-def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_digest_and_its_automations(readers, monkeypatch):
+def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_digest_and_its_automations(
+    readers, monkeypatch
+):
     """A channel a thread link carries reaches its thread through the bridge only. The hourly digest, the backfill and
     the message automations leave it out, including the rows stored before the link (the readers' copies)."""
     from backend import automations
+
     gw, hub, slack = readers, readers.store, readers.slack
     heard = []
-    monkeypatch.setattr(automations, "on_slack", lambda c, event, person, channel, settings=None: (
-        heard.append(event["text"]) or ["run_1"]))
+    monkeypatch.setattr(
+        automations,
+        "on_slack",
+        lambda c, event, person, channel, settings=None: heard.append(event["text"]) or ["run_1"],
+    )
     with hub.transaction() as c:
         c.execute("INSERT INTO registry_metadata(key,value) VALUES('redesign',?)", ('{"enabled": true}',))
-        c.execute("INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
-                  ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
+            "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+            ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()),
+        )
     gw.clock.advance(60)
     assert gw.receive(channel_message("Control message")) == "stored"
     gw.offer()
@@ -937,18 +1359,24 @@ def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_diges
     gw.clock.advance(60)
     assert gw.receive(channel_message("Stored before the link")) == "stored"
     with hub.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
-                  "VALUES ('T-link','thread','Marketing','x','company','T-link','')")
-        c.execute("INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_id,channel_name,audience,state,"
-                  "linked_by,created_at,updated_at) VALUES ('L1','T-link',?,?,'marketing','company','active','ana','x','x')",
-                  (MARKETING, MARKETING))
+        c.execute(
+            "INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
+            "VALUES ('T-link','thread','Marketing','x','company','T-link','')"
+        )
+        c.execute(
+            "INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_id,channel_name,audience,state,"
+            "linked_by,created_at,updated_at) VALUES ('L1','T-link',?,?,'marketing','company','active','ana','x','x')",
+            (MARKETING, MARKETING),
+        )
     assert gw.linked_channels() == {MARKETING}
     gw.offer()
     assert heard == ["Control message"], "the stored row of a linked channel is not offered"
     slack.calls.clear()
     gw.backfill()
     assert not [c for c in slack.calls if c[0] == "conversations.history" and c[1] == MARKETING]
-    assert [c for c in slack.calls if c[0] == "conversations.history" and c[1] == RELEASE], "the other channels still run"
+    assert [c for c in slack.calls if c[0] == "conversations.history" and c[1] == RELEASE], (
+        "the other channels still run"
+    )
     gw.clock.advance(3600)
     gw.tick()
     bodies = " ".join(d["body"] for d in digests(hub))
@@ -961,11 +1389,15 @@ def test_a_queued_slack_copy_to_someone_removed_from_the_thread_is_not_sent(gate
     thread after the copy is queued (here, while it waits out a rate limit), the copy must not go out: Slack would
     show them a thread they can no longer open."""
     from backend import threads
+
     slack, clock = gateway.slack, gateway.clock
 
     def queue(mid):
-        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
-                  "VALUES(?,?,'','legal',?,'ready',?,?,'human:ben')", (mid, "D0U2", "copy", clock(), clock()))
+        c.execute(
+            "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
+            "VALUES(?,?,'','legal',?,'ready',?,?,'human:ben')",
+            (mid, "D0U2", "copy", clock(), clock()),
+        )
 
     with hub.transaction() as c:
         tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben"])["id"]
@@ -992,23 +1424,35 @@ def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
     """A members thread whose Slack mapping is Cara's DM: a bot's message to Ben must not be copied into Cara's DM,
     since the copy would reach Cara with Ben's message. A shared channel mapping of the same thread still gets it."""
     from backend import threads
+
     with hub.transaction() as c:
-        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
-        c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,event_type,"
-                  "text,received_at,state,actor) VALUES('ev-cara',?,'D0CARA','im','','','1','U5','message','hi',?,'routed',"
-                  "'human:cara')", (TEAM, "2000-01-01T00:00:00Z"))
-        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at,recipient_actor) "
-                  "VALUES('D0CARA','','legal',?,'2000-01-01T00:00:00Z',NULL,'human:cara')", (tid,))
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])[
+            "id"
+        ]
+        c.execute(
+            "INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,event_type,"
+            "text,received_at,state,actor) VALUES('ev-cara',?,'D0CARA','im','','','1','U5','message','hi',?,'routed',"
+            "'human:cara')",
+            (TEAM, "2000-01-01T00:00:00Z"),
+        )
+        c.execute(
+            "INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at,recipient_actor) "
+            "VALUES('D0CARA','','legal',?,'2000-01-01T00:00:00Z',NULL,'human:cara')",
+            (tid,),
+        )
         dm_copy = threads.post(c, "bot:legal", tid, "Ben, the draft.", kind="say", to_actor="human:ben")["id"]
     gateway.mirror()
     gateway.deliver()
     assert not any(post["channel"] == "D0CARA" for post in gateway.slack.posts)
-    assert not rows(hub, "SELECT 1 FROM slack_posts WHERE message_id=?", dm_copy)     # queued for no one else's DM
+    assert not rows(hub, "SELECT 1 FROM slack_posts WHERE message_id=?", dm_copy)  # queued for no one else's DM
 
     with hub.transaction() as c:
         channel_tid = threads.create(c, "human:ana", title="Shared", audience="members", members=["human:ben"])["id"]
-        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
-                  "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)", (MARKETING, channel_tid))
+        c.execute(
+            "INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
+            "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)",
+            (MARKETING, channel_tid),
+        )
         shared = threads.post(c, "bot:legal", channel_tid, "Team, the draft.", kind="say", to_actor="human:ben")["id"]
     gateway.mirror()
     gateway.deliver()
@@ -1020,9 +1464,12 @@ def test_a_copy_to_a_member_of_a_native_dm_with_no_inbound_yet_is_delivered_and_
     """A native DM keeps its other people in thread membership. A member with no inbound message yet gets the copy in
     their own DM, which originate opens for them; a removed person gets nothing."""
     from backend import threads
+
     with hub.transaction() as c:
         c.execute("UPDATE humans SET slack_id='U2' WHERE id='ben'")
-        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])[
+            "id"
+        ]
         to_ben = threads.post(c, "bot:legal", tid, "Ben, the draft.", kind="say", to_actor="human:ben")["id"]
         to_cara = threads.post(c, "bot:legal", tid, "Cara, the draft.", kind="say", to_actor="human:cara")["id"]
         threads.remove_member(c, "human:ana", tid, "human:cara")
@@ -1039,10 +1486,13 @@ def test_a_bot_message_to_ben_never_goes_through_caras_dm_after_she_leaves_the_t
     """originate opens Cara's DM for a members thread; Cara leaves; the next bot message is to Ben. It must reach Ben
     through his own DM, and Cara's DM must carry nothing for him: a DM mapping carries copies only to its stored person."""
     from backend import threads
+
     with hub.transaction() as c:
         c.execute("UPDATE humans SET slack_id='UC' WHERE id='cara'")
         c.execute("UPDATE humans SET slack_id='U2' WHERE id='ben'")
-        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])[
+            "id"
+        ]
         threads.post(c, "bot:legal", tid, "Cara, the first draft.", kind="say", to_actor="human:cara")
     gateway.originate()
     gateway.deliver()
@@ -1063,43 +1513,78 @@ def test_a_dm_mapping_from_before_the_column_takes_only_a_person_its_verified_me
     """A DM mapping made before recipient_actor existed: one verified sender names its person; two senders, or none,
     leave it empty, so its copies fail closed."""
     from backend import threads
+
     with hub.transaction() as c:
         tid = threads.create(c, "human:ana", title="Old", audience="members", members=["human:ben"])["id"]
         other = threads.create(c, "human:ana", title="Older", audience="members", members=["human:cara"])["id"]
-        for channel, conversation, actors in (("D0ONE", tid, ["human:ben"]), ("D0TWO", other, ["human:ben", "human:cara"])):
-            c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
-                      "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)", (channel, conversation))
+        for channel, conversation, actors in (
+            ("D0ONE", tid, ["human:ben"]),
+            ("D0TWO", other, ["human:ben", "human:cara"]),
+        ):
+            c.execute(
+                "INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
+                "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)",
+                (channel, conversation),
+            )
             c.execute("UPDATE slack_threads SET recipient_actor=NULL WHERE channel=?", (channel,))
             for n, actor in enumerate(actors):
-                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,"
-                          "event_type,text,received_at,state,actor) VALUES(?,?,?,'im','','',?,'U1','message','hi',"
-                          "'2000-01-01T00:00:00Z','routed',?)", (f"{channel}-{n}", TEAM, channel, f"{n + 1}.0", actor))
+                c.execute(
+                    "INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,"
+                    "event_type,text,received_at,state,actor) VALUES(?,?,?,'im','','',?,'U1','message','hi',"
+                    "'2000-01-01T00:00:00Z','routed',?)",
+                    (f"{channel}-{n}", TEAM, channel, f"{n + 1}.0", actor),
+                )
     hub.initialize()
-    found = dict((r["channel"], r["recipient_actor"]) for r in rows(hub, "SELECT channel,recipient_actor FROM slack_threads "
-                                                                        "WHERE channel IN ('D0ONE','D0TWO')"))
+    found = dict(
+        (r["channel"], r["recipient_actor"])
+        for r in rows(hub, "SELECT channel,recipient_actor FROM slack_threads WHERE channel IN ('D0ONE','D0TWO')")
+    )
     assert found == {"D0ONE": "human:ben", "D0TWO": None}
 
 
 # ----------------------------------------------------------------------------- link previews
 def shared(urls, user="U1", channel=MARKETING, **event_fields):
     COUNTER["n"] += 1
-    return {"type": "event_callback", "team_id": TEAM, "api_app_id": APP, "event_id": f"Ev{COUNTER['n']:08d}",
-            "event": {"type": "link_shared", "user": user, "channel": channel, "message_ts": "1690000000.000100",
-                      "links": [{"url": u, "domain": "tico.example.com"} for u in urls], **event_fields}}
+    return {
+        "type": "event_callback",
+        "team_id": TEAM,
+        "api_app_id": APP,
+        "event_id": f"Ev{COUNTER['n']:08d}",
+        "event": {
+            "type": "link_shared",
+            "user": user,
+            "channel": channel,
+            "message_ts": "1690000000.000100",
+            "links": [{"url": u, "domain": "tico.example.com"} for u in urls],
+            **event_fields,
+        },
+    }
 
 
 def test_a_pasted_task_link_gets_a_preview_only_for_a_verified_reader_and_never_for_a_private_task(gateway, hub):
     hub.settings.public_url = "https://tico.example.com"
     hub.settings.slack_open_label, hub.settings.slack_open_url = "Open in Desk", "desk://task/{id}"
     with hub.transaction() as c:
-        team = H.task_create(c, "human:ana", "Fix the login page", "## Why\nPeople **cannot** sign in.", "human:cara",
-                             due="2026-11-05", lint=False, private=False)["id"]
+        team = H.task_create(
+            c,
+            "human:ana",
+            "Fix the login page",
+            "## Why\nPeople **cannot** sign in.",
+            "human:cara",
+            due="2026-11-05",
+            lint=False,
+            private=False,
+        )["id"]
         c.execute("UPDATE tasks SET number=42 WHERE id=?", (team,))
         secret = H.task_create(c, "human:ana", "Salary review", "Private.", "human:ana", lint=False, private=True)["id"]
     slack = gateway.slack
     ticket = "https://tico.example.com/ticket/42/fix-the-login-page"
-    assert gateway.receive(shared([ticket, f"https://tico.example.com/task/{secret}",
-                                   f"https://elsewhere.example/task/{team}"])) == "unfurled"
+    assert (
+        gateway.receive(
+            shared([ticket, f"https://tico.example.com/task/{secret}", f"https://elsewhere.example/task/{team}"])
+        )
+        == "unfurled"
+    )
     [unfurl] = slack.unfurls
     assert list(unfurl) == [ticket]
     section, context, actions = unfurl[ticket]["blocks"]
@@ -1107,7 +1592,10 @@ def test_a_pasted_task_link_gets_a_preview_only_for_a_verified_reader_and_never_
     # The owner's name and the due date, from the renamed columns (owner_id, due_at): the requester is not shown.
     facts = context["elements"][0]["text"]
     assert "Owner: Cara Melo" in facts and "Due 2026-11-05" in facts and "Ana Rivera" not in facts
-    assert actions["elements"][0]["url"] == f"desk://task/{team}" and actions["elements"][0]["text"]["text"] == "Open in Desk"
+    assert (
+        actions["elements"][0]["url"] == f"desk://task/{team}"
+        and actions["elements"][0]["text"]["text"] == "Open in Desk"
+    )
     # A guest, a private task alone, or a link to no task: nothing is shown.
     assert gateway.receive(shared([ticket], user="U5")) == "unfurl_denied"
     assert gateway.receive(shared([f"https://tico.example.com/open/task/{secret}/salary"])) == "unfurl_unreadable"
@@ -1124,8 +1612,9 @@ def test_a_pasted_task_link_gets_a_preview_only_for_a_verified_reader_and_never_
 def test_a_link_gets_no_preview_where_its_channel_cannot_be_checked_or_it_is_still_in_the_composer(gateway, hub):
     hub.settings.public_url = "https://tico.example.com"
     with hub.transaction() as c:
-        team = H.task_create(c, "human:ana", "Fix the login page", "Body.", "human:cara", due="2026-11-05",
-                             lint=False, private=False)["id"]
+        team = H.task_create(
+            c, "human:ana", "Fix the login page", "Body.", "human:cara", due="2026-11-05", lint=False, private=False
+        )["id"]
         c.execute("UPDATE tasks SET number=42 WHERE id=?", (team,))
     slack = gateway.slack
     ticket = "https://tico.example.com/ticket/42/fix-the-login-page"
@@ -1141,3 +1630,52 @@ def test_a_link_gets_no_preview_where_its_channel_cannot_be_checked_or_it_is_sti
     assert gateway.receive(shared([ticket], channel=DM)) == "unfurled"
     assert len(slack.unfurls) == 1
     assert len(rows(hub, "SELECT * FROM events WHERE action='slack.unfurl'")) == 1
+
+
+def test_a_done_notice_that_names_the_task_in_a_list_is_its_notice_for_the_same_status(hub):
+    """A saved completion notice whose refs.task lists the task after another id is still that task's notice. Reopening
+    and finishing it again with the same status sends no second one."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute(
+            "UPDATE messages SET refs=json_set(refs,'$.task',json_array(?,?)) "
+            "WHERE json_extract(refs,'$.task_completion.notify')=1",
+            ("00000000-0000-4000-8000-000000000000", made["id"]),
+        )
+    with hub.transaction() as c:
+        H.task_update(c, "human:ana", made["id"], status="open")
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted again")
+    with hub.read() as c:
+        assert (
+            c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.task_completion.notify')=1").fetchone()[
+                0
+            ]
+            == 1
+        )
+
+
+def test_a_visual_from_before_a_list_notice_for_the_task_is_not_its_later_result(gateway, hub):
+    """A previous completion notice that names the task in a list (not first) marks the boundary too: the owner's visual
+    from before it is not announced again by the next notice."""
+    link_task_requester(hub)
+    with hub.transaction() as c:
+        made = H.task_create(c, "human:ana", "Q3 numbers", "Chart the quarter.", "bot:legal", lint=False)
+        other = H.task_create(c, "human:ana", "Other work", "Unrelated.", "bot:legal", lint=False)
+        old = H.task_comment(c, "bot:legal", made["id"], "First cut.", extra_refs={"attachments": [visual(n=7)]})
+        H.task_update(c, "bot:legal", made["id"], status="done", note="Charted")
+        c.execute(
+            "UPDATE messages SET refs=json_set(refs,'$.task',json_array(?,?)) "
+            "WHERE json_extract(refs,'$.task_completion.notify')=1",
+            (other["id"], made["id"]),
+        )
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    with hub.transaction() as c:
+        H.task_update(c, "human:ana", made["id"], status="open")
+        H.task_comment(c, "bot:legal", made["id"], "Not doing the rest.")
+        H.task_update(c, "bot:legal", made["id"], status="declined", note="Out of scope")
+    assert gateway.task_completions() == 1
+    gateway.deliver()
+    assert "visual" not in gateway.slack.posts[1]["text"] and old["id"] not in gateway.slack.posts[1]["text"]

@@ -78,7 +78,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 3. Finish with `hub task update <id> --status done --note`: the headline and the export dates used.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments; ask for this week's with `hub task ask <id>` when they are
+Exports arrive as task attachments; ask for this week's with `hub task question "<question>" --on <person> --parent <id>` when they are
 missing. Read supplier price lists with `hub doc search`. When an order is ready for review, attach it to the task and
 tell the owner with `hub task create --owner <owner>`.
 

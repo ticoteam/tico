@@ -110,6 +110,7 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .sub-who{display:inline-flex;flex:none}
 .sub-who .av{width:16px!important;height:16px!important;font-size:7px!important}
 .sub-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sub-chip{flex:none}
 .sub-row.finished>.sub-line .sub-title{color:var(--muted)}
 .sub-add{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px;margin:4px 0 0}
 .sub-add input{width:100%;min-width:0;font-size:var(--t-base);padding:3px 6px}

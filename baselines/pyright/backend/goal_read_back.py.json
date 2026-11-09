@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/goal_read_back.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 43,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
