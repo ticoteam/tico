@@ -1,15 +1,16 @@
+import type * as Tasks from './tasks-page.cjs';
 // Needs you: a question to me is delivered once my list holds it (sent once, never again for the same list) and read
 // once its card shows me it, option cards included (decide.js decideAskRead); a question to someone else, or one already
 // delivered, is not sent (hub-v2.js needsSeen). A task's questions are read on each open of the full task.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
-const ask = (id, to, delivered = null) => ({id, recipient_id: to, sender_id: 'bot:writer', body: 'Approve the venue?', delivered_at: delivered, read_at: null});
-const request = (id, title, a) => ({id, kind: 'task', title, body: 'Which venue?', owner: 'human:ana', requester: 'bot:writer', status: 'open',
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const at = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
+const ask = (id: string, to: string, delivered: string | null = null) => ({id, recipient_id: to, sender_id: 'bot:writer', body: 'Approve the venue?', delivered_at: delivered, read_at: null});
+const request = (id: string, title: string, a: unknown) => ({id, kind: 'task', title, body: 'Which venue?', owner: 'human:ana', requester: 'bot:writer', status: 'open',
   version: 1, labels: [], created: at(60), updated: at(60), conversation_id: 'c-' + id, ask: a, open_asks: 1});
 // A question to a person with no message behind it: a question task, read as its task is (never a message ack).
-const loose = (id, to) => ({id, kind: 'question', body: 'Tacos or pizza?', requester: 'bot:writer', created: at(30),
+const loose = (id: string, to: string) => ({id, kind: 'question', body: 'Tacos or pizza?', requester: 'bot:writer', created: at(30),
   ask: {...ask(id, to), body: 'Tacos or pizza?', question_task: true, refs: {questions: [{id: 'food', question: 'Tacos or pizza?',
     options: [{label: 'Tacos'}, {label: 'Pizza'}]}]}}});
 const items = [request('t-mine', 'Pick the venue', ask('m-mine', 'human:ana')),
@@ -20,7 +21,7 @@ const items = [request('t-mine', 'Pick the venue', ask('m-mine', 'human:ana')),
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors} = await open(browser, {hash: '#/tasks'});
-    const sent = [];
+    const sent: {p: string; body: Record<string, unknown>}[] = [];
     page.on('request', r => { if (r.method() === 'POST' && /\/(seen|ack)$/.test(new URL(r.url()).pathname)) sent.push({p: new URL(r.url()).pathname, body: r.postDataJSON()}); });
     await page.evaluate(items => needsTake({items: structuredClone(items), version: 'v1', count: items.length}), items);
     await page.evaluate(items => needsTake({items: structuredClone(items), version: 'v1', count: items.length}), items);
@@ -74,7 +75,7 @@ const items = [request('t-mine', 'Pick the venue', ask('m-mine', 'human:ana')),
     await page.evaluate(items => needsTake({items, version: 'many', count: items.length}),
       Array.from({length: 205}, (_, n) => loose('batch-' + n, 'human:ana')));
     await page.waitForTimeout(200);
-    const delivered = sent.slice(mark).filter(r => r.p === '/api/v2/needs-you/seen').map(r => r.body.asks);
+    const delivered = sent.slice(mark).filter(r => r.p === '/api/v2/needs-you/seen').map(r => r.body.asks as string[]);
     assert.deepEqual(delivered.map(ids => ids.length), [200, 5]);
     assert.equal(new Set(delivered.flat()).size, 205, 'no question is lost or delivered twice');
     assert.deepEqual(errors, []);

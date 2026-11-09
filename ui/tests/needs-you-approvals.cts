@@ -1,3 +1,5 @@
+import type * as Tasks from './tasks-page.cjs';
+import type {Browser, Locator} from 'playwright';
 // A send approval in Needs you: one line in the list, and its card (a tap on the line) shows recipients, subject,
 // draft and each attached file readable (name, size, short hash),
 // the exact payload folds under Details, and a payload value is only ever text. A file links only to the version the
@@ -9,9 +11,9 @@
 // with where it goes, what goes with it and its whole message wrapped as text. A task cap and a spend limit read as
 // facts with names, not ids. An approval says how long its exact
 // payload has been ready and whose decision it is ("Ready 2 h 10 min, waiting on you", or the person's name).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
 const HASH = 'a'.repeat(12) + 'b'.repeat(52), HASH2 = 'c'.repeat(64);
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:support',
@@ -25,12 +27,12 @@ const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve th
 const REPLY = 'You asked how BotOps can restart a stuck runner without losing the queue. ' +
   'Open Settings, then Computers, pick the computer and choose Restart runner; queued_runs_survive_a_restart_because_they_live_in_hub_db_not_in_the_runner.\n\n' +
   '<img src=x onerror="window.pwned=1"> is how the ticket quoted it, and that stays text.\nThanks, Support';
-const publish = {id: 'ap-pub', kind: 'approval', what: 'publish', title: 'Approve this publish', requester_id: 'bot:support',
+const publish: Record<string, unknown> = {id: 'ap-pub', kind: 'approval', what: 'publish', title: 'Approve this publish', requester_id: 'bot:support',
   requested_by: 'bot:support', created_at: new Date().toISOString(),
   payload: {content_sha256: '355cf' + 'e'.repeat(59), text: REPLY, url: 'hq-ticket:TK-TGYWKV5A'},
   ready_since: new Date(Date.now() - (130 * 60 + 5) * 1000).toISOString()};
 const PUBLISH_CLOCK = new Date();
-async function phonePublish(browser) {
+async function phonePublish(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', clock: PUBLISH_CLOCK});
   publish.decision_owner = 'human:' + await page.evaluate(() => S.me.id);
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [publish]})}));
@@ -41,13 +43,13 @@ async function phonePublish(browser) {
   await row.click();
   const card = page.locator('#need-card .dc-card');
   // How long its exact payload has been ready, and whose decision it is; readable, whole and inside the phone's width.
-  const check = async (box, where, minutes = 10) => {
+  const check = async (box: Locator, where: string, minutes = 10) => {
     assert.equal(await box.locator('.approval-ready').textContent(), `Ready 2 h ${minutes} min, waiting on you`, where);
-    const facts = await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent));
+    const facts = await box.locator('.approval-facts').evaluate((dl: Element) => [...dl.children].map(x => x.textContent));
     assert.deepEqual(facts, ['Where', 'Support ticket TK-TGYWKV5A', 'Text', REPLY], where);
     const text = box.locator('.approval-facts dd.approval-text');
     assert.ok(await text.isVisible(), where);
-    const fit = await text.evaluate(dd => {
+    const fit = await text.evaluate((dd: HTMLElement) => {
       const r = dd.getBoundingClientRect();
       return {inside: r.left >= 0 && r.right <= innerWidth, wraps: dd.scrollWidth <= dd.clientWidth, lines: r.height / parseFloat(getComputedStyle(dd).lineHeight)};
     });
@@ -56,10 +58,10 @@ async function phonePublish(browser) {
     assert.deepEqual(await box.locator('img, a').count(), 0, `${where}: the payload's markup stays text`);
     const raw = box.locator('details.approval-raw');
     assert.equal(await raw.locator('summary').textContent(), 'Exact payload');
-    assert.equal(await raw.evaluate(d => d.open), false, `${where}: the exact payload is folded`);
-    assert.deepEqual(JSON.parse(await raw.locator('pre').textContent()), publish.payload);
+    assert.equal(await raw.evaluate(d => (d as HTMLDetailsElement).open), false, `${where}: the exact payload is folded`);
+    assert.deepEqual(JSON.parse((await raw.locator('pre').textContent())!), publish.payload);
     await raw.locator('summary').click();
-    const pre = await raw.locator('pre').evaluate(el => ({wraps: el.scrollWidth <= el.clientWidth, right: el.getBoundingClientRect().right}));
+    const pre = await raw.locator('pre').evaluate((el: HTMLElement) => ({wraps: el.scrollWidth <= el.clientWidth, right: el.getBoundingClientRect().right}));
     assert.ok(pre.wraps && pre.right <= 390, `${where}: the exact payload wraps at 390px`);
   };
   const dc = card;
@@ -72,7 +74,7 @@ async function phonePublish(browser) {
   assert.equal(await ready(), 'Ready 2 h 11 min, waiting on you');
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
   assert.equal(await ready(), 'Ready 2 h 11 min, waiting on you');
-  assert.equal(await page.locator('#need-card').evaluate(d => d.open), true, 'the card stays open');
+  assert.equal(await page.locator('#need-card').evaluate(d => (d as HTMLDetailsElement).open), true, 'the card stays open');
   await page.clock.runFor(60000);
   assert.equal(await dc.locator('.approval-ready').textContent(), 'Ready 2 h 12 min, waiting on you');
   if (process.env.APPROVAL_SHOT) await dc.screenshot({path: process.env.APPROVAL_SHOT.replace(/(\.png)?$/, '-publish.png')});
@@ -91,12 +93,12 @@ async function phonePublish(browser) {
     {what: 'other', payload: {x: 1}},
     {what: 'merge', payload: {repo: 'acme/site', pr: 43}, decision_owner: 'human:sam', decision_owner_name: 'Sam',
       ready_since: new Date(Date.now() - 61 * 60000).toISOString()}].map(it => {
-    const node = approvalPayloadNode(it), body = document.querySelector('.decide .dc-body');
+    const node = approvalPayloadNode(it), body = document.querySelector<HTMLElement>('.decide .dc-body')!;
     body.replaceChildren(node);
-    const fits = [...node.querySelectorAll('.approval-facts dd')].every(dd => dd.getBoundingClientRect().right <= innerWidth && dd.scrollWidth <= dd.clientWidth);
-    return {facts: [...node.querySelectorAll('.approval-facts > *')].map(x => x.textContent), fits,
-      links: [...node.querySelectorAll('a')].map(a => a.getAttribute('href')), folded: !!node.querySelector('details.approval-raw pre'),
-      markup: node.querySelectorAll('img').length, ...(it.ready_since ? {ready: node.querySelector('.approval-ready').textContent} : {})};
+    const fits = [...node.querySelectorAll<HTMLElement>('.approval-facts dd')].every(dd => dd.getBoundingClientRect().right <= innerWidth && dd.scrollWidth <= dd.clientWidth);
+    return {facts: [...node.querySelectorAll<HTMLElement>('.approval-facts > *')].map(x => x.textContent), fits,
+      links: [...node.querySelectorAll<HTMLElement>('a')].map(a => a.getAttribute('href')), folded: !!node.querySelector('details.approval-raw pre'),
+      markup: node.querySelectorAll<HTMLElement>('img').length, ...(it.ready_since ? {ready: node.querySelector<HTMLElement>('.approval-ready')!.textContent} : {})};
   }));
   const ok = {links: [], folded: true, fits: true, markup: 0};
   assert.deepEqual(shown, [
@@ -112,7 +114,7 @@ async function phonePublish(browser) {
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
 }
-async function letterProof(browser) {
+async function letterProof(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
   const shown = await page.evaluate(() => {
     const address = {name: '<img src=x onerror="window.pwned=1">', line1: '2 Main St', city: 'Dover', state: 'DE', postal_code: '19901'};
@@ -121,8 +123,8 @@ async function letterProof(browser) {
       total_micros: 1500123, page_count: 2, color: false, duplex: true};
     const node = approvalPayloadNode({what: 'letter', payload});
     const host = document.createElement('div'); host.style.width = '350px'; host.append(node); document.body.replaceChildren(host);
-    return {text: node.textContent, href: node.querySelector('a').getAttribute('href'), markup: node.querySelectorAll('img').length,
-      fits: [...node.querySelectorAll('dd')].every(dd => dd.scrollWidth <= dd.clientWidth)};
+    return {text: node.textContent, href: node.querySelector<HTMLElement>('a')!.getAttribute('href'), markup: node.querySelectorAll<HTMLElement>('img').length,
+      fits: [...node.querySelectorAll<HTMLElement>('dd')].every(dd => dd.scrollWidth <= dd.clientWidth)};
   });
   assert.equal(shown.href, '/api/v2/files/proof-1');
   assert.ok(shown.text.includes('2 Main St') && shown.text.includes('1 Main St') && shown.text.includes('certified'));
@@ -137,7 +139,7 @@ const REPORT = 'hub task update has failed since 0.2.17 with: refused (version);
 const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester_id: 'bot:support',
   requested_by: 'bot:support', created_at: new Date().toISOString(), support: {to: 'updates.tico.team'},
   payload: {message: REPORT, content_sha256: 'e'.repeat(64)}};
-async function phoneSupport(browser) {
+async function phoneSupport(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [report]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
@@ -146,9 +148,9 @@ async function phoneSupport(browser) {
   assert.match(await row.locator('.tl-title').textContent(), /^Support: Send this to Tico support\?$/);
   await row.click();
   const facts = ['To', 'Tico support (updates.tico.team)', 'With it', "The Tico version and this install's ID", 'Message', REPORT];
-  const check = async (box, where) => {
-    assert.deepEqual(await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent)), facts, where);
-    const fit = await box.locator('.approval-facts dd.approval-text').evaluate(dd => {
+  const check = async (box: Locator, where: string) => {
+    assert.deepEqual(await box.locator('.approval-facts').evaluate((dl: Element) => [...dl.children].map(x => x.textContent)), facts, where);
+    const fit = await box.locator('.approval-facts dd.approval-text').evaluate((dd: HTMLElement) => {
       const r = dd.getBoundingClientRect();
       return {inside: r.left >= 0 && r.right <= innerWidth, wraps: dd.scrollWidth <= dd.clientWidth};
     });
@@ -160,7 +162,7 @@ async function phoneSupport(browser) {
   await check(dc.locator('.approval-payload'), 'card');
   // Without the IDs, the card says only the message goes.
   const bare = await page.evaluate(r => [...approvalPayloadNode({...r, payload: {...r.payload, include_ids: false}})
-    .querySelectorAll('.approval-facts > *')].map(x => x.textContent), report);
+    .querySelectorAll<HTMLElement>('.approval-facts > *')].map(x => x.textContent), report);
   assert.deepEqual(bare, ['To', 'Tico support (updates.tico.team)', 'With it', 'Nothing else: only the message', 'Message', REPORT]);
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.deepEqual(errors, []);
@@ -168,9 +170,9 @@ async function phoneSupport(browser) {
 }
 // The redesign's approvals (CONTRACT §5: task_cap, spend_limit) read as facts with names, the exact payload folded, and
 // fit a 390px phone; neither falls back to the bare JSON. ‹ and › walk from one card to the next.
-async function phoneRedesignKinds(browser) {
+async function phoneRedesignKinds(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
-  const at = new Date().toISOString(), ap = (id, what, payload) => ({id, kind: 'approval', what, title: 'Approve this ' + what,
+  const at = new Date().toISOString(), ap = (id: string, what: string, payload: unknown) => ({id, kind: 'approval', what, title: 'Approve this ' + what,
     requester_id: 'bot:analyst', requested_by: 'bot:analyst', created_at: at, payload});
   const items = [ap('ap-cap', 'task_cap', {sender: 'bot:engineer', receiver: 'bot:support', per_day: 40}),
     ap('ap-lim', 'spend_limit', {bot: 'bot:engineer', daily_usd: 25, monthly_usd: 400})];
@@ -186,22 +188,22 @@ async function phoneRedesignKinds(browser) {
     await card.waitFor();
     assert.deepEqual(await card.locator('.approval-facts dt').allTextContents(), labels, id + ': its facts');
     assert.match(await card.locator('.approval-facts').textContent(), /Engineer/, id + ': names, not ids');
-    assert.equal(await card.locator('details.approval-raw').evaluate(d => d.open), false, id + ': the payload folded');
-    const fits = el => el.getBoundingClientRect().right <= innerWidth && el.scrollWidth <= el.clientWidth + 1;
+    assert.equal(await card.locator('details.approval-raw').evaluate(d => (d as HTMLDetailsElement).open), false, id + ': the payload folded');
+    const fits = (el: HTMLElement) => el.getBoundingClientRect().right <= innerWidth && el.scrollWidth <= el.clientWidth + 1;
     assert.equal(await card.evaluate(fits), true, id + ': fits 390px');
-    await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
+    await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC!.lockUntil || 0));
     if (id === 'ap-cap') await page.locator('#need-card [data-dc="next"]').click();
   }
   assert.equal(await page.locator('#need-card [data-dc="next"]').isDisabled(), true, 'the last card has no next');
   assert.deepEqual(errors, []);
   await page.close();
 }
-async function frozenEmailPreview(browser) {
+async function frozenEmailPreview(browser: Browser) {
   for (const fail of [false, true]) {
     const {page, errors} = await open(browser, {viewport: {width:390,height:844}, hash:'#/tasks'});
     const item = {...approval, id:'frozen-approval', payload:{...approval.payload, email_send_id:'frozen-send', content_sha256:HASH}};
-    const writes = [];
-    let release;
+    const writes: Record<string, unknown>[] = [];
+    let release!: (value?: unknown) => void;
     const held = new Promise(resolve => { release = resolve; });
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType:'application/json', body:JSON.stringify({items:[item]})}));
     await page.route('**/api/v2/email/sends/frozen-send', async route => {
@@ -221,9 +223,9 @@ async function frozenEmailPreview(browser) {
     await page.locator('[data-need-card="approval:frozen-approval"]').click();
     const approve = page.locator('#need-card [data-dc="yes"]');
     assert.equal(await approve.isDisabled(), true);
-    await page.evaluate(() => { DEC.lockUntil = 0; decideAct(DEC, 'yes'); });
+    await page.evaluate(() => { DEC!.lockUntil = 0; decideAct(DEC, 'yes'); });
     assert.equal(writes.length, 0, 'keyboard and direct actions cannot approve an unloaded snapshot');
-    release();
+    release!();
     if (fail) {
       await page.locator('#need-card .dc-body .err').waitFor();
       assert.equal(await approve.isDisabled(), true);
@@ -234,12 +236,12 @@ async function frozenEmailPreview(browser) {
       assert.equal(await page.locator('.email-send-preview img').count(), 0);
       assert.equal(await page.evaluate(() => window.pwned), undefined);
       assert.equal(await page.locator('.email-send-preview a').getAttribute('href'), '/api/v2/email/sends/frozen-send/attachments/1');
-      await page.evaluate(() => { DEC.lockUntil = 0; });
+      await page.evaluate(() => { DEC!.lockUntil = 0; });
       await approve.click();
       await page.locator('#need-card [data-dc="close"]').click();
       await page.waitForFunction(() => !DEC);
       for (let i=0;i<100 && !writes.length;i++) await page.waitForTimeout(20);
-      assert.equal(writes[0].decision, 'approved');
+      assert.equal(writes[0]!.decision, 'approved');
     }
     assert.deepEqual(errors, []);
     await page.close();
@@ -250,9 +252,9 @@ async function frozenEmailPreview(browser) {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors} = await open(browser, {hash: '#/tasks'});
-    const decided = [];
+    const decided: unknown[] = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [approval]})}));
-    const fetched = [];
+    const fetched: string[] = [];
     await page.route('**/api/v2/files/f-*', route => {
       fetched.push(new URL(route.request().url()).pathname + new URL(route.request().url()).search);
       return route.fulfill({contentType: 'image/png', body: PNG, headers: {'content-disposition': 'inline; filename="chart.png"'}});
@@ -268,14 +270,14 @@ async function frozenEmailPreview(browser) {
     const size = await page.locator('#need-card').evaluate(d => { const r = d.getBoundingClientRect(); return {w: r.width, h: r.height, modal: d.matches(':modal')}; });
     assert.ok(size.modal && size.w <= 480 && size.h < 900, `a modal on a wide screen: ${JSON.stringify(size)}`);
     const box = card.locator('.approval-payload');
-    const facts = await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent));
+    const facts = await box.locator('.approval-facts').evaluate((dl: Element) => [...dl.children].map(x => x.textContent));
     assert.deepEqual(facts, ['From', 'ana@acme.example', 'To', 'ava@creator.example',
       'Subject', '<img src=x onerror="window.pwned=1">Contract', 'Draft', 'r-882']);
     const files = await box.locator('.approval-files li').evaluateAll(lis => lis.map(li => ({
-      name: li.querySelector('.approval-file-name').textContent, link: li.querySelector('a')?.getAttribute('href') ?? null,
-      size: li.querySelector('.approval-file-size').textContent, hash: li.querySelector('.approval-file-hash').textContent,
-      title: li.querySelector('.approval-file-hash').title, icon: !!li.querySelector('svg.approval-file-icon'),
-      warn: li.querySelector('.approval-file-warn')?.textContent ?? null})));
+      name: li.querySelector<HTMLElement>('.approval-file-name')!.textContent, link: li.querySelector<HTMLElement>('a')?.getAttribute('href') ?? null,
+      size: li.querySelector<HTMLElement>('.approval-file-size')!.textContent, hash: li.querySelector<HTMLElement>('.approval-file-hash')!.textContent,
+      title: li.querySelector<HTMLElement>('.approval-file-hash')!.title, icon: !!li.querySelector('svg.approval-file-icon'),
+      warn: li.querySelector<HTMLElement>('.approval-file-warn')?.textContent ?? null})));
     const warn = "Not openable: the file on the task doesn't match the approved file";
     assert.deepEqual(files, [
       {name: 'chart.png', link: '/api/v2/files/f-chart-0001?v=1', size: '214 KB', hash: 'aaaaaaaaaaaa', title: 'sha256 ' + HASH, icon: true, warn: null},
@@ -285,8 +287,8 @@ async function frozenEmailPreview(browser) {
     assert.deepEqual(await card.locator('img, b').evaluateAll(xs => xs.filter(x => !x.closest('.inline-thumb')).map(x => x.outerHTML)), []);
     assert.equal(await page.evaluate(() => window.pwned), undefined);
     const raw = card.locator('details.approval-raw');
-    assert.equal(await raw.evaluate(d => d.open), false, 'the raw JSON is folded');
-    assert.deepEqual(JSON.parse(await raw.locator('pre').textContent()), approval.payload);
+    assert.equal(await raw.evaluate(d => (d as HTMLDetailsElement).open), false, 'the raw JSON is folded');
+    assert.deepEqual(JSON.parse((await raw.locator('pre').textContent())!), approval.payload);
     if (process.env.APPROVAL_SHOT) await card.screenshot({path: process.env.APPROVAL_SHOT});
     await box.locator('a.approval-file-name').click();
     await page.locator('#doc-viewer .viewer-img').waitFor();

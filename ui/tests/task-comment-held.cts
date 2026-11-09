@@ -1,9 +1,10 @@
+import type * as Tasks from './tasks-page.cjs';
 // Offline browser regression: a person's task comment an org rule holds is not a saved comment. Nothing is written, the
 // box keeps the text, no "Saved" line shows, and the task shows the held comment with its rule and Edit and resend.
 // Every request is intercepted (tasks-page.cjs).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
 const TEXT = 'Our favorite color is gold.';
 const HOLD = {id: 'h-task', operation: 'comment', author: 'human:ana', author_name: 'Ana', state: 'held', outcome: 'blocked',
   rules: [{id: 'r-color', kind: 'internal', text: 'Acme does not name a favorite color.', version: 1, status: 'active',
@@ -13,7 +14,7 @@ const HOLD = {id: 'h-task', operation: 'comment', author: 'human:ana', author_na
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined
-    ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
     const {page, errors} = await open(browser);
     // Later routes win: the comment POST is held, anything else falls through to the fixtures.

@@ -1,46 +1,60 @@
+import type * as Tasks from './tasks-page.cjs';
+import type {Browser, Page} from 'playwright';
 // Org rule checks in the app (ui/app/org-rule-holds.ts, backend/org_rule_check.py): a rule review task shows each held
 // output with its rule and Keep blocked / Send anyway / Edit rule (the list is summaries, each card opens its hold for the
 // text, and Show more reads the next page); Keep blocked and Send anyway post once and the card says what was decided; a held reply in a chat is one line naming the rule, never the text; the Rules header carries
 // "Checks on · N today · N unchecked · $N left", and Edit rule opens that rule's side panel on the Rules page. No sideways
 // scroll at phone width. Every request is intercepted.
 // TICO_SHOTS=<dir> saves the screenshots (1440 and 390, dark and light).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
 const SHOTS = process.env.TICO_SHOTS || '';
-const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 
 const REVIEW = {id: 't-review', title: 'Review: Support Bot broke a rule', owner_id: 'human:ana', requester_id: 'tico', status: 'open',
   body: "Support Bot's output was held: it broke a rule. Keep it blocked, send it anyway, or edit the rule.\n\nHold: h-1",
   lane: 'company', rank: null, labels: ['rule-review'], tags: [], links: [], parts: {total: 0, done: 0}, version: 1,
   created_at: ago(30), updated_at: ago(5)};
-const HOLD = {id: 'h-1', operation: 'message', author: 'bot:support', author_name: 'Support Bot', state: 'held', outcome: 'escalated',
+interface Hold {
+  id: string;
+  state: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  nonce?: string | undefined;
+  can_send: boolean;
+  why: string | null;
+  text: string;
+  rules: {text: string; [field: string]: unknown}[];
+  [field: string]: unknown;
+}
+const HOLD: Hold = {id: 'h-1', operation: 'message', author: 'bot:support', author_name: 'Support Bot', state: 'held', outcome: 'escalated',
   rules: [{id: 'r-eu', kind: 'internal', text: "Acme data stays in the EU and only goes to vendors on Acme's list.", version: 2, status: 'active',
            if_broken: 'escalate'}],
   text: "Attached Acme's ticket export for the new transcription vendor to test with.", to: ['Ops'], reviewer: 'human:ana',
   reviewer_name: 'Ana', task_id: 't-review', created_at: ago(30), decided_at: null, decided_by: null, can_send: true, nonce: 'n-1',
   why: 'The vendor signed the EU addendum last week.'};
 
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   await page.screenshot({path: path.join(SHOTS, name + '.png')});
 }
 
-const SECOND = {...HOLD, id: 'h-2', outcome: 'blocked', text: 'Sent the Acme roster to a personal address.', why: null,
+const SECOND: Hold = {...HOLD, id: 'h-2', outcome: 'blocked', text: 'Sent the Acme roster to a personal address.', why: null,
   nonce: 'n-2', created_at: ago(20)};
-const scope = (bots = []) => ({everyone: false, all_bots: false, groups: [], bots, people: []});
-const RULE = {id: 'r-eu', kind: 'internal', text: HOLD.rules[0].text, description: '', who: scope([{id: 'support', name: 'Support Bot'}]),
+const scope = (bots: unknown[] = []) => ({everyone: false, all_bots: false, groups: [], bots, people: []});
+const RULE = {id: 'r-eu', kind: 'internal', text: HOLD.rules[0]!.text, description: '', who: scope([{id: 'support', name: 'Support Bot'}]),
   with: {groups: [], bots: [], people: []}, source: null, if_broken: 'escalate', reviewer: null, status: 'active', version: 2,
   created_at: ago(900), updated_at: ago(60), due_at: [], due_more: 0, can_edit: true};
-const summary = h => { const {text, why, nonce, ...rest} = h; return {...rest, appealed: !!why}; };
+const summary = (h: Hold) => { const {text, why, nonce, ...rest} = h; return {...rest, appealed: !!why}; };
 
-async function review(browser, {viewport, theme, paged = false}) {
+async function review(browser: Browser, {viewport, theme, paged = false}: {viewport: {width: number; height: number}; theme: string; paged?: boolean}) {
   const {page, errors} = await open(browser, {viewport, theme, hash: '#/tasks', baseTasks: [REVIEW]});
-  let hold = {...HOLD};
-  const posted = [];
+  let hold: Hold = {...HOLD};
+  const posted: {id: string | undefined; act: string | undefined; body: unknown}[] = [];
   await page.route(url => url.pathname === '/api/v2/rule-holds', route => {
     const cursor = new URL(route.request().url()).searchParams.get('cursor');
     const body = cursor === 'c-1' ? {holds: [summary(SECOND)], next_cursor: null}
@@ -52,7 +66,7 @@ async function review(browser, {viewport, theme, paged = false}) {
     return route.fulfill({contentType: 'application/json', body: JSON.stringify(id === 'h-2' ? SECOND : hold)});
   });
   await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+\/(keep|send)$/.test(url.pathname), route => {
-    const [, id, act] = new URL(route.request().url()).pathname.match(/rule-holds\/([^/]+)\/([^/]+)$/);
+    const [, id, act] = new URL(route.request().url()).pathname.match(/rule-holds\/([^/]+)\/([^/]+)$/)!;
     posted.push({id, act, body: route.request().postDataJSON()});
     hold = {...hold, state: act === 'send' ? 'sent' : 'kept', decided_by: 'human:ana', decided_at: ago(0), nonce: undefined, can_send: false};
     return route.fulfill({contentType: 'application/json', body: JSON.stringify(act === 'send' ? {hold, result: {}} : hold)});
@@ -112,7 +126,7 @@ async function review(browser, {viewport, theme, paged = false}) {
         const edit = card.locator('a.rh-btn');
         if (await edit.count()) await edit.click();
         else await page.evaluate(() => { location.hash = '#/rules?rule=r-eu'; });   // a decided card has no buttons
-        await page.evaluate(() => document.querySelector('#task-modal')?.open && document.querySelector('#task-modal').close());
+        await page.evaluate(() => document.querySelector<HTMLDialogElement>('#task-modal')?.open && document.querySelector<HTMLDialogElement>('#task-modal')!.close());
         await page.locator('#ru-side form[data-rule="r-eu"]').waitFor();
         const line = page.locator('#ru-root .ru-ph .ru-checks');
         await line.waitFor();
@@ -132,7 +146,7 @@ async function review(browser, {viewport, theme, paged = false}) {
           host.id = 'rh-sample'; host.style.cssText = 'padding:24px;max-width:720px';
           host.innerHTML = `<div class="conv-thread">${v2MessageHTML({id: 'm-1', kind: 'notice', sender_id: 'tico', recipient_id: 'human:ana', created_at: new Date().toISOString(),
               body: "Support Bot's reply was held: it broke the rule 'Acme data stays in the EU.'", refs: {org_rule: {hold: 'h-2', bot: 'support'}}})}</div>`;
-          document.querySelector('#main').replaceChildren(host);
+          document.querySelector('#main')!.replaceChildren(host);
         });
         const note = page.locator('#rh-sample .rh-note');
         assert.match(await note.innerText(), /reply was held: it broke the rule/);

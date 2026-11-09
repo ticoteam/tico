@@ -1,19 +1,20 @@
+import type * as Tasks from './tasks-page.cjs';
 // Needs you (the You tab) on a busy company: grouped by kind (Answer, Pay, Connect, Review, Do)
 // with a count per group, in the server's order (due first); an approval reads what it approves; a deadline shows as a
 // due chip; a card with folded duplicates says "+N"; an ask with a recommendation offers "Do what you recommend", which
 // posts once and closes the card. Its card (a tap on the row) leads with the same button (and R). Overview shows the count and how many
 // went away on their own this week.
 // NEEDS_SHOTS=<dir> also saves the screenshots for the PR.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
 const SHOTS = process.env.NEEDS_SHOTS || '';
-const inDays = days => new Date(Date.now() + days * 86400000).toISOString();
-const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+const inDays = (days: number) => new Date(Date.now() + days * 86400000).toISOString();
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 
-const base = (id, title, over = {}) => ({id, title, body: 'Details.', person_ask: 'Can you take care of this today?', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
+const base = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, title, body: 'Details.', person_ask: 'Can you take care of this today?', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [
   base('t-keys', 'Add the new OpenAI keys', {requester_id: 'bot:botops', due_at: inDays(2)}),
@@ -40,7 +41,7 @@ const SPEND = {id: 'ap-spend', kind: 'approval', what: 'spend', requester_id: 'b
   title: 'Pay $1,200: LinkedIn ads for October', need: 'pay', payload: {amount: '$1,200', what: 'LinkedIn ads for October', account: 'Ads'}};
 // A question task's own id is its ask's: "Do what you recommend" takes it by that id.
 const REC = {do: 'Gusto', ask: 't-pick', option: 'Gusto', kind: 'reversible'};
-const card = (id, over) => ({...TASKS.find(x => x.id === id), kind: 'task', ...over});
+const card = (id: string, over: Record<string, unknown>) => ({...TASKS.find(x => x.id === id), kind: 'task', ...over});
 const NEEDS = [
   card('t-keys', {need: 'connect'}),
   // It holds up a roadmap item at Building, so Decide shows it first (backend/views.py decide_tier).
@@ -55,7 +56,7 @@ const NEEDS = [
 ];
 const WENT_AWAY = {expired: 3, withdrawn: 1, assistant: 2, total: 6, days: 7};
 
-async function shot(target, name) {
+async function shot(target: {screenshot(options: {path: string}): Promise<unknown>}, name: string) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   await target.screenshot({path: path.join(SHOTS, name + '.png')});
@@ -66,7 +67,7 @@ async function shot(target, name) {
   try {
     const {page, errors} = await open(browser, {hash: '#/tasks', byNeed: true, baseTasks: TASKS});
     let needs = NEEDS;
-    const taken = [];
+    const taken: unknown[] = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json',
       body: JSON.stringify({items: needs, count: needs.length, plate_count: needs.length, went_away: WENT_AWAY})}));
     await page.route('**/api/v2/needs-you/recommended', route => {
@@ -77,7 +78,7 @@ async function shot(target, name) {
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
     await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
     await page.locator('#task-filter').click();
-    assert.equal((await page.locator('#task-filter-pop [data-pick-group][aria-checked=true]').textContent()).trim(), 'Kind');
+    assert.equal((await page.locator('#task-filter-pop [data-pick-group][aria-checked=true]').textContent())!.trim(), 'Kind');
     await page.keyboard.press('Escape');
 
     // Groups in order, each with its count; approvals sit in the group their kind takes.
@@ -89,31 +90,31 @@ async function shot(target, name) {
     assert.deepEqual(groups.map(g => g.label), ['Answer', 'Pay', 'Connect', 'Review', 'Do', 'Older questions']);
     assert.equal(await page.locator('#task-scope .cnt').innerText(), '8');
     const review = page.locator('#task-body [data-group="need:review"]');
-    assert.ok((await review.textContent()).includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
-    assert.ok((await page.locator('#task-body [data-group="need:pay"]').textContent()).includes('Pay $1,200: LinkedIn ads for October'));
+    assert.ok((await review.textContent())!.includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
+    assert.ok((await page.locator('#task-body [data-group="need:pay"]').textContent())!.includes('Pay $1,200: LinkedIn ads for October'));
 
     // The due chip, the folded duplicate and the recommendation on the decide card; the folded task is not its own row.
     const pick = page.locator('#task-body [data-group="need:decide"] .tl-row').first();
     assert.match(await pick.textContent(), /Due (Wed|Thu|Fri|Sat|Sun|Mon|Tue|[A-Z][a-z]{2} \d+)/);
     assert.match(await page.locator('#task-body [data-group="need:connect"] .tl-row').first().textContent(), /Due (\w{3}|tomorrow|today)/);
-    assert.equal((await pick.locator('.tl-folded').textContent()).trim(), '+1');
+    assert.equal((await pick.locator('.tl-folded').textContent())!.trim(), '+1');
     assert.equal(await page.locator('#task-body .tl-row', {hasText: 'Switch the payroll vendor'}).count(), 0);
     const older = page.locator('#task-body [data-group="older"]');
     if ((await older.locator('[data-group-toggle]').getAttribute('aria-expanded')) !== 'true') await older.locator('[data-group-toggle]').click();
     assert.equal(await older.locator('.tl-row').count(), 1);
-    assert.ok((await older.textContent()).includes('Which logo on the invoice?'));
+    assert.ok((await older.textContent())!.includes('Which logo on the invoice?'));
     assert.equal(await older.locator('[data-need-card]').count(), 0, 'an open question can need the full task');
     const rec = pick.locator('[data-recommend]');
-    assert.equal((await rec.textContent()).trim(), 'Do what you recommend');
+    assert.equal((await rec.textContent())!.trim(), 'Do what you recommend');
     await shot(page, 'needs-you-groups');
 
     // Its card leads with the same one-tap answer.
     await pick.locator('.tl-title').click();
     const dc = page.locator('#need-card .dc-card[data-key="task:t-pick"]');
     await dc.waitFor();
-    assert.equal((await dc.locator('.dc-who .pill.needs').textContent()).trim(), 'Question');
+    assert.equal((await dc.locator('.dc-who .pill.needs').textContent())!.trim(), 'Question');
     const dcRec = page.locator('.decide .dc-actions [data-dc="recommend"]');
-    assert.ok((await dcRec.textContent()).includes('Do what you recommend'));
+    assert.ok((await dcRec.textContent())!.includes('Do what you recommend'));
     assert.match(await dc.locator('.need-folded').innerText(), /Also waiting on this[\s\S]*Switch the payroll vendor/i);
     if (SHOTS) await page.waitForTimeout(500);   // the card's entrance animation
     await shot(page, 'decide-recommend');

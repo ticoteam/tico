@@ -1,34 +1,36 @@
+import type * as TaskCode from './task-code.cjs';
 // Regressions for stale focused fields, redraws of every Add form, draft ownership and reload recovery.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const {open} = require('./task-code.cjs');
-const gate = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {open} = require('./task-code.cjs') as typeof TaskCode;
+const gate = () => { let resolve!: (value?: unknown) => void; const promise = new Promise<unknown>(r => { resolve = r; }); return {promise, resolve}; };
+type Gate = ReturnType<typeof gate>;
 const init = () => {
  window.taskSources = []; window.taskSafety = [];
  window.EventSource = class extends EventTarget {
-  constructor(url) { super(); this.url = url; taskSources.push(this); }
-  close() { this.closed = true; }
- };
+  constructor(url: string) { super(); (this as unknown as {url: string}).url = url; taskSources!.push(this); }
+  close() { (this as unknown as {closed: boolean}).closed = true; }
+ } as unknown as typeof EventSource;
  const interval = window.setInterval.bind(window);
- window.setInterval = (fn, ms, ...args) => { if (ms === 180000) taskSafety.push(fn); return interval(fn, ms, ...args); };
+ (window as {setInterval: unknown}).setInterval = (fn: TimerHandler, ms?: number, ...args: unknown[]) => { if (ms === 180000) taskSafety!.push(fn as () => void); return interval(fn, ms, ...args); };
 };
 (async () => {
- const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined});
+ const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
  try {
   for (const width of [390, 1440]) {
    const context = await browser.newContext({viewport: {width, height: 900}, hasTouch: width <= 390, serviceWorkers: 'block'});
-   const sharedBrowser = {newPage: async options => { const page = await context.newPage(); await page.setViewportSize(options.viewport); return page; }};
+   const sharedBrowser = {newPage: async (options: {viewport: {width: number; height: number}}) => { const page = await context.newPage(); await page.setViewportSize(options.viewport); return page; }};
    const {page, data, errors} = await open(sharedBrowser, {viewport: {width, height: 900}});
-   const task = {...data.tasks[0], title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
+   const task: TaskCode.Fixture['tasks'][number] = {...data.tasks[0]!, title: 'Review launch', body: 'Original details', links: [], children_summary: undefined};
    data.tasks[0] = task;
-   const writes = []; let hold, offline = false, expired = false;
+   const writes: Record<string, unknown>[] = []; let hold!: Gate | null, offline = false, expired = false;
    let me = {id: 'ana', name: 'Ana', role: 'owner', mover: true, cloud: true, registered: true, config: {environment_id: 'acme-org'}};
    await page.route('**/api/me', route => route.fulfill({json: me}));
    await page.route('**/api/v2/me', route => route.fulfill(expired
     ? {status: 401, json: {error: {code: 'identity', sign_in: '/auth/login'}}}
     : {json: {id: me.id}}));
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
-   await page.evaluate(() => { taskLiveStop(taskModal()); taskModal().taskRail = null; S.config.environment_id = 'acme-org'; sessionReturn(); });
+   await page.evaluate(() => { taskLiveStop(taskModal()); taskModal().taskRail = null; S.config!.environment_id = 'acme-org'; sessionReturn(); });
    await page.evaluate(init); await page.addInitScript(init);
    await page.route('**/api/v2/tasks/' + task.id, async route => {
     if (route.request().method() === 'GET') return route.fulfill({json: {task, comments: [], children: [], events: []}});
@@ -42,23 +44,23 @@ const init = () => {
    });
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
    await page.evaluate(async task => taskModalShow(task), task);
-   const idle = () => page.waitForFunction(() => !taskModal().taskLive.reading && !taskModal().taskLive.draft.flight);
+   const idle = () => page.waitForFunction(() => !taskModal().taskLive!.reading && !taskModal().taskLive!.draft.flight);
    const tasksReady = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'));
-   const emit = topic => page.evaluate(topic => {
-    for (const source of taskSources) if (!source.closed) source.dispatchEvent(new MessageEvent(topic, {data: JSON.stringify({kinds: ['update']})}));
+   const emit = (topic: string) => page.evaluate(topic => {
+    for (const source of taskSources!) if (!source.closed) source.dispatchEvent(new MessageEvent(topic, {data: JSON.stringify({kinds: ['update']})}));
    }, topic);
    const update = async () => {
-    const seq = await page.evaluate(() => taskModal().drawSeq);
+    const seq = await page.evaluate(() => taskModal().drawSeq!);
     await emit('tasks');
-    await page.waitForFunction(seq => taskModal().drawSeq > seq && !taskModal().taskLive.reading, seq);
+    await page.waitForFunction(seq => taskModal().drawSeq! > seq && !taskModal().taskLive!.reading, seq);
    };
    const refresh = async () => {
-    const seq = await page.evaluate(() => taskModal().drawSeq);
-    await page.evaluate(() => taskSafety.forEach(fn => fn()));
-    await page.waitForFunction(seq => taskModal().drawSeq > seq && !taskModal().taskLive.reading, seq);
+    const seq = await page.evaluate(() => taskModal().drawSeq!);
+    await page.evaluate(() => taskSafety!.forEach(fn => fn()));
+    await page.waitForFunction(seq => taskModal().drawSeq! > seq && !taskModal().taskLive!.reading, seq);
    };
    const title = page.locator('#task-modal .tmodal-title'), details = page.getByRole('textbox', {name: 'Details', exact: true});
-   const fillTitle = async value => { await title.click(); await title.fill(value); };
+   const fillTitle = async (value: string) => { await title.click(); await title.fill(value); };
    const error = page.locator('[data-task-edit-error]:not([hidden])');
    const retry = async () => { await page.locator('[data-task-edit-retry]').click(); await idle(); };
    const unload = () => page.evaluate(() => { const e = new Event('beforeunload', {cancelable: true}); window.dispatchEvent(e); return e.defaultPrevented; });
@@ -71,7 +73,7 @@ const init = () => {
    await details.press('End'); await details.pressSequentially(' plus A');
    await details.evaluate(el => el.blur());
    await error.waitFor(); await idle();
-   assert.equal(writes.at(-1).version, originalVersion);
+   assert.equal(writes.at(-1)!.version, originalVersion);
    assert.equal(task.body, 'B changed details', 'A cannot silently replace B with a newer version');
    assert.equal(await details.inputValue(), 'Original details plus A');
    await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
@@ -81,7 +83,7 @@ const init = () => {
    await page.evaluate(() => { TASK_TYPES.push({id: 'draft-roadmap', role: 'product-roadmap', name: 'Roadmap', steps: []}); TASK_TYPES_READ = true; });
    await page.route('**/api/v2/task-types', route => route.fulfill({json: {types: [{id: 'draft-roadmap', role: 'product-roadmap', name: 'Roadmap', steps: []}]}}));
    await update();
-   for (const [key, label] of [['public_title', 'Public title'], ['public_summary', 'Public summary']]) {
+   for (const [key, label] of [['public_title', 'Public title'], ['public_summary', 'Public summary']] as const) {
     const box = page.getByRole('textbox', {name: label, exact: true}), base = task.version, original = task[key];
     await box.focus();
     task[key] = 'Other editor ' + key; task.version++;
@@ -93,12 +95,12 @@ const init = () => {
     assert.equal(task[key], 'Other editor ' + key);
     // Restore/focus once more and type after a newer server value arrives.
     await box.focus();
-    const focusedBase = await box.evaluate(el => taskModal().taskLive.fields[el.dataset.taskField].version);
+    const focusedBase = await box.evaluate(el => taskModal().taskLive!.fields[el.dataset.taskField!]!.version);
     task[key] = 'Newer editor ' + key; task.version++;
     await update();
     await box.fill('My ' + key); await box.evaluate(el => el.blur());
     await error.waitFor(); await idle();
-    assert.equal(writes.at(-1).version, focusedBase);
+    assert.equal(writes.at(-1)!.version, focusedBase);
     assert.equal(task[key], 'Newer editor ' + key);
     if (key === 'public_title') {
      const count = writes.length;
@@ -112,31 +114,31 @@ const init = () => {
    // Size and the due-date fallback also retain the version of the field they displayed.
    for (const [key, selector, value, remote] of [
     ['size', '[data-task-size]', '3', 8], ['due', '[data-prop-date]', '2026-12-04', '2026-12-08T17:00:00.000Z']
-   ]) {
+   ] as const) {
     const box = page.locator('#task-modal ' + selector);
     await box.evaluate(el => { el.classList.add('shown'); el.focus(); });
-    task[key === 'due' ? 'due_at' : key] = remote; task.version++;
+    (task as Record<string, unknown>)[key === 'due' ? 'due_at' : key] = remote; task.version++;
     await update();
     const count = writes.length;
     await box.evaluate(el => el.blur()); await idle();
     assert.equal(writes.length, count, 'clean property blur never saves');
     await box.evaluate(el => el.focus());
-    const base = await box.evaluate(el => taskModal().taskLive.fields[el.dataset.taskField].version);
+    const base = await box.evaluate(el => taskModal().taskLive!.fields[el.dataset.taskField!]!.version);
     task.version++; await update();
-    await box.evaluate((el, value) => { el.focus(); el.value = value; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); }, value);
+    await box.evaluate((el, value) => { el.focus(); (el as HTMLInputElement).value = value; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); }, value);
     await error.waitFor(); await idle();
     assert.deepEqual(errors, [], key + ' conflict redraw');
-    assert.equal(writes.at(-1).version, base);
+    assert.equal(writes.at(-1)!.version, base);
     await box.evaluate(el => el.blur());
     assert.equal(await error.count(), 1, key + ' blur keeps its failed save until Retry');
     await retry();
    }
    // Invalid dates keep their feedback and send nothing; a successful date edit clears its own error.
    const beforeDate = writes.length, date = page.locator('#task-modal [data-prop-date]');
-   await date.evaluate(el => { el.value = '0002-10-09'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
+   await date.evaluate(el => { (el as HTMLInputElement).value = '0002-10-09'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
    assert.equal(writes.length, beforeDate);
-   assert.ok(await page.locator('#task-modal [data-props-msg]').textContent());
-   await date.evaluate(el => { el.value = '2026-12-05'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
+   assert.ok(await page.locator('#task-modal [data-props-msg]').textContent())!;
+   await date.evaluate(el => { (el as HTMLInputElement).value = '2026-12-05'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
    await idle();
    assert.equal(await page.locator('#task-modal [data-props-msg]').textContent(), '');
    // A routine's due day retains its calendar date across viewer timezones.
@@ -150,39 +152,39 @@ const init = () => {
    await page.getByRole('button', {name: 'Add a session', exact: true}).click();
    const boxes = ['Add subtask', 'Add a link', 'Add a session', 'Message'];
    const values = ['Typed child', 'https://acme.example/typed', 'session to keep', 'Unsent comment'];
-   for (let i = 0; i < boxes.length; i++) await page.getByRole('textbox', {name: boxes[i], exact: true}).fill(values[i]);
+   for (let i = 0; i < boxes.length; i++) await page.getByRole('textbox', {name: boxes[i]!, exact: true}).fill(values[i]!);
    for (let i = 0; i < boxes.length; i++) {
-    const box = page.getByRole('textbox', {name: boxes[i], exact: true});
+    const box = page.getByRole('textbox', {name: boxes[i]!, exact: true});
     await box.focus(); await box.press('Home'); await box.press('ArrowRight'); await box.press('ArrowRight');
     if (i === 0) { task.run_model = null; task.can_set_run_model = false; task.version++; }
     for (const redraw of [update, refresh]) {
      await redraw();
-     for (let j = 0; j < boxes.length; j++) assert.equal(await page.getByRole('textbox', {name: boxes[j], exact: true}).inputValue(), values[j]);
-     assert.equal(await box.evaluate(el => document.activeElement === el), true, boxes[i] + ' keeps focus');
+     for (let j = 0; j < boxes.length; j++) assert.equal(await page.getByRole('textbox', {name: boxes[j]!, exact: true}).inputValue(), values[j]!);
+     assert.equal(await box.evaluate(el => document.activeElement === el), true, boxes[i]! + ' keeps focus');
     }
-    await box.pressSequentially('X'); values[i] = values[i].slice(0, 2) + 'X' + values[i].slice(2);
-    assert.equal(await box.inputValue(), values[i], boxes[i] + ' keeps its native caret');
+    await box.pressSequentially('X'); values[i] = values[i]!.slice(0, 2) + 'X' + values[i]!.slice(2);
+    assert.equal(await box.inputValue(), values[i]!, boxes[i]! + ' keeps its native caret');
    }
-   const draw = await page.evaluate(() => taskModal().drawSeq);
+   const draw = await page.evaluate(() => taskModal().drawSeq!);
    const presenceRead = page.waitForResponse(r => r.url().includes('/v2/presence?'));
    await emit('presence'); await presenceRead;
-   assert.equal(await page.evaluate(() => taskModal().drawSeq), draw, 'presence alone never redraws the task');
+   assert.equal(await page.evaluate(() => taskModal().drawSeq!), draw, 'presence alone never redraws the task');
    // Reopening transfers ownership while the previous save is still pending.
    const pending = gate(); hold = pending;
    await fillTitle('Pending old view'); await title.evaluate(el => el.blur());
-   await page.waitForFunction(() => !!taskModal().taskLive.draft.flight);
+   await page.waitForFunction(() => !!taskModal().taskLive!.draft.flight);
    assert.equal(await unload(), true);
-   const owner = await page.evaluate(() => { window.oldView = taskModal().taskLive; taskModal().close(); return oldView.owner; });
+   const owner = await page.evaluate(() => { window.oldView = taskModal().taskLive; taskModal().close(); return oldView!.owner; });
    await page.waitForFunction(() => !taskModal().taskLive);
    await page.evaluate(async task => taskModalShow(task), task);
-   assert.notEqual(await page.evaluate(() => taskModal().taskLive.owner), owner);
+   assert.notEqual(await page.evaluate(() => taskModal().taskLive!.owner), owner);
    pending.resolve(); await idle();
-   assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().taskLive.id) === taskModal().taskLive.draft), true, 'late success cannot evict the reopened draft');
+   assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().taskLive!.id) === taskModal().taskLive!.draft), true, 'late success cannot evict the reopened draft');
    // B opens clean before A edits; both actual pages share localStorage in one browser context.
    const clean = await open(sharedBrowser, {viewport: {width, height: 900}});
    await clean.page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
-   await clean.page.evaluate(async task => { taskLiveStop(taskModal()); S.config.environment_id = 'acme-org'; sessionReturn(); await taskModalShow(task); }, task);
-   assert.equal(await clean.page.evaluate(() => taskModal().taskLive.identity), await page.evaluate(() => taskModal().taskLive.identity));
+   await clean.page.evaluate(async task => { taskLiveStop(taskModal()); S.config!.environment_id = 'acme-org'; sessionReturn(); await taskModalShow(task); }, task);
+   assert.equal(await clean.page.evaluate(() => taskModal().taskLive!.identity), await page.evaluate(() => taskModal().taskLive!.identity));
    offline = true;
    await fillTitle('New view failed draft'); await title.evaluate(el => el.blur());
    await error.waitFor(); await idle();
@@ -190,7 +192,7 @@ const init = () => {
    await clean.page.waitForFunction(() => !taskModal().taskLive);
    await clean.page.close();
    assert.deepEqual(clean.errors, []);
-   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'title'))).value), 'New view failed draft', 'closing clean B preserves A’s failed text');
+   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'title'))!).value), 'New view failed draft', 'closing clean B preserves A’s failed text');
    await page.evaluate(() => taskModal().close()); await page.waitForFunction(() => !taskModal().taskLive);
    await page.evaluate(async task => taskModalShow(task), task);
    assert.equal(await title.textContent(), 'New view failed draft');
@@ -199,7 +201,7 @@ const init = () => {
    await details.fill('Offline details to keep');
    const keptVersion = task.version;
    assert.equal(await unload(), true);
-   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'body'))).base.version), keptVersion);
+   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'body'))!).base.version), keptVersion);
    task.title = 'B title during offline'; task.body = 'B details during offline'; task.version++;
    page.on('dialog', dialog => dialog.accept());
    await page.reload();
@@ -208,7 +210,7 @@ const init = () => {
    assert.equal(await details.inputValue(), 'Offline details to keep');
    offline = false;
    await retry(); await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
-   assert.equal(writes.at(-1).version, keptVersion);
+   assert.equal(writes.at(-1)!.version, keptVersion);
    assert.equal(task.title, 'B title during offline'); assert.equal(task.body, 'B details during offline');
    assert.equal(await details.inputValue(), 'Offline details to keep');
    await retry();
@@ -217,28 +219,28 @@ const init = () => {
    assert.equal(await unload(), false, 'a saved page needs no unload prompt');
    // Debounce text is already durable before a request starts, without an unload prompt.
    await page.evaluate(() => {
-    const field = document.querySelector('[data-task-field="title"]'); field.click(); field.focus();
+    const field = document.querySelector<HTMLElement>('[data-task-field="title"]')!; field.click(); field.focus();
     field.textContent = 'Before debounce'; field.dispatchEvent(new Event('input', {bubbles: true}));
-    clearTimeout(taskModal().taskLive.draft.timer);
+    clearTimeout(taskModal().taskLive!.draft.timer);
    });
    assert.equal(await unload(), false);
    await page.reload();
-   await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Before debounce');
-   await page.waitForFunction(() => !taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length);
+   await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal[open] .tmodal-title')?.textContent === 'Before debounce');
+   await page.waitForFunction(() => !taskModal().taskLive!.draft.flight && !Object.keys(taskModal().taskLive!.draft.patch).length);
    // A closed task's failed title/details survive expiry with their bases, even after another editor saves.
    offline = true;
    await fillTitle('Closed task title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
    await page.getByRole('button', {name: 'Edit details', exact: true}).click();
    await details.fill('Closed task details'); await details.evaluate(el => el.blur()); await idle();
    const closedDraft = await page.evaluate(id => Object.fromEntries(['title', 'body'].map(key =>
-    [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key)))])), task.id);
+    [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key))!)])), task.id);
    await page.evaluate(() => taskModal().close());
    await page.waitForFunction(() => !taskModal().taskLive && !TASK_MODAL_BACK);
    offline = false; expired = true;
    await page.evaluate(() => get('/v2/me', {fresh: true}).catch(() => {}));
    await page.locator('#signed-out:not([hidden])').waitFor();
    assert.deepEqual(await page.evaluate(id => Object.fromEntries(['title', 'body'].map(key =>
-    [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key)))])), task.id), closedDraft, 'expiry preserves closed drafts and bases');
+    [key, JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key))!)])), task.id), closedDraft, 'expiry preserves closed drafts and bases');
    task.title = 'Other title while signed out'; task.body = 'Other details while signed out'; task.version++;
    const beforeReturn = writes.length;
    expired = false;
@@ -253,7 +255,7 @@ const init = () => {
    assert.equal(await details.inputValue(), 'Closed task details');
    assert.equal(writes.length, beforeReturn, 'failed drafts wait for Retry after reopening');
    await retry(); await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
-   assert.equal(writes.at(-1).version, Math.min(...Object.values(closedDraft).map(field => field.base.version)));
+   assert.equal(writes.at(-1)!.version, Math.min(...Object.values(closedDraft).map(field => field.base.version)));
    assert.equal(task.title, 'Other title while signed out'); assert.equal(task.body, 'Other details while signed out');
    await retry();
    assert.equal(task.title, 'Closed task title'); assert.equal(task.body, 'Closed task details');
@@ -262,30 +264,30 @@ const init = () => {
    offline = true;
    await fillTitle('Sign-in title to keep'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
    await page.evaluate(() => {
-    for (const [key, value] of [['public_title', 'Recovered public title'], ['public_summary', 'Recovered public summary'], ['size', '5'], ['due', '2026-12-15']]) {
-      const el = taskModal().querySelector(`[data-task-field="${key}"]`);
-      el.value = value; el.dispatchEvent(new Event('input', {bubbles: true}));
+    for (const [key, value] of [['public_title', 'Recovered public title'], ['public_summary', 'Recovered public summary'], ['size', '5'], ['due', '2026-12-15']] as const) {
+      const el = taskModal().querySelector<HTMLInputElement>(`[data-task-field="${key}"]`)!;
+      (el as HTMLInputElement).value = value; el.dispatchEvent(new Event('input', {bubbles: true}));
     }
     SESSION.seen = true; signedOut('/auth/login');
    });
-   assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.filter(f => f.base).map(f => f.key).sort()),
+   assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.filter((f: {base?: unknown}) => f.base).map((f: {key: string}) => f.key).sort()),
      ['Public summary', 'Public title', 'Size', 'Title', 'due'].sort());
    assert.equal(await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith(TASK_EDIT_STORAGE)).length), 5);
-   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.find(f => f.key === 'Title').value), 'Sign-in title to keep');
-   const recoveryBase = await page.evaluate(() => Math.min(...JSON.parse(sessionStorage.getItem(SESSION_RETURN)).fields.filter(f => f.base).map(f => f.base.version)));
+   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.find((f: {key: string}) => f.key === 'Title').value), 'Sign-in title to keep');
+   const recoveryBase = await page.evaluate(() => Math.min(...JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).fields.filter((f: {base?: unknown}) => f.base).map((f: {base: {version: number}}) => f.base.version)));
    offline = false;
    await page.reload();
-   await page.waitForFunction(() => document.querySelector('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
+   await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal[open] .tmodal-title')?.textContent === 'Sign-in title to keep');
    await error.waitFor(); await idle(); await retry();
-   await page.waitForFunction(() => taskModal().taskLive.draft.error || (!taskModal().taskLive.draft.flight && !Object.keys(taskModal().taskLive.draft.patch).length));
-   assert.equal(writes.at(-1).version, recoveryBase);
+   await page.waitForFunction(() => taskModal().taskLive!.draft.error || (!taskModal().taskLive!.draft.flight && !Object.keys(taskModal().taskLive!.draft.patch).length));
+   assert.equal(writes.at(-1)!.version, recoveryBase);
    if (await error.count()) {
-    assert.match(await page.evaluate(() => taskModal().taskLive.draft.error), /Task changed/);
+    assert.match(await page.evaluate(() => taskModal().taskLive!.draft.error as string), /Task changed/);
     await retry();
    }
    assert.equal(task.title, 'Sign-in title to keep');
    assert.equal(task.public_title, 'Recovered public title'); assert.equal(task.public_summary, 'Recovered public summary');
-   assert.equal(task.size, 5); assert.equal(task.due_at.slice(0, 10), '2026-12-15');
+   assert.equal(task.size, 5); assert.equal(task.due_at!.slice(0, 10), '2026-12-15');
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
@@ -293,16 +295,16 @@ const init = () => {
    await page.evaluate(() => taskModal().close());
    await page.waitForFunction(() => !taskModal().taskLive);
    await page.evaluate(() => { SESSION.seen = true; signedOut('/auth/login'); });
-   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)).identity), JSON.stringify(['acme-org', 'ana']));
-   assert.equal(await page.evaluate(id => JSON.parse(localStorage.getItem(taskLiveStorageKey(id, 'title'))).value, task.id), 'Ana private title');
+   assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem(SESSION_RETURN)!).identity), JSON.stringify(['acme-org', 'ana']));
+   assert.equal(await page.evaluate(id => JSON.parse(localStorage.getItem(taskLiveStorageKey(id, 'title'))!).value, task.id), 'Ana private title');
    const count = writes.length;
    me = {...me, id: 'ben', name: 'Ben'}; offline = false;
    await page.reload(); await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ben']));
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
    assert.equal(await title.textContent(), task.title);
    assert.equal(await page.getByRole('textbox', {name: 'Message', exact: true}).inputValue(), '');
-   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
-   assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().dataset.task)?.patch.title), undefined);
+   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)!), null);
+   assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().dataset.task!)?.patch.title), undefined);
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.equal(writes.length, count, 'no text from Ana autosaves as Ben');
    // A reload as another org with the same person id also drops both recovery paths.
@@ -313,7 +315,7 @@ const init = () => {
    await page.reload(); await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
    assert.equal(await title.textContent(), task.title);
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
-   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
+   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)!), null);
    // Explicit sign-out discards recovery even when an expired session's pagehide watcher runs afterward.
    offline = true;
    await fillTitle('Discard on logout'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
@@ -323,7 +325,7 @@ const init = () => {
     link.addEventListener('click', event => event.preventDefault()); taskModal().append(link); link.click();
     window.dispatchEvent(new Event('pagehide')); sessionKeep();
    });
-   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)), null);
+   assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)!), null);
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.deepEqual(errors, []);
    await page.close(); await context.close();

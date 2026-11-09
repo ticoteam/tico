@@ -1,16 +1,17 @@
+import type * as Tasks from './tasks-page.cjs';
 // The Needs you card on a phone (390px), a full-screen takeover: a row that takes a yes or no, an option or an
 // approval opens its card; any other row opens the whole task. A task card leads with the plain ask, large, and the
 // title second, smaller; the bot's status note and the rest of the body fold under Details, as text. A yes/no ask gets
 // Yes and No, which answer the bot with a comment. An old #/decide link lands on Needs you with the item's card open,
 // or its task when it has none. Back closes the card.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const NOW = Date.now(), at = minutes => new Date(NOW - minutes * 60000).toISOString();
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const NOW = Date.now(), at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
 const NOTE = 'Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static Larkspur. '
   + 'Docs task Doing; no sample edit/deploy or duplicate human question. <img src=x onerror="window.pwned=1">';
 const PLAIN = "Approve the video tool trial on Thursday? If yes, I'll send the invite.";
-const wait = (id, title, over = {}) => ({id, kind: 'waiting', title, body: '', owner_id: 'bot:writer', requester_id: 'bot:botops',
+const wait = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, kind: 'waiting', title, body: '', owner_id: 'bot:writer', requester_id: 'bot:botops',
   status: 'waiting', waiting_on: 'human:ana', note: NOTE, version: 2, created_at: at(400), updated_at: at(360), ask: null, open_asks: 0,
   person_ask: '', ask_missing: false, lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, ...over});
 const items = [
@@ -35,32 +36,32 @@ const items = [
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', extraTasks: items});
-    const sent = [];
+    const sent: unknown[] = [];
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => {
-      const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2));
+      const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)!);
       if (route.request().method() === 'POST') { sent.push({id, ...route.request().postDataJSON()}); return route.fulfill({contentType: 'application/json', body: '{}'}); }
       return route.fulfill({contentType: 'application/json', body: JSON.stringify({comments: []})});
     });
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));
     await page.evaluate(() => v2Refresh());
     const card = page.locator('#need-card .dc-card');
-    const read = async id => {
+    const read = async (id: string) => {
       await page.locator(`#need-card .dc-card[data-key="task:${id}"]`).waitFor();
       await page.waitForFunction(id => DEC?.data.get(id)?.comments, id);
       return card.evaluate(el => {
-        const body = el.querySelector('.dc-body'), [first, second] = body.children, details = body.querySelector('.dc-details');
-        return {sub: el.querySelector('.dc-who-sub').textContent, lead: first.textContent.trim(), leadClass: first.className,
+        const body = el.querySelector<HTMLElement>('.dc-body')!, [first, second] = body.children, details = body.querySelector<HTMLElement>('.dc-details');
+        return {sub: el.querySelector<HTMLElement>('.dc-who-sub')!.textContent, lead: first!.textContent!.trim(), leadClass: first!.className,
           title: second?.className === 'dc-title' ? second.textContent : null,
-          sizes: [first, second].map(x => parseFloat(getComputedStyle(x).fontSize)),
-          details: details ? {open: details.open, text: details.textContent, last: body.lastElementChild === details} : null,
-          buttons: [...document.querySelectorAll('#need-card .dc-actions button')].map(b => b.dataset.dc)};
+          sizes: [first!, second!].map(x => parseFloat(getComputedStyle(x).fontSize)),
+          details: details ? {open: (details as HTMLDetailsElement).open, text: details.textContent, last: body.lastElementChild === details} : null,
+          buttons: [...document.querySelectorAll<HTMLElement>('#need-card .dc-actions button')].map(b => b.dataset.dc)};
       });
     };
     // DECIDE_SHOTS=<dir> saves each card for the owner.
-    const shot = name => process.env.DECIDE_SHOTS && page.screenshot({path: require('node:path').join(process.env.DECIDE_SHOTS, name + '.png')});
+    const shot = (name: string) => process.env.DECIDE_SHOTS && page.screenshot({path: require('node:path').join(process.env.DECIDE_SHOTS, name + '.png')});
     // Act once the last action's lock (350 ms) has passed: a tap inside it does nothing, by design.
-    const tap = async what => {
+    const tap = async (what: string) => {
       await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
       await page.locator(`#need-card .dc-actions [data-dc="${what}"]`).click();
     };
@@ -100,7 +101,7 @@ const items = [
       [0, 0, 390, 844], 'a takeover on a phone');
     // Needs you includes full-task rows too; only the answerable rows open a card.
     const rows = await page.locator('#task-body .tl-row[data-task-key^="t"]').evaluateAll(els => Object.fromEntries(els
-      .filter(el => /^t-(ask|stale|plain|blank|person)$/.test(el.dataset.taskKey.slice(1))).map(el => [el.dataset.taskKey.slice(1), el.dataset.needCard || ''])));
+      .filter(el => /^t-(ask|stale|plain|blank|person)$/.test(el.dataset.taskKey!.slice(1))).map(el => [el.dataset.taskKey!.slice(1), el.dataset.needCard || ''])));
     assert.deepEqual(rows, {'t-ask': '', 't-stale': 'task:t-stale', 't-plain': 'task:t-plain', 't-blank': '', 't-person': ''});
     assert.equal(await page.locator('#task-scope .cnt').innerText(), '5');
     assert.deepEqual(await page.locator('[data-needs-badge]').allTextContents(), ['5', '5']);
@@ -111,19 +112,19 @@ const items = [
     assert.equal(c.lead, PLAIN);
     assert.equal(c.leadClass, 'dc-msg md');
     assert.equal(c.title, 'Run the video tool trial');
-    assert.ok(c.sizes[1] < c.sizes[0], `the title is smaller than the ask: ${c.sizes}`);
-    assert.equal(c.details.open, false);
-    assert.equal(c.details.last, true);
-    assert.ok(c.details.text.includes('The test plan is in the shared folder.') && c.details.text.includes('db14c907') === false);
+    assert.ok(c.sizes[1]! < c.sizes[0]!, `the title is smaller than the ask: ${c.sizes}`);
+    assert.equal(c.details!.open, false);
+    assert.equal(c.details!.last, true);
+    assert.ok(c.details!.text!.includes('The test plan is in the shared folder.') && c.details!.text!.includes('db14c907') === false);
     assert.deepEqual(c.buttons, ['no', 'yes']);
-    assert.equal((await page.locator('#need-card .dc-count').textContent()).replace(/\s+/g, ' ').trim().startsWith('1 of 2'), true);
+    assert.equal((await page.locator('#need-card .dc-count').textContent())!.replace(/\s+/g, ' ').trim().startsWith('1 of 2'), true);
     await page.locator('#need-card .dc-details summary').click();
     await shot('yes-no');
     await tap('yes');
     // The card moves on to the other one; the answered row leaves the list at once.
     c = await read('t-stale');
     assert.equal(await page.locator('#task-body [data-need-card="task:t-plain"]').count(), 0);
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
+    await page.waitForFunction(() => !DEC!.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(sent, [{id: 't-plain', text: 'Yes.'}]);
 
     assert.equal(c.lead, 'Should the public example show the agent demo?');
@@ -135,15 +136,15 @@ const items = [
 
     // Back closes the card and stays on Needs you.
     await page.goBack();
-    await page.waitForFunction(() => !document.querySelector('#need-card')?.open && !DEC);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open && !DEC);
     assert.match(await page.evaluate(() => location.hash), /^#\/tasks\?(.*&)?view=foryou/);
 
     // A Needs you row with no card opens its task.
     await page.locator('#task-body [data-task-key="tt-blank"] .tl-title').click();
     await page.locator('#task-peek[open]').waitFor();
-    assert.equal(await page.evaluate(() => !!document.querySelector('#need-card')?.open), false);
+    assert.equal(await page.evaluate(() => !!document.querySelector<HTMLDialogElement>('#need-card')?.open), false);
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector('#task-peek')?.open);
+    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#task-peek')?.open);
 
     // An old link to an item a card does not answer opens its task.
     await page.evaluate(() => { location.hash = '#/decide?item=t-person'; });
@@ -155,7 +156,7 @@ const items = [
     const go = page.locator('#tasks-pane [data-go-through]:visible');
     assert.equal(await page.locator('#task-body .tl-row').count(), 4, 'the open question and the full-task rows need the person');
     assert.equal(await page.locator('#task-scope .cnt').innerText(), '4');
-    assert.equal((await go.textContent()).trim(), 'Catch up');
+    assert.equal((await go.textContent())!.trim(), 'Catch up');
     assert.equal(await go.evaluate(el => !!el.closest('.tl-head')), true, 'Catch up sits in the header row');
     await go.click();
     await read('t-stale');
@@ -164,21 +165,21 @@ const items = [
     await page.evaluate(() => { decideStop(); decideOpen('task:t-stale'); });
     await page.waitForFunction(() => history.state?.needCard);
     await page.waitForTimeout(300);
-    assert.equal(await page.evaluate(() => !!document.querySelector('#need-card')?.open && !!DEC), true, 'the card opened again stays open');
+    assert.equal(await page.evaluate(() => !!document.querySelector<HTMLDialogElement>('#need-card')?.open && !!DEC), true, 'the card opened again stays open');
     // A bot's face and name open the bot; the face is not a second tab stop. Tapping the name sends nothing from the
     // card. Opening a bot page saves the recently viewed list (preference org.history) after a short debounce: that
     // write is not a card action, and waiting for it gives any card action the click might have sent time to show up.
     assert.deepEqual(await page.locator('#need-card .dc-who a').evaluateAll(as => as.map(a => ({cls: a.className, href: a.getAttribute('href'), tab: a.tabIndex}))), [
       {cls: 'dc-who-face', href: '#/bot/writer', tab: -1}, {cls: 'dc-who-link', href: '#/bot/writer', tab: 0}]);
     assert.deepEqual(errors, []);
-    const writes = [];
+    const writes: unknown[] = [];
     page.on('request', r => { if (r.method() !== 'GET' && !new URL(r.url()).pathname.startsWith('/api/v2/preferences/')) writes.push(r.url()); });
     const visited = page.waitForRequest(r => r.method() !== 'GET' && new URL(r.url()).pathname === '/api/v2/preferences/org.history');
     await page.locator('#need-card .dc-who-link').click();
     await page.waitForFunction(() => location.hash === '#/bot/writer');
     await visited;
     assert.deepEqual(writes, [], 'no card action was sent');
-    assert.equal(await page.evaluate(() => !!document.querySelector('#need-card')?.open), false, 'the card closes with its page');
+    assert.equal(await page.evaluate(() => !!document.querySelector<HTMLDialogElement>('#need-card')?.open), false, 'the card closes with its page');
     console.log('Needs you card (phone): a takeover; only rows a card answers open one, the rest open the task; a yes/no ask'
       + ' answers the bot and moves on; Back closes it; old #/decide links open the card or the task');
   } finally { await browser.close(); }
