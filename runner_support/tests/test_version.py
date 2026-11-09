@@ -1,6 +1,7 @@
 """runner_support/version.py names the Rust runner's protocol version, which the shim matches against the binary's `--version`.
 The release is separate: build.rs stamps it from TICO_VERSION and `tico-runner --release` prints it (runner-rs/src/runner.rs
 RUNNER_RELEASE), so releases need no source bump."""
+
 import re
 from pathlib import Path
 

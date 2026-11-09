@@ -1,6 +1,7 @@
 """The Company page's disclosure core: what decides whether a number may leave the install. Each test here stands for a
 way a real number could get out: a missing rule, a raw Finance field, a clock that starts in the wrong place, a replaced
 reading, a value worked out from what is shown, or a bot's hand on the switch."""
+
 import json
 import re
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ def rebuilds(monkeypatch):
     def spy(c, reason, at=None):
         calls.append((reason, S.get(c)["transparency"]))
         return real(c, reason, at)
+
     monkeypatch.setattr(release, "rebuild", spy)
     return calls
 
@@ -92,8 +94,17 @@ def test_a_missing_rule_hides_and_a_hidden_rule_hides(store):
 def test_a_stat_holds_exactly_the_view_model_and_nothing_of_the_reading(store):
     setup(store, shown("kpi"))
     with store.transaction() as c:
-        kpi = K.create(c, OWNER, OWNER, {"name": "Signups inside name", "unit": "signups", "cadence": "monthly",
-                                         "source_note": "SECRET-SOURCE-NOTE"})
+        kpi = K.create(
+            c,
+            OWNER,
+            OWNER,
+            {
+                "name": "Signups inside name",
+                "unit": "signups",
+                "cadence": "monthly",
+                "source_note": "SECRET-SOURCE-NOTE",
+            },
+        )
         read(c, kpi, 120, "2026-08-31", evidence="SECRET-EVIDENCE", note="SECRET-NOTE", source="SECRET-SRC")
         on_board(c, kpi, label="Signups")
         result = ST.project(c, "investors", "2026-10-15")
@@ -111,13 +122,35 @@ def test_runway_and_cash_pass_on_their_value_only(books, monkeypatch):
 
     def metric(c, viewer, name, **kw):
         if name == "cash":
-            return {"name": name, "value": 500_000, "unit": "minor", "currency": "USD", "stale": False, "view_version": 987_651,
-                    "accounts": [{"money_account_id": "SENTINEL-ACCOUNT", "name": "SENTINEL-CHECKING", "balance": 777_777_01,
-                                  "provider_balance": 666_666_01}]}
+            return {
+                "name": name,
+                "value": 500_000,
+                "unit": "minor",
+                "currency": "USD",
+                "stale": False,
+                "view_version": 987_651,
+                "accounts": [
+                    {
+                        "money_account_id": "SENTINEL-ACCOUNT",
+                        "name": "SENTINEL-CHECKING",
+                        "balance": 777_777_01,
+                        "provider_balance": 666_666_01,
+                    }
+                ],
+            }
         if name == "runway_months":
-            return {"name": name, "value": "12.5", "unit": "months", "cash": 555_555_01, "monthly_burn": 444_444_01,
-                    "start": "2026-07-01", "end": "2026-09-30", "stale": False}
+            return {
+                "name": name,
+                "value": "12.5",
+                "unit": "months",
+                "cash": 555_555_01,
+                "monthly_burn": 444_444_01,
+                "start": "2026-07-01",
+                "end": "2026-09-30",
+                "stale": False,
+            }
         return real(c, viewer, name, **kw)
+
     monkeypatch.setattr(FR, "metric", metric)
     setup(books, shown("cash_runway"), shown("burn"))
     with books.transaction() as c:
@@ -157,13 +190,27 @@ def test_finance_numbers_come_from_the_books_and_a_private_line_never_shows(book
     with books.transaction() as c:
         spend(c, "6000", 10_000_00, day="2026-09-10")
         income = account(c, "4000")
-        FA.post_entry(c, {"date": "2026-09-12", "source": "usage", "source_id": "sale-1",
-                          "lines": [{"account_id": income, "amount": -30_000_00},
-                                    {"account_id": account(c, "1000"), "amount": 30_000_00}]}, at="2026-09-12T00:00:00.000000Z")
+        FA.post_entry(
+            c,
+            {
+                "date": "2026-09-12",
+                "source": "usage",
+                "source_id": "sale-1",
+                "lines": [
+                    {"account_id": income, "amount": -30_000_00},
+                    {"account_id": account(c, "1000"), "amount": 30_000_00},
+                ],
+            },
+            at="2026-09-12T00:00:00.000000Z",
+        )
         ST.create_stat(c, OWNER, "finance_metric", "revenue")
         ST.create_stat(c, OWNER, "finance_metric", "spend")
-        made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
-                                                "parent_id": account(c, "6000")})
+        made = act(
+            c,
+            OWNER,
+            "account_create",
+            {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
+        )
         pay = str(made.result["account_id"])
         assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
         ST.create_stat(c, OWNER, "finance_line", pay, label="Payroll")
@@ -262,7 +309,12 @@ def test_the_leak_check_knows_the_recent_values_a_hidden_stat_keeps_back_and_not
 def test_a_rounded_or_delayed_value_the_audience_does_not_see_exactly_is_unseen_too(store):
     """A rounded stat shows 150 for 148, and a delayed one shows nothing yet: the exact 148 is still unseen. Only a value
     this audience sees exactly is not."""
-    setup(store, shown("kpi"), ("customers", "", {"mode": "rounded"}), ("headcount", "", {"mode": "delayed", "lag_days": 60}))
+    setup(
+        store,
+        shown("kpi"),
+        ("customers", "", {"mode": "rounded"}),
+        ("headcount", "", {"mode": "delayed", "lag_days": 60}),
+    )
     with store.transaction() as c:
         rounded = make_kpi(c, "Paying customers")
         read(c, rounded, 148, "2026-09-30")
@@ -356,7 +408,7 @@ def test_a_cash_series_reveals_a_hidden_burn_by_differences(store):
 def test_exact_growth_next_to_rounded_revenue_exposes_its_differences(store):
     setup(store, ("revenue", "", {"mode": "rounded"}), shown("growth"), ("gross_margin", "", {"mode": "rounded"}))
     with store.transaction() as c:
-        revenue = make_kpi(c, "Revenue", "$")                  # off the grid, so the rounded series isn't itself exact
+        revenue = make_kpi(c, "Revenue", "$")  # off the grid, so the rounded series isn't itself exact
         read(c, revenue, 12_345, "2026-08-31")
         read(c, revenue, 13_678, "2026-09-30")
         on_board(c, revenue, cls="revenue", label="Revenue")
@@ -432,9 +484,16 @@ def test_a_delayed_value_cant_be_worked_out_before_its_time(store):
 def post_income(c, code, amount, day="2026-09-12"):
     made = act(c, OWNER, "account_create", {"code": code, "name": f"Income {code}", "type": "income"})
     line = str(made.result["account_id"])
-    FA.post_entry(c, {"date": day, "source": "usage", "source_id": f"sale-{code}",
-                      "lines": [{"account_id": line, "amount": -amount},
-                                {"account_id": account(c, "1000"), "amount": amount}]}, at="2026-09-12T00:00:00.000000Z")
+    FA.post_entry(
+        c,
+        {
+            "date": day,
+            "source": "usage",
+            "source_id": f"sale-{code}",
+            "lines": [{"account_id": line, "amount": -amount}, {"account_id": account(c, "1000"), "amount": amount}],
+        },
+        at="2026-09-12T00:00:00.000000Z",
+    )
     return line
 
 
@@ -448,7 +507,10 @@ def test_an_exact_total_minus_exact_parts_recovers_the_hidden_part(books):
         D.set_rule(c, OWNER, "investors", "pnl_line", subscriptions, mode="show")
         D.set_rule(c, OWNER, "investors", "growth", mode="show")
         result = ST.project(c, "investors", "2026-10-15")
-        assert held_labels(result) == {"Revenue", "Subscriptions"} and "minus the lines shown" in result["held"][0]["reason"]
+        assert (
+            held_labels(result) == {"Revenue", "Subscriptions"}
+            and "minus the lines shown" in result["held"][0]["reason"]
+        )
         assert "$100,000" not in json.dumps(result)
         # With the other line open too, nothing is left to recover.
         D.set_rule(c, OWNER, "investors", "pnl_line", services, mode="show")
@@ -511,8 +573,12 @@ def test_a_private_stat_the_public_page_shows_only_coarsely_is_still_held(store)
 
 def _private_payroll(c, amount, day="2026-09-10"):
     """Payroll, a private line, the only expense posted: total spend is Payroll and nothing else."""
-    made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
-                                            "parent_id": account(c, "6000")})
+    made = act(
+        c,
+        OWNER,
+        "account_create",
+        {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
+    )
     pay = str(made.result["account_id"])
     assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
     spend(c, "6200", amount, day=day)
@@ -575,7 +641,9 @@ def test_a_shown_total_is_held_when_the_books_cannot_be_read(books):
     with books.transaction() as c:
         spend(c, "6000", 4_000_00, day="2026-09-10")
         ST.create_stat(c, OWNER, "finance_metric", "spend")
-    with mock.patch.object(ST._Books, "active_accounts", side_effect=ST._Books._errors()("forbidden", "books unreadable")):
+    with mock.patch.object(
+        ST._Books, "active_accounts", side_effect=ST._Books._errors()("forbidden", "books unreadable")
+    ):
         with books.transaction() as c:
             result = ST.project(c, "investors", "2026-10-15")
     assert held_labels(result) == {"Spend"} and "couldn't be read" in result["held"][0]["reason"]
@@ -592,9 +660,13 @@ def test_preset_contents(store):
     with store.transaction() as c:
         for name in D.PRESETS:
             for audience in ("public", "investors", "board"):
-                before = c.execute("SELECT count(*) FROM disclosure_revisions WHERE audience_id=?", (audience,)).fetchone()[0]
+                before = c.execute(
+                    "SELECT count(*) FROM disclosure_revisions WHERE audience_id=?", (audience,)
+                ).fetchone()[0]
                 D.apply_preset(c, OWNER, audience, name)
-                after = c.execute("SELECT count(*) FROM disclosure_revisions WHERE audience_id=?", (audience,)).fetchone()[0]
+                after = c.execute(
+                    "SELECT count(*) FROM disclosure_revisions WHERE audience_id=?", (audience,)
+                ).fetchone()[0]
                 assert after == before + 1
                 if name == "radical":
                     found = modes(c, audience)
@@ -607,7 +679,11 @@ def test_preset_contents(store):
                 elif name == "standard":
                     found = modes(c, audience)
                     if audience == "public":
-                        assert {k for k, r in found.items() if r["mode"] != "hidden"} == {"product", "headcount", "mission"}
+                        assert {k for k, r in found.items() if r["mode"] != "hidden"} == {
+                            "product",
+                            "headcount",
+                            "mission",
+                        }
                     elif audience == "investors":
                         assert all(found[k]["mode"] == "show" for k in D.NUMBER_CLASSES)
                         assert found["customer_names"]["mode"] == "hidden" and found["customers"]["mode"] == "show"
@@ -630,10 +706,22 @@ def test_a_preset_board_of_every_finance_metric_doesnt_hold_itself(store):
     """The presets are the normal way in: an all-numbers audience must not end up holding its own numbers."""
     setup(store)
     with store.transaction() as c:
-        numbers(c, ("Revenue", "revenue", "$"), ("Growth", "growth", "%"), ("Margin", "gross_margin", "%"),
-                ("Burn", "burn", "$"), ("Cash", "cash_runway", "$"), ("Runway", "cash_runway", "months"))
-        for name, audience in (("radical", "public"), ("radical", "investors"), ("standard", "investors"),
-                               ("standard", "board"), ("quiet", "board")):
+        numbers(
+            c,
+            ("Revenue", "revenue", "$"),
+            ("Growth", "growth", "%"),
+            ("Margin", "gross_margin", "%"),
+            ("Burn", "burn", "$"),
+            ("Cash", "cash_runway", "$"),
+            ("Runway", "cash_runway", "months"),
+        )
+        for name, audience in (
+            ("radical", "public"),
+            ("radical", "investors"),
+            ("standard", "investors"),
+            ("standard", "board"),
+            ("quiet", "board"),
+        ):
             D.apply_preset(c, OWNER, audience, name)
             assert ST.project(c, audience, "2026-11-02")["held"] == [], (name, audience)
         D.apply_preset(c, OWNER, "public", "quiet")
@@ -659,32 +747,39 @@ def rule(mode, lag=0, rounding=None):
     return {"mode": mode, "lag_days": lag, "rounding": rounding}
 
 
-@pytest.mark.parametrize("old, new, loosens", [
-    (None, rule("show"), True),                                             # missing is hidden
-    (rule("hidden"), rule("range"), True),
-    (rule("show"), rule("hidden"), False),
-    (rule("show"), rule("rounded", rounding="sig:2"), False),
-    (rule("rounded", rounding="sig:2"), rule("show"), True),
-    (rule("delayed", 30), rule("delayed", 60), False),
-    (rule("delayed", 60), rule("delayed", 30), True),
-    (rule("delayed", 30), rule("show"), True),
-    (rule("show"), rule("delayed", 30), False),
-    (rule("delayed", 30), rule("rounded"), True),                           # a current value appears: can't call it tighter
-    (rule("rounded", rounding="sig:2"), rule("rounded", rounding="sig:1"), False),
-    (rule("rounded", rounding="sig:1"), rule("rounded", rounding="sig:2"), True),
-    (rule("rounded", rounding="nearest:100"), rule("rounded", rounding="nearest:1000"), False),
-    (rule("rounded", rounding="nearest:700"), rule("rounded", rounding="nearest:1000"), True),   # not a multiple: unsure
-    (rule("rounded", rounding="nearest:100"), rule("rounded", rounding="sig:1"), True),          # unlike methods: unsure
-    (rule("rounded", rounding="sig:2 quarterly"), rule("rounded", rounding="sig:2"), True),
-    (rule("rounded", rounding="sig:2"), rule("rounded", rounding="sig:2 quarterly"), False),
-    (rule("rounded", rounding="sig:2"), rule("range", rounding="bands"), False),
-    (rule("range", rounding="bands"), rule("rounded", rounding="sig:1"), True),
-    (rule("rounded", rounding="nearest:1000"), rule("range", rounding="bands"), True),           # unsure
-    (rule("range", rounding="step:100"), rule("range", rounding="step:50"), True),
-    (rule("show"), rule("no-such-mode"), True),
-    (rule("rounded", rounding="made up"), rule("rounded"), True),
-    ("not a rule", rule("hidden"), True),
-])
+@pytest.mark.parametrize(
+    "old, new, loosens",
+    [
+        (None, rule("show"), True),  # missing is hidden
+        (rule("hidden"), rule("range"), True),
+        (rule("show"), rule("hidden"), False),
+        (rule("show"), rule("rounded", rounding="sig:2"), False),
+        (rule("rounded", rounding="sig:2"), rule("show"), True),
+        (rule("delayed", 30), rule("delayed", 60), False),
+        (rule("delayed", 60), rule("delayed", 30), True),
+        (rule("delayed", 30), rule("show"), True),
+        (rule("show"), rule("delayed", 30), False),
+        (rule("delayed", 30), rule("rounded"), True),  # a current value appears: can't call it tighter
+        (rule("rounded", rounding="sig:2"), rule("rounded", rounding="sig:1"), False),
+        (rule("rounded", rounding="sig:1"), rule("rounded", rounding="sig:2"), True),
+        (rule("rounded", rounding="nearest:100"), rule("rounded", rounding="nearest:1000"), False),
+        (
+            rule("rounded", rounding="nearest:700"),
+            rule("rounded", rounding="nearest:1000"),
+            True,
+        ),  # not a multiple: unsure
+        (rule("rounded", rounding="nearest:100"), rule("rounded", rounding="sig:1"), True),  # unlike methods: unsure
+        (rule("rounded", rounding="sig:2 quarterly"), rule("rounded", rounding="sig:2"), True),
+        (rule("rounded", rounding="sig:2"), rule("rounded", rounding="sig:2 quarterly"), False),
+        (rule("rounded", rounding="sig:2"), rule("range", rounding="bands"), False),
+        (rule("range", rounding="bands"), rule("rounded", rounding="sig:1"), True),
+        (rule("rounded", rounding="nearest:1000"), rule("range", rounding="bands"), True),  # unsure
+        (rule("range", rounding="step:100"), rule("range", rounding="step:50"), True),
+        (rule("show"), rule("no-such-mode"), True),
+        (rule("rounded", rounding="made up"), rule("rounded"), True),
+        ("not a rule", rule("hidden"), True),
+    ],
+)
 def test_is_loosening_is_conservative(old, new, loosens):
     assert D.is_loosening(old, new) is loosens
 
@@ -694,8 +789,11 @@ def test_every_change_writes_a_revision_and_the_same_rule_again_writes_none(stor
     with store.transaction() as c:
         first = D.set_rule(c, OWNER, "investors", "revenue", mode="show")["revision"]
         assert first == D.current_revision(c, "investors")
-        assert D.set_rule(c, OWNER, "investors", "revenue", mode="show") == {"revision": first, "loosened": False,
-                                                                             "tightened": False}
+        assert D.set_rule(c, OWNER, "investors", "revenue", mode="show") == {
+            "revision": first,
+            "loosened": False,
+            "tightened": False,
+        }
         second = D.set_rule(c, OWNER, "investors", "revenue", mode="hidden")["revision"]
         assert second != first
         count = c.execute("SELECT count(*) FROM disclosure_revisions WHERE audience_id='investors'").fetchone()[0]
@@ -706,8 +804,12 @@ def test_a_change_that_tightens_one_cell_says_so_even_when_another_loosens(store
     """Hiding revenue while showing customers is still a tightening: the published editions it leaves up need saying."""
     setup(store, shown("revenue"))
     with store.transaction() as c:
-        mixed = D.set_rules(c, OWNER, "investors", [{"data_class": "revenue", "mode": "hidden"},
-                                                    {"data_class": "customers", "mode": "show"}])
+        mixed = D.set_rules(
+            c,
+            OWNER,
+            "investors",
+            [{"data_class": "revenue", "mode": "hidden"}, {"data_class": "customers", "mode": "show"}],
+        )
         assert mixed["loosened"] and mixed["tightened"]
         pure = D.set_rules(c, OWNER, "investors", [{"data_class": "revenue", "mode": "show"}])
         assert pure["loosened"] and not pure["tightened"]
@@ -730,10 +832,19 @@ def test_a_preset_that_narrows_says_so_and_one_that_only_widens_does_not(store):
 
 # ------------------------------------------------------------------------------------------- the stats board's approval
 def approve(c, audience="investors"):
-    c.execute("INSERT INTO stat_board_approvals (id, audience_id, config_hash, disclosure_revision_id, approval_id, "
-              "approved_by, created_at) VALUES (?,?,?,?,?,?,?)",
-              (H.new_id(), audience, ST.board_config_hash(c, audience), D.current_revision(c, audience), "appr-1", OWNER,
-               H.now()))
+    c.execute(
+        "INSERT INTO stat_board_approvals (id, audience_id, config_hash, disclosure_revision_id, approval_id, "
+        "approved_by, created_at) VALUES (?,?,?,?,?,?,?)",
+        (
+            H.new_id(),
+            audience,
+            ST.board_config_hash(c, audience),
+            D.current_revision(c, audience),
+            "appr-1",
+            OWNER,
+            H.now(),
+        ),
+    )
 
 
 def test_loosening_or_adding_asks_again_and_tightening_or_removing_does_not(store):
@@ -742,7 +853,7 @@ def test_loosening_or_adding_asks_again_and_tightening_or_removing_does_not(stor
         kept = make_kpi(c, "Kept")
         extra = make_kpi(c, "Extra")
         stat = on_board(c, kept, label="Kept")
-        assert not ST.board_approved(c, "investors")           # no approval yet
+        assert not ST.board_approved(c, "investors")  # no approval yet
         approve(c)
         assert ST.board_approved(c, "investors")
         # A value refreshing is not a change to the board.
@@ -787,11 +898,11 @@ def test_a_bot_renaming_its_kpi_changes_nothing_shown_and_its_unit_voids_the_app
 # ------------------------------------------------------------------------------------------- the switch and audiences
 def test_changing_transparency_rebuilds_in_the_same_step(store, rebuilds):
     with store.transaction() as c:
-        assert S.get(c)["transparency"] == "closed"            # the default, with no row at all
+        assert S.get(c)["transparency"] == "closed"  # the default, with no row at all
         S.set_transparency(c, OWNER, "open")
         S.set_transparency(c, OWNER, "private")
         S.set_transparency(c, OWNER, "closed")
-        S.set_transparency(c, OWNER, "closed")                 # no change, no rebuild
+        S.set_transparency(c, OWNER, "closed")  # no change, no rebuild
     # Each rebuild saw the new state: it reads the change it's taking effect for.
     assert [state for _, state in rebuilds] == ["open", "private", "closed"]
     with pytest.raises(Problem), store.transaction() as c:
@@ -805,6 +916,7 @@ def test_a_failed_rebuild_leaves_the_switch_where_it_was(store, monkeypatch):
 
     def broken(c, reason):
         raise RuntimeError("disk full")
+
     monkeypatch.setattr(company_page.release, "rebuild", broken)
     with pytest.raises(RuntimeError), store.transaction() as c:
         S.set_transparency(c, OWNER, "closed")
@@ -817,7 +929,7 @@ def test_taking_things_away_from_a_live_page_rebuilds(store, rebuilds):
     with store.transaction() as c:
         A.update(c, OWNER, "public", enabled=True)
         D.set_rule(c, OWNER, "public", "revenue", mode="show")
-        assert rebuilds == []                                  # closed: nothing is served
+        assert rebuilds == []  # closed: nothing is served
         S.set_transparency(c, OWNER, "open")
         rebuilds.clear()
         D.set_rule(c, OWNER, "public", "revenue", mode="hidden")
@@ -834,9 +946,13 @@ def test_taking_things_away_from_a_live_page_rebuilds(store, rebuilds):
 def test_the_mission_is_the_published_vision_and_only_where_a_rule_allows_it(store):
     setup(store)
     with store.transaction() as c:
-        c.execute("UPDATE strategy_versions SET vision='UNPUBLISHED DRAFT', summary='INSIDE SUMMARY' WHERE status='draft'")
-        c.execute("INSERT INTO strategy_versions (id, n, status, vision, summary) VALUES ('v1', 999, 'published', "
-                  "'Every landlord runs on Acme.', 'INSIDE SUMMARY')")
+        c.execute(
+            "UPDATE strategy_versions SET vision='UNPUBLISHED DRAFT', summary='INSIDE SUMMARY' WHERE status='draft'"
+        )
+        c.execute(
+            "INSERT INTO strategy_versions (id, n, status, vision, summary) VALUES ('v1', 999, 'published', "
+            "'Every landlord runs on Acme.', 'INSIDE SUMMARY')"
+        )
         assert S.get(c)["mission"] == "Every landlord runs on Acme."
         assert S.mission_for(c, "public") == ""
         D.set_rule(c, OWNER, "public", "mission", mode="show")
@@ -859,10 +975,15 @@ def test_slug_is_one_dns_label(store):
 def test_a_logo_is_an_image_in_the_store(store):
     with store.transaction() as c:
         # The page's own upload is named for it; a library picture is an image too but never the logo.
-        for blob, name, kind in (("logo-1", S.LOGO_NAME + ".png", "image/png"), ("doc-1", "doc.pdf", "application/pdf"),
-                                 ("pic-1", "holiday.png", "image/png")):
-            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
-                      (blob, OWNER, blob, 1, name, kind, H.now()))
+        for blob, name, kind in (
+            ("logo-1", S.LOGO_NAME + ".png", "image/png"),
+            ("doc-1", "doc.pdf", "application/pdf"),
+            ("pic-1", "holiday.png", "image/png"),
+        ):
+            c.execute(
+                "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+                (blob, OWNER, blob, 1, name, kind, H.now()),
+            )
         assert S.update(c, OWNER, logo_file_id="logo-1")["logo_file_id"] == "logo-1"
         for bad in ("doc-1", "pic-1", "no-such-file", "../etc/passwd"):
             with pytest.raises(Problem):
@@ -873,6 +994,7 @@ def test_a_logo_is_an_image_in_the_store(store):
 def test_the_address_is_the_reader_origin_else_the_slug_under_the_page_domain():
     def app(origin="", domain=""):
         return SimpleNamespace(reader_origin=origin, page_domain=domain)
+
     assert S.address("acme", app()) is None
     assert S.address("", app(domain="pages.example")) is None
     assert S.address("acme", app(domain="pages.example")) == "https://acme.pages.example"
@@ -885,18 +1007,24 @@ def test_what_can_go_on_the_board_is_names_only_and_never_a_private_line(books):
         read(c, kept, 4242, "2026-08-31")
         K.set_archived(c, OWNER, make_kpi(c, "Old one")["id"], True)
         spend(c, "6000", 42_424_00, day="2026-09-10")
-        made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
-                                                "parent_id": account(c, "6000")})
+        made = act(
+            c,
+            OWNER,
+            "account_create",
+            {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
+        )
         pay = str(made.result["account_id"])
         act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"})
         found = ST.available(c)
     assert all(set(item) == {"source_kind", "ref_id", "label"} for item in found)
     kinds = {(item["source_kind"], item["label"]) for item in found}
-    assert ("kpi", "Signups") in kinds and ("finance_metric", "Revenue") in kinds and ("finance_metric", "Runway") in kinds
+    assert (
+        ("kpi", "Signups") in kinds and ("finance_metric", "Revenue") in kinds and ("finance_metric", "Runway") in kinds
+    )
     lines = [item for item in found if item["source_kind"] == "finance_line"]
     assert account(c, "6000") in {item["ref_id"] for item in lines}
     assert pay not in {item["ref_id"] for item in lines} and "Payroll" not in json.dumps(found)
-    labels = json.dumps([item["label"] for item in found])     # ref_ids are random UUIDs: one can hold "4242"
+    labels = json.dumps([item["label"] for item in found])  # ref_ids are random UUIDs: one can hold "4242"
     assert "Old one" not in labels and "4242" not in labels and "42424" not in labels
 
 
@@ -907,7 +1035,7 @@ def test_built_ins_are_seeded_once_disabled_and_cant_be_deleted(store):
         A.seed(c)
         found = {a["kind"]: a for a in A.list_all(c)}
         assert set(found) == {"board", "investors", "public"}
-        assert found["board"]["name"] == "The board" and found["board"]["enabled"] is True     # seed left it alone
+        assert found["board"]["name"] == "The board" and found["board"]["enabled"] is True  # seed left it alone
         assert found["investors"]["enabled"] is False and found["public"]["enabled"] is False
         assert found["investors"]["due_rule"] == {"kind": "business_day", "n": 10}
         assert found["public"]["due_rule"] == {"kind": "days_after_period_end", "n": 30}
@@ -915,8 +1043,14 @@ def test_built_ins_are_seeded_once_disabled_and_cant_be_deleted(store):
         assert A.update(c, OWNER, "board", due_rule=due)["due_rule"] == due
         stored = c.execute("SELECT due_rule FROM audiences WHERE id='board'").fetchone()[0]
         assert json.loads(stored) == due
-        for bad in ({"business_day": 3}, {"kind": "business_day", "n": 0}, {"kind": "business_day", "n": 99},
-                    {"kind": "days_after_period_end", "n": True}, {"kind": "someday", "n": 1}, {}):
+        for bad in (
+            {"business_day": 3},
+            {"kind": "business_day", "n": 0},
+            {"kind": "business_day", "n": 99},
+            {"kind": "days_after_period_end", "n": True},
+            {"kind": "someday", "n": 1},
+            {},
+        ):
             with pytest.raises(Problem):
                 A.update(c, OWNER, "board", due_rule=bad)
         with pytest.raises(Problem) as refused:
@@ -929,7 +1063,7 @@ def test_built_ins_are_seeded_once_disabled_and_cant_be_deleted(store):
         with pytest.raises(Problem):
             A.add_source(c, OWNER, custom["id"], "bot:no-such-bot")
         with pytest.raises(Problem):
-            A.update(c, OWNER, custom["id"], approver="bot:coder")     # an approval is a person's own click
+            A.update(c, OWNER, custom["id"], approver="bot:coder")  # an approval is a person's own click
         D.set_rule(c, OWNER, custom["id"], "revenue", mode="show")
         A.delete(c, OWNER, custom["id"])
         assert not c.execute("SELECT 1 FROM disclosure_rules WHERE audience_id=?", (custom["id"],)).fetchone()
@@ -940,13 +1074,15 @@ def test_a_bot_is_refused_every_write_at_the_module_too(store):
     setup(store)
     with store.transaction() as c:
         kpi = make_kpi(c)
-        for write in (lambda: S.set_transparency(c, "bot:coder", "open"),
-                      lambda: S.update(c, "bot:coder", slug="acme"),
-                      lambda: A.create(c, "bot:coder", "Advisors"),
-                      lambda: A.update(c, "bot:coder", "public", enabled=True),
-                      lambda: D.set_rule(c, "bot:coder", "public", "revenue", mode="show"),
-                      lambda: D.apply_preset(c, "bot:coder", "public", "radical"),
-                      lambda: ST.create_stat(c, "bot:coder", "kpi", kpi["id"])):
+        for write in (
+            lambda: S.set_transparency(c, "bot:coder", "open"),
+            lambda: S.update(c, "bot:coder", slug="acme"),
+            lambda: A.create(c, "bot:coder", "Advisors"),
+            lambda: A.update(c, "bot:coder", "public", enabled=True),
+            lambda: D.set_rule(c, "bot:coder", "public", "revenue", mode="show"),
+            lambda: D.apply_preset(c, "bot:coder", "public", "radical"),
+            lambda: ST.create_stat(c, "bot:coder", "kpi", kpi["id"]),
+        ):
             with pytest.raises(Problem) as refused:
                 write()
             assert refused.value.status == 403
@@ -967,26 +1103,37 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     identities["botops-for-cara"] = Identity("human:cara", "human", "cara@acme.example", via="botops", confirmed=True)
     identities["manager-bot"] = Identity("bot:ops", "bot", agent="hermes", via="botops", confirmed=True)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
-                  "VALUES('ops','hermes','x-ops',?,'human:ana')", (H.now(),))
+        c.execute(
+            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
+            "VALUES('ops','hermes','x-ops',?,'human:ana')",
+            (H.now(),),
+        )
 
     # Seeded and listed, all closed.
     audiences = call(api, "GET", "audiences")["audiences"]
     assert {a["kind"] for a in audiences} == {"board", "investors", "public"}
     assert call(api, "GET", "company-page")["transparency"] == "closed"
 
-    writes = [("PATCH", "company-page", {"transparency": "open", "slug": "acme"}),
-              ("POST", "audiences", {"name": "Advisors"}),
-              ("PATCH", "audiences/public", {"enabled": True}),
-              ("PUT", "audiences/public/disclosure", {"rules": [{"data_class": "revenue", "mode": "show"}]}),
-              ("POST", "audiences/public/disclosure/preset", {"name": "radical"}),
-              ("POST", "audiences/public/sources", {"author": "company"}),
-              ("POST", "company-page/stats", {"source_kind": "finance_metric", "ref_id": "revenue"})]
+    writes = [
+        ("PATCH", "company-page", {"transparency": "open", "slug": "acme"}),
+        ("POST", "audiences", {"name": "Advisors"}),
+        ("PATCH", "audiences/public", {"enabled": True}),
+        ("PUT", "audiences/public/disclosure", {"rules": [{"data_class": "revenue", "mode": "show"}]}),
+        ("POST", "audiences/public/disclosure/preset", {"name": "radical"}),
+        ("POST", "audiences/public/sources", {"author": "company"}),
+        ("POST", "company-page/stats", {"source_kind": "finance_metric", "ref_id": "revenue"}),
+    ]
     for token in ("bot-test", "manager-bot", "cara-test", "botops-for-cara"):
         for method, path, body in writes:
             call(api, method, path, body, token=token, expected=403)
-        for path in ("company-page", "audiences", "audiences/public/disclosure", "audiences/public/stats",
-                     "company-page/stats", "company-page/preview?audience=public"):
+        for path in (
+            "company-page",
+            "audiences",
+            "audiences/public/disclosure",
+            "audiences/public/stats",
+            "company-page/stats",
+            "company-page/preview?audience=public",
+        ):
             r = api.get("/api/v2/" + path, headers=headers(token))
             assert r.status_code == 403, (token, path, r.text)
     assert rebuilds == []
@@ -1008,18 +1155,26 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     assert call(api, "PATCH", "company-page", {"slug": "acme"}, token="botops-for-ana")["slug"] == "acme"
     assert call(api, "PATCH", "company-page", {"transparency": "open"})["transparency"] == "open"
     assert [state for _, state in rebuilds] == ["open"]
-    call(api, "PATCH", "company-page", {"slug": ""}, expected=422)     # the live page keeps its address
+    call(api, "PATCH", "company-page", {"slug": ""}, expected=422)  # the live page keeps its address
     assert call(api, "PATCH", "company-page", {"transparency": "closed"})["transparency"] == "closed"
     assert [state for _, state in rebuilds] == ["open", "closed"]
     # A write with no key is refused, not guessed at.
-    assert api.post("/api/v2/audiences", json={"name": "No key"},
-                    headers={"Authorization": "Bearer ana-test"}).status_code == 422
+    assert (
+        api.post("/api/v2/audiences", json={"name": "No key"}, headers={"Authorization": "Bearer ana-test"}).status_code
+        == 422
+    )
 
     # The grid and the board.
-    grid = call(api, "PUT", "audiences/investors/disclosure",
-                {"rules": [{"data_class": "kpi", "mode": "show"}, {"data_class": "legal", "mode": "hidden"}]})
+    grid = call(
+        api,
+        "PUT",
+        "audiences/investors/disclosure",
+        {"rules": [{"data_class": "kpi", "mode": "show"}, {"data_class": "legal", "mode": "hidden"}]},
+    )
     assert {(r["data_class"], r["mode"]) for r in grid["rules"]} == {("kpi", "show"), ("legal", "hidden")}
-    call(api, "PUT", "audiences/investors/disclosure", {"rules": [{"data_class": "nope", "mode": "show"}]}, expected=422)
+    call(
+        api, "PUT", "audiences/investors/disclosure", {"rules": [{"data_class": "nope", "mode": "show"}]}, expected=422
+    )
     call(api, "POST", "audiences/investors/disclosure/preset", {"name": "standard"})
     assert call(api, "GET", "audiences/investors/disclosure")["revision"]
     with api.app.state.store.transaction() as c:
@@ -1044,15 +1199,16 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
         # Frozen on a Monday, 2 November 2026, so the business days below are fixed.
         with mock.patch.object(H, "now", return_value="2026-11-02T12:00:00.000000Z"):
             return {a["id"]: a["next_due"] for a in call(api, "GET", "audiences")["audiences"]}
+
     call(api, "PATCH", "audiences/board", {"enabled": True})
-    assert dues()["board"] is None                                     # no sources
+    assert dues()["board"] is None  # no sources
     board_source = call(api, "POST", "audiences/board/sources", {"author": "company"})
-    assert dues()["board"] is None                                     # the page is Closed
+    assert dues()["board"] is None  # the page is Closed
     call(api, "PATCH", "company-page", {"transparency": "private"})
     assert dues()["board"] == "2026-11-06" and dues()["investors"] is None
     call(api, "PATCH", "audiences/public", {"enabled": True})
     call(api, "POST", "audiences/public/sources", {"author": "company"})
-    assert dues()["public"] is None                                    # no readers until it is Open
+    assert dues()["public"] is None  # no readers until it is Open
     call(api, "PATCH", "company-page", {"transparency": "open"})
     assert dues()["public"] == "2026-11-30"  # October ends the 31st; 30 days after it
     call(api, "PATCH", "company-page", {"transparency": "closed"})
@@ -1075,10 +1231,11 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     def page(view, **kw):
         seen.update(view)
         return real_page(view, **kw)
+
     monkeypatch.setattr(render, "page", page)
     r = api.get("/api/v2/company-page/preview?audience=investors", headers=headers("ben-test"))
     assert r.status_code == 200 and r.text.startswith("<!doctype html>")
     assert "sandbox" in r.headers["content-security-policy"] and "no-store" in r.headers["cache-control"]
-    assert "font-src data:" in r.headers["content-security-policy"]     # the fonts ride in the page, as its logo does
+    assert "font-src data:" in r.headers["content-security-policy"]  # the fonts ride in the page, as its logo does
     assert seen["audience"] == {"kind": "investors", "name": "Investors"}
     assert api.get("/api/v2/company-page/preview?audience=nobody", headers=headers()).status_code == 404

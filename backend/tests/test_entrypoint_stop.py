@@ -1,6 +1,7 @@
 """docker/entrypoint.sh `server` on a stop: the server gets TICO_STOP_GRACE and is then killed, and only after it has
 exited is Litestream stopped, so its last sync covers every write. A server or Litestream that exits on its own ends
 the container, the other stopped in the same order."""
+
 import contextlib
 import json
 import os
@@ -65,19 +66,30 @@ def start(tmp_path, **extra):
         (bin_dir / name).write_text(text)
         (bin_dir / name).chmod(0o755)
     log = tmp_path / "stub.log"
-    env = {**os.environ, "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{os.environ['PATH']}",
-           "TICO_DATA_DIR": str(data), "TICO_BACKUP_DIR": str(backups), "PYTHONPATH": str(ROOT),
-           "TICO_LITESTREAM_CONFIG": str(tmp_path / "litestream.yml"), "TICO_COMPANY_NAME": "Acme",
-           "TICO_OWNER_EMAIL": "owner@example.com", "TICO_AUTH_PROXY": "none", "STUB_LOG": str(log),
-           "STUB_SERVER_EXIT": "", "STUB_LITESTREAM_EXIT": "", **extra}
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+        "TICO_DATA_DIR": str(data),
+        "TICO_BACKUP_DIR": str(backups),
+        "PYTHONPATH": str(ROOT),
+        "TICO_LITESTREAM_CONFIG": str(tmp_path / "litestream.yml"),
+        "TICO_COMPANY_NAME": "Acme",
+        "TICO_OWNER_EMAIL": "owner@example.com",
+        "TICO_AUTH_PROXY": "none",
+        "STUB_LOG": str(log),
+        "STUB_SERVER_EXIT": "",
+        "STUB_LITESTREAM_EXIT": "",
+        **extra,
+    }
     for key in ("TICO_BACKUP_URL", "BASH_ENV", "TICO_BACKUP", "TICO_REHEARSAL"):
         env.pop(key, None)
     env.update(extra)
     # Output to a file, not a pipe: a stub left behind (a failure here) would hold a pipe open. Its own session, so
     # `finish` can clean up everything it started, as the container's end does.
     out = (tmp_path / "out.txt").open("w")
-    p = subprocess.Popen(["bash", str(ENTRYPOINT), "server"], env=env, stdout=out, stderr=subprocess.STDOUT,
-                         start_new_session=True)
+    p = subprocess.Popen(
+        ["bash", str(ENTRYPOINT), "server"], env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True
+    )
     out.close()
     return p, log
 
@@ -116,7 +128,7 @@ def test_a_stop_kills_a_slow_server_after_the_grace_then_lets_litestream_sync(tm
     assert p.returncode == 0, out
     seen = lines(log)
     assert seen.index("server TERM") < seen.index("litestream TERM") < seen.index("litestream synced"), seen
-    assert 0.5 <= took < 3, took                 # the grace, Litestream's sync, and not Docker's 10 s
+    assert 0.5 <= took < 3, took  # the grace, Litestream's sync, and not Docker's 10 s
     assert "shutdown-sync-timeout: 5s" in (tmp_path / "litestream.yml").read_text().splitlines()
 
 

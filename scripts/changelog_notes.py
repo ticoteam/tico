@@ -1,4 +1,5 @@
 """Print one version's section of CHANGELOG.md, the body of its GitHub release."""
+
 import re
 import sys
 from pathlib import Path

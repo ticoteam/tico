@@ -10,6 +10,7 @@ front of the hub, an Access gate that sends a request without the hub session co
 Cloudflare Access does. Prints one JSON line, {"hub": ..., "log": ...}, then serves until stdin closes. The log is
 one JSON line per request either service saw: which service, method, path and whether it carried a Cookie header.
 """
+
 import json
 import os
 from pathlib import Path
@@ -42,11 +43,17 @@ def bucket_server(log):
         def key(self):
             path = urlsplit(self.path).path
             prefix = f"/{BUCKET}/"
-            return path[len(prefix):] if path.startswith(prefix) else None
+            return path[len(prefix) :] if path.startswith(prefix) else None
 
         def note(self):
-            record(log, service="bucket", method=self.command, path=self.path,
-                   cookie="Cookie" in self.headers, authorization="Authorization" in self.headers)
+            record(
+                log,
+                service="bucket",
+                method=self.command,
+                path=self.path,
+                cookie="Cookie" in self.headers,
+                authorization="Authorization" in self.headers,
+            )
 
         def reply(self, status, body=b"", content_type="application/xml"):
             self.send_response(status)
@@ -91,25 +98,38 @@ def unchunk(body):
         size = int(size.split(b";")[0], 16)
         if size == 0:
             break
-        out, rest = out + rest[:size], rest[size + 2:]
+        out, rest = out + rest[:size], rest[size + 2 :]
     return out
 
 
 def access_gate(app, cookie, hub, log):
     """Cloudflare Access in front of the hub: without the session cookie, a redirect to its sign-in page."""
+
     async def gate(scope, receive, send):
         if scope["type"] != "http":
             return await app(scope, receive, send)
         headers = {name.decode().lower(): value.decode() for name, value in scope["headers"]}
         sent = headers.get("cookie", "")
         signed_in = cookie in [part.strip() for part in sent.split(";")]
-        record(log, service="hub", method=scope["method"], path=scope["path"], cookie="cookie" in headers,
-               signed_in=signed_in)
+        record(
+            log,
+            service="hub",
+            method=scope["method"],
+            path=scope["path"],
+            cookie="cookie" in headers,
+            signed_in=signed_in,
+        )
         if signed_in:
             return await app(scope, receive, send)
-        await send({"type": "http.response.start", "status": 302,
-                    "headers": [(b"location", f"{hub}/cdn-cgi/access/login".encode()), (b"content-length", b"0")]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 302,
+                "headers": [(b"location", f"{hub}/cdn-cgi/access/login".encode()), (b"content-length", b"0")],
+            }
+        )
         await send({"type": "http.response.body", "body": b""})
+
     return gate
 
 
@@ -128,12 +148,18 @@ def main(bundles, version, cookie):
     for name in list(os.environ):
         if name.startswith(("AWS_", "TICO_BLOB_", "LITESTREAM_", "TICO_BACKUP_")):
             del os.environ[name]
-    os.environ.update(AWS_ACCESS_KEY_ID="AKIDACMEEXAMPLE", AWS_SECRET_ACCESS_KEY="acme-example-secret",
-                      AWS_DEFAULT_REGION="us-west-2", AWS_ENDPOINT_URL_S3=storage_url,
-                      AWS_CONFIG_FILE=os.devnull, AWS_SHARED_CREDENTIALS_FILE=os.devnull,
-                      AWS_EC2_METADATA_DISABLED="true")
+    os.environ.update(
+        AWS_ACCESS_KEY_ID="AKIDACMEEXAMPLE",
+        AWS_SECRET_ACCESS_KEY="acme-example-secret",
+        AWS_DEFAULT_REGION="us-west-2",
+        AWS_ENDPOINT_URL_S3=storage_url,
+        AWS_CONFIG_FILE=os.devnull,
+        AWS_SHARED_CREDENTIALS_FILE=os.devnull,
+        AWS_EC2_METADATA_DISABLED="true",
+    )
     sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
     import app_release
+
     if app_release.main(["--version", version, "--bucket", BUCKET, "--base", hub, "--quiet", str(bundles)]):
         raise SystemExit("publishing the bundles failed")
 
@@ -142,8 +168,14 @@ def main(bundles, version, cookie):
     from backend.blobs import Blobs
     from backend.config import Settings
     from backend.downloads import install_downloads
-    settings = Settings(db_path=scratch / "hub.db", public_url=hub, blob_bucket=BUCKET, blob_endpoint=storage_url,
-                        blob_region="us-west-2")
+
+    settings = Settings(
+        db_path=scratch / "hub.db",
+        public_url=hub,
+        blob_bucket=BUCKET,
+        blob_endpoint=storage_url,
+        blob_region="us-west-2",
+    )
     server = FastAPI()
     server.state.blobs = Blobs(settings)
     install_downloads(server, SimpleNamespace(settings=settings))

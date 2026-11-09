@@ -54,9 +54,24 @@ CONTENT = {
     "marketplace": {
         "name": "Crate and Shelf Marketplace",
         "payouts": [
-            {"date": ("prev", 10), "gross": 310000, "fees": 54000, "memo": "Marketplace payout, sales through {through}"},
-            {"date": ("prev", 24), "gross": 330000, "fees": 58000, "memo": "Marketplace payout, sales through {through}"},
-            {"date": ("this", 1), "gross": 330000, "fees": 58000, "memo": "Marketplace payout, sales through {through}"},
+            {
+                "date": ("prev", 10),
+                "gross": 310000,
+                "fees": 54000,
+                "memo": "Marketplace payout, sales through {through}",
+            },
+            {
+                "date": ("prev", 24),
+                "gross": 330000,
+                "fees": 58000,
+                "memo": "Marketplace payout, sales through {through}",
+            },
+            {
+                "date": ("this", 1),
+                "gross": 330000,
+                "fees": 58000,
+                "memo": "Marketplace payout, sales through {through}",
+            },
         ],
     },
     "subscriptions": {
@@ -93,87 +108,239 @@ CONTENT = {
     # Drafted by the bookkeeper and sent by Ana. ACME-1001 is paid; ACME-1003 is overdue and ar-followup chases it.
     # The others fall due later this month, so only ACME-1003 is late on any day in the first half of the month.
     "invoices": [
-        {"customer": "homestead", "number": "ACME-1001", "date": ("prev", 2), "due": ("prev", 28), "amount": 456000,
-         "account": "4300", "description": "Retail order, 120 starter kits", "paid": ("prev", 27)},
-        {"customer": "harborvine", "number": "ACME-1002", "date": ("prev", 9), "due": ("this", 28), "amount": 285000,
-         "account": "4400", "description": "Install: lobby and guest floors"},
-        {"customer": "tidewater", "number": "ACME-1003", "date": ("prev", 14), "due": ("prev", 28), "amount": 124000,
-         "account": "4400", "description": "Install: counter and patio lighting"},
-        {"customer": "ridgeline", "number": "ACME-1004", "date": ("prev", 20), "due": ("this", 20), "amount": 186500,
-         "account": "4400", "description": "Install: reception and treatment rooms"},
-        {"customer": "mapleridge", "number": "ACME-1005", "date": ("prev", 22), "due": ("this", 25), "amount": 360000,
-         "account": "4400", "description": "Install: trail-head and pavilion"},
-        {"customer": "homestead", "number": "ACME-1006", "date": ("prev", 26), "due": ("this", 26), "amount": 228000,
-         "account": "4300", "description": "Retail restock, 60 starter kits"},
+        {
+            "customer": "homestead",
+            "number": "ACME-1001",
+            "date": ("prev", 2),
+            "due": ("prev", 28),
+            "amount": 456000,
+            "account": "4300",
+            "description": "Retail order, 120 starter kits",
+            "paid": ("prev", 27),
+        },
+        {
+            "customer": "harborvine",
+            "number": "ACME-1002",
+            "date": ("prev", 9),
+            "due": ("this", 28),
+            "amount": 285000,
+            "account": "4400",
+            "description": "Install: lobby and guest floors",
+        },
+        {
+            "customer": "tidewater",
+            "number": "ACME-1003",
+            "date": ("prev", 14),
+            "due": ("prev", 28),
+            "amount": 124000,
+            "account": "4400",
+            "description": "Install: counter and patio lighting",
+        },
+        {
+            "customer": "ridgeline",
+            "number": "ACME-1004",
+            "date": ("prev", 20),
+            "due": ("this", 20),
+            "amount": 186500,
+            "account": "4400",
+            "description": "Install: reception and treatment rooms",
+        },
+        {
+            "customer": "mapleridge",
+            "number": "ACME-1005",
+            "date": ("prev", 22),
+            "due": ("this", 25),
+            "amount": 360000,
+            "account": "4400",
+            "description": "Install: trail-head and pavilion",
+        },
+        {
+            "customer": "homestead",
+            "number": "ACME-1006",
+            "date": ("prev", 26),
+            "due": ("this", 26),
+            "amount": 228000,
+            "account": "4300",
+            "description": "Retail restock, 60 starter kits",
+        },
     ],
     # Drafted by the named actor. Ana approves each one, and pays the ones marked paid.
     "bills": [
-        {"vendor": "lumen", "number": "LA-20417", "by": ACCOUNTS_PAYABLE, "date": ("prev", 3), "due": ("prev", 28),
-         "amount": 864000, "account": "5300", "description": "Production run, 1,440 units at $6.00",
-         "approve": ("prev", 4), "paid": ("prev", 27)},
-        {"vendor": "fernway", "number": "FA-1015", "by": BOOKKEEPER, "date": ("prev", 16), "due": ("prev", 28),
-         "amount": 270000, "account": "6300", "description": "Paid search and social, first half of {month}",
-         "approve": ("prev", 16), "paid": ("prev", 27)},
-        {"vendor": "fernway", "number": "FA-1031", "by": BOOKKEEPER, "date": ("prev", 20), "due": ("prev", 28),
-         "amount": 270000, "account": "6300", "description": "Paid search and social, second half of {month}",
-         "approve": ("prev", 20), "paid": ("prev", 27)},
-        {"vendor": "kiln", "number": "KR-5504", "by": BOOKKEEPER, "date": ("prev", 1), "due": ("prev", 28),
-         "amount": 112500, "account": "5600", "description": "Render hosting, {month}",
-         "approve": ("prev", 1), "paid": ("prev", 27)},
-        {"vendor": "quillwork", "number": "QW-7741", "by": BOOKKEEPER, "date": ("prev", 1), "due": ("prev", 15),
-         "amount": 29900, "account": "6100", "description": "Team seats, {month}",
-         "approve": ("prev", 1), "paid": ("prev", 14)},
-        {"vendor": "ostrander", "number": "NC-0412", "by": ACCOUNTS_PAYABLE, "date": ("prev", 27), "due": ("this", 28),
-         "amount": 135000, "account": "5500", "description": "Install crew share, Harbor & Vine and Ridgeline jobs",
-         "approve": ("prev", 28)},
+        {
+            "vendor": "lumen",
+            "number": "LA-20417",
+            "by": ACCOUNTS_PAYABLE,
+            "date": ("prev", 3),
+            "due": ("prev", 28),
+            "amount": 864000,
+            "account": "5300",
+            "description": "Production run, 1,440 units at $6.00",
+            "approve": ("prev", 4),
+            "paid": ("prev", 27),
+        },
+        {
+            "vendor": "fernway",
+            "number": "FA-1015",
+            "by": BOOKKEEPER,
+            "date": ("prev", 16),
+            "due": ("prev", 28),
+            "amount": 270000,
+            "account": "6300",
+            "description": "Paid search and social, first half of {month}",
+            "approve": ("prev", 16),
+            "paid": ("prev", 27),
+        },
+        {
+            "vendor": "fernway",
+            "number": "FA-1031",
+            "by": BOOKKEEPER,
+            "date": ("prev", 20),
+            "due": ("prev", 28),
+            "amount": 270000,
+            "account": "6300",
+            "description": "Paid search and social, second half of {month}",
+            "approve": ("prev", 20),
+            "paid": ("prev", 27),
+        },
+        {
+            "vendor": "kiln",
+            "number": "KR-5504",
+            "by": BOOKKEEPER,
+            "date": ("prev", 1),
+            "due": ("prev", 28),
+            "amount": 112500,
+            "account": "5600",
+            "description": "Render hosting, {month}",
+            "approve": ("prev", 1),
+            "paid": ("prev", 27),
+        },
+        {
+            "vendor": "quillwork",
+            "number": "QW-7741",
+            "by": BOOKKEEPER,
+            "date": ("prev", 1),
+            "due": ("prev", 15),
+            "amount": 29900,
+            "account": "6100",
+            "description": "Team seats, {month}",
+            "approve": ("prev", 1),
+            "paid": ("prev", 14),
+        },
+        {
+            "vendor": "ostrander",
+            "number": "NC-0412",
+            "by": ACCOUNTS_PAYABLE,
+            "date": ("prev", 27),
+            "due": ("this", 28),
+            "amount": 135000,
+            "account": "5500",
+            "description": "Install crew share, Harbor & Vine and Ridgeline jobs",
+            "approve": ("prev", 28),
+        },
         # This month to date: approved and open, so this month's budgets have spend against them.
-        {"vendor": "fernway", "number": "FA-1042", "by": BOOKKEEPER, "date": ("this", 1), "due": ("this", 28),
-         "amount": 270000, "account": "6300", "description": "Paid search and social, {month}", "approve": ("this", 1)},
-        {"vendor": "kiln", "number": "KR-5520", "by": BOOKKEEPER, "date": ("this", 1), "due": ("this", 28),
-         "amount": 112500, "account": "5600", "description": "Render hosting, {month}", "approve": ("this", 1)},
-        {"vendor": "keelson", "number": "KF-88213", "by": ACCOUNTS_PAYABLE, "date": ("this", 1), "due": ("this", 28),
-         "amount": 192000, "account": "5400", "description": "Container 3, ocean freight and drayage",
-         "approve": ("this", 1)},
+        {
+            "vendor": "fernway",
+            "number": "FA-1042",
+            "by": BOOKKEEPER,
+            "date": ("this", 1),
+            "due": ("this", 28),
+            "amount": 270000,
+            "account": "6300",
+            "description": "Paid search and social, {month}",
+            "approve": ("this", 1),
+        },
+        {
+            "vendor": "kiln",
+            "number": "KR-5520",
+            "by": BOOKKEEPER,
+            "date": ("this", 1),
+            "due": ("this", 28),
+            "amount": 112500,
+            "account": "5600",
+            "description": "Render hosting, {month}",
+            "approve": ("this", 1),
+        },
+        {
+            "vendor": "keelson",
+            "number": "KF-88213",
+            "by": ACCOUNTS_PAYABLE,
+            "date": ("this", 1),
+            "due": ("this", 28),
+            "amount": 192000,
+            "account": "5400",
+            "description": "Container 3, ocean freight and drayage",
+            "approve": ("this", 1),
+        },
     ],
     # One monthly budget each, starting this month. Spend this month is judged against them; the previous month is
     # history, so its spend is not a budget's concern.
     "budgets": [
         {"name": "Paid advertising", "account": "6300", "owner": "bot:marketing-lead", "amount": 300000, "by": OWNER},
-        {"name": "Render cloud hosting", "account": "5600", "owner": "bot:product-manager", "amount": 150000,
-         "by": FINANCE_LEAD},
+        {
+            "name": "Render cloud hosting",
+            "account": "5600",
+            "owner": "bot:product-manager",
+            "amount": 150000,
+            "by": FINANCE_LEAD,
+        },
         {"name": "Marketplace fees", "account": "6200", "owner": OWNER, "amount": 100000, "by": OWNER},
         {"name": "Freight in", "account": "5400", "owner": ACCOUNTS_PAYABLE, "amount": 250000, "by": OWNER},
     ],
     # Gate and posting rules. `account` is a chart code and becomes an account id when the rule is written.
     "rules": [
-        {"kind": "gate", "name": "Spend over $500 needs Ana", "words": "A bill approval over $500 waits for Ana.",
-         "when": {"kind": "bill_approve", "amount": {"gt": 50000}},
-         "outcome": {"outcome": "needs_approval", "who": "owner"},
-         "examples": [{"input": {"kind": "bill_approve", "amount": 50001}, "expect": "needs_approval"},
-                      {"input": {"kind": "bill_approve", "amount": 50000}, "expect": "allow"}],
-         "by": OWNER, "on": ("prev", 1)},
-        {"kind": "posting", "name": "Marketplace fees go to 6200",
-         "words": "Fees from the marketplace post to Marketplace fees.",
-         "when": {"counterparty": "Crate and Shelf Marketplace"},
-         "outcome": {"outcome": "post", "account": "6200"},
-         "examples": [{"input": {"kind": "bill", "counterparty": "Crate and Shelf Marketplace", "amount": 54000},
-                       "expect": "post", "account": "6200"},
-                      {"input": {"kind": "bill", "counterparty": "Keelson Freight Forwarding", "amount": 192000},
-                       "expect": "none"}],
-         "by": OWNER, "on": ("prev", 1)},
+        {
+            "kind": "gate",
+            "name": "Spend over $500 needs Ana",
+            "words": "A bill approval over $500 waits for Ana.",
+            "when": {"kind": "bill_approve", "amount": {"gt": 50000}},
+            "outcome": {"outcome": "needs_approval", "who": "owner"},
+            "examples": [
+                {"input": {"kind": "bill_approve", "amount": 50001}, "expect": "needs_approval"},
+                {"input": {"kind": "bill_approve", "amount": 50000}, "expect": "allow"},
+            ],
+            "by": OWNER,
+            "on": ("prev", 1),
+        },
+        {
+            "kind": "posting",
+            "name": "Marketplace fees go to 6200",
+            "words": "Fees from the marketplace post to Marketplace fees.",
+            "when": {"counterparty": "Crate and Shelf Marketplace"},
+            "outcome": {"outcome": "post", "account": "6200"},
+            "examples": [
+                {
+                    "input": {"kind": "bill", "counterparty": "Crate and Shelf Marketplace", "amount": 54000},
+                    "expect": "post",
+                    "account": "6200",
+                },
+                {
+                    "input": {"kind": "bill", "counterparty": "Keelson Freight Forwarding", "amount": 192000},
+                    "expect": "none",
+                },
+            ],
+            "by": OWNER,
+            "on": ("prev", 1),
+        },
     ],
     # The Bookkeeper's first rule proposal. A bot's rule needs a person's approval, so it waits in Ana's queue until she
     # approves it. The proposal is made four days before the build and approved two days before it.
     "proposal": {
-        "kind": "posting", "name": "Freight bills go to 5400", "by": BOOKKEEPER,
+        "kind": "posting",
+        "name": "Freight bills go to 5400",
+        "by": BOOKKEEPER,
         "words": "Bills from Keelson Freight Forwarding post to Freight in.",
         "when": {"counterparty": "Keelson Freight Forwarding"},
         "outcome": {"outcome": "post", "account": "5400"},
-        "examples": [{"input": {"kind": "bill", "counterparty": "Keelson Freight Forwarding", "amount": 192000},
-                      "expect": "post", "account": "5400"},
-                     {"input": {"kind": "bill", "counterparty": "Lumen Assembly Co.", "amount": 864000},
-                      "expect": "none"}],
-        "proposed": ("ago", 4), "approved": ("ago", 2),
+        "examples": [
+            {
+                "input": {"kind": "bill", "counterparty": "Keelson Freight Forwarding", "amount": 192000},
+                "expect": "post",
+                "account": "5400",
+            },
+            {"input": {"kind": "bill", "counterparty": "Lumen Assembly Co.", "amount": 864000}, "expect": "none"},
+        ],
+        "proposed": ("ago", 4),
+        "approved": ("ago", 2),
         "note": "Yes. Keelson's freight bills go to Freight in.",
     },
     # The Bookkeeper's books view: Ana grants it on Finance's Access page six days before the build, and marks the
@@ -181,8 +348,10 @@ CONTENT = {
     "view": {"granted": ("ago", 6), "note": "The Bookkeeper can see the books (Everything)."},
     "chase": {
         "title": "Chase ACME-1003 from Tidewater Coffee Co.",
-        "body": ("Invoice ACME-1003 for $1,240.00 was due {due} and is still unpaid. Send the usual reminder "
-                 "and tell Ana if it is not paid by {by}."),
+        "body": (
+            "Invoice ACME-1003 for $1,240.00 was due {due} and is still unpaid. Send the usual reminder "
+            "and tell Ana if it is not paid by {by}."
+        ),
         "invoice": "ACME-1003",
     },
 }
@@ -259,15 +428,24 @@ def _line(account_id, amount, description="", tags=None):
 
 def _journal(c, cal, who, tag, when, memo, rows, codes):
     lines = [_line(codes[code], amount, text) for code, amount, text in rows]
-    _act(c, cal, who, "journal", {"date": cal.day(when).isoformat(), "memo": cal.words(memo, when), "lines": lines},
-         tag, when)
+    _act(
+        c,
+        cal,
+        who,
+        "journal",
+        {"date": cal.day(when).isoformat(), "memo": cal.words(memo, when), "lines": lines},
+        tag,
+        when,
+    )
 
 
 def _resolve(value, codes):
     """A rule's account codes become account ids; everything else is copied as it is."""
     if isinstance(value, dict):
-        return {("account_id" if k == "account" else k): (codes[v] if k == "account" else _resolve(v, codes))
-                for k, v in value.items()}
+        return {
+            ("account_id" if k == "account" else k): (codes[v] if k == "account" else _resolve(v, codes))
+            for k, v in value.items()
+        }
     if isinstance(value, list):
         return [_resolve(v, codes) for v in value]
     return value
@@ -280,18 +458,38 @@ def _setup(c, cal):
     _act(c, cal, OWNER, "right_grant", {"teammate": ACCOUNTS_PAYABLE, "right": "finance.ap"}, "right-ap", opened)
     _act(c, cal, OWNER, "right_grant", {"teammate": FINANCE_LEAD, "right": "finance.budgets"}, "right-budgets", opened)
     for who in (ACCOUNTS_PAYABLE, FINANCE_LEAD):
-        _act(c, cal, OWNER, "view_grant", {"subject_kind": "teammate", "subject": who, "what": "everything"},
-             f"view-{who}", opened)
+        _act(
+            c,
+            cal,
+            OWNER,
+            "view_grant",
+            {"subject_kind": "teammate", "subject": who, "what": "everything"},
+            f"view-{who}",
+            opened,
+        )
     for code, name, kind, parent in CONTENT["chart"]:
         codes = _codes(c, cal)
-        _act(c, cal, OWNER, "account_create", {"code": code, "name": name, "type": kind, "parent_id": codes[parent]},
-             f"account-{code}", opened)
+        _act(
+            c,
+            cal,
+            OWNER,
+            "account_create",
+            {"code": code, "name": name, "type": kind, "parent_id": codes[parent]},
+            f"account-{code}",
+            opened,
+        )
     codes = _codes(c, cal)
     start = cal.day(("this", 1))
     for i, bud in enumerate(CONTENT["budgets"]):
-        payload = {"name": bud["name"], "period": "month", "account_id": codes[bud["account"]],
-                   "owner": bud["owner"], "amount": bud["amount"], "effective_from": start.isoformat(),
-                   "at_limit": "warn"}
+        payload = {
+            "name": bud["name"],
+            "period": "month",
+            "account_id": codes[bud["account"]],
+            "owner": bud["owner"],
+            "amount": bud["amount"],
+            "effective_from": start.isoformat(),
+            "at_limit": "warn",
+        }
         _act(c, cal, bud["by"], "budget_create", payload, f"budget-{i}", opened)
 
 
@@ -299,22 +497,64 @@ def _books(c, cal):
     codes = _codes(c, cal)
     op = CONTENT["opening"]
     opened = cal.opening()
-    _journal(c, cal, OWNER, "opening", opened, op["memo"],
-             [("1000", op["amount"], "Bank balance"), ("3900", -op["amount"], "Opening balance equity")], codes)
+    _journal(
+        c,
+        cal,
+        OWNER,
+        "opening",
+        opened,
+        op["memo"],
+        [("1000", op["amount"], "Bank balance"), ("3900", -op["amount"], "Opening balance equity")],
+        codes,
+    )
     tu = CONTENT["gateway_topup"]
-    _journal(c, cal, BOOKKEEPER, "topup", tu["date"], tu["memo"],
-             [("1100", tu["amount"], "Gateway credit"), ("1000", -tu["amount"], "Paid from bank")], codes)
+    _journal(
+        c,
+        cal,
+        BOOKKEEPER,
+        "topup",
+        tu["date"],
+        tu["memo"],
+        [("1100", tu["amount"], "Gateway credit"), ("1000", -tu["amount"], "Paid from bank")],
+        codes,
+    )
     for i, week in enumerate(CONTENT["store_weeks"]):
-        _journal(c, cal, BOOKKEEPER, f"store-{i}", week["date"], week["memo"],
-                 [("1000", week["amount"], "Card settlements"), ("4100", -week["amount"], "Store sales")], codes)
+        _journal(
+            c,
+            cal,
+            BOOKKEEPER,
+            f"store-{i}",
+            week["date"],
+            week["memo"],
+            [("1000", week["amount"], "Card settlements"), ("4100", -week["amount"], "Store sales")],
+            codes,
+        )
     st = CONTENT["store_this_month"]
-    _journal(c, cal, BOOKKEEPER, "store-this-month", st["date"], st["memo"],
-             [("1000", st["amount"], "Card settlements"), ("4100", -st["amount"], "Store sales")], codes)
+    _journal(
+        c,
+        cal,
+        BOOKKEEPER,
+        "store-this-month",
+        st["date"],
+        st["memo"],
+        [("1000", st["amount"], "Card settlements"), ("4100", -st["amount"], "Store sales")],
+        codes,
+    )
     for i, pay in enumerate(CONTENT["marketplace"]["payouts"]):
-        _journal(c, cal, BOOKKEEPER, f"marketplace-{i}", pay["date"], pay["memo"],
-                 [("1000", pay["gross"] - pay["fees"], "Payout after fees"),
-                  ("6200", pay["fees"], "Marketplace fees"),
-                  ("4200", -pay["gross"], "Marketplace sales")], codes)
+        _journal(
+            c,
+            cal,
+            BOOKKEEPER,
+            f"marketplace-{i}",
+            pay["date"],
+            pay["memo"],
+            [
+                ("1000", pay["gross"] - pay["fees"], "Payout after fees"),
+                ("6200", pay["fees"], "Marketplace fees"),
+                ("4200", -pay["gross"], "Marketplace sales"),
+            ],
+            codes,
+        )
     sub = CONTENT["subscriptions"]
     rows = [("1000", sum(amount for _, amount in sub["lines"]), "Subscription payments")]
     rows += [("4500", -amount, label) for label, amount in sub["lines"]]
@@ -322,47 +562,112 @@ def _books(c, cal):
     use = CONTENT["usage"]
     lines = [_line(codes["5100"], amount, "AI services", {"teammate": who}) for who, amount in use["by_teammate"]]
     lines.append(_line(codes["1100"], -sum(amount for _, amount in use["by_teammate"]), "Gateway credit used"))
-    FA.post_entry(c, {"date": cal.day(use["date"]).isoformat(), "memo": cal.words(use["memo"], use["date"]),
-                      "source": "usage", "source_id": f"{use['source_id']}-{cal.day(use['date']):%Y-%m}",
-                      "lines": lines}, at=cal.at(use["date"]))
+    FA.post_entry(
+        c,
+        {
+            "date": cal.day(use["date"]).isoformat(),
+            "memo": cal.words(use["memo"], use["date"]),
+            "source": "usage",
+            "source_id": f"{use['source_id']}-{cal.day(use['date']):%Y-%m}",
+            "lines": lines,
+        },
+        at=cal.at(use["date"]),
+    )
 
 
 def _billing(c, cal):
     codes = _codes(c, cal)
     vendors, customers = {}, {}
     for v in CONTENT["vendors"]:
-        res = _act(c, cal, BOOKKEEPER, "contact_create",
-                   {"name": v["name"], "kind": "vendor", "emails": [v["email"]]}, f"vendor-{v['key']}", ("prev", 1))
+        res = _act(
+            c,
+            cal,
+            BOOKKEEPER,
+            "contact_create",
+            {"name": v["name"], "kind": "vendor", "emails": [v["email"]]},
+            f"vendor-{v['key']}",
+            ("prev", 1),
+        )
         vendors[v["key"]] = res.result["contact_id"]
     for cu in CONTENT["customers"]:
-        res = _act(c, cal, BOOKKEEPER, "contact_create",
-                   {"name": cu["name"], "kind": "customer", "emails": [cu["email"]]}, f"customer-{cu['key']}",
-                   ("prev", 1))
+        res = _act(
+            c,
+            cal,
+            BOOKKEEPER,
+            "contact_create",
+            {"name": cu["name"], "kind": "customer", "emails": [cu["email"]]},
+            f"customer-{cu['key']}",
+            ("prev", 1),
+        )
         customers[cu["key"]] = res.result["contact_id"]
     for inv in CONTENT["invoices"]:
         line = _line(codes[inv["account"]], inv["amount"], cal.words(inv["description"], inv["date"]))
-        made = _act(c, cal, BOOKKEEPER, "invoice_create",
-                    {"customer_id": customers[inv["customer"]], "number": inv["number"],
-                     "invoice_date": cal.day(inv["date"]).isoformat(), "due_date": cal.day(inv["due"]).isoformat(),
-                     "lines": [line]}, f"invoice-{inv['number']}", inv["date"])
+        made = _act(
+            c,
+            cal,
+            BOOKKEEPER,
+            "invoice_create",
+            {
+                "customer_id": customers[inv["customer"]],
+                "number": inv["number"],
+                "invoice_date": cal.day(inv["date"]).isoformat(),
+                "due_date": cal.day(inv["due"]).isoformat(),
+                "lines": [line],
+            },
+            f"invoice-{inv['number']}",
+            inv["date"],
+        )
         invoice_id = made.result["invoice_id"]
         _act(c, cal, OWNER, "invoice_send", {"invoice_id": invoice_id}, f"send-{inv['number']}", inv["date"])
         if "paid" in inv:
-            _act(c, cal, BOOKKEEPER, "invoice_record_payment",
-                 {"invoice_id": invoice_id, "amount": inv["amount"], "date": cal.day(inv["paid"]).isoformat(),
-                  "account_id": codes["1000"]}, f"paid-{inv['number']}", inv["paid"])
+            _act(
+                c,
+                cal,
+                BOOKKEEPER,
+                "invoice_record_payment",
+                {
+                    "invoice_id": invoice_id,
+                    "amount": inv["amount"],
+                    "date": cal.day(inv["paid"]).isoformat(),
+                    "account_id": codes["1000"],
+                },
+                f"paid-{inv['number']}",
+                inv["paid"],
+            )
     for bill in CONTENT["bills"]:
         line = _line(codes[bill["account"]], bill["amount"], cal.words(bill["description"], bill["date"]))
-        made = _act(c, cal, bill["by"], "bill_create",
-                    {"vendor_id": vendors[bill["vendor"]], "number": bill["number"],
-                     "bill_date": cal.day(bill["date"]).isoformat(), "due_date": cal.day(bill["due"]).isoformat(),
-                     "lines": [line]}, f"bill-{bill['number']}", bill["date"])
+        made = _act(
+            c,
+            cal,
+            bill["by"],
+            "bill_create",
+            {
+                "vendor_id": vendors[bill["vendor"]],
+                "number": bill["number"],
+                "bill_date": cal.day(bill["date"]).isoformat(),
+                "due_date": cal.day(bill["due"]).isoformat(),
+                "lines": [line],
+            },
+            f"bill-{bill['number']}",
+            bill["date"],
+        )
         bill_id = made.result["bill_id"]
         _act(c, cal, OWNER, "bill_approve", {"bill_id": bill_id}, f"approve-{bill['number']}", bill["approve"])
         if "paid" in bill:
-            _act(c, cal, OWNER, "bill_mark_paid",
-                 {"bill_id": bill_id, "amount": bill["amount"], "date": cal.day(bill["paid"]).isoformat(),
-                  "account_id": codes["1000"]}, f"paid-{bill['number']}", bill["paid"])
+            _act(
+                c,
+                cal,
+                OWNER,
+                "bill_mark_paid",
+                {
+                    "bill_id": bill_id,
+                    "amount": bill["amount"],
+                    "date": cal.day(bill["paid"]).isoformat(),
+                    "account_id": codes["1000"],
+                },
+                f"paid-{bill['number']}",
+                bill["paid"],
+            )
 
 
 def _rule_payload(rule, codes):
@@ -376,8 +681,15 @@ def _bookkeeper_view(c, cal):
     if ask is None:
         raise AssertionError("finance demo: the Bookkeeper's view was asked for before the demo's own ask")
     view = CONTENT["view"]
-    _act(c, cal, OWNER, "view_grant", {"subject_kind": "teammate", "subject": BOOKKEEPER, "what": "everything"},
-         "view-bookkeeper", view["granted"])
+    _act(
+        c,
+        cal,
+        OWNER,
+        "view_grant",
+        {"subject_kind": "teammate", "subject": BOOKKEEPER, "what": "everything"},
+        "view-bookkeeper",
+        view["granted"],
+    )
     hubdb.task_update(c, OWNER, ask, status="done", note=view["note"])
 
 
@@ -393,8 +705,16 @@ def _rules_and_tasks(c, cal):
 
 def _propose_rule(c, cal, rule):
     """The Bookkeeper's proposal: a bot's rule waits for a person's approval, so it lands in Ana's queue."""
-    res = _act(c, cal, rule["by"], "rule_create", _rule_payload(rule, _codes(c, cal)), "rule-proposal",
-               rule["proposed"], expect="needs_approval")
+    res = _act(
+        c,
+        cal,
+        rule["by"],
+        "rule_create",
+        _rule_payload(rule, _codes(c, cal)),
+        "rule-proposal",
+        rule["proposed"],
+        expect="needs_approval",
+    )
     if not res.approval_id:
         raise AssertionError("finance demo: the rule proposal has no approval")
     return res.approval_id

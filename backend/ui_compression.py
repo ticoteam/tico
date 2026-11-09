@@ -1,9 +1,10 @@
 """Compress the standalone UI scripts and styles; leave API streams and files to their routes."""
+
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 
 from .json_response import accepts_gzip
-from .ui_bundle import PATHS
+from .ui_bundle import is_part
 
 
 class UiCompression:
@@ -12,8 +13,12 @@ class UiCompression:
         self.compressed = GZipMiddleware(app, minimum_size=1024, compresslevel=3)
 
     async def __call__(self, scope, receive, send):
-        if (scope["type"] != "http" or scope["method"] != "GET"
-                or not scope["path"].startswith("/tico/ui/") or scope["path"] in PATHS):
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "GET"
+            or not scope["path"].startswith("/tico/ui/")
+            or is_part(scope["path"])
+        ):
             return await self.app(scope, receive, send)
 
         async def encoded_send(message):
@@ -27,8 +32,11 @@ class UiCompression:
 
         if accepts_gzip(Headers(scope=scope)):
             # The middleware's substring check does not understand q=0 or the wildcard encoding.
-            encoded = {**scope, "headers": [(k, v) for k, v in scope["headers"] if k.lower() != b"accept-encoding"]
-                       + [(b"accept-encoding", b"gzip")]}
+            encoded = {
+                **scope,
+                "headers": [(k, v) for k, v in scope["headers"] if k.lower() != b"accept-encoding"]
+                + [(b"accept-encoding", b"gzip")],
+            }
             await self.compressed(encoded, receive, encoded_send)
         else:
             await self.app(scope, receive, encoded_send)

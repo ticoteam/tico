@@ -1,0 +1,488 @@
+{
+ "entities": {
+  "entities": [
+   {
+    "id": "company/self",
+    "type": "company",
+    "name": "Acme"
+   },
+   {
+    "id": "mk_northwind",
+    "type": "company",
+    "name": "Northwind"
+   },
+   {
+    "id": "mk_globex",
+    "type": "company",
+    "name": "Globex"
+   }
+  ],
+  "total": 3
+ },
+ "spend": {
+  "offering": {
+   "name": "Release tooling",
+   "definition": {
+    "root": "segment/release",
+    "description": "What software teams spend on release checks and deploy pipelines",
+    "includes": [
+     "Hosted release checks"
+    ],
+    "excludes": [
+     "In-house scripts"
+    ],
+    "counting_rules": [
+     "One vendor per team"
+    ],
+    "year": 2025,
+    "geography": "Global",
+    "currency": "USD",
+    "params": {}
+   },
+   "year": 2025,
+   "dimension": "offering",
+   "basis": "product",
+   "total": {
+    "spend_usd": 1200000000.0,
+    "low_usd": 900000000.0,
+    "high_usd": 1600000000.0
+   },
+   "segments": [
+    {
+     "id": "segment/checks",
+     "name": "Release checks",
+     "parent": null,
+     "depth": 1,
+     "summary": "",
+     "size": {
+      "id": "sz-checks",
+      "segment_id": "segment/checks",
+      "dimension": "offering",
+      "basis": "product",
+      "year": 2025,
+      "spend_usd": 700000000.0,
+      "low_usd": 500000000.0,
+      "high_usd": 900000000.0,
+      "growth_pct": 22,
+      "method": "bottom_up",
+      "arithmetic": "",
+      "formula": null,
+      "params": {},
+      "evidence_ids": [],
+      "confidence": "medium",
+      "overlaps": "",
+      "spread": "",
+      "status": "accepted",
+      "accepted": true
+     },
+     "rolled_usd": {
+      "spend_usd": 700000000.0,
+      "low_usd": 500000000.0,
+      "high_usd": 900000000.0
+     },
+     "estimates": [
+      {
+       "id": "sz-checks",
+       "segment_id": "segment/checks",
+       "dimension": "offering",
+       "basis": "product",
+       "year": 2025,
+       "spend_usd": 700000000.0,
+       "low_usd": 500000000.0,
+       "high_usd": 900000000.0,
+       "growth_pct": 22,
+       "method": "bottom_up",
+       "arithmetic": "",
+       "formula": null,
+       "params": {},
+       "evidence_ids": [],
+       "confidence": "medium",
+       "overlaps": "",
+       "spread": "",
+       "status": "accepted",
+       "accepted": true
+      }
+     ],
+     "disagree": false,
+     "bases": [
+      "product"
+     ],
+     "players": [
+      {
+       "entity_id": "mk_northwind",
+       "name": "Northwind",
+       "figures": [
+        {
+         "metric": "revenue",
+         "value": 40000000.0,
+         "text": "",
+         "kind": "estimated",
+         "as_of": "2026-06",
+         "source_url": ""
+        }
+       ]
+      },
+      {
+       "entity_id": "mk_globex",
+       "name": "Globex",
+       "figures": [
+        {
+         "metric": "revenue",
+         "value": 25000000.0,
+         "text": "",
+         "kind": "estimated",
+         "as_of": "2026-06",
+         "source_url": ""
+        }
+       ]
+      },
+      {
+       "entity_id": "company/self",
+       "name": "Acme",
+       "figures": [
+        {
+         "metric": "revenue",
+         "value": 6000000.0,
+         "text": "",
+         "kind": "estimated",
+         "as_of": "2026-06",
+         "source_url": ""
+        }
+       ]
+      }
+     ],
+     "self": true
+    },
+    {
+     "id": "segment/deploy",
+     "name": "Deploy pipelines",
+     "parent": null,
+     "depth": 1,
+     "summary": "",
+     "size": {
+      "id": "sz-deploy",
+      "segment_id": "segment/deploy",
+      "dimension": "offering",
+      "basis": "product",
+      "year": 2025,
+      "spend_usd": 500000000.0,
+      "low_usd": 400000000.0,
+      "high_usd": 700000000.0,
+      "growth_pct": 12,
+      "method": "bottom_up",
+      "arithmetic": "",
+      "formula": null,
+      "params": {},
+      "evidence_ids": [],
+      "confidence": "medium",
+      "overlaps": "",
+      "spread": "",
+      "status": "accepted",
+      "accepted": true
+     },
+     "rolled_usd": {
+      "spend_usd": 500000000.0,
+      "low_usd": 400000000.0,
+      "high_usd": 700000000.0
+     },
+     "estimates": [
+      {
+       "id": "sz-deploy",
+       "segment_id": "segment/deploy",
+       "dimension": "offering",
+       "basis": "product",
+       "year": 2025,
+       "spend_usd": 500000000.0,
+       "low_usd": 400000000.0,
+       "high_usd": 700000000.0,
+       "growth_pct": 12,
+       "method": "bottom_up",
+       "arithmetic": "",
+       "formula": null,
+       "params": {},
+       "evidence_ids": [],
+       "confidence": "medium",
+       "overlaps": "",
+       "spread": "",
+       "status": "accepted",
+       "accepted": true
+      }
+     ],
+     "disagree": false,
+     "bases": [
+      "product"
+     ],
+     "players": [
+      {
+       "entity_id": "mk_northwind",
+       "name": "Northwind",
+       "figures": [
+        {
+         "metric": "revenue",
+         "value": 30000000.0,
+         "text": "",
+         "kind": "estimated",
+         "as_of": "2026-06",
+         "source_url": ""
+        }
+       ]
+      }
+     ],
+     "self": false
+    }
+   ]
+  },
+  "buyer": {
+   "name": "Release tooling",
+   "definition": {
+    "root": "segment/release",
+    "description": "What software teams spend on release checks and deploy pipelines",
+    "includes": [
+     "Hosted release checks"
+    ],
+    "excludes": [
+     "In-house scripts"
+    ],
+    "counting_rules": [
+     "One vendor per team"
+    ],
+    "year": 2025,
+    "geography": "Global",
+    "currency": "USD",
+    "params": {}
+   },
+   "year": 2025,
+   "dimension": "buyer",
+   "basis": "product",
+   "total": {
+    "spend_usd": 1200000000.0,
+    "low_usd": 900000000.0,
+    "high_usd": 1600000000.0
+   },
+   "segments": [
+    {
+     "id": "segment/small-teams",
+     "name": "Teams under 50",
+     "parent": null,
+     "depth": 1,
+     "summary": "",
+     "size": {
+      "id": "sz-small",
+      "segment_id": "segment/small-teams",
+      "dimension": "buyer",
+      "basis": "product",
+      "year": 2025,
+      "spend_usd": 500000000.0,
+      "low_usd": 300000000.0,
+      "high_usd": 700000000.0,
+      "growth_pct": 25,
+      "method": "bottom_up",
+      "arithmetic": "",
+      "formula": null,
+      "params": {},
+      "evidence_ids": [],
+      "confidence": "medium",
+      "overlaps": "",
+      "spread": "",
+      "status": "accepted",
+      "accepted": true
+     },
+     "rolled_usd": {
+      "spend_usd": 500000000.0,
+      "low_usd": 300000000.0,
+      "high_usd": 700000000.0
+     },
+     "estimates": [
+      {
+       "id": "sz-small",
+       "segment_id": "segment/small-teams",
+       "dimension": "buyer",
+       "basis": "product",
+       "year": 2025,
+       "spend_usd": 500000000.0,
+       "low_usd": 300000000.0,
+       "high_usd": 700000000.0,
+       "growth_pct": 25,
+       "method": "bottom_up",
+       "arithmetic": "",
+       "formula": null,
+       "params": {},
+       "evidence_ids": [],
+       "confidence": "medium",
+       "overlaps": "",
+       "spread": "",
+       "status": "accepted",
+       "accepted": true
+      }
+     ],
+     "disagree": false,
+     "bases": [
+      "product"
+     ],
+     "players": [],
+     "self": true
+    },
+    {
+     "id": "segment/large-teams",
+     "name": "Teams of 50 or more",
+     "parent": null,
+     "depth": 1,
+     "summary": "",
+     "size": {
+      "id": "sz-large",
+      "segment_id": "segment/large-teams",
+      "dimension": "buyer",
+      "basis": "product",
+      "year": 2025,
+      "spend_usd": 700000000.0,
+      "low_usd": 500000000.0,
+      "high_usd": 900000000.0,
+      "growth_pct": 10,
+      "method": "bottom_up",
+      "arithmetic": "",
+      "formula": null,
+      "params": {},
+      "evidence_ids": [],
+      "confidence": "medium",
+      "overlaps": "",
+      "spread": "",
+      "status": "accepted",
+      "accepted": true
+     },
+     "rolled_usd": {
+      "spend_usd": 700000000.0,
+      "low_usd": 500000000.0,
+      "high_usd": 900000000.0
+     },
+     "estimates": [
+      {
+       "id": "sz-large",
+       "segment_id": "segment/large-teams",
+       "dimension": "buyer",
+       "basis": "product",
+       "year": 2025,
+       "spend_usd": 700000000.0,
+       "low_usd": 500000000.0,
+       "high_usd": 900000000.0,
+       "growth_pct": 10,
+       "method": "bottom_up",
+       "arithmetic": "",
+       "formula": null,
+       "params": {},
+       "evidence_ids": [],
+       "confidence": "medium",
+       "overlaps": "",
+       "spread": "",
+       "status": "accepted",
+       "accepted": true
+      }
+     ],
+     "disagree": false,
+     "bases": [
+      "product"
+     ],
+     "players": [],
+     "self": false
+    }
+   ]
+  }
+ },
+ "chain": {
+  "layers": [
+   {
+    "key": "suppliers",
+    "title": "Suppliers",
+    "nodes": [
+     {
+      "id": "mk_cloudco",
+      "name": "CloudCo",
+      "type": "company",
+      "self": false
+     }
+    ]
+   },
+   {
+    "key": "platforms",
+    "title": "Platforms",
+    "nodes": [
+     {
+      "id": "mk_githost",
+      "name": "GitHost",
+      "type": "company",
+      "self": false
+     }
+    ]
+   },
+   {
+    "key": "rivals",
+    "title": "Us and rivals",
+    "nodes": [
+     {
+      "id": "company/self",
+      "name": "Acme",
+      "type": "company",
+      "self": true
+     },
+     {
+      "id": "mk_northwind",
+      "name": "Northwind",
+      "type": "company",
+      "self": false
+     },
+     {
+      "id": "mk_globex",
+      "name": "Globex",
+      "type": "company",
+      "self": false
+     }
+    ]
+   },
+   {
+    "key": "channels",
+    "title": "Channels",
+    "nodes": []
+   },
+   {
+    "key": "buyers",
+    "title": "Buyers",
+    "nodes": [
+     {
+      "id": "segment/small-teams",
+      "name": "Teams under 50",
+      "type": "segment",
+      "self": false
+     },
+     {
+      "id": "segment/large-teams",
+      "name": "Teams of 50 or more",
+      "type": "segment",
+      "self": false
+     }
+    ]
+   }
+  ],
+  "edges": [
+   {
+    "src": "company/self",
+    "rel": "integrates_with",
+    "dst": "mk_githost"
+   },
+   {
+    "src": "company/self",
+    "rel": "sells_to",
+    "dst": "segment/small-teams"
+   }
+  ]
+ },
+ "note": {
+  "entity": {
+   "id": "mk_northwind",
+   "type": "company",
+   "name": "Northwind",
+   "summary": "CI vendor that now bundles release checks."
+  },
+  "edges": {},
+  "evidence": [],
+  "neighbors": []
+ }
+}

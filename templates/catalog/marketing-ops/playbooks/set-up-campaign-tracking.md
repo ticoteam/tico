@@ -11,7 +11,7 @@ the task for the campaign owner.
     hub task show <id>
 
 List the channels (each email, each ad platform, each social post, partner or event), the landing
-pages and the owner. If a landing page is missing, ask once with `hub task ask <id>`.
+pages and the owner. If a landing page is missing, ask once with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## 2. Name the campaign
 

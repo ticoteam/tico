@@ -3,6 +3,7 @@ or the ten fake-day workflows with --workflows (TESTING L2c; not in the default 
 
 Each check prints PASS, or FAIL with the PLAN §6 wave it waits on ("not built yet: wave 2 · budgets"). A wave listed in
 harness.BUILT prints the real reason instead. A check the CONTRACT cannot back prints as untestable. Exit 1 on any FAIL."""
+
 import argparse
 import sys
 import time
@@ -22,6 +23,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.workflows:
         from .workflows import WORKFLOWS
+
         known = {w.name for w in WORKFLOWS} | {str(w.num) for w in WORKFLOWS}
         unknown = [n for n in args.names if n not in known]
         if unknown:
@@ -35,6 +37,7 @@ def main(argv=None):
     if MATRIX in args.names:
         from .cases.matrix import matrix_scenario
         from .matrix import plan
+
         print(f"matrix seed {args.seed}: {len(plan(args.seed))} combinations")
         chosen = [matrix_scenario(args.seed)]
     else:

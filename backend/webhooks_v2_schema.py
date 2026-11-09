@@ -7,6 +7,7 @@
 `disabled_at` and `disabled_reason` say Tico switched the endpoint off after days of failures. `webhook_events.only_id`
 names the one endpoint a targeted send (a rule, `hub webhook send`) was for, so "replay missing" never copies it elsewhere.
 """
+
 SCHEMA = """
 ALTER TABLE trigger_bodies ADD COLUMN outcome TEXT NOT NULL DEFAULT 'accepted';
 ALTER TABLE webhooks ADD COLUMN filter TEXT NOT NULL DEFAULT '{}';

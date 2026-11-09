@@ -16,11 +16,24 @@ from . import models as M
 from .store import H, Problem, encode
 
 IMPORTERS = {
-    "zoom": {"name": "Zoom", "file": "secrets/zoom.env",
-             "keys": ["ZOOM_ACCOUNT_ID", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET"], "interval": 600},
-    "google-meet": {"name": "Google Meet", "file": "secrets/google-meet.env",
-                    "keys": ["GOOGLE_MEET_USERS", "GOOGLE_SERVICE_ACCOUNT_FILE"], "interval": 600},
-    "granola": {"name": "Granola API key (Business/Enterprise)", "file": "secrets/granola.env", "keys": ["GRANOLA_API_KEY"], "interval": 300},
+    "zoom": {
+        "name": "Zoom",
+        "file": "secrets/zoom.env",
+        "keys": ["ZOOM_ACCOUNT_ID", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET"],
+        "interval": 600,
+    },
+    "google-meet": {
+        "name": "Google Meet",
+        "file": "secrets/google-meet.env",
+        "keys": ["GOOGLE_MEET_USERS", "GOOGLE_SERVICE_ACCOUNT_FILE"],
+        "interval": 600,
+    },
+    "granola": {
+        "name": "Granola API key (Business/Enterprise)",
+        "file": "secrets/granola.env",
+        "keys": ["GRANOLA_API_KEY"],
+        "interval": 300,
+    },
 }
 RETIRED_IMPORTERS = {"fireflies"}
 ERROR_TEXT = {
@@ -67,11 +80,20 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
     def computers(c):
         allowed = set(eligible_operators(c))
         now = H.now()
-        return [{"id": r["id"], "label": r["label"], "platform": r["platform"] or "",
-                 "online": bool(r["last_seen_at"] and r["last_seen_at"] >= H.shift(now, minutes=-5)),
-                 "last_seen_at": r["last_seen_at"]}
-                for r in c.execute("SELECT id,label,platform,last_seen_at,owner_id FROM runners_with_state "
-                                   "WHERE revoked_at IS NULL ORDER BY label") if r["owner_id"] in allowed]
+        return [
+            {
+                "id": r["id"],
+                "label": r["label"],
+                "platform": r["platform"] or "",
+                "online": bool(r["last_seen_at"] and r["last_seen_at"] >= H.shift(now, minutes=-5)),
+                "last_seen_at": r["last_seen_at"],
+            }
+            for r in c.execute(
+                "SELECT id,label,platform,last_seen_at,owner_id FROM runners_with_state "
+                "WHERE revoked_at IS NULL ORDER BY label"
+            )
+            if r["owner_id"] in allowed
+        ]
 
     def configured(c):
         return {r["source"]: dict(r) for r in c.execute("SELECT * FROM meeting_importers")}
@@ -87,21 +109,31 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
             saved, now, rows = configured(c), H.now(), []
             for source, spec in IMPORTERS.items():
                 cfg = saved.get(source) or {}
-                health = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
-                                   ("recording:" + source,)).fetchone()
+                health = c.execute(
+                    "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
+                    ("recording:" + source,),
+                ).fetchone()
                 detail = json.loads(health["detail"] or "{}") if health else {}
                 code = detail.get("error_code") or ""
                 enabled = bool(cfg.get("enabled"))
                 machine = labels.get(cfg.get("runner_id") or "")
-                rows.append({
-                    "source": source, "name": spec["name"], "enabled": enabled,
-                    "runner_id": cfg.get("runner_id") or "", "runner_label": machine["label"] if machine else "",
-                    "status": status_of(enabled, health, spec["interval"], now),
-                    "last_succeeded_at": health["last_succeeded_at"] if health else None,
-                    "last_attempt": detail.get("last_attempt"), "last_import": detail.get("last_import"),
-                    "imported_total": detail.get("imported_total", 0),
-                    "error_code": code, "error": (detail.get("message") or ERROR_TEXT.get(code, "")) if code else "",
-                    "setup": {"file": spec["file"], "keys": spec["keys"], "doc": "docs/meetings.md#" + source}})
+                rows.append(
+                    {
+                        "source": source,
+                        "name": spec["name"],
+                        "enabled": enabled,
+                        "runner_id": cfg.get("runner_id") or "",
+                        "runner_label": machine["label"] if machine else "",
+                        "status": status_of(enabled, health, spec["interval"], now),
+                        "last_succeeded_at": health["last_succeeded_at"] if health else None,
+                        "last_attempt": detail.get("last_attempt"),
+                        "last_import": detail.get("last_import"),
+                        "imported_total": detail.get("imported_total", 0),
+                        "error_code": code,
+                        "error": (detail.get("message") or ERROR_TEXT.get(code, "")) if code else "",
+                        "setup": {"file": spec["file"], "keys": spec["keys"], "doc": "docs/meetings.md#" + source},
+                    }
+                )
             return {"importers": rows, "computers": machines}
 
     @app.post("/api/v2/meeting-importers/{source}")
@@ -119,25 +151,35 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
             if body.enabled and runner_id not in {m["id"] for m in computers(c)}:
                 raise Problem("validation", "Choose an enrolled computer that may run importers", 422)
             old = c.execute("SELECT runner_id FROM meeting_importers WHERE source=?", (source,)).fetchone()
-            c.execute("INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) VALUES(?,?,?,?,?) "
-                      "ON CONFLICT(source) DO UPDATE SET enabled=excluded.enabled,runner_id=excluded.runner_id,"
-                      "updated_by=excluded.updated_by,updated_at=excluded.updated_at",
-                      (source, int(body.enabled), runner_id or None, who.actor, H.now()))
+            c.execute(
+                "INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(source) DO UPDATE SET enabled=excluded.enabled,runner_id=excluded.runner_id,"
+                "updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+                (source, int(body.enabled), runner_id or None, who.actor, H.now()),
+            )
             if source not in RETIRED_IMPORTERS and (not old or (old["runner_id"] or "") != runner_id):
                 # A different computer starts with a clean bill of health, not the last one's.
                 c.execute("DELETE FROM service_health WHERE service=?", ("recording:" + source,))
-            H.event(c, who.actor, "meeting_importer.configured", source,
-                    {"enabled": body.enabled, "runner_id": runner_id})
+            H.event(
+                c, who.actor, "meeting_importer.configured", source, {"enabled": body.enabled, "runner_id": runner_id}
+            )
             return {"ok": True}
+
         return mutate(request, body, work)
 
     @app.get("/api/v2/runners/importers")
     def assigned(request: Request):
         with store.read() as c:
             runner = importer(c, request.state.identity)
-            return {"importers": [{"source": r["source"]} for r in c.execute(
-                "SELECT source FROM meeting_importers WHERE enabled=1 AND runner_id=?", (runner["id"],))
-                if r["source"] in IMPORTERS]}
+            return {
+                "importers": [
+                    {"source": r["source"]}
+                    for r in c.execute(
+                        "SELECT source FROM meeting_importers WHERE enabled=1 AND runner_id=?", (runner["id"],)
+                    )
+                    if r["source"] in IMPORTERS
+                ]
+            }
 
     @app.post("/api/v2/imports/sources/{source}/status")
     def heartbeat(request: Request, source: str, body: ImporterHeartbeat):
@@ -156,13 +198,20 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
                 detail.update(last_import=H.now(), imported_total=detail.get("imported_total", 0) + body.imported)
             if body.state == "ok":
                 detail.update(error_code="", message="")
-                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?) "
-                          "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,"
-                          "detail=excluded.detail", ("recording:" + source, H.now(), encode(detail)))
+                c.execute(
+                    "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?) "
+                    "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,"
+                    "detail=excluded.detail",
+                    ("recording:" + source, H.now(), encode(detail)),
+                )
             else:
                 detail.update(error_code=body.error_code or "sync_error", message=body.message)
-                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
-                          "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,"
-                          "detail=excluded.detail", ("recording:" + source, H.now(), encode(detail)))
+                c.execute(
+                    "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
+                    "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,"
+                    "detail=excluded.detail",
+                    ("recording:" + source, H.now(), encode(detail)),
+                )
             return {"ok": True}
+
         return mutate(request, body, work)

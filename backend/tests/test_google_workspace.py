@@ -1,4 +1,4 @@
-"""Settings > Google, the Workspace key on this server (backend/google_workspace.py): setup codes, the key upload and its
+"""Tools, the Workspace key on this server (backend/google_workspace.py): setup codes, the key upload and its
 checks, what a computer's token may be used for, and the OAuth client Connect Google uses.
 
 Google is never asked: `google_call` is replaced. The keys are throwaway RSA keys made in the test, the domain is
@@ -31,10 +31,14 @@ KEEP = "/api/v2/google/workspace/key/keep"
 @pytest.fixture(scope="module")
 def keys():
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                serialization.NoEncryption()).decode()
-    public = key.public_key().public_bytes(serialization.Encoding.PEM,
-                                           serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    private = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    ).decode()
+    public = (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
     return private, public
 
 
@@ -54,13 +58,18 @@ def fresh_state(monkeypatch):
 
 @pytest.fixture
 def google(monkeypatch):
-    """Google's answers: the token endpoint (`state["token"]`), the API probes (`state["probe"]`), and every call made."""
-    state = {"token": (200, {"access_token": "tok-1", "expires_in": 3600}), "probe": 200}
+    """Google's answers: the token endpoint (`state["token"]`), the API probes (`state["probe"]`), and every call made.
+    `state["authorized"]` is what the admin authorized in Google Admin: a token asking for any other scope is refused
+    with unauthorized_client, as Google's domain-wide delegation does. None authorizes everything."""
+    state = {"token": (200, {"access_token": "tok-1", "expires_in": 3600}), "probe": 200, "authorized": None}
     calls = []
 
     def fake(url, *, data=None, token=None):
         calls.append((url, data, token))
         if url == W.TOKEN_URI:
+            asked = set(jwt.decode(data["assertion"], options={"verify_signature": False})["scope"].split())
+            if state["authorized"] is not None and not asked <= set(state["authorized"]):
+                return 401, {"error": "unauthorized_client"}
             return state["token"]
         return state["probe"], {}
 
@@ -71,16 +80,30 @@ def google(monkeypatch):
 @pytest.fixture
 def covered(monkeypatch):
     """Sets the message bot mailboxes the roster would list: (address, bot) pairs."""
+
     def set_boxes(*pairs):
-        monkeypatch.setattr(routines, "message_bot_mailboxes", lambda c, roster=None: [
-            {"address": address, "person_id": address.split("@")[0], "bot": bot, "declared": True}
-            for address, bot in pairs])
+        monkeypatch.setattr(
+            routines,
+            "message_bot_mailboxes",
+            lambda c, roster=None: [
+                {"address": address, "person_id": address.split("@")[0], "bot": bot, "declared": True}
+                for address, bot in pairs
+            ],
+        )
+
     return set_boxes
 
 
 def key_json(private, key_id="key-1", **changes):
-    body = {"type": "service_account", "project_id": "acme-project", "private_key_id": key_id,
-            "private_key": private, "client_email": SA, "client_id": "1000001", "token_uri": W.TOKEN_URI}
+    body = {
+        "type": "service_account",
+        "project_id": "acme-project",
+        "private_key_id": key_id,
+        "private_key": private,
+        "client_email": SA,
+        "client_id": "1000001",
+        "token_uri": W.TOKEN_URI,
+    }
     body.update(changes)
     return body
 
@@ -126,11 +149,15 @@ def connected(api, private, key_id="key-1", mailbox=MAILBOX):
 def personal(api, person, mailbox, status="connected", holder="r1", grant="g1", client=None):
     """A Connect Google grant as google_connect keeps it: a holder computer and a grant fingerprint make it live."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO google_connects(person_id,mailbox,status,holder,grant_hash,client_id,created_at,updated_at) "
-                  "VALUES(?,?,?,?,?,?,?,?)", (person, mailbox, status, holder, grant, client, H.now(), H.now()))
+        c.execute(
+            "INSERT INTO google_connects(person_id,mailbox,status,holder,grant_hash,client_id,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (person, mailbox, status, holder, grant, client, H.now(), H.now()),
+        )
 
 
 # ----------------------------------------------------------------------------- the key and its sealing
+
 
 def test_the_key_is_sealed_at_rest_and_never_comes_back_in_a_view(api, private):
     upload(api, new_code(api), key_json(private))
@@ -141,7 +168,7 @@ def test_the_key_is_sealed_at_rest_and_never_comes_back_in_a_view(api, private):
         opened = json.loads(W._cipher().unseal(c, "google-workspace:" + row["id"], row["key_sealed"]))
         with pytest.raises(Exception):
             W._cipher().unseal(c, "google-workspace:someone-else", row["key_sealed"])
-    assert opened["private_key"] == private.strip() and opened["client_email"] == SA   # fields are stripped
+    assert opened["private_key"] == private.strip() and opened["client_email"] == SA  # fields are stripped
     text = json.dumps(google_view(api))
     assert private not in text and "key_sealed" not in text and "private_key" not in text
 
@@ -165,7 +192,7 @@ def test_each_bad_key_is_named_by_its_field_and_nothing_is_echoed(api, private):
         r = api.post(KEY, content=raw, headers={"Authorization": "Setup " + code, "Content-Type": "application/json"})
         assert r.status_code == 422 and r.json()["error"]["code"] == "key"
     assert rows(api) == []
-    upload(api, code, key_json(private))                 # rejected keys used no code
+    upload(api, code, key_json(private))  # rejected keys used no code
 
 
 def test_an_admin_session_uploads_a_key_for_a_domain_and_a_non_admin_cannot(api, private):
@@ -173,12 +200,14 @@ def test_an_admin_session_uploads_a_key_for_a_domain_and_a_non_admin_cannot(api,
     assert r.status_code == 200 and r.json()["keep_key_ids"] == ["key-1"]
     [row] = rows(api)
     assert row["status"] == "pending" and row["generation"] == 1 and row["domain"] == "acme.example"
-    refused = api.post(KEY, json={"key": key_json(private, "key-2"), "domain": "acme.example"},
-                       headers=headers("cara-test"))
+    refused = api.post(
+        KEY, json={"key": key_json(private, "key-2"), "domain": "acme.example"}, headers=headers("cara-test")
+    )
     assert refused.status_code == 403 and len(rows(api)) == 1
 
 
 # ----------------------------------------------------------------------------- setup codes
+
 
 def test_a_setup_code_uploads_once_and_only_its_hash_is_kept(api, private):
     code = new_code(api)
@@ -234,14 +263,16 @@ def test_an_older_code_cannot_upload_over_a_newer_one_and_keep_says_which_is_lat
     assert answer["keep_key_ids"] == ["key-new"]
     keep = api.post(KEEP, headers={"Authorization": "Setup " + second}).json()
     assert keep == {"latest": True, "keep_key_ids": ["key-new"]}
-    new_code(api)                                        # a newer command now exists
+    new_code(api)  # a newer command now exists
     keep = api.post(KEEP, headers={"Authorization": "Setup " + second}).json()
     assert keep["latest"] is False
     never = api.post(KEEP, headers={"Authorization": "Setup " + first})
-    assert never.status_code == 403                      # never used: nothing to keep keys for
+    assert never.status_code == 403  # never used: nothing to keep keys for
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT used_at FROM google_setup_codes WHERE code_hash=?",
-                         (W.code_hash(first),)).fetchone()[0] is None
+        assert (
+            c.execute("SELECT used_at FROM google_setup_codes WHERE code_hash=?", (W.code_hash(first),)).fetchone()[0]
+            is None
+        )
 
 
 def test_keep_answers_only_for_an_upload_made_within_ten_minutes(api, private):
@@ -254,19 +285,24 @@ def test_keep_answers_only_for_an_upload_made_within_ten_minutes(api, private):
 
 
 def test_a_removed_key_never_gives_its_generation_back(api, private):
-    first = new_code(api)                                    # a setup command still out, generation one
-    admin = api.post(KEY, json={"key": key_json(private, "key-admin"), "domain": "acme.example"},
-                     headers=headers("ana-test"))
+    first = new_code(api)  # a setup command still out, generation one
+    admin = api.post(
+        KEY, json={"key": key_json(private, "key-admin"), "domain": "acme.example"}, headers=headers("ana-test")
+    )
     assert admin.status_code == 200 and admin.json()["keep_key_ids"] == ["key-admin"]
     assert api.delete("/api/v2/google/workspace", headers=headers("ana-test")).status_code == 200
-    assert rows(api) == []                                   # the admin's key, and the row that carried its number, are gone
+    assert rows(api) == []  # the admin's key, and the row that carried its number, are gone
     assert upload(api, first, key_json(private, "key-old"), expected=409)["error"]["code"] == "superseded"
     assert rows(api) == []
 
 
 def test_setup_answers_and_the_key_view_say_which_generation_they_are(api, private):
-    first = api.post("/api/v2/google/workspace/setup-code", json={"domain": "acme.example"}, headers=headers("ana-test"))
-    second = api.post("/api/v2/google/workspace/setup-code", json={"domain": "acme.example"}, headers=headers("ana-test"))
+    first = api.post(
+        "/api/v2/google/workspace/setup-code", json={"domain": "acme.example"}, headers=headers("ana-test")
+    )
+    second = api.post(
+        "/api/v2/google/workspace/setup-code", json={"domain": "acme.example"}, headers=headers("ana-test")
+    )
     assert first.status_code == 200 and second.status_code == 200
     assert second.json()["generation"] == first.json()["generation"] + 1
     upload(api, second.json()["code"], key_json(private))
@@ -284,13 +320,17 @@ def test_keep_refuses_once_the_person_who_made_the_code_is_no_longer_an_admin(ap
 
 
 def test_a_public_key_is_a_bad_key_named_as_one_not_a_server_error(api, private):
-    public = serialization.load_pem_private_key(private.encode(), password=None).public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    public = (
+        serialization.load_pem_private_key(private.encode(), password=None)
+        .public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
     code = new_code(api)
     answer = upload(api, code, key_json(public), expected=422)
     assert answer["error"]["code"] == "key" and public not in json.dumps(answer)
     assert rows(api) == []
-    upload(api, code, key_json(private))                     # the rejected key used no code
+    upload(api, code, key_json(private))  # the rejected key used no code
 
 
 def test_wrong_codes_lock_the_setup_for_a_minute(api, private):
@@ -307,10 +347,11 @@ def test_the_setup_upload_is_capped_at_sixteen_kilobytes(api, private):
     big = b'{"key": "' + b"x" * (W.KEY_BYTES + 10) + b'"}'
     r = api.post(KEY, content=big, headers={"Authorization": "Setup " + code, "Content-Type": "application/json"})
     assert r.status_code == 413 and rows(api) == []
-    upload(api, code, key_json(private))                 # the refused upload used no code
+    upload(api, code, key_json(private))  # the refused upload used no code
 
 
 # ----------------------------------------------------------------------------- the guard's exemptions and the script
+
 
 def test_only_the_exact_setup_requests_pass_without_a_session(api, tmp_path, monkeypatch):
     script = tmp_path / "google-setup.sh"
@@ -322,7 +363,9 @@ def test_only_the_exact_setup_requests_pass_without_a_session(api, tmp_path, mon
     assert api.post(KEY, json={}).status_code == 401
     assert api.post(KEY, json={}, headers={"Authorization": "Bearer nope"}).status_code == 401
     assert api.get(KEY, headers={"Authorization": "Setup abc"}).status_code == 401
-    assert api.post("/api/v2/google/workspace/check", json={}, headers={"Authorization": "Setup abc"}).status_code == 401
+    assert (
+        api.post("/api/v2/google/workspace/check", json={}, headers={"Authorization": "Setup abc"}).status_code == 401
+    )
     assert api.get("/api/v2/google").status_code == 401
     keep = api.post(KEEP, headers={"Authorization": "Setup abc"})
     assert keep.status_code == 401 and keep.json()["error"]["code"] == "setup_code"
@@ -347,16 +390,22 @@ def test_the_setup_script_gets_this_server_and_the_install_label(api, tmp_path, 
 
 # ----------------------------------------------------------------------------- checks
 
+
 def test_a_pending_key_becomes_connected_when_its_check_passes(api, private, covered, google):
     covered((MAILBOX, "inbox-cara"))
     upload(api, new_code(api), key_json(private))
     view = google_view(api)
     assert view["workspace"]["status"] == "pending" and view["pending"] is None
     answer = check(api, {"mailbox": MAILBOX})
-    assert answer == {"ok": True, "mailbox": MAILBOX, "error_kind": None,
-                      "message": "Google accepts this key for this mailbox.", "workspace": answer["workspace"]}
+    assert answer == {
+        "ok": True,
+        "mailbox": MAILBOX,
+        "error_kind": None,
+        "message": "Google accepts this key for this mailbox.",
+        "workspace": answer["workspace"],
+    }
     assert answer["workspace"]["status"] == "connected" and answer["workspace"]["probe"] == {"mailbox": MAILBOX}
-    assert answer["workspace"]["scopes"] == [CALENDAR, GMAIL]
+    assert answer["workspace"]["scopes"] == [CALENDAR, CALENDAR + ".readonly", GMAIL, W.READ_ONLY_SCOPES["gmail"][0]]
     assert [row["status"] for row in rows(api)] == ["connected"]
     assert check(api, {"mailbox": "other@elsewhere.example"}, expected=422)["error"]["code"] == "mailbox"
 
@@ -369,7 +418,12 @@ def test_the_check_is_signed_for_the_mailbox_with_the_key(api, private, keys, co
     assert len(exchanges) == 2
     claims = [jwt.decode(assertion, keys[1], algorithms=["RS256"], audience=W.TOKEN_URI) for assertion in exchanges]
     assert {c["sub"] for c in claims} == {MAILBOX} and {c["iss"] for c in claims} == {SA}
-    assert {c["scope"] for c in claims} == {GMAIL, CALENDAR}
+    # Each service asks for its write and read-only scope together, which proves the key was authorized for both.
+    assert {c["scope"] for c in claims} == {
+        GMAIL + " " + GMAIL.replace("modify", "readonly"),
+        CALENDAR + " " + CALENDAR + ".readonly",
+    }
+    assert json.loads(rows(api)[0]["authorized_scopes"]) == W.scope_urls()
 
 
 def test_a_failed_check_keeps_a_pending_key_pending_with_the_reason(api, private, covered, google):
@@ -432,7 +486,7 @@ def test_a_result_for_a_key_that_changed_meanwhile_is_dropped(api, private, cove
     def probe_then_change(store_, row_, mailbox):
         with store.transaction() as c:
             c.execute("UPDATE google_workspaces SET revision=revision+1 WHERE id=?", (row_["id"],))
-        return True, None, ""
+        return True, None, "", W.scope_urls()
 
     monkeypatch.setattr(W, "_probe", probe_then_change)
     settled, ok, _, _ = W.run_check(store, row, MAILBOX, "test")
@@ -451,16 +505,16 @@ def test_a_pending_key_is_checked_again_every_fifteen_minutes_for_a_day(api, pri
     def token_calls():
         return len([call for call in calls if call[0] == W.TOKEN_URI])
 
-    W.tick(store)                                        # never checked: due now
+    W.tick(store)  # never checked: due now
     last = H.parse_ts(rows(api)[0]["checked_at"]).timestamp()
     before = token_calls()
     W.tick(store, now=last + 100)
-    assert token_calls() == before                       # not yet fifteen minutes
+    assert token_calls() == before  # not yet fifteen minutes
     W.tick(store, now=last + 1000)
-    assert token_calls() > before                        # due again
+    assert token_calls() > before  # due again
     before = token_calls()
     W.tick(store, now=start + W.RECHECK_WINDOW + 10000)
-    assert token_calls() == before                       # past its day: waits for Check
+    assert token_calls() == before  # past its day: waits for Check
     assert rows(api)[0]["status"] == "pending"
 
 
@@ -476,18 +530,27 @@ def test_disconnecting_the_workspace_drops_its_tokens_and_its_keys(api, private,
 
 
 def test_only_an_admin_makes_codes_checks_and_changes_the_key_or_the_client(api):
-    assert api.post("/api/v2/google/workspace/setup-code", json={"domain": "acme.example"},
-                    headers=headers("cara-test")).status_code == 403
+    assert (
+        api.post(
+            "/api/v2/google/workspace/setup-code", json={"domain": "acme.example"}, headers=headers("cara-test")
+        ).status_code
+        == 403
+    )
     assert api.post("/api/v2/google/workspace/check", json={}, headers=headers("cara-test")).status_code == 403
     assert api.delete("/api/v2/google/workspace", headers=headers("cara-test")).status_code == 403
-    assert api.put("/api/v2/google/oauth-client", json={"client_id": "c", "client_secret": "s"},
-                   headers=headers("cara-test")).status_code == 403
+    assert (
+        api.put(
+            "/api/v2/google/oauth-client", json={"client_id": "c", "client_secret": "s"}, headers=headers("cara-test")
+        ).status_code
+        == 403
+    )
     assert api.delete("/api/v2/google/oauth-client", headers=headers("cara-test")).status_code == 403
     bad = api.post("/api/v2/google/workspace/setup-code", json={"domain": "not a domain"}, headers=headers("ana-test"))
     assert bad.status_code == 422 and bad.json()["error"]["code"] == "domain"
 
 
 # ----------------------------------------------------------------------------- authority and what a computer may hold
+
 
 def test_authority_follows_a_live_personal_grant_then_the_key_then_legacy(api, private, covered, google):
     covered((MAILBOX, "inbox-cara"))
@@ -501,28 +564,31 @@ def test_authority_follows_a_live_personal_grant_then_the_key_then_legacy(api, p
     connected(api, private)
     assert who("eve@acme.example") == "workspace" and who("x@other.example") == "legacy"
     personal(api, "cara", "cara@acme.example", holder="r1", grant="g1")
-    assert who("cara@acme.example") == "personal"               # a live grant always wins
+    assert who("cara@acme.example") == "personal"  # a live grant always wins
     personal(api, "dan", "dan@acme.example", status="disconnected", holder=None, grant=None)
-    assert who("dan@acme.example") == "workspace"               # not live: the key covers the domain
+    assert who("dan@acme.example") == "workspace"  # not live: the key covers the domain
     personal(api, "fay", "fay@acme.example", status="failed", holder="r1", grant="g2", client="old")
-    assert who("fay@acme.example") == "personal"                # a failed reconnect keeps the earlier grant
+    assert who("fay@acme.example") == "personal"  # a failed reconnect keeps the earlier grant
     with store.transaction() as c:
         c.execute("UPDATE google_workspaces SET status='failing'")
-    assert who("eve@acme.example") == "workspace"               # a failing key keeps its authority
+    assert who("eve@acme.example") == "workspace"  # a failing key keeps its authority
     with store.transaction() as c:
         c.execute("UPDATE google_workspaces SET status='pending', connected_at=NULL")
-    assert who("eve@acme.example") == "legacy"                  # a pending key alone does not
+    assert who("eve@acme.example") == "legacy"  # a pending key alone does not
 
 
 def test_a_cloud_computer_publishes_the_workspace_mailboxes_its_bots_run_on(api, private, covered, google):
     covered((MAILBOX, "inbox-cara"))
     store = api.app.state.store
     with store.transaction() as c:
-        H.sync_registry(c, {"inbox-cara": {"name": "inbox-cara", "runtime": "fake", "status": "active"}},
-                        {"people": []})
+        H.sync_registry(
+            c, {"inbox-cara": {"name": "inbox-cara", "runtime": "fake", "status": "active"}}, {"people": []}
+        )
         for runner_id in ("cloud-1", "box-2"):
-            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
-                      (runner_id, runner_id, "h-" + runner_id, H.now()))
+            c.execute(
+                "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?,'ana',?,?)",
+                (runner_id, runner_id, "h-" + runner_id, H.now()),
+            )
         c.execute("INSERT INTO assignments VALUES('inbox-cara','cloud-1',1,?,'human:ana')", (H.now(),))
     connected(api, private)
     personal(api, "cara", "cara@acme.example", holder="cloud-1", grant="g1")
@@ -545,7 +611,7 @@ def test_a_token_is_minted_per_mailbox_and_service_and_cached_until_near_expiry(
         calendar = W.mint(c, MAILBOX, "calendar")
         before = token_calls()
         assert W.mint(c, MAILBOX, "gmail") == gmail
-    assert token_calls() == before                               # the second gmail token came from the cache
+    assert token_calls() == before  # the second gmail token came from the cache
     assert gmail["access_token"] == "tok-1" and gmail["scopes"] == [GMAIL] and gmail["expiry"].endswith("Z")
     assert calendar["scopes"] == [CALENDAR]
     with pytest.raises(Problem) as unknown:
@@ -566,7 +632,7 @@ def test_a_refusal_about_the_key_starts_a_clock_and_a_success_clears_it(api, pri
     monkeypatch.setattr(W, "FAILING_SECONDS", 0)
     with store.transaction() as c:
         W.record_mint(c, row, MAILBOX, "gmail", "r1", False, "not_found")
-    assert rows(api)[0]["status"] == "connected"                 # one mailbox's refusal fails no key
+    assert rows(api)[0]["status"] == "connected"  # one mailbox's refusal fails no key
     with store.transaction() as c:
         W.record_mint(c, row, MAILBOX, "gmail", "r1", False, "unauthorized_client")
     assert rows(api)[0]["status"] == "failing"
@@ -575,41 +641,52 @@ def test_a_refusal_about_the_key_starts_a_clock_and_a_success_clears_it(api, pri
     assert rows(api)[0]["status"] == "connected" and rows(api)[0]["mint_failing_since"] is None
     with store.read() as c:
         audits = c.execute("SELECT COUNT(*) FROM events WHERE action=?", ("google.workspace.mint",)).fetchone()[0]
-    assert audits == 1                                           # one audit row per mailbox, service and computer an hour
+    assert audits == 1  # one audit row per mailbox, service and computer an hour
 
 
 # ----------------------------------------------------------------------------- the OAuth client
+
 
 def test_the_oauth_client_is_the_environments_or_the_admins_and_a_replacement_asks_for_reconnects(api, monkeypatch):
     store = api.app.state.store
     settings = store.settings
     assert google_view(api)["oauth"]["configured"] is False
-    r = api.put("/api/v2/google/oauth-client", json={"client_id": "old-client", "client_secret": "S-ONE"},
-                headers=headers("ana-test"))
+    r = api.put(
+        "/api/v2/google/oauth-client",
+        json={"client_id": "old-client", "client_secret": "S-ONE"},
+        headers=headers("ana-test"),
+    )
     assert r.status_code == 200 and "S-ONE" not in r.text
     oauth = r.json()["oauth"]
     assert oauth["configured"] is True and oauth["source"] == "settings" and oauth["client_id"] == "old-client"
     assert oauth["redirect_uri"].endswith(google_connect.CALLBACK)
     personal(api, "cara", "cara@acme.example", client="old-client")
     personal(api, "eve", "eve@acme.example", client=None)
-    api.put("/api/v2/google/oauth-client", json={"client_id": "new-client", "client_secret": "S-TWO"},
-            headers=headers("ana-test"))
+    api.put(
+        "/api/v2/google/oauth-client",
+        json={"client_id": "new-client", "client_secret": "S-TWO"},
+        headers=headers("ana-test"),
+    )
     with store.read() as c:
-        statuses = {r["person_id"]: (r["status"], r["kind"]) for r in
-                    c.execute("SELECT person_id, status, kind FROM google_connects")}
+        statuses = {
+            r["person_id"]: (r["status"], r["kind"])
+            for r in c.execute("SELECT person_id, status, kind FROM google_connects")
+        }
         assert W.oauth_client(c, settings) == ("new-client", "S-TWO", "settings")
-    assert statuses["cara"] == ("failed", "reconnect")           # its client is not the one now set
-    assert statuses["eve"] == ("connected", None)                # no client recorded: left alone
+    assert statuses["cara"] == ("failed", "reconnect")  # its client is not the one now set
+    assert statuses["eve"] == ("connected", None)  # no client recorded: left alone
     monkeypatch.setattr(settings, "google_oauth_client_id", "env-client")
     monkeypatch.setattr(settings, "google_oauth_client_secret", "env-secret")
     with store.read() as c:
         assert W.oauth_client(c, settings) == ("env-client", "env-secret", "env")
-    refused = api.put("/api/v2/google/oauth-client", json={"client_id": "x", "client_secret": "y"},
-                      headers=headers("ana-test"))
+    refused = api.put(
+        "/api/v2/google/oauth-client", json={"client_id": "x", "client_secret": "y"}, headers=headers("ana-test")
+    )
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "env_client"
 
 
 # ----------------------------------------------------------------------------- GET /google
+
 
 def test_me_says_whether_the_key_covers_your_own_mailbox(api, private, covered, google, monkeypatch):
     covered((MAILBOX, "inbox-cara"))
@@ -620,17 +697,27 @@ def test_me_says_whether_the_key_covers_your_own_mailbox(api, private, covered, 
 
 def test_me_is_null_without_a_roster_or_for_someone_not_acting_as_themselves(api, monkeypatch):
     store = api.app.state.store
-    monkeypatch.setitem(store.settings.test_identities, "ana-via-test",
-                        Identity("human:ana", "owner", "ana@acme.example", via="assistant"))
-    def not_on_roster(c, person_id):                # auth already refuses people off the roster; this is the
-        raise Problem("not_found", "You are not on this team's roster", 404)   # view's own fallback
+    monkeypatch.setitem(
+        store.settings.test_identities,
+        "ana-via-test",
+        Identity("human:ana", "owner", "ana@acme.example", via="assistant"),
+    )
+
+    def not_on_roster(c, person_id):  # auth already refuses people off the roster; this is the
+        raise Problem("not_found", "You are not on this team's roster", 404)  # view's own fallback
+
     monkeypatch.setattr(google_connect, "mailbox_for", not_on_roster)
     no_roster = google_view(api, "cara-test")
     assert no_roster["me"] is None and no_roster["can_admin"] is False
-    assert google_view(api, "ana-via-test")["me"] is None        # the Assistant acting for her is not her
+    assert google_view(api, "ana-via-test")["me"] is None  # the Assistant acting for her is not her
     assert google_view(api, "ana-test")["can_admin"] is True
 
 
 def test_a_devcopy_clears_the_workspace_tables_and_the_connection_client():
-    assert {"google_workspaces", "google_setup_codes", "google_oauth_clients", "connector_reports",
-            "google_connects"} <= set(devcopy.EMPTY)
+    assert {
+        "google_workspaces",
+        "google_setup_codes",
+        "google_oauth_clients",
+        "connector_reports",
+        "google_connects",
+    } <= set(devcopy.EMPTY)

@@ -19,7 +19,7 @@ import json
 from .store import H, bot_readiness, readiness_document
 
 MAX_BOTS = 5
-STEP_EVENTS = 60          # a run's newest events read for its current step
+STEP_EVENTS = 60  # a run's newest events read for its current step
 STEP_CHARS = 80
 LIVE_JOBS = ("queued", "leased", "running", "input")
 SIGN_IN_REASONS = ("not_ready", "readiness_unknown", "sign_in_rejected", "sign_in_missing", "login_upgrade", "profile")
@@ -48,23 +48,28 @@ _OPEN_SQL = (
     "AND p.sender_id IN (SELECT recipient FROM open) GROUP BY p.sender_id) "
     "SELECT recipient, state, carrier_id, message_id, created_at FROM (SELECT o.*, ROW_NUMBER() OVER "
     "(PARTITION BY o.recipient ORDER BY o.created_at DESC) AS n FROM open o LEFT JOIN posted q ON q.sender_id=o.recipient "
-    "WHERE q.seq IS NULL OR o.seq>q.seq) WHERE n<=?2 ORDER BY created_at")
+    "WHERE q.seq IS NULL OR o.seq>q.seq) WHERE n<=?2 ORDER BY created_at"
+)
 _RUNS_SQL = (
     "SELECT a.id, a.bot_id, a.runner_id, a.state, COALESCE(a.started_at, a.created_at) AS since FROM attempts a "
     "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
-    "WHERE a.state IN ('leased','running') AND t.root_id=? ORDER BY a.created_at")
+    "WHERE a.state IN ('leased','running') AND t.root_id=? ORDER BY a.created_at"
+)
 
 
 # The running turns and their roots (the partial index one_active_attempt_per_lane holds exactly these).
 _RUNNING_SQL = (
     "SELECT a.id, COALESCE(t.root_id, t.id) FROM attempts a JOIN jobs j ON j.id=a.job_id "
     "JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
-    "WHERE a.state IN ('leased','running')")
+    "WHERE a.state IN ('leased','running')"
+)
 # A turn's newest step, walking its UNIQUE(attempt_id, seq) key back from the end: it reads only the deltas since that
 # step, never the run's history.
-_NEWEST_STEP_SQL = ("SELECT created_at FROM attempt_events WHERE attempt_id=? AND (kind IN ('tool','message') OR "
-                    "(kind='delta' AND json_extract(payload,'$.delta_kind')='thought')) ORDER BY seq DESC LIMIT 1")
-_LAST_STATUS_SQL = ("SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?")
+_NEWEST_STEP_SQL = (
+    "SELECT created_at FROM attempt_events WHERE attempt_id=? AND (kind IN ('tool','message') OR "
+    "(kind='delta' AND json_extract(payload,'$.delta_kind')='thought')) ORDER BY seq DESC LIMIT 1"
+)
+_LAST_STATUS_SQL = "SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?"
 _QUIET = "strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 seconds')"
 
 
@@ -95,10 +100,13 @@ def send_trailing(c, roots=None):
     wrote = 0
     for root in roots:
         # The triggers' own clock (events._NOW), and again quiet for 5 s: a trigger may have sent one since the read.
-        wrote += c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
-                           "SELECT 'threads','bot_status',?1,?1,strftime('%Y-%m-%dT%H:%M:%fZ','now') "
-                           f"WHERE NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' "
-                           f"AND subject_id=?1 AND created_at>={_QUIET})", (root,)).rowcount
+        wrote += c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
+            "SELECT 'threads','bot_status',?1,?1,strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            f"WHERE NOT EXISTS (SELECT 1 FROM changes WHERE topic='threads' AND kind='bot_status' "
+            f"AND subject_id=?1 AND created_at>={_QUIET})",
+            (root,),
+        ).rowcount
     return wrote
 
 
@@ -112,9 +120,10 @@ def _job_live(c, message_ids):
     ids = sorted({i for i in message_ids if i})
     out = {}
     for start in range(0, len(ids), 500):
-        part = ids[start:start + 500]
-        for r in c.execute(f"SELECT message_id, state, attempt_id FROM jobs WHERE message_id IN ({','.join('?' * len(part))})",
-                           part):
+        part = ids[start : start + 500]
+        for r in c.execute(
+            f"SELECT message_id, state, attempt_id FROM jobs WHERE message_id IN ({','.join('?' * len(part))})", part
+        ):
             out[r[0]] = (r[1], r[2])
     return out
 
@@ -125,10 +134,12 @@ def _inputs_live(c, message_ids):
     ids = sorted({i for i in message_ids if i})
     out = {}
     for start in range(0, len(ids), 500):
-        part = ids[start:start + 500]
-        for r in c.execute("SELECT i.message_id, a.bot_id, a.id FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
-                           f"WHERE i.message_id IN ({','.join('?' * len(part))}) AND a.state IN ('leased','running')",
-                           part):
+        part = ids[start : start + 500]
+        for r in c.execute(
+            "SELECT i.message_id, a.bot_id, a.id FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
+            f"WHERE i.message_id IN ({','.join('?' * len(part))}) AND a.state IN ('leased','running')",
+            part,
+        ):
             out[(r[0], "bot:" + str(r[1]))] = r[2]
     return out
 
@@ -145,10 +156,13 @@ def candidates(c, root_id):
         key = r["carrier_id"] or r["message_id"]
         job = jobs.get(key)
         bot = r["recipient"]
-        run = (inputs.get((key, bot)) or inputs.get((r["message_id"], bot))
-               or (job[1] if job and job[0] in ("leased", "running") else None))
+        run = (
+            inputs.get((key, bot))
+            or inputs.get((r["message_id"], bot))
+            or (job[1] if job and job[0] in ("leased", "running") else None)
+        )
         if r["state"] != "capped" and not run and not (job and job[0] in LIVE_JOBS) and not _outside(c, bot, outside):
-            continue                     # its turn ended without a post here: nothing waits any more
+            continue  # its turn ended without a post here: nothing waits any more
         at = found.setdefault(r["recipient"], {"since": r["created_at"], "capped": False, "run": None})
         at["capped"] = at["capped"] or r["state"] == "capped"
         at["since"] = min(at["since"], r["created_at"])
@@ -166,6 +180,7 @@ def _outside(c, actor, seen):
     until it posts. `seen` caches the answer per bot."""
     if actor not in seen:
         from .agents import external_harness
+
         seen[actor] = bool(external_harness(c, H.actor_id(actor)))
     return seen[actor]
 
@@ -174,10 +189,13 @@ def _step(c, attempt_id):
     """The run's current step in a person's words: its latest progress line or tool, else that it is writing, thinking or
     starting."""
     from .turns import reply_parts
+
     rows = []
     for kind, payload, created in c.execute(
-            "SELECT kind, payload, created_at FROM attempt_events WHERE attempt_id=? AND kind IN ('delta','message','tool') "
-            "ORDER BY seq DESC LIMIT ?", (attempt_id, STEP_EVENTS)):
+        "SELECT kind, payload, created_at FROM attempt_events WHERE attempt_id=? AND kind IN ('delta','message','tool') "
+        "ORDER BY seq DESC LIMIT ?",
+        (attempt_id, STEP_EVENTS),
+    ):
         try:
             value = json.loads(payload)
         except (TypeError, ValueError):
@@ -194,17 +212,20 @@ def _step(c, attempt_id):
     if last["kind"] == "reply":
         return "Writing a reply"
     text = " ".join(str(last["text"]).split())
-    return text if len(text) <= STEP_CHARS else text[:STEP_CHARS - 1] + "…"
+    return text if len(text) <= STEP_CHARS else text[: STEP_CHARS - 1] + "…"
 
 
 def _elsewhere(c, v, bot_id, root_id):
     """What the bot is finishing outside this root, said only as far as the viewer reads it."""
     from . import task_privacy, threads
+
     row = c.execute(
         "SELECT m.*, t.task_id AS thread_task, t.subject AS thread_subject, t.parent_id AS thread_parent, "
         "COALESCE(t.root_id, t.id) AS thread_root FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id LEFT JOIN conversations t ON t.id=m.conversation_id "
-        "WHERE a.bot_id=? AND a.state IN ('leased','running') ORDER BY a.created_at LIMIT 1", (bot_id,)).fetchone()
+        "WHERE a.bot_id=? AND a.state IN ('leased','running') ORDER BY a.created_at LIMIT 1",
+        (bot_id,),
+    ).fetchone()
     if not row:
         return None
     row = dict(row)
@@ -235,21 +256,30 @@ def _blocked(c, bot, location, refusal):
     """(detail, fix) when something stops the bot, else None; `refusal` is the claim's latest recorded refusal."""
     from .health import BOT_SETTINGS, COMPUTERS, HELD
     from .models_preset import LOGIN_NAMES
+    from .cloud_machines import resting
+
     row = H.bot(c, bot) or {}
     slug = row.get("slug") or bot
     machine = location.get("machine") or {}
     computer = machine.get("runner_id")
     # Settings > Devices lists every computer, with its sign-ins: there is no page for one computer.
     computer_href = "#/settings/computers" if computer else None
-    if row.get("state") != "active" or c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1",
-                                                 (bot,)).fetchone():
+    if (
+        row.get("state") != "active"
+        or c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
+    ):
         return PAUSED, _fix("#/bot/" + slug + "/more")
     if location.get("external"):
         return None if location.get("online") else (OFFLINE, _fix("#/bot/" + slug + "/more"))
-    if not computer or not location.get("online"):
+    asleep = computer in resting(c)
+    if not computer or not location.get("online") or asleep:
         from .views import cloud_machine_wait
-        if computer and cloud_machine_wait(c, bot):
-            return None                  # its cloud machine is starting for this turn
+
+        cloud = cloud_machine_wait(c, bot)
+        if computer and cloud:
+            if asleep:
+                return cloud[0].upper() + cloud[1:], None
+            return None  # its cloud machine is starting for this turn
         return OFFLINE, _fix(computer_href or "#/bot/" + slug + "/more")
     reason = (refusal or {}).get("reason")
     if not reason or (refusal or {}).get("runner_id") not in (None, computer):
@@ -276,24 +306,36 @@ def _location(c, bot):
     """Where the bot runs (views.machine): its computer, whether it is in contact, and its readiness row there. An
     outside agent has no computer here: it is offline while it has not reported in lately."""
     from .agents import presence
+
     external = presence(c, bot)
     if external:
         return {"online": bool(external.get("online")), "machine": None, "readiness": {}, "external": True}
-    row = c.execute("SELECT a.runner_id, r.label, r.last_seen_at, r.revoked_at, r.readiness FROM assignments a "
-                    "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
+    row = c.execute(
+        "SELECT a.runner_id, r.label, r.last_seen_at, r.revoked_at, r.readiness FROM assignments a "
+        "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?",
+        (bot,),
+    ).fetchone()
     if not row:
         return {"online": False, "machine": None, "readiness": {}}
     from .readiness import ONLINE_SECONDS
-    online = bool(not row["revoked_at"] and row["last_seen_at"]
-                  and row["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_SECONDS))
-    return {"online": online, "machine": {"runner_id": row["runner_id"], "label": row["label"]},
-            "readiness": bot_readiness(readiness_document(row["readiness"]), bot)}
+
+    online = bool(
+        not row["revoked_at"]
+        and row["last_seen_at"]
+        and row["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_SECONDS)
+    )
+    return {
+        "online": online,
+        "machine": {"runner_id": row["runner_id"], "label": row["label"]},
+        "readiness": bot_readiness(readiness_document(row["readiness"]), bot),
+    }
 
 
 def status(c, v, root):
     """The bot status rows of this root for viewer `v`, who reads it (the caller checked). Nothing for one who reads
     only a migrated Home's old history: what its bots do now is not theirs to see."""
     from . import queue_refusals, threads
+
     root_id = _root(c, root)
     if not root_id:
         return []
@@ -307,17 +349,28 @@ def status(c, v, root):
     bots = [H.actor_id(actor) for actor, _ in order]
     refusals = queue_refusals.states(c, bots)
     from .names import lookup
+
     names = lookup(c, [actor for actor, _ in order])
     out = []
     for actor, at in order:
         bot = H.actor_id(actor)
-        row = {"actor": actor, "name": names.get(actor) or H.actor_name(c, actor), "since": at["since"],
-               "run_id": None, "fix": None}
+        row = {
+            "actor": actor,
+            "name": names.get(actor) or H.actor_name(c, actor),
+            "since": at["since"],
+            "run_id": None,
+            "fix": None,
+        }
         if at["run"]:
-            started = c.execute("SELECT COALESCE(started_at, created_at) FROM attempts WHERE id=?",
-                                (at["run"],)).fetchone()
-            row.update(state="working", detail=_step(c, at["run"]), run_id=at["run"],
-                       since=started[0] if started else at["since"])
+            started = c.execute(
+                "SELECT COALESCE(started_at, created_at) FROM attempts WHERE id=?", (at["run"],)
+            ).fetchone()
+            row.update(
+                state="working",
+                detail=_step(c, at["run"]),
+                run_id=at["run"],
+                since=started[0] if started else at["since"],
+            )
         elif at["capped"]:
             row.update(state="cant_reply", detail=CAPPED)
         else:

@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/market_watch.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 16,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -52,6 +52,7 @@
 # service pulls only what is missing). The updater replaces itself only with an image it can pull, so updater images
 # go through a throwaway registry on 127.0.0.1, and the bundles the updater downloads come from a throwaway release
 # server on the install's network (the candidate's is built from this checkout for the local build).
+# shellcheck disable=SC2329  # the steps run through run_step by name, so the helpers they call look unused
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
@@ -137,6 +138,7 @@ dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
 say() { printf '  %s\n' "$*"; }
 retry() { local end=$((SECONDS + $1)); shift; until "$@" >/dev/null 2>&1; do [ "$SECONDS" -lt "$end" ] || return 1; sleep 0.5; done; }
 api() {  # curl arguments; the owner token never leaves the server container
+  # shellcheck disable=SC2016  # single quotes: the container's shell expands the token and "$@"
   dc exec -T server sh -c 'curl -sS --fail-with-body -H "Authorization: Bearer $(cat /data/local-owner.token)" -H "Content-Type: application/json" "$@"' sh "$@"
 }
 post() {
@@ -254,7 +256,8 @@ release_bundle() {  # version: its bundle and SHA256SUMS where the release serve
   [ -s "$into/SHA256SUMS" ] && return 0
   mkdir -p "$into"
   if [ "$1" = "$CAND" ] && [ "$LOCAL" = 0 ]; then
-    curl -fsSL -o "$into/SHA256SUMS" "$RELEASES/download/$1/SHA256SUMS" && curl -fsSL -o "$into/tico-bundle-$1.tar.gz" "$RELEASES/download/$1/tico-bundle-$1.tar.gz" || return 1
+    bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$into/SHA256SUMS" "$RELEASES/download/$1/SHA256SUMS" && \
+      bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$into/tico-bundle-$1.tar.gz" "$RELEASES/download/$1/tico-bundle-$1.tar.gz" || return 1
   else
     python3 scripts/build_install_bundle.py --version "$1" --output "$into" >/dev/null || return 1
   fi
@@ -291,7 +294,8 @@ run_update() {  # version -> waits for a final state; prints it
 
 step_install() {
   local bundle="tico-bundle-$PREV.tar.gz" want got
-  curl -fsSL -o "$WORK/SHA256SUMS" "$RELEASES/download/$PREV/SHA256SUMS" && curl -fsSL -o "$WORK/$bundle" "$RELEASES/download/$PREV/$bundle" \
+  { bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$WORK/SHA256SUMS" "$RELEASES/download/$PREV/SHA256SUMS" &&
+    bash scripts/ci/retry.sh --permanent 'curl: \(22\).* 404([^0-9]|$)' -- curl -fsSL -o "$WORK/$bundle" "$RELEASES/download/$PREV/$bundle"; } \
     || { say "could not download the $PREV bundle"; return 1; }
   want="$(awk -v f="$bundle" '{n=$2; sub(/^\*/,"",n)} n==f {print $1; exit}' "$WORK/SHA256SUMS")"
   got="$(sha256_of "$WORK/$bundle")"
