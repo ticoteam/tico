@@ -1,5 +1,4 @@
-"""pages.spec (backend/spec_approval.py): which pages are visual specs on a Product roadmap card ("card") or their frozen
-copies on a Dev ticket ("frozen"). Older pages stay NULL."""
+"""pages.spec (backend/visual_specs.py): "card" marks a visual spec on a Product roadmap card. Other pages stay NULL."""
 
 
 def up(conn):

@@ -37,7 +37,10 @@ def file_under(api, parent, title="Build it", body="Do the work."):
 
 def test_styles_are_inlined_before_the_head_closes_and_the_page_keeps_its_markup():
     out = VS.inline_styles(HTML).decode()
-    assert out.index("<style>") < out.index("</head>")
+    assert (
+        out.index("<head>") < out.index("<style>") < out.index("<title>")
+    )  # first in the head: the page's own styles win
+    assert out.rindex(VS.PAGE_BODY) < out.index("</style>")  # the app shell's body grid is undone
     assert ":root" in out  # tokens.css defines the variables the rest of the styles read
     assert "<h1>Exports</h1>" in out
     assert VS.page_text(HTML) == "Exports Pick a range, then download."
@@ -68,6 +71,16 @@ def test_a_ticket_filed_under_the_card_and_its_review_child_get_the_spec_link_an
     assert "Spec page: " in review and "Pick a range, then download." in review
 
 
+def test_an_archived_spec_is_not_handed_down(api):
+    item = _item(api, "Exports archived", step="Spec")
+    assert publish_spec(api, item).status_code == 200
+    with api.app.state.store.transaction() as c:
+        live = VS.spec_page(c, item["id"])
+        c.execute("UPDATE bot_files SET archived=1 WHERE id=?", (live["id"],))
+    _, body = file_under(api, item)
+    assert body == "Do the work."
+
+
 def test_a_card_without_a_spec_leaves_the_body_alone(api):
     item = _item(api, "No spec", step="Spec")
     _, body = file_under(api, item)
@@ -82,6 +95,7 @@ def test_a_narrowed_spec_gives_the_link_and_not_the_text(api):
         c.execute("UPDATE pages SET audience=? WHERE file_id=?", ('{"people":["ana"]}', live["id"]))
     _, body = file_under(api, item)
     assert "Spec page: " in body and "Pick a range" not in body
+    assert "Spec: " not in body  # nor the page's title
 
 
 def test_a_private_card_gives_the_link_and_not_the_text(api):

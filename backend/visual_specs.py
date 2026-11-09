@@ -45,14 +45,19 @@ def page_link(file_id: str) -> str:
     return f"{_base}/#/page/{quote(file_id, safe='')}"
 
 
+# The app shell lays body out as a grid with a left rail (base.css); a page is a plain document.
+PAGE_BODY = "body{display:block;min-height:0}"
+
+
 def inline_styles(data: bytes) -> bytes:
-    """The page with the shared styles in a <style> at the end of its head, read from ui/styles at publish time."""
+    """The page with the shared styles in a <style> at the start of its head, read from ui/styles at publish time, so
+    the page's own styles come after them and win."""
     root = Path(__file__).resolve().parents[1] / "ui" / "styles"
-    css = "\n".join((root / name).read_text(encoding="utf-8") for name in STYLES)
+    css = "\n".join((root / name).read_text(encoding="utf-8") for name in STYLES) + "\n" + PAGE_BODY
     style = "<style>" + css.replace("</style", "<\\/style") + "</style>"
     text = data.decode("utf-8", "replace")
-    if re.search(r"</head>", text, re.I):
-        text = re.sub(r"</head>", lambda m: style + m.group(0), text, count=1, flags=re.I)
+    if re.search(r"<head\b[^>]*>", text, re.I):
+        text = re.sub(r"<head\b[^>]*>", lambda m: m.group(0) + style, text, count=1, flags=re.I)
     else:
         text = style + text
     return text.encode("utf-8")
@@ -72,7 +77,8 @@ def spec_page(c: Any, card_id: str) -> Any:
     return c.execute(
         "SELECT f.id,f.title,v.digest FROM pages p JOIN bot_files f ON f.id=p.file_id JOIN bot_file_versions v "
         "ON v.file_id=f.id AND v.version=f.current_version "
-        "WHERE p.spec=? AND f.task_id=? AND p.archived=0 AND f.state!='deleted' ORDER BY f.last_activity_at DESC LIMIT 1",
+        "WHERE p.spec=? AND f.task_id=? AND p.archived=0 AND f.archived=0 AND p.replaced_by_id IS NULL "
+        "AND f.state!='deleted' ORDER BY f.last_activity_at DESC LIMIT 1",
         (CARD, card_id),
     ).fetchone()
 
@@ -87,7 +93,10 @@ def check_publish(c: Any, task_id: str) -> None:
 
 
 def _block(title: str, file_id: str, text: str) -> str:
-    return f"Spec: {title}\nSpec page: {page_link(file_id)}\n\n{text}".rstrip()
+    """The spec's lines in a ticket body. A restricted spec (no text) is named by its link only, never its title."""
+    if not text:
+        return f"Spec page: {page_link(file_id)}"
+    return f"Spec: {title}\nSpec page: {page_link(file_id)}\n\n{text}"
 
 
 def _card_with_spec(c: Any, parent_id: str) -> tuple[dict[str, Any], Any] | None:
@@ -100,13 +109,11 @@ def _card_with_spec(c: Any, parent_id: str) -> tuple[dict[str, Any], Any] | None
         if not task_id:
             return None
         row = cast(dict[str, Any] | None, hub.task(c, task_id))
-        if not row:
+        if not row or pipeline_links.NEUTRAL_BODY in str(row.get("body") or ""):
             return None
         spec = spec_page(c, task_id)
         if spec is not None:
             return row, spec
-        if pipeline_links.NEUTRAL_BODY in str(row.get("body") or ""):
-            return None
         task_id = relations.parent_of(c, task_id)
     return None
 
