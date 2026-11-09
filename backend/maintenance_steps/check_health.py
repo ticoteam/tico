@@ -18,7 +18,11 @@ Lifecycle, per finding (its local key) and per signature (what it is, never wher
     only a task at its daily cap: refused tasks wait in the marker `health-wake:pending` for the next allowed run. Every other comment is quiet;
   - a Tico bug is not a task: it goes through the report path (backend/maintenance_health.py `report`). `run` calls it after
     its write transaction, for the signatures in `details.reports_due`, and the answers go to `details.reports`;
-  - with no active BotOps bot nothing is written: the findings are listed in `details.unrouted` on the step's row.
+  - with no active BotOps bot nothing is written: the findings are listed in `details.unrouted` on the step's row;
+  - while the company pause is on (company_pause.record), a run writes nothing to BotOps and no wake goes out: the findings
+    stay recorded and are counted (`held_count`, the banner's number). The first run after Resume sends ONE digest task for
+    the open findings that no open task covers (`_digest`), not one task per finding. A digest that BotOps closes is not
+    reopened per finding: a problem that clears and returns then opens its task as usual.
 
 Check health never writes to a person. The one exception is the Tico bug report path, which the team rule
 `health_monitor_reports` decides: a support approval a person reads first when that rule is off.
@@ -31,7 +35,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .. import health, hosted_updates, invariants, maintenance_limits, replication
+from .. import company_pause, health, hosted_updates, invariants, maintenance_limits, replication
 from .. import maintenance_health as MH
 from .. import run_triggers as RT
 from ..store import H
@@ -45,6 +49,9 @@ REREPORT_HOURS = 24  # a Tico bug already reported is reported again (a comment)
 COMMENT_HOURS = 24  # a repeat adds to a BotOps task's count at most this often
 WAKE_KEY = "health-wake:pending"  # registry_metadata: the task ids whose BotOps wake waits (the gate refused it, or a comment failed)
 WAKE_LIST = 20  # the wake comment names this many tasks; the rest are counted
+HELD_KEY = (
+    "health-held"  # registry_metadata: set by a run while the company is paused; the first run after Resume digests it
+)
 
 # How fast a check files. "urgent": on the first run that finds it. Any check not listed is "noisy": it files on the second
 # run that finds it, so a problem that comes and goes in one run does not wake anyone. Page checks are listed by their
@@ -399,12 +406,23 @@ def apply(c, ctx, checked, found, notes):
         else:
             details["pending"].append(key)
 
-    # 3. Setup findings: one BotOps task per signature. Tico bugs are reported (returned for the caller to file). A task
+    # 3. While the company pause is on, Health opens no task and writes no comment or wake: the findings stay recorded here
+    # and are counted (held_count). The first run after Resume digests them (_digest), not one task per finding.
+    paused = company_pause.record(c) is not None
+    covered = set()
+    if paused:
+        details["held"] = _hold(c, now)
+    elif _held_marker(c):
+        covered = _digest(c, now, botops, details, wakes)
+
+    # Setup findings: one BotOps task per signature. Tico bugs are reported (returned for the caller to file). A task
     # registered for a signature with nothing filed left (a task seeded by the Health Monitor's retirement, or one whose
     # rows were lost) clears too, so BotOps is never left a task that nothing will ever close. Skipped on a run where a
     # reader failed: its rows are unread, not gone.
     registered = set() if unread else _registered_signatures(c)
-    for sig in sorted(filed_sigs | gone_sigs | registered):
+    for sig in [] if paused else sorted(filed_sigs | gone_sigs | registered):
+        if sig in covered:  # the digest opened this run covers it
+            continue
         rows = _filed_rows(c, sig)
         if not rows:  # nothing filed is left for this signature: it cleared
             _cleared_comment(c, sig, now, wakes)
@@ -421,7 +439,7 @@ def apply(c, ctx, checked, found, notes):
         _task_for(c, sig, rows, now, details, wakes)
 
     details["open"] = c.execute("SELECT count(*) FROM health_findings WHERE present=1 AND pending=0").fetchone()[0]
-    woke = _wake(c, wakes, details)
+    woke = 0 if paused else _wake(c, wakes, details)  # a paused company wakes no BotOps
     return {
         "status": "ran",
         "reason": "",
@@ -441,6 +459,10 @@ def _task_for(c, sig, rows, now, details, wakes):
     task = _open(c, reg.get("task"))
     total = sum(r["occurrences"] for r in rows)
     places = len(rows)
+    if task is None and reg.get("digest") and not reg.get("cleared"):
+        # BotOps closed the digest that covers this problem: it is not reopened as one task per finding. It stays quiet
+        # until the problem clears; a later return then opens a task as usual.
+        return
     if task is None:
         body = _task_body(sig, rows, total, now)
         made = _task_create(c, rows[0]["title"], body)
@@ -501,6 +523,75 @@ def _cleared_comment(c, sig, now, wakes):
     wakes.append(task["id"])
     reg["cleared"] = True
     _reg_set(c, _reg_key(sig), reg)
+
+
+def held_count(c):
+    """The findings the company pause holds until Resume: the open findings while it is on, else 0 (the banner's count)."""
+    if company_pause.record(c) is None:
+        return 0
+    return len(_open_rows(c))
+
+
+def _open_rows(c):
+    return c.execute("SELECT * FROM health_findings WHERE present=1 AND pending=0 ORDER BY signature, key").fetchall()
+
+
+def _hold(c, now):
+    """A run while the company is paused: the findings are recorded above and nothing is written to BotOps. The marker
+    tells the first run after Resume that a digest is owed. Returns the keys held."""
+    _reg_set(c, HELD_KEY, {"marked": now})
+    return [row["key"] for row in _open_rows(c)]
+
+
+def _held_marker(c):
+    return bool(_reg_get(c, HELD_KEY))
+
+
+def _digest(c, now, botops, details, wakes):
+    """The first run after Resume: ONE BotOps digest task for the findings still open that no open task covers (spec Q4),
+    instead of a task per finding. Those signatures are registered to the digest and returned as covered; the rest take
+    the normal path. The marker goes once the digest is written, or when nothing is left to digest. With no active BotOps
+    the marker waits for it."""
+    groups = {}
+    for row in _open_rows(c):
+        groups.setdefault(row["signature"], []).append(row)
+    uncovered = {sig: rows for sig, rows in groups.items() if task_of(c, sig) is None}
+    if not uncovered:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (HELD_KEY,))
+        return set()
+    if not botops:
+        return set()
+    count = sum(len(rows) for rows in uncovered.values())
+    lines = [f"- {rows[0]['title']} ({sum(r['occurrences'] for r in rows)} seen)" for rows in uncovered.values()]
+    body = (
+        f"{count} health findings are still open after the company pause, in {len(uncovered)} problems. Health opened no task "
+        "for them while the pause was on; this one digest lists them instead.\n\n"
+        + "\n".join(lines)
+        + "\n\nFull detail: Settings > Health. Once this digest is closed, no problem opens its own task again until it clears "
+        "and comes back."
+    )
+    made = _task_create(c, f"{count} health findings still open after the pause", body)
+    if made is None:
+        details["unrouted"].append({"digest": True, "count": count, "refused": True})
+        return set()
+    for sig, rows in uncovered.items():
+        _reg_set(
+            c,
+            _reg_key(sig),
+            {
+                "task": made["id"],
+                "keys": len(rows),
+                "count": sum(r["occurrences"] for r in rows),
+                "last_comment": now,
+                "cleared": False,
+                "digest": True,
+            },
+        )
+        details["tasks"][sig] = made["id"]
+    c.execute("DELETE FROM registry_metadata WHERE key=?", (HELD_KEY,))
+    wakes.append(made["id"])
+    details["digest"] = {"task": made["id"], "findings": count, "problems": len(uncovered)}
+    return set(uncovered)
 
 
 def _report_due(c, sig, now):

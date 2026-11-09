@@ -977,7 +977,12 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
             "computer": where[1] if where else "",
         }
         if bot["state"] != "active":
-            if count:
+            if count and bot["state"] == "paused":
+                # A paused bot is paused, not stuck: its work waits on its owner's Resume (spec T12).
+                slow.append(
+                    {**row, "reason": "paused", "runner_id": where[0] if where else "", "runtime": "", "resting": True}
+                )
+            elif count:
                 stuck.append({**row, "reason": bot["state"], "runner_id": where[0] if where else "", "runtime": ""})
             continue
         if slug in orphaned and where and where[0] in online_ids:
@@ -1101,6 +1106,10 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
             # Counts belong to the individual job's task, not the representative oldest job.
             row["queue_reasons"] = queue_reasons(where[0], slug)
+            if refused == "company_paused":
+                # The company pause holds every bot's work until someone resumes it: resting on purpose, not stuck.
+                slow.append({**row, "reason": refused, "runtime": "", "resting": True})
+                continue
             reason = (
                 "limit"
                 if refused == "limit"

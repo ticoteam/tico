@@ -1205,10 +1205,10 @@ def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explan
         H.status_set(c, "human:morgan", "helper", state="active", reason="Checked")
         H.status_set(c, "human:morgan", "helper", state="paused", reason="Waiting")
     body, checks = health_of(api)
-    [paused] = body["stuck"]
+    assert body["stuck"] == []  # a paused bot is paused, not stuck (spec T12)
+    [paused] = checks["queue"]["items"]
     assert paused["reason"] == "paused"
-    assert paused["why"] == "Paused: its owner or BotOps must resume it"
-    assert paused["why"] in checks["queue"]["items"][0]["text"]
+    assert "Paused: its owner or BotOps must resume it" in paused["text"]
 
 
 def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environment):
@@ -1627,7 +1627,8 @@ def test_health_names_queued_bot_for_bot_reader(environment, monkeypatch):
     )
     assert queued['fix'] == 'hub run list helper' and queued['fixes']
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
-    assert next(i for i in issues if i['kind'] == 'queue') == {**queued, 'kind': 'queue', 'severity': 'high'}
+    # A paused bot's queue is work waiting on purpose (info), not a stuck bot (high).
+    assert next(i for i in issues if i['kind'] == 'queue') == {**queued, 'kind': 'queue', 'severity': 'low'}
 
     # Capacity stays an explained queue; bots no longer receive a no-slot alert.
     with api.app.state.store.transaction() as c:

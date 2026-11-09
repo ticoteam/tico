@@ -96,7 +96,10 @@ def task_stuck(c, ctx):
         f"WHERE j.bot_id=substr(t.owner_id, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
         f"AND {H.MESSAGE_TASK_SQL}=t.id) "
         "AND NOT EXISTS (SELECT 1 FROM history_events h WHERE h.subject_type='task' AND h.subject_id=t.id "
-        "AND h.kind=? AND h.created_at>=?) ORDER BY t.updated_at LIMIT ?",
+        "AND h.kind=? AND h.created_at>=?) "
+        # A bot its owner paused is paused, not stuck (spec T12): its tasks wait on the Resume.
+        "AND NOT EXISTS (SELECT 1 FROM bots b WHERE b.id=substr(t.owner_id, 5) AND b.state='paused') "
+        "ORDER BY t.updated_at LIMIT ?",
         (since, *LIVE_JOBS, RESUMED, since, LIMIT),
     ).fetchall()
     return [row["id"] for row in rows]
