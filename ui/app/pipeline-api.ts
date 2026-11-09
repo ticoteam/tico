@@ -140,6 +140,9 @@ interface ServerDot {
   name: string;
   state: ServerReqState;
 }
+/** A board dot as it arrives: a server dot, one already mapped, or a ticket's requirement as the API schema types it
+    (ui/types/api.d.ts Task.requirements: a record each). */
+type BoardDotRow = ServerDot | PipelineRequirement | Record<string, unknown>;
 
 /** One requirement of GET /api/v2/tasks/{id}/requirements (the ticket's detail row). `decision` is who decided it (the judge
     and its actor) and under which requirement version; `attachments` is the newest few, as read views. */
@@ -227,8 +230,9 @@ const REQ_STATE: Record<ServerReqState, PipelineReqState> = {
 };
 
 /** A board dot as the requirement the view shows: the server's `none` is the UI's `missing`; a dot already mapped passes
-    through. The board has no reviewer, so next_actor is null. */
-function requirementFromDot(dot: ServerDot | PipelineRequirement): PipelineRequirement {
+    through. The board has no reviewer, so next_actor is null. A ticket's dots come as the schema types them
+    (BoardDotRow: a loose record each). */
+function requirementFromDot(dot: BoardDotRow): PipelineRequirement {
   const state = dot.state as string;
   const mapped = (REQ_STATE as Record<string, PipelineReqState>)[state] ?? (state as PipelineReqState);
   return { ...dot, state: mapped, next_actor: ('next_actor' in dot ? dot.next_actor : null) ?? null } as PipelineRequirement;
@@ -319,7 +323,7 @@ function managerViewFromRail(rail: ServerRail): PipelineManagerView {
 }
 
 /** The ticket's requirements on the board (their dots), for the card's requirement dots. */
-function pipelineBoardDots(dots: (ServerDot | PipelineRequirement)[]): PipelineRequirement[] {
+function pipelineBoardDots(dots: BoardDotRow[]): PipelineRequirement[] {
   return dots.map(requirementFromDot);
 }
 
