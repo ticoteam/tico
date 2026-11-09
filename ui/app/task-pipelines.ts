@@ -120,6 +120,24 @@ function taskPipelineSelect(state: PipelineState, id: string) {
   tasksFiltersChanged(state); tasksPeekSync(state);
   tasksDoneEnsure(state);          // this type's board may have its finished steps unfolded
 }
+// The Spend line on a pipeline's page: today's and this month's estimated spend, one figure per period, with its cap beside
+// it when one is set. It shows the pipeline's own runs only, read-only for everyone. It is left out for General, and when the
+// spend route does not answer (the route is not there yet, or the reader may not see it).
+let PIPE_SPEND_SEQ = 0;
+const pipeSpendFigure = (when: string, used: number, cap: number | null): string =>
+  `<span class="tl-spend-f">${esc(when)} ${esc(useMoney(used))}${cap == null ? '' : ` <span class="muted">of ${esc(useMoney(cap))} cap</span>`}</span>`;
+async function pipelineSpendSync(typeId: string | null | undefined): Promise<void> {
+  const line = document.getElementById('task-spend');
+  if (!line) return;
+  const seq = ++PIPE_SPEND_SEQ;
+  const hide = (): void => { line.hidden = true; line.innerHTML = ''; };
+  if (!typeId || typeId === 'general') { hide(); return; }
+  let spend: PipelineSpend;
+  try { spend = await pipelineSpend(typeId); } catch { if (seq === PIPE_SPEND_SEQ) hide(); return; }
+  if (seq !== PIPE_SPEND_SEQ) return;
+  line.hidden = false;
+  line.innerHTML = `<span class="tl-spend-l">Spend</span> ${pipeSpendFigure('today', spend.today_usd, spend.daily_cap_usd)} · ${pipeSpendFigure('this month', spend.month_usd, spend.monthly_cap_usd)} <span class="muted">estimated</span>`;
+}
 // A type's board: a column per step, in the type's order, that cards are dragged between (ui/app/task-board.ts). Its
 // leading backlog steps (open, before the first step with work under way) and its trailing finished steps each fold
 // into one strip; a finished step part way along stays off the board.

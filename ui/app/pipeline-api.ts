@@ -642,3 +642,43 @@ async function pipelineFactories(): Promise<PipelineFactory[]> {
   const res = await get('/v2/factories') as { factories: PipelineFactory[] };
   return res.factories;
 }
+
+// ------------------------------------------------------------------ spend caps and the Spend line
+
+/** A pipeline's spend and caps, as GET /v2/pipelines/{id}/spend sends them: estimated dollars for this pipeline's runs
+    (model spend plus CI at its priced cost), for the UTC day and the UTC month. A null cap means no cap. Anyone who may see the
+    pipeline reads it; only its owner and admins change the caps (the settings save, `pipelinePatchSettings`). */
+interface PipelineSpend {
+  daily_cap_usd: number | null;
+  monthly_cap_usd: number | null;
+  today_usd: number;
+  month_usd: number;
+}
+
+/** The two caps. Each is saved through the settings route (pipelinePatchSettings), as the existing save path does. */
+type PipeSpendKey = 'daily_cap_usd' | 'monthly_cap_usd';
+
+// The last read of each pipeline's spend, kept for a minute so the Spend line and the editor do not each ask again.
+const PIPE_SPEND = new Map<string, {at: number; read: Promise<PipelineSpend>}>();
+const PIPE_SPEND_TTL = 60000;
+
+/** A pipeline's spend and caps. A read is kept a minute; a save forgets it (pipelineSpendForget). */
+function pipelineSpend(pipelineId: string): Promise<PipelineSpend> {
+  const kept = PIPE_SPEND.get(pipelineId);
+  if (kept && Date.now() - kept.at < PIPE_SPEND_TTL) return kept.read;
+  const read = get(pipelineRoute(`/${encodeURIComponent(pipelineId)}/spend`), {fresh: true}) as Promise<PipelineSpend>;
+  PIPE_SPEND.set(pipelineId, {at: Date.now(), read});
+  // A refused read is not kept: the next call asks again.
+  read.catch(() => PIPE_SPEND.delete(pipelineId));
+  return read;
+}
+const pipelineSpendForget = (pipelineId: string): void => { PIPE_SPEND.delete(pipelineId); };
+
+/** Save one cap: a number above zero, or null for no cap. Only that field is sent, so the other cap stays as it is. */
+async function pipelineSaveCap(pipelineId: string, key: PipeSpendKey, dollars: number | null): Promise<void> {
+  try {
+    await pipelinePatchSettings(pipelineId, {[key]: dollars});
+  } finally {
+    pipelineSpendForget(pipelineId);
+  }
+}

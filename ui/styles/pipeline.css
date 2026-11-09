@@ -266,6 +266,13 @@
 .pe-warn-line{color:var(--fail)}
 .pe-f>.pe-readonly{color:var(--ink);font-size:var(--t-sm)}
 .pe-goal,.pe-froms{grid-column:1/-1;margin:0;font-size:var(--t-sm)}
+/* The Spend caps block: two fields, each with its period's spend under it as a bar (the Usage bar, from usage.css). */
+.pe-caps{grid-column:1/-1;margin:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--s3);border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--s2) var(--s3)}
+.pe-caps legend{color:var(--muted);font-size:var(--t-sm);padding:0 4px}
+.pe-caps>.pe-hint{grid-column:1/-1;margin:0}
+.pe-cap-field{position:relative;display:flex;flex-direction:column;gap:4px;padding-bottom:10px;font-size:var(--t-sm)}
+.pe-cap-field .use-meter{position:absolute;left:0;right:0;bottom:0}
+.pe-cap-spent{color:var(--muted)}
 .pe-goal span,.pe-froms span:first-child{color:var(--muted)}
 .pe-from+.pe-from::before{content:", "}
 .pe-members{grid-column:1/-1;margin:0;display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--s2) var(--s3)}

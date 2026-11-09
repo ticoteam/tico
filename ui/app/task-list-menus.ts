@@ -78,6 +78,7 @@ function tasksScopePaint(state: TaskState) {
   if (!b) return false;
   const label = tasksScopeLabel(state), n = state.view === 'foryou' ? tasksCounts(state).foryou : null;
   pipelineEditSync(state.view === 'foryou' ? null : state.type);
+  pipelineSpendSync(state.view === 'foryou' ? null : state.type);
   b.setAttribute('aria-label', n != null ? `${label}, ${n}` : label);
   $('#task-body')?.setAttribute('aria-label', label);
   return tasksPaint(b, `<span class="tl-scope-l">${esc(label)}</span>${n != null ? `<span class="cnt tnum${n && tasksNeedsQueue(state) ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}${TL_ICON.caret}`);

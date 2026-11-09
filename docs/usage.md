@@ -61,6 +61,13 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
   Its hold log identifies the budget and its period end (or that it must be raised), without amounts.
 - Separate from these cost limits, each bot has a run budget (runs per hour and per day, default 300 and 2500) that stops a runaway loop; see [Run budgets](how-it-works.md).
 - A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
+- **Pipeline caps.** A pipeline can have a daily and a monthly cap in estimated USD, set in its editor (the ✎ pencil, Spend caps; blank
+  means no cap) or with `daily_cap_usd` and `monthly_cap_usd` on `PATCH /api/v2/pipelines/{id}/settings`. The spend counted is the
+  pipeline's own runs: model spend, plus CI at its priced cost, in the UTC day and the UTC month. At 80% of a cap its manager gets one
+  notice for that period and cap (the team owner when it has no manager). At 100%, new runs for that pipeline only wait and read
+  "Paused: over its daily cap" (or monthly); other pipelines of the same bot keep running, and a run already going finishes. A
+  cap lowered below what is already spent holds at once. `GET /api/v2/pipelines/{id}/spend` returns the caps and today's and this
+  month's spend, for anyone who may see the pipeline.
 
 `GET /api/v2/usage/limits`, `PUT /api/v2/usage/limits` (the default), `PUT /api/v2/usage/limits/{bot}` (a field set to null follows the default; one left out stays),
 `PUT /api/v2/usage/pools/company` and `PUT /api/v2/usage/pools/groups/{group}` (a field set to null removes it; one left out stays).

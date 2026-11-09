@@ -7,7 +7,8 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
 
    openPipelineEditor(pipelineId)    opens the editor for a pipeline.
-   pipelineEditSync(pipelineId)      shows or hides the pencil for the pipeline in view. */
+   pipelineEditSync(pipelineId)      shows or hides the pencil for the pipeline in view.
+   The Spend caps block (daily and monthly, in dollars) sits in the settings block; its reads and saves are in pipeline-api.ts. */
 'use strict';
 
 interface PeStage { id: string; name: string; status: string; limit_minutes?: number | null; card_cap?: number | null; position?: number; }
@@ -27,6 +28,8 @@ interface PeState {
   settings: PipelineSettings | null;
   /** The live factories for the Factory choice, or null when the list did not load (the choice is then left out). */
   factories: PipelineFactory[] | null;
+  /** The pipeline's caps and spend so far, or null when the spend route did not answer (the Spend caps block is then left out). */
+  spend: PipelineSpend | null;
 }
 
 const PE_KINDS: [string, string][] = [['attachment', 'Attachment'], ['field', 'Field'], ['approval', 'Approval'], ['run', 'Run']];
@@ -92,10 +95,11 @@ async function pipelineEditSync(pipelineId: string | null | undefined): Promise<
 
 async function peLoad(id: string): Promise<PeState> {
   const type: PeType = (await get(`/v2/task-types/${encodeURIComponent(id)}`, {fresh: true})).type;
-  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), mayEdit: false, warn: '', cap: '', link: '', settings: null, factories: null};
+  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), mayEdit: false, warn: '', cap: '', link: '', settings: null, factories: null, spend: null};
   try { state.mayEdit = !!(await get(`/v2/pipelines/${encodeURIComponent(id)}/rights`, {fresh: true})).may_edit_rules; } catch { state.mayEdit = false; }
   try { state.settings = await pipelineSettings(id); } catch { state.settings = null; }
   try { state.factories = await pipelineFactories(); } catch { state.factories = null; }
+  try { state.spend = await pipelineSpend(id); } catch { state.spend = null; }
   try { state.links = (await get(peRoute(`/v2/pipeline-links?pipeline=${encodeURIComponent(id)}`), {fresh: true})).links; } catch { state.links = null; }
   try {
     for (const stage of type.steps) state.reqs.set(stage.id, (await get(peRoute(`/v2/pipeline-stages/${encodeURIComponent(stage.id)}/requirements`), {fresh: true})).requirements ?? []);
@@ -219,6 +223,29 @@ function peStuckHTML(s: PipelineSettings): string {
   return PE_STUCK.map(([key, label]) => `<label class="pe-f"><span>${label}</span><input type="number" min="1" step="1" inputmode="numeric" value="${esc(String(s[key] ?? ''))}" placeholder="${esc(String(s.stuck_rule_defaults[key]))}" data-pe-number="${key}" autocomplete="off"></label>`).join('');
 }
 
+/** The Spend caps block: a daily and a monthly cap in dollars, each field with the spend so far in its period under it, as a
+    bar (the Usage bar). Blank is no cap. An owner or admin sets them; anyone else reads them. It stays apart from the manager field. */
+const PE_SPEND_CAPS: [PipeSpendKey, string, 'today_usd' | 'month_usd', string][] = [
+  ['daily_cap_usd', 'Daily cap', 'today_usd', 'Today'],
+  ['monthly_cap_usd', 'Monthly cap', 'month_usd', 'This month'],
+];
+
+function peSpendCapsHTML(state: PeState): string {
+  const spend = state.spend;
+  if (!spend) return '';
+  const fields = PE_SPEND_CAPS.map(([key, label, spent, when]) => {
+    const cap = spend[key], used = spend[spent];
+    const pct = cap ? Math.min(100, Math.round(100 * used / cap)) : null;
+    const meter = pct == null ? '' : `<i class="use-meter${pct >= 100 ? ' bad' : pct >= 80 ? ' warn' : ''}" aria-hidden="true"><b style="width:${pct}%"></b></i>`;
+    const control = state.mayEdit
+      ? `<label class="pe-f"><span>${esc(label)} ($)</span><input type="number" min="0" step="0.01" inputmode="decimal" autocomplete="off" value="${cap == null ? '' : cap}" placeholder="No cap" data-pe-cap-amount="${key}" aria-label="${esc(label)}"></label>`
+      : `<span class="pe-f"><span>${esc(label)}</span><span class="pe-readonly" data-pe-cap-readonly="${key}">${cap == null ? 'No cap' : esc(useMoney(cap))}</span></span>`;
+    return `<div class="pe-cap-field">${control}<span class="pe-cap-spent">${esc(when)}: ${esc(useMoney(used))}${cap == null ? '' : ` of ${esc(useMoney(cap))}`}</span>${meter}</div>`;
+  }).join('');
+  return `<fieldset class="pe-caps" data-pe-caps><legend>Spend caps</legend>${fields}
+    <p class="pe-hint">Estimates in dollars, as Usage shows them. Blank means no cap.</p></fieldset>`;
+}
+
 function peBodyHTML(state: PeState): string {
   const t = state.type;
   const from = (state.links ?? []).filter(l => l.to_pipeline_id === t.id).map(l => {
@@ -230,6 +257,7 @@ function peBodyHTML(state: PeState): string {
       <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'Not set', false)}</select></label>
       <label class="pe-f"><span>Pipeline Manager</span>${peManagerHTML(state)}</label>
       ${peGoalHTML(state)}
+      ${peSpendCapsHTML(state)}
       ${from ? `<p class="pe-froms"><span>From</span> ${from}</p>` : ''}</div>
     <ol class="pe-stages">${t.steps.map((s, i) => peStageHTML(state, s, i, t.steps.length)).join('')}</ol>
     ${state.mover ? '<form class="pe-add-stage" data-pe-add-stage><input name="name" maxlength="80" placeholder="New stage" aria-label="New stage" autocomplete="off"><button type="submit" class="ghost">Add stage</button></form>' : ''}`;
@@ -394,6 +422,24 @@ async function peCapSave(target: Element, stage: string, off: boolean): Promise<
   await peReload();
 }
 
+/** One cap from its field: blank is no cap; anything else must be an amount above zero, or nothing is saved. The stored cap
+    is redrawn after a refusal, so a refused save leaves it as it was. */
+async function peSpendCapSave(input: HTMLInputElement): Promise<void> {
+  if (!PE) return;
+  const key = input.dataset['peCapAmount'] as PipeSpendKey;
+  const raw = input.value.trim();
+  const dollars = raw === '' ? null : Math.round(Number(raw) * 100) / 100;
+  // A text entry reads as blank in a number field, so a bad entry is caught by its validity, not by its value.
+  if (input.validity.badInput || (dollars !== null && !(dollars > 0))) {
+    toast('Enter an amount above zero, or leave it blank.', true);
+    await peReload();
+    return;
+  }
+  try { await pipelineSaveCap(PE.type.id, key, dollars); } catch (e) { peFail(e); }
+  await peReload();
+  void pipelineSpendSync(PE?.type.id);
+}
+
 async function peClick(target: Element): Promise<void> {
   if (!PE) return;
   const hit = (attr: string): string | null => target.closest<HTMLElement>(`[${attr}]`)?.getAttribute(attr) ?? null;
@@ -464,6 +510,7 @@ function peWire(dialog: HTMLDialogElement): void {
     if (t instanceof HTMLElement && t.closest('[data-pe-form]')) { const form = t.closest('form'); if (form) { peFormSync(form); void peAffectedSync(form); } return; }
     if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) {
       const key = t.dataset['peSetting'], renamed = t.dataset['peRename'];
+      if (t instanceof HTMLInputElement && t.dataset['peCapAmount']) { void peSpendCapSave(t); return; }
       if (t instanceof HTMLInputElement && t.hasAttribute('data-pe-private')) { void peSaveSettings({visibility: t.checked ? 'members' : 'company'}); return; }
       if (t instanceof HTMLInputElement && t.hasAttribute('data-pe-member')) {
         void peSaveSettings({members: [...dialog.querySelectorAll<HTMLInputElement>('[data-pe-member]:checked')].map(box => box.value)});

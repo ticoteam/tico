@@ -95,6 +95,7 @@ function pageTasks(forced?: string, openId = '') {
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
       </div>
       <span id="tl-sel-word" hidden>Selected</span>
+      <p class="tl-spend" id="task-spend" hidden></p>
       <div id="task-body"></div>
       <div class="tl-bulk" id="task-bulk" role="toolbar" aria-label="Selected tasks" hidden></div>
     </div></div>

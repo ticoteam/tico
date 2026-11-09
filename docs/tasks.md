@@ -830,6 +830,26 @@ Each pipeline sets the hours in its editor (the ✎ pencil) or `PATCH /api/v2/pi
 `null` uses the default; `GET` returns the defaults as `stuck_rule_defaults`. A pipeline with no manager has no stuck
 rule.
 
+## Spend caps
+
+A pipeline can have a daily and a monthly spend cap, in estimated dollars. Its owner or an admin sets them in the pipeline's editor
+(the ✎ pencil, **Spend caps**: a field for each, blank for no cap), and each field shows what the pipeline has spent in that period as
+a bar. The pipeline's page has a **Spend** line with today's and this month's spend, and the cap beside each figure when one is set.
+Only that pipeline's runs count: model spend, plus CI at its priced cost. Anyone who may see the pipeline reads the caps and the line;
+only its owner and admins change them. Days and months are UTC.
+
+- At 80% of a cap, the pipeline's manager gets one notice for that period and cap: "<Pipeline> is at 80% of its daily cap." Work keeps
+  running. A pipeline with no manager sends it to the team owner.
+- At 100%, new runs for that pipeline wait, queued, and read "Paused: over its daily cap" (or monthly). A run already going finishes.
+  Other pipelines of the same bot keep running.
+- At 100%, the manager gets one decision task per period and cap, with three choices:
+  - **Ask Chris to raise** sends the request to Chris. The manager cannot raise a cap itself, and the hold stands until the cap is raised.
+  - **Pause** keeps the hold until the period turns over.
+  - **Reprioritize** changes the order of the manager's own queue. The cap still holds.
+
+A cap set part way through a period counts the spend already made in it. Caps stack with the bot, group, team and Finance limits:
+whichever is met first holds the work, and its paused reason names it. The Usage help covers the same caps on the Limits page.
+
 ## Wake rules
 
 Who a message in a task's thread reaches comes first: whoever it @mentions or replies to, and the task's
