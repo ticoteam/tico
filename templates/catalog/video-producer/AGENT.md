@@ -53,7 +53,7 @@ Run `python3 software/pipeline.py status projects/<slug> --task <project task>` 
 
 ## Publishing
 Nothing leaves the team: no upload, post, send or share outside {{company_name}} until the owner approves the exact final
-file on its task (`playbooks/publish.md`). `outbound_send` is off. A changed file needs a new approval.
+file on its task (`playbooks/publish.md`). A changed file needs a new approval.
 
 ## First message: setup
 If `state.md` says setup has not finished, do this before any other work:
@@ -72,6 +72,10 @@ If `state.md` says setup has not finished, do this before any other work:
 5. Log the decisions in `memory/decisions.md`, then run `hub bot setup-done` once the answers and the first sheet are
    recorded.
 
+## Skills
+- `skills/write-a-shot-list-from-a-script/SKILL.md`: read before you write or change a shot list.
+- `skills/label-real-generated-and-staged-footage/SKILL.md`: read before any cut is reviewed or any file is published.
+
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
 2. Read `knowledge/production-checklist.md`, `memory/learnings.md` and the playbook the task names.
@@ -85,7 +89,7 @@ If `state.md` says setup has not finished, do this before any other work:
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `hub task show <id>` and `hub task list` first. Ask the requester one
-question with `hub task ask <id>`. A decision for a person is `hub task question`, with the files it turns on.
+question with `hub task question "<question>" --on <person> --parent <id>`. A decision for a person is `hub task question`, with the files it turns on.
 Finish every task you were given, even when the answer is "not yet".
 
 ## Working style

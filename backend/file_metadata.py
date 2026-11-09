@@ -1,4 +1,5 @@
 """One bounded worker derives media outside upload requests; tools are optional."""
+
 import hashlib
 import json
 import shutil
@@ -17,11 +18,13 @@ FIELDS = ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "
 # Starts from the few pending rows (partial indexes in hubdb.migrate), never a scan of every blob: it runs every few seconds.
 # INDEXED BY pins the partial pending indexes: with small or freshly analysed tables the planner may otherwise
 # scan the full (blob_id,media_state) index, which visits every version.
-PENDING = ("SELECT b.*,m.poster_blob_id FROM (SELECT blob_id FROM blob_media INDEXED BY blob_media_pending "
-           "WHERE media_state='pending' UNION SELECT blob_id FROM bot_file_versions INDEXED BY bot_file_versions_pending "
-           "WHERE media_state='pending') p JOIN blobs b ON b.id=p.blob_id "
-           "LEFT JOIN blob_media m ON m.blob_id=b.id LEFT JOIN blob_media_retries r ON r.blob_id=b.id "
-           "WHERE COALESCE(r.retry_at,0)<=? LIMIT 10")
+PENDING = (
+    "SELECT b.*,m.poster_blob_id FROM (SELECT blob_id FROM blob_media INDEXED BY blob_media_pending "
+    "WHERE media_state='pending' UNION SELECT blob_id FROM bot_file_versions INDEXED BY bot_file_versions_pending "
+    "WHERE media_state='pending') p JOIN blobs b ON b.id=p.blob_id "
+    "LEFT JOIN blob_media m ON m.blob_id=b.id LEFT JOIN blob_media_retries r ON r.blob_id=b.id "
+    "WHERE COALESCE(r.retry_at,0)<=? LIMIT 10"
+)
 
 
 def dimensions(stream):
@@ -36,10 +39,10 @@ def dimensions(stream):
         if head[12:16] == b"VP8X" and len(head) >= 30:
             return int.from_bytes(head[24:27], "little") + 1, int.from_bytes(head[27:30], "little") + 1
         if head[12:16] == b"VP8 " and head[23:26] == b"\x9d\x01\x2a":
-            return tuple(n & 0x3fff for n in struct.unpack("<HH", head[26:30]))
-        if head[12:16] == b"VP8L" and head[20] == 0x2f:
+            return tuple(n & 0x3FFF for n in struct.unpack("<HH", head[26:30]))
+        if head[12:16] == b"VP8L" and head[20] == 0x2F:
             bits = int.from_bytes(head[21:25], "little")
-            return (bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
     if head[:2] == b"\xff\xd8":
         stream.seek(2)
         for _ in range(256):
@@ -58,7 +61,7 @@ def dimensions(stream):
             size = int.from_bytes(length, "big")
             if size < 2:
                 break
-            if marker[0] in (0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf):
+            if marker[0] in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
                 frame = stream.read(5)
                 if len(frame) == 5:
                     h, w = struct.unpack(">HH", frame[1:])
@@ -99,12 +102,16 @@ def image(source, target):
                     if time.monotonic() >= deadline:
                         raise DecodeError("Image decoding timed out")
                     try:
-                        output, _ = child.communicate(timeout=.1)
+                        output, _ = child.communicate(timeout=0.1)
                         break
                     except subprocess.TimeoutExpired:
                         if sys.platform == "darwin":
-                            usage = subprocess.run(["/bin/ps", "-o", "rss=", "-p", str(child.pid)],
-                                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=1)
+                            usage = subprocess.run(
+                                ["/bin/ps", "-o", "rss=", "-p", str(child.pid)],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL,
+                                timeout=1,
+                            )
                             if usage.stdout.strip() and int(usage.stdout) > 1024 * 1024:
                                 raise DecodeError("Image decoding exceeded its memory budget")
                 if child.returncode:
@@ -120,8 +127,14 @@ def image(source, target):
 
 
 def run(args):
-    return subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          timeout=30, cwd=str(Path(args[-1]).parent) if Path(args[-1]).is_absolute() else None)
+    return subprocess.run(
+        args,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        cwd=str(Path(args[-1]).parent) if Path(args[-1]).is_absolute() else None,
+    )
 
 
 class Metadata:
@@ -130,14 +143,25 @@ class Metadata:
         self.stop, self.wake = threading.Event(), threading.Event()
 
     def process(self, blob):
-        result = dict(width=None, height=None, duration_ms=None, poster_blob_id=blob.get("poster_blob_id"),
-                      thumb_blob_id=None, media_state="none")
+        result = dict(
+            width=None,
+            height=None,
+            duration_ms=None,
+            poster_blob_id=blob.get("poster_blob_id"),
+            thumb_blob_id=None,
+            media_state="none",
+        )
         mime = blob["content_type"]
         if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf"):
             return self.save(blob, result, [])
-        if not (mime in ("image/png", "image/jpeg", "image/gif", "image/webp")
-                or mime in ("video/mp4", "video/webm", "video/quicktime") and shutil.which("ffprobe") and shutil.which("ffmpeg")
-                or mime == "application/pdf" and shutil.which("pdftoppm")):
+        if not (
+            mime in ("image/png", "image/jpeg", "image/gif", "image/webp")
+            or mime in ("video/mp4", "video/webm", "video/quicktime")
+            and shutil.which("ffprobe")
+            and shutil.which("ffmpeg")
+            or mime == "application/pdf"
+            and shutil.which("pdftoppm")
+        ):
             # Nothing can be derived from it here (an SVG, or no tool for it), so it is never read: a file in Tico's
             # bucket is read through the company's address, and every byte read there is charged as delivery.
             return self.save(blob, result | {"media_state": "ready" if result["poster_blob_id"] else "none"}, [])
@@ -157,20 +181,72 @@ class Metadata:
                 preview = None
                 if mime in ("image/png", "image/jpeg", "image/gif", "image/webp"):
                     result["width"], result["height"], preview = image(source, thumb)
-                elif mime in ("video/mp4", "video/webm", "video/quicktime") and shutil.which("ffprobe") and shutil.which("ffmpeg"):
+                elif (
+                    mime in ("video/mp4", "video/webm", "video/quicktime")
+                    and shutil.which("ffprobe")
+                    and shutil.which("ffmpeg")
+                ):
                     container = "matroska" if mime == "video/webm" else "mov"
-                    probe = json.loads(run([shutil.which("ffprobe"), "-v", "error", "-show_streams", "-show_format", "-of", "json", "-protocol_whitelist", "file,pipe", "-f", container, str(source)]).stdout)
+                    probe = json.loads(
+                        run(
+                            [
+                                shutil.which("ffprobe"),
+                                "-v",
+                                "error",
+                                "-show_streams",
+                                "-show_format",
+                                "-of",
+                                "json",
+                                "-protocol_whitelist",
+                                "file,pipe",
+                                "-f",
+                                container,
+                                str(source),
+                            ]
+                        ).stdout
+                    )
                     stream = next(s for s in probe["streams"] if s["codec_type"] == "video")
                     result["width"], result["height"] = stream.get("width"), stream.get("height")
                     seconds = float(probe.get("format", {}).get("duration") or stream.get("duration") or 0)
                     result["duration_ms"] = round(seconds * 1000)
-                    run([shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-ss", str(min(1, seconds * .1)),
-                         "-protocol_whitelist", "file,pipe", "-f", container, "-i", str(source), "-frames:v", "1", "-vf", "scale=640:640:force_original_aspect_ratio=decrease", str(poster)])
+                    run(
+                        [
+                            shutil.which("ffmpeg"),
+                            "-nostdin",
+                            "-v",
+                            "error",
+                            "-ss",
+                            str(min(1, seconds * 0.1)),
+                            "-protocol_whitelist",
+                            "file,pipe",
+                            "-f",
+                            container,
+                            "-i",
+                            str(source),
+                            "-frames:v",
+                            "1",
+                            "-vf",
+                            "scale=640:640:force_original_aspect_ratio=decrease",
+                            str(poster),
+                        ]
+                    )
                     if not result["poster_blob_id"]:
                         derived.append(("poster_blob_id", poster))
                     _, _, preview = image(poster, thumb)
                 elif mime == "application/pdf" and shutil.which("pdftoppm"):
-                    run([shutil.which("pdftoppm"), "-f", "1", "-singlefile", "-scale-to", "640", "-jpeg", str(source), str(root / "poster")])
+                    run(
+                        [
+                            shutil.which("pdftoppm"),
+                            "-f",
+                            "1",
+                            "-singlefile",
+                            "-scale-to",
+                            "640",
+                            "-jpeg",
+                            str(source),
+                            str(root / "poster"),
+                        ]
+                    )
                     if not result["poster_blob_id"]:
                         derived.append(("poster_blob_id", poster))
                     result["width"], result["height"], preview = image(poster, thumb)
@@ -180,8 +256,17 @@ class Metadata:
                 for field, path in derived:
                     with path.open("rb") as data:
                         digest = self.blobs.put_stream(data, "image/jpeg")
-                    prepared.append((field, {"digest": digest, "size": path.stat().st_size,
-                                             "name": path.name, "content_type": "image/jpeg"}))
+                    prepared.append(
+                        (
+                            field,
+                            {
+                                "digest": digest,
+                                "size": path.stat().st_size,
+                                "name": path.name,
+                                "content_type": "image/jpeg",
+                            },
+                        )
+                    )
                 result["media_state"] = "ready" if result["width"] or result["poster_blob_id"] or prepared else "none"
                 self.save(blob, result, prepared)
         except (DecodeError, subprocess.SubprocessError, ValueError, KeyError, StopIteration):
@@ -190,6 +275,7 @@ class Metadata:
 
     def save(self, blob, result, prepared):
         from types import SimpleNamespace
+
         with self.store.transaction() as c:
             for field, upload in prepared:
                 result[field] = register(c, SimpleNamespace(actor=blob["owner"]), **upload)["id"]
@@ -206,8 +292,10 @@ class Metadata:
             c.execute("INSERT OR IGNORE INTO blob_media_retries(blob_id) VALUES(?)", (blob["id"],))
             row = c.execute("SELECT attempts FROM blob_media_retries WHERE blob_id=?", (blob["id"],)).fetchone()
             attempts = row["attempts"] + 1
-            c.execute("UPDATE blob_media_retries SET attempts=?,retry_at=? WHERE blob_id=?",
-                      (attempts, time.time() + min(3600, 5 * 2 ** min(attempts - 1, 10)), blob["id"]))
+            c.execute(
+                "UPDATE blob_media_retries SET attempts=?,retry_at=? WHERE blob_id=?",
+                (attempts, time.time() + min(3600, 5 * 2 ** min(attempts - 1, 10)), blob["id"]),
+            )
 
     def batch(self):
         with self.store.read() as c:
@@ -242,4 +330,4 @@ class Metadata:
                     self.wake.clear()
             except Exception:
                 self.stop.wait(5)
-            self.stop.wait(.1)
+            self.stop.wait(0.1)

@@ -8,7 +8,7 @@ pack: basics
 icon: request_quote
 suggest: common
 tags: [b2b, invoicing, collections, cash, services, saas, agency]
-summary: "Gets overdue invoices paid: every Monday a one-page aging summary and a reminder ready for each overdue invoice, friendly first and firmer later. Each reminder goes out only within the requested work it."
+summary: "Gets overdue invoices paid. Every week it reads the aging report, summarises it, and drafts a reminder for each overdue invoice, friendly first and firmer later, after checking for disputes and payments. A reminder goes out only when the task asks for it and mail sending is on."
 when: "A team that invoices customers on terms and finds itself chasing payments late or not at all."
 pains:
   - "customers pay invoices late and nobody chases them"
@@ -17,9 +17,9 @@ pains:
   - "cash is tight because customers pay slowly"
   - "we can't see which invoices are overdue"
 owns:
-  - "A draft reminder for each overdue or soon-due invoice, at the right step of the ladder and in the right tone"
-  - "The weekly aging summary: buckets, the biggest overdue amounts, what changed since last week"
-  - "The customer notes that must be checked first: disputes, promises to pay, do-not-chase names (knowledge/customers.md)"
+  - "A draft reminder for each overdue or soon-due invoice, at the right step of the ladder and in the sender's voice"
+  - "The weekly aging summary: buckets, the largest overdue balances, DSO, and what changed since last week"
+  - "The customer notes checked before any chase: disputes, promises to pay, do-not-chase names (knowledge/customers.md)"
   - "The reminder ladder and tone rules the team agreed (knowledge/ladder.md)"
 never:
   - "Send, schedule or reply to any reminder, invoice, statement or message to a customer outside the requested work or Tools"
@@ -40,7 +40,7 @@ prerequisites:
     why: "Optional. A shared folder for the aging export, and the payment terms document."
     required: false
 onboarding:
-  - ask: "Where do I get the list of open invoices: an aging export from the accounting system or payment processor, a spreadsheet? Can you attach the current one?"
+  - ask: "Where do I get the list of open invoices: an aging export from the accounting system or payment processor, or a spreadsheet? Can you attach the current one?"
     why: "I only draft for invoices I can see. A real list lets me show a first pack today."
   - ask: "What are your usual payment terms, and what may a reminder say about them (due date, payment link, late fee)?"
     why: "A reminder never states a term I was not given. Anything else is a marked gap for the sender."
@@ -48,14 +48,12 @@ onboarding:
     why: "Sets the ladder in knowledge/ladder.md. Reminders stay short and polite; the last step hands over to a human."
   - ask: "Which customers or invoices must I never chase (disputes, promises, key accounts), and above what amount does a human write instead?"
     why: "Becomes the do-not-chase list and the personal-touch threshold. A chased dispute damages a relationship."
-  - ask: "Who sends reminders and from which address? Can you paste two you were happy with?"
-    why: "Drafts are written in the sender's voice, signed by them. Real examples beat a description of tone."
-  - ask: "Which day and hour should the weekly pack land, and for whom? (Default: you, Mondays at 09:00.)"
-    why: "Sets the routine's schedule and recipient. Share only with the named recipients."
+  - ask: "Who sends reminders and from which address, and who gets the weekly pack and on which day and hour? (Default: you, Mondays at 09:00.) Can you paste two reminders you were happy with?"
+    why: "Drafts are written in the sender's voice and signed by them, and real examples beat a description of tone. The pack goes only to the people named."
 first_routine:
   title: "Weekly receivables reminders"
   cadence: "Mondays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-ar-followup.md: the aging summary, then a draft reminder for each invoice at its step of the ladder, and the invoices held back with the reason"
+  output: "reports/YYYY-MM-DD-ar-followup.md: the aging summary with DSO, then a draft reminder for each invoice at its step of the ladder, and the invoices held back with the reason"
   draft_only: true
 example_output: knowledge/examples/ar-pack.md
 reasoning_effort: medium

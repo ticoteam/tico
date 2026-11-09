@@ -29,7 +29,7 @@ const ONB_BLANK = {
   answers: {building: '', what_we_do: '', customers: '', team_size: '', work_arrives: [], repetitive_work: '',
             software_product: '', departments: [], briefings: {}},
   selected: {}, completed: null, home: '', bots: [], machine: {runners: [], enrolled: false}, needed: true};
-let ONB = null;
+/** @type {any} wizard state; ui/setup-strategy.ts reads it, and the type is any until this file is typed */ let ONB = null;
 // A server that is a container is the usual install, and the computer that runs bots is a Linux one beside it.
 const onbDefaultKind = () => (S.config?.in_docker ? 'linux' : 'mac');
 // Their own name: the roster's when it is not just an address, else the sign-in's display name when the proxy sends one.
@@ -314,10 +314,10 @@ function onbCommands(state) {
   const file = state.enrollment || '<setup-file>.json';
   return [
     ['Register this Mac for the team',
-     `scripts/tico -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
+     `scripts/tico-computer -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
     ...signIns.map((row, i) => [`Add your ${row.label} subscription`,
-     `${i === 0 ? 'scripts/tico -e <slug> profile add default\n' : ''}scripts/tico -e <slug> profile login default ${row.runtime}`]),
-    ['Start the bot service', 'scripts/tico -e <slug> install bot'],
+     `${i === 0 ? 'scripts/tico-computer -e <slug> profile add default\n' : ''}scripts/tico-computer -e <slug> profile login default ${row.runtime}`]),
+    ['Start the bot service', 'scripts/tico-computer -e <slug> install bot'],
   ].filter(Boolean);
 }
 // A label's parenthetical is a hint in small type under it, so each step reads as one short line. The command wraps
@@ -632,7 +632,7 @@ async function onbCompleted(state, record) {
 async function onbRevisions(state) {
   const bots = await v2Get('/v2/bots?include_archived=1');
   if (ONB !== state || !Array.isArray(bots)) return;
-  state.revisions = Object.fromEntries(bots.map(bot => [bot.slug, bot.revision]));
+  state.revisions = Object.fromEntries(bots.map(bot => [bot.id, bot.revision]));
 }
 async function onbPoll(state) {
   if (ONB !== state || state.busy) return;
@@ -646,11 +646,11 @@ async function onbPoll(state) {
 }
 async function onbActivate(state, slug, button) {
   button.disabled = true;
-  const bot = (state.record.bots || []).find(row => row.slug === slug);
+  const bot = (state.record.bots || []).find(row => row.id === slug);
   try {
     await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {status: 'active', expected_revision: state.revisions[slug]});
     if (bot) bot.status = 'active';
-    toast(`${bot?.display_name || slug} is active`);
+    toast(`${bot?.display_name || bot?.slug || slug} is active`);
     await onbRevisions(state);
     if (ONB !== state) return;
     onbRenderDone(state);

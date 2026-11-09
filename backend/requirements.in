@@ -18,6 +18,8 @@ PyMySQL>=1.1,<2
 pymongo>=4.10,<5
 dnspython>=2.7,<3           # SRV lookups for mongodb+srv:// (Atlas); pymongo depends on it, pinned here so it is never dropped
 pypdf>=6.21.2,<7
+reportlab>=4.4,<5
 
 python-multipart>=0.0.22,<1
 Pillow>=13.0,<14
+livekit>=1.1.21,<1.2     # real-time audio for call recording (backend/call_media.py); imported lazily

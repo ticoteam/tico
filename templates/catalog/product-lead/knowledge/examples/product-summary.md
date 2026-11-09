@@ -9,7 +9,7 @@ studios. Every item is invented. Nothing was changed in any tool. First draft, n
 **Headline: 4 of 6 committed Q4 items on track, 1 at risk, 1 slipped; 2 decisions wait on Dana.**
 
 ## Decisions for Dana this week
-1. **Class waitlists: build now or research first?** Score 1,380 (reach 1,150 studios × impact 2 ×
+1. **Class waitlists: build now or research first?** Score 1,415 (reach 1,150 studios × impact 2 ×
    confidence 80% ÷ effort 1.3 weeks, estimate from Marco 2026-09-24). 41 accounts asked
    (`product-ops` ledger), top feedback theme 3 weeks running. Recommendation: build; spec from
    `product-manager` by 2026-10-02. If undecided: it misses the November release.

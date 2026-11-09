@@ -1,7 +1,9 @@
 """What one Finance call works from: the caller's connection and clock, the book and its chart, the org chart, and
 each teammate's rights and view, loaded once per call and never across calls (a revoked grant is gone on the next)."""
+
 import sqlite3
 from dataclasses import dataclass, field
+from typing import Any
 
 from .core import budgets as B
 from .core import view as VW
@@ -13,12 +15,13 @@ from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
 
-OWNER_KEY = "owner"                       # who Finance was set up for: the owner when Tico has no owner record
-APPROVER_KEY = "finance_approver"         # the one person finance-admin approvals go to (else the owner)
+OWNER_KEY = "owner"  # who Finance was set up for: the owner when Tico has no owner record
+APPROVER_KEY = "finance_approver"  # the one person finance-admin approvals go to (else the owner)
 
 
 def now() -> str:
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
@@ -33,6 +36,9 @@ class Ctx:
     _views: dict[str, VW.View] = field(default_factory=lambda: dict[str, VW.View]())
     _budgets: dict[str, B.Budget] | None = None
     _private: dict[str, VW.PrivateLine] | None = None
+    memo: dict[str, Any] = field(default_factory=lambda: dict[str, Any]())  # per-call reads (budgeting's ad spend)
+    deciding: bool = False  # set while an approval is rechecked: outcomes then use the true figures
+    decider: str = ""  # the person whose decision an approved action commits on (approval_decided), or ""
 
     @property
     def today(self) -> str:
@@ -45,9 +51,16 @@ class Ctx:
 
     def view(self, viewer: str) -> VW.View:
         if viewer not in self._views:
-            self._views[viewer] = VW.resolve(self.org, viewer, grants=SA.grants(self.c), defaults=SA.defaults(self.c),
-                                             private=SA.private_lines(self.c), accounts=self.accounts, at=self.at,
-                                             version=SA.view_version(self.c))
+            self._views[viewer] = VW.resolve(
+                self.org,
+                viewer,
+                grants=SA.grants(self.c),
+                defaults=SA.defaults(self.c),
+                private=SA.private_lines(self.c),
+                accounts=self.accounts,
+                at=self.at,
+                version=SA.view_version(self.c),
+            )
         return self._views[viewer]
 
     def budgets(self) -> dict[str, B.Budget]:
@@ -65,6 +78,7 @@ class Ctx:
         self.accounts = SL.accounts(self.c, self.book.id)
         self._budgets = None
         self._private = None
+        self.memo.clear()
         self._views.clear()
         self._rights.clear()
 

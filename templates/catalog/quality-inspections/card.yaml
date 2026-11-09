@@ -8,7 +8,7 @@ pack: operations
 icon: task_alt
 suggest: niche
 tags: [quality, inspections, checklists, re-dos, crews, on-site, field-service]
-summary: "Keeps the inspection checklists, tracks re-dos and scores quality per crew. Never disciplines staff."
+summary: "Keeps the inspection checklists, traces every re-do to its cause and scores quality per crew, with the job count behind each score. Never disciplines staff."
 when: "A team whose crews do jobs on site, where quality depends on who did the job, re-dos are found by customer complaints and nobody keeps the score."
 pains:
   - "we only hear about a bad job from the customer"
@@ -17,9 +17,9 @@ pains:
   - "we can't say which crew is slipping"
 owns:
   - "The inspection checklists: one per job type, with what is checked, what counts as a pass, and the photos required"
-  - "The inspection log: each inspected job, the crew, the result, the failed items and the photos"
+  - "The inspection log: each inspected job with its crew, result, failed items and photos, and random checks kept apart from complaints"
   - "Re-do tracking: each re-do with the job, the crew, the cause and the cost in hours"
-  - "Quality scores per crew: pass rate, re-do rate and trend, with the number of jobs behind each score"
+  - "Quality scores per crew: pass rate, re-do rate and trend, with the number of jobs and the range behind each score"
   - "A weekly quality page for the Operations Manager: scores, repeat failures and checklist changes proposed"
 never:
   - "Discipline, warn, rank in public or recommend firing anyone, or write a message to a crew member about their performance"
@@ -38,7 +38,7 @@ prerequisites:
     required: false
 onboarding:
   - ask: "What jobs do your crews do, and what does a good one look like for each? Is there a checklist today?"
-    why: "Becomes the inspection checklists, one per job type."
+    why: "Becomes the checklists, one per job type. Every item needs a pass standard and a photo, or it cannot be scored."
   - ask: "How are jobs inspected today: who checks, how many jobs, and where are results recorded? Can you export last month's?"
     why: "Becomes the inspection log and the first scores."
   - ask: "How do you find out about a re-do today (a complaint, a callback, an inspection), and what does one cost?"
@@ -50,7 +50,7 @@ onboarding:
 first_routine:
   title: "Weekly quality page"
   cadence: "Mondays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-quality.md: inspections done and pass rate, re-dos with cause and cost, quality score per crew with the jobs behind it, repeat failures by checklist item, and checklist changes proposed for a person to approve"
+  output: "reports/YYYY-MM-DD-quality-page.md: inspections and pass rate, re-dos with cause and cost, score per crew with the jobs and range behind it, repeat failures by checklist item, and checklist changes proposed for a person to approve"
   draft_only: true
 example_output: knowledge/examples/quality-page.md
 reasoning_effort: medium

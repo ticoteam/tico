@@ -17,8 +17,9 @@ that is a gap to name, and a task for the owner if they want a source connected.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly scored sample of sent replies and drafted coaching notes), that you only read,
-never touch a ticket or a customer, and that individual scores go only to the owner.
+I score a weekly sample of sent replies against your scorecard, and draft coaching notes for the owner.
+I only read. I never touch a ticket or contact a customer.
+Individual scores go only to the owner, never into a shared report.
 
 ## 3. Ask, in one message
 
@@ -44,13 +45,13 @@ Send it to nobody.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will review a sample of replies every Friday at 10:00 and send it only to you." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will review a sample of replies every Friday at 10:00 and send it only to you." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

@@ -49,7 +49,11 @@ fn ascii_dumps(v: &Value) -> String {
 }
 
 fn sha256_hex(text: &str) -> String {
-    ring::digest::digest(&ring::digest::SHA256, text.as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    ring::digest::digest(&ring::digest::SHA256, text.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The conversation scope of an attempt: bot, conversation, principal, session epoch, model, effort, harness.
@@ -70,7 +74,11 @@ pub fn scope(attempt: &Value) -> String {
 
 /// The environment without HUB_TOKEN, hashed: a change means the process must start again.
 pub fn fingerprint(env: &Env) -> String {
-    let rest: serde_json::Map<String, Value> = env.iter().filter(|(k, _)| *k != "HUB_TOKEN").map(|(k, v)| (k.clone(), json!(v))).collect();
+    let rest: serde_json::Map<String, Value> = env
+        .iter()
+        .filter(|(k, _)| *k != "HUB_TOKEN")
+        .map(|(k, v)| (k.clone(), json!(v)))
+        .collect();
     sha256_hex(&ascii_dumps(&Value::Object(rest)))
 }
 
@@ -92,7 +100,12 @@ pub fn write_token_for(path: &Path, token: &str, owner: Option<(u32, u32)>) {
             f.write_all(token.as_bytes())?;
             match owner {
                 // SAFETY: fchown on a descriptor this process owns.
-                Some((uid, gid)) if unsafe { libc::fchown(std::os::fd::AsRawFd::as_raw_fd(&f), uid, gid) } != 0 => Err(std::io::Error::last_os_error()),
+                Some((uid, gid))
+                    if unsafe { libc::fchown(std::os::fd::AsRawFd::as_raw_fd(&f), uid, gid) }
+                        != 0 =>
+                {
+                    Err(std::io::Error::last_os_error())
+                }
                 Some(_) => Ok(()),
                 None => crate::isolation::chown_file(&f),
             }
@@ -100,13 +113,20 @@ pub fn write_token_for(path: &Path, token: &str, owner: Option<(u32, u32)>) {
         .and_then(|_| std::fs::rename(&tmp, path));
     let _ = std::fs::remove_file(&tmp);
     if let Err(e) = written {
-        crate::util::log(&format!("Tico runner: could not write a warm session's token file ({e})"));
+        crate::util::log(&format!(
+            "Tico runner: could not write a warm session's token file ({e})"
+        ));
     }
 }
 
 impl WarmSessions {
     pub fn new(directory: PathBuf, limit: usize) -> WarmSessions {
-        WarmSessions { directory, limit, idle: IDLE, entries: Mutex::new(HashMap::new()) }
+        WarmSessions {
+            directory,
+            limit,
+            idle: IDLE,
+            entries: Mutex::new(HashMap::new()),
+        }
     }
 
     fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
@@ -115,7 +135,12 @@ impl WarmSessions {
 
     /// This scope's process (`make` builds one when there is none to reuse) and the environment the turn gives it,
     /// with HUB_TOKEN pointing at the token file.
-    pub async fn acquire(&self, attempt: &Value, env: &Env, make: impl FnOnce(&Path, &Env) -> AntigravityHost) -> Result<(AntigravityHost, Env), String> {
+    pub async fn acquire(
+        &self,
+        attempt: &Value,
+        env: &Env,
+        make: impl FnOnce(&Path, &Env) -> AntigravityHost,
+    ) -> Result<(AntigravityHost, Env), String> {
         let key = scope(attempt);
         let print = fingerprint(env);
         self.prune(false).await;
@@ -123,7 +148,9 @@ impl WarmSessions {
             let mut entries = self.entries();
             match entries.get(&key) {
                 Some(e) if e.busy => return Err("Conversation already has an active turn".into()),
-                Some(e) if e.fingerprint != print || !e.host.alive() => entries.remove(&key).map(|e| e.host),
+                Some(e) if e.fingerprint != print || !e.host.alive() => {
+                    entries.remove(&key).map(|e| e.host)
+                }
                 _ => None,
             }
         };
@@ -133,13 +160,21 @@ impl WarmSessions {
         let home = self.directory.join(&key);
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::create_dir_all(&home).map_err(|e| format!("could not make the warm session home: {e}"))?;
+            std::fs::create_dir_all(&home)
+                .map_err(|e| format!("could not make the warm session home: {e}"))?;
             for path in [&self.directory, &home] {
-                if !std::fs::symlink_metadata(path).map_err(|e| e.to_string())?.is_dir() {
+                if !std::fs::symlink_metadata(path)
+                    .map_err(|e| e.to_string())?
+                    .is_dir()
+                {
                     return Err("Warm session directories must not be symbolic links".into());
                 }
             }
-            let mode = if crate::isolation::enabled() { 0o711 } else { 0o700 };
+            let mode = if crate::isolation::enabled() {
+                0o711
+            } else {
+                0o700
+            };
             // Only traversal to a known token path: neither directory is writable by the bot.
             if crate::isolation::enabled() {
                 std::fs::set_permissions(&self.directory, std::fs::Permissions::from_mode(mode))
@@ -150,7 +185,12 @@ impl WarmSessions {
         }
         let token_file = home.join("lease-token");
         let mut turn_env = env.clone();
-        let token = turn_env.insert("HUB_TOKEN".into(), format!("tico-file:{}", token_file.display())).unwrap_or_default();
+        let token = turn_env
+            .insert(
+                "HUB_TOKEN".into(),
+                format!("tico-file:{}", token_file.display()),
+            )
+            .unwrap_or_default();
         let mut entries = self.entries();
         if entries.get(&key).is_some_and(|e| e.busy) {
             return Err("Conversation already has an active turn".into());
@@ -171,7 +211,13 @@ impl WarmSessions {
     pub async fn release(&self, host: &AntigravityHost, success: bool) {
         let stop = {
             let mut entries = self.entries();
-            let Some(key) = entries.iter().find(|(_, e)| e.host.same(host)).map(|(k, _)| k.clone()) else { return };
+            let Some(key) = entries
+                .iter()
+                .find(|(_, e)| e.host.same(host))
+                .map(|(k, _)| k.clone())
+            else {
+                return;
+            };
             let e = entries.get_mut(&key).unwrap();
             write_token(&e.token_file, "");
             e.busy = false;
@@ -187,11 +233,30 @@ impl WarmSessions {
         }
     }
 
+    /// Stop this scope's idle process, so its next `acquire` starts a new one. A busy one is left to its turn.
+    pub async fn discard(&self, attempt: &Value) {
+        let key = scope(attempt);
+        let stop = {
+            let mut entries = self.entries();
+            match entries.get(&key) {
+                Some(e) if !e.busy => entries.remove(&key).map(|e| e.host),
+                _ => None,
+            }
+        };
+        if let Some(h) = stop {
+            h.stop().await;
+        }
+    }
+
     /// Stop idle processes past their time or over the limit (oldest first), or every idle one with `close`.
     pub async fn prune(&self, close: bool) {
         let stopping: Vec<AntigravityHost> = {
             let mut entries = self.entries();
-            let mut idle: Vec<(String, Instant)> = entries.iter().filter(|(_, e)| !e.busy).map(|(k, e)| (k.clone(), e.used)).collect();
+            let mut idle: Vec<(String, Instant)> = entries
+                .iter()
+                .filter(|(_, e)| !e.busy)
+                .map(|(k, e)| (k.clone(), e.used))
+                .collect();
             idle.sort_by_key(|(_, used)| *used);
             let mut out = vec![];
             for (key, used) in idle {
@@ -233,8 +298,34 @@ mod tests {
     fn the_scope_is_the_python_runners() {
         let attempt = json!({"bot": "ops", "conversation": {"id": "c-1"}, "config": {"model": "gemini-3.8-flash", "reasoning_effort": "low", "harness": "antigravity"}});
         // hashlib.sha256(json.dumps(["ops", "c-1", None, 0, "gemini-3.8-flash", "low", "antigravity"]).encode()).hexdigest()
-        assert_eq!(scope(&attempt), "be415f67ac4890f63e0fdf64bc0f0e45b2d97753e19366cf9d43b3e888e095fa");
+        assert_eq!(
+            scope(&attempt),
+            "be415f67ac4890f63e0fdf64bc0f0e45b2d97753e19366cf9d43b3e888e095fa"
+        );
         assert_eq!(ascii_dumps(&json!(["é😀"])), "[\"\\u00e9\\ud83d\\ude00\"]");
+    }
+
+    #[tokio::test]
+    async fn a_discarded_idle_process_is_not_the_next_turns() {
+        let dir =
+            std::env::temp_dir().join(format!("warm-discard-{}", uuid::Uuid::new_v4().simple()));
+        let warm = WarmSessions::new(dir, 8);
+        let attempt = json!({"bot": "tico-counsel", "conversation": {"id": "c-chat"}, "config": {"harness": "antigravity"}});
+        let make = |home: &Path, _: &Env| {
+            AntigravityHost::new(home, vec!["agy".into()], mpsc::unbounded_channel().0)
+        };
+        let env = Env::new();
+        let (first, _) = warm.acquire(&attempt, &env, make).await.unwrap();
+        first.start().unwrap();
+        warm.release(&first, true).await;
+        assert_eq!(warm.len(), 1, "a completed turn keeps its process");
+        warm.discard(&attempt).await;
+        assert_eq!(warm.len(), 0);
+        let (second, _) = warm.acquire(&attempt, &env, make).await.unwrap();
+        assert!(!second.same(&first), "the next turn gets a new process");
+        second.start().unwrap();
+        warm.release(&second, true).await;
+        warm.close_runtime("antigravity").await;
     }
 
     #[tokio::test]
@@ -242,15 +333,23 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("warm-{}", uuid::Uuid::new_v4().simple()));
         let warm = WarmSessions::new(dir.clone(), 8);
         let attempt = json!({"bot": "ops", "conversation": {"id": "c-1"}, "config": {"harness": "antigravity"}});
-        let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], mpsc::unbounded_channel().0);
+        let make = |home: &Path, _: &Env| {
+            AntigravityHost::new(home, vec!["agy".into()], mpsc::unbounded_channel().0)
+        };
         let mut env = Env::new();
         env.insert("HUB_TOKEN".into(), "attempt-token-1".into());
         let (host, turn_env) = warm.acquire(&attempt, &env, make).await.unwrap();
         host.start().unwrap();
         let file = dir.join(scope(&attempt)).join("lease-token");
-        assert_eq!(turn_env["HUB_TOKEN"], format!("tico-file:{}", file.display()));
+        assert_eq!(
+            turn_env["HUB_TOKEN"],
+            format!("tico-file:{}", file.display())
+        );
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "attempt-token-1");
-        assert!(warm.acquire(&attempt, &env, make).await.is_err(), "one turn per conversation");
+        assert!(
+            warm.acquire(&attempt, &env, make).await.is_err(),
+            "one turn per conversation"
+        );
         warm.release(&host, true).await;
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
         // The next attempt's token only changes the file; the process stays.

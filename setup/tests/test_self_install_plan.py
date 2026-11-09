@@ -1,4 +1,5 @@
 """Full self-install charts, using synthetic AWS and SSH only. No live account or server."""
+
 import hashlib
 import json
 import stat
@@ -18,7 +19,7 @@ def self_args():
     args = list(CREATE)
     for flag in ("--hosted", "--hosted-zone", "--preset", "--aws-permissions-boundary"):
         i = args.index(flag)
-        del args[i:i + 2]
+        del args[i : i + 2]
     return args
 
 
@@ -47,20 +48,25 @@ class PlanS3:
     def __getattr__(self, name):
         def record(**kw):
             self.calls.append((name, kw))
+
         return record
 
     def called(self, name):
         return [kw for n, kw in self.calls if n == name]
 
 
-@pytest.mark.parametrize("seats", [73, 300])
+# The blank chart is the model every new install starts from: its seat count is whatever the catalog holds now.
+MODEL_SEATS = len(C.Turn(C.blank()).finish()["bots"])
+
+
+@pytest.mark.parametrize("seats", [MODEL_SEATS, 300])
 def test_self_aws_carries_full_chart_without_a_bucket_flag_and_retries_without_the_file(seats, request, tmp_path):
     path = tmp_path / "model.yaml"
     if seats == 300:
         path.write_text(request.getfixturevalue("big").read_text())
-    if seats == 73:
+    else:
         draft = C.Turn(C.blank()).finish()
-        assert len(draft["bots"]) == 73  # model A, not a shortened test chart
+        assert len(draft["bots"]) == seats  # the whole model chart, not a shortened test chart
         draft["company"]["name"] = "Acme Finance"
         path = tmp_path / "model-a.yaml"
         path.write_text(C.to_yaml(draft))
@@ -92,7 +98,10 @@ def test_self_aws_carries_full_chart_without_a_bucket_flag_and_retries_without_t
     assert life["LifecycleConfiguration"]["Rules"][0]["Expiration"] == {"Days": 1}
     (policy,) = iam.called("put_role_policy")
     assert json.loads(policy["PolicyDocument"])["Statement"][-1] == {
-        "Effect": "Allow", "Action": "s3:GetObject", "Resource": f"arn:aws:s3:::{put['Bucket']}/plans/{NAME}/*"}
+        "Effect": "Allow",
+        "Action": "s3:GetObject",
+        "Resource": f"arn:aws:s3:::{put['Bucket']}/plans/{NAME}/*",
+    }
     # The file can disappear after setup saves it; retries recover the full private chart and bucket.
     path.unlink()
     code, retry_out = go(self_args(), d)
@@ -104,7 +113,11 @@ def test_self_aws_carries_full_chart_without_a_bucket_flag_and_retries_without_t
 @pytest.mark.parametrize("target", ["aws", "ssh"])
 def test_301_seats_gets_the_plain_300_error_before_any_cloud_or_ssh_write(target, big, tmp_path):
     path = tmp_path / "over.yaml"
-    path.write_text(big.read_text().replace("employees:\n", "employees:\n  - id: too-many\n    template: bookkeeping\n    title: Extra\n", 1))
+    path.write_text(
+        big.read_text().replace(
+            "employees:\n", "employees:\n  - id: too-many\n    template: revenue-accountant\n    title: Extra\n", 1
+        )
+    )
     d, ec2, _, ssm, _ = world()
     d.ssh_shell = lambda *a: pytest.fail("must validate before connecting")
     args = self_args() if target == "aws" else ["--target", "ssh", "--domain", DOMAIN]
@@ -118,9 +131,28 @@ def test_ssh_carries_the_chart_on_stdin_with_private_env_and_saved_retry(big):
     d, *_ = world()
     shell = FakeShell()
     d.ssh_shell = lambda *a: shell
-    args = ["--target", "ssh", "--ssh", "root@203.0.113.9", "--domain", DOMAIN, "--auth", "oidc",
-            "--issuer", "https://accounts.example", "--client-id", "client", "--owner-email", "a@example.com",
-            "--server-ip", "203.0.113.9", "--backup", "local", "--non-interactive", "--yes"]
+    args = [
+        "--target",
+        "ssh",
+        "--ssh",
+        "root@203.0.113.9",
+        "--domain",
+        DOMAIN,
+        "--auth",
+        "oidc",
+        "--issuer",
+        "https://accounts.example",
+        "--client-id",
+        "client",
+        "--owner-email",
+        "a@example.com",
+        "--server-ip",
+        "203.0.113.9",
+        "--backup",
+        "local",
+        "--non-interactive",
+        "--yes",
+    ]
     code, out = go([*args, "--company-file", str(big)], d)
     assert code == 0, out
     packed = starter.pack(big.read_text(), starter.MAX_PACKED)
@@ -143,17 +175,28 @@ def test_ssh_carries_the_chart_on_stdin_with_private_env_and_saved_retry(big):
 
 @pytest.mark.parametrize("region", ["us-east-1", "us-west-2"])
 def test_managed_bucket_region_privacy_and_no_unowned_adoption(region):
-    d = aws.Deployer(aws.plan_aws(domain="a.example", front_door="caddy", region=region,
-                                 name=NAME, plan_bucket="tico-setup-plans-test"), None, None, None, "123456789012")
+    d = aws.Deployer(
+        aws.plan_aws(
+            domain="a.example", front_door="caddy", region=region, name=NAME, plan_bucket="tico-setup-plans-test"
+        ),
+        None,
+        None,
+        None,
+        "123456789012",
+    )
     s3 = PlanS3()
     d.ensure_plan_bucket(s3, region)
     (create,) = s3.called("create_bucket")
-    assert create == {"Bucket": "tico-setup-plans-test", **({} if region == "us-east-1" else {
-        "CreateBucketConfiguration": {"LocationConstraint": region}})}
+    assert create == {
+        "Bucket": "tico-setup-plans-test",
+        **({} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}),
+    }
     assert s3.called("put_bucket_encryption")[0]["ServerSideEncryptionConfiguration"]["Rules"][0][
-        "ApplyServerSideEncryptionByDefault"] == {"SSEAlgorithm": "AES256"}
-    assert s3.called("put_bucket_ownership_controls")[0]["OwnershipControls"]["Rules"] == [{
-        "ObjectOwnership": "BucketOwnerEnforced"}]
+        "ApplyServerSideEncryptionByDefault"
+    ] == {"SSEAlgorithm": "AES256"}
+    assert s3.called("put_bucket_ownership_controls")[0]["OwnershipControls"]["Rules"] == [
+        {"ObjectOwnership": "BucketOwnerEnforced"}
+    ]
     s3.tagset = []
     before = len(s3.calls)
     with pytest.raises(SystemExit, match="refusing to reuse"):
@@ -165,8 +208,10 @@ def test_bucket_access_denial_and_incomplete_privacy_never_upload_or_launch(big)
     for failing in ("head_bucket", "put_public_access_block", "put_bucket_lifecycle_configuration"):
         d, ec2, _, ssm, _ = world()
         s3 = PlanS3()
+
         def denied(**kw):
             raise ClientError("AccessDenied")
+
         setattr(s3, failing, denied)
         d.aws_s3 = lambda region, profile: s3
         code, out = go([*self_args(), "--company-file", str(big)], d)

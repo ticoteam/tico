@@ -23,8 +23,17 @@ pub fn stale_playbook(repo: &Path, text: &str) -> Option<String> {
         return None;
     }
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let heading = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
-    let mut files: Vec<_> = std::fs::read_dir(&folder).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "md") && p.is_file()).collect();
+    let heading = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default();
+    let mut files: Vec<_> = std::fs::read_dir(&folder)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md") && p.is_file())
+        .collect();
     files.sort();
     let head: Vec<char> = flat.chars().take(4000).collect();
     let mut best: Option<(String, f64)> = None;
@@ -34,11 +43,18 @@ pub fn stale_playbook(repo: &Path, text: &str) -> Option<String> {
         if !flat_current.is_empty() && flat.contains(&flat_current) {
             return None; // the text holds the current file: nothing is stale
         }
-        let first = current.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
+        let first = current
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or_default();
         let ratio = ratio(&head, &flat_current.chars().take(4000).collect::<Vec<_>>());
         let like = (heading.starts_with('#') && heading == first) || ratio >= 0.6;
         if like && best.as_ref().is_none_or(|(_, r)| ratio > *r) {
-            best = Some((format!("playbooks/{}", path.file_name()?.to_string_lossy()), ratio));
+            best = Some((
+                format!("playbooks/{}", path.file_name()?.to_string_lossy()),
+                ratio,
+            ));
         }
     }
     best.map(|(p, _)| p)
@@ -49,10 +65,18 @@ pub fn note(repo: &Path, attempt: &Value) -> String {
     if !crate::util::truthy(Some(&attempt["routine"])) {
         return String::new();
     }
-    let Some(path) = stale_playbook(repo, &text_of(&attempt["task"]["body"])) else { return String::new() };
-    let id = Some(text_of(&attempt["routine"]["id"])).filter(|i| !i.is_empty()).unwrap_or_else(|| "<id>".into());
+    let Some(path) = stale_playbook(repo, &text_of(&attempt["task"]["body"])) else {
+        return String::new();
+    };
+    // Routines are automations now (`hub automation`): one that moved names its automation; its text is the prompt of
+    // its turn step, changed by saving the steps again.
+    let routine = &attempt["routine"];
+    let id = [text_of(&routine["automation"]), text_of(&routine["id"])]
+        .into_iter()
+        .find(|i| !i.is_empty())
+        .unwrap_or_else(|| "<id>".into());
     format!(
-        "This routine's text is an older copy of `{path}`, which has changed since the routine was saved. Follow the current `{path}` in your repository, not the task text. Then point the routine at the file so it cannot go stale again: hub routine update {id} --text 'Run {path}'"
+        "This routine's text is an older copy of `{path}`, which has changed since the routine was saved. Follow the current `{path}` in your repository, not the task text. Then point the routine at the file so it cannot go stale again: read it with `hub automation show {id}`, set its bot_turn step's prompt to `Run {path}`, and save the steps with `hub automation update {id} --file <flow.json>`."
     )
 }
 
@@ -82,7 +106,11 @@ pub fn ratio(a: &[char], b: &[char]) -> f64 {
                 if j >= bhi {
                     break;
                 }
-                let k = if j > 0 { j2len.get(&(j - 1)).copied().unwrap_or(0) } else { 0 } + 1;
+                let k = if j > 0 {
+                    j2len.get(&(j - 1)).copied().unwrap_or(0)
+                } else {
+                    0
+                } + 1;
                 next.insert(j, k);
                 if k > size {
                     (besti, bestj, size) = (i + 1 - k, j + 1 - k, k);
@@ -121,7 +149,10 @@ mod tests {
     use serde_json::json;
 
     fn r(a: &str, b: &str) -> f64 {
-        ratio(&a.chars().collect::<Vec<_>>(), &b.chars().collect::<Vec<_>>())
+        ratio(
+            &a.chars().collect::<Vec<_>>(),
+            &b.chars().collect::<Vec<_>>(),
+        )
     }
 
     #[test]
@@ -129,7 +160,14 @@ mod tests {
         assert_eq!(r("abcd", "bcde"), 0.75);
         assert_eq!(r("", ""), 1.0);
         // difflib.SequenceMatcher(None, "private Thread currentThread;", "private volatile Thread currentThread;").ratio()
-        assert!((r("private Thread currentThread;", "private volatile Thread currentThread;") - 0.8656716417910447).abs() < 1e-12);
+        assert!(
+            (r(
+                "private Thread currentThread;",
+                "private volatile Thread currentThread;"
+            ) - 0.8656716417910447)
+                .abs()
+                < 1e-12
+        );
         // autojunk: a 300-char b of mostly "a" (python: 0.013201320132013201)
         let b = format!("{}{}", "a".repeat(298), "xy");
         assert!((r("xyz", &b) - 0.013201320132013201).abs() < 1e-12);
@@ -137,15 +175,41 @@ mod tests {
 
     #[test]
     fn a_routine_holding_an_old_copy_of_a_playbook_is_told_to_follow_the_file() {
-        let dir = std::env::temp_dir().join(format!("tico-playbook-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-playbook-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("playbooks")).unwrap();
-        std::fs::write(dir.join("playbooks").join("checks.md"), "# Daily checks\n\nLook at the queue, then the inbox, then report.\n").unwrap();
+        std::fs::write(
+            dir.join("playbooks").join("checks.md"),
+            "# Daily checks\n\nLook at the queue, then the inbox, then report.\n",
+        )
+        .unwrap();
         let old = "# Daily checks\n\nLook at the queue and report.\n";
         let attempt = json!({"routine": {"id": "r1"}, "task": {"body": old}});
-        assert!(note(&dir, &attempt).contains("hub routine update r1 --text 'Run playbooks/checks.md'"));
-        assert_eq!(note(&dir, &json!({"routine": {"id": "r1"}, "task": {"body": "Run playbooks/checks.md"}})), "");
+        let told = note(&dir, &attempt);
+        assert!(
+            told.contains("hub automation show r1")
+                && told.contains("prompt to `Run playbooks/checks.md`"),
+            "{told}"
+        );
+        assert!(told.contains("hub automation update r1 --file"), "{told}");
+        // a routine that moved to an automation is changed there
+        let moved = json!({"routine": {"id": "r1", "automation": "auto_1"}, "task": {"body": old}});
+        assert!(note(&dir, &moved).contains("hub automation update auto_1 --file"));
+        assert_eq!(
+            note(
+                &dir,
+                &json!({"routine": {"id": "r1"}, "task": {"body": "Run playbooks/checks.md"}})
+            ),
+            ""
+        );
         let current = std::fs::read_to_string(dir.join("playbooks").join("checks.md")).unwrap();
-        assert_eq!(note(&dir, &json!({"routine": {"id": "r1"}, "task": {"body": current}})), "");
+        assert_eq!(
+            note(
+                &dir,
+                &json!({"routine": {"id": "r1"}, "task": {"body": current}})
+            ),
+            ""
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

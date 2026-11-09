@@ -44,8 +44,11 @@ def support(runtime, harness=""):
         return {"name": str(runtime or "This harness"), "transports": (), "why": "it has no MCP support in Tico"}
     caps = row["capabilities"]
     transports = tuple(caps["mcp_transports"])
-    return {"name": row["name"], "transports": transports,
-            "why": caps["mcp_unsupported"] or ("" if transports else "it has no MCP support in Tico")}
+    return {
+        "name": row["name"],
+        "transports": transports,
+        "why": caps["mcp_unsupported"] or ("" if transports else "it has no MCP support in Tico"),
+    }
 
 
 def server_name(service):
@@ -94,8 +97,16 @@ def servers_for_run(tools, env):
             n += 1
             name = f"{server_name(service)}_{n}"
         used.add(name)
-        servers.append({"name": name, "service": service, "url": mcp["url"], "transport": mcp["transport"],
-                        "headers": dict(mcp.get("headers") or {}), "env": var})
+        servers.append(
+            {
+                "name": name,
+                "service": service,
+                "url": mcp["url"],
+                "transport": mcp["transport"],
+                "headers": dict(mcp.get("headers") or {}),
+                "env": var,
+            }
+        )
     return servers, problems
 
 
@@ -123,31 +134,53 @@ def supported(servers, runtime, harness=""):
 
 def warnings_for(tools, runtime, harness=""):
     """Readiness warnings for one bot: each MCP server its harness cannot pass, by tool. Needs no credential."""
-    servers = [{"service": str(entry.get("service") or "").strip().lower(), "transport": mcp["transport"], "url": mcp["url"]}
-              for entry, mcp in declared(tools)]
-    return [f"{server['service']}: its MCP server is not passed to the bot's runs. " + why
-            for server, why in unsupported(servers, runtime, harness)]
+    servers = [
+        {"service": str(entry.get("service") or "").strip().lower(), "transport": mcp["transport"], "url": mcp["url"]}
+        for entry, mcp in declared(tools)
+    ]
+    return [
+        f"{server['service']}: its MCP server is not passed to the bot's runs. " + why
+        for server, why in unsupported(servers, runtime, harness)
+    ]
 
 
 # --------------------------------------------------------------------------- one config per harness
 def claude_config(servers):
     """`--mcp-config` entries. Claude Code expands `${VAR}` in url and headers from the turn's own environment."""
-    return {s["name"]: {"type": s["transport"], "url": s["url"],
-                        **({"headers": dict(s["headers"])} if s["headers"] else {})} for s in servers}
+    return {
+        s["name"]: {
+            "type": s["transport"],
+            "url": s["url"],
+            **({"headers": dict(s["headers"])} if s["headers"] else {}),
+        }
+        for s in servers
+    }
 
 
 def gemini_config(servers):
     """`mcpServers` for Gemini CLI's settings file: `httpUrl` is streamable HTTP, `url` is SSE. The CLI expands
     `${VAR}` in the file from its environment, so the file holds no value."""
-    return {s["name"]: {("httpUrl" if s["transport"] == "http" else "url"): s["url"],
-                        **({"headers": dict(s["headers"])} if s["headers"] else {})} for s in servers}
+    return {
+        s["name"]: {
+            ("httpUrl" if s["transport"] == "http" else "url"): s["url"],
+            **({"headers": dict(s["headers"])} if s["headers"] else {}),
+        }
+        for s in servers
+    }
 
 
 def grok_config(servers, env):
     """ACP `mcpServers` for `session/new`: headers as {name, value}, resolved, because ACP has no placeholders.
     They travel over the agent's stdin for this session and are written nowhere."""
-    return [{"type": s["transport"], "name": s["name"], "url": s["url"],
-             "headers": [{"name": k, "value": expand(v, env)} for k, v in s["headers"].items()]} for s in servers]
+    return [
+        {
+            "type": s["transport"],
+            "name": s["name"],
+            "url": s["url"],
+            "headers": [{"name": k, "value": expand(v, env)} for k, v in s["headers"].items()],
+        }
+        for s in servers
+    ]
 
 
 def codex_config(servers, env, process_env=None):
@@ -207,19 +240,29 @@ def reachability(url, transport, headers, timeout=REACH_TIMEOUT_S, opener=None):
     there. `headers` are the resolved ones. Redirects are not followed, so a credential never leaves for
     another host."""
     open_url = opener or _opener().open
-    headers = {"User-Agent": "tico-runner", **{k: v for k, v in (headers or {}).items() if "\n" not in v and "\r" not in v}}
+    headers = {
+        "User-Agent": "tico-runner",
+        **{k: v for k, v in (headers or {}).items() if "\n" not in v and "\r" not in v},
+    }
     if transport == "sse":
         request = urllib.request.Request(url, headers={**headers, "Accept": "text/event-stream"}, method="GET")
     else:
-        body = (b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},'
-                b'"clientInfo":{"name":"tico-runner","version":"1"}}}')
-        request = urllib.request.Request(url, data=body, method="POST", headers={
-            **headers, "Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
+        body = (
+            b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},'
+            b'"clientInfo":{"name":"tico-runner","version":"1"}}}'
+        )
+        request = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={**headers, "Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+        )
     try:
         with open_url(request, timeout=timeout) as response:
             status = response.status
     except urllib.error.HTTPError as exc:
-        status = exc.code
+        with exc:
+            status = exc.code
     except (urllib.error.URLError, OSError, ValueError):
         return "unreachable"
     if status in (401, 403):

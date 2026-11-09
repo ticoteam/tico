@@ -144,7 +144,7 @@ These routes also have hub MCP tools and CLI commands of the same names: `hub ta
 requester-save`, `hub task requester-remove`, `hub task publication-preview`, `hub task comment-moderate`, `hub
 roadmap tasks` and `hub roadmap settings` (flags change only the settings named). `hub api` reaches every route.
 `hub task create` takes `--public-title`/`--public-summary` beside `--visibility`, and `hub task update` supports
-publication fields, size and approval id. `waits_on` / `waiting_on` still means blocked on someone;
+publication fields, size and approval id. `waits_on` / `waiting_on` still means blocked on someone (derived from open question tasks);
 requesters are independent. Nothing sends automatically; follow-ups require a person's request
 and the existing outbound send switch.
 

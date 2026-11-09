@@ -1,12 +1,13 @@
 """The org chart as Finance reads it, who is acting, and who decides an approval (spec §5, §7.4, §7.5).
 
-Teammates are actor strings (`human:<id>`, `bot:<slug>`), teams are org group ids. The store builds an `Org` from the
+Teammates are actor strings (`human:<id>`, `bot:<id>`), teams are org group ids. The store builds an `Org` from the
 roster once per request; nothing here reads it.
 """
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-SYSTEM = "system:finance"           # sync, posting rules, setup and usage postings
+SYSTEM = "system:finance"  # sync, posting rules, setup and usage postings
 APPROVERS = ("owner", "finance_admin", "manager")
 
 
@@ -15,12 +16,12 @@ class Team:
     id: str
     name: str
     parent: str = ""
-    lead: str = ""                  # an actor, "" when the group has no lead
+    lead: str = ""  # an actor, "" when the group has no lead
 
 
 @dataclass(frozen=True)
 class Org:
-    owner: str                      # the install owner as `human:<id>`
+    owner: str  # the install owner as `human:<id>`
     teams: Mapping[str, Team] = field(default_factory=lambda: dict[str, Team]())
     team_of: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     reports_to: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
@@ -62,6 +63,24 @@ class Org:
                 out |= self.below(team.id)
         return frozenset(out)
 
+    def reports(self, actor: str) -> frozenset[str]:
+        """Everyone who reports to `actor`, directly or not: with `led_by`, what a manager's default covers."""
+        under: dict[str, list[str]] = {}
+        for mate, boss in self.reports_to.items():
+            under.setdefault(boss, []).append(mate)
+        found: set[str] = set()
+        todo = [actor]
+        while todo:
+            for mate in under.get(todo.pop(), []):
+                if mate != actor and mate not in found:
+                    found.add(mate)
+                    todo.append(mate)
+        return frozenset(found)
+
+    def manages(self, actor: str) -> bool:
+        """Whether `actor` is a manager: leads a team or has anyone reporting to them."""
+        return bool(self.led_by(actor) or self.reports(actor))
+
     def members(self, teams: frozenset[str]) -> frozenset[str]:
         return frozenset(actor for actor, team in self.team_of.items() if team in teams)
 
@@ -74,6 +93,7 @@ class Principal:
     """Who is acting. `actor` made the call; `for_actor` is whose authority it uses (the Assistant and BotOps act as
     the teammate who asked, BotOps parity), and `rule` the finance rule it runs under. Rights and view are always the
     effective teammate's (`who`), never a manager's."""
+
     actor: str
     for_actor: str = ""
     rule: str = ""
@@ -108,11 +128,14 @@ def manager_of(org: Org, actor: str) -> str:
     return ""
 
 
-def approver(org: Org, who: str, requester: str, finance_approver: str = "") -> str:
+def approver(org: Org, who: str, requester: str, finance_approver: str = "", budget_owner: str = "") -> str:
     """The one person who decides: `owner` is the install owner; `finance_admin` the named finance approver when that
-    is a person, else the owner; `manager` the nearest person above the requester, else the owner."""
+    is a person, else the owner; `manager` the nearest person above the requester, else the owner; `budget_owner` the
+    parent budget's owner when that is a person, else the owner."""
     if who == "finance_admin" and finance_approver and org.is_person(finance_approver):
         return finance_approver
     if who == "manager":
         return manager_of(org, requester) or org.owner
+    if who == "budget_owner" and org.is_person(budget_owner):
+        return budget_owner
     return org.owner

@@ -21,7 +21,7 @@ owns:
   - "A recognition note for each new or changed contract: the obligations, the price, the period and the method the team's policy gives"
   - "The team's revenue policy as written by its accountant (knowledge/revenue-policy.md)"
 never:
-  - "Post, edit or reverse an entry in the books, or change anything in the billing system outside the requested work or Tools"
+  - "Post, edit or reverse an entry in the books, or change anything in the billing system, on your own initiative. A task request and a granted Tool allow it."
   - "Decide an accounting treatment the written policy does not cover: that is the accountant's"
   - "Write a revenue figure no billing export or ledger shows"
   - "Share revenue figures beyond finance and the owner"

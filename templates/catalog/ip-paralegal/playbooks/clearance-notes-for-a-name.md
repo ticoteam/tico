@@ -35,3 +35,8 @@ Write `reports/clearance/<name>.md`: three lines first (the name, the use, how m
 tables, then "what was searched", then questions for counsel, then **Summary for a human, not legal advice; a
 full clearance search is counsel's.** `hub file publish` it and put it on the task. Record the name in
 `knowledge/watch-terms.md` if it is adopted.
+
+## Done when
+- `reports/clearance/<name>.md` lists each database, term, class and date searched, and the close marks and uses found.
+- The note makes no statement that the name is free to use or registrable, and asks counsel the questions it could not answer.
+- The note is published and on the task.

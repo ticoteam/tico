@@ -27,7 +27,7 @@ cleanup. List in `knowledge/ledger.md`.
 
 ## Credentials
 - `web-app`, `tests/fixtures/payments.env`, added in commit 3f9c2a1 on 2026-09-22: a payment provider
-  **test** secret key. Rotate it in the provider's dashboard, then remove the file; deleting it alone
+  **test** secret key. Proposed: the owner rotates it in the provider's dashboard, then removes the file; deleting it alone
   leaves it in history. Owner: Marco. Value not copied here.
 
 ## Past deadline
@@ -35,6 +35,7 @@ cleanup. List in `knowledge/ledger.md`.
 
 ## Could not read
 - The mobile repository is not in this bot's GitHub list, so its dependencies are not covered.
+- Dependabot alert list for `api`: not readable with this bot's access, so the alerts above come from open pull requests only. Alerts not checked.
 
 ## Sources
 - Dependabot pull requests, api and web-app, 2026-09-28; CISA KEV catalogue and FIRST EPSS, read 2026-09-28;

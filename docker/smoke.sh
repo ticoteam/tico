@@ -71,7 +71,7 @@ retry() {  # seconds command...
 }
 
 api() { curl -fsS -H "Authorization: Bearer $(dc exec -T server cat /data/local-owner.token)" "$@"; }
-healthy() { curl -fsS --max-time 3 $base/healthz; }
+healthy() { curl -fsS --max-time 3 "$base/healthz"; }
 environment_id() { healthy | python3 -c 'import json,sys; print(json.load(sys.stdin)["environment_id"])'; }
 runners() {
   dc exec -T server python -c 'import sqlite3
@@ -81,17 +81,17 @@ print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(
 last_seen() {
   dc exec -T server python -c 'import sqlite3
 print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(
-    "SELECT coalesce(max(last_seen), \"\") FROM runners WHERE revoked_at IS NULL").fetchone()[0])'
+    "SELECT coalesce(max(last_seen_at), \"\") FROM runners_with_state WHERE revoked_at IS NULL").fetchone()[0])'
 }
 reconnected() { [[ "$(last_seen)" > "$before" ]]; }
 online() {
-  api $base/api/v2/setup/getting-started | python3 -c '
+  api "$base/api/v2/setup/getting-started" | python3 -c '
 import json, sys
 items = json.load(sys.stdin)["items"]
 sys.exit(0 if any(i["id"] == "computer" and i["done"] for i in items) else 1)'
 }
 harness() {  # id field: what the runner reported for one harness, from the server's point of view
-  api $base/api/v2/operations | python3 -c '
+  api "$base/api/v2/operations" | python3 -c '
 import json, sys
 machine = json.load(sys.stdin)["machines"][0]
 print(machine["readiness"].get("harnesses", {}).get(sys.argv[1], {}).get(sys.argv[2], "unreported"))' "$1" "$2"
@@ -100,14 +100,14 @@ codex_installed() { [ "$(harness codex installed)" = True ]; }
 codex_absent() { [ "$(harness codex installed)" = False ]; }
 enable_openai() {
   local revision
-  revision="$(api $base/api/v2/providers | python3 -c 'import json,sys; print(json.load(sys.stdin)["revision"])')"
+  revision="$(api "$base/api/v2/providers" | python3 -c 'import json,sys; print(json.load(sys.stdin)["revision"])')"
   api -X PUT -H 'Content-Type: application/json' -H "Idempotency-Key: smoke-$RANDOM$RANDOM$SECONDS" \
     -d "{\"enabled\": [\"openai\"], \"runtime\": \"\", \"model\": \"\", \"expected_revision\": $revision}" \
-    $base/api/v2/providers >/dev/null
+    "$base/api/v2/providers" >/dev/null
 }
 join_runner() {
   local code
-  code="$(api -X POST -H 'Content-Type: application/json' -H "Idempotency-Key: smoke-$RANDOM$RANDOM$SECONDS" -d '{"operator": "owner"}' $base/api/v2/enrollments \
+  code="$(api -X POST -H 'Content-Type: application/json' -H "Idempotency-Key: smoke-$RANDOM$RANDOM$SECONDS" -d '{"operator": "owner"}' "$base/api/v2/enrollments" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["code"])')"
   docker rm -f "$runner" >/dev/null 2>&1 || true
   # As docker/runner.compose.yaml starts it: root with five capabilities, so bot code runs as another user.
@@ -134,6 +134,11 @@ route="$(dc exec -T server cat /tunnel/ingress.yml)"
 printf '%s\n' "$route" | grep -A1 -x '  - hostname: runner.smoke.example.test' | grep -qF "path: '^/(?:api/v2|download)(?:/.*)?\$'" \
   || fail "the tunnel does not route the runner hostname's API and downloads"
 [ "$(printf '%s\n' "$route" | tail -1)" = "  - service: http_status:404" ] || fail "the tunnel's catch-all 404 is not last"
+# With calls on the app host, the tunnel sends LiveKit's signal to the media server ahead of the app's own route.
+dc exec -T -e TICO_DOMAIN=smoke.example.test -e TICO_MEET_URL=wss://smoke.example.test -e TICO_MEET_API_KEY=smoke \
+  -e TICO_MEET_API_SECRET=smoke server tico-entrypoint tunnel-config || fail "the server cannot write the tunnel's route with calls"
+dc exec -T server cat /tunnel/ingress.yml | head -3 | grep -qF "path: '^/rtc(?:/.*)?\$'" || fail "the tunnel has no /rtc route for calls"
+dc exec -T -e TICO_DOMAIN=smoke.example.test server tico-entrypoint tunnel-config || fail "the server cannot restore the tunnel's route"
 
 step "a malformed expected AWS account refuses to start, without calling AWS"
 out="$(dc exec -T -e TICO_EXPECTED_AWS_ACCOUNT=12345 server tico-entrypoint aws-identity 2>&1)" && fail "a malformed TICO_EXPECTED_AWS_ACCOUNT was accepted"
@@ -200,7 +205,7 @@ box="$(mktemp -d "$PWD/.smoke-runner.XXXXXX")"
 awk -v name="$box_project" '/^name: tico-runner$/ {print "name: " name; next} {print} /^  (runner|updater):$/ {print "    networks: [default, smoke]"}' \
   docker/runner.compose.yaml > "$box/runner.compose.yaml"
 printf 'networks:\n  smoke:\n    external: true\n    name: %s_default\n' "$project" >> "$box/runner.compose.yaml"
-code="$(api -X POST -H 'Content-Type: application/json' -H "Idempotency-Key: smoke-$RANDOM$RANDOM$SECONDS" -d '{"operator": "owner"}' $base/api/v2/enrollments \
+code="$(api -X POST -H 'Content-Type: application/json' -H "Idempotency-Key: smoke-$RANDOM$RANDOM$SECONDS" -d '{"operator": "owner"}' "$base/api/v2/enrollments" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["code"])')"
 cat > "$box/.env" <<EOF
 TICO_URL=http://server:8765

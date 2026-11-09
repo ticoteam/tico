@@ -48,7 +48,7 @@ gh pr create -R <org>/bot-<slug> --base main --head <branch> --title "..." --bod
 gh pr merge -R <org>/bot-<slug> <number> --merge --delete-branch  # your own repo, checks passed
 ```
 
-For a repository whose merge still needs human review, request that exact action:
+For a repository whose merge still needs human review (a docs-only pull request does not; see policies/approvals.md), request that exact action:
 `hub approval request --kind merge --payload '{"repo": "<org>/<repo>", "pr": 123,
 "head_sha": "..."}'`.
 

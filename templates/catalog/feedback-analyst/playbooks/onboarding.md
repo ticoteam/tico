@@ -18,7 +18,7 @@ read any feedback, that is answer one, and a task for the owner if they want a s
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly report of feedback themes with counts and three suggested actions), that requested evidence handoffs use your Tools, and that customer messages stay drafts until a person turns mail sending on in Tico; never promise a change.
+What you do (a weekly report of feedback themes with counts and three suggested actions, and evidence handed to other teams within the requested work). Customer messages stay drafts until a person turns mail sending on in Tico. You never promise a change.
 
 ## 3. Ask, in one message
 
@@ -45,13 +45,13 @@ reviewed". Send it to nobody else.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will draft this report every Monday at 08:00 and send it only to you." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will draft this report every Monday at 08:00 and send it only to you." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

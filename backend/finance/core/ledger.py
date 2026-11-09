@@ -6,6 +6,7 @@
 3. Nothing posts into a closed period (also a database trigger).
 4. A line's account is active and in the entry's book.
 """
+
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -17,8 +18,13 @@ from .errors import UNBALANCED, FinanceError, invalid
 ACCOUNT_TYPES = ("asset", "liability", "equity", "income", "expense")
 PNL_TYPES = ("income", "expense")
 SOURCES = ("manual", "import", "bank", "card", "bill", "invoice", "payment", "usage", "sync")
+# `accrual`: left out of the cash view (depreciation, accruals, a write-off). Bills and invoices are accrual by source:
+# their cash view comes from settlements instead.
+BASES = ("both", "accrual")
+DOC_SOURCES = ("bill", "invoice")
 # Tags on a line, one value per kind. Vendor is not a tag: it is the line's contact.
-TAG_KINDS = ("team", "teammate", "budget", "project", "custom")
+# location, project and class name a shared record (backend/records, fin_dimensions); the others are text.
+TAG_KINDS = ("team", "teammate", "budget", "project", "custom", "location", "class")
 MAX_LINES = 500
 
 
@@ -38,6 +44,7 @@ class Account:
 class Line:
     """One posting line. `amount` is base-currency minor units (debit +, credit -); `original_amount` is in
     `currency` and `fx_rate` turns it into `amount`."""
+
     account_id: str
     amount: int
     currency: str
@@ -46,10 +53,23 @@ class Line:
     contact_id: str = ""
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
-    role: str = ""          # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
+    role: str = ""  # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
+    external_line: str = ""  # the provider's id for the line, so its tags follow it across a revision
 
 
-MONEY_ROLE = "money"        # a feed row's own line: the money account's side (for a card, the card program's)
+NAME_MAX = 80  # a vendor name's length: names are capped to it before they are keyed, never keys after
+KEY_MAX = 3 * NAME_MAX  # a key's: folding turns a character into up to three (ß is ss)
+
+
+def name_key(name: str) -> str:
+    """A vendor's plain name as a key (a line's contact_id when no contact has it, a budget's vendor, an alias):
+    case-folded, then stripped, so ÉCOLE and école are one vendor. The only place a vendor is normalised. The key is
+    whole (folding can lengthen it; cutting it after could make two names one) and folding it again changes nothing.
+    A contact's id is its own key (already folded)."""
+    return name.casefold().strip()
+
+
+MONEY_ROLE = "money"  # a feed row's own line: the money account's side (for a card, the card program's)
 
 
 @dataclass(frozen=True)
@@ -60,6 +80,11 @@ class Entry:
     source: str
     source_id: str
     lines: tuple[Line, ...]
+    basis: str = "both"
+
+    def cash_view(self) -> bool:
+        """Whether the cash P&L takes this entry as posted (else a correction leaves its P&L lines out)."""
+        return self.basis == "both" and self.source not in DOC_SOURCES
 
 
 @dataclass(frozen=True)
@@ -69,7 +94,8 @@ class Book:
     base_currency: str
     basis: str = "cash"
     fiscal_year_start: int = 1
-    mode: str = "native"
+    mode: str = "native"  # native: Tico is the books; mirror: a provider's books are (spec §10)
+    mirror_connection_id: str = ""
 
 
 def tags(raw: object) -> dict[str, str]:
@@ -84,12 +110,15 @@ def tags(raw: object) -> dict[str, str]:
             continue
         if not isinstance(value, str) or len(value) > 200:
             raise invalid(f"tag {kind} is a text value")
+        if "|" in value:  # a rollup key joins tags with |, so a value holding one could be misread
+            raise invalid(f"tag {kind} has no | in it")
         out[kind] = value.strip()
     return out
 
 
 def tagset(tag_map: Mapping[str, str], vendor: str = "") -> str:
-    """The canonical key a rollup row is kept under: every tag and the vendor, sorted. "" is a line with none."""
+    """The canonical key a rollup row is kept under: every tag and the vendor, sorted. "" is a line with none. Values
+    hold no "|" (tags() refuses one), so a reader can split the key back into its tags."""
     parts = [f"{kind}={tag_map[kind]}" for kind in sorted(tag_map) if tag_map[kind]]
     if vendor:
         parts.append(f"vendor={vendor}")
@@ -112,9 +141,26 @@ def line(raw: object, base: str) -> Line:
         raise invalid("in the base currency, original_amount equals amount")
     if amount == 0:
         raise invalid("a line moves money: amount is not 0")
-    return Line(account_id=account_id, amount=amount, currency=cur, original_amount=amount, fx_rate=Decimal(1),
-                contact_id=V.opt_text(p, "contact_id", 80) or "", description=V.opt_text(p, "description") or "",
-                tags=tags(p.get("tags")))
+    return Line(
+        account_id=account_id,
+        amount=amount,
+        currency=cur,
+        original_amount=amount,
+        fx_rate=Decimal(1),
+        contact_id=vendor_text(p),
+        description=V.opt_text(p, "description") or "",
+        tags=tags(p.get("tags")),
+    )
+
+
+def vendor_text(p: V.Payload, key: str = "contact_id") -> str:
+    """A vendor (a line's, a budget's): a contact's id or a name of up to NAME_MAX characters, or a key already folded
+    (name_key), which folding may have made longer (up to KEY_MAX): a line Tico posts again (a reclass) keeps its
+    stored key, and a budget can be made on a vendor key a report shows."""
+    value = V.opt_text(p, key, KEY_MAX) or ""
+    if len(value) > NAME_MAX and name_key(value) != value:
+        raise invalid(f"{key} is longer than {NAME_MAX} characters")
+    return value
 
 
 def entry(raw: object, book: Book) -> Entry:
@@ -122,15 +168,32 @@ def entry(raw: object, book: Book) -> Entry:
     p = V.obj(raw)
     source = V.choice(p, "source", ("manual", "import"), "manual")
     lines = tuple(line(item, book.base_currency) for item in V.items(p.get("lines"), "lines", MAX_LINES))
-    return Entry(book_id=book.id, entry_date=V.day(p, "date"), memo=V.opt_text(p, "memo") or "", source=source,
-                 source_id=V.opt_text(p, "source_id", 200) or "", lines=lines)
+    return Entry(
+        book_id=book.id,
+        entry_date=V.day(p, "date"),
+        memo=V.opt_text(p, "memo") or "",
+        source=source,
+        source_id=V.opt_text(p, "source_id", 200) or "",
+        lines=lines,
+        basis=V.choice(p, "basis", BASES, "both"),
+    )
 
 
-def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, reversing: bool = False) -> None:
+def check(
+    e: Entry,
+    book: Book,
+    accounts: Mapping[str, Account],
+    closed: bool,
+    reversing: bool = False,
+    importing: bool = False,
+) -> None:
     """Invariants 1, 3 and 4 for an entry about to post. `closed` says whether its date is in a closed period. A
-    reversal may post to an account deactivated since the original, or the original could never be undone."""
+    reversal may post to an account deactivated since the original, or the original could never be undone; a provider's
+    history may name an account it retired, which is taken in as it was (`importing`)."""
     if e.source not in SOURCES:
         raise invalid(f"a source is {'|'.join(SOURCES)}")
+    if e.basis not in BASES:
+        raise invalid(f"a basis is {'|'.join(BASES)}")
     dates.day(e.entry_date)
     if closed:
         raise FinanceError("period_closed", f"the period holding {e.entry_date} is closed")
@@ -141,11 +204,13 @@ def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, r
         account = accounts.get(item.account_id)
         if account is None or account.book_id != e.book_id:
             raise invalid("a line's account is not in this book")
-        if not account.active and not reversing:
+        if not account.active and not (reversing or importing):
             raise invalid(f"account {account.code} {account.name} is inactive")
         money.minor(item.amount)
         if item.currency != book.base_currency:
-            raise invalid(f"lines are in the book's currency ({book.base_currency}); {item.currency} is not supported yet")
+            raise invalid(
+                f"lines are in the book's currency ({book.base_currency}); {item.currency} is not supported yet"
+            )
         if item.original_amount != item.amount or item.fx_rate != 1:
             raise invalid("in the base currency, original_amount equals amount at fx_rate 1")
         total += item.amount
@@ -155,9 +220,20 @@ def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, r
 
 def reversal(lines: Iterable[Line]) -> tuple[Line, ...]:
     """The lines that undo `lines`: every amount negated, tags, contacts and roles kept."""
-    return tuple(Line(account_id=x.account_id, amount=-x.amount, currency=x.currency,
-                      original_amount=-x.original_amount, fx_rate=x.fx_rate, contact_id=x.contact_id,
-                      description=x.description, tags=dict(x.tags), role=x.role) for x in lines)
+    return tuple(
+        Line(
+            account_id=x.account_id,
+            amount=-x.amount,
+            currency=x.currency,
+            original_amount=-x.original_amount,
+            fx_rate=x.fx_rate,
+            contact_id=x.contact_id,
+            description=x.description,
+            tags=dict(x.tags),
+            role=x.role,
+        )
+        for x in lines
+    )
 
 
 PNL_SECTIONS = ("revenue", "cost_of_revenue", "operating", "other")

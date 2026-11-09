@@ -15,6 +15,9 @@ Sample output for Acme, a fictional studio-software team. Every customer is inve
 | 31 to 60 days | 2 | 4,300 | +1,200 |
 | 61+ days | 1 | 2,900 | 0 |
 
+DSO 38 days: receivables 36,930 / credit sales 87,300 over the last 90 days x 90 (sales from the invoice register, 2026-09-28).
+No unapplied cash found in the export.
+
 ## Needs you now
 - **Invoice 2041, Elm Street Studio, 2,900, 61 days**: the last step of the ladder. Two reminders went unanswered (2026-08-10, 2026-08-24). A human should call; I have drafted no email.
 

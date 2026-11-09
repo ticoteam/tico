@@ -13,7 +13,7 @@ import pytest
 
 from backend import support, support_access
 from backend.auth import Identity
-from backend.store import Problem
+from backend.store import H, Problem, digest
 from backend.tests.test_onboarding import as_person, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import TICKET_ID, ContractHQ, FakeHQ, documented
 
@@ -63,8 +63,11 @@ def hq(monkeypatch):
 
 
 def ticket(api, headers=None):
-    r = api.post("/api/v2/support/tickets", json={"message": "Bots stopped", "include_ids": False},
-                 headers=headers or signed_in())
+    r = api.post(
+        "/api/v2/support/tickets",
+        json={"message": "Bots stopped", "include_ids": False},
+        headers=headers or signed_in(),
+    )
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
@@ -79,6 +82,51 @@ def bearer(session):
     return {"Authorization": "Bearer " + support_access._tokens[session["id"]], "Idempotency-Key": "k-" + session["id"]}
 
 
+def test_default_and_maximum_duration_reach_hq_without_a_cap(environment, hq):
+    api = environment()
+    for hours in (None, 8760):
+        response = start(api, **({} if hours is None else {"hours": hours}))
+        assert response.status_code == 200, (hours, response.text)
+        session = response.json()
+        duration = timedelta(hours=72 if hours is None else hours)
+        assert H.parse_ts(session["expires_at"]) - H.parse_ts(session["started_at"]) == duration, hours
+        opened = json.loads([x for x in hq.seen if x.url.path.endswith("/access")][-1].content)
+        assert opened == {"tier": "app", "expires_at": support_access.hq_stamp(session["expires_at"])}, hours
+        with api.app.state.store.read() as c:
+            row = c.execute("SELECT * FROM support_access WHERE id=?", (session["id"],)).fetchone()
+            assert row["expires_at"] == session["expires_at"], hours
+            assert row["token_hash"] == digest(support_access._tokens[session["id"]]), hours
+            events = [
+                json.loads(e["detail"])
+                for e in c.execute("SELECT detail FROM events WHERE action='support_access.started' ORDER BY rowid")
+            ]
+            actor = c.execute(
+                "SELECT actor FROM events WHERE action='support_access.started' ORDER BY rowid DESC"
+            ).fetchone()[0]
+        assert actor == "human:morgan", hours
+        assert events[-1]["hours"] == int(duration.total_seconds() / 3600), hours
+        # One session at a time: stop this one before the next starts.
+        stopped = api.post(f"/api/v2/support/access/{session['id']}/stop", headers=signed_in())
+        assert stopped.status_code == 200, (hours, stopped.text)
+    schema = api.app.openapi()["components"]["schemas"]["AccessStart"]["properties"]["hours"]
+    assert (schema["minimum"], schema["maximum"], schema["default"]) == (1, 8760, 72)
+
+
+def test_duration_outside_the_limits_is_refused_before_hq_or_a_grant(environment, hq):
+    api = environment()
+    tid = ticket(api)
+    sent = len(hq.seen)
+    for hours in (0, 8761):
+        response = api.post("/api/v2/support/access", json={"ticket_id": tid, "hours": hours}, headers=signed_in())
+        assert response.status_code == 422, (hours, response.text)
+        assert len(hq.seen) == sent, hours
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM support_access").fetchone()[0] == 0, hours
+            assert c.execute("SELECT count(*) FROM events WHERE action='support_access.started'").fetchone()[0] == 0, (
+                hours
+            )
+
+
 def test_a_session_starts_shows_everyone_the_banner_and_stops_at_once(environment, hq):
     api = environment()
     riley = as_person(api, "riley")
@@ -89,13 +137,13 @@ def test_a_session_starts_shows_everyone_the_banner_and_stops_at_once(environmen
     assert session["tier"] == "app" and 4 * 3600 - 60 < session["seconds_left"] <= 4 * 3600
     opened = json.loads(next(x for x in hq.seen if x.url.path.endswith("/access")).content)
     assert opened["tier"] == "app" and opened["expires_at"].endswith("Z")
-    seen = api.get("/api/v2/support/access", headers=riley).json()   # any person sees it
+    seen = api.get("/api/v2/support/access", headers=riley).json()  # any person sees it
     assert seen["available"] and seen["active"]["id"] == session["id"]
     # One at a time.
     assert start(api).status_code == 409
     token = bearer(session)
     assert api.get("/api/v2/health", headers=token).status_code == 200
-    stopped = api.post(f"/api/v2/support/access/{session['id']}/stop", headers=riley)   # an admin may stop it
+    stopped = api.post(f"/api/v2/support/access/{session['id']}/stop", headers=riley)  # an admin may stop it
     assert stopped.status_code == 200 and stopped.json()["end_reason"] == "stopped"
     assert len(hq.ended) == 1
     assert api.get("/api/v2/health", headers=token).status_code == 401
@@ -103,7 +151,12 @@ def test_a_session_starts_shows_everyone_the_banner_and_stops_at_once(environmen
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM support_access").fetchone()
         assert row["token_hash"] is None and row["ended_by"] == "human:riley"
-        assert c.execute("SELECT count(*) FROM events WHERE action IN ('support_access.started','support_access.stopped')").fetchone()[0] == 2
+        assert (
+            c.execute(
+                "SELECT count(*) FROM events WHERE action IN ('support_access.started','support_access.stopped')"
+            ).fetchone()[0]
+            == 2
+        )
 
 
 def test_a_session_keeps_hqs_ids_and_each_request_lists_its_own(environment, hq):
@@ -120,10 +173,13 @@ def test_a_session_keeps_hqs_ids_and_each_request_lists_its_own(environment, hq)
     second = start(api, riley).json()
     assert second["id"] == "sa_" + "0" * 23 + "2" and hq.ended == [first["id"]]
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT action, target, detail_json FROM events WHERE action LIKE 'support_access.%' "
-                           "ORDER BY rowid").fetchall()
-    assert [(e["action"], e["target"], json.loads(e["detail_json"])["hq_ticket"]) for e in events][:2] == [
-        ("support_access.started", first["id"], hq_id), ("support_access.stopped", first["id"], hq_id)]
+        events = c.execute(
+            "SELECT action, target, detail FROM events WHERE action LIKE 'support_access.%' ORDER BY rowid"
+        ).fetchall()
+    assert [(e["action"], e["target"], json.loads(e["detail"])["hq_ticket"]) for e in events][:2] == [
+        ("support_access.started", first["id"], hq_id),
+        ("support_access.stopped", first["id"], hq_id),
+    ]
     mine = api.get("/api/v2/support/access", headers=signed_in()).json()["sessions"]
     assert [(x["id"], x["ticket_id"], x["end_reason"]) for x in mine] == [(first["id"], first["ticket_id"], "stopped")]
     assert [x["id"] for x in api.get("/api/v2/support/access", headers=riley).json()["sessions"]] == [second["id"]]
@@ -139,20 +195,26 @@ def test_an_expired_session_lets_nothing_in_and_the_worker_ends_it(environment, 
     assert support_access.pull_once(api.app) is False
     with api.app.state.store.read() as c:
         assert c.execute("SELECT end_reason FROM support_access").fetchone()[0] == "expired"
-    assert start(api).status_code == 200                       # a new one may start
+    assert start(api).status_code == 200  # a new one may start
 
 
 def test_only_an_owner_or_admin_starts_one_and_full_access_is_the_owners(environment, hq):
     api = environment()
     member, admin = as_person(api, "quinn"), as_person(api, "riley")
-    assert start(api, member).status_code == 403
-    assert start(api, admin, tier="full").status_code == 403
-    api.app.state.store.settings.test_identities["tok"] = Identity("human:morgan", "owner", email="owner@acme.example",
-                                                                   via_token=True)
-    assert api.post("/api/v2/support/access", json={"ticket_id": "sup_x"}, headers=signed_in("tok")).status_code == 403
+    assert start(api, member, hours=8760).status_code == 403
+    assert start(api, admin, tier="full", hours=8760).status_code == 403
+    api.app.state.store.settings.test_identities["tok"] = Identity(
+        "human:morgan", "owner", email="owner@acme.example", via_token=True
+    )
+    assert (
+        api.post(
+            "/api/v2/support/access", json={"ticket_id": "sup_x", "hours": 8760}, headers=signed_in("tok")
+        ).status_code
+        == 403
+    )
     # Another person's ticket is not theirs to open a session from.
     assert start(api, admin, ticket_id=ticket(api)).status_code == 404
-    assert start(api, admin, tier="app").status_code == 200
+    assert start(api, admin, tier="app", hours=8760).status_code == 200
 
 
 @pytest.mark.parametrize("switch", ["flag", "TICO_SUPPORT", "rehearsal", "demo", "rule"])
@@ -192,20 +254,32 @@ def test_app_access_reads_and_changes_setup_and_nothing_else(environment, hq):
     token = bearer(start(api, tier="app").json())
     for path in ("/api/v2/health", "/api/v2/access", "/api/v2/bots", "/api/v2/providers"):
         assert api.get(path, headers=token).status_code == 200, path
-    refused = [("POST", "/api/v2/credentials/cred_1/reveal", {}), ("POST", "/api/v2/approvals/apr_1", {"decision": "approved"}),
-               ("POST", "/api/v2/messages", {"to": "bot:coo", "body": "hi"}), ("POST", "/api/v2/tasks", {"title": "x"}),
-               ("PUT", "/api/v2/access/rules", {"admin_sql": False}), ("GET", "/api/v2/me/tokens", None),
-               ("GET", "/api/v2/support/access", None), ("POST", "/api/v2/support/access/x/stop", {})]
+    refused = [
+        ("POST", "/api/v2/credentials/cred_1/reveal", {}),
+        ("POST", "/api/v2/approvals/apr_1", {"decision": "approved"}),
+        ("POST", "/api/v2/messages", {"to": "bot:coo", "body": "hi"}),
+        ("POST", "/api/v2/tasks", {"title": "x"}),
+        ("PUT", "/api/v2/access/rules", {"admin_sql": False}),
+        ("GET", "/api/v2/me/tokens", None),
+        ("GET", "/api/v2/support/access", None),
+        ("POST", "/api/v2/support/access/x/stop", {}),
+    ]
     for method, path, body in refused:
         r = api.request(method, path, json=body, headers=token)
         assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.text)
     computer = machine(api)
     # A model sign-in's code would let support choose the account the computer runs on.
-    for path in (f"/api/v2/runners/{computer['runner_id']}/logins", f"/api/v2/runners/{computer['runner_id']}/harness-actions"):
+    for path in (
+        f"/api/v2/runners/{computer['runner_id']}/logins",
+        f"/api/v2/runners/{computer['runner_id']}/harness-actions",
+    ):
         r = api.post(path, json={"harness": "codex"}, headers=token)
         assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.text)
     # Nor read the link and code of a sign-in the person starts during the session.
-    for path in (f"/api/v2/runners/{computer['runner_id']}/logins/lgn_1", f"/api/v2/runners/{computer['runner_id']}/logins"):
+    for path in (
+        f"/api/v2/runners/{computer['runner_id']}/logins/lgn_1",
+        f"/api/v2/runners/{computer['runner_id']}/logins",
+    ):
         r = api.get(path, headers=token)
         assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.text)
     r = api.post(f"/api/v2/runners/{computer['runner_id']}/restart", json={}, headers=token)
@@ -219,27 +293,42 @@ def test_full_access_is_the_owners_reach_but_not_the_session_or_tokens(environme
     api = environment()
     token = bearer(start(api, tier="full").json())
     assert api.put("/api/v2/access/rules", json={"admin_sql": False}, headers=token).status_code == 200
-    for method, path in (("GET", "/api/v2/support/access"), ("POST", "/api/v2/me/tokens"),
-                         ("POST", "/api/v2/service-keys"), ("POST", "/api/v2/access/owner"),
-                         ("POST", "/api/v2/access/owner/email")):
+    for method, path in (
+        ("GET", "/api/v2/support/access"),
+        ("POST", "/api/v2/me/tokens"),
+        ("POST", "/api/v2/service-keys"),
+        ("POST", "/api/v2/access/owner"),
+        ("POST", "/api/v2/access/owner/email"),
+    ):
         assert api.request(method, path, json={}, headers=token).status_code == 403, path
 
 
 def test_full_access_keeps_the_owners_lasting_changes_and_neither_tier_opens_a_personal_page(environment, hq):
     api = environment()
     app_token = bearer(start(api, tier="app").json())
-    for method, path in (("POST", "/api/v2/triggers"), ("POST", "/api/v2/triggers/trg_1/delete"),
-                         ("POST", "/api/v2/triggers/trg_1/rotate"), ("POST", "/api/v2/credentials"),
-                         ("POST", "/api/v2/github/app/disconnect"), ("PUT", "/api/v2/slack/tokens"),
-                         ("PUT", "/api/v2/directory"), ("GET", "/api/v2/assistant"),
-                         ("GET", "/api/v2/tasks/t1/chat"), ("GET", "/api/v2/calendar/upcoming")):
+    for method, path in (
+        ("POST", "/api/v2/triggers"),
+        ("POST", "/api/v2/triggers/trg_1/delete"),
+        ("POST", "/api/v2/triggers/trg_1/rotate"),
+        ("POST", "/api/v2/credentials"),
+        ("POST", "/api/v2/github/app/disconnect"),
+        ("PUT", "/api/v2/slack/tokens"),
+        ("PUT", "/api/v2/directory"),
+        ("GET", "/api/v2/assistant"),
+        ("GET", "/api/v2/tasks/t1/chat"),
+        ("GET", "/api/v2/calendar/upcoming"),
+    ):
         r = api.request(method, path, json={}, headers=app_token)
         assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (method, path, r.text)
     with api.app.state.store.read() as c:
         sid = c.execute("SELECT id FROM support_access WHERE ended_at IS NULL").fetchone()[0]
     assert api.post(f"/api/v2/support/access/{sid}/stop", json={}, headers=signed_in()).status_code == 200
     full_token = bearer(start(api, tier="full").json())
-    for method, path in (("GET", "/api/v2/assistant"), ("GET", "/api/v2/tasks/t1/chat"), ("GET", "/api/v2/calendar/upcoming")):
+    for method, path in (
+        ("GET", "/api/v2/assistant"),
+        ("GET", "/api/v2/tasks/t1/chat"),
+        ("GET", "/api/v2/calendar/upcoming"),
+    ):
         r = api.request(method, path, headers=full_token)
         assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.text)
     # The owner's reach, as decided for the full level: a webhook it makes, or a computer's model sign-in, is its owner's
@@ -250,18 +339,35 @@ def test_full_access_keeps_the_owners_lasting_changes_and_neither_tier_opens_a_p
         assert not (r.status_code == 403 and r.json()["error"]["code"] == "support_access"), (path, r.text)
 
 
-@pytest.mark.parametrize("path", ["/api/v2/me%2Ftokens", "/api/v2/support%2Faccess", "/api/v2/me/tokens%3F",
-                                  "/api/v2/support/access%3Fx", "/api/v2/%73upport/access", "/api/v2/health%3F"])
-def test_an_encoded_address_is_refused_as_sent(environment, hq, path):
+def test_an_encoded_address_is_refused_as_sent(environment, hq):
     api = environment()
     token = bearer(start(api, tier="full").json())
-    r = api.get(path, headers=token)
-    assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.status_code, r.text)
+    for path in [
+        "/api/v2/me%2Ftokens",
+        "/api/v2/support%2Faccess",
+        "/api/v2/me/tokens%3F",
+        "/api/v2/support/access%3Fx",
+        "/api/v2/%73upport/access",
+        "/api/v2/health%3F",
+    ]:
+        r = api.get(path, headers=token)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "support_access", (path, r.status_code, r.text)
 
 
-@pytest.mark.parametrize("path", ["/api/v2//support/access", "/api/v2/./me/tokens", "/api/v2/x/../me/tokens",
-                                  "/api/v2/%73upport/access", "/api/v2/support/access/", "/api/v2/me;x/tokens",
-                                  "/api/v2", "/api/v3/health", ""])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v2//support/access",
+        "/api/v2/./me/tokens",
+        "/api/v2/x/../me/tokens",
+        "/api/v2/%73upport/access",
+        "/api/v2/support/access/",
+        "/api/v2/me;x/tokens",
+        "/api/v2",
+        "/api/v3/health",
+        "",
+    ],
+)
 def test_the_gate_reads_only_the_plain_path_form(path):
     who = Identity(support_access.SUPPORT_ACTOR, "owner", support="full")
     with pytest.raises(Problem) as refused:
@@ -274,11 +380,27 @@ def test_the_gate_reads_only_the_plain_path_form(path):
 def test_the_worker_runs_what_hq_carries_as_the_session_and_logs_it(environment, hq):
     api = environment()
     session = start(api, tier="app").json()
-    hq.queued = [{"rid": "r1", "by": "support-agent", "method": "GET", "path": "/api/v2/health", "query": "",
-                  "content_type": "", "body_b64": ""},
-                 {"rid": "r2", "by": "staff", "method": "POST", "path": "/api/v2/messages", "query": "",
-                  "content_type": "application/json", "body_b64": base64.b64encode(b'{"to":"bot:coo"}').decode()},
-                 {"rid": "r3", "by": "staff", "method": "GET", "path": "/download/latest.json"}]
+    hq.queued = [
+        {
+            "rid": "r1",
+            "by": "support-agent",
+            "method": "GET",
+            "path": "/api/v2/health",
+            "query": "",
+            "content_type": "",
+            "body_b64": "",
+        },
+        {
+            "rid": "r2",
+            "by": "staff",
+            "method": "POST",
+            "path": "/api/v2/messages",
+            "query": "",
+            "content_type": "application/json",
+            "body_b64": base64.b64encode(b'{"to":"bot:coo"}').decode(),
+        },
+        {"rid": "r3", "by": "staff", "method": "GET", "path": "/download/latest.json"},
+    ]
     assert support_access.pull_once(api.app) is True
     # Each answer went back on its own, as soon as its request finished.
     assert hq.reply_calls == 3
@@ -288,8 +410,10 @@ def test_the_worker_runs_what_hq_carries_as_the_session_and_logs_it(environment,
     assert replies["r2"]["status"] == 403 and replies["r3"]["status"] == 400
     log = api.get(f"/api/v2/support/access/{session['id']}/log", headers=signed_in()).json()["log"]
     assert [(x["by"], x["method"], x["path"], x["status"]) for x in reversed(log)] == [
-        ("support-agent", "GET", "/api/v2/health", 200), ("staff", "POST", "/api/v2/messages", 403),
-        ("staff", "GET", "/download/latest.json", 400)]
+        ("support-agent", "GET", "/api/v2/health", 200),
+        ("staff", "POST", "/api/v2/messages", 403),
+        ("staff", "GET", "/download/latest.json", 400),
+    ]
     assert api.get(f"/api/v2/support/access/{session['id']}/log", headers=as_person(api, "quinn")).status_code == 403
     # HQ ending it ends it here.
     hq.say_ended = True
@@ -298,14 +422,40 @@ def test_the_worker_runs_what_hq_carries_as_the_session_and_logs_it(environment,
         assert c.execute("SELECT end_reason FROM support_access").fetchone()[0] == "ended_by_hq"
 
 
-def test_a_restart_mints_a_fresh_token_for_a_live_session(environment, hq):
+def test_a_long_session_survives_restart_and_relays_until_its_expiry(environment, hq, monkeypatch):
     api = environment()
-    session = start(api).json()
+    response = start(api, hours=8760)
+    assert response.status_code == 200, response.text
+    session = response.json()
     old = bearer(session)
-    support_access._tokens.clear()                             # what a restart forgets
+    now = [H.shift(session["expires_at"], seconds=-1)]
+    monkeypatch.setattr(H, "now", lambda: now[0])
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = H.parse_ts(now[0])
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(support_access, "datetime", Clock)
+    assert api.get("/api/v2/health", headers=old).status_code == 200
+    support_access._tokens.clear()  # what a restart forgets
     support_access.started(api.app, support_access._runtime["loop"])
     assert api.get("/api/v2/health", headers=old).status_code == 401
-    assert api.get("/api/v2/health", headers=bearer(session)).status_code == 200
+    fresh = bearer(session)
+    assert api.get("/api/v2/health", headers=fresh).status_code == 200
+    active = api.get("/api/v2/support/access", headers=signed_in()).json()["active"]
+    assert active["expires_at"] == session["expires_at"] and active["seconds_left"] == 1
+    hq.queued = [{"rid": "last", "by": "staff", "method": "GET", "path": "/api/v2/health"}]
+    assert support_access.pull_once(api.app) is True
+    assert hq.replies[-1]["rid"] == "last" and hq.replies[-1]["status"] == 200
+    now[0] = session["expires_at"]
+    assert api.get("/api/v2/health", headers=fresh).status_code == 401
+    assert support_access.pull_once(api.app) is False
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT end_reason, token_hash FROM support_access WHERE id=?", (session["id"],)).fetchone()
+    assert row["end_reason"] == "expired" and row["token_hash"] is None
+    assert hq.ended == [session["id"]]
 
 
 class ContractAccessHQ(FakeAccessHQ):
@@ -323,8 +473,13 @@ def test_a_support_session_keeps_to_hq_s_documented_access_contract(environment,
     staff call left at HQ, runs it as the session and replies with its status and body, keeps the log (by, path,
     status), and on Stop ends it at HQ, each with the ticket's secret in `X-Ticket-Secret`. HQ's own side (the staff
     routes, its in-memory queue, refusing a call once the session ended) is tested in ticoteam/tico-services."""
-    documented("tico-hq.md", "POST /v1/support/{ticket}/access", "POST /v1/support/{ticket}/access/{session}/pull",
-               "POST /v1/support/{ticket}/access/{session}/reply", "POST /v1/support/{ticket}/access/{session}/end")
+    documented(
+        "tico-hq.md",
+        "POST /v1/support/{ticket}/access",
+        "POST /v1/support/{ticket}/access/{session}/pull",
+        "POST /v1/support/{ticket}/access/{session}/reply",
+        "POST /v1/support/{ticket}/access/{session}/end",
+    )
     hq = ContractAccessHQ()
     monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(hq))
     api = environment()
@@ -332,11 +487,11 @@ def test_a_support_session_keeps_to_hq_s_documented_access_contract(environment,
     # Opening, from a ticket just filed: `{tier, expires_at}` (to the second, UTC) answered `{session}`.
     before = datetime.now(timezone.utc).replace(microsecond=0)
     session = start(api, tier="app", hours=2).json()
-    (tid, held), = hq.tickets.items()
+    ((tid, held),) = hq.tickets.items()
     secret = held["secret"]
     assert TICKET_ID.fullmatch(tid)
     filed, (method, path, query, sent_secret, body) = hq.calls()
-    assert filed == ("POST", "/v1/support", "", None, {"message": "Bots stopped"})
+    assert filed == ("POST", "/v1/support", "", None, {"message": "Bots stopped", "source": "person"})
     assert (method, path, query, sent_secret) == ("POST", f"/v1/support/{tid}/access", "", secret)
     assert set(body) == {"tier", "expires_at"} and body["tier"] == "app"
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["expires_at"])
@@ -348,16 +503,34 @@ def test_a_support_session_keeps_to_hq_s_documented_access_contract(environment,
     base = f"/v1/support/{tid}/access/{hq_session}"
 
     # A staff call waits at HQ; the pull hands it over as documented, the install runs it and replies to it alone.
-    hq.queued = [{"rid": "r1", "by": "support-agent", "method": "GET", "path": "/api/v2/health", "query": "",
-                  "content_type": "", "body_b64": ""},
-                 {"rid": "r2", "by": "staff", "method": "GET", "path": "/api/v2/health", "query": "verbose=1",
-                  "content_type": "", "body_b64": ""}]
+    hq.queued = [
+        {
+            "rid": "r1",
+            "by": "support-agent",
+            "method": "GET",
+            "path": "/api/v2/health",
+            "query": "",
+            "content_type": "",
+            "body_b64": "",
+        },
+        {
+            "rid": "r2",
+            "by": "staff",
+            "method": "GET",
+            "path": "/api/v2/health",
+            "query": "verbose=1",
+            "content_type": "",
+            "body_b64": "",
+        },
+    ]
     mark = len(hq.seen)
     assert support_access.pull_once(api.app, wait=1) is True
     calls = hq.calls(mark)
-    assert [(m, p, q, s) for m, p, q, s, _ in calls] == [("POST", base + "/pull", "", secret),
-                                                         ("POST", base + "/reply", "", secret),
-                                                         ("POST", base + "/reply", "", secret)]
+    assert [(m, p, q, s) for m, p, q, s, _ in calls] == [
+        ("POST", base + "/pull", "", secret),
+        ("POST", base + "/reply", "", secret),
+        ("POST", base + "/reply", "", secret),
+    ]
     assert calls[0][4] == {}
     for (*_, sent), rid in zip(calls[1:], ("r1", "r2")):
         (reply,) = sent["replies"]
@@ -366,11 +539,15 @@ def test_a_support_session_keeps_to_hq_s_documented_access_contract(environment,
         assert json.loads(base64.b64decode(reply["body_b64"], validate=True))
     log = api.get(f"/api/v2/support/access/{session['id']}/log", headers=signed_in()).json()["log"]
     assert [(x["by"], x["method"], x["path"], x["status"]) for x in reversed(log)] == [
-        ("support-agent", "GET", "/api/v2/health", 200), ("staff", "GET", "/api/v2/health", 200)]
+        ("support-agent", "GET", "/api/v2/health", 200),
+        ("staff", "GET", "/api/v2/health", 200),
+    ]
 
     # Stop here ends it at HQ, and nothing more is pulled.
     mark = len(hq.seen)
-    assert api.post(f"/api/v2/support/access/{session['id']}/stop", headers=signed_in()).json()["end_reason"] == "stopped"
+    assert (
+        api.post(f"/api/v2/support/access/{session['id']}/stop", headers=signed_in()).json()["end_reason"] == "stopped"
+    )
     assert hq.calls(mark) == [("POST", base + "/end", "", secret, {})] and hq.ended == [hq_session]
     assert support_access.pull_once(api.app, wait=1) is False and len(hq.seen) == mark + 1
 

@@ -9,9 +9,11 @@
 Stages, their movers, the owner and the budget come from pipeline.yaml at the repository root. A project is a folder per
 stage (projects/<slug>/<stage>/<asset>). An asset may have a provenance sidecar: the same file name with `.json` added,
 holding `cost_usd`. A self-moved stage is done when its folder holds a `.done` file. The budget raised by the owner is in
-projects/<slug>/budget.json. Approval is `hub file approved <path>`: exit 0 when approved, 1 when not.
+projects/<slug>/budget.json. Approval is `hub file approved <path>`: exit 0 when approved, 1 when its answer says
+`"approved": false`. Any other result stops the pipeline with an error, since a failed call also exits 1.
 Standard library only.
 """
+
 import argparse
 import json
 import re
@@ -25,8 +27,10 @@ PIPELINE = REPO / "pipeline.yaml"
 PROJECTS = REPO / "projects"
 MOVER = re.compile(r"owner|self|person:.+|bot:[a-z0-9][a-z0-9-]*")
 STAGE = re.compile(r"[a-z][a-z0-9-]*")
-NO_OWNER = ("waiting: no owner is named (pipeline.yaml `owner`, or --owner NAME): use the person who opened the project "
-            "task, then run next again with --owner NAME")
+NO_OWNER = (
+    "waiting: no owner is named (pipeline.yaml `owner`, or --owner NAME): use the person who opened the project "
+    "task, then run next again with --owner NAME"
+)
 
 
 class Problem(Exception):
@@ -77,7 +81,9 @@ def read(path=None):
         if not STAGE.fullmatch(stage_id):
             raise Problem(f"pipeline.yaml: stage id {stage_id!r} must be lowercase words joined by dashes")
         if not MOVER.fullmatch(mover):
-            raise Problem(f"pipeline.yaml: stage {stage_id} mover {mover!r} is not owner, self, person:<name> or bot:<slug>")
+            raise Problem(
+                f"pipeline.yaml: stage {stage_id} mover {mover!r} is not owner, self, person:<name> or bot:<slug>"
+            )
         stages.append({"id": stage_id, "mover": mover})
     ids = [s["id"] for s in stages]
     if not ids or len(set(ids)) != len(ids):
@@ -131,8 +137,11 @@ def budget_record(project):
         data = json.loads(path.read_text())
     except ValueError:
         raise Problem(f"{path}: not readable JSON") from None
-    return {"extra_usd": float(data.get("extra_usd") or 0), "approval": str(data.get("approval") or ""),
-            "approvals": [str(a) for a in data.get("approvals") or []]}
+    return {
+        "extra_usd": float(data.get("extra_usd") or 0),
+        "approval": str(data.get("approval") or ""),
+        "approvals": [str(a) for a in data.get("approvals") or []],
+    }
 
 
 def record_raise(project, usd, approval_id):
@@ -140,8 +149,11 @@ def record_raise(project, usd, approval_id):
     record = budget_record(project)
     if approval_id in record["approvals"]:
         return record
-    record = {"extra_usd": record["extra_usd"] + float(usd), "approval": approval_id,
-              "approvals": record["approvals"] + [approval_id]}
+    record = {
+        "extra_usd": record["extra_usd"] + float(usd),
+        "approval": approval_id,
+        "approvals": record["approvals"] + [approval_id],
+    }
     project.mkdir(parents=True, exist_ok=True)
     (project / "budget.json").write_text(json.dumps(record, indent=2) + "\n")
     return record
@@ -159,22 +171,32 @@ def approved_by(mover):
     return mover if mover.startswith("bot:") else "human"
 
 
+def answer_of(text):
+    """The JSON object a command printed, or {} when it printed none."""
+    try:
+        value = json.loads(text or "")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def approval(asset, mover="owner"):
-    """(approved, detail) from `hub file approved --by`: exit 0 approved, 1 not approved, anything else is a failure."""
-    command = ["hub", "file", "approved", rel(asset), "--by", approved_by(mover)]
+    """(approved, detail) from `hub file approved --by`. Exit 0: approved. Exit 1 with an answer that says
+    `"approved": false`: not approved. Anything else raises Problem. The CLI also exits 1 when a call fails (Tico
+    unreachable, an unexpected error), so the code alone is not a verdict: a failed call is never read as pending."""
+    path = rel(asset)
+    command = ["hub", "file", "approved", path, "--by", approved_by(mover)]
     try:
         done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise Problem(f"hub file approved could not run: {exc}") from None
+        raise Problem(f"hub file approved could not run for {path}: {exc}") from None
+    answer = answer_of(done.stdout)
     if done.returncode == 0:
-        try:
-            detail = json.loads(done.stdout)
-        except ValueError:
-            detail = {}
-        return True, detail if isinstance(detail, dict) else {}
-    if done.returncode == 1:
+        return True, answer
+    if done.returncode == 1 and answer.get("approved") is False:
         return False, {}
-    raise Problem(f"hub file approved exited {done.returncode}: {(done.stderr or done.stdout).strip()[:200]}")
+    output = (done.stderr.strip() or done.stdout.strip())[-500:] or "no output"
+    raise Problem(f"hub file approved exited {done.returncode} for {path}, so its approval is unknown: {output}")
 
 
 # ----------------------------------------------------------------------------- what to do next
@@ -198,8 +220,19 @@ def request(project, cfg, stage, files, task, owner):
         lines = [f"Review each file for the {stage['id']} stage of {project.name}. Files, as <FILE@N> from step 1:"]
         lines += [f"- {rel(f)}: <FILE@N>" for f in files]
         lines.append("Run for each one: hub file review <FILE@N> --approve|--changes --task <this task> [--note TEXT]")
-        create = ["hub", "task", "create", "--owner", mover, "--parent", task,
-                  "--title", f"Review {stage['id']} files for {project.name}", "--body", "\n".join(lines)]
+        create = [
+            "hub",
+            "task",
+            "create",
+            "--owner",
+            mover,
+            "--parent",
+            task,
+            "--title",
+            f"Review {stage['id']} files for {project.name}",
+            "--body",
+            "\n".join(lines),
+        ]
         steps.append(f"2. {shlex.join(create)}")
         return "\n".join(steps)
     person = owner if mover == "owner" else mover.split(":", 1)[1]
@@ -214,13 +247,15 @@ def self_step(project, cfg, stage, task, owner):
     if not owner:
         return NO_OWNER
     raise_by = f"{cfg['budget']:g}"
-    options = [f"Raise budget -> the self-moved stages of {project.name} may spend {raise_by} USD more",
-               "Stop -> no more self-moved work on this project"]
+    options = [
+        f"Raise budget -> the self-moved stages of {project.name} may spend {raise_by} USD more",
+        "Stop -> no more self-moved work on this project",
+    ]
     extra = [item for option in options for item in ("--option", option)]
     extra += ["--spend", f"Raise budget={raise_by}:{project.name} self-moved stages"]
-    return (f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner: "
-            + question(task, owner, f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used.",
-                       [], extra))
+    return f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner: " + question(
+        task, owner, f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used.", [], extra
+    )
 
 
 def next_step(project, cfg, task="TASK-ID", owner=None):
@@ -282,8 +317,10 @@ def status(project, cfg, task="TASK-ID", owner=None):
             state = "approved" if approval(f, stage["mover"])[0] else "not approved"
             lines.append(f"{stage['id']:<11} {stage['mover']:<16} {f.name:<28} {state:<12} {cost(f):.2f} USD")
     record = budget_record(project)
-    lines.append(f"budget {cfg['budget']:.2f} USD + {record['extra_usd']:.2f} raised, {spent(project, cfg):.2f} USD spent "
-                 "by self-moved stages")
+    lines.append(
+        f"budget {cfg['budget']:.2f} USD + {record['extra_usd']:.2f} raised, {spent(project, cfg):.2f} USD spent "
+        "by self-moved stages"
+    )
     lines.append("next: " + next_step(project, cfg, task, owner))
     return "\n".join(lines)
 
@@ -312,8 +349,11 @@ def main(argv=None):
             return 0
         cfg = read()
         project = Path(args.project).resolve()
-        print(status(project, cfg, args.task, args.owner) if args.command == "status"
-              else next_step(project, cfg, args.task, args.owner))
+        print(
+            status(project, cfg, args.task, args.owner)
+            if args.command == "status"
+            else next_step(project, cfg, args.task, args.owner)
+        )
         return 0
     except Problem as exc:
         print(f"error: {exc}", file=sys.stderr)

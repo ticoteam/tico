@@ -2,6 +2,7 @@
 own transaction, and the run's end settles that hold at the run's priced Gateway cost, or releases it when nothing was
 Gateway-billed (own keys, sign-ins and subscriptions post nothing from usage). A settled hold counts until the daily
 usage posting takes it in, so AI spend counts against the budget as it happens and never twice."""
+
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -17,16 +18,17 @@ from .store import tico
 from .store import usage as SU
 from .usage import cents, nano
 
-FLOOR = 5                       # cents held for a bot with no Gateway-billed history
+FLOOR = 5  # cents held for a bot with no token-priced history
 RECENT_RUNS = 20
 RECENT_DAYS = 30
-EXPIRES_HOURS = 12              # a run that never reports back frees its hold after this
+EXPIRES_HOURS = 12  # a run that never reports back frees its hold after this
 
 
 @dataclass(frozen=True)
 class RunHold:
     """What a claim's hold came to: `refused` when a `decline` budget at its limit says no (the claim then takes no
     run), with the budget's name for the paused reason."""
+
     refused: bool = False
     hold_id: str | None = None
     budget: str = ""
@@ -41,14 +43,17 @@ def scope_target(bot: str) -> str:
 
 
 def size(c: sqlite3.Connection, bot: str, at: str) -> int:
-    """Cents to hold for one run of `bot`: its recent average Gateway-billed cost, never under FLOOR."""
+    """Cents to hold for one run of `bot`: its recent average token-priced cost per run (any key, not a subscription),
+    never under FLOOR."""
     average = tico.bot_average_run(c, bot, tico.shift(at, days=-RECENT_DAYS), RECENT_RUNS)
     return max(FLOOR, cents(nano(average)) if average is not None else 0)
 
 
 def hold(c: sqlite3.Connection, bot: str, job_id: str, at: str | None = None) -> RunHold:
-    """Hold the run's likely cost at claim. When the full amount would pass a `decline` budget that still has money
-    left, the hold takes what is left instead: only a budget at its limit refuses the run."""
+    """Hold the run's likely cost at claim. A claim is work, not a request for budget, so it fits against spend (actuals
+    and holds), past what unused allocations set aside: a reserve never refuses it and never pauses the bot. When the
+    full amount would pass a `decline` budget that still has spend room, the hold takes that room instead. Only a budget
+    at its cutoff (spend at its amount) refuses the run, the same point the usage cutoff pauses the bot."""
     book = SL.book(c)
     if book is None:
         return RunHold()
@@ -56,22 +61,40 @@ def hold(c: sqlite3.Connection, bot: str, job_id: str, at: str | None = None) ->
     live = [b.id for b in SB.budgets(c, book.id).values() if b.active]
     versions = SB.versions(c, live) if account is not None and live else {}
     if not any(versions.get(bid) for bid in live):
-        return RunHold()            # no budget has an amount: nothing to hold against
+        return RunHold()  # no budget has an amount: nothing to hold against
     at = at or tico.now()
     scope = {"account_id": account, "teammate": "bot:" + bot}
     expires = _hours_after(at, EXPIRES_HOURS)
     amount = size(c, bot, at)
-    decision = budgeting.hold_place(c, budget_scope=scope, amount=amount, currency=book.base_currency, source="run",
-                                    source_id=source_id(job_id), expires_at=expires, at=at)
+    decision = budgeting.hold_place(
+        c,
+        budget_scope=scope,
+        amount=amount,
+        currency=book.base_currency,
+        source="run",
+        source_id=source_id(job_id),
+        expires_at=expires,
+        at=at,
+        past_reserves=True,
+    )
     if not decision.allowed and decision.action == "decline" and decision.limit_budget_id and decision.budget_id:
-        left = _left(load(c, at), bot, decision.budget_id)
-        if left is not None and 0 < left < amount:
-            decision = budgeting.hold_place(c, budget_scope=scope, amount=left, currency=book.base_currency,
-                                            source="run", source_id=source_id(job_id), expires_at=expires, at=at)
+        room = _room(load(c, at), bot, decision.budget_id)
+        if room is not None and 0 < room < amount:
+            decision = budgeting.hold_place(
+                c,
+                budget_scope=scope,
+                amount=room,
+                currency=book.base_currency,
+                source="run",
+                source_id=source_id(job_id),
+                expires_at=expires,
+                at=at,
+                past_reserves=True,
+            )
     if decision.allowed or decision.hold_id:
-        return RunHold(hold_id=decision.hold_id)    # held, or a retried claim keeps the hold its job already has
+        return RunHold(hold_id=decision.hold_id)  # held, or a retried claim keeps the hold its job already has
     if decision.action != "decline":
-        return RunHold()            # ask or hold_payment: a run is not a payment, so it goes ahead without a hold
+        return RunHold()  # ask or hold_payment: a run is not a payment, so it goes ahead without a hold
     limit = SB.budgets(c, book.id).get(decision.limit_budget_id or "")
     return RunHold(refused=True, budget=limit.name if limit else "AI services")
 
@@ -110,13 +133,18 @@ def expire(c: sqlite3.Connection, at: str, most: int = 500) -> int:
     return budgeting.holds_expire(c, at, most)
 
 
-def _left(ctx: Ctx, bot: str, leaf_id: str) -> int | None:
-    """What the bot may still spend along its whole budget path: the least any budget on it has left for the bot (its
-    own allocations there are its to spend), or None when no budget on it has an amount."""
+def _room(ctx: Ctx, bot: str, leaf_id: str) -> int | None:
+    """The spend room a claim has along the bot's whole budget path: the least any budget on it has left under its
+    amount, counting actuals and holds only (unused allocations do not count, a claim fits past them), or None when no
+    budget on it has an amount."""
     path = budgeting.chain_of(ctx, leaf_id)
     today = dates.day(ctx.today)
-    lefts = [budgeting.state(ctx, bid, today, scope_target(bot), path).remaining for bid in path]
-    return min((v for v in lefts if v is not None), default=None)
+    rooms = [
+        s.amount - s.spent
+        for s in (budgeting.state(ctx, bid, today, scope_target(bot), path) for bid in path)
+        if s.amount is not None
+    ]
+    return min(rooms, default=None)
 
 
 def _hours_after(at: str, hours: int) -> str:

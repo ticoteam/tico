@@ -4,6 +4,10 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 finished. Budget 20 minutes. The outcome is five recorded answers, a register of open escalations,
 a first daily digest, and the first routine checked.
 
+Inputs: the task, `hub team show`, the open tasks, and the recent updates, in your access.
+
+Done when: the five answers are in `state.md`, the register and the first digest are on the task, the routine is checked, and `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -44,13 +48,13 @@ the digest "First draft, not yet reviewed".
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send this digest every weekday at 08:30." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send this digest every weekday at 08:30." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

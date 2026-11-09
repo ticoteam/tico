@@ -15,8 +15,15 @@ contact sheet; a person looks at the rest.
   without written agreement.
 - **Every claim is in the approved script,** with a source the owner can name.
 - **Demo is labelled.** Demo data says it is demo data. Sped-up or compressed time says so.
+- **Every shot has its class.** Real, recorded demo, compressed or sample, generated or drawn, with the label visible in the final frame.
+- **Platform disclosure is answered truthfully.** Where a platform asks whether a realistic video is synthetic, the answer matches the classes in the cut. Check the platform's current help page.
+- **Generated clips are finished, not shipped raw.** Assembled and finished in an editor, with the finish step recorded
+  in the file's sidecar. A generator is never asked to render UI or printed text.
+- **One next step.** The last shot shows the step the brief names, and nothing else competes with it.
+- **Length fits the brief.** The cut is within the brief's length; a longer cut is shortened before review, not after.
 - **Every part is traceable.** Each file in the cut has an approved version or its own sidecar.
 - **The file is the one approved.** Same version and digest as the one on the final task.
 
 ## Sources
 - Owner's standard for finals, from the setup answers in `state.md`.
+- Platform disclosure rules for realistic synthetic video, read 2026-11-01 from news and third-party guides; check each platform's own help page before relying on them.

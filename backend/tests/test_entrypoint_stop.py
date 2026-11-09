@@ -1,11 +1,14 @@
 """docker/entrypoint.sh `server` on a stop: the server gets TICO_STOP_GRACE and is then killed, and only after it has
 exited is Litestream stopped, so its last sync covers every write. A server or Litestream that exits on its own ends
 the container, the other stopped in the same order."""
+
 import contextlib
+import json
 import os
 import shlex
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -38,12 +41,16 @@ if [ "$1 $2" = "-m backend.server" ]; then
   while :; do sleep 0.05; done
 fi
 if [ "$1 $2 $3" = "-m backend.replication loop" ]; then exec sleep 600; fi
+if [ "$1 $2 $3" = "-m backend.replication reset-stale-litestream" ] && [ -n "$STUB_RESET_EXIT" ]; then exit "$STUB_RESET_EXIT"; fi
+if [ "$1 $2 $3" = "-m backend.replication reset-stale-litestream" ] && [ -n "$STUB_RESET_WAIT" ]; then echo "reset waiting" >> "$STUB_LOG"; exec sleep 600; fi
 exec %s "$@"
 """
 
-# Litestream: restore finds no replica; replicate runs until SIGTERM, then takes a moment for its last sync.
+# Litestream: restore finds no replica; replicate logs the replica url its config names, then runs until SIGTERM, then takes
+# a moment for its last sync.
 LITESTREAM = """#!/bin/sh
 [ "$1" = replicate ] || exit 0
+echo "replica $(sed -n 's/^ *url: //p' "$3")" >> "$STUB_LOG"
 trap 'echo "litestream TERM" >> "$STUB_LOG"; sleep 0.3; echo "litestream synced" >> "$STUB_LOG"; exit 0' TERM
 echo "litestream up" >> "$STUB_LOG"
 [ -z "$STUB_LITESTREAM_EXIT" ] || { sleep 1; echo "litestream died" >> "$STUB_LOG"; exit 2; }
@@ -59,19 +66,30 @@ def start(tmp_path, **extra):
         (bin_dir / name).write_text(text)
         (bin_dir / name).chmod(0o755)
     log = tmp_path / "stub.log"
-    env = {**os.environ, "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{os.environ['PATH']}",
-           "TICO_DATA_DIR": str(data), "TICO_BACKUP_DIR": str(backups), "PYTHONPATH": str(ROOT),
-           "TICO_LITESTREAM_CONFIG": str(tmp_path / "litestream.yml"), "TICO_COMPANY_NAME": "Acme",
-           "TICO_OWNER_EMAIL": "owner@example.com", "TICO_AUTH_PROXY": "none", "STUB_LOG": str(log),
-           "STUB_SERVER_EXIT": "", "STUB_LITESTREAM_EXIT": "", **extra}
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+        "TICO_DATA_DIR": str(data),
+        "TICO_BACKUP_DIR": str(backups),
+        "PYTHONPATH": str(ROOT),
+        "TICO_LITESTREAM_CONFIG": str(tmp_path / "litestream.yml"),
+        "TICO_COMPANY_NAME": "Acme",
+        "TICO_OWNER_EMAIL": "owner@example.com",
+        "TICO_AUTH_PROXY": "none",
+        "STUB_LOG": str(log),
+        "STUB_SERVER_EXIT": "",
+        "STUB_LITESTREAM_EXIT": "",
+        **extra,
+    }
     for key in ("TICO_BACKUP_URL", "BASH_ENV", "TICO_BACKUP", "TICO_REHEARSAL"):
         env.pop(key, None)
     env.update(extra)
     # Output to a file, not a pipe: a stub left behind (a failure here) would hold a pipe open. Its own session, so
     # `finish` can clean up everything it started, as the container's end does.
     out = (tmp_path / "out.txt").open("w")
-    p = subprocess.Popen(["bash", str(ENTRYPOINT), "server"], env=env, stdout=out, stderr=subprocess.STDOUT,
-                         start_new_session=True)
+    p = subprocess.Popen(
+        ["bash", str(ENTRYPOINT), "server"], env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True
+    )
     out.close()
     return p, log
 
@@ -110,7 +128,7 @@ def test_a_stop_kills_a_slow_server_after_the_grace_then_lets_litestream_sync(tm
     assert p.returncode == 0, out
     seen = lines(log)
     assert seen.index("server TERM") < seen.index("litestream TERM") < seen.index("litestream synced"), seen
-    assert 0.5 <= took < 3, took                 # the grace, Litestream's sync, and not Docker's 10 s
+    assert 0.5 <= took < 3, took  # the grace, Litestream's sync, and not Docker's 10 s
     assert "shutdown-sync-timeout: 5s" in (tmp_path / "litestream.yml").read_text().splitlines()
 
 
@@ -129,6 +147,32 @@ def test_a_litestream_that_dies_stops_the_server_and_fails(tmp_path):
     seen = lines(log)
     assert seen.index("litestream died") < seen.index("server TERM"), seen
     assert "Litestream exited; stopping the server" in out
+
+
+def test_a_generation_switch_that_broke_off_keeps_litestream_from_starting_on_its_config(tmp_path):
+    # reset-stale-litestream exits 3 only after environment.json may name a new generation: Litestream must not start.
+    p, log = start(tmp_path, STUB_RESET_EXIT="3", TICO_STOP_GRACE="0.2")
+    out = finish(p, tmp_path)
+    assert p.returncode != 0, out
+    assert "litestream up" not in lines(log), lines(log)
+
+
+def test_a_reset_job_waiting_for_the_backup_location_leaves_the_server_up_and_ends_on_a_stop(tmp_path):
+    # An unfinished generation switch waits in the reset job while the backup location cannot be read. The server keeps
+    # running meanwhile, and a stop ends the wait (the job is a shell subshell, which a TERM ends at once).
+    p, log = start(tmp_path, STUB_RESET_WAIT="1", TICO_STOP_GRACE="0.2")
+    try:
+        until(lambda: {"server up", "reset waiting"} <= set(lines(log)))
+        assert p.poll() is None, (tmp_path / "out.txt").read_text()
+        began = time.monotonic()
+        p.send_signal(signal.SIGTERM)
+        p.wait(20)
+        took = time.monotonic() - began
+    finally:
+        out = finish(p, tmp_path)
+    assert p.returncode == 0, out
+    assert "litestream up" not in lines(log) and "server TERM" in lines(log)
+    assert took < 3, took
 
 
 def test_backups_off_stops_the_server_the_same_way(tmp_path):

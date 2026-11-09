@@ -2,16 +2,17 @@
 
 The server names each bucket's https base in TICO_S3_VIEW_URLS (`bucket=https://base[/prefix]`, comma-separated;
 docs/files.md) and hands the mapping to signed-in clients in `GET /api/v2/config` as `s3_view_urls`. The UI renders
-with it (ui/app/markdown.js) and the `hub` CLI and MCP tools rewrite a bot's text with it before sending, so a
+with it (ui/app/markdown.ts) and the `hub` CLI and MCP tools rewrite a bot's text with it before sending, so a
 person gets a link rather than a URI nothing opens. Pure stdlib: the server, the runner and the CLI all import it.
 """
+
 import logging
 import re
 from urllib.parse import quote, unquote, urlsplit
 
 # S3's own rule for bucket names: 3-63 lower-case letters, digits, dots and hyphens, starting and ending alphanumeric.
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
-# An s3:// URI in free text, by the rules ui/app/markdown.js (autolink) links with; ui/tests/support/s3-link-vectors.json
+# An s3:// URI in free text, by the rules ui/app/markdown.ts (autolink) links with; ui/tests/support/s3-link-vectors.json
 # holds the cases both are tested on. `<s3://...>` is one unit, spaces and all. A bare URI runs to whitespace or
 # <>"'` and then gives back trailing punctuation and a closing bracket it did not open.
 URI = re.compile(r"<(s3://[^<>\n]+)>|\bs3://[^\s<>\"'`]+", re.I)
@@ -49,12 +50,20 @@ def parse(value, private_bucket=""):
         # The log names the bucket, never the base: a mistyped base may carry credentials.
         if not BUCKET.fullmatch(bucket) or ".." in bucket:
             log.warning("TICO_S3_VIEW_URLS: ignored the entry for %r: not a plain bucket name", bucket[:70])
-        elif url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment \
-                or any(c.isspace() for c in base):
+        elif (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or any(c.isspace() for c in base)
+        ):
             log.warning("TICO_S3_VIEW_URLS: ignored the entry for %s: the base must be https://host[/prefix]", bucket)
         elif private_bucket and bucket == private_bucket.lower():
-            log.warning("TICO_S3_VIEW_URLS: ignored the entry for %s: it is TICO_BLOB_BUCKET, Tico's private file store",
-                        bucket)
+            log.warning(
+                "TICO_S3_VIEW_URLS: ignored the entry for %s: it is TICO_BLOB_BUCKET, Tico's private file store", bucket
+            )
         elif bucket in out:
             log.warning("TICO_S3_VIEW_URLS: ignored the second entry for %s", bucket)
         else:
@@ -83,11 +92,11 @@ def rewrite(text, mapping):
                 unmapped.append(uri)
             return m.group(0)
         rewritten.append({"from": uri, "to": url})
-        return ("<" + url + ">") if angled else url + m.group(0)[len(uri):]
+        return ("<" + url + ">") if angled else url + m.group(0)[len(uri) :]
 
     out, at = [], 0
     for code in CODE.finditer(text or ""):
-        out.append(URI.sub(one, text[at:code.start()]))
+        out.append(URI.sub(one, text[at : code.start()]))
         out.append(code.group(0))
         at = code.end()
     out.append(URI.sub(one, (text or "")[at:]))

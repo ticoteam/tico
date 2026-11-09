@@ -25,13 +25,13 @@ and open questions. What nobody said stays unknown; never infer a budget or a si
 
 Steps from today to signature and go-live, each with an owner on each side by name and a date: security
 review, legal review, pricing approval, signature, kickoff. Work backwards from the buyer's go-live date if
-they gave one. A step with no date is marked "date to agree".
+they gave one. A step with no date is marked "date to agree". Build the plan with `skills/build-a-mutual-action-plan/SKILL.md`.
 
 ## 4. Write the recap
 
 Under 150 words, plain text, the seller's voice: what we heard (two or three lines in their words), what we
 agreed, who does what by when, the next meeting. A price or term question is not answered: it is a line
-for the seller. Put the exact text and recipients on the task. Send requested recaps with your Tools when a person has turned mail sending on in Tico; otherwise leave a draft in the seller's mailbox.
+for the seller. Put the exact text and recipients on the task. Send a recap only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise leave it as a draft in the seller's mailbox.
 
 ## 5. Hand over
 

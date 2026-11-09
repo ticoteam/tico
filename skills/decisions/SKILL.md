@@ -10,7 +10,7 @@ You have a second model that cannot write: a decision model. It takes a JSON sta
 questions (`noul` for yes/no, `choice`, `score`; the same format as OpenRouter's Decisions API)
 and answers each one with a probability, in one round trip of about two hundred milliseconds.
 It invents nothing, because it produces nothing but numbers. Tico holds the key; you call it
-with the credential you already have. The server asks the Tico AI Gateway first (Decide at the company's level: Low, the default, is `tico-decide-1.0`;
+with the credential you already have. The server asks the Tico AI Gateway first (Decide at the company's level: Low, the default, is `tico-decide-low`;
 Medium and High are `tico-decide-medium-1.0` and `tico-decide-high-1.0`, slower and dearer), then the owner's own TypeSafe key if they set one, then the team's own model
 provider; a provider that fails hands the question to the next. With none of them Decide is off,
 and you carry on without it.
@@ -209,10 +209,10 @@ the cookbook nearest your shape (`cookbooks/rerank_typesafe.md`, `hierarchical_c
 
 - Tico's audit keeps each call's label, question ids, the value and confidence per answer,
   token usage, latency, cost (`cost_usd`, when the price is known), the provider and model that answered
-  (`Tico AI Gateway` / `tico-decide-1.0`, `TypeSafe`, or the team's provider) and `fallback` with the first
-  failure's code when a later provider answered, never the state. Read a set's history back with `hub sql "SELECT ts,
-  actor, target, detail_json FROM events WHERE action='judge.call' AND target='mail-triage@1'
-  ORDER BY ts DESC LIMIT 200"`. For the week at a glance, `hub decision readout` (`hub_decision_readout`): per
+  (`Tico AI Gateway` / `tico-decide-low`, `TypeSafe`, or the team's provider) and `fallback` with the first
+  failure's code when a later provider answered, never the state. Read a set's history back with `hub sql "SELECT created_at,
+  actor, target, detail FROM events WHERE action='judge.call' AND target='mail-triage@1'
+  ORDER BY created_at DESC LIMIT 200"`. For the week at a glance, `hub decision readout` (`hub_decision_readout`): per
   question set, calls, cost, how many Jev answered (a Tico Decide answer counts as Jev), fell back or failed, the spread of answers, and the month's spend
   against the cap (`--days N` for another window, up to 31).
 - A 422 is the request's shape, not its content: an unknown key on a question, a criteria map with

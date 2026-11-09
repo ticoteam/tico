@@ -1,16 +1,26 @@
 """Finance rights: what a teammate may ask for (spec §7.4). Seeing is separate (view.py); amounts are gate rules."""
+
 from collections.abc import Collection
 
 from .org import SYSTEM, Org
 
-BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN = (
-    "finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.budgets", "finance.rules",
-    "finance.admin")
-RIGHTS = (BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN)
+BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN, ATTRIBUTION = (
+    "finance.book",
+    "finance.ap",
+    "finance.ar",
+    "finance.pay",
+    "finance.cards",
+    "finance.budgets",
+    "finance.rules",
+    "finance.admin",
+    "finance.attribution",
+)
+RIGHTS = (BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN, ATTRIBUTION)
 # System work posts usage and keeps budgets current; it never grants, pays or changes access.
 SYSTEM_RIGHTS = frozenset({BOOK, BUDGETS})
-# What a default Bookkeeper is set up with (spec §7.4).
-BOOKKEEPER = (BOOK, AP, AR, PAY, CARDS)
+# What a default Bookkeeper is set up with (spec §7.4). Rules is the right to propose a posting rule; a person still
+# approves each one (bots always need approval). Attribution (who a line counts for) is not in it: it is granted.
+BOOKKEEPER = (BOOK, AP, AR, PAY, CARDS, RULES)
 
 
 def has(org: Org, actor: str, right: str, held: Collection[str]) -> bool:

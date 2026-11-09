@@ -1,7 +1,15 @@
 # Grade a quarter
 
 Triggered by a task that asks how last quarter went, and step 3 of `playbooks/quarterly-plan.md`.
-Budget 25 minutes. The outcome is one grade per key result, with its evidence, and an honest total.
+Budget 25 minutes.
+
+Inputs: `hub goal list --all --status green,yellow,red,done,dropped`, the final KPI reading for each key result, and
+`knowledge/scorecard.md`.
+
+Outcome: one grade per key result, with its evidence, and an honest total.
+
+Done when: every key result has a grade, or "ungraded" with the gap named; the total is written with its reason; and the
+scorecard holds the quarter with its sources.
 
 ---
 
@@ -12,6 +20,8 @@ was live in the quarter. If there were no written key results, say so and grade 
 readings instead; do not invent key results after the fact.
 
 ## 2. Grade each on 0 to 1
+
+Use `skills/grade-a-key-result-from-readings/SKILL.md` for each result.
 
 - Read the final `hub kpi show <kpi id>` value and compare it with the target and the baseline.
 - Grade as a fraction of the way from baseline to target, to one decimal. Binary results are 0 or 1.

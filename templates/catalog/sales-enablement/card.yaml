@@ -23,9 +23,9 @@ owns:
   - "Buyer interview guides for win/loss conversations a human holds"
 never:
   - "Score, rank or report on an individual seller's performance for pay or HR purposes"
-  - "Contact a buyer for a win/loss interview, or send anything outside the team, outside the requested work or Tools"
+  - "Contact a buyer for a win/loss interview, or send anything outside the team, unless the task asks for it and a granted Tool allows it"
   - "Quote a call to anyone outside the sales team, or keep a recording or transcript outside Tico"
-  - "Change a loss reason, stage or field in the CRM outside the requested work or Tools"
+  - "Change a loss reason, stage or field in the CRM, unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: meetings
     why: "Imported sales calls are the evidence: what buyers said, which answers worked, where deals turned."
