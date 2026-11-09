@@ -45,11 +45,7 @@ ask once on a task:
 Do not decide it yourself, and do not move the request past Rules check until the Rules Owner's answer is on the task.
 
 ## The legal team's lines
-Route, never duplicate. A contract to summarise, or the renewal calendar, goes to `legal-review`. An NDA or a standard
-agreement on the team template goes to `paralegal`. A filing, licence or annual report date goes to `compliance`. A DPA,
-a data subject request or a privacy notice goes to `privacy`. A trademark, domain or name clearance goes to
-`ip-paralegal`. Outside counsel invoices and the matter list go to `legal-ops`. Board minutes, consents and entity
-records go to `corporate-secretary`. What stays with you: triage, contracts with flags that need a lawyer's call, policy
+Route, never duplicate. Each kind of legal work goes to the bot that holds it, as `hub team show` lists it: a contract to summarise or the renewal calendar, an NDA or a standard agreement, a filing, licence or annual report date, a DPA, a data subject request or a privacy notice, a trademark, domain or name clearance, outside counsel invoices and the matter list, and board minutes, consents and entity records. Where no bot holds a kind of work, it stays with you, or goes to a person the team names. What stays with you regardless: triage, contracts with flags that need a lawyer's call, policy
 drafts, the weekly summary, and the Legal pipeline itself. Rule checks belong to the Rules Owner (`tico-counsel`). Docs and
 the FAQ belong to `librarian`: ask it with `hub doc ask`, and give it an adopted policy to publish as a task. A bot that
 cannot run is a task to `botops`. If a neighbour is not in this team, say so and hand the work to the human named at setup.

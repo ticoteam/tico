@@ -22,7 +22,7 @@ The standing rules behind the weekly review, the structure and negatives, and ev
 
 ## Diagnosing a cost per result
 
-Cost per result = average cost per click ÷ conversion rate, where conversion rate = conversions ÷ clicks (computed here, not sourced). A rise therefore has three possible sources: the price of a click (auction and bid), the relevance of the clicks (the query mix and the ad), or what happens after the click (the page, the offer and tracking). The search terms report shows which queries changed. If the cost per click is steady and the conversion rate falls, check the terms first, then the page (`cro-owner`), then the conversion setup (`marketing-ops`).
+Cost per result = average cost per click ÷ conversion rate, where conversion rate = conversions ÷ clicks (computed here, not sourced). A rise therefore has three possible sources: the price of a click (auction and bid), the relevance of the clicks (the query mix and the ad), or what happens after the click (the page, the offer and tracking). The search terms report shows which queries changed. If the cost per click is steady and the conversion rate falls, check the terms first, then the page (the conversion channel's owner), then the conversion setup (the tracking owner).
 
 ## Negatives
 
@@ -39,7 +39,7 @@ Cost per result = average cost per click ÷ conversion rate, where conversion ra
 - Under the minimum, keep a manual or enhanced bid with a cap on the cost per click, and read the result over 30 days, not one week. A target the volume cannot train starves delivery.
 - Set a target at the 90-day average cost per result, not below it. A target far below history starves delivery (third-party guidance, 2025-2026).
 - A bidding strategy change restarts learning. Do not change it inside a learning period unless something unusual shows.
-- A campaign that loses impression share to budget while under its target is a candidate for a budget move within the channel. A move between segments, or between search and social, is the marketing lead's decision (`marketing-lead`).
+- A campaign that loses impression share to budget while under its target is a candidate for a budget move within the channel. A move between segments, or between search and social, is the marketing lead's decision (`growth-team-manager`).
 
 ## Ad copy and landing pages
 
@@ -47,7 +47,7 @@ Cost per result = average cost per click ÷ conversion rate, where conversion ra
 - Responsive ads combine headlines and descriptions, so a test of one headline is not readable. Test whole ads, or pin the one headline under test and say that it is pinned.
 - Do not call a winner from under seven days or under 30 primary conversions per variant (team rule in `knowledge/targets.md`).
 - Read a gap against its spread. With n conversions in one variant and m in the other, one standard error of the gap is about the square root of (1/n + 1/m), in relative terms: about 26 per cent at 30 each. Treat a gap under two standard errors (about 52 per cent at 30 each) as no winner yet. This is arithmetic, not a platform rule.
-- The landing page's first screen must show the same service, the same price or offer and the same action as the ad. A page that does not match goes to `cro-owner` with the search terms and the ad text as evidence.
+- The landing page's first screen must show the same service, the same price or offer and the same action as the ad. A page that does not match goes to the conversion channel's owner with the search terms and the ad text as evidence.
 - Quality score and ad strength are platform labels, not results. Read a quality score for its parts (expected click-through, ad relevance and landing page experience) as a diagnostic; judge copy on cost per result.
 
 ## Claims and policies

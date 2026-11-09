@@ -18,7 +18,7 @@ The standing rules behind the weekly review, the creative pipeline and every cha
 - Fewer, larger ad sets learn faster. Splitting a small budget across many ad sets multiplies the events each one needs.
 - Set a target near the average cost per result of the last 90 days, not below it. A target far below history starves delivery.
 - Budget moves go in steps. The team default is no more than 20 per cent in one step (a team rule in `knowledge/targets.md`). Read the effect two weeks later, not the next day.
-- A budget move between segments is the marketing lead's decision (`marketing-lead`). Within a channel, the split between campaigns is the Social Ad Owner's.
+- A budget move between segments is the marketing lead's decision (`growth-team-manager`). Within a channel, the split between campaigns is the Social Ad Owner's.
 
 ## Diagnosing a cost per result
 

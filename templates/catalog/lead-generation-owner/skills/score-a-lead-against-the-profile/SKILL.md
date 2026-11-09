@@ -9,7 +9,7 @@ When to use: before you count a lead as qualified, before a hand-off, and before
 Steps:
 1. Read `knowledge/lead-method.md` for the rule and the profile. If the profile is not written yet, stop and ask the person who
    runs sales. Count nothing as qualified until it is.
-2. Source: the lead has one source tag. With no tag, it is "no source", not qualified, and listed for marketing-ops.
+2. Source: the lead has one source tag. With no tag, it is "no source", not qualified, and listed for the tracking owner.
 3. Duplicate: is there an earlier lead for the same person or company that is open or already counted this week? If so, the
    later one is "duplicate".
 4. Not blocked: is it already a customer, a competitor, or on the do-not-contact list? Then the reason is "already a customer"

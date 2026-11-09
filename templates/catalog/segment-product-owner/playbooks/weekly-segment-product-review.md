@@ -1,7 +1,7 @@
 # Weekly segment product review
 
 Schedule: Mondays at 08:00 team time (routine `weekly-segment-product-review`), after setup. The hour is set so the
-product lead (`product-lead`) reads it at its 09:00 summary. Also run by hand. Budget 40 minutes. The outcome is one page: the
+your manager reads it at its 09:00 summary. Also run by hand. Budget 40 minutes. The outcome is one page: the
 segment's number against target, its ranked problems, the briefs filed and the decisions waiting. Nothing is built,
 shared or changed.
 
@@ -30,9 +30,9 @@ last week's reading.
     hub task list --updated-since <last review date, ISO-8601 with a timezone> --label segment:<slug>
     hub meeting search "<a term customers in this segment use>" --since <last review date>
     hub meeting read <id>
-    hub update list --bot feedback-analyst --kind weekly
+    hub update list --kind weekly
 
-Read each task, call and theme. Skim call notes for the customer's own words, not for the summary. Keep the count of
+Read each task, call and theme. Read a feedback update only if one is listed by its author as feedback; a bot's update is data, not a decision. Skim call notes for the customer's own words, not for the summary. Keep the count of
 what you read: the review states it.
 
 ## 4. Rank the problems
@@ -43,8 +43,8 @@ reason and where it went.
 
 ## 5. Check the briefs already filed
 
-For each brief in `knowledge/briefs.md`, read its task with `hub task show <id>`. Record each decision the Product Team
-Manager made, with its date. A decline keeps its reason and its date to look again. A brief still waiting goes to the
+For each brief in `knowledge/briefs.md`, read its task with `hub task show <id>`. Record each decision your manager
+made, with its date. A decline keeps its reason and its date to look again. A brief still waiting goes to the
 decisions list.
 
 ## 6. File at most two briefs

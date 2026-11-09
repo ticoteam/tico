@@ -26,7 +26,7 @@ each figure with its split methods and its month. For each KPI you own, log the 
 
     hub kpi log <id> <value> --period-start <YYYY-MM-01> --period-end <YYYY-MM-DD>
 
-Log nothing for a KPI you do not own. If the goal names no KPI, say so in the review and ask the marketing lead (`marketing-lead`).
+Log nothing for a KPI you do not own. If the goal names no KPI, say so in the review and ask the Growth Team Manager (`growth-team-manager`).
 
 ## 3. Read the tests
 
@@ -40,7 +40,7 @@ review; the growth meeting nudges its owner.
 
 For each ask in `knowledge/asks.md`, note whether it is answered, open, or open for seven days or more. Record each
 answer with its date and the number it gave. Add a reminder comment to any ask open seven days, with
-`hub task comment <id> "<reminder>"`. Ask the marketing lead (`marketing-lead`) on the task for any ask open 14 days.
+`hub task comment <id> "<reminder>"`. Ask the Growth Team Manager (`growth-team-manager`) on the task for any ask open 14 days.
 
 ## 5. Check the message
 

@@ -25,10 +25,10 @@ Two cohorts of this size moved 2 points: too small to call a trend.
 - "Add a Notion export": 6 accounts, 2 sources.
 
 ## Brief filed this week
-- Board brief "Calendar connection fails for shared calendars", task 4187, to the product lead (`product-lead`). Measure: share of new accounts that connect a calendar within 14 days. Baseline 21% (3 of 14). Read on 2026-12-14. Target missing: the product lead (`product-lead`) to set it.
+- Board brief "Calendar connection fails for shared calendars", task 4187, to your manager. Measure: share of new accounts that connect a calendar within 14 days. Baseline 21% (3 of 14). Read on 2026-12-14. Target missing: your manager to set it.
 
 ## Decisions waiting
-- Product lead (`product-lead`): approve, change or decline brief 4187. Asked on 2026-11-02.
+- Your manager: approve, change or decline brief 4187. Asked on 2026-11-02.
 
 ## Left out
 - 6 tickets about invoices: billing, routed to `support`.

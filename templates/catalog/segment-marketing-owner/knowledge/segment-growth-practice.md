@@ -1,12 +1,12 @@
 # Segment growth practice
 
-How a segment's new customers and cost per customer are counted and split, how growth tests and asks are run, and where each rule comes from. The standing rules for this bot. Items marked "team default" were set for this template, not taken from Tico's docs; the marketing lead (`marketing-lead`) confirms or changes them at the first review.
+How a segment's new customers and cost per customer are counted and split, how growth tests and asks are run, and where each rule comes from. The standing rules for this bot. Items marked "team default" were set for this template, not taken from Tico's docs; the Growth Team Manager (`growth-team-manager`) confirms or changes them at the first review.
 
 ## Counts
 
 - **New customer.** One that the counting rule in `knowledge/segment.md` admits, dated by the day that rule names. Each customer counts once.
 - **Cost per customer** = (segment spend + segment bot cost) ÷ segment new customers, for the same month. It is blank with no new customers. It is the same formula as a channel's CAC, applied to the segment's share.
-- **Goal, floor and ceiling** come from the KPI linked to the segment's goal (`hub goal list --all`, `hub kpi show <id>`). If the goal names no KPI, the review says so and asks the marketing lead (`marketing-lead`).
+- **Goal, floor and ceiling** come from the KPI linked to the segment's goal (`hub goal list --all`, `hub kpi show <id>`). If the goal names no KPI, the review says so and asks the Growth Team Manager (`growth-team-manager`).
 
 ## Splitting a channel's numbers
 
@@ -31,7 +31,7 @@ A customer with no segment field is counted in a no-segment row and never droppe
 ## Tests
 
 - A test is a Marketing task (type `idea`). It moves through the board: On deck, In development, Live, Working, then Succeeded, Failed, Inconclusive or Dropped. Paused waits to one side. Nothing closes a Live or Working test while it runs.
-- A test starts only when the marketing lead (`marketing-lead`) picks it at the Monday growth meeting, on a channel at stage `testing` or `scaling` with budget left (`hub growth channel list`). A paused channel gets no new test.
+- A test starts only when the Growth Team Manager (`growth-team-manager`) picks it at the Monday growth meeting, on a channel at stage `testing` or `scaling` with budget left (`hub growth channel list`). A paused channel gets no new test.
 - Team capacity, from the marketing team's growth meeting: at most six Live tests across the team, and at most two new tests per channel Owner at a time.
 - An idea carries no prediction, hypothesis, score or bet. It says the segment, the change, the channel and the measure. Tico's Marketing tasks have no field for any of the others.
 - A test is read only after its own window and not in its first seven days. The seven days are a team default.
@@ -41,7 +41,7 @@ A customer with no segment field is counted in a no-segment row and never droppe
 
 - An ask names one outcome, one segment, one date and the spend it may use. An ask that spends money needs a spend approval before it starts.
 - Two open asks per channel Owner from this segment at a time, and one open ask per channel per idea. Both are team defaults.
-- A reminder after seven days, as a comment on the same ask. A question to the marketing lead (`marketing-lead`) after 14 days with no answer.
+- A reminder after seven days, as a comment on the same ask. A question to the Growth Team Manager (`growth-team-manager`) after 14 days with no answer.
 
 ## Message and claims
 

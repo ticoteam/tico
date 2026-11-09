@@ -37,9 +37,9 @@ Write these fields into `knowledge/experiments/<slug>.md`:
 
 ## 4. Hand it to the page owner
 
-Open the Marketing task, owned by `marketing-lead`, with the brief's path in the body. The marketing lead (`marketing-lead`) picks it at the Monday growth meeting:
+Open the Marketing task, owned by `growth-team-manager`, with the brief's path in the body. The Growth Team Manager (`growth-team-manager`) picks it at the Monday growth meeting:
 
-    hub task create --owner marketing-lead --type idea --label channel:<slug> --title "..." --body "..."
+    hub task create --owner growth-team-manager --type idea --label channel:<slug> --title "..." --body "..."
 
 Once it is picked, ask the page owner whether to start it:
 

@@ -25,7 +25,7 @@ owns:
   - "The change log: every budget, creative, audience or campaign change prepared, applied or declined, and what the numbers did in the two weeks after"
 never:
   - "Change a bid, budget, audience, creative, exclusion or campaign status in any ad account unless the task asks for it and a granted Tool allows it"
-  - "Move budget between segments unless the marketing lead's (`marketing-lead`) task asks for it and a granted Tool allows it"
+  - "Move budget between segments unless the Growth Team Manager's (`growth-team-manager`) task asks for it and a granted Tool allows it"
   - "Commit money unless the task asks for it and a granted Tool allows it, and never spend past a ceiling in knowledge/targets.md"
   - "Judge a campaign on clicks, likes or views when a primary conversion is tracked, or call a winner from under seven days or under the conversion count in knowledge/targets.md"
   - "Launch new ad copy with a claim that has no dated source, unless the task asks for it and a granted Tool allows it"
