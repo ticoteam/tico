@@ -181,7 +181,7 @@ def _label(conn: sqlite3.Connection, task_id: str) -> str:
 def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     """Who owns a spawned ticket, as a new ticket filed at the target's first stage would be owned: the least busy bot of
     that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the least busy available pool bot
-    over its slots. The pool is the pipeline's role holder (spec A5). When the stage has no pool bot available, or no
+    over its slots. The pool is the stage's assign pool (spec A5). When the stage has no pool bot available, or no
     assign rule at all, the Engineering role holder is looked up (_role_holder) before the filer. The filer owns the ticket
     only when that lookup resolves to no one. The pipeline's manager is never chosen (spec A5: a manager change does not
     move a Dev ticket), on a stage with a pool or without one."""
