@@ -71,17 +71,16 @@
 .chat-btn svg{width:17px;height:17px;display:block}
 .chat-btn:hover{color:var(--ink);background:var(--surface2)}
 .issue-actions .chat-btn{border:1px solid var(--line);border-radius:6px;width:30px;height:30px}
-/* A task's own thread, opened from a bot's chat (taskThreadShow): the bar (back, title, status, Details) and the
+/* A task's own thread, opened from a bot's chat (taskThreadShow): the bar (back, title, Details) and the
    conversation with its box at the foot. Details takes the class off and the full task shows. */
 .tmodal .tthread-only{display:none}
 #task-modal.thread[open]{display:flex;flex-direction:column}
 #task-modal.thread[open] .tthread-only{display:inline-flex;align-items:center;justify-content:center}
 #task-modal.thread[open] .tmodal-head{padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top));border-bottom:1px solid var(--line)}
-#task-modal.thread[open] .tmodal-head>:not(.tthread-only,.tstatus,.tchip-blocked){display:none}
+#task-modal.thread[open] .tmodal-head>:not(.tthread-only){display:none}
 #task-modal.thread[open] .tthread-back{order:-2;flex:none;display:grid;place-items:center;color:var(--ink)}
 #task-modal.thread[open] .tthread-back svg{width:14px;height:14px;flex:none}
 #task-modal.thread[open] .tthread-title{order:-1;flex:1;min-width:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:600;color:var(--ink);outline:0;letter-spacing:var(--track-snug)}
-#task-modal.thread[open] .tmodal-head .pill.tstatus{color:var(--muted);font-weight:500}
 #task-modal.thread[open]>.tmodal-title,#task-modal.thread[open]>.tmeta,#task-modal.thread[open] .tmodal-main,#task-modal.thread[open] .task-side{display:none}
 #task-modal.thread[open] .tmodal-body.task-layout{flex:1;min-height:0;max-height:none;display:flex;flex-direction:column;align-items:stretch;overflow:hidden;padding:0 16px max(12px,env(safe-area-inset-bottom))}
 #task-modal.thread[open] .task-chat{flex:1;min-height:0;display:flex;flex-direction:column;margin:0;padding:0;border:0}
@@ -106,9 +105,18 @@
 .task-chat .task-send .p-menu button{border:0}
 @media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}.task-chat .task-send .task-send-caret{width:34px}}
 @media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
-/* A reconnect card (ui/app/task-modal.js reconnectCardHTML): one line and its fix, as dense as a credential card. */
+/* A reconnect card (ui/app/task-modal.ts reconnectCardHTML): one line and its fix, as dense as a credential card. */
 .rc-card{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;width:min(560px,100%);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:4px 0;background:var(--surface)}
 .rc-line{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
 .rc-card button,.rc-card .button{min-height:36px}
 .rc-card:not([data-status="open"]){background:none}
 .rc-done{font-size:12.5px;color:var(--ok);font-weight:600}
+
+/* Editors stay mounted through live task redraws. */
+.tmodal-title[data-task-field="title"] { cursor: text; min-height: 1.25em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-edit-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 24px 12px; font-size: 12px; }
+.task-edit-meta:empty { display: none; }
+[data-task-edit-body] { position: relative; }
+[data-task-body-edit] { float: right; font-size: 12px; }
+textarea[data-task-field="body"] { width: 100%; min-height: 140px; resize: vertical; font: inherit; }
+[data-task-edit-current] { margin: 0 24px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

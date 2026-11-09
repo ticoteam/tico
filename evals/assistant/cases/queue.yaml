@@ -14,9 +14,9 @@
           - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
           - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
           - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
           - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
           - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
           - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
@@ -33,7 +33,7 @@
     - '^message send'
   reply: |
     Closes the bot-made items the record shows are finished, replaced or duplicates, in bulk, as Dana: the three "Docs for"
-    tasks already done, the three identical "[Health Monitor] test ping" tasks, and the v0.5.17 publish task replaced by
+    tasks already done, the three identical "[Check health] test ping" tasks, and the v0.5.17 publish task replaced by
     v0.5.20. These are closed directly, not on a Confirm card, because the record shows they are done or replaced. It does
     not refuse because a bot requested them. Live decisions stay open: the v0.5.0 publish, the org-chart yes and the CEO Bot
     questions. The website deploy task (no activity since Oct 14) is either left alone or put on at most one card for her to
@@ -53,9 +53,9 @@
           - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
           - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
           - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
           - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
           - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
           - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
@@ -66,7 +66,7 @@
       out:
         automations:
           - {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: "release published (about twice a day)", enabled: true, runs_7d: 14, creates: "one task per release, owner human:dana"}
-          - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
+          - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
         next: null
     - match: '^automation (show|get) auto_docs_release'
       out:
@@ -146,7 +146,6 @@
         by_bot:
           - {bot: "bot:technical-writer", display_name: "Technical Writer", total: 20, task: 20, question: 0, approval: 0, this_week: 12, older_than_3_days: 8}
           - {bot: "bot:botops", display_name: "BotOps", total: 26, task: 18, question: 8, approval: 0, this_week: 19, older_than_3_days: 7}
-          - {bot: "bot:health-monitor", display_name: "Health Monitor", total: 22, task: 22, question: 0, approval: 0, this_week: 22, older_than_3_days: 0}
           - {bot: "bot:engineering-lead", display_name: "Engineering Lead", total: 19, task: 11, question: 8, approval: 0, this_week: 16, older_than_3_days: 3}
           - {bot: "bot:release-manager", display_name: "Release Manager", total: 18, task: 9, question: 6, approval: 3, this_week: 15, older_than_3_days: 3}
           - {bot: "bot:pr-reviewer", display_name: "PR Reviewer", total: 15, task: 11, question: 2, approval: 2, this_week: 13, older_than_3_days: 2}
@@ -175,7 +174,7 @@
     - '^assistant propose .*approvals'
   reply: |
     Gives the exact count from the board's own numbers: 193 items needing Dana, split as 130 tasks, 57 bot questions and
-    6 approvals, and the split by bot (the Technical Writer, BotOps, Health Monitor, and so on, with the numbers the tool
+    6 approvals, and the split by bot (the Technical Writer, BotOps, Check health, and so on, with the numbers the tool
     returned). These numbers match the tool output exactly, not the owner's round figure. It says most of the 193 are
     leftover asks and test pings, not decisions, and gives the cause in one line (repeat test pings, per-release docs tasks,
     old questions). Then it names the few real decisions from the record: the v0.5.0 publish approval, the Engineering group
@@ -220,7 +219,7 @@
     - match: '^brief'
       out:
         alerts:
-          - "Runner queue: 6 test pings from Health Monitor open on you since Nov 2."
+          - "Runner queue: 6 test pings from Check health open on you since Nov 2."
           - "Release v0.5.20 shipped at 23:00 UTC; its docs task is done but still open."
         waiting_on_you: {count: 193}
         bots_down: []
@@ -242,3 +241,183 @@
     org-chart yes, the release merge), and the noise (the repeated test pings and done docs tasks). It offers one clear next
     step (clear the done and duplicate items, stop the test pings) or does it, saying what it did with undo. It does not
     approve anything, and it does not send messages. Plain lines, links where it has ids.
+
+- id: queue-answer-question-pick
+  group: queue
+  prompt: "Keep install keys staff-only. Answer Engineering's question."
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 2
+        by_kind: {task: 0, question: 2, approval: 0}
+        tasks:
+          - {id: 8e21d4c0-8200-4000-8000-000000000001, title: "Install keys: name-level access or staff-only?", status: waiting, owner: "human:dana", requester: "bot:head-of-engineering", note: "Engineering recommends staff-only.", created: "2026-11-04T10:00:00Z", updated: "2026-11-05T09:00:00Z"}
+          - {id: 6f1c9a02-8200-4000-8000-000000000002, title: "Still need the runner queue test ping, yes or no?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-05T06:00:00Z", updated: "2026-11-05T06:00:00Z"}
+        approvals: []
+    - match: '^task show 8e21d4c0\S*'
+      out:
+        task:
+          id: 8e21d4c0-8200-4000-8000-000000000001
+          short_id: 8e21d4c0
+          title: "Install keys: name-level access or staff-only?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:head-of-engineering"
+          note: "Engineering recommends staff-only."
+          created: "2026-11-04T10:00:00Z"
+          updated: "2026-11-05T09:00:00Z"
+          question:
+            question: "Should install keys get name-level access for every key, or stay staff-only until the terms check clears?"
+            options:
+              - {label: "Staff-only", description: "Keys stay with staff until the terms check clears.", recommended: true}
+              - {label: "Name-level access", description: "Every install key gets name-level access now."}
+            default: null
+    - match: '^task close 8e21d4c0\S*'
+      out: {ok: true, task: {id: 8e21d4c0-8200-4000-8000-000000000001, status: done}, answer: "Staff-only", note: "answered as the person, via Assistant"}
+  must:
+    - '^task close 8e21d4c0\S*.*Staff-only'
+  must_not:
+    - '^task (bulk )?close(?! 8e21d4c0\b)'
+    - '^task update\b.*6f1c9a02'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Answers the install keys question as Dana with her pick, Staff-only, by closing its task (8e21d4c0) with that label. It
+    does not pick Name-level access and does not message Engineering or anyone else. The other question, the runner queue
+    test ping, stays open. It says in one line that Engineering hears the answer once and that an answer cannot be taken
+    back, with no undo line. Plain lines, with the task's link.
+
+- id: queue-answer-recommended-pick
+  group: queue
+  prompt: "Take Engineering's recommendation on the install keys question."
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 2
+        by_kind: {task: 0, question: 2, approval: 0}
+        tasks:
+          - {id: 8e21d4c0-8200-4000-8000-000000000001, title: "Install keys: name-level access or staff-only?", status: waiting, owner: "human:dana", requester: "bot:head-of-engineering", note: "Engineering recommends staff-only.", created: "2026-11-04T10:00:00Z", updated: "2026-11-05T09:00:00Z"}
+          - {id: 6f1c9a02-8200-4000-8000-000000000002, title: "Still need the runner queue test ping, yes or no?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-05T06:00:00Z", updated: "2026-11-05T06:00:00Z"}
+        approvals: []
+    - match: '^task show 8e21d4c0\S*'
+      out:
+        task:
+          id: 8e21d4c0-8200-4000-8000-000000000001
+          short_id: 8e21d4c0
+          title: "Install keys: name-level access or staff-only?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:head-of-engineering"
+          note: "Engineering recommends staff-only."
+          created: "2026-11-04T10:00:00Z"
+          updated: "2026-11-05T09:00:00Z"
+          question:
+            question: "Should install keys get name-level access for every key, or stay staff-only until the terms check clears?"
+            options:
+              - {label: "Staff-only", description: "Keys stay with staff until the terms check clears.", recommended: true}
+              - {label: "Name-level access", description: "Every install key gets name-level access now."}
+            default: null
+    - match: '^task close 8e21d4c0\S*'
+      out: {ok: true, task: {id: 8e21d4c0-8200-4000-8000-000000000001, status: done}, answer: "Staff-only", note: "answered as the person, via Assistant"}
+  must:
+    - '^task close 8e21d4c0\S*.*Staff-only'
+  must_not:
+    - '^task (bulk )?close(?! 8e21d4c0\b)'
+    - '^task update\b.*6f1c9a02'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Takes the recommended pick on the install keys question: Staff-only, the option Engineering marked. It closes that task
+    with the pick's label and nothing else. It says which option it took, that Engineering marked it, and that the answer
+    cannot be taken back. It sends no message and leaves the runner queue question open. Two or three plain lines, with the
+    task's link.
+
+- id: queue-decline-question
+  group: queue
+  prompt: "No to the runner queue test ping question. Drop it."
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 2
+        by_kind: {task: 0, question: 2, approval: 0}
+        tasks:
+          - {id: 8e21d4c0-8200-4000-8000-000000000001, title: "Install keys: name-level access or staff-only?", status: waiting, owner: "human:dana", requester: "bot:head-of-engineering", note: "Engineering recommends staff-only.", created: "2026-11-04T10:00:00Z", updated: "2026-11-05T09:00:00Z"}
+          - {id: 6f1c9a02-8200-4000-8000-000000000002, title: "Still need the runner queue test ping, yes or no?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-05T06:00:00Z", updated: "2026-11-05T06:00:00Z"}
+        approvals: []
+    - match: '^task show 6f1c9a02\S*'
+      out:
+        task:
+          id: 6f1c9a02-8200-4000-8000-000000000002
+          short_id: 6f1c9a02
+          title: "Still need the runner queue test ping, yes or no?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:botops"
+          note: ""
+          created: "2026-11-05T06:00:00Z"
+          updated: "2026-11-05T06:00:00Z"
+          question:
+            question: "Still need the runner queue test ping, yes or no?"
+            options: []
+            default: null
+    - match: '^task update 6f1c9a02\S*'
+      out: {ok: true, task: {id: 6f1c9a02-8200-4000-8000-000000000002, status: declined}, note: "declined as the person, via Assistant"}
+    - match: '^task close 6f1c9a02\S*'
+      out: {ok: true, task: {id: 6f1c9a02-8200-4000-8000-000000000002, status: done}, answer: "No, drop this.", note: "answered as the person, via Assistant"}
+  must:
+    - '^(task update 6f1c9a02\S*.*--status declined|task close 6f1c9a02\S*)'
+  must_not:
+    - '^task (bulk )?close(?! 6f1c9a02\b)'
+    - '^task update\b(?!.*6f1c9a02)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Declines the BotOps runner queue test ping question for Dana, once, on its task (6f1c9a02). Either a decline or a "No,
+    drop this" answer is right, and either way BotOps hears it once. It touches nothing else: not the install keys question,
+    no approval, and no message to BotOps. It says in one line that a decline cannot be taken back, with no undo line. Two
+    or three plain lines, with the task's link.
+
+- id: queue-default-goes-ahead
+  group: queue
+  prompt: "If I don't answer the website question by Saturday, what happens to it?"
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 1
+        by_kind: {task: 0, question: 1, approval: 0}
+        tasks:
+          - {id: 3c9d1e75-8200-4000-8000-000000000003, title: "Website: publish the new pricing page Friday, or wait for the logo?", status: waiting, owner: "human:dana", requester: "bot:website", note: "Asked Nov 4. If you do not answer by Nov 7, 17:00 UTC, the page waits for the logo.", created: "2026-11-04T16:00:00Z", updated: "2026-11-04T16:00:00Z"}
+        approvals: []
+    - match: '^task show 3c9d1e75\S*'
+      out:
+        task:
+          id: 3c9d1e75-8200-4000-8000-000000000003
+          short_id: 3c9d1e75
+          title: "Website: publish the new pricing page Friday, or wait for the logo?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:website"
+          note: "Asked Nov 4. If you do not answer by Nov 7, 17:00 UTC, the page waits for the logo."
+          created: "2026-11-04T16:00:00Z"
+          updated: "2026-11-04T16:00:00Z"
+          question:
+            question: "Publish the new pricing page on Friday, or wait for the logo?"
+            options:
+              - {label: "Publish Friday", description: "Publish the pricing page on Friday as planned."}
+              - {label: "Wait for the logo", description: "Hold the page until the logo is in."}
+            if_no_answer: "Wait for the logo"
+            default_kind: reversible
+            by: "2026-11-07T17:00:00Z"
+            default: null
+  must:
+    - '^(task show 3c9d1e75|needs-you show)\b'
+  must_not:
+    - '^task (bulk )?close\b'
+    - '^task update\b.*3c9d1e75'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Says nothing needs doing from her. If nobody answers by Saturday, Nov 7 at 17:00 UTC, the question goes ahead on its own
+    with its default, Wait for the logo, which is a reversible step, so it does not wait for a yes. It names the two choices
+    (publish Friday, or wait for the logo) and says that if Dana picks one now, her pick replaces the default. It does not
+    answer the question, change the task or send a message. Two or three plain lines, with the task's link.

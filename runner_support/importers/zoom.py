@@ -13,8 +13,20 @@ import urllib.parse
 import urllib.request
 from datetime import timedelta
 
-from .base import (Importer, Item, ProviderError, Scope, email_of, https_url, moment, people, request_json,
-                   safe_id, text, MAX_TRANSCRIPT)
+from .base import (
+    Importer,
+    Item,
+    ProviderError,
+    Scope,
+    email_of,
+    https_url,
+    moment,
+    people,
+    request_json,
+    safe_id,
+    text,
+    MAX_TRANSCRIPT,
+)
 
 API = "https://api.zoom.us/v2"
 TOKEN = "https://zoom.us/oauth/token"
@@ -44,7 +56,7 @@ class Zoom(Importer):
     secret_file = "zoom.env"
     required = ("ZOOM_ACCOUNT_ID", "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET")
     interval = 600
-    window = timedelta(days=7)        # Zoom lists at most a month per request
+    window = timedelta(days=7)  # Zoom lists at most a month per request
     pace = 0.1
 
     def credential_names(self):
@@ -55,8 +67,12 @@ class Zoom(Importer):
             return self._token[0]
         env = self.env()
         basic = base64.b64encode((env["ZOOM_CLIENT_ID"] + ":" + env["ZOOM_CLIENT_SECRET"]).encode()).decode()
-        answer = self.send("POST", TOKEN, headers={"Authorization": "Basic " + basic},
-                           form={"grant_type": "account_credentials", "account_id": env["ZOOM_ACCOUNT_ID"]})
+        answer = self.send(
+            "POST",
+            TOKEN,
+            headers={"Authorization": "Basic " + basic},
+            form={"grant_type": "account_credentials", "account_id": env["ZOOM_ACCOUNT_ID"]},
+        )
         value = answer.get("access_token") if isinstance(answer, dict) else None
         if not value:
             raise ProviderError("bad_response", "Zoom returned no access token")
@@ -71,8 +87,11 @@ class Zoom(Importer):
         return {"Authorization": "Bearer " + self.token()}
 
     def get(self, path, /, **query):
-        url = API + path + ("?" + urllib.parse.urlencode({k: v for k, v in query.items() if v not in (None, "")})
-                            if query else "")
+        url = (
+            API
+            + path
+            + ("?" + urllib.parse.urlencode({k: v for k, v in query.items() if v not in (None, "")}) if query else "")
+        )
         try:
             return self.send("GET", url, headers=self.auth())
         except ProviderError as exc:
@@ -103,9 +122,15 @@ class Zoom(Importer):
     def recordings(self, user_id, since, until):
         token, out = "", []
         for _ in range(PAGES):
-            page = self.get("/users/" + urllib.parse.quote(user_id, safe="") + "/recordings",
-                            **{"from": since.strftime("%Y-%m-%d"), "to": until.strftime("%Y-%m-%d"),
-                               "page_size": RECORDINGS_PAGE, "next_page_token": token})
+            page = self.get(
+                "/users/" + urllib.parse.quote(user_id, safe="") + "/recordings",
+                **{
+                    "from": since.strftime("%Y-%m-%d"),
+                    "to": until.strftime("%Y-%m-%d"),
+                    "page_size": RECORDINGS_PAGE,
+                    "next_page_token": token,
+                },
+            )
             rows = page.get("meetings") if isinstance(page, dict) else None
             if not isinstance(rows, list):
                 raise ProviderError("bad_response", "Zoom returned no recording list")
@@ -124,8 +149,9 @@ class Zoom(Importer):
             if not (since <= started < until):
                 continue
             files = [f for f in row.get("recording_files") or [] if isinstance(f, dict)]
-            revision = "|".join(sorted(str(f.get("id") or f.get("file_type")) + ":" + str(f.get("status"))
-                                       for f in files))
+            revision = "|".join(
+                sorted(str(f.get("id") or f.get("file_type")) + ":" + str(f.get("status")) for f in files)
+            )
             ident = safe_id(row["uuid"])
             if self.known(scope, ident, revision):
                 continue
@@ -148,16 +174,20 @@ class Zoom(Importer):
         if self.transport:
             payload = self.send("GET", url, headers=self.auth(), raw=True)
         else:
-            payload = request_json("GET", url, headers=self.auth(), tool="Zoom",
-                                   opener=urllib.request.build_opener(Redirects()))
+            payload = request_json(
+                "GET", url, headers=self.auth(), tool="Zoom", opener=urllib.request.build_opener(Redirects())
+            )
         if len(payload) > MAX_TRANSCRIPT * 4:
             raise ProviderError("bad_response", "The Zoom transcript exceeds the import limit")
         return payload.decode("utf-8-sig", "replace") if isinstance(payload, bytes) else str(payload)
 
     def participants(self, uuid):
         # A UUID that starts with "/" or holds "//" is encoded twice, as Zoom asks.
-        ref = urllib.parse.quote(urllib.parse.quote(uuid, safe=""), safe="") if uuid.startswith("/") or "//" in uuid \
+        ref = (
+            urllib.parse.quote(urllib.parse.quote(uuid, safe=""), safe="")
+            if uuid.startswith("/") or "//" in uuid
             else urllib.parse.quote(uuid, safe="")
+        )
         out, token = [], ""
         try:
             for _ in range(PAGES):
@@ -169,7 +199,7 @@ class Zoom(Importer):
         except ProviderError as exc:
             if exc.code in ("auth_failed", "rate_limited", "unreachable"):
                 raise
-            return []                # the scope is optional: without it, names come from the transcript
+            return []  # the scope is optional: without it, names come from the transcript
         return [(p.get("name"), p.get("user_email")) for p in out]
 
     def item(self, scope, row, files, started, ident, revision):
@@ -178,17 +208,21 @@ class Zoom(Importer):
             if files and not any(str(f.get("status")) == "completed" for f in files):
                 self.hold_at(started)
             elif files and self.now() - started < timedelta(hours=24):
-                self.hold_at(started)          # Zoom writes the transcript some time after the video
+                self.hold_at(started)  # Zoom writes the transcript some time after the video
             return None
         vtt = self.download(chosen["download_url"])
         if "-->" not in vtt:
             return None
         minutes = row.get("duration")
-        body = {"title": text(row.get("topic"), 300) or "Zoom meeting", "started_at": started.isoformat(),
-                "participants": people(*self.participants(str(row["uuid"])), scope.data["email"]),
-                "format": "vtt", "transcript": vtt,
-                "media_url": https_url(row.get("share_url")),
-                "context": {k: v for k, v in {"zoom_meeting_id": text(row.get("id"), 40)}.items() if v}}
+        body = {
+            "title": text(row.get("topic"), 300) or "Zoom meeting",
+            "started_at": started.isoformat(),
+            "participants": people(*self.participants(str(row["uuid"])), scope.data["email"]),
+            "format": "vtt",
+            "transcript": vtt,
+            "media_url": https_url(row.get("share_url")),
+            "context": {k: v for k, v in {"zoom_meeting_id": text(row.get("id"), 40)}.items() if v},
+        }
         if isinstance(minutes, (int, float)) and 0 < minutes <= 1440:
             body["duration_seconds"] = minutes * 60
         return Item(ident, scope.data["email"], body, started, revision)

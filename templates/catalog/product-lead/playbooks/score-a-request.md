@@ -37,5 +37,5 @@ Score = reach × impact × confidence ÷ effort. Show all four numbers and every
 
 On the task, in five lines: the problem, the score and its weakest input, the goal it serves (or "no
 goal: park"), a recommendation (build, research first, park) and the owner of the next step:
-`product-researcher` to raise confidence, `product-manager` for a spec. Ask only for missing facts with `hub task ask <id>`, as in `skills/ask-with-recommended-answers/SKILL.md`. Route requested next steps with `hub task create --owner <slug> --parent <id>` and log it in
+`product-researcher` to raise confidence, `product-manager` for a spec. Ask only for missing facts with `hub task question "<question>" --on <person> --parent <id>`, as in `skills/ask-with-recommended-answers/SKILL.md`. Route requested next steps with `hub task create --owner <slug> --parent <id>` and log it in
 `knowledge/decision-log.md`.

@@ -12,7 +12,7 @@
      "runtime": "fake",
      "status": "active"
     },
-    "config_json": "{\"name\":\"ops\",\"runtime\":\"fake\",\"status\":\"active\",\"repo_access_mode\":\"own\"}",
+    "config_json": "{\"name\":\"ops\",\"status\":\"active\",\"runtime\":\"fake\",\"repo_access_mode\":\"own\"}",
     "generation": 1,
     "mail_agent": false,
     "onboarding_state": null,

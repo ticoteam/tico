@@ -88,15 +88,75 @@ const DRAFT_VERSIONS = [{n: 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z',
   summary: 'Archive receipts from billing'}];
 
 // A system job's mirror (`system: true`): Tico runs it from its own code, so it reads only; the top of the org may pause it.
-const SYSTEM = {id: 'au_sys_still', name: 'Still wanted check', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true,
+const SYSTEM = {id: 'au_sys_still', name: 'KPI stale asks check', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true,
   kind: 'system', version: 1, schedule: 'Daily at 07:00', can_edit: false, can_pause: true,
-  description: 'Asks each owner whether tasks open for 30 days are still wanted.',
-  trigger: {type: 'event', name: 'tico.builtin.job.still_wanted'}, steps: [], controls: {on: true},
-  source: {kind: 'system_job', id: 'job:still_wanted'}};
+  description: 'Asks a KPI keeper for a reading when it goes out of date.',
+  trigger: {type: 'event', name: 'tico.builtin.job.kpi_asks'}, steps: [], controls: {on: true},
+  source: {kind: 'system_job', id: 'job:kpi_asks'}};
 const systemRuns = (now = Date.now()) => Array.from({length: 8}, (_, i) => ({id: 'sys_' + (50 - i), automation_id: SYSTEM.id,
   started_at: new Date(now - (i * 3 + 1) * 3600000).toISOString(), finished_at: new Date(now - (i * 3 + 1) * 3600000 + 4000).toISOString(),
   status: i === 2 ? 'failed' : 'ok', cost: 0, steps: [], started_by: 'Schedule', outcome: i === 2 ? 'Mail down' : 'Asked 3 owners',
   summary: i === 2 ? 'Mail down' : 'Asked 3 owners'}));
+
+// Maintenance (`maintenance: true`): backend/maintenance.py's listing at the migration's defaults, Learn's beta numbers
+// (backend/learnings.py beta_stats), and 30 hourly runs, newest first: one failed at Dream, one a Run now of one step.
+const MAINT_ORDER = ['collect', 'clean_up', 'check_health', 'find_stuck', 'learn', 'suggest', 'update', 'dream'];
+const MAINT_NAMES = {collect: 'Collect', clean_up: 'Clean up', check_health: 'Check health', find_stuck: 'Find stuck', learn: 'Learn',
+  suggest: 'Suggest', update: 'Update', dream: 'Dream'};
+const MAINT_EVERY_RUN = ['collect', 'clean_up', 'check_health'], MAINT_BOTS = ['find_stuck', 'dream'];
+function maintSteps() {
+  const d = {find_stuck: {frequency: 'custom', custom_every: 6, custom_unit: 'hours', max_bots: 10}, learn: {enabled: false, frequency: 'day'},
+    suggest: {frequency: 'day'}, update: {frequency: 'day'}, dream: {frequency: 'day', max_bots: 3}};
+  return MAINT_ORDER.map(key => ({key, name: MAINT_NAMES[key], enabled: true, frequency: 'run', custom_every: null, custom_unit: null,
+    max_bots: null, ...d[key], fixed: MAINT_EVERY_RUN.includes(key),
+    last_started_at: null, last_ran_at: key === 'learn' ? null : new Date(Date.now() - 3600000).toISOString(), cursor_at: null,
+    ...(key === 'suggest' ? {consent: false} : {}),
+    ...(key === 'learn' ? {stats: {days: 7, runs: 6, items_read: 42, items_sent: {support: 3, 'eng-lead': 2}, saved: 4, dropped: 1,
+      unreported: 0, not_sent: 0, expired: 0, cost_usd: 0.18}} : {})}));
+}
+function maintRuns(now = Date.now()) {
+  return Array.from({length: 30}, (_, i) => {
+    const at = now - (i + 1) * 3600000, failed = i === 2, one = i === 4;
+    const line = (step, status, extra = {}) => ({step, status, reason: '', checked: null, found: null, woke: null, cost_usd: 0,
+      started_at: new Date(at).toISOString(), finished_at: new Date(at + 2000).toISOString(), ...extra});
+    const steps = one ? [line('dream', 'ran', {checked: 5, found: 2, woke: 2, cost_usd: 0.05})] : [
+      line('collect', 'ran', {checked: 120, found: 14}), line('clean_up', 'ran'), line('check_health', 'skipped', {reason: 'not due'}),
+      line('find_stuck', 'skipped', {reason: 'not due'}), line('learn', 'off'), line('suggest', 'skipped', {reason: 'Privacy consent is off'}),
+      line('update', 'skipped', {reason: 'not due'}),
+      line('dream', failed ? 'failed' : 'skipped', failed ? {reason: 'model timed out', cost_usd: 0.02} : {reason: 'not due'})];
+    return {id: 'mrun_' + (100 - i), occurrence_key: one ? null : 'hourly:' + i, trigger: one ? 'run_now' : 'schedule', step: one ? 'dream' : null,
+      started_at: new Date(at).toISOString(), finished_at: new Date(at + 9000).toISOString(), heartbeat_at: new Date(at + 9000).toISOString(),
+      ok: !failed, result: failed ? '1 failed, 2 ran, 4 skipped' : one ? '1 ran' : '2 ran, 5 skipped',
+      cost_usd: steps.reduce((t, x) => t + x.cost_usd, 0), steps};
+  });
+}
+
+// The Heartbeat (`heartbeat: true`): backend/heartbeat.py's listing with one step of each kind and Ask go-ahead's switch,
+// Queue check failing now and GitHub sync's old error, and 30 beats that did something, one every 2 minutes, newest first:
+// every fifth one failed, and the seventh is a failure folded three times.
+const HEART_STEPS = [['due_reminders', 'Due reminders', 'due', 'Every beat'], ['ask_deadlines', 'Ask go-ahead', 'due', 'Hourly'],
+  ['stall_checks', 'Stall checks', 'recovery', 'Every minute'], ['queue_check', 'Queue check', 'recovery', 'Every beat'],
+  ['github_sync', 'GitHub sync', 'poll', 'Every 10 s']];
+function heartSteps(now = Date.now()) {
+  return HEART_STEPS.map(([key, name, kind, every]) => ({key, name, kind, kind_name: {due: 'Due times', recovery: 'Recovery', poll: 'Outside polls'}[kind],
+    every_s: null, every, switch: key === 'ask_deadlines', on: true, can_change: false, last_run_at: new Date(now - 4000).toISOString(),
+    last_ms: key === 'github_sync' ? 1240 : 3, last_result: key === 'due_reminders' ? '1 reminder sent' : 'Nothing due',
+    last_did_at: key === 'due_reminders' ? new Date(now - 4000).toISOString() : null, last_did: key === 'due_reminders' ? '1 reminder sent' : null,
+    last_error: {queue_check: 'Failed: unexpected error (RuntimeError)', github_sync: 'Failed: GitHub did not answer'}[key] || null,
+    last_error_at: {queue_check: new Date(now - 4000).toISOString(), github_sync: new Date(now - 600000).toISOString()}[key] || null,
+    failing: key === 'queue_check', runs_24h: 8640,
+    did_24h: key === 'due_reminders' ? 24 : 0, failed_24h: key === 'queue_check' ? 6 : 0}));
+}
+function heartBeats(now = Date.now()) {
+  return Array.from({length: 30}, (_, i) => {
+    const failed = i % 5 === 1, folded = i === 6;
+    const steps = folded ? [] : [{key: 'due_reminders', name: 'Due reminders', text: '1 reminder sent', ms: 3, error: null}];
+    if (failed) steps.push({key: 'queue_check', name: 'Queue check', text: null, ms: 2, error: 'Failed: unexpected error (RuntimeError)'});
+    return {id: 'hbt_' + String(100 - i).padStart(3, '0'), started_at: new Date(now - (i * 2 + 1) * 60000).toISOString(), total_ms: 7,
+      did: folded ? 0 : 1, failed: failed ? 1 : 0, steps, repeats: folded ? 3 : 1,
+      last_repeated_at: folded ? new Date(now - i * 2 * 60000).toISOString() : null};
+  });
+}
 
 // 30 runs of the inbox automation, newest first: most reply, a few fail at the LLM, a few hit the spend limit.
 function inboxRuns(now = Date.now()) {
@@ -121,7 +181,7 @@ function inboxRuns(now = Date.now()) {
 // One page on the fake hub. viewer: the person signed in (any but the fixture's owner sees nothing editable).
 // tweak(fx) changes the fixture copy before the page reads it. proposal: a bot's pending version on the inbox one.
 async function openAutomations(browser, {viewport = PHONE, hash = '#/automations', viewer = 'dana', tweak = null, draft = false,
-                                         proposal = false, system = false} = {}) {
+                                         proposal = false, system = false, maintenance = false, heartbeat = false} = {}) {
   const fx = clone(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')));
   if (system) fx.automations.push(clone(SYSTEM));
   if (draft) { fx.automations.push(clone(DRAFT)); fx.versions = {...fx.versions, au_draft: clone(DRAFT_VERSIONS)}; }
@@ -133,7 +193,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
   const db = {
     list: fx.automations.map(a => ({...sortFlow(a), can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
     versions: {}, runs: {au_inbox: inboxRuns(), ...(system ? {[SYSTEM.id]: systemRuns()} : {})}, conv: null, messages: [],
-    held: {},   // id → {release, fail}: that automation's GET waits for release(), then answers (or fails)
+    held: {},   // id → {wait, fail}: an automation's GET or Maintenance's PATCH waits for release()
   };
   for (const a of db.list) {
     const old = fx.versions[a.id] || [{n: a.version, actor: a.owner_id, at: '2026-10-27T15:00:00Z'}];
@@ -145,6 +205,27 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     db.versions.au_inbox.push({n: a.version + 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z', status: 'pending',
       summary: fx.proposal.summary, flow: {trigger: clone(a.trigger), steps}});
   }
+  if (maintenance) db.maint = {settings: {schedule: 'hourly', paused: false, monthly_cap_usd: null}, cap_env: 50, steps: maintSteps(),
+    runs: maintRuns(), live: null};
+  // GET only reads; the test ends a live run as the backend's worker does.
+  const maintListing = () => {
+    const mt = db.maint;
+    return clone({settings: {...mt.settings, monthly_cap_usd_in_effect: mt.settings.monthly_cap_usd ?? mt.cap_env}, steps: mt.steps,
+      last_run: mt.runs[0] || null, live_run_id: mt.live?.id || null, can_change: owner,
+      next_run_at: mt.settings.paused ? null : new Date(Date.now() + 1800000).toISOString()});
+  };
+  if (heartbeat) db.heart = {interval_s: 10, last_beat_at: new Date(Date.now() - 4000).toISOString(), beats_24h: 8640, steps: heartSteps(),
+    beats: heartBeats()};
+  // A page of beats as GET /api/v2/heartbeat lists them; `next` is the last one's "started_at|id".
+  const heartListing = (limit = 20, before = null) => {
+    const hb = db.heart, cut = before ? before.split('|')[0] : null;
+    const rows = hb.beats.filter(b => !cut || b.started_at < cut).slice(0, limit);
+    const more = hb.beats.filter(b => !cut || b.started_at < cut).length > limit;
+    return clone({interval_s: hb.interval_s, interval_min: 5, interval_max: 60, last_beat_at: hb.last_beat_at, beats_24h: hb.beats_24h,
+      quiet_beats: 12, quiet_since_at: null, kinds: [{key: 'due', name: 'Due times'}, {key: 'recovery', name: 'Recovery'}, {key: 'poll', name: 'Outside polls'}],
+      steps: hb.steps.map(x => ({...x, can_change: x.switch && owner})), beats: rows,
+      next: more ? `${rows.at(-1).started_at}|${rows.at(-1).id}` : null, can_change: owner});
+  };
   const writes = [];
   const find = id => db.list.find(a => a.id === id);
   // A Decide step on a saved set comes back with the set's questions alongside, read-only (CONTRACT §2).
@@ -181,7 +262,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
@@ -194,6 +275,72 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     let m0;
     if (method !== 'GET') writes.push({method, path: p, body});
 
+    // System jobs beside Maintenance (ui/app/settings-recurring.ts draws them): two of Tico's own jobs.
+    if (db.maint && p === '/api/v2/system-routines' && method === 'GET') {
+      const job = (key, name, extra) => ({key, name, what: name + '.', schedule: 'Every hour', when: ['every hour'], then: [name.toLowerCase()],
+        department: {name: 'Engineering'}, records: true, last: null, next: null, presets: [], search: name.toLowerCase(), ...extra});
+      return json({can_create_task_rule: false, jobs: [job('stale_review', 'Stale ticket review', {switch: true, on: true, can_change: owner, controllable: true}),
+        job('stall_checks', 'Stall checks', {needed: true, schedule: 'Every minute', when: ['every minute']})]});
+    }
+    if (db.heart && p === '/api/v2/heartbeat') {
+      if (method === 'GET') return json(heartListing(Number(url.searchParams.get('limit') || 20), url.searchParams.get('before')));
+      if (method === 'PUT') {
+        if (!owner) return refuse(403, 'forbidden', 'Only an owner or an admin changes the Heartbeat');
+        const hold = db.held.heartbeat;
+        if (hold) { await hold.wait; if (hold.fail) return refuse(500, 'boom', 'The hub stalled'); }
+        if (!(body?.interval_s >= 5 && body.interval_s <= 60)) return refuse(422, 'invalid', 'interval_s is 5 to 60');
+        db.heart.interval_s = body.interval_s;
+        return json(heartListing());
+      }
+    }
+    // A Heartbeat step's switch is its job's (backend/system_routines.py `row_of`): the answer is the step's row.
+    if (db.heart && p === '/api/v2/system-routines/ask_deadlines' && method === 'PUT') {
+      if (!owner) return refuse(403, 'forbidden', 'Only an owner or an admin changes this job');
+      const st = db.heart.steps.find(x => x.key === 'ask_deadlines');
+      st.on = !!body.on; st.every = st.on ? 'Hourly' : 'Off';
+      return json({job: clone({...st, can_change: true})});
+    }
+    if (db.maint && p.startsWith('/api/v2/maintenance')) {
+      const mt = db.maint;
+      if (method !== 'GET' && !owner) return refuse(403, 'forbidden', 'Only an owner or an admin changes Maintenance');
+      if (p === '/api/v2/maintenance' && method === 'GET') return json(maintListing());
+      if (p === '/api/v2/maintenance' && method === 'PATCH') {
+        const hold = db.held.maintenance;
+        if (hold) { await hold.wait; if (hold.fail) return refuse(500, 'boom', 'The hub stalled'); }
+        // backend/maintenance.py save_settings and save_step's refusals.
+        if (body.schedule != null && !['hourly', '2h', '3h', '6h', '12h', 'daily'].includes(body.schedule)) return refuse(422, 'invalid', 'No such schedule');
+        for (const ch of body.steps || []) {
+          const st = mt.steps.find(x => x.key === ch.key);
+          if (!st) return refuse(404, 'not_found', 'No such Maintenance step');
+          const after = {...st, ...Object.fromEntries(Object.entries(ch).filter(([, v]) => v != null))};
+          if (MAINT_EVERY_RUN.includes(st.key) && after.frequency !== 'run') return refuse(422, 'invalid', `${st.name} runs every run`);
+          if (st.key === 'collect' && !after.enabled) return refuse(422, 'invalid', 'Collect is always on');
+          if (after.frequency === 'custom' && (after.custom_every == null || !['hours', 'days'].includes(after.custom_unit))) return refuse(422, 'invalid', 'A custom schedule needs a number and hours or days');
+          if (ch.max_bots != null && !MAINT_BOTS.includes(st.key)) return refuse(422, 'invalid', `${st.name} takes no number of bots`);
+        }
+        for (const k of ['schedule', 'paused', 'monthly_cap_usd']) if (body[k] != null) mt.settings[k] = body[k];
+        for (const ch of body.steps || []) {
+          const st = mt.steps.find(x => x.key === ch.key);
+          for (const [k, v] of Object.entries(ch)) if (k !== 'key' && v != null) st[k] = v;
+          if (st.frequency !== 'custom') st.custom_every = st.custom_unit = null;
+        }
+        return json(maintListing());
+      }
+      if (p === '/api/v2/maintenance/runs') {
+        const limit = Number(url.searchParams.get('limit') || 25), before = url.searchParams.get('before');
+        const rows = mt.runs.filter(r => !before || r.started_at < before).slice(0, limit);
+        return json({runs: clone(rows), next: rows.length === limit ? rows.at(-1).started_at : null});
+      }
+      if (p === '/api/v2/maintenance/run' && method === 'POST') {
+        if (mt.live) return json({run: clone(mt.live), started: false});
+        const at = new Date().toISOString();
+        mt.live = {id: 'mrun_now', occurrence_key: null, trigger: 'run_now', step: body?.step || null, started_at: at, finished_at: null,
+          heartbeat_at: at, ok: null, result: null, cost_usd: 0, steps: [{step: 'collect', status: 'ran', reason: '', checked: 3, found: 1, woke: null,
+            cost_usd: 0, started_at: at, finished_at: at}]};
+        mt.runs.unshift(mt.live);
+        return json({run: clone(mt.live), started: true});
+      }
+    }
     if (p === '/api/v2/automations/question-sets') return json({sets: fx.question_sets});
     // A template fill saves nothing; like the hub it refuses an owner the viewer may not make an automation for (another
     // person) and one that can't hear the inbox (a group on an email address).
@@ -218,9 +365,23 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/v2/automations') return json({automations: db.list.map(row), next: null});
     // The overview's reads: every run in the range across the list, newest first, and its counts per bucket.
     const RANGES = {'5m': [300, 10], '1h': [3600, 12], '24h': [86400, 24], '7d': [604800, 28]};
+    // The Maintenance run's log is listed under its row, as backend/automation_overview.py does (`maint_row`).
+    const maintRuns = () => (db.maint?.runs || []).map(r => {
+      const status = !r.finished_at ? 'running' : r.ok ? 'ok' : 'failed';
+      return {id: 'mnt_' + r.id, automation_id: 'maintenance', automation_name: 'Maintenance', trigger: 'system', owner_id: 'tico',
+        started_at: r.started_at, finished_at: r.finished_at, status, cost: r.cost_usd || 0,
+        started_by: r.trigger === 'run_now' ? 'Run now' : 'Scheduled', outcome: r.result || (status === 'ok' ? 'Done' : status === 'failed' ? 'Failed' : 'Running'),
+        step_count: null, count: 1, maint: true};
+    });
+    // The Heartbeat's runs (system_runs job heartbeat) too (`heart_row`): one a minute, the last failed.
+    const heartRuns = () => !db.heart ? [] : Array.from({length: 6}, (_, i) => ({id: 'hb_r' + i, automation_id: 'heartbeat',
+      automation_name: 'Heartbeat', trigger: 'system', owner_id: 'tico', started_at: new Date(Date.now() - (i * 60 + 30) * 1000).toISOString(),
+      finished_at: new Date(Date.now() - (i * 60 + 30) * 1000 + 7).toISOString(), status: i === 0 ? 'failed' : 'ok', cost: 0,
+      started_by: 'Scheduled', outcome: i === 0 ? 'Failed: Queue check' : '1 step did something', step_count: null, count: 1, maint: true}));
     const inRange = range => {
       const [secs] = RANGES[range] || RANGES['1h'], since = Date.now() - secs * 1000;
-      return Object.values(db.runs).flat().filter(r => new Date(r.started_at).getTime() >= since && find(r.automation_id))
+      return [...Object.values(db.runs).flat().filter(r => find(r.automation_id)), ...maintRuns(), ...heartRuns()]
+        .filter(r => new Date(r.started_at).getTime() >= since)
         .sort((x, y) => y.started_at.localeCompare(x.started_at));
     };
     if (p === '/api/v2/automations/runs') {
@@ -229,6 +390,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         && (!status || (status === 'done' ? ['ok', 'empty', 'skipped'].includes(r.status) : r.status === status)));
       const from = q.get('before') ? all.findIndex(r => r.id === q.get('before')) + 1 : 0, limit = Number(q.get('limit') || 50);
       const rows = all.slice(from, from + limit).map(r => {
+        if (r.maint) return {...r, maint: undefined};
         const a = find(r.automation_id);
         return {...r, steps: undefined, automation_name: a.name, trigger: a.kind || a.trigger.type, owner_id: a.owner_id,
           started_by: r.started_by || 'From Sam Lee · Thursday?', outcome: r.outcome || (r.status === 'failed' ? 'LLM failed: model timed out' : 'Draft reply'),
@@ -347,7 +509,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + hash);
-  // Hold an automation's GET until release() (fail: then answer 500), to land a slow answer late.
+  // Hold an automation's GET, Maintenance's PATCH or the Heartbeat's PUT until release() (fail: then answer 500).
   const hold = (id, fail = false) => { let release; const wait = new Promise(r => { release = r; }); db.held[id] = {wait, fail}; return () => { delete db.held[id]; release(); }; };
   return {page, errors, writes, db, me, hold};
 }

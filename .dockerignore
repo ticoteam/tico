@@ -1,6 +1,7 @@
 .git
 .github
 node_modules
+build
 .venv
 __pycache__
 .pytest_cache

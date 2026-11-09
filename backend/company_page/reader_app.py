@@ -12,6 +12,7 @@ token, verified email) and nothing that touches the roster: a reader who works a
 Closed answers one plain 404 on every route here, the same as a path that never existed. Unsubscribing with a good link
 is the one exception: that way out outlasts the page.
 """
+
 import hashlib
 import hmac
 import html
@@ -30,8 +31,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from .. import brand_icons
 from .. import hubdb as H
 from .. import oidc as O
+from .. import team_icon
 from ..store import Problem
 from ..visuals import hostname, origin_of
 from . import readers as R
@@ -47,19 +50,46 @@ INVITE_TOKEN = re.compile(r"[A-Za-z0-9_-]{20,100}")
 SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 ANCHOR_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 FONT_DIR = Path(__file__).parent / "template" / "fonts"
-ASSET_TYPES = {"css": "text/css; charset=utf-8", "js": "text/javascript; charset=utf-8", "woff2": "font/woff2",
-               "woff": "font/woff", "ttf": "font/ttf", "otf": "font/otf", "png": "image/png", "jpg": "image/jpeg",
-               "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}      # no SVG: it can carry script
+ASSET_TYPES = {
+    "css": "text/css; charset=utf-8",
+    "js": "text/javascript; charset=utf-8",
+    "woff2": "font/woff2",
+    "woff": "font/woff",
+    "ttf": "font/ttf",
+    "otf": "font/otf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}  # no SVG: it can carry script
 
 # Every path this host answers; the router in front of a hosted install lets through only these.
-ROUTES = (("GET", "/"), ("GET", "/data.json"), ("GET", "/feed.xml"), ("GET", "/assets/{path:path}"), ("GET", "/sign-in"),
-          ("GET", CALLBACK_PATH), ("POST", "/sign-out"), ("GET", "/invite/{token}"), ("GET", "/unsubscribe"),
-          ("POST", "/unsubscribe"), ("POST", "/reply"), ("POST", "/can-help"))
+ROUTES = (
+    ("GET", "/"),
+    ("GET", "/data.json"),
+    ("GET", "/feed.xml"),
+    ("GET", "/assets/{path:path}"),
+    ("GET", "/favicon.ico"),
+    ("GET", "/apple-touch-icon.png"),
+    ("GET", "/sign-in"),
+    ("GET", CALLBACK_PATH),
+    ("POST", "/sign-out"),
+    ("GET", "/invite/{token}"),
+    ("GET", "/unsubscribe"),
+    ("POST", "/unsubscribe"),
+    ("POST", "/reply"),
+    ("POST", "/can-help"),
+)
 # Gone from every request to this host: these prove who someone is to the app or to a proxy in front of it.
 STRIPPED = (b"authorization", b"proxy-authorization", b"remote-user", b"x-forwarded-user", b"x-forwarded-email")
 STRIPPED_PREFIXES = (b"cf-access-", b"x-amzn-oidc-", b"x-tico-")
-SECURITY = {"X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "frame-ancestors 'none'"}     # the page's own policy is a meta tag: render.py
+SECURITY = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+}  # the page's own policy is a meta tag: render.py
 PRIVATE = {**SECURITY, "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow", "Vary": "Cookie"}
 PUBLIC = {**SECURITY, "Cache-Control": "public, max-age=60", "Vary": "Cookie"}
 
@@ -73,18 +103,26 @@ def check_origin(settings):
         return ""
     try:
         parts = urlsplit(origin_of(value))
-        _ = parts.port              # raises on a port that isn't a number
+        _ = parts.port  # raises on a port that isn't a number
     except ValueError:
         parts = None
-    if not parts or not parts.hostname or "@" in parts.netloc or not (
-            parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in O.LOOPBACK)):
-        log.warning("TICO_READER_ORIGIN is not an https origin; the Company page has no reader address until it is fixed")
+    if (
+        not parts
+        or not parts.hostname
+        or "@" in parts.netloc
+        or not (parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in O.LOOPBACK))
+    ):
+        log.warning(
+            "TICO_READER_ORIGIN is not an https origin; the Company page has no reader address until it is fixed"
+        )
         return ""
     origin = f"{parts.scheme}://{parts.netloc.lower()}"
     for other in (settings.public_url, getattr(settings, "visual_origin", ""), getattr(settings, "runner_url", "")):
         if other and hostname(other) == hostname(origin):
-            raise ValueError("TICO_READER_ORIGIN must differ from the app's, visuals' and runners' hostnames, whatever "
-                             "the scheme or port")
+            raise ValueError(
+                "TICO_READER_ORIGIN must differ from the app's, visuals' and runners' hostnames, whatever "
+                "the scheme or port"
+            )
     return origin
 
 
@@ -106,6 +144,7 @@ class ReaderOidc(O.Oidc):
     """The login round trip, on the reader origin. No roster, no allowed domains (a reader comes from anywhere and has
     an entry on the reader list or nothing), no app sessions. Its signing key is its own, so a login state signed here is
     worth nothing on the app's callback, or the other way round."""
+
     name = "reader"
     sessions = False
 
@@ -117,7 +156,7 @@ class ReaderOidc(O.Oidc):
         self.redirect_uri = origin + CALLBACK_PATH
         self.secret = hmac.new(self.secret, b"company-page-reader-login", hashlib.sha256).digest()
 
-    def _email(self, claims):
+    def _email(self, claims, joined=()):
         return self._verified_email(claims)
 
     def person(self, *args, **kwargs):
@@ -131,13 +170,28 @@ class ReaderOidc(O.Oidc):
         only on a verified sign-in, so a link scanner that opens the address spends nothing."""
         doc = self._discover()
         state, nonce, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(24), secrets.token_urlsafe(48)
-        params = {"response_type": "code", "client_id": self.settings.oidc_client_id, "redirect_uri": self.redirect_uri,
-                  "scope": "openid email profile", "state": state, "nonce": nonce, "code_challenge_method": "S256",
-                  "code_challenge": O._b64(hashlib.sha256(verifier.encode()).digest())}
+        params = {
+            "response_type": "code",
+            "client_id": self.settings.oidc_client_id,
+            "redirect_uri": self.redirect_uri,
+            "scope": "openid email profile",
+            "state": state,
+            "nonce": nonce,
+            "code_challenge_method": "S256",
+            "code_challenge": O._b64(hashlib.sha256(verifier.encode()).digest()),
+        }
         endpoint = doc["authorization_endpoint"]
         url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(params)
-        return url, self._sign({"s": state, "n": nonce, "v": verifier, "x": O.safe_next(target), "i": invite,
-                                "e": time.time() + O.LOGIN_WINDOW})
+        return url, self._sign(
+            {
+                "s": state,
+                "n": nonce,
+                "v": verifier,
+                "x": O.safe_next(target),
+                "i": invite,
+                "e": time.time() + O.LOGIN_WINDOW,
+            }
+        )
 
     def complete(self, query, cookie):
         """(verified email, (issuer, subject), where to go, the invite's token). Raises SignInError. Waits on the
@@ -156,10 +210,18 @@ class ReaderOidc(O.Oidc):
         if endpoint is None:
             return None
         try:
-            reply = httpx.post(endpoint, json={"to": emails, "company": " ".join(company.split())[:80], "url": link,
-                                               "unsubscribe_url": unsubscribe},
-                               auth=httpx.BasicAuth(self.settings.oidc_client_id, self.settings.oidc_client_secret),
-                               timeout=30, follow_redirects=False)
+            reply = httpx.post(
+                endpoint,
+                json={
+                    "to": emails,
+                    "company": " ".join(company.split())[:80],
+                    "url": link,
+                    "unsubscribe_url": unsubscribe,
+                },
+                auth=httpx.BasicAuth(self.settings.oidc_client_id, self.settings.oidc_client_secret),
+                timeout=30,
+                follow_redirects=False,
+            )
             answer = reply.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise O.SignInError("notice failed: " + type(exc).__name__, 502) from exc
@@ -197,6 +259,7 @@ def _read_file(root, rel):
 def _release_file(settings, rel):
     """A file of the current public release. A swap can take the folder away mid-read; the next look finds the new one."""
     from . import release
+
     for _ in range(2):
         root = release.current_dir(settings)
         if not root:
@@ -228,8 +291,9 @@ async def _form(request):
     return {name: values[0] for name, values in fields.items()}
 
 
-def build(store, settings, judge=lambda: None):
-    """The app for the reader host. `judge` gives the screening model at request time (app.state.judge)."""
+def build(store, settings, judge=lambda: None, blobs=lambda: None):
+    """The app for the reader host. `judge` gives the screening model at request time (app.state.judge), and `blobs` the
+    file store (app.state.blobs) for the team's logo."""
     session_cookie, login_cookie = cookie_names(settings.reader_origin)
     secure = settings.reader_origin.startswith("https://")
     oidc = ReaderOidc(settings, store) if sign_in_configured(settings) else None
@@ -252,11 +316,20 @@ def build(store, settings, judge=lambda: None):
         return (not origin or origin == settings.reader_origin) and (not site or site == "same-origin")
 
     def csrf_ok(request, form, token):
-        return same_origin(request) and hmac.compare_digest(str(form.get("csrf", "")).encode(), csrf_token(token).encode())
+        return same_origin(request) and hmac.compare_digest(
+            str(form.get("csrf", "")).encode(), csrf_token(token).encode()
+        )
 
     def set_session(response, token):
-        response.set_cookie(session_cookie, token, max_age=R.SESSION_DAYS * 86400, path="/", secure=secure, httponly=True,
-                            samesite="lax")
+        response.set_cookie(
+            session_cookie,
+            token,
+            max_age=R.SESSION_DAYS * 86400,
+            path="/",
+            secure=secure,
+            httponly=True,
+            samesite="lax",
+        )
 
     def clear(response, *names):
         for name in names:
@@ -297,6 +370,7 @@ def build(store, settings, judge=lambda: None):
 
     def home(request: Request):
         from . import render
+
         before = before_of(request)
         if before is False:
             return not_found()
@@ -305,7 +379,9 @@ def build(store, settings, judge=lambda: None):
             return not_found()
         if view:
             token = request.cookies[session_cookie]
-            text = render.page({**view, "actions": True, "viewer": {"email": reader["email"]}, "csrf": csrf_token(token)})
+            text = render.page(
+                {**view, "actions": True, "viewer": {"email": reader["email"]}, "csrf": csrf_token(token)}
+            )
             record(reader["id"], ids)
             return _private(Response(text, media_type="text/html; charset=utf-8"))
         if transparency == "open":
@@ -337,14 +413,62 @@ def build(store, settings, judge=lambda: None):
         """A company that isn't Open has no release to carry its logo, and the sign-in page shows it. Only the file the
         settings name now, read the way a release reads it."""
         from . import release
+
         page = c.execute("SELECT logo_file_id FROM company_page_settings WHERE id='company'").fetchone()
         url = release._logo_url(c, page["logo_file_id"]) if page else ""
         return release._logo_bytes(c, settings, {"company": {"logo_url": url}}) if url == "assets/" + rel else None
+
+    def answering():
+        """Closed answers nothing here, icons included: a 200 would tell a visitor this host is a company page."""
+        with store.read() as c:
+            return R.transparency_of(c) != "closed"
+
+    # The apple-touch icon of the current team logo, by its digest: made once per logo, not once per request.
+    touch_icons: dict[str, bytes] = {}
+
+    def team_logo(apple):
+        """The team's logo as a reader icon's bytes, or None when none is set or it can't be read now. The apple-touch
+        icon is the logo flattened and fitted (team_icon.touch_png), made once for each logo."""
+        storage = blobs()
+        if storage is None:
+            return None
+        try:
+            with store.read() as c:
+                digest = team_icon.current_digest(c)
+            if not digest:
+                return None
+            if not apple:
+                return storage.get(digest)
+            data = touch_icons.get(digest)
+            if data is None:
+                data = team_icon.touch_png(storage.get(digest))
+                touch_icons.clear()  # only the current logo's icon is kept
+                touch_icons[digest] = data
+            return data
+        except (Problem, sqlite3.Error, OSError, ValueError):
+            log.warning("The team icon couldn't be read; the reader host shows Tico's mark", exc_info=True)
+            return None
+
+    def root_icon(request: Request):
+        """/favicon.ico and /apple-touch-icon.png: the team's logo when one is set, else Tico's mark. The logo is read at
+        each request, so a logo set after the release was made still shows."""
+        rel, media_type = brand_icons.ROOT[request.url.path]
+        if not answering():
+            return not_found()
+        logo = team_logo(apple=request.url.path == "/apple-touch-icon.png")
+        if logo is not None:
+            return brand_icons.reply(logo, media_type, brand_icons.TEAM_CACHE)
+        data = brand_icons.read(settings, rel)
+        return brand_icons.reply(data, media_type) if data is not None else not_found()
 
     def asset(request: Request):
         """The current release's assets, for a signed-in page as much as the public one. A release is empty unless the
         company is Open, so a private page's fonts come from the template, the same files for everyone."""
         rel = request.path_params["path"]
+        brand = brand_icons.FILES.get("/assets/" + rel)
+        if brand:  # Tico's own icons, for an open or private page (no SVG otherwise: see ASSET_TYPES)
+            data = brand_icons.read(settings, brand[0]) if answering() else None
+            return brand_icons.reply(data, brand[1]) if data is not None else not_found()
         media_type = ASSET_TYPES.get(rel.rsplit(".", 1)[-1].lower()) if "." in rel else None
         if not media_type:
             return not_found()
@@ -369,8 +493,9 @@ def build(store, settings, judge=lambda: None):
             log.warning("Reader sign-in couldn't start: %s", exc.reason)
             return page(503, "Sign-in unavailable", "Try again in a minute.")
         response = _private(RedirectResponse(url, 303))
-        response.set_cookie(login_cookie, state, max_age=O.LOGIN_WINDOW, path="/", secure=secure, httponly=True,
-                            samesite="lax")
+        response.set_cookie(
+            login_cookie, state, max_age=O.LOGIN_WINDOW, path="/", secure=secure, httponly=True, samesite="lax"
+        )
         return response
 
     def sign_in(request: Request):
@@ -387,7 +512,9 @@ def build(store, settings, judge=lambda: None):
             if R.transparency_of(c) == "closed":
                 return not_found()
         try:
-            email, account, target, invited = oidc.complete(dict(request.query_params), request.cookies.get(login_cookie))
+            email, account, target, invited = oidc.complete(
+                dict(request.query_params), request.cookies.get(login_cookie)
+            )
         except O.SignInError as exc:
             log.info("Reader sign-in refused: %s", exc.reason)
             return clear(page(403, "Sign-in didn't finish", "Try again from the link you were given."), login_cookie)
@@ -396,13 +523,18 @@ def build(store, settings, judge=lambda: None):
             with store.transaction() as c:
                 if R.transparency_of(c) == "closed":
                     return not_found()
-                reader = (R.redeem_invite(c, invited, issuer, sub, email) if invited
-                          else R.resolve_login(c, issuer, sub, email))
+                reader = (
+                    R.redeem_invite(c, invited, issuer, sub, email)
+                    if invited
+                    else R.resolve_login(c, issuer, sub, email)
+                )
                 token = R.start_session(c, reader["id"], request.cookies.get(session_cookie, "")) if reader else None
         except R.InviteRefused as exc:
             log.info("Reader invite refused: %s", exc)
-            return clear(page(403, "Link not valid", "This link has been used or has expired. Ask your contact for a new "
-                                                     "one."), login_cookie)
+            return clear(
+                page(403, "Link not valid", "This link has been used or has expired. Ask your contact for a new one."),
+                login_cookie,
+            )
         if not token:
             return clear(no_access(), login_cookie)
         response = _private(RedirectResponse(target, 303))
@@ -437,7 +569,7 @@ def build(store, settings, judge=lambda: None):
             return not_found()
         text = form.get("body", "")
         if kind == "can_help" and not text.strip():
-            text = "I can help."        # the button alone: the ask it answers says what with
+            text = "I can help."  # the button alone: the ask it answers says what with
         try:
             R.submit_message(store, reader["id"], edition, kind, text, form.get("ask_id"), primary=judge())
         except Problem as exc:
@@ -464,9 +596,13 @@ def build(store, settings, judge=lambda: None):
             return not_found()
         email = (form or {}).get("email", "").strip()
         if not email:
-            return page(200, "Stop these emails", '<form method="post" action="/unsubscribe"><input type="hidden" '
-                        f'name="token" value="{html.escape(token, quote=True)}"><p><label>Email <input type="email" '
-                        'name="email" required></label></p><button class="b" type="submit">Stop emails</button></form>')
+            return page(
+                200,
+                "Stop these emails",
+                '<form method="post" action="/unsubscribe"><input type="hidden" '
+                f'name="token" value="{html.escape(token, quote=True)}"><p><label>Email <input type="email" '
+                'name="email" required></label></p><button class="b" type="submit">Stop emails</button></form>',
+            )
         with store.transaction() as c:
             R.unsubscribe_address(c, email)
         return page(200, "Emails stopped", "That address won't get emails about new updates.")
@@ -476,13 +612,24 @@ def build(store, settings, judge=lambda: None):
         return await run_in_threadpool(do_unsubscribe, request, form)
 
     handlers = {404: not_found, 405: not_found}
-    return Starlette(exception_handlers=handlers, routes=[
-        Route("/", home, methods=["GET"]), Route("/data.json", data, methods=["GET"]),
-        Route("/feed.xml", feed, methods=["GET"]), Route("/assets/{path:path}", asset, methods=["GET"]),
-        Route("/sign-in", sign_in, methods=["GET"]), Route(CALLBACK_PATH, callback, methods=["GET"]),
-        Route("/sign-out", sign_out, methods=["POST"]), Route("/invite/{token}", invite, methods=["GET"]),
-        Route("/unsubscribe", unsubscribe, methods=["GET", "POST"]), Route("/reply", reply, methods=["POST"]),
-        Route("/can-help", can_help, methods=["POST"])])
+    return Starlette(
+        exception_handlers=handlers,
+        routes=[
+            Route("/", home, methods=["GET"]),
+            Route("/data.json", data, methods=["GET"]),
+            Route("/feed.xml", feed, methods=["GET"]),
+            Route("/assets/{path:path}", asset, methods=["GET"]),
+            Route("/favicon.ico", root_icon, methods=["GET"]),
+            Route("/apple-touch-icon.png", root_icon, methods=["GET"]),
+            Route("/sign-in", sign_in, methods=["GET"]),
+            Route(CALLBACK_PATH, callback, methods=["GET"]),
+            Route("/sign-out", sign_out, methods=["POST"]),
+            Route("/invite/{token}", invite, methods=["GET"]),
+            Route("/unsubscribe", unsubscribe, methods=["GET", "POST"]),
+            Route("/reply", reply, methods=["POST"]),
+            Route("/can-help", can_help, methods=["POST"]),
+        ],
+    )
 
 
 def _is_reader_host(raw, want):
@@ -527,9 +674,11 @@ class ReaderGate:
             return await self.app(scope, receive, send)
         if scope["type"] == "websocket":
             return await send({"type": "websocket.close", "code": 1008})
-        if len(hosts) > 1:                  # two Host headers: never decide which one a proxy believed
+        if len(hosts) > 1:  # two Host headers: never decide which one a proxy believed
             return await not_found()(scope, receive, send)
-        inner = {k: v for k, v in scope.items() if k not in ("app", "router", "route", "state", "endpoint", "path_params")}
+        inner = {
+            k: v for k, v in scope.items() if k not in ("app", "router", "route", "state", "endpoint", "path_params")
+        }
         await self.reader_app({**inner, "headers": self._clean(scope["headers"])}, receive, send)
 
 
@@ -538,5 +687,10 @@ def install(app, store, auth, settings):
     R._state.update(store=store, settings=settings, oidc=None, not_before=0.0)
     if not settings.reader_origin:
         return
-    reader_app = build(store, settings, judge=lambda: getattr(app.state, "judge", None))
+    reader_app = build(
+        store,
+        settings,
+        judge=lambda: getattr(app.state, "judge", None),
+        blobs=lambda: getattr(app.state, "blobs", None),
+    )
     app.add_middleware(ReaderGate, reader_app=reader_app, origin=settings.reader_origin)

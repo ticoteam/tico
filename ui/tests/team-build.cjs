@@ -1,6 +1,6 @@
-// Build a team (ui/app/team-build.js): the dialog asks the server for the roles a briefing needs, shows them as cards,
-// keeps what the person picked when the briefing changes, and hires the picks in one request. Run at a desktop and a
-// phone size in light and dark. Fixtures only, no network. TB_SHOTS=<folder> also saves the screenshots.
+// Build a team (ui/app/team-build.ts): the dialog asks the server for the roles a briefing needs, shows them as cards,
+// keeps what the person picked when the briefing changes, and hires the picks in one request. Run at a desktop (dark) and a
+// phone size (light). Fixtures only, no network. TB_SHOTS=<folder> also saves the screenshots.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -50,7 +50,7 @@ async function scenario(browser, {name, viewport, theme}) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
@@ -209,10 +209,9 @@ async function scenario(browser, {name, viewport, theme}) {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
     for (const run of [
+      // One run per width: no assertion reads a colour, so each theme drew the same boxes.
       {name: 'desktop', viewport: {width: 1300, height: 900}, theme: 'dark'},
-      {name: 'desktop', viewport: {width: 1300, height: 900}, theme: 'light'},
       {name: 'phone', viewport: {width: 390, height: 844}, theme: 'light'},
-      {name: 'phone', viewport: {width: 390, height: 844}, theme: 'dark'},
     ]) await scenario(browser, run);
     console.log('team-build: ok');
   } finally { await browser.close(); }

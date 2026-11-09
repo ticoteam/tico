@@ -10,6 +10,7 @@ The id is random, made once, stored in this database and never derived from anyt
 booleans over the last seven days (a person used the app, a bot turn completed); the third says a bot the company
 added has ever completed a turn here, so HQ can tell how long an install took to reach its first working bot.
 """
+
 import json
 import logging
 import os
@@ -21,13 +22,15 @@ from .store import H, Problem, encode
 
 log = logging.getLogger("tico.census")
 
-KEY = "usage-count"               # registry_metadata
+KEY = "usage-count"  # registry_metadata
 DEFAULT_HQ = "https://updates.tico.team"
 WINDOW_DAYS = 7
-NOTE_EVERY = 3600                 # a person's activity is written at most this often
+NOTE_EVERY = 3600  # a person's activity is written at most this often
 DOC_URL = "https://github.com/ticoteam/tico/blob/main/PRIVACY.md"
-NOTICE = ("Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). "
-          "Turn off: Settings > General or TICO_TELEMETRY=off.")
+NOTICE = (
+    "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). "
+    "Turn off: Settings > General or TICO_TELEMETRY=off."
+)
 FIELDS = ("install_id", "version", "active_people", "active_bots", "first_result")
 _OFF = ("off", "0", "false", "no", "disabled")
 
@@ -58,9 +61,13 @@ def first_result(c, settings):
     table is in the order they were made, so the first match is the earliest-started result;
     the scan reads only the built-in bots' turns before it (tens of milliseconds at 20,000 Assistant turns)."""
     from .getting_started import built_in
+
     skip = sorted(built_in(settings))
-    row = c.execute("SELECT finished_at FROM attempts WHERE state='completed' AND finished_at IS NOT NULL AND bot_id NOT IN (%s) "
-                    "LIMIT 1" % ",".join("?" * len(skip)), skip).fetchone()
+    row = c.execute(
+        "SELECT finished_at FROM attempts WHERE state='completed' AND finished_at IS NOT NULL AND bot_id NOT IN (%s) "
+        "LIMIT 1" % ",".join("?" * len(skip)),
+        skip,
+    ).fetchone()
     return row[0] if row else ""
 
 
@@ -71,8 +78,10 @@ def _load(c):
 
 
 def _save(c, value):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (KEY, encode(value)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, encode(value)),
+    )
 
 
 def install_id_in(c):
@@ -82,6 +91,11 @@ def install_id_in(c):
         record["install_id"] = str(uuid.uuid4())
         _save(c, record)
     return record["install_id"]
+
+
+def install_id_if_set(c):
+    """This install's random ID when it has one, read only: `install_id_in` makes one inside a write transaction."""
+    return str(_load(c).get("install_id") or "")
 
 
 class Census:
@@ -119,10 +133,17 @@ class Census:
         since = H.shift(self.clock(), days=-WINDOW_DAYS)
         record = _load(c)
         people = str(record.get("last_person") or "") >= since
-        bots = c.execute("SELECT 1 FROM attempts WHERE state='completed' AND finished_at>=? LIMIT 1",
-                         (since,)).fetchone() is not None
-        return {"install_id": self._id(record, c), "version": version, "active_people": people, "active_bots": bots,
-                "first_result": bool(first_result(c, self.settings))}
+        bots = (
+            c.execute("SELECT 1 FROM attempts WHERE state='completed' AND finished_at>=? LIMIT 1", (since,)).fetchone()
+            is not None
+        )
+        return {
+            "install_id": self._id(record, c),
+            "version": version,
+            "active_people": people,
+            "active_bots": bots,
+            "first_result": bool(first_result(c, self.settings)),
+        }
 
     def _id(self, record, c=None):
         value = str(record.get("install_id") or "")
@@ -149,11 +170,17 @@ class Census:
         if data is None:
             return None
         if debug():
-            log.warning("[usage count] would send GET %s/v1/latest with %s (debug: not sending)", hq_url(),
-                        {k: data[k] for k in FIELDS})
+            log.warning(
+                "[usage count] would send GET %s/v1/latest with %s (debug: not sending)",
+                hq_url(),
+                {k: data[k] for k in FIELDS},
+            )
             return None
-        return {"install_id": data["install_id"], "version": data["version"],
-                **{k: str(data[k]).lower() for k in ("active_people", "active_bots", "first_result")}}
+        return {
+            "install_id": data["install_id"],
+            "version": data["version"],
+            **{k: str(data[k]).lower() for k in ("active_people", "active_bots", "first_result")},
+        }
 
     # ------------------------------------------------------------------ activity
     def note_person(self, who):
@@ -175,15 +202,25 @@ class Census:
             log.debug("Could not note activity: %s", type(exc).__name__)
 
     def person_due(self, who):
-        return (who.role in ("owner", "human") and not who.via and not who.via_token
-                and (not self._noted or time.monotonic() - self._noted >= NOTE_EVERY))
+        return (
+            who.role in ("owner", "human")
+            and not who.via
+            and not who.via_token
+            and (not self._noted or time.monotonic() - self._noted >= NOTE_EVERY)
+        )
 
     # ------------------------------------------------------------------ the owner's controls
     def view(self, c):
         record = _load(c)
         off = self.off_reason(c)
-        return {"enabled": not off, "off_by": off, "install_id": str(record.get("install_id") or ""),
-                "notice": record.get("notice") or "", "text": NOTICE, "doc": DOC_URL}
+        return {
+            "enabled": not off,
+            "off_by": off,
+            "install_id": str(record.get("install_id") or ""),
+            "notice": record.get("notice") or "",
+            "text": NOTICE,
+            "doc": DOC_URL,
+        }
 
     def set_notice(self, state):
         if state not in ("shown", "dismissed"):
@@ -198,7 +235,7 @@ class Census:
         with self.store.transaction() as c:
             record = _load(c)
             record["enabled"] = bool(enabled)
-            record.setdefault("notice", "dismissed")   # they have made the choice themselves
+            record.setdefault("notice", "dismissed")  # they have made the choice themselves
             _save(c, record)
             H.event(c, actor, "usage_count.on" if enabled else "usage_count.off", "")
             return self.view(c)

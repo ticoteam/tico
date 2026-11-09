@@ -28,7 +28,7 @@
       "folder": "bot-coo",
       "goal_active": false,
       "harness": "fake",
-      "host": "dispatcher",
+      "host": "keeper",
       "id": "coo",
       "keep_tasks_going": null,
       "last_turn_at": null,
@@ -135,7 +135,7 @@
       "folder": "bot-cpo",
       "goal_active": false,
       "harness": "fake",
-      "host": "dispatcher",
+      "host": "keeper",
       "id": "cpo",
       "keep_tasks_going": null,
       "last_turn_at": null,
@@ -247,7 +247,7 @@
       "folder": "bot-doc-updater",
       "goal_active": false,
       "harness": "fake",
-      "host": "dispatcher",
+      "host": "keeper",
       "id": "doc-updater",
       "keep_tasks_going": null,
       "last_turn_at": null,
@@ -276,7 +276,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a stall check or routine runs at most every 15 min.",
+        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
         "sweep_seconds": "<volatile>",
         "sweeps": true,
         "takes": "all"
@@ -322,7 +322,7 @@
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine or stall check runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -354,7 +354,7 @@
       "folder": "bot-finance",
       "goal_active": false,
       "harness": "fake",
-      "host": "dispatcher",
+      "host": "keeper",
       "id": "finance",
       "keep_tasks_going": null,
       "last_turn_at": null,
@@ -383,7 +383,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a stall check or routine runs at most every 15 min.",
+        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
         "sweep_seconds": "<volatile>",
         "sweeps": true,
         "takes": "all"
@@ -429,7 +429,7 @@
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine or stall check runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -461,7 +461,7 @@
       "folder": "bot-inbox",
       "goal_active": false,
       "harness": "fake",
-      "host": "dispatcher",
+      "host": "keeper",
       "id": "inbox",
       "keep_tasks_going": null,
       "last_turn_at": null,
@@ -490,7 +490,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a stall check or routine runs at most every 15 min.",
+        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
         "sweep_seconds": "<volatile>",
         "sweeps": true,
         "takes": "all"
@@ -536,7 +536,7 @@
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine or stall check runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -576,7 +576,7 @@
       "folder": "bot-ops",
       "goal_active": false,
       "harness": "fake",
-      "host": "dispatcher",
+      "host": "keeper",
       "id": "ops",
       "keep_tasks_going": null,
       "last_turn_at": "<time>",
@@ -610,7 +610,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a stall check or routine runs at most every 15 min.",
+        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
         "sweep_seconds": "<volatile>",
         "sweeps": true,
         "takes": "all"
@@ -668,7 +668,7 @@
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine or stall check runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -700,7 +700,7 @@
       "folder": "bot-product-design",
       "goal_active": false,
       "harness": "fake",
-      "host": "dispatcher",
+      "host": "keeper",
       "id": "product-design",
       "keep_tasks_going": null,
       "last_turn_at": null,
@@ -734,7 +734,7 @@
         "name": "doer",
         "options": {},
         "pulls": "all",
-        "summary": "News about its tasks waits up to 15 min; a stall check or routine runs at most every 15 min.",
+        "summary": "News about its tasks waits up to 15 min; a routine runs at most every 15 min.",
         "sweep_seconds": "<volatile>",
         "sweeps": true,
         "takes": "all"
@@ -780,7 +780,7 @@
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine or stall check runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     }

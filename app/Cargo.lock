@@ -4618,6 +4618,7 @@ dependencies = [
  "block2",
  "log",
  "minisign",
+ "objc2",
  "objc2-foundation",
  "objc2-web-kit",
  "reqwest 0.12.28",

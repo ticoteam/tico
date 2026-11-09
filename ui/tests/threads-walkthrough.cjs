@@ -298,24 +298,22 @@ async function messageAct(page, text, label, phone) {
       });
       await step(page, 'make it public to a team', phone, name, async () => {
         await page.locator('[data-thv-menu]').first().click();
-        await page.locator('.thv-pop [role="menuitem"]', {hasText: 'Who can read'}).click();
-        const dialog = page.locator('dialog[open]').first();
+        const dialog = page.locator('#thread-settings[open]');
         await dialog.waitFor({timeout: WAIT});
         await snap(page, 'who-can-read-private', phone);
-        await dialog.locator('input[name="audience"][value="team"]').check();
+        await dialog.locator('input[name="audience"][value="team"]').check();   // saves as it changes
+        await sleep(800);
         await snap(page, 'who-can-read-team-picked', phone);
-        await dialog.locator('button[type="submit"]').click();
-        await page.locator('dialog[open]').first().waitFor({state: 'detached', timeout: WAIT}).catch(() => {});
+        await dialog.locator('footer [data-close]').click();
         await snap(page, 'thread-shared-to-team', phone);
       });
       await step(page, 'make it public to the company', phone, name, async () => {
         await page.locator('[data-thv-menu]').first().click();
-        await page.locator('.thv-pop [role="menuitem"]', {hasText: 'Who can read'}).click();
-        const dialog = page.locator('dialog[open]').first();
+        const dialog = page.locator('#thread-settings[open]');
         await dialog.waitFor({timeout: WAIT});
         await dialog.locator('input[name="audience"][value="company"]').check();
-        await dialog.locator('button[type="submit"]').click();
         await sleep(800);
+        await dialog.locator('footer [data-close]').click();
         await snap(page, 'thread-shared-to-company', phone);
       });
     });
@@ -341,12 +339,13 @@ async function messageAct(page, text, label, phone) {
     await journey(browser, hub, 'bot page', 'dana', async (page, phone, name) => {
       await step(page, 'bot Home', phone, name, async () => {
         await shell(page, `#/bot/${BOT}/home`, '#bot-work')();
-        // A phone names them in the top line; a desktop switches above the talk.
-        await page.locator(phone ? '#btabs [data-bt="home"]' : '.bot-talk-switch [data-talk="home"]').waitFor({timeout: WAIT});
+        // Home is the chat; the DM is behind the Incognito toggle above it, at every width.
+        await page.locator(phone ? '#btabs [data-bt="home"]' : '#bot-incognito[aria-pressed="false"]').waitFor({timeout: WAIT});
         await snap(page, 'bot-home', phone);
       });
       await step(page, 'bot DM', phone, name, async () => {
-        await page.locator(phone ? '#btabs [data-bt="dm"]' : '.bot-talk-switch [data-talk="dm"]').click();
+        await page.locator('#bot-incognito').click();
+        await page.locator('#bot-incognito[aria-pressed="true"]').waitFor({timeout: WAIT});
         await sleep(800);
         await snap(page, 'bot-dm', phone);
       });
@@ -489,11 +488,11 @@ async function messageAct(page, text, label, phone) {
     // ------------------------------------------------------------------ Connect: Slack, Find a thread, Summarize
     await journey(browser, hub, 'connect', 'dana', async (page, phone, name) => {
       await step(page, 'connections page', phone, name, async () => {
-        await shell(page, '#/library/connections', '#cn-slack')();
+        await shell(page, '#/tools/slack', '#tool-slack-links')();
         await snap(page, 'connect-page', phone);
       });
       await step(page, 'Slack section', phone, name, async () => {
-        await page.locator('#cn-slack').scrollIntoViewIfNeeded();
+        await page.locator('#tool-slack-links').scrollIntoViewIfNeeded();
         await snap(page, 'connect-slack', phone);
       });
       await step(page, 'find a thread', phone, name, async () => {
@@ -504,9 +503,9 @@ async function messageAct(page, text, label, phone) {
       });
       await step(page, 'Summarize', phone, name, async () => {
         await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
-        // Summarize is an item in the thread menu (threads-page.js: threadMenuOpen), not a button on the page.
+        // Summarize is in Thread settings (threads-page.js: threadSettingsOpen), not a button on the page.
         await page.locator('[data-thv-menu]').first().click();
-        await page.locator('.thv-pop [role="menuitem"]', {hasText: 'Summarize'}).click();
+        await page.locator('#thread-settings[open] [data-ths="catchup"]').click();
         await sleep(1000);
         await snap(page, 'summarize', phone);
       });

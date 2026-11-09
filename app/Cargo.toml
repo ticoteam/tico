@@ -9,11 +9,15 @@ default-run = "tico-app"
 name = "tico-app"
 path = "src/main.rs"
 
+[features]
+# The web inspector on org pages in a release build (`cargo build --features devtools`); debug builds always have it.
+devtools = ["tauri/devtools"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools", "macos-private-api", "unstable"] }
+tauri = { version = "2", features = ["macos-private-api", "unstable"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
@@ -33,11 +37,12 @@ tauri-plugin-process = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-autostart = "2"
 
-# The badge reads the page's cookies through WebKit's own callback, so the main thread never waits for them
-# (see src/cookies.rs). The same versions wry already uses.
+# The badge reads the page's cookies, and Tico sign-in copies its session into new orgs' stores, through WebKit's own
+# callbacks, so the main thread never waits for them (see src/cookies.rs, src/signin.rs). The same versions wry already uses.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSHTTPCookie", "NSString"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSHTTPCookie", "NSString", "NSUUID"] }
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore"] }
 
 [dev-dependencies]

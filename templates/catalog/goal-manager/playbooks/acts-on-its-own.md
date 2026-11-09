@@ -65,11 +65,10 @@ cite it. Look in these, in order, and nowhere else:
    `covered`).
 3. **Approved proposals**: `hub proposal list --status confirmed`: a target, a Why, a recovery the owner approved.
 
-Covered: `hub question answer <message-id> "<the answer>. Per <source>: <quoted line, with its date>"`. Quote the
+Covered: `hub message send <bot> "<the answer>. Per <source>: <quoted line, with its date>"`. Quote the
 source; never stretch it to a case it does not name.
 Not covered, or two sources disagree: you don't decide it. Answer
-`hub question answer <message-id> "No recorded rule or decision covers this; ask the owner." --unknown "the owner's
-decision"`, so the bot asks the person itself, on its own task. Never guess, never answer as the owner, and never
+`hub message send <bot> "No recorded rule or decision covers this; ask the owner."`, so the bot asks the person itself, on its own task. Never guess, never answer as the owner, and never
 pass a question off as decided because it looks like an old one. When several bots then ask the owner the same
 thing, merge them (`playbooks/recoveries.md`).
 

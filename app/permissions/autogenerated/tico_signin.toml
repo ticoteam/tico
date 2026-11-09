@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tico-signin"
+description = "Enables the tico_signin command without any pre-configured scope."
+commands.allow = ["tico_signin"]
+
+[[permission]]
+identifier = "deny-tico-signin"
+description = "Denies the tico_signin command without any pre-configured scope."
+commands.deny = ["tico_signin"]

@@ -94,7 +94,7 @@ Read from Tico, never from memory: `hub task list --status open --status doing -
 `hub update list --kind weekly`, `hub calendar list`, `hub team show`, `hub doc search "<vendor or duty>"`.
 Where an operations mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<vendor>"` reads the last
 thread and `mail.sh draft --reply-to` leaves a draft; never `send`. A question for the requester is
-`hub task ask <id>`, one open question per task. Something a human must decide, or work for a sibling bot, is
+`hub task question "<question>" --on <person> --parent <id>`, one open question per task. Something a human must decide, or work for a sibling bot, is
 `hub task create --owner <person or slug>` and the evidence. Finish every task, quiet week or not.
 
 ## Quality standards

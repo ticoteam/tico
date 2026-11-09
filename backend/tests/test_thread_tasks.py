@@ -20,9 +20,14 @@ def test_a_task_from_a_members_thread_message_is_private_with_a_link_back_and_a_
 def test_a_repeated_task_is_refused_with_the_task_it_repeats(api):
     thread = new_thread(api, title="Pricing", members=("human:ben",), body="Ship the pricing page Friday")
     message_id = thread["message"]["id"]
-    first = post(api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "coo"}, token="ben-test")
-    again = api.post(f"/api/v2/threads/messages/{message_id}/task", json={"title": "Ship pricing", "owner": "coo"},
-                     headers=headers("ben-test"))
+    first = post(
+        api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "coo"}, token="ben-test"
+    )
+    again = api.post(
+        f"/api/v2/threads/messages/{message_id}/task",
+        json={"title": "Ship pricing", "owner": "coo"},
+        headers=headers("ben-test"),
+    )
     assert again.status_code == 422, again.text
     assert again.json()["error"]["code"] == "duplicate" and again.json()["error"]["task_id"] == first["id"]
 
@@ -66,8 +71,9 @@ def test_a_task_made_from_a_thread_message_is_not_unread_for_its_maker(api):
 def test_the_maker_still_sees_what_others_post_to_their_task_later(api):
     task = post(api, "tasks", {"owner": "human:ben", "title": "Ben's task", "body": "Details."})
     assert thread_me(api, task["conversation_id"])["unread"] == 0
-    response = api.post(f"/api/v2/threads/{task['conversation_id']}/messages", json={"text": "On it"},
-                        headers=headers("ben-test"))
+    response = api.post(
+        f"/api/v2/threads/{task['conversation_id']}/messages", json={"text": "On it"}, headers=headers("ben-test")
+    )
     assert response.status_code == 200, response.text
     assert thread_me(api, task["conversation_id"])["unread"] == 1
 
@@ -76,11 +82,17 @@ def test_a_bot_made_task_for_a_person_is_not_news_to_that_person(api):
     """The "New task from" notice is task news: it stays in the task's thread, and the requester gets no delivery for it
     (no unread, no Inbox row, no digest or push)."""
     with api.app.state.store.transaction() as c:
-        made = H.task_create(c, "bot:ops", "Filed for Ana", "Details.", "bot:ops", requester_actor="human:ana", lint=False)
+        made = H.task_create(
+            c, "bot:ops", "Filed for Ana", "Details.", "bot:ops", requester_actor="human:ana", lint=False
+        )
     assert thread_me(api, made["conversation_id"])["unread"] == 0
     with api.app.state.store.read() as c:
-        notice = c.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=? AND sender_id=? AND body LIKE ?",
-                           (made["conversation_id"], H.KEEPER, "New task from%")).fetchone()[0]
-        delivered = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE thread_id=? AND recipient=?",
-                              (made["conversation_id"], "human:ana")).fetchone()[0]
+        notice = c.execute(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND sender_id=? AND body LIKE ?",
+            (made["conversation_id"], H.KEEPER, "New task from%"),
+        ).fetchone()[0]
+        delivered = c.execute(
+            "SELECT COUNT(*) FROM message_deliveries WHERE thread_id=? AND recipient=?",
+            (made["conversation_id"], "human:ana"),
+        ).fetchone()[0]
     assert notice == 1 and delivered == 0
