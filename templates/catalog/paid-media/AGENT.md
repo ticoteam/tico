@@ -81,7 +81,7 @@ Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --pe
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks with exports attached. A question is `hub task ask <id>`, one open question per task. A
+Work arrives as tasks with exports attached. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A
 change a human must make is `hub task create --owner <person>` with the exact edit. Apply requested spend with your Tools; new public copy stays a draft until a person turns mail sending on in Tico. Read the funnel with `hub goal list` and, where connected, the
 CRM (read only).
 

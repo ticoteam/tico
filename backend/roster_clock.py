@@ -6,13 +6,15 @@ a few times an hour at most: on a busy server the two reads were a tenth of all 
 change from every connection, as provenance_clock does, so the rows read at one count are the rows at that count.
 These are neutral stored rows, never a permission result.
 """
+
 import sqlite3
 
 from . import bot_settings as BS
 
 TABLES = ("bots", "bot_config", "bot_settings", "task_steps")
-STATEMENTS = frozenset({BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug",
-                        "SELECT * FROM task_steps ORDER BY position,id"})
+STATEMENTS = frozenset(
+    {BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug", "SELECT * FROM task_steps ORDER BY position,id"}
+)
 
 
 def ensure(c):
@@ -20,8 +22,10 @@ def ensure(c):
     c.execute("INSERT OR IGNORE INTO roster_clock VALUES(1,0)")
     for table in TABLES:
         for operation in ("INSERT", "UPDATE", "DELETE"):
-            c.execute(f"CREATE TRIGGER IF NOT EXISTS roster_clock_{table}_{operation.lower()} AFTER {operation} "
-                      f"ON {table} BEGIN UPDATE roster_clock SET value=value+1 WHERE id=1; END")
+            c.execute(
+                f"CREATE TRIGGER IF NOT EXISTS roster_clock_{table}_{operation.lower()} AFTER {operation} "
+                f"ON {table} BEGIN UPDATE roster_clock SET value=value+1 WHERE id=1; END"
+            )
 
 
 def _clock(c):
@@ -90,4 +94,3 @@ def shared(c, key, build):
     if not getattr(c, "write_transaction", False):
         store[key] = (clock, found)
     return found
-

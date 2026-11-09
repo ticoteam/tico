@@ -23,11 +23,14 @@ FTS_TOKEN = re.compile(r"[A-Za-z0-9_@.+'-]+")
 CURSOR = re.compile(r"^(\d+)\|([^|]+)\|([^|]+)$")
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 DURATION = {"d": 86400, "h": 3600, "m": 60}
-ORGANIZE_ACTIONS = {"archive": ((), ("INBOX",), "unarchive"),
-                    "unarchive": (("INBOX",), (), "archive"),
-                    "mark_read": ((), ("UNREAD",), "mark_unread"),
-                    "mark_unread": (("UNREAD",), (), "mark_read"),
-                    "label": ((), (), "unlabel"), "unlabel": ((), (), "label")}
+ORGANIZE_ACTIONS = {
+    "archive": ((), ("INBOX",), "unarchive"),
+    "unarchive": (("INBOX",), (), "archive"),
+    "mark_read": ((), ("UNREAD",), "mark_unread"),
+    "mark_unread": (("UNREAD",), (), "mark_read"),
+    "label": ((), (), "unlabel"),
+    "unlabel": ((), (), "label"),
+}
 
 
 def organize_selection(body):
@@ -36,9 +39,11 @@ def organize_selection(body):
         raise Problem("action", "Choose archive, unarchive, mark_read, mark_unread, label or unlabel", 422)
     if (ids is not None) == (query is not None):
         raise Problem("selection", "Choose either message ids or a Gmail query", 422)
-    if ids is not None and (not isinstance(ids, list) or not 1 <= len(ids) <= 500
-                            or any(not isinstance(mid, str) or not mid.strip() or not mid.isascii()
-                                   or len(mid) > 128 for mid in ids)):
+    if ids is not None and (
+        not isinstance(ids, list)
+        or not 1 <= len(ids) <= 500
+        or any(not isinstance(mid, str) or not mid.strip() or not mid.isascii() or len(mid) > 128 for mid in ids)
+    ):
         raise Problem("ids", "Choose 1 to 500 message ids (up to 128 characters each)", 422)
     if query is not None and (not isinstance(query, str) or not query.strip() or len(query) > 4096):
         raise Problem("query", "A Gmail query is required (up to 4096 characters)", 422)
@@ -118,13 +123,20 @@ def truthy(value):
 def message_public(row, body=False):
     attachments = json.loads(row["attachments"] or "[]")
     out = {
-        "mailbox": row["mailbox"], "msg_id": row["msg_id"], "thread_id": row["thread_id"],
-        "epoch": row["epoch"], "date": row["date"],
-        "from_addr": row["from_addr"], "from_header": row["from_header"],
-        "to": json.loads(row["to_addresses"] or "[]"), "cc": json.loads(row["cc"] or "[]"),
-        "subject": row["subject"], "snippet": row["snippet"],
+        "mailbox": row["mailbox"],
+        "msg_id": row["msg_id"],
+        "thread_id": row["thread_id"],
+        "epoch": row["epoch"],
+        "date": row["date"],
+        "from_addr": row["from_addr"],
+        "from_header": row["from_header"],
+        "to": json.loads(row["to_addresses"] or "[]"),
+        "cc": json.loads(row["cc"] or "[]"),
+        "subject": row["subject"],
+        "snippet": row["snippet"],
         "labels": json.loads(row["labels"] or "[]"),
-        "has_attachment": bool(attachments), "attachment_count": len(attachments),
+        "has_attachment": bool(attachments),
+        "attachment_count": len(attachments),
         "body_truncated": bool(row["body_truncated"]),
         "is_internal": bool(row["is_internal"]),
         "has_unsubscribe": bool(row["has_unsubscribe"]),
@@ -152,14 +164,26 @@ def gmail_query(q, label, since_epoch, until_epoch, has_attachment):
 
 def live_message_public(mailbox, item, domains, body=False):
     """Adapt the shared Gmail normalizer to the stored read API's public shape, only in memory."""
-    row = {**item, "mailbox": mailbox, "msg_id": item["id"], "from_addr": item["from"],
-           "to_addresses": json.dumps(item["to"]), "cc": json.dumps(item["cc"]),
-           "labels": json.dumps(item["labels"]), "attachments": json.dumps(item["attachments"]),
-           "has_unsubscribe": item["unsubscribe"], "rule_hits": "[]"}
+    row = {
+        **item,
+        "mailbox": mailbox,
+        "msg_id": item["id"],
+        "from_addr": item["from"],
+        "to_addresses": json.dumps(item["to"]),
+        "cc": json.dumps(item["cc"]),
+        "labels": json.dumps(item["labels"]),
+        "attachments": json.dumps(item["attachments"]),
+        "has_unsubscribe": item["unsubscribe"],
+        "rule_hits": "[]",
+    }
     everyone = [item["from"], *item["to"], *item["cc"]]
     row["is_internal"] = bool(item["from"]) and all(
-        any(address.rpartition("@")[2] == domain or address.rpartition("@")[2].endswith("." + domain)
-            for domain in domains) for address in everyone)
+        any(
+            address.rpartition("@")[2] == domain or address.rpartition("@")[2].endswith("." + domain)
+            for domain in domains
+        )
+        for address in everyone
+    )
     return message_public(row, body=body)
 
 
@@ -169,8 +193,13 @@ def mailbox_view(c, address, people, who, auth):
     bot = (person or {}).get("inbox_bot") or ""
     bot_row = H.bot(c, bot) if bot else None
     bot = bot if bot_row and bot_row["state"] != "archived" and auth.bot_access(c, who, bot)["read"] else ""
-    instructions = c.execute("SELECT updated_at,length(content) AS size FROM mail_agent_instructions "
-                             "WHERE bot=?", (bot,)).fetchone() if bot else None
+    instructions = (
+        c.execute(
+            "SELECT updated_at,length(content) AS size FROM mail_agent_instructions WHERE bot=?", (bot,)
+        ).fetchone()
+        if bot
+        else None
+    )
     return {
         "address": address,
         "person_id": (person or {}).get("id") or (row["person_id"] if row else None),
@@ -215,8 +244,10 @@ def install_mail(app, store, auth):
             if ids is None and not completed and not store.saved(c, who, selection_operation, key):
                 ids = gmail_live.message_ids(c, addr, query, limit)
         if completed:
+
             def expired(c):
                 raise Problem("receipt_expired", "This organize receipt expired; retry the request", 409)
+
             return store.mutate(who, request.url.path, key, body, expired, check=access)
         # Retain only ids before writing Gmail. A retry of an archive query must not pick another page of mail.
         ids = store.mutate(who, selection_operation, key, body, lambda c: {"ids": ids}, check=access)["ids"]
@@ -229,8 +260,14 @@ def install_mail(app, store, auth):
             gmail_live.organize(c, addr, ids, add=add, remove=remove)
         detail = {"mailbox": addr, "action": action, "label": label, "count": len(ids), "ids": ids}
         label_fields = {"label": label} if label is not None else {}
-        result = {"mailbox": addr, "action": action, "count": len(ids), "ids": ids, **label_fields,
-                  "undo": {"action": inverse, "ids": ids, **label_fields}}
+        result = {
+            "mailbox": addr,
+            "action": action,
+            "count": len(ids),
+            "ids": ids,
+            **label_fields,
+            "undo": {"action": inverse, "ids": ids, **label_fields},
+        }
 
         def record(c):
             H.event(c, who.actor, "mail.organize", addr, detail)
@@ -247,12 +284,20 @@ def install_mail(app, store, auth):
             raise Problem("identity", "Mail access is answered for a person or a bot's turn", 403)
         with store.read() as c:
             principal = mailbox_access.principal(c, who)
-            out = {"principal": principal.ref, "mailboxes": mailbox_access.mailboxes_for(c, principal),
-                   "company": google_workspace.permissions(c)}
+            out = {
+                "principal": principal.ref,
+                "mailboxes": mailbox_access.mailboxes_for(c, principal),
+                "company": google_workspace.permissions(c),
+            }
             addr = str(mailbox or "").strip().lower()
             if addr:
-                out.update({"mailbox": addr, "level": mailbox_access.level(c, principal, addr),
-                            "may": mailbox_access.may(c, principal, addr)})
+                out.update(
+                    {
+                        "mailbox": addr,
+                        "level": mailbox_access.level(c, principal, addr),
+                        "may": mailbox_access.may(c, principal, addr),
+                    }
+                )
             return out
 
     @app.get("/api/v2/mail/mailboxes")
@@ -261,8 +306,7 @@ def install_mail(app, store, auth):
         human_only(who)
         with store.read() as c:
             people = roster(c)
-            return {"mailboxes": [mailbox_view(c, addr, people, who, auth)
-                                  for addr in visible_addresses(c, who)]}
+            return {"mailboxes": [mailbox_view(c, addr, people, who, auth) for addr in visible_addresses(c, who)]}
 
     @app.get("/api/v2/mail/agent")
     def agent_instructions(request: Request, mailbox: str = ""):
@@ -276,17 +320,23 @@ def install_mail(app, store, auth):
             bot_row = H.bot(c, bot) if bot else None
             if not bot_row or bot_row["state"] == "archived" or not auth.bot_access(c, who, bot)["read"]:
                 raise Problem("not_found", "This mailbox has no visible agent", 404)
-            row = c.execute("SELECT content,updated_at FROM mail_agent_instructions WHERE bot=?",
-                            (bot,)).fetchone()
+            row = c.execute("SELECT content,updated_at FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
             if not row or not row["content"].strip():
                 raise Problem("not_found", "Agent instructions are not available yet", 404)
-            return {"mailbox": addr, "bot": bot, "instructions": row["content"],
-                    "updated_at": row["updated_at"]}
+            return {"mailbox": addr, "bot": bot, "instructions": row["content"], "updated_at": row["updated_at"]}
 
     @app.get("/api/v2/mail/messages")
-    def messages(request: Request, mailbox: str = "", q: str = "", label: str = "",
-                 since: str = "", until: str = "", has_attachment: str = "",
-                 cursor: str = "", limit: int = LIMIT_DEFAULT):
+    def messages(
+        request: Request,
+        mailbox: str = "",
+        q: str = "",
+        label: str = "",
+        since: str = "",
+        until: str = "",
+        has_attachment: str = "",
+        cursor: str = "",
+        limit: int = LIMIT_DEFAULT,
+    ):
         who = request.state.identity
         human_only(who)
         cap = min(LIMIT_MAX, max(1, int(limit or LIMIT_DEFAULT)))
@@ -311,15 +361,17 @@ def install_mail(app, store, auth):
                 return {"messages": [], "next_cursor": None, "q": ""}
             if not boxes:
                 return {"messages": [], "next_cursor": None, "q": match}
-            sql = ("SELECT m.mailbox,m.msg_id,m.thread_id,m.epoch,m.date,m.from_addr,m.from_header,"
-                   "m.to_addresses,m.cc,m.subject,m.snippet,m.labels,m.attachments,"
-                   "m.body_truncated,m.is_internal,m.has_unsubscribe "
-                   "FROM mail_messages m WHERE m.deleted_at IS NULL AND m.mailbox IN ({})"
-                   .format(",".join("?" * len(boxes))))
+            sql = (
+                "SELECT m.mailbox,m.msg_id,m.thread_id,m.epoch,m.date,m.from_addr,m.from_header,"
+                "m.to_addresses,m.cc,m.subject,m.snippet,m.labels,m.attachments,"
+                "m.body_truncated,m.is_internal,m.has_unsubscribe "
+                "FROM mail_messages m WHERE m.deleted_at IS NULL AND m.mailbox IN ({})".format(
+                    ",".join("?" * len(boxes))
+                )
+            )
             args = list(boxes)
             if match:
-                sql += (" AND (m.mailbox, m.msg_id) IN "
-                        "(SELECT mailbox, msg_id FROM mail_fts WHERE mail_fts MATCH ?)")
+                sql += " AND (m.mailbox, m.msg_id) IN (SELECT mailbox, msg_id FROM mail_fts WHERE mail_fts MATCH ?)"
                 args.append(match)
             if label:
                 sql += " AND EXISTS (SELECT 1 FROM json_each(m.labels) WHERE value=?)"
@@ -358,12 +410,15 @@ def install_mail(app, store, auth):
             addr, _ = require_mailbox(c, who, mailbox)
             if google_workspace.authority(c, addr) == "workspace":
                 domains = mailbox_access.company_domains(c)
-                items = [live_message_public(addr, item, domains, body=True)
-                         for item in gmail_live.thread(c, addr, tid)]
+                items = [
+                    live_message_public(addr, item, domains, body=True) for item in gmail_live.thread(c, addr, tid)
+                ]
             else:
                 rows = c.execute(
                     "SELECT * FROM mail_messages WHERE mailbox=? AND thread_id=? AND deleted_at IS NULL "
-                    "ORDER BY epoch, msg_id", (addr, tid)).fetchall()
+                    "ORDER BY epoch, msg_id",
+                    (addr, tid),
+                ).fetchall()
                 if not rows:
                     raise Problem("not_found", "Thread not found", 404)
                 items = [message_public(row, body=True) for row in rows]
@@ -382,11 +437,13 @@ def install_mail(app, store, auth):
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
             if google_workspace.authority(c, addr) == "workspace":
-                out = live_message_public(addr, gmail_live.message(c, addr, mid),
-                                          mailbox_access.company_domains(c), body=True)
+                out = live_message_public(
+                    addr, gmail_live.message(c, addr, mid), mailbox_access.company_domains(c), body=True
+                )
             else:
-                row = c.execute("SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL",
-                                (addr, mid)).fetchone()
+                row = c.execute(
+                    "SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL", (addr, mid)
+                ).fetchone()
                 if not row:
                     raise Problem("not_found", "Message not found", 404)
                 out = message_public(row, body=True)

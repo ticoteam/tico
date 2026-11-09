@@ -1,4 +1,4 @@
-// Automations > System jobs (ui/app/settings-recurring.js, #/automations/system-jobs): one flat list of Tico's own jobs, no group headings, a search box
+// Automations > System jobs (ui/app/settings-recurring.ts, #/automations/system-jobs): one flat list of Tico's own jobs, no group headings, a search box
 // that matches name, trigger, action and department; each row reads WHEN ... THEN ... with one department tag, its
 // schedule, last run in words (a failure in red with its reason), next run, and for a Decide job the route that answered,
 // a fallback in words and this month's spend. Housekeeping says Tico needs it. An owner or admin gets a switch, a
@@ -26,7 +26,7 @@ function system(role) {
       spent_this_month_usd: 0.42, next: soon, last: {started_at: before, finished_at: before, ok: true, result: '9 checked, 2 suggestions', runs: 1}})),
     job('kpi_asks', 'KPI stale asks', ctl({schedule: 'Daily at 09:00', preset: 'daily', at: '09:00', presets: ALL, group: 'checks', next: soon,
       when: ['every day at 09:00'], last: {started_at: before, finished_at: before, ok: false, result: 'Failed: the database was busy', runs: 1}})),
-    job('memory_tidy', 'Nightly memory tidy', ctl({on: false, schedule: 'Nightly at 03:30', group: 'learning', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}], pilots: [], pilot_models: [{model: 'codex:gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['low', 'high']}, {model: 'claude:claude-sonnet-5-5', label: 'Sonnet 5.5', efforts: ['low', 'high']}]})),
+    job('daily_check', 'Daily check', ctl({on: false, schedule: 'Daily at 03:30', group: 'checks', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}]})),
     job('due_reminders', 'Due reminders', {schedule: 'Every 10 seconds', group: 'reminders', when: ['every 10 seconds'], then: ['tell a bot when one of its tasks reaches its due time']}),
     job('approval_expiry', 'Approval expiry', {group: 'reminders', then: ['take approvals and asks nobody will act on out of Needs you']}),
     job('stall_checks', 'Stall checks', {needed: true, schedule: 'Every minute', when: ['every minute']}),
@@ -47,10 +47,10 @@ async function open(browser, role) {
   await page.route('**/*', route => {
     const req = route.request(), p = new URL(req.url()).pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role: role === 'owner' ? 'owner' : 'human', bot_admin: role === 'admin',
@@ -82,7 +82,6 @@ async function open(browser, role) {
         j.last = {started_at: new Date().toISOString(), finished_at: new Date().toISOString(), ok: true, result: '4 checked, 1 suggestion', runs: 1};
         return json({job: j, running: false});
       }
-      if (body.pilots) j.pilots = body.pilots;
       if (body.on != null) j.on = body.on;
       if (body.preset) { j.preset = body.preset; j.schedule = body.preset === '4h' ? 'Every 4 hours' : j.schedule; j.when = body.preset === '4h' ? ['every 4 hours'] : j.when; }
       return json({job: j});
@@ -160,8 +159,8 @@ const saved = async (page, writes, count, key) => {
         const presets = key => row(page, key).locator('[data-sysr-preset] option').evaluateAll(els => els.map(el => el.value));
         assert.deepEqual(await presets('stale_review'), ['hourly', '4h', 'daily']);
         assert.deepEqual(await presets('kpi_asks'), ['15m', 'hourly', '4h', 'daily']);
-        assert.equal(await row(page, 'memory_tidy').locator('[data-sysr-preset]').count(), 0, 'one choice: its time');
-        assert.equal(await row(page, 'memory_tidy').locator('[data-sysr-at]').inputValue(), '03:30');
+        assert.equal(await row(page, 'daily_check').locator('[data-sysr-preset]').count(), 0, 'one choice: its time');
+        assert.equal(await row(page, 'daily_check').locator('[data-sysr-at]').inputValue(), '03:30');
         assert.equal(await row(page, 'kpi_asks').locator('[data-sysr-at]').inputValue(), '09:00');
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-on]').isChecked(), false);
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-run]').count(), 0, 'a switch only');
@@ -189,32 +188,17 @@ const saved = async (page, writes, count, key) => {
       assert.deepEqual(asked, ['GET']);
       assert.deepEqual(errors, []);
       if (role !== 'member') {
-        const tidy = row(page, 'memory_tidy');
-        assert.equal(await tidy.locator('[data-sysr-on]').isChecked(), false);
-        assert.equal(await tidy.locator('[data-sysr-run]').isDisabled(), true);
-        assert.match(await tidy.locator('[data-sysr-run]').getAttribute('title'), /Switch it on/);
-        await tidy.locator('[data-memory-tidy-edit]').click();
-        const dialog = page.locator('dialog:visible');
-        assert.equal(await dialog.locator('[data-pilot-row]').count(), 0);
-        await dialog.locator('[data-add]').click();
-        await dialog.locator('[data-bot]').fill('botops');
-        assert.deepEqual(await dialog.locator('[data-model] option').evaluateAll(es => es.map(e => e.value)), ['', 'codex:gpt-6.1-sol', 'claude:claude-sonnet-5-5']);
-        await dialog.locator('[data-model]').selectOption('claude:claude-sonnet-5-5');
-        assert.equal(await dialog.locator('[data-effort]').inputValue(), 'low');
-        await dialog.locator('[type="submit"]').click();
-        await dialog.waitFor({state: 'detached'});
-        assert.deepEqual(writes.at(-1).body, {pilots: [{bot: 'botops', model: 'claude:claude-sonnet-5-5', effort: 'low'}]});
-        await tidy.locator('[data-memory-tidy-edit]').click();
-        await page.locator('dialog:visible [data-remove]').click();
-        await page.locator('dialog:visible [type="submit"]').click();
-        await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
-        assert.deepEqual(writes.at(-1).body, {pilots: []});
+        // A job switched off cannot run until it is switched on.
+        const daily = row(page, 'daily_check');
+        assert.equal(await daily.locator('[data-sysr-on]').isChecked(), false);
+        assert.equal(await daily.locator('[data-sysr-run]').isDisabled(), true);
+        assert.match(await daily.locator('[data-sysr-run]').getAttribute('title'), /Switch it on/);
         const count = writes.length;
-        await tidy.locator('[data-sysr-on]').check();
-        await saved(page, writes, count + 1, 'memory_tidy');
-        assert.equal(await tidy.locator('[data-sysr-run]').isDisabled(), false);
-        await tidy.locator('[data-sysr-run]').click();
-        await saved(page, writes, count + 2, 'memory_tidy');
+        await daily.locator('[data-sysr-on]').check();
+        await saved(page, writes, count + 1, 'daily_check');
+        assert.equal(await daily.locator('[data-sysr-run]').isDisabled(), false);
+        await daily.locator('[data-sysr-run]').click();
+        await saved(page, writes, count + 2, 'daily_check');
         assert.equal(writes.at(-1).method, 'POST');
       }
       await page.close();

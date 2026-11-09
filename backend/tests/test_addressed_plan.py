@@ -1,6 +1,7 @@
 """Needs you's messages to answer (thread_attention._addressed) plan from the person's deliveries whatever sqlite_stat1
 says. TIDY's stale stats (messages analysed when small) once put messages first: a scan of every message a call,
 which grew to minutes and queued every other request behind it (v0.5.56, Nov 3)."""
+
 import sqlite3
 
 from backend import thread_attention as TA
@@ -9,8 +10,12 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.store import Store
 
-STALE = [("messages", None, "16000"), ("messages", "messages_conversation", "16000 2"),
-         ("message_deliveries", None, "5000000"), ("conversations", None, "900000")]
+STALE = [
+    ("messages", None, "16000"),
+    ("messages", "messages_conversation", "16000 2"),
+    ("message_deliveries", None, "5000000"),
+    ("conversations", None, "900000"),
+]
 
 
 def test_addressed_reads_the_persons_deliveries_first_even_with_stale_stats(tmp_path):
@@ -22,7 +27,7 @@ def test_addressed_reads_the_persons_deliveries_first_even_with_stale_stats(tmp_
     c.executemany("INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES (?,?,?)", STALE)
     c.commit()
     c.close()
-    c = sqlite3.connect(path)              # a fresh connection loads the stale stats
+    c = sqlite3.connect(path)  # a fresh connection loads the stale stats
     c.row_factory = sqlite3.Row
     seen = []
     c.set_trace_callback(seen.append)

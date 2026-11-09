@@ -111,7 +111,7 @@ unsafe extern "C-unwind" fn receive(
             return 0;
         }
         let bytes = buffer.mDataByteSize as usize;
-        if bytes % 4 != 0 {
+        if !bytes.is_multiple_of(4) {
             state.sink.health.errors.fetch_add(1, Ordering::Relaxed);
             return 0;
         }

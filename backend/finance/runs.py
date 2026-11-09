@@ -2,6 +2,7 @@
 own transaction, and the run's end settles that hold at the run's priced Gateway cost, or releases it when nothing was
 Gateway-billed (own keys, sign-ins and subscriptions post nothing from usage). A settled hold counts until the daily
 usage posting takes it in, so AI spend counts against the budget as it happens and never twice."""
+
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -17,16 +18,17 @@ from .store import tico
 from .store import usage as SU
 from .usage import cents, nano
 
-FLOOR = 5                       # cents held for a bot with no token-priced history
+FLOOR = 5  # cents held for a bot with no token-priced history
 RECENT_RUNS = 20
 RECENT_DAYS = 30
-EXPIRES_HOURS = 12              # a run that never reports back frees its hold after this
+EXPIRES_HOURS = 12  # a run that never reports back frees its hold after this
 
 
 @dataclass(frozen=True)
 class RunHold:
     """What a claim's hold came to: `refused` when a `decline` budget at its limit says no (the claim then takes no
     run), with the budget's name for the paused reason."""
+
     refused: bool = False
     hold_id: str | None = None
     budget: str = ""
@@ -59,23 +61,40 @@ def hold(c: sqlite3.Connection, bot: str, job_id: str, at: str | None = None) ->
     live = [b.id for b in SB.budgets(c, book.id).values() if b.active]
     versions = SB.versions(c, live) if account is not None and live else {}
     if not any(versions.get(bid) for bid in live):
-        return RunHold()            # no budget has an amount: nothing to hold against
+        return RunHold()  # no budget has an amount: nothing to hold against
     at = at or tico.now()
     scope = {"account_id": account, "teammate": "bot:" + bot}
     expires = _hours_after(at, EXPIRES_HOURS)
     amount = size(c, bot, at)
-    decision = budgeting.hold_place(c, budget_scope=scope, amount=amount, currency=book.base_currency, source="run",
-                                    source_id=source_id(job_id), expires_at=expires, at=at, past_reserves=True)
+    decision = budgeting.hold_place(
+        c,
+        budget_scope=scope,
+        amount=amount,
+        currency=book.base_currency,
+        source="run",
+        source_id=source_id(job_id),
+        expires_at=expires,
+        at=at,
+        past_reserves=True,
+    )
     if not decision.allowed and decision.action == "decline" and decision.limit_budget_id and decision.budget_id:
         room = _room(load(c, at), bot, decision.budget_id)
         if room is not None and 0 < room < amount:
-            decision = budgeting.hold_place(c, budget_scope=scope, amount=room, currency=book.base_currency,
-                                            source="run", source_id=source_id(job_id), expires_at=expires, at=at,
-                                            past_reserves=True)
+            decision = budgeting.hold_place(
+                c,
+                budget_scope=scope,
+                amount=room,
+                currency=book.base_currency,
+                source="run",
+                source_id=source_id(job_id),
+                expires_at=expires,
+                at=at,
+                past_reserves=True,
+            )
     if decision.allowed or decision.hold_id:
-        return RunHold(hold_id=decision.hold_id)    # held, or a retried claim keeps the hold its job already has
+        return RunHold(hold_id=decision.hold_id)  # held, or a retried claim keeps the hold its job already has
     if decision.action != "decline":
-        return RunHold()            # ask or hold_payment: a run is not a payment, so it goes ahead without a hold
+        return RunHold()  # ask or hold_payment: a run is not a payment, so it goes ahead without a hold
     limit = SB.budgets(c, book.id).get(decision.limit_budget_id or "")
     return RunHold(refused=True, budget=limit.name if limit else "AI services")
 
@@ -120,8 +139,11 @@ def _room(ctx: Ctx, bot: str, leaf_id: str) -> int | None:
     budget on it has an amount."""
     path = budgeting.chain_of(ctx, leaf_id)
     today = dates.day(ctx.today)
-    rooms = [s.amount - s.spent for s in (budgeting.state(ctx, bid, today, scope_target(bot), path) for bid in path)
-             if s.amount is not None]
+    rooms = [
+        s.amount - s.spent
+        for s in (budgeting.state(ctx, bid, today, scope_target(bot), path) for bid in path)
+        if s.amount is not None
+    ]
     return min(rooms, default=None)
 
 

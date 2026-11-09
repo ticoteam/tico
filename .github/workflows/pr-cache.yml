@@ -1,9 +1,10 @@
 # Keeps the main-branch caches PR checks (pr-checks.yml) restore from fresh, now that main pushes run no PR checks.
-# A pull request reads its own caches and main's; caches it saves stay with it. GitHub evicts a cache unused for seven
-# days, and the RunsOn cache (extras=s3-cache) follows the same branch rules and expires every entry ten days after it
-# is saved, however often it is read. Each job here first looks its keys up without downloading anything: a hit ends
-# the job in about a minute, and only a missing key (a dependency, toolchain or runner-image change, or an expired entry)
-# builds and saves it. Every key and path below must match its step in pr-checks.yml (scripts/tests/test_pr_checks.py).
+# It runs on GitHub-hosted runners, as PR checks do, so the caches it saves are GitHub's own: a pull request reads its
+# own caches and main's; caches it saves stay with it. GitHub evicts a cache unused for seven days, and a repository's
+# caches share 10 GB, so the least recently used go first. Each job here first looks its keys up without downloading
+# anything: a hit ends the job in about a minute, and only a missing key (a dependency, toolchain or runner-image change,
+# or an evicted entry) builds and saves it. Every key and path below must match its step in pr-checks.yml
+# (scripts/tests/test_pr_checks.py).
 name: PR caches
 
 on:
@@ -32,9 +33,11 @@ concurrency:
 jobs:
   python-browser:
     # pip, npm, the Playwright browsers and the browser system packages: what a browser shard's Install fills.
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -78,9 +81,11 @@ jobs:
         run: bash scripts/ci_install.sh browser-cache
 
   rust-lint:
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -97,10 +102,44 @@ jobs:
       - if: steps.cache.outputs.cache-hit != 'true'
         run: bash scripts/rust_checks.sh
 
+  desktop-app:
+    # The desktop app's compiled dependencies: what the desktop app PR job's clippy and test steps restore.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app -> target
+          shared-key: pr-desktop
+          cache-on-failure: true
+          lookup-only: true
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Rust 1.92.0 and the Linux build dependencies (as the desktop app PR job installs them)
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal --component clippy,rustfmt
+          sudo sed -i \
+            -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' \
+            -e 's|http://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
+      - if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: app
+        # Builds what the PR job's clippy and test steps build, so their caches are saved.
+        run: cargo +1.92.0 clippy --locked --all-targets && cargo +1.92.0 test --locked --no-run
+
   conformance:
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/extras=s3-cache
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - name: Free disk (GitHub-hosted runners start with about 14 GB free)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc && df -h /
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false

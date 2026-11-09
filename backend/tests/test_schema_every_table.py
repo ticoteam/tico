@@ -61,15 +61,22 @@ def test_every_table_of_an_upgraded_database_has_the_columns_of_a_new_one(shapes
             continue
         have, want = upgraded.get(table), new.get(table)
         if have != want:
-            differ[table] = {"only_upgraded": sorted((have or set()) - (want or set())),
-                             "only_new": sorted((want or set()) - (have or set())),
-                             "table_missing": "upgraded" if have is None else "new" if want is None else ""}
+            differ[table] = {
+                "only_upgraded": sorted((have or set()) - (want or set())),
+                "only_new": sorted((want or set()) - (have or set())),
+                "table_missing": "upgraded" if have is None else "new" if want is None else "",
+            }
     assert not differ
 
 
 def test_no_old_column_name_survives_an_upgrade(shapes):
     _, upgraded, _ = shapes
     renamed = {(table, old) for table, old, _new, _wave in COLUMNS}
-    left = sorted(f"{t}.{c}" for t, cols in upgraded.items() if t not in LEFT_BEHIND for c in cols
-                  if (t, c) in renamed or OLD_LOOKING.match(c))
+    left = sorted(
+        f"{t}.{c}"
+        for t, cols in upgraded.items()
+        if t not in LEFT_BEHIND
+        for c in cols
+        if (t, c) in renamed or OLD_LOOKING.match(c)
+    )
     assert not left

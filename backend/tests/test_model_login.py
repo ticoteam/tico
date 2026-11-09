@@ -45,22 +45,39 @@ def test_nothing_token_like_is_stored_or_shown(api):
     jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlc2lnbmF0dXJl"
     secret = "sk-ant-oat01-" + "A1b2C3d4" * 6
     blob = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5"
-    report(api, r, login["id"], state="waiting", url="http://insecure.example/x", code="not a code!!",
-           lines=[f"token: {jwt}", f"Your key {secret} is here", f"blob {blob}", "Enter code AB12-CD345",
-                  "line\x1b[31m with control"], message=f"failed {jwt}")
+    report(
+        api,
+        r,
+        login["id"],
+        state="waiting",
+        url="http://insecure.example/x",
+        code="not a code!!",
+        lines=[
+            f"token: {jwt}",
+            f"Your key {secret} is here",
+            f"blob {blob}",
+            "Enter code AB12-CD345",
+            "line\x1b[31m with control",
+        ],
+        message=f"failed {jwt}",
+    )
     dump = json.dumps(stored(api)) + json.dumps(get(api, f"runners/{r['runner_id']}/logins/{login['id']}"))
     for leaked in (jwt, secret, blob, "eyJ", "sk-ant"):
         assert leaked not in dump
     shown = get(api, f"runners/{r['runner_id']}/logins/{login['id']}")
-    assert shown["url"] == "" and shown["code"] == ""            # http and free text are refused
+    assert shown["url"] == "" and shown["code"] == ""  # http and free text are refused
     assert "Enter code AB12-CD345" in shown["lines"]
     assert "\x1b" not in dump
 
 
 def test_grok_and_cursor_computer_logins_can_be_controlled(api):
     r = online(api)
-    post(api, "runners/heartbeat", {"version": "test", "platform": "linux", "readiness": {},
-                                 "capabilities": ["model_sign_out_v1"]}, token=r["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "linux", "readiness": {}, "capabilities": ["model_sign_out_v1"]},
+        token=r["token"],
+    )
     for runtime in ("grok", "cursor"):
         base = f"computers/{r['runner_id']}"
         login = post(api, f"{base}/logins", {"runtime": runtime})

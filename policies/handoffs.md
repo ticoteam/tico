@@ -7,7 +7,7 @@ tracking. Bots use the `hub` CLI; people use Tico at `https://hub.acme.example`.
 
 1. Read `state.md`, then `hub task show <task-id>` and its comments.
 2. Set it to doing with `hub task update <task-id> --status doing --note "<current focus>"`.
-3. If the goal or deliverable is unclear, ask one focused question (`hub task ask`) and set the
+3. If the goal or deliverable is unclear, ask one focused question (`hub task question "<question>" --on <person>`) and set the
    task to waiting. Otherwise state the smallest necessary assumption and continue.
 
 Before starting a newly created task, compare it with the other active tasks between the same
@@ -135,12 +135,12 @@ would want it stopped.
 
 ## Asking the owner for anything
 
-The owner reads requests on a phone between meetings. `hub task ask` sends to the task's requester.
-Use it once when that requester is the owner and one answer unblocks the task. If the task
+The owner reads requests on a phone between meetings. `hub task question "<question>" --on <owner>` sends to the owner.
+Use it once when the task's requester is the owner and one answer unblocks the task. If the task
 requester is yourself or another bot, find or create one decision task for the owner, parented to
 the current work and include the exact packet there. Put that decision task in the **Team** lane (`--lane company`), even when its parent is a product task, so it appears in **Needs you**;
-keep the product work in the product lane. That human task is the ask. Do not call
-`hub question ask` or `hub message send` to the owner for the same question; each sends another notification. A direct
+keep the product work in the product lane. That human task is the question. Do not also
+send the owner the same question with `hub message send`; each sends another notification. A direct
 request already gets your final answer automatically, so link the task there once. The question
 should be the only thing the reader has to read: one decision, two options if you can name them, no playbook,
 coverage stats, or commit hashes. The human task title starts with a verb, its body's first paragraph is
@@ -230,7 +230,7 @@ Find an active task for that same artifact and decision first. If the owner requ
 bot-owned task, attach the exact packet there, ask the owner one scoped question on it, and leave it
 `waiting`. Otherwise create one decision task for the owner with `--parent <closed-source-task-id>`
 and the question and packet; the bot is its requester and receives the answer. The human task
-itself is the ask, so do not call `hub task ask` on it. Do not create a generic approval or
+itself is the question, so do not file another question on it. Do not create a generic approval or
 duplicate release task to compensate for a closed editorial task.
 
 On the next turn, check the current source of truth for that action (for example, PR state or a

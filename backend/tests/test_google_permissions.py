@@ -15,7 +15,19 @@ from backend.auth import Identity
 from backend.tests.test_api import api, get, headers, runner  # noqa: F401
 from backend.tests.test_google_connect import FakeGoogle, app, exchanged, own_app, refresh, start  # noqa: F401
 from backend.tests.test_google_workspace import (  # noqa: F401  (fixtures)
-    CALENDAR, GMAIL, MAILBOX, check, connected, covered, fresh_state, google, google_view, keys, private, rows)
+    CALENDAR,
+    GMAIL,
+    MAILBOX,
+    check,
+    connected,
+    covered,
+    fresh_state,
+    google,
+    google_view,
+    keys,
+    private,
+    rows,
+)
 from backend.store import Problem
 from connectors.mail import oauth
 
@@ -30,11 +42,11 @@ def allow(api, token="ana-test", **changes):
 
 def test_everything_is_on_until_an_admin_acting_as_themselves_turns_it_off(api):
     assert get(api, "google", "cara-test")["permissions"] == ALL_ON
-    assert allow(api, "cara-test", send_mail=False).status_code == 403              # not an admin
+    assert allow(api, "cara-test", send_mail=False).status_code == 403  # not an admin
     settings = api.app.state.store.settings
     settings.test_identities["ana-assistant"] = Identity("human:ana", "human", "ana@acme.example", via="assistant")
-    assert allow(api, "ana-assistant", send_mail=False).status_code == 403          # nobody acting for the admin
-    assert api.put(PERMISSIONS, json={"send_mail": False}, headers=headers()).status_code == 422   # all three named
+    assert allow(api, "ana-assistant", send_mail=False).status_code == 403  # nobody acting for the admin
+    assert api.put(PERMISSIONS, json={"send_mail": False}, headers=headers()).status_code == 422  # all three named
     r = allow(api, organize_mail=False, send_mail=False)
     assert r.status_code == 200, r.text
     off = {"organize_mail": False, "send_mail": False, "change_calendar": True}
@@ -47,8 +59,10 @@ def test_everything_is_on_until_an_admin_acting_as_themselves_turns_it_off(api):
 def test_a_stored_legacy_attachment_switch_does_not_restrict_sending(app):
     machine = runner(app)
     with app.app.state.store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                  "value=excluded.value", (W.PERMISSIONS_KEY, json.dumps({**ALL_ON, "send_attachments": False})))
+        c.execute(
+            "INSERT INTO registry_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (W.PERMISSIONS_KEY, json.dumps({**ALL_ON, "send_attachments": False})),
+        )
     assert get(app, "google", "cara-test")["permissions"] == ALL_ON
     assert get(app, "connectors/mail/targets", machine["token"])["company"] == ALL_ON
     changed = app.post("/api/v2/bots/inbox/mail-settings", json={"outbound_send": True}, headers=headers())
@@ -64,9 +78,10 @@ def test_scopes_follow_what_tico_may_do():
     assert google_connect.grantable("settings") == google_connect.READ_SCOPES + google_connect.ACT_SCOPES
     assert google_connect.grantable("settings", send_only) == google_connect.READ_SCOPES + [G + "gmail.modify"]
     assert google_connect.grantable("settings", {**nothing, "change_calendar": True}) == (
-        google_connect.READ_SCOPES + [G + "calendar.events"])
+        google_connect.READ_SCOPES + [G + "calendar.events"]
+    )
     assert google_connect.grantable("settings", nothing) == google_connect.READ_SCOPES
-    assert google_connect.grantable("env", ALL_ON) == google_connect.READ_SCOPES       # the shared app stays read only
+    assert google_connect.grantable("env", ALL_ON) == google_connect.READ_SCOPES  # the shared app stays read only
     held = json.dumps(google_connect.READ_SCOPES + google_connect.ACT_SCOPES)
     assert google_connect.refresh_scopes("gmail", held, nothing) == {G + "gmail.readonly"}
     assert google_connect.refresh_scopes("gmail", held, send_only) == {G + "gmail.readonly", G + "gmail.modify"}
@@ -104,11 +119,15 @@ def test_a_box_turned_off_narrows_the_next_refresh_and_turned_on_offers_a_reconn
     assert r.status_code == 200, r.text
     assert r.json()["scopes"] == [G + "gmail.readonly"] and google.calls[-1]["scope"] == G + "gmail.readonly"
     count = len(google.calls)
-    assert refresh(own_app, machine["token"], scopes=[G + "gmail.modify"]).status_code == 422   # nothing left to ask
+    assert refresh(own_app, machine["token"], scopes=[G + "gmail.modify"]).status_code == 422  # nothing left to ask
     assert len(google.calls) == count
     # Back on: the grant still holds gmail.modify, so the next refresh carries it with no new sign-in.
     assert allow(own_app, change_calendar=False).status_code == 200
-    google.answer = {"access_token": "ya29.mail", "expires_in": 3599, "scope": G + "gmail.modify " + G + "gmail.readonly"}
+    google.answer = {
+        "access_token": "ya29.mail",
+        "expires_in": 3599,
+        "scope": G + "gmail.modify " + G + "gmail.readonly",
+    }
     r = refresh(own_app, machine["token"], scopes=[G + "gmail.modify", G + "gmail.readonly"])
     assert r.json()["scopes"] == [G + "gmail.modify", G + "gmail.readonly"]
     # Change calendar on again, on a grant without calendar events: the reconnect hint comes back.
@@ -139,13 +158,13 @@ def test_a_workspace_token_is_minted_with_only_what_is_ticked(api, private, cove
         sent = jwt.decode(last["assertion"], options={"verify_signature": False})
         return answer["scopes"], sent["scope"]
 
-    W.forget_tokens()                                   # the check's probes minted both; start from Google again
+    W.forget_tokens()  # the check's probes minted both; start from Google again
     assert minted("gmail") == ([GMAIL], GMAIL) and minted("calendar") == ([CALENDAR], CALENDAR)
     assert allow(api, organize_mail=False, send_mail=False, change_calendar=False).status_code == 200
     # The cached full tokens are not handed out: the scopes are part of the cache key.
     assert minted("gmail") == ([G + "gmail.readonly"], G + "gmail.readonly")
     assert minted("calendar") == ([G + "calendar.readonly"], G + "calendar.readonly")
-    assert allow(api, organize_mail=False).status_code == 200                       # Send alone needs gmail.modify
+    assert allow(api, organize_mail=False).status_code == 200  # Send alone needs gmail.modify
     assert minted("gmail")[0] == [GMAIL]
 
 
@@ -162,23 +181,24 @@ def test_send_mail_off_stops_every_bot_whatever_its_own_switch(app):
     assert own["outbound_send"] is True
     assert allow(app, send_mail=False).status_code == 200
     own = get(app, "bots/inbox/mail-settings", "inbox-test")
-    assert own["outbound_send"] is False and own["company_send"] is False   # the connector refuses before any approval
+    assert own["outbound_send"] is False and own["company_send"] is False  # the connector refuses before any approval
     person = get(app, "bots/inbox/mail-settings", "ana-test")
-    assert person["outbound_send"] is True and person["company_send"] is False   # the bot's own switch is kept
+    assert person["outbound_send"] is True and person["company_send"] is False  # the bot's own switch is kept
     assert allow(app).status_code == 200
     assert get(app, "bots/inbox/mail-settings", "inbox-test")["outbound_send"] is True
 
 
 def test_the_assistant_never_sets_what_tico_may_do():
     from backend import assistant
+
     assert any(method in (None, "PUT") and pattern.fullmatch(PERMISSIONS) for method, pattern in assistant.NEVER)
 
 
 def test_a_key_authorized_before_the_read_only_scopes_keeps_minting_what_google_accepts(api, private, covered, google):
     covered((MAILBOX, "inbox-cara"))
     state, _ = google
-    state["authorized"] = [GMAIL, CALENDAR]             # step 2 done before Tico listed the read-only scopes
-    connected(api, private)                             # Check: the pair is refused, the write scope alone accepted
+    state["authorized"] = [GMAIL, CALENDAR]  # step 2 done before Tico listed the read-only scopes
+    connected(api, private)  # Check: the pair is refused, the write scope alone accepted
     (row,) = rows(api)
     assert json.loads(row["authorized_scopes"]) == W.LEGACY_SCOPES
     assert google_view(api)["workspace"]["narrowable"] is False
@@ -192,13 +212,13 @@ def test_a_key_authorized_before_the_read_only_scopes_keeps_minting_what_google_
         # ... so the key keeps minting its write scopes, and the mail connector holds What Tico may do.
         assert W.mint(c, MAILBOX, "gmail")["scopes"] == [GMAIL]
         assert W.mint(c, MAILBOX, "calendar")["scopes"] == [CALENDAR]
-    with api.app.state.store.transaction() as c:        # a row from before migration 0081: no list at all
+    with api.app.state.store.transaction() as c:  # a row from before migration 0081: no list at all
         c.execute("UPDATE google_workspaces SET authorized_scopes=NULL")
     W.forget_tokens()
     with api.app.state.store.read() as c:
         assert W.mint(c, MAILBOX, "calendar")["scopes"] == [CALENDAR]
     assert google_view(api)["workspace"]["narrowable"] is False
-    state["authorized"] = W.scope_urls()                # the admin redoes step 2, then Check
+    state["authorized"] = W.scope_urls()  # the admin redoes step 2, then Check
     assert check(api, {"mailbox": MAILBOX})["ok"] is True
     assert google_view(api)["workspace"]["narrowable"] is True
     W.forget_tokens()
@@ -209,6 +229,7 @@ def test_a_key_authorized_before_the_read_only_scopes_keeps_minting_what_google_
 
 def test_a_key_stored_by_upload_lists_every_scope_tico_shows(api, private, covered, google):
     from backend.tests.test_google_workspace import key_json, new_code, upload
+
     covered((MAILBOX, "inbox-cara"))
     upload(api, new_code(api), key_json(private))
     (row,) = rows(api)

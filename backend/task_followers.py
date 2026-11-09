@@ -16,9 +16,9 @@ import uuid
 from . import hubdb as H
 
 LEVELS = ("live", "mentions", "digest", "muted")
-OWNER = "owner"      # the row the task's ownership made
-CHOSEN = "manual"    # a follow someone chose (the reason threads.follow writes too)
-KEPT = (CHOSEN, "mentioned")   # rows an owner change leaves: a choice, or a mention
+OWNER = "owner"  # the row the task's ownership made
+CHOSEN = "manual"  # a follow someone chose (the reason threads.follow writes too)
+KEPT = (CHOSEN, "mentioned", "replied")  # rows an owner change leaves: a choice, a mention or a reply
 
 
 def thread_id(conn, row):
@@ -41,7 +41,8 @@ def _upsert(conn, tid, actor, reason, notify=None):
         "VALUES(?,?,?,1,?,?,0,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET "
         "reason=CASE WHEN following=0 OR excluded.reason=? THEN excluded.reason ELSE reason END, following=1, "
         "notify=COALESCE(?,CASE WHEN following=0 THEN 'live' ELSE notify END), updated_at=excluded.updated_at",
-        (rid, tid, actor, notify or "live", reason, now, now, CHOSEN, notify))
+        (rid, tid, actor, notify or "live", reason, now, now, CHOSEN, notify),
+    )
 
 
 def seed_owner(conn, row, owner=None):
@@ -59,9 +60,11 @@ def owner_moved(conn, row, old, new):
     seed_owner(conn, row, new)
     tid = thread_id(conn, row)
     if tid and old:
-        conn.execute(f"UPDATE thread_followers SET following=0, reason='read', updated_at=? WHERE thread_id=? AND "
-                     f"actor=? AND following=1 AND reason NOT IN ({','.join('?' * len(KEPT))})",
-                     (H.now(), tid, old, *KEPT))
+        conn.execute(
+            f"UPDATE thread_followers SET following=0, reason='read', updated_at=? WHERE thread_id=? AND "
+            f"actor=? AND following=1 AND reason NOT IN ({','.join('?' * len(KEPT))})",
+            (H.now(), tid, old, *KEPT),
+        )
 
 
 def follow_on_create(conn, row, actor):
@@ -77,9 +80,14 @@ def listed(conn, row):
     tid = thread_id(conn, row)
     if not tid:
         return []
-    rows = [{"actor": r[0], "notify": r[1], "reason": r[2]} for r in conn.execute(
-        "SELECT actor, notify, reason FROM thread_followers WHERE thread_id=? AND following=1 AND "
-        "(actor LIKE 'human:%' OR actor LIKE 'bot:%') ORDER BY created_at, actor", (tid,))]
+    rows = [
+        {"actor": r[0], "notify": r[1], "reason": r[2]}
+        for r in conn.execute(
+            "SELECT actor, notify, reason FROM thread_followers WHERE thread_id=? AND following=1 AND "
+            "(actor LIKE 'human:%' OR actor LIKE 'bot:%') ORDER BY created_at, actor",
+            (tid,),
+        )
+    ]
     if H.task_private(conn, row):
         rows = [r for r in rows if H.task_private_readable(conn, r["actor"], row)]
     return rows
@@ -97,7 +105,9 @@ def change(conn, actor, task_id, target=None, *, following=True, notify=None, mo
     if notify is not None and notify not in LEVELS:
         H.refuse(conn, actor, "notify", "A level is live, mentions, digest or muted")
     who = actor if target in (None, "", "me") else H.resolve_actor(conn, target)
-    if not who or not (H.is_human(who) and H.human(conn, H.actor_id(who)) or H.is_bot(who) and H.bot(conn, H.actor_id(who))):
+    if not who or not (
+        H.is_human(who) and H.human(conn, H.actor_id(who)) or H.is_bot(who) and H.bot(conn, H.actor_id(who))
+    ):
         H.refuse(conn, actor, "not-found", f"{target} is not a person or bot on the team")
     tid = thread_id(conn, row)
     if not tid:
@@ -106,26 +116,40 @@ def change(conn, actor, task_id, target=None, *, following=True, notify=None, mo
         if not H.may_change_readers(conn, actor, row, mover):
             H.refuse(conn, actor, "identity", "Only someone who may change the task changes who else follows it")
         if following and not H.task_private_readable(conn, who, row):
-            H.refuse(conn, actor, "private", f"{H.actor_name(conn, who)} cannot see this task: add them under Who can "
-                                             "see first")
+            H.refuse(
+                conn,
+                actor,
+                "private",
+                f"{H.actor_name(conn, who)} cannot see this task: add them under Who can see first",
+            )
         if following and check:
             check(who)
-    had = conn.execute("SELECT following, notify FROM thread_followers WHERE thread_id=? AND actor=?",
-                       (tid, who)).fetchone()
+    had = conn.execute(
+        "SELECT following, notify FROM thread_followers WHERE thread_id=? AND actor=?", (tid, who)
+    ).fetchone()
     if following:
         # Your own follow, or a new follower someone added, is a choice; an editor's level change keeps the reason.
         if who == actor or not (had and had[0]):
             _upsert(conn, tid, who, CHOSEN, notify)
         elif notify:
-            conn.execute("UPDATE thread_followers SET notify=?, updated_at=? WHERE thread_id=? AND actor=?",
-                         (notify, H.now(), tid, who))
+            conn.execute(
+                "UPDATE thread_followers SET notify=?, updated_at=? WHERE thread_id=? AND actor=?",
+                (notify, H.now(), tid, who),
+            )
     elif had and had[0]:
-        conn.execute("UPDATE thread_followers SET following=0, reason='read', updated_at=? WHERE thread_id=? AND actor=?",
-                     (H.now(), tid, who))
-    after = conn.execute("SELECT notify FROM thread_followers WHERE thread_id=? AND actor=? AND following=1",
-                         (tid, who)).fetchone()
+        conn.execute(
+            "UPDATE thread_followers SET following=0, reason='read', updated_at=? WHERE thread_id=? AND actor=?",
+            (H.now(), tid, who),
+        )
+    after = conn.execute(
+        "SELECT notify FROM thread_followers WHERE thread_id=? AND actor=? AND following=1", (tid, who)
+    ).fetchone()
     if bool(had and had[0]) != bool(after) or (had and after and had[1] != after[0]):
-        H.event(conn, actor, "task.followers", task_id, {"actor": who, "following": bool(after),
-                                                         "notify": after[0] if after else None})
+        H.event(
+            conn,
+            actor,
+            "task.followers",
+            task_id,
+            {"actor": who, "following": bool(after), "notify": after[0] if after else None},
+        )
     return row
-

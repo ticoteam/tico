@@ -27,7 +27,13 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(code: &str, detail: impl Into<String>, status: u16, retryable: bool) -> Self {
-        ApiError { code: code.into(), detail: detail.into(), status, retryable, operation_id: None }
+        ApiError {
+            code: code.into(),
+            detail: detail.into(),
+            status,
+            retryable,
+            operation_id: None,
+        }
     }
 }
 
@@ -46,7 +52,9 @@ pub fn plain_http_host(url: &reqwest::Url) -> bool {
         Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip).is_loopback(),
         Some(url::Host::Domain(name)) => {
             name == "localhost"
-                || (!name.contains('.') && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+                || (!name.contains('.')
+                    && !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
         }
         None => false,
     }
@@ -59,7 +67,11 @@ pub fn check_origin(url: &str) -> Result<String, String> {
     if scheme != "https" && !(scheme == "http" && plain_http_host(&parsed)) {
         return Err("Tico requires HTTPS, except on loopback or a one-label service name".into());
     }
-    let raw_path = url.splitn(4, '/').nth(3).map(|p| format!("/{p}")).unwrap_or_default();
+    let raw_path = url
+        .splitn(4, '/')
+        .nth(3)
+        .map(|p| format!("/{p}"))
+        .unwrap_or_default();
     if !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.query().is_some()
@@ -76,7 +88,9 @@ pub fn quote_plus(text: &str) -> String {
     let mut out = String::new();
     for b in text.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-' | b'~' => {
+                out.push(b as char)
+            }
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{b:02X}")),
         }
@@ -112,9 +126,16 @@ pub fn http_client(timeout: Option<Duration>) -> reqwest::Client {
 /// expired per-turn token.
 pub fn bearer(token: &str) -> Result<String, ApiError> {
     if let Some(path) = token.strip_prefix("tico-file:") {
-        let read = std::fs::read_to_string(Path::new(path)).map(|t| t.trim().to_string()).unwrap_or_default();
+        let read = std::fs::read_to_string(Path::new(path))
+            .map(|t| t.trim().to_string())
+            .unwrap_or_default();
         if read.is_empty() {
-            return Err(ApiError::new("stale_lease", "No active Hub turn; wait for a new request", 409, false));
+            return Err(ApiError::new(
+                "stale_lease",
+                "No active Hub turn; wait for a new request",
+                409,
+                false,
+            ));
         }
         return Ok(read);
     }
@@ -124,14 +145,27 @@ pub fn bearer(token: &str) -> Result<String, ApiError> {
 /// `{"error": {...}}` from a refusal, else the Cloudflare problem-detail `title`, else "HTTP N".
 pub fn error_from(status: u16, body: &[u8], key: &str) -> ApiError {
     let payload: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let payload = if payload.is_object() { payload } else { json!({}) };
-    let error = payload.get("error").filter(|e| e.is_object()).cloned().unwrap_or(json!({}));
+    let payload = if payload.is_object() {
+        payload
+    } else {
+        json!({})
+    };
+    let error = payload
+        .get("error")
+        .filter(|e| e.is_object())
+        .cloned()
+        .unwrap_or(json!({}));
     let detail = match error.get("detail") {
         Some(Value::String(s)) if !s.is_empty() => s.clone(),
-        Some(v) if !v.is_null() && v.as_str() != Some("") && v != &Value::Bool(false) => v.to_string(),
+        Some(v) if !v.is_null() && v.as_str() != Some("") && v != &Value::Bool(false) => {
+            v.to_string()
+        }
         _ => {
             let mut d = format!("HTTP {status}");
-            if let Some(title) = payload.get("title").filter(|t| !t.is_null() && t.as_str() != Some("")) {
+            if let Some(title) = payload
+                .get("title")
+                .filter(|t| !t.is_null() && t.as_str() != Some(""))
+            {
                 let title = match title {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
@@ -142,7 +176,10 @@ pub fn error_from(status: u16, body: &[u8], key: &str) -> ApiError {
             d
         }
     };
-    let code = error.get("code").and_then(|c| c.as_str()).unwrap_or("http_error");
+    let code = error
+        .get("code")
+        .and_then(|c| c.as_str())
+        .unwrap_or("http_error");
     let retryable = status == 429 || (500..600).contains(&status);
     let mut e = ApiError::new(code, detail, status, retryable);
     e.operation_id = Some(key.to_string());
@@ -153,17 +190,28 @@ impl Client {
     pub fn new(url: &str, token: &str, timeout_s: u64, retries: u32) -> Result<Client, String> {
         let url = check_origin(url)?;
         let timeout = Duration::from_secs(timeout_s);
-        Ok(Client { url, token: token.to_string(), retries, http: http_client(Some(timeout)), timeout, backoff_scale: 1.0 })
+        Ok(Client {
+            url,
+            token: token.to_string(),
+            retries,
+            http: http_client(Some(timeout)),
+            timeout,
+            backoff_scale: 1.0,
+        })
     }
 
     /// The same hub and token over connections of its own, for a client that lives on another runtime: a pooled
     /// connection belongs to the runtime that opened it.
     pub fn detached(&self) -> Client {
-        Client { http: http_client(Some(self.timeout)), ..self.clone() }
+        Client {
+            http: http_client(Some(self.timeout)),
+            ..self.clone()
+        }
     }
 
     pub async fn get(&self, path: &str) -> Result<Value, ApiError> {
-        self.request(Method::GET, &format!("/api/v2/{path}"), None, None).await
+        self.request(Method::GET, &format!("/api/v2/{path}"), None, None)
+            .await
     }
 
     #[allow(dead_code)] // the status and doctor reads with a query come in step 2
@@ -172,32 +220,77 @@ impl Client {
             String::new()
         } else {
             "?".to_string()
-                + &query.iter().map(|(k, v)| format!("{}={}", quote_plus(k), quote_plus(v))).collect::<Vec<_>>().join("&")
+                + &query
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", quote_plus(k), quote_plus(v)))
+                    .collect::<Vec<_>>()
+                    .join("&")
         };
-        self.request(Method::GET, &format!("/api/v2/{path}{suffix}"), None, None).await
+        self.request(Method::GET, &format!("/api/v2/{path}{suffix}"), None, None)
+            .await
     }
 
-    pub async fn post(&self, path: &str, body: &Value, key: Option<&str>) -> Result<Value, ApiError> {
-        self.request(Method::POST, &format!("/api/v2/{path}"), Some(body), key.map(|k| k.to_string())).await
+    pub async fn post(
+        &self,
+        path: &str,
+        body: &Value,
+        key: Option<&str>,
+    ) -> Result<Value, ApiError> {
+        self.request(
+            Method::POST,
+            &format!("/api/v2/{path}"),
+            Some(body),
+            key.map(|k| k.to_string()),
+        )
+        .await
     }
 
     pub async fn patch(&self, path: &str, body: &Value) -> Result<Value, ApiError> {
-        self.request(Method::PATCH, &format!("/api/v2/{path}"), Some(body), None).await
+        self.request(Method::PATCH, &format!("/api/v2/{path}"), Some(body), None)
+            .await
     }
 
-    pub async fn request(&self, method: Method, path: &str, body: Option<&Value>, key: Option<String>) -> Result<Value, ApiError> {
-        let data = body.map(|b| (serde_json::to_vec(b).unwrap_or_default(), "application/json"));
+    pub async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+        key: Option<String>,
+    ) -> Result<Value, ApiError> {
+        let data = body.map(|b| {
+            (
+                serde_json::to_vec(b).unwrap_or_default(),
+                "application/json",
+            )
+        });
         self.send(method, path, data, key).await
     }
 
     /// A POST of raw bytes (`application/octet-stream`), as `Client.request(raw=...)`: a file upload.
     pub async fn post_raw(&self, path: &str, data: Vec<u8>, key: &str) -> Result<Value, ApiError> {
-        self.send(Method::POST, path, Some((data, "application/octet-stream")), Some(key.to_string())).await
+        self.send(
+            Method::POST,
+            path,
+            Some((data, "application/octet-stream")),
+            Some(key.to_string()),
+        )
+        .await
     }
 
-    async fn send(&self, method: Method, path: &str, data: Option<(Vec<u8>, &'static str)>, key: Option<String>) -> Result<Value, ApiError> {
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        data: Option<(Vec<u8>, &'static str)>,
+        key: Option<String>,
+    ) -> Result<Value, ApiError> {
         if !path.starts_with("/api/v2/") {
-            return Err(ApiError::new("protocol", "Use a versioned Tico API path", 0, false));
+            return Err(ApiError::new(
+                "protocol",
+                "Use a versioned Tico API path",
+                0,
+                false,
+            ));
         }
         let key = key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let token = bearer(&self.token)?;
@@ -211,27 +304,34 @@ impl Client {
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Accept", "application/json");
             if let Some((d, content_type)) = &data {
-                req = req.header("Content-Type", *content_type).header("Idempotency-Key", &key).body(d.clone());
+                req = req
+                    .header("Content-Type", *content_type)
+                    .header("Idempotency-Key", &key)
+                    .body(d.clone());
             }
             let failure = match req.send().await {
                 Ok(resp) => {
                     let status = resp.status();
                     match resp.bytes().await {
-                        Ok(bytes) if status.is_success() => match serde_json::from_slice::<Value>(&bytes) {
-                            Ok(v) => return Ok(v),
-                            Err(_) => {
-                                let mut e = ApiError::new(
+                        Ok(bytes) if status.is_success() => {
+                            match serde_json::from_slice::<Value>(&bytes) {
+                                Ok(v) => return Ok(v),
+                                Err(_) => {
+                                    let mut e = ApiError::new(
                                     "protocol",
                                     "Tico returned an invalid API response; check the endpoint and sign-in configuration",
                                     0,
                                     false,
                                 );
-                                e.operation_id = Some(key.clone());
-                                e
+                                    e.operation_id = Some(key.clone());
+                                    e
+                                }
                             }
-                        },
+                        }
                         Ok(bytes) => error_from(status.as_u16(), &bytes, &key),
-                        Err(_) if !status.is_success() && status != StatusCode::OK => error_from(status.as_u16(), b"", &key),
+                        Err(_) if !status.is_success() && status != StatusCode::OK => {
+                            error_from(status.as_u16(), b"", &key)
+                        }
                         Err(_) => unavailable(&key),
                     }
                 }
@@ -249,7 +349,12 @@ impl Client {
 }
 
 fn unavailable(key: &str) -> ApiError {
-    let mut e = ApiError::new("unavailable", "Tico could not confirm this request; retry with the same operation ID", 0, true);
+    let mut e = ApiError::new(
+        "unavailable",
+        "Tico could not confirm this request; retry with the same operation ID",
+        0,
+        true,
+    );
     e.operation_id = Some(key.to_string());
     e
 }
@@ -261,7 +366,9 @@ pub(crate) mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// A one-connection-per-response HTTP server answering `replies` in order, recording each request's head.
-    pub(crate) async fn serve(replies: Vec<(u16, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
+    pub(crate) async fn serve(
+        replies: Vec<(u16, &'static str)>,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -278,7 +385,11 @@ pub(crate) mod tests {
                     if let Some(end) = text.find("\r\n\r\n") {
                         let length = text[..end]
                             .lines()
-                            .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap()))
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap())
+                            })
                             .unwrap_or(0);
                         if got.len() >= end + 4 + length {
                             break;
@@ -288,7 +399,9 @@ pub(crate) mod tests {
                         break;
                     }
                 }
-                log.lock().unwrap().push(String::from_utf8_lossy(&got).to_string());
+                log.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&got).to_string());
                 let reply = format!(
                     "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -312,36 +425,70 @@ pub(crate) mod tests {
         let (url, seen) = serve(vec![(503, "{}"), (429, "{}"), (200, "{\"ok\":true}")]).await;
         let mut client = Client::new(&url, "runner-token", 5, 3).unwrap();
         client.backoff_scale = 0.001;
-        let got = client.post("jobs/claim", &json!({"next_run": true}), None).await.unwrap();
+        let got = client
+            .post("jobs/claim", &json!({"next_run": true}), None)
+            .await
+            .unwrap();
         assert_eq!(got, json!({"ok": true}));
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 3);
-        let keys: Vec<_> = seen.iter().map(|r| header(r, "Idempotency-Key").unwrap()).collect();
+        let keys: Vec<_> = seen
+            .iter()
+            .map(|r| header(r, "Idempotency-Key").unwrap())
+            .collect();
         assert!(keys.iter().all(|k| k == &keys[0]) && keys[0].len() == 36);
         assert_eq!(header(&seen[0], "User-Agent").unwrap(), "Tico-Client/0.2.1");
-        assert_eq!(header(&seen[0], "Authorization").unwrap(), "Bearer runner-token");
+        assert_eq!(
+            header(&seen[0], "Authorization").unwrap(),
+            "Bearer runner-token"
+        );
     }
 
     #[tokio::test]
     async fn a_4xx_is_not_retried_and_its_error_is_parsed() {
-        let (url, seen) = serve(vec![(409, r#"{"error":{"code":"stale_lease","detail":"Lease expired","retryable":false}}"#)]).await;
+        let (url, seen) = serve(vec![(
+            409,
+            r#"{"error":{"code":"stale_lease","detail":"Lease expired","retryable":false}}"#,
+        )])
+        .await;
         let mut client = Client::new(&url, "t", 5, 3).unwrap();
         client.backoff_scale = 0.001;
-        let err = client.post("attempts/a/renew", &json!({}), Some("renew:a")).await.unwrap_err();
-        assert_eq!((err.code.as_str(), err.detail.as_str(), err.status, err.retryable), ("stale_lease", "Lease expired", 409, false));
-        assert_eq!(header(&seen.lock().unwrap()[0], "Idempotency-Key").unwrap(), "renew:a");
+        let err = client
+            .post("attempts/a/renew", &json!({}), Some("renew:a"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (
+                err.code.as_str(),
+                err.detail.as_str(),
+                err.status,
+                err.retryable
+            ),
+            ("stale_lease", "Lease expired", 409, false)
+        );
+        assert_eq!(
+            header(&seen.lock().unwrap()[0], "Idempotency-Key").unwrap(),
+            "renew:a"
+        );
     }
 
     #[tokio::test]
     async fn retries_stop_after_the_budget_and_a_cloudflare_title_is_kept() {
-        let (url, seen) = serve(vec![(530, r#"{"title":"Error 1033"}"#), (530, r#"{"title":"Error 1033"}"#)]).await;
+        let (url, seen) = serve(vec![
+            (530, r#"{"title":"Error 1033"}"#),
+            (530, r#"{"title":"Error 1033"}"#),
+        ])
+        .await;
         let mut client = Client::new(&url, "t", 5, 1).unwrap();
         client.backoff_scale = 0.001;
         let err = client.get("runners/assignments").await.unwrap_err();
         assert_eq!(err.detail, "HTTP 530: Error 1033");
         assert!(err.retryable);
         assert_eq!(seen.lock().unwrap().len(), 2);
-        assert!(header(&seen.lock().unwrap()[0], "Idempotency-Key").is_none(), "a GET carries no body and no key");
+        assert!(
+            header(&seen.lock().unwrap()[0], "Idempotency-Key").is_none(),
+            "a GET carries no body and no key"
+        );
     }
 
     #[tokio::test]
@@ -368,7 +515,13 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("token");
         std::fs::write(&file, "").unwrap();
-        let client = Client::new("http://127.0.0.1:9", &format!("tico-file:{}", file.display()), 1, 0).unwrap();
+        let client = Client::new(
+            "http://127.0.0.1:9",
+            &format!("tico-file:{}", file.display()),
+            1,
+            0,
+        )
+        .unwrap();
         let err = client.get("config").await.unwrap_err();
         assert_eq!((err.code.as_str(), err.status), ("stale_lease", 409));
         std::fs::write(&file, "fresh\n").unwrap();

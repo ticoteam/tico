@@ -20,10 +20,9 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
-use tauri::{
-    AppHandle, Emitter, Manager, State, WindowEvent,
-    menu::{Menu, MenuItem},
-};
+#[cfg(target_os = "macos")]
+use tauri::menu::MenuItem;
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent, menu::Menu};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tico_recorder_native::app_location::{self, Existing, Location};
 
@@ -267,6 +266,7 @@ impl Updates {
         let _ = app.emit("changed", 0);
     }
 
+    #[cfg(test)]
     fn idle_for(&self) -> Option<Duration> {
         self.lock().idle_for()
     }

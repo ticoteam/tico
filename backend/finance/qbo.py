@@ -6,6 +6,7 @@ Writes carry a RequestId derived from the outbox key, so a retry after a lost an
 A 429 waits out Retry-After a few times; a 401 gets one new token from HQ and the call is tried again; a redirect is
 never followed (the token stays with the host it was meant for). Every call returns a Read or a Sent: it never raises
 for an answer from QuickBooks."""
+
 import json
 import logging
 import os
@@ -25,24 +26,34 @@ from .mirror import Read, Record, Sent
 
 PRODUCTION = "https://quickbooks.api.intuit.com"
 SANDBOX = "https://sandbox-quickbooks.api.intuit.com"
-BASE_ENV = "TICO_QUICKBOOKS_BASE"     # a developer's override: the sandbox, or a local fake (scripts/fake_quickbooks.py)
+BASE_ENV = "TICO_QUICKBOOKS_BASE"  # a developer's override: the sandbox, or a local fake (scripts/fake_quickbooks.py)
 OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "sandbox-quickbooks.api.intuit.com"})
-NAMESPACE = M.REFERENCE_NAMESPACE      # RequestIds are uuid5 of the outbox key in this namespace (core/mirror.reference)
+NAMESPACE = M.REFERENCE_NAMESPACE  # RequestIds are uuid5 of the outbox key in this namespace (core/mirror.reference)
 TIMEOUT = 20
 TRIES_429 = 3
-MAX_WAIT = 30.0                        # the longest wait a Retry-After header may ask for
-RATE_WAIT = 60.0                       # QuickBooks asks for 60 seconds before a throttled call is tried, when no Retry-After
+MAX_WAIT = 30.0  # the longest wait a Retry-After header may ask for
+RATE_WAIT = 60.0  # QuickBooks asks for 60 seconds before a throttled call is tried, when no Retry-After
 MAX_TEXT = 300
-PAGE = 1000                            # QuickBooks' most rows in one query or one change-feed entity
-MAX_PAGES = 100                        # a list of items larger than this is refused rather than read forever
+PAGE = 1000  # QuickBooks' most rows in one query or one change-feed entity
+MAX_PAGES = 100  # a list of items larger than this is refused rather than read forever
 # The transactions a retry looks for first, by entity: a cut-off call may already have landed in QuickBooks.
-TRANSACTIONS = {"bill.create": "Bill", "invoice.create": "Invoice", "journal.create": "JournalEntry",
-                "purchaseorder.create": "PurchaseOrder", "estimate.create": "Estimate",
-                "payment.bill": "BillPayment", "payment.invoice": "Payment", "writeoff.create": "CreditMemo",
-                "credit.apply": "Payment"}
+TRANSACTIONS = {
+    "bill.create": "Bill",
+    "invoice.create": "Invoice",
+    "journal.create": "JournalEntry",
+    "purchaseorder.create": "PurchaseOrder",
+    "estimate.create": "Estimate",
+    "payment.bill": "BillPayment",
+    "payment.invoice": "Payment",
+    "writeoff.create": "CreditMemo",
+    "credit.apply": "Payment",
+}
 # A shared record found by its name: the entity it is read from, and the field its name is in.
-NAMED = {"item.create": ("Item", "Name"), "location.create": ("Department", "Name"),
-         "project.create": ("Customer", "DisplayName")}
+NAMED = {
+    "item.create": ("Item", "Name"),
+    "location.create": ("Department", "Name"),
+    "project.create": ("Customer", "DisplayName"),
+}
 # The provider kind a write's record is kept under when it differs from the QuickBooks entity (a job is a Project).
 SENT_AS = {"project.create": "Project"}
 
@@ -60,6 +71,8 @@ def _where(entity: str) -> str:
 def _quote(value: object) -> str:
     """A string as a QuickBooks query takes it, with its quotes escaped."""
     return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+
 log = logging.getLogger(__name__)
 _warned = [False]
 
@@ -70,7 +83,7 @@ def _no_body() -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Reply:
-    status: int                       # 0: unreachable or timed out (the write may or may not have landed)
+    status: int  # 0: unreachable or timed out (the write may or may not have landed)
     body: dict[str, Any] = field(default_factory=_no_body)
     retry_after: float = 0.0
 
@@ -105,7 +118,8 @@ def _urllib(method: str, url: str, headers: Mapping[str, str], data: bytes | Non
         with opener.open(request, timeout=TIMEOUT) as response:
             return _reply(response.status, response.read(), response.headers.get("Retry-After"))
     except urllib.error.HTTPError as e:
-        return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
+        with e:
+            return _reply(e.code, e.read(), e.headers.get("Retry-After") if e.headers else None)
     except (urllib.error.URLError, TimeoutError, OSError):
         return Reply(0)
 
@@ -150,21 +164,37 @@ class QuickBooks:
     full_reread: bool = True
     read_kinds: tuple[str, ...] = (*Q.ENTITIES, "Project")
 
-    def __init__(self, realm: str, tokens: Callable[[bool], str], *, base: str | None = None,
-                 transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
+    def __init__(
+        self,
+        realm: str,
+        tokens: Callable[[bool], str],
+        *,
+        base: str | None = None,
+        transport: Transport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.realm, self.tokens = realm, tokens
         self.base = (base or base_url()).rstrip("/")
         self.transport = transport or _urllib
         self.sleep = sleep
-        self._items: dict[str, dict[str, str]] | None = None      # one read of the items per pass, when a document needs it
-        self._per_line: bool | None = None                        # whether the company tracks a class on each line, read once
+        self._items: dict[str, dict[str, str]] | None = None  # one read of the items per pass, when a document needs it
+        self._per_line: bool | None = None  # whether the company tracks a class on each line, read once
 
-    def _call(self, method: str, path: str, *, query: Mapping[str, str] | None = None,
-              body: Mapping[str, Any] | None = None, request_id: str = "") -> Reply:
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: Mapping[str, str] | None = None,
+        body: Mapping[str, Any] | None = None,
+        request_id: str = "",
+    ) -> Reply:
         params = {**(query or {}), "minorversion": Q.MINOR_VERSION}
         if request_id:
             params["requestid"] = request_id
-        url = f"{self.base}/v3/company/{urllib.parse.quote(self.realm, safe='')}/{path}?" + urllib.parse.urlencode(params)
+        url = f"{self.base}/v3/company/{urllib.parse.quote(self.realm, safe='')}/{path}?" + urllib.parse.urlencode(
+            params
+        )
         data = json.dumps(body).encode() if body is not None else None
         try:
             token = self.tokens(False)
@@ -174,8 +204,11 @@ class QuickBooks:
         reply = Reply(0)
         tries = 0
         while True:
-            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json",
-                       "Content-Type": "application/json"}
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
             reply = self.transport(method, url, headers, data)
             if reply.status == 401 and not refreshed:
                 refreshed = True
@@ -205,8 +238,11 @@ class QuickBooks:
             rows: list[object] = []
             for page in range(MAX_PAGES):
                 start = page * PAGE + 1
-                reply = self._call("GET", "query", query={"query": (
-                    f"SELECT * FROM Item{_where('Item')} STARTPOSITION {start} MAXRESULTS {PAGE}")})
+                reply = self._call(
+                    "GET",
+                    "query",
+                    query={"query": (f"SELECT * FROM Item{_where('Item')} STARTPOSITION {start} MAXRESULTS {PAGE}")},
+                )
                 if reply.status != 200:
                     return _fault(reply.body, reply.status)
                 found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
@@ -224,7 +260,11 @@ class QuickBooks:
         if self._per_line is None:
             reply = self._call("GET", "preferences")
             if reply.status != 200:
-                return _fault(reply.body, reply.status) if reply.status else "QuickBooks did not answer the preferences read"
+                return (
+                    _fault(reply.body, reply.status)
+                    if reply.status
+                    else "QuickBooks did not answer the preferences read"
+                )
             prefs: dict[str, Any] = Q.as_map(reply.body.get("Preferences")) or {}
             info: dict[str, Any] = Q.as_map(prefs.get("AccountingInfoPrefs")) or {}
             flag = info.get("ClassTrackingPerTxnLine")
@@ -310,8 +350,11 @@ class QuickBooks:
         key, so a retry does not make a second). One that sells to another account is refused, since the write-off
         would post there."""
         account = account_key.partition(":")[2]
-        found = self._call("GET", "query", query={
-            "query": f"SELECT * FROM Item WHERE Active IN (true,false) AND Name = '{Q.WRITE_OFF_ITEM}'"})
+        found = self._call(
+            "GET",
+            "query",
+            query={"query": f"SELECT * FROM Item WHERE Active IN (true,false) AND Name = '{Q.WRITE_OFF_ITEM}'"},
+        )
         if found.status == 0:
             return Sent(False, error="QuickBooks did not answer")
         if found.status != 200:
@@ -319,13 +362,22 @@ class QuickBooks:
         known = Q.item_accounts(Q.as_list((Q.as_map(found.body.get("QueryResponse")) or {}).get("Item")))
         for sells in known.values():
             if sells["income"] != account:
-                return Sent(False, final=True, error=(
-                    f"the {Q.WRITE_OFF_ITEM} item already sells to another account; point the write-off at that "
-                    "account or change the item in QuickBooks"))
+                return Sent(
+                    False,
+                    final=True,
+                    error=(
+                        f"the {Q.WRITE_OFF_ITEM} item already sells to another account; point the write-off at that "
+                        "account or change the item in QuickBooks"
+                    ),
+                )
         if known:
             return next(iter(known))
-        created = self._call("POST", "item", body=Q.item_body(Q.WRITE_OFF_ITEM, account),
-                             request_id=str(uuid.uuid5(NAMESPACE, f"{key}:item")))
+        created = self._call(
+            "POST",
+            "item",
+            body=Q.item_body(Q.WRITE_OFF_ITEM, account),
+            request_id=str(uuid.uuid5(NAMESPACE, f"{key}:item")),
+        )
         if created.status == 0:
             return Sent(False, error="QuickBooks did not answer")
         made: dict[str, Any] = Q.as_map(created.body.get("Item")) or {}
@@ -350,25 +402,34 @@ class QuickBooks:
             where, mark = f"DisplayName = '{_quote(body['name'])}'", ""
         elif op in NAMED:
             entity, field = NAMED[op]
-            where, mark = f"{field} = '{_quote(body['name'])}'" + (" AND Job = true" if op == "project.create" else ""), ""
+            where, mark = (
+                f"{field} = '{_quote(body['name'])}'" + (" AND Job = true" if op == "project.create" else ""),
+                "",
+            )
         else:
             return None
         # An inactive record is found too: a retry that does not see it would create a second one under the same name.
         active = "Active IN (true,false) AND " if entity in Q.ACTIVE_FILTERED else ""
-        reply = self._call("GET", "query", query={
-            "query": f"SELECT * FROM {entity} WHERE {active}{where} MAXRESULTS 1000"})
+        reply = self._call(
+            "GET", "query", query={"query": f"SELECT * FROM {entity} WHERE {active}{where} MAXRESULTS 1000"}
+        )
         if reply.status in (0, 429) or reply.status >= 500:
             return Sent(False, error="QuickBooks did not answer the lookup")
         if reply.status != 200:
-            return Sent(False, error=f"UNKNOWN: {_fault(reply.body, reply.status)}"[:MAX_TEXT], final=True,
-                        unknown=True)
+            return Sent(
+                False, error=f"UNKNOWN: {_fault(reply.body, reply.status)}"[:MAX_TEXT], final=True, unknown=True
+            )
         rows = Q.as_list((Q.as_map(reply.body.get("QueryResponse")) or {}).get(entity))
         for raw in rows:
             row = Q.as_map(raw) or {}
             if not mark or mark in str(row.get("PrivateNote") or ""):
-                return Sent(True, kind=SENT_AS.get(op, entity), external_id=str(row.get("Id") or ""),
-                            revision=str(row.get("SyncToken") or ""),
-                            lines=Q.line_ids(row) if op == "bill.create" else ())
+                return Sent(
+                    True,
+                    kind=SENT_AS.get(op, entity),
+                    external_id=str(row.get("Id") or ""),
+                    revision=str(row.get("SyncToken") or ""),
+                    lines=Q.line_ids(row) if op == "bill.create" else (),
+                )
         if len(rows) >= 1000:
             return Sent(False, error="UNKNOWN: too many writes that day to tell", final=True, unknown=True)
         return None
@@ -410,10 +471,14 @@ class QuickBooks:
             return Sent(False, error="QuickBooks did not answer")
         made: dict[str, Any] = Q.as_map(reply.body.get(kind)) or {}
         if 200 <= reply.status < 300 and made:
-            return Sent(True, kind=SENT_AS.get(op, kind), external_id=str(made.get("Id") or ""),
-                        revision=str(made.get("SyncToken") or ""),
-                        lines=Q.line_ids(made) if op == "bill.create" else ())
-        final = reply.status == 400 and "Fault" in reply.body      # a validation refusal: a retry says the same thing
+            return Sent(
+                True,
+                kind=SENT_AS.get(op, kind),
+                external_id=str(made.get("Id") or ""),
+                revision=str(made.get("SyncToken") or ""),
+                lines=Q.line_ids(made) if op == "bill.create" else (),
+            )
+        final = reply.status == 400 and "Fault" in reply.body  # a validation refusal: a retry says the same thing
         if final and op == "invoice.create" and body.get("linked_estimate"):
             # The estimate link is best effort: a refusal sends the invoice again without it, under its own request.
             return self._send(op, {k: v for k, v in body.items() if k != "linked_estimate"}, key, f"{key}:unlinked")
@@ -438,19 +503,26 @@ def _without_classes(body: Mapping[str, Any]) -> dict[str, Any]:
     return {**body, "lines": kept}
 
 
-def _write_of(op: str, body: Mapping[str, Any],
-              items: Mapping[str, Mapping[str, str]]) -> tuple[str | None, str, dict[str, Any], dict[str, str]]:
+def _write_of(
+    op: str, body: Mapping[str, Any], items: Mapping[str, Mapping[str, str]]
+) -> tuple[str | None, str, dict[str, Any], dict[str, str]]:
     """The record kind, path, body and query one outbox operation sends. `items` maps each item to its accounts."""
     if op == "account.create":
         return "Account", "account", Q.account_body(body), {}
     if op == "party.create":
         vendor = str(body.get("kind")) == "vendor"
-        return ("Vendor", "vendor", Q.party_body(body), {}) if vendor else ("Customer", "customer", Q.party_body(body), {})
+        return (
+            ("Vendor", "vendor", Q.party_body(body), {}) if vendor else ("Customer", "customer", Q.party_body(body), {})
+        )
     if op == "journal.create":
         return "JournalEntry", "journalentry", Q.journal_body(body), {}
     if op == "journal.delete":
-        return "JournalEntry", "journalentry", Q.delete_body(str(body["ext"]), str(body["revision"])), {
-            "operation": "delete"}
+        return (
+            "JournalEntry",
+            "journalentry",
+            Q.delete_body(str(body["ext"]), str(body["revision"])),
+            {"operation": "delete"},
+        )
     if op == "bill.create":
         return "Bill", "bill", Q.bill_body(body), {}
     if op == "invoice.create":

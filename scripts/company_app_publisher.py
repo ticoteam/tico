@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Prepare a company publisher role. Dry-run reads GitHub settings; --apply changes IAM only."""
+
 import argparse
 import json
 import re
@@ -19,11 +20,11 @@ def oidc_subject(settings):
     immutable = settings.get("use_immutable_subject")
     if immutable is True:
         base = settings.get("sub_claim_prefix")
-        if not isinstance(base, str) or not re.fullmatch(
-                r"repo:ticoteam@[0-9]+/tico@[0-9]+", base):
+        if not isinstance(base, str) or not re.fullmatch(r"repo:ticoteam@[0-9]+/tico@[0-9]+", base):
             raise ValueError("GitHub returned an unsupported immutable repository subject")
-    elif immutable is False or (immutable is None and "sub_claim_prefix" not in settings
-                                and settings.get("include_claim_keys") in (None, [])):
+    elif immutable is False or (
+        immutable is None and "sub_claim_prefix" not in settings and settings.get("include_claim_keys") in (None, [])
+    ):
         base = settings.get("sub_claim_prefix", "repo:ticoteam/tico")
         if base != "repo:ticoteam/tico":
             raise ValueError("GitHub returned an unsupported legacy repository subject")
@@ -37,7 +38,10 @@ def discover_oidc_subject():
     try:
         result = subprocess.run(
             ["gh", "api", "repos/ticoteam/tico/actions/oidc/customization/sub"],
-            check=True, capture_output=True, text=True)
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         settings = json.loads(result.stdout)
     except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         raise ValueError("could not discover GitHub OIDC settings; authenticate gh and retry") from exc
@@ -48,18 +52,41 @@ def policies(account, bucket, prefix="", subject=None):
     if subject is None:
         subject = discover_oidc_subject()
     if not isinstance(subject, str) or not re.fullmatch(
-            r"repo:ticoteam(?:@[0-9]+/tico@[0-9]+|/tico):ref:refs/tags/v\*", subject):
+        r"repo:ticoteam(?:@[0-9]+/tico@[0-9]+|/tico):ref:refs/tags/v\*", subject
+    ):
         raise ValueError("refusing an unsupported GitHub OIDC subject")
     provider = f"arn:aws:iam::{account}:oidc-provider/token.actions.githubusercontent.com"
     root = (prefix.strip("/") + "/" if prefix.strip("/") else "") + "releases/app/"
-    trust = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"Federated": provider},
-             "Action": "sts:AssumeRoleWithWebIdentity", "Condition": {
-                 "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
-                 "StringLike": {"token.actions.githubusercontent.com:sub": subject}}}]}
-    access = {"Version": "2012-10-17", "Statement": [
-        {"Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": f"arn:aws:s3:::{bucket}/{root}*"},
-        {"Effect": "Allow", "Action": "s3:ListBucket", "Resource": f"arn:aws:s3:::{bucket}",
-         "Condition": {"StringLike": {"s3:prefix": root + "*"}}}]}
+    trust = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {"Federated": provider},
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                    "StringEquals": {"token.actions.githubusercontent.com:aud": "sts.amazonaws.com"},
+                    "StringLike": {"token.actions.githubusercontent.com:sub": subject},
+                },
+            }
+        ],
+    }
+    access = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": ["s3:PutObject", "s3:GetObject"],
+                "Resource": f"arn:aws:s3:::{bucket}/{root}*",
+            },
+            {
+                "Effect": "Allow",
+                "Action": "s3:ListBucket",
+                "Resource": f"arn:aws:s3:::{bucket}",
+                "Condition": {"StringLike": {"s3:prefix": root + "*"}},
+            },
+        ],
+    }
     return provider, trust, access
 
 
@@ -78,8 +105,15 @@ def main():
     if not re.fullmatch(r"[0-9]{12}", a.account_id) or not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", a.role_name):
         p.error("invalid account id or role name")
     arn = f"arn:aws:iam::{a.account_id}:role/{a.role_name}"
-    entry = {"slug": a.slug, "id": a.id, "app_name": a.app_name, "url": a.url, "icon_url": a.icon_url,
-             "bucket": a.bucket, "deploy_role_arn": arn}
+    entry = {
+        "slug": a.slug,
+        "id": a.id,
+        "app_name": a.app_name,
+        "url": a.url,
+        "icon_url": a.icon_url,
+        "bucket": a.bucket,
+        "deploy_role_arn": arn,
+    }
     if a.runner_url:
         entry["runner_url"] = a.runner_url
     if a.prefix:
@@ -95,6 +129,7 @@ def main():
     if a.apply:
         import boto3
         from botocore.exceptions import ClientError
+
         iam = boto3.client("iam")
         # Verify the selected account before making any IAM changes.
         if boto3.client("sts").get_caller_identity()["Account"] != a.account_id:
@@ -104,8 +139,9 @@ def main():
         except ClientError as exc:
             if exc.response["Error"]["Code"] != "NoSuchEntity":
                 raise
-            iam.create_open_id_connect_provider(Url="https://token.actions.githubusercontent.com",
-                                                ClientIDList=["sts.amazonaws.com"])
+            iam.create_open_id_connect_provider(
+                Url="https://token.actions.githubusercontent.com", ClientIDList=["sts.amazonaws.com"]
+            )
         try:
             iam.get_role(RoleName=a.role_name)
         except ClientError as exc:
@@ -115,8 +151,18 @@ def main():
         else:
             iam.update_assume_role_policy(RoleName=a.role_name, PolicyDocument=json.dumps(trust))
         iam.put_role_policy(RoleName=a.role_name, PolicyName="company-app-releases", PolicyDocument=json.dumps(access))
-    print(json.dumps({"dry_run": not a.apply, "role_arn": arn, "trust": trust, "permissions": access,
-                      "TICO_COMPANY_APPS_entry": entry}, indent=2))
+    print(
+        json.dumps(
+            {
+                "dry_run": not a.apply,
+                "role_arn": arn,
+                "trust": trust,
+                "permissions": access,
+                "TICO_COMPANY_APPS_entry": entry,
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

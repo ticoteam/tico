@@ -146,14 +146,21 @@ pub fn sources() -> Result<Vec<String>> {
         .collect()
 }
 
-/// Prefer hardware-reference echo cancellation only while recording meeting audio. Unsupported
-/// routes (including headphones) and native setup failures retain the existing microphone path.
+/// Off: on a Nov 6 Meet call, starting macOS voice processing on the built-in mic silenced the
+/// mic for Chrome (people could not hear the speaker) and for Recorder's own raw capture.
+/// Transcript-level echo removal still runs; this was only a live-text aid.
+#[cfg(target_os = "macos")]
+const VOICE_PROCESSING: bool = false;
+
+/// Hardware-reference echo cancellation while recording meeting audio, when `VOICE_PROCESSING`
+/// is on. Unsupported routes and native setup failures retain the plain microphone path.
 pub fn start_microphone_for_meeting(name: Option<&str>, meeting_audio: bool) -> Result<Source> {
     #[cfg(target_os = "macos")]
-    if meeting_audio {
-        if let Ok(source) = macos::start_voice_microphone(name) {
-            return Ok(source);
-        }
+    if VOICE_PROCESSING
+        && meeting_audio
+        && let Ok(source) = macos::start_voice_microphone(name)
+    {
+        return Ok(source);
     }
     #[cfg(not(target_os = "macos"))]
     let _ = meeting_audio;

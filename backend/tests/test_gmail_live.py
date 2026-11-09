@@ -18,27 +18,58 @@ NEXT = "Gmail+next/=?|opaque"
 
 
 def raw_message(mid, epoch=100):
-    return {"id": mid, "threadId": "t1", "internalDate": str(epoch * 1000),
-            "labelIds": ["INBOX", "UNREAD"], "snippet": "A &amp; B",
-            "payload": {"mimeType": "multipart/mixed", "headers": [
+    return {
+        "id": mid,
+        "threadId": "t1",
+        "internalDate": str(epoch * 1000),
+        "labelIds": ["INBOX", "UNREAD"],
+        "snippet": "A &amp; B",
+        "payload": {
+            "mimeType": "multipart/mixed",
+            "headers": [
                 {"name": "From", "value": "Sender <sender@acme.example>"},
-                {"name": "To", "value": BOX}, {"name": "Subject", "value": "A contract"},
+                {"name": "To", "value": BOX},
+                {"name": "Subject", "value": "A contract"},
                 {"name": "List-Id", "value": "contracts.acme.example"},
-                {"name": "List-Unsubscribe", "value": "<https://acme.example/unsubscribe>"}],
-                "parts": [{"mimeType": "text/plain", "body": {
-                    "data": base64.urlsafe_b64encode(b"Live contract body.").decode()}},
-                    {"filename": "contract.pdf", "mimeType": "application/pdf",
-                     "body": {"attachmentId": "a1", "size": 123}}]}}
+                {"name": "List-Unsubscribe", "value": "<https://acme.example/unsubscribe>"},
+            ],
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": base64.urlsafe_b64encode(b"Live contract body.").decode()}},
+                {
+                    "filename": "contract.pdf",
+                    "mimeType": "application/pdf",
+                    "body": {"attachmentId": "a1", "size": 123},
+                },
+            ],
+        },
+    }
 
 
 @pytest.fixture
 def gmail_http(monkeypatch):
-    state = {"calls": [], "status": 200, "metadata_status": 200,
-             "writes": [], "write_status": 200,
-             "labels": [{"id": name, "name": name, "type": "system"} for name in
-                        ("INBOX", "UNREAD", "STARRED", "IMPORTANT", "TRASH", "SPAM", "SENT", "DRAFT", "CATEGORY_PERSONAL")]
-                       + [{"id": "Label_1", "name": "Receipts", "type": "user"}],
-             "messages": {"m1": raw_message("m1", 100), "m2": raw_message("m2", 200)}}
+    state = {
+        "calls": [],
+        "status": 200,
+        "metadata_status": 200,
+        "writes": [],
+        "write_status": 200,
+        "labels": [
+            {"id": name, "name": name, "type": "system"}
+            for name in (
+                "INBOX",
+                "UNREAD",
+                "STARRED",
+                "IMPORTANT",
+                "TRASH",
+                "SPAM",
+                "SENT",
+                "DRAFT",
+                "CATEGORY_PERSONAL",
+            )
+        ]
+        + [{"id": "Label_1", "name": "Receipts", "type": "user"}],
+        "messages": {"m1": raw_message("m1", 100), "m2": raw_message("m2", 200)},
+    }
 
     def call(url, *, token, data=None):
         parsed = urlsplit(url)
@@ -131,7 +162,8 @@ def test_a_metadata_failure_refuses_the_page_instead_of_losing_a_message(gmail_h
 
 def test_query_filters_and_a_callers_or_query_are_anded():
     assert gmail_query("from:a OR from:b", "Needs review", 100, 200, "true") == (
-        '(from:a OR from:b) label:"Needs review" after:100 before:200 has:attachment')
+        '(from:a OR from:b) label:"Needs review" after:100 before:200 has:attachment'
+    )
     assert gmail_query("", "", None, None, "false") == ""
 
 
@@ -176,8 +208,12 @@ def test_batch_modify_chunks_and_uses_only_the_write_scope(gmail_http, minted):
     writes = gmail_http["writes"]
     assert [len(body["ids"]) for _, body, _ in writes] == [1000, 1000, 1]
     assert [mid for _, body, _ in writes for mid in body["ids"]] == ids
-    assert all(path.endswith("/messages/batchModify") and body["addLabelIds"] == ["STARRED"]
-               and body["removeLabelIds"] == ["UNREAD"] for path, body, _ in writes)
+    assert all(
+        path.endswith("/messages/batchModify")
+        and body["addLabelIds"] == ["STARRED"]
+        and body["removeLabelIds"] == ["UNREAD"]
+        for path, body, _ in writes
+    )
     assert minted == [(BOX, "gmail", W.WORKSPACE_SCOPES["gmail"])]
 
 
@@ -210,8 +246,10 @@ def test_ids_resolve_all_pages_before_a_bounded_change_without_reading_content(g
     assert G.message_ids(None, BOX, "in:inbox", limit=1) == ["m2"]
     assert G.message_ids(None, BOX, "in:inbox", limit=100) == ["m2", "m1"]
     assert len(gmail_http["calls"]) == 3
-    assert all(path.endswith("/messages") and query["fields"] == ["messages(id),nextPageToken"]
-               for path, query, _ in gmail_http["calls"])
+    assert all(
+        path.endswith("/messages") and query["fields"] == ["messages(id),nextPageToken"]
+        for path, query, _ in gmail_http["calls"]
+    )
     assert gmail_http["calls"][-1][1]["maxResults"] == ["99"]
 
 
@@ -237,8 +275,10 @@ def test_batch_modify_http_sends_json_and_accepts_an_empty_success(monkeypatch, 
 
 
 def test_repeated_page_tokens_refuse_before_any_modify(gmail_http, minted):
-    gmail_http["pages"] = {"": {"messages": [{"id": "m1"}], "nextPageToken": "loop"},
-                           "loop": {"messages": [], "nextPageToken": "loop"}}
+    gmail_http["pages"] = {
+        "": {"messages": [{"id": "m1"}], "nextPageToken": "loop"},
+        "loop": {"messages": [], "nextPageToken": "loop"},
+    }
     with pytest.raises(Problem, match="incomplete page"):
         G.message_ids(None, BOX, "in:inbox")
     assert not gmail_http["writes"]

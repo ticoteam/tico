@@ -7,6 +7,7 @@ Run from a checkout with fetched release tags and a scoped hub/gh login:
 Exit 0 means no evidence gaps, 1 means gaps, 2 means collection failed. A checklist
 is a snapshot of visible ticket evidence, not release approval or test execution.
 """
+
 import argparse
 import json
 import re
@@ -77,28 +78,47 @@ def collect_ticket(tid):
 
 
 def linked_tickets(slug, number):
-    result = hub("sql", "SELECT DISTINCT l.task_id FROM task_links l "
-                 "JOIN tasks t ON t.id=l.task_id JOIN task_types ty ON ty.id=t.type_id "
-                 "WHERE l.kind='pr' AND lower(l.repo)=lower(:repo) AND l.number=:number "
-                 "AND ty.name='Dev tickets' ORDER BY l.task_id LIMIT 101",
-                 "--param", f"repo={slug}", "--param", f"number={number}", "--json", "--max-rows", "101")
+    result = hub(
+        "sql",
+        "SELECT DISTINCT l.task_id FROM task_links l "
+        "JOIN tasks t ON t.id=l.task_id JOIN task_types ty ON ty.id=t.type_id "
+        "WHERE l.kind='pr' AND lower(l.repo)=lower(:repo) AND l.number=:number "
+        "AND ty.name='Dev tickets' ORDER BY l.task_id LIMIT 101",
+        "--param",
+        f"repo={slug}",
+        "--param",
+        f"number={number}",
+        "--json",
+        "--max-rows",
+        "101",
+    )
     if result.get("truncated") or len(result["rows"]) > 100:
         raise freeze.GuardError("too many linked Dev tickets; checklist would be incomplete")
     return [row[0] for row in result["rows"]]
 
 
 def source(task, message):
-    return {"task": task["id"], "message": message.get("id"),
-            "actor": message.get("sender_id"), "created_at": message.get("created_at"),
-            "text": message.get("body", "")}
+    return {
+        "task": task["id"],
+        "message": message.get("id"),
+        "actor": message.get("sender_id"),
+        "created_at": message.get("created_at"),
+        "text": message.get("body", ""),
+    }
 
 
 def owner_messages(task):
     if not task.get("owner_id"):
         return []
-    return sorted((m for m in task.get("messages", []) if m.get("sender_id") == task.get("owner_id")
-                   and not any(m.get(k) for k in ("deleted_at", "hidden_at", "superseded_at"))),
-                  key=lambda m: (m.get("created_at") or "", m.get("id") or ""))
+    return sorted(
+        (
+            m
+            for m in task.get("messages", [])
+            if m.get("sender_id") == task.get("owner_id")
+            and not any(m.get(k) for k in ("deleted_at", "hidden_at", "superseded_at"))
+        ),
+        key=lambda m: (m.get("created_at") or "", m.get("id") or ""),
+    )
 
 
 def verdicts(task, role, number):
@@ -115,8 +135,10 @@ def verdicts(task, role, number):
 
 
 def passing_test(text, head):
-    return any((r := test_receipts.recognise(line)) and r["head"] == head and r["status"] == "passed"
-               for line in text.splitlines())
+    return any(
+        (r := test_receipts.recognise(line)) and r["head"] == head and r["status"] == "passed"
+        for line in text.splitlines()
+    )
 
 
 def failing_test(line, head):
@@ -134,9 +156,13 @@ def ticket_evidence(task, pr):
         receipts = verdicts(task, role, number)
         reviews[role] = receipts
         required = role == "Review 1" or (role == "QA" and qa)
-        required |= role == "Review 2" and bool(receipts or any(
-            ROLE.match(c["title"]) and ROLE.match(c["title"])[1].lower() == "review 2"
-            for c in task.get("children", [])))
+        required |= role == "Review 2" and bool(
+            receipts
+            or any(
+                ROLE.match(c["title"]) and ROLE.match(c["title"])[1].lower() == "review 2"
+                for c in task.get("children", [])
+            )
+        )
         if required:
             last = receipts[-1] if receipts else None
             if not last:
@@ -156,30 +182,50 @@ def ticket_evidence(task, pr):
     for child in task.get("children", []):
         match = ROLE.match(child["title"])
         if match and match[1].lower() in ("docs", "documentation", "technical writer"):
-            docs.append({"task": child["id"], "title": child["title"], "status": child["status"],
-                         "links": child.get("links", []),
-                         "receipts": [source(child, m) for m in owner_messages(child)]})
+            docs.append(
+                {
+                    "task": child["id"],
+                    "title": child["title"],
+                    "status": child["status"],
+                    "links": child.get("links", []),
+                    "receipts": [source(child, m) for m in owner_messages(child)],
+                }
+            )
     # Docs are no gap: the Technical Writer starts on `release_published`, after the release, so a docs task is
     # listed as evidence when one exists and never required.
-    return {"id": task["id"], "number": task.get("number"), "title": task["title"],
-            "step": (task.get("step") or {}).get("name", "unknown"),
-            "qa": qa, "reviews": reviews, "test_receipts": tests,
-            "docs": docs, "gaps": gaps}
+    return {
+        "id": task["id"],
+        "number": task.get("number"),
+        "title": task["title"],
+        "step": (task.get("step") or {}).get("name", "unknown"),
+        "qa": qa,
+        "reviews": reviews,
+        "test_receipts": tests,
+        "docs": docs,
+        "gaps": gaps,
+    }
 
 
 def build(prs, tickets, *, head, previous, previous_sha):
     rows = []
     for pr in prs:
-        linked = [t for t in tickets if any(l.get("kind") == "pr" and l.get("url") == pr["url"]
-                                           for l in t.get("links", []))]
+        linked = [
+            t for t in tickets if any(l.get("kind") == "pr" and l.get("url") == pr["url"] for l in t.get("links", []))
+        ]
         evidence = [ticket_evidence(t, pr) for t in linked]
         gaps = [f"Ticket {t.get('number') or t['id']}: {gap}" for t in evidence for gap in t["gaps"]]
         if not linked:
             gaps.append("No visible linked Dev ticket")
         rows.append({**pr, "tickets": evidence, "gaps": gaps})
-    return {"schema_version": 1, "head": head, "previous": previous, "previous_sha": previous_sha,
-            "security": "Outside the release pipeline; no Security result required",
-            "prs": rows, "gaps": sum(len(row["gaps"]) for row in rows)}
+    return {
+        "schema_version": 1,
+        "head": head,
+        "previous": previous,
+        "previous_sha": previous_sha,
+        "security": "Outside the release pipeline; no Security result required",
+        "prs": rows,
+        "gaps": sum(len(row["gaps"]) for row in rows),
+    }
 
 
 def collect(repo, head, previous=None, slug=None):
@@ -206,8 +252,16 @@ def collect(repo, head, previous=None, slug=None):
         pr = json.loads(command("gh", "api", f"repos/{slug}/pulls/{number}"))
         if not pr.get("merged_at"):
             raise freeze.GuardError(f"PR #{number} is not merged")
-        prs.append({"number": number, "title": pr["title"], "url": pr["html_url"],
-                    "head": pr["head"]["sha"], "merge_commit": commit["sha"], "merged_at": pr["merged_at"]})
+        prs.append(
+            {
+                "number": number,
+                "title": pr["title"],
+                "url": pr["html_url"],
+                "head": pr["head"]["sha"],
+                "merge_commit": commit["sha"],
+                "merged_at": pr["merged_at"],
+            }
+        )
         for tid in linked_tickets(slug, number):
             if tid not in tickets:
                 tickets[tid] = collect_ticket(tid)
@@ -215,48 +269,113 @@ def collect(repo, head, previous=None, slug=None):
 
 
 def cell(text):
-    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("|", "&#124;").replace("\n", " ")
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("|", "&#124;")
+        .replace("\n", " ")
+    )
 
 
 def markdown(result):
-    lines = ["# Release checklist", "", f"Candidate: `{result['head']}`", "",
-             f"Previous: {cell(result['previous'])} (`{result['previous_sha']}`)", "",
-             f"{len(result['prs'])} merged PRs; {result['gaps']} evidence gaps.", "",
-             result["security"], "", "Evidence snapshot only; gaps require resolution by the Release Manager.", "",
-             "| PR | Ticket / step | Review 1 | Review 2 | Tests | QA | Docs | Gaps |",
-             "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    lines = [
+        "# Release checklist",
+        "",
+        f"Candidate: `{result['head']}`",
+        "",
+        f"Previous: {cell(result['previous'])} (`{result['previous_sha']}`)",
+        "",
+        f"{len(result['prs'])} merged PRs; {result['gaps']} evidence gaps.",
+        "",
+        result["security"],
+        "",
+        "Evidence snapshot only; gaps require resolution by the Release Manager.",
+        "",
+        "| PR | Ticket / step | Review 1 | Review 2 | Tests | QA | Docs | Gaps |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
     for pr in result["prs"]:
         for ticket in pr["tickets"] or [None]:
             if ticket is None:
-                values = [f"#{pr['number']} {pr['title']}", "Missing", "Unknown", "Unknown", "Unknown",
-                          "Unknown", "Unknown", "; ".join(pr["gaps"])]
+                values = [
+                    f"#{pr['number']} {pr['title']}",
+                    "Missing",
+                    "Unknown",
+                    "Unknown",
+                    "Unknown",
+                    "Unknown",
+                    "Unknown",
+                    "; ".join(pr["gaps"]),
+                ]
             else:
+
                 def review(role):
                     receipts = ticket["reviews"][role]
                     return "; ".join(f"{r['verdict']} {r['head']}" for r in receipts) or "No verdict recorded"
-                values = [f"#{pr['number']} {pr['title']}", f"#{ticket['number']} / {ticket['step']}",
-                          review("Review 1"), review("Review 2"), str(len(ticket["test_receipts"])) + " receipts",
-                          ("qa; " + review("QA")) if ticket["qa"] else "Not tagged qa",
-                          "; ".join(d["title"] + " / " + d["status"] for d in ticket["docs"]) or "None recorded",
-                          "; ".join(ticket["gaps"]) or "None"]
+
+                values = [
+                    f"#{pr['number']} {pr['title']}",
+                    f"#{ticket['number']} / {ticket['step']}",
+                    review("Review 1"),
+                    review("Review 2"),
+                    str(len(ticket["test_receipts"])) + " receipts",
+                    ("qa; " + review("QA")) if ticket["qa"] else "Not tagged qa",
+                    "; ".join(d["title"] + " / " + d["status"] for d in ticket["docs"]) or "None recorded",
+                    "; ".join(ticket["gaps"]) or "None",
+                ]
             lines.append("| " + " | ".join(cell(v) for v in values) + " |")
-        lines.extend(["", f"## PR #{pr['number']}", "", f"PR: {pr['url']}", "",
-                      f"Merged head: `{pr['head']}`; landed commit: `{pr['merge_commit']}`", ""])
+        lines.extend(
+            [
+                "",
+                f"## PR #{pr['number']}",
+                "",
+                f"PR: {pr['url']}",
+                "",
+                f"Merged head: `{pr['head']}`; landed commit: `{pr['merge_commit']}`",
+                "",
+            ]
+        )
         for ticket in pr["tickets"]:
             for role, receipts in ticket["reviews"].items():
                 for receipt in receipts:
-                    lines.extend([f"{role} evidence: task {receipt['task']}, message {receipt['message']}, "
-                                  f"actor {cell(receipt['actor'])}", "",
-                                  *["> " + cell(line) for line in receipt["text"].splitlines()], ""])
+                    lines.extend(
+                        [
+                            f"{role} evidence: task {receipt['task']}, message {receipt['message']}, "
+                            f"actor {cell(receipt['actor'])}",
+                            "",
+                            *["> " + cell(line) for line in receipt["text"].splitlines()],
+                            "",
+                        ]
+                    )
             for receipt in ticket["test_receipts"]:
-                lines.extend([f"Test evidence: task {receipt['task']}, message {receipt['message']}", "",
-                              *["> " + cell(line) for line in receipt["text"].splitlines()], ""])
+                lines.extend(
+                    [
+                        f"Test evidence: task {receipt['task']}, message {receipt['message']}",
+                        "",
+                        *["> " + cell(line) for line in receipt["text"].splitlines()],
+                        "",
+                    ]
+                )
             for doc in ticket["docs"]:
-                lines.extend([f"Docs task: {doc['task']} ({doc['status']})", "",
-                              *[cell(l.get("url", "")) for l in doc["links"]], ""])
+                lines.extend(
+                    [
+                        f"Docs task: {doc['task']} ({doc['status']})",
+                        "",
+                        *[cell(l.get("url", "")) for l in doc["links"]],
+                        "",
+                    ]
+                )
                 for receipt in doc["receipts"]:
-                    lines.extend([f"Docs evidence: message {receipt['message']}", "",
-                                  *["> " + cell(line) for line in receipt["text"].splitlines()], ""])
+                    lines.extend(
+                        [
+                            f"Docs evidence: message {receipt['message']}",
+                            "",
+                            *["> " + cell(line) for line in receipt["text"].splitlines()],
+                            "",
+                        ]
+                    )
     return "\n".join(lines) + "\n"
 
 

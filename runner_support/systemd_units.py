@@ -8,6 +8,7 @@ runner reads: `TICO_SUPERVISED=1` (something starts it again, so it may exit to 
 
 Every function is pure or takes the command runner as an argument, so the tests never start systemd.
 """
+
 import argparse
 import os
 import subprocess
@@ -16,8 +17,13 @@ from pathlib import Path
 
 KINDS = ("bot", "connectors", "close-calls", "importers")
 COMMANDS = {"bot": "run", "connectors": "connectors", "close-calls": "close-calls", "importers": "importers"}
-DESCRIPTIONS = {"bot": "Tico runner", "connectors": "Tico connectors", "close-calls": "Tico close-calls",
-                "importers": "Tico importers", "api": "Tico server"}
+DESCRIPTIONS = {
+    "bot": "Tico runner",
+    "connectors": "Tico connectors",
+    "close-calls": "Tico close-calls",
+    "importers": "Tico importers",
+    "api": "Tico server",
+}
 
 
 def unit_name(kind, env_slug=""):
@@ -29,12 +35,15 @@ def helper_units(unit, kinds=KINDS):
     """The units beside the runner's own, from its name: `tico-bot.service` -> `tico-connectors.service`, ..."""
     if not (unit.startswith("tico-") and unit.endswith("bot.service")):
         return {}
-    stem = unit[:-len("bot.service")]
+    stem = unit[: -len("bot.service")]
     return {kind: f"{stem}{kind}.service" for kind in kinds if kind != "bot"}
 
 
 def user_unit_dir(env=os.environ):
-    return Path(env.get("TICO_SYSTEMD_USER_DIR") or Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user")
+    return Path(
+        env.get("TICO_SYSTEMD_USER_DIR")
+        or Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
+    )
 
 
 def quote(value):
@@ -43,34 +52,48 @@ def quote(value):
     return '"' + text + '"'
 
 
-def render(kind, *, python, config, root, log, path, env_slug="", home="", user="", env_file="", port="",
-           throttle=10):
+def render(kind, *, python, config, root, log, path, env_slug="", home="", user="", env_file="", port="", throttle=10):
     """The text of one unit. `kind` is bot, connectors, close-calls, importers, or api (an environment's local server,
     which reads its settings from `env_file`)."""
     if kind == "api":
-        exec_line = " ".join(quote(x) for x in (python, "-m", "backend.server", "--host",
-                                               "127.0.0.1", "--port", port))
+        exec_line = " ".join(quote(x) for x in (python, "-m", "backend.server", "--host", "127.0.0.1", "--port", port))
     elif kind in COMMANDS:
         # `-m runner`, not `-m runner_support`: a unit outlives this release, and an older target release (a downgrade)
         # has only runner/. Here runner/__main__.py forwards it (runner/__init__.py).
         exec_line = " ".join(quote(x) for x in (python, "-m", "runner", "--config", config, COMMANDS[kind]))
     else:
         raise ValueError(f"unknown job {kind!r}")
-    lines = ["[Unit]", f"Description={DESCRIPTIONS[kind]}" + (f" ({env_slug})" if env_slug else ""),
-             "StartLimitIntervalSec=0", "",
-             "[Service]", "Type=simple", f"WorkingDirectory={root}"]
+    lines = [
+        "[Unit]",
+        f"Description={DESCRIPTIONS[kind]}" + (f" ({env_slug})" if env_slug else ""),
+        "StartLimitIntervalSec=0",
+        "",
+        "[Service]",
+        "Type=simple",
+        f"WorkingDirectory={root}",
+    ]
     if env_file:
         lines.append(f"EnvironmentFile={env_file}")
-    lines += [f"ExecStart={exec_line}", "Restart=always", f"RestartSec={throttle}",
-              "Environment=" + quote("TICO_SUPERVISED=1"),
-              "Environment=" + quote("TICO_SYSTEMD_UNIT=" + unit_name(kind, env_slug)),
-              "Environment=" + quote("PATH=" + path)]
+    lines += [
+        f"ExecStart={exec_line}",
+        "Restart=always",
+        f"RestartSec={throttle}",
+        "Environment=" + quote("TICO_SUPERVISED=1"),
+        "Environment=" + quote("TICO_SYSTEMD_UNIT=" + unit_name(kind, env_slug)),
+        "Environment=" + quote("PATH=" + path),
+    ]
     if home:
         lines.append("Environment=" + quote("HOME=" + home))
     if user:
         lines += ["Environment=" + quote("USER=" + user), "Environment=" + quote("LOGNAME=" + user)]
-    lines += [f"StandardOutput=append:{log}", f"StandardError=append:{log}", "",
-              "[Install]", "WantedBy=default.target", ""]
+    lines += [
+        f"StandardOutput=append:{log}",
+        f"StandardError=append:{log}",
+        "",
+        "[Install]",
+        "WantedBy=default.target",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -87,14 +110,18 @@ def write(unit_dir, kind, text, env_slug=""):
 def linger_guidance(user, run=subprocess.run):
     """What to tell the person when their user manager stops at logout, or "" when lingering is on (or cannot be told)."""
     try:
-        done = run(["loginctl", "show-user", user, "--property=Linger", "--value"], capture_output=True, text=True, timeout=10)
+        done = run(
+            ["loginctl", "show-user", user, "--property=Linger", "--value"], capture_output=True, text=True, timeout=10
+        )
     except (OSError, subprocess.SubprocessError):
         return ""
     answer = done.stdout.strip().lower()
     if done.returncode or answer == "yes":
         return ""
-    return (f"Linger is off for {user}: these jobs stop when the last session logs out and do not start at boot. "
-            f"Run once: loginctl enable-linger {user}   (add sudo if it asks)")
+    return (
+        f"Linger is off for {user}: these jobs stop when the last session logs out and do not start at boot. "
+        f"Run once: loginctl enable-linger {user}   (add sudo if it asks)"
+    )
 
 
 def is_installed(unit, unit_dir=None):
@@ -130,9 +157,19 @@ def main(argv=None):
         if note:
             print(note)
     else:
-        text = render(args.kind, python=args.python, config=args.config, root=args.root, log=args.log, path=args.path,
-                      env_slug=args.env, home=os.environ.get("HOME", ""), user=os.environ.get("USER", ""),
-                      env_file=args.env_file, port=args.port)
+        text = render(
+            args.kind,
+            python=args.python,
+            config=args.config,
+            root=args.root,
+            log=args.log,
+            path=args.path,
+            env_slug=args.env,
+            home=os.environ.get("HOME", ""),
+            user=os.environ.get("USER", ""),
+            env_file=args.env_file,
+            port=args.port,
+        )
         print(write(args.dir or user_unit_dir(), args.kind, text, args.env))
     return 0
 

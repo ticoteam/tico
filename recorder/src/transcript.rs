@@ -131,12 +131,13 @@ impl Heard {
             .flat_map(|(i, w)| tokens(&w.text).into_iter().map(move |t| (w.start_ms, t, i)))
             .collect();
         let form = |parts: &[&str]| {
-            if parts.len() == 2 {
-                if let (Ok(tens), Ok(units)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                    if (20..=90).contains(&tens) && tens % 10 == 0 && units < 10 {
-                        return (tens + units).to_string();
-                    }
-                }
+            if parts.len() == 2
+                && let (Ok(tens), Ok(units)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+                && (20..=90).contains(&tens)
+                && tens % 10 == 0
+                && units < 10
+            {
+                return (tens + units).to_string();
             }
             parts.concat()
         };
@@ -1287,7 +1288,7 @@ mod tests {
             text: "Ship this tomorrow".into(),
             words: me,
         };
-        assert!(live_turns(&record, &streamed, &[partial.clone()]).is_empty());
+        assert!(live_turns(&record, &streamed, std::slice::from_ref(&partial)).is_empty());
         streamed.insert(
             "them".into(),
             vec![
@@ -1505,7 +1506,10 @@ mod tests {
                 text: text.into(),
                 ..Default::default()
             };
-            assert_eq!(without_echo(&[word.clone()], &[word.clone()]), [word]);
+            assert_eq!(
+                without_echo(std::slice::from_ref(&word), std::slice::from_ref(&word)),
+                [word]
+            );
         }
     }
 

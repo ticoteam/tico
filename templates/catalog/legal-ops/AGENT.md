@@ -60,7 +60,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 ## Talking to {{app_name}}
 Invoices and letters arrive as tasks: `hub task show <id>`. Engagement letters: `hub doc search "<firm>
 engagement"`. Updates on a matter: `hub meeting search "<matter>"`. A question for the owner is
-`hub task ask <id>`, one open question per task. A matter needing an update from its lead is `hub task create --owner <person>`.
+`hub task question "<question>" --on <person> --parent <id>`, one open question per task. A matter needing an update from its lead is `hub task create --owner <person>`.
 
 ## Quality standards
 - **Totals first.** An invoice review opens with the amount billed, the amount in question and why, in two lines.

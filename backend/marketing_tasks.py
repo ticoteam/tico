@@ -11,17 +11,28 @@ that name; then the names it had before, Idea or Growth idea, are the fallbacks.
 gets them from its migration (backend/migrations, marketing step names), which renames only a step still under its old
 default name.
 """
+
 from . import hubdb as H
 
 TYPE_ID = "idea"
 TYPE_NAMES = ("Marketing", "Idea", "Growth idea")
 # The steps in board order: (key, step name, task status). A step's id is `idea-<key>`; the first two keep the ids an
 # earlier seed gave them.
-STEPS = (("idea", "On deck", "open"), ("building", "In development", "doing"), ("testing", "Live", "doing"),
-         ("scaling", "Working", "doing"), ("paused", "Paused", "waiting"), ("review", "Review", "review"),
-         ("ready", "Ready", "ready"), ("done", "Done", "done"), ("closed", "Closed", "closed"),
-         ("won", "Succeeded", "closed"), ("lost", "Failed", "closed"), ("inconclusive", "Inconclusive", "closed"),
-         ("dropped", "Dropped", "closed"))
+STEPS = (
+    ("idea", "On deck", "open"),
+    ("building", "In development", "doing"),
+    ("testing", "Live", "doing"),
+    ("scaling", "Working", "doing"),
+    ("paused", "Paused", "waiting"),
+    ("review", "Review", "review"),
+    ("ready", "Ready", "ready"),
+    ("done", "Done", "done"),
+    ("closed", "Closed", "closed"),
+    ("won", "Succeeded", "closed"),
+    ("lost", "Failed", "closed"),
+    ("inconclusive", "Inconclusive", "closed"),
+    ("dropped", "Dropped", "closed"),
+)
 STEP_IDS = {"idea": f"{TYPE_ID}-open", "testing": f"{TYPE_ID}-doing"}
 TERMINAL = ("won", "lost", "inconclusive", "dropped")
 
@@ -49,7 +60,9 @@ def ensure(c):
         if not name:
             return None
         now = H.now()
-        c.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES (?,?,?,?)", (TYPE_ID, name, now, now))
+        c.execute(
+            "INSERT INTO task_types (id, name, created_at, updated_at) VALUES (?,?,?,?)", (TYPE_ID, name, now, now)
+        )
     names = {r[0].lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (TYPE_ID,))}
     have = {r[0] for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (TYPE_ID,))}
     for position, (key, name, status) in enumerate(STEPS):
@@ -59,6 +72,8 @@ def ensure(c):
             # every start would otherwise do for every step.
             c.execute("UPDATE task_steps SET position=? WHERE id=? AND position IS NOT ?", (position, sid, position))
         elif name.lower() not in names:
-            c.execute("INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
-                      (sid, TYPE_ID, name, position, status))
+            c.execute(
+                "INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
+                (sid, TYPE_ID, name, position, status),
+            )
     return TYPE_ID

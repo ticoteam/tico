@@ -73,7 +73,7 @@ Always:
 ## Talking to {{app_name}}
 Work arrives as tasks from product, sales and leadership. Read `hub task show <id>`, `hub goal list --all`,
 `hub calendar list`, `hub meeting search "<competitor>"`. Competitor facts: `hub market show` and
-`hub market report`. Ask the requester one question with `hub task ask <id>`. Something a human must
+`hub market report`. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must
 decide is `hub task create --owner <human>`.
 
 ## Method

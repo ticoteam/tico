@@ -1,4 +1,5 @@
 """Recognize copies of HEAD's link targets without treating local edits as disposable."""
+
 import argparse
 from datetime import datetime, timezone
 import fcntl
@@ -13,8 +14,13 @@ import uuid
 
 
 def _git(root, run, *args):
-    done = run(["git", "-C", str(root), *args], capture_output=True, timeout=30,
-               stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    done = run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        timeout=30,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+    )
     if done.returncode:
         raise ValueError("Could not check checkout links")
     return done.stdout
@@ -54,21 +60,32 @@ def _inspect(root, run):
             link = os.fsdecode(git("cat-file", "blob", oid))
             target = posixpath.normpath(posixpath.join(posixpath.dirname(name), link))
             target_mode, target_kind, target_oid = tree.get(target, (None, None, None))
-            if (posixpath.isabs(link) or target in dirty or target_mode not in (b"100644", b"100755")
-                    or target_kind != b"blob"):
+            if (
+                posixpath.isabs(link)
+                or target in dirty
+                or target_mode not in (b"100644", b"100755")
+                or target_kind != b"blob"
+            ):
                 continue
             source = root / target
             # Neither a replaced target nor a linked ancestor may lend another file's bytes to this check.
-            if (path.parent.resolve() != path.parent or source.resolve() != source or not source.is_file()
-                    or bool(source.stat().st_mode & 0o111) != (target_mode == b"100755")):
+            if (
+                path.parent.resolve() != path.parent
+                or source.resolve() != source
+                or not source.is_file()
+                or bool(source.stat().st_mode & 0o111) != (target_mode == b"100755")
+            ):
                 continue
             content = git("cat-file", "blob", target_oid)
             if path.read_bytes() == content == source.read_bytes():
                 result["flattened"].append(name)
                 repairs.append((name, link, content))
         # Check the index separately too: a conflict, staged edit or staged mode change blocks every repair.
-        result["only_flattened"] = (not staged and dirty == set(result["flattened"])
-                                    and not git("diff", "--cached", "--name-only", "-z", "HEAD"))
+        result["only_flattened"] = (
+            not staged
+            and dirty == set(result["flattened"])
+            and not git("diff", "--cached", "--name-only", "-z", "HEAD")
+        )
     except (OSError, ValueError, subprocess.SubprocessError):
         result["only_flattened"] = False
     return result, repairs
@@ -109,8 +126,9 @@ def _backup_folder(root, run):
 def _prune_backups(current):
     # Keep this repair and the four newest older batches. Never prune the originals just validated.
     try:
-        older = sorted((p for p in current.parent.iterdir()
-                        if p != current and not p.is_symlink() and p.is_dir()), reverse=True)
+        older = sorted(
+            (p for p in current.parent.iterdir() if p != current and not p.is_symlink() and p.is_dir()), reverse=True
+        )
     except OSError:
         return
     for old in older[4:]:
@@ -137,8 +155,12 @@ def restore(root, run=subprocess.run):
             if _git(root, run, "diff", "--cached", "--name-only", "-z", "HEAD"):
                 raise ValueError("The index changed during link repair")
             for path, backup, link, content in saved:
-                if (backup.is_symlink() or backup.read_bytes() != content
-                        or not path.is_symlink() or os.readlink(path) != link):
+                if (
+                    backup.is_symlink()
+                    or backup.read_bytes() != content
+                    or not path.is_symlink()
+                    or os.readlink(path) != link
+                ):
                     raise ValueError("The file changed during link repair")
         except (OSError, ValueError, subprocess.SubprocessError):
             found["only_flattened"] = False
@@ -154,8 +176,11 @@ def restore(root, run=subprocess.run):
 
 
 def note(found):
-    return (f"restored {len(found['restored'])} flattened links; originals kept in {found['backup']}"
-            if found.get("restored") else "")
+    return (
+        f"restored {len(found['restored'])} flattened links; originals kept in {found['backup']}"
+        if found.get("restored")
+        else ""
+    )
 
 
 def main():
@@ -168,6 +193,7 @@ def main():
     if args.repair:
         from .release_update import lock_path
         from .regular_file import lock
+
         path = lock_path(args.root)
         if path is None:
             raise ValueError("Could not find the checkout update lock")

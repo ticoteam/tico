@@ -34,7 +34,17 @@ ROUTES = {
     "tasks": {("POST", INBOUND_PATH)},
     "update": {("GET", UPDATE_PATH), ("POST", UPDATE_PATH), ("POST", UPDATE_PATH + "/check")},
 }
-FIELDS = ("id", "label", "scope", "created_at", "created_by", "last_used_at", "revoked_at", "revoked_by", "made_with_token")
+FIELDS = (
+    "id",
+    "label",
+    "scope",
+    "created_at",
+    "created_by",
+    "last_used_at",
+    "revoked_at",
+    "revoked_by",
+    "made_with_token",
+)
 
 
 def allowed(scope, method, path):
@@ -64,9 +74,14 @@ def _admin(auth, who):
 def listing(c, auth, who):
     """Every service key, newest first, with the label of the token it ends with; never the secret or its hash."""
     _admin(auth, who)
-    return [dict(row) for row in c.execute("SELECT " + ",".join("k." + f for f in FIELDS) + ",t.label AS token_label "
-                                           "FROM service_keys k LEFT JOIN human_tokens t ON t.id=k.made_with_token "
-                                           "ORDER BY k.created_at DESC")]
+    return [
+        dict(row)
+        for row in c.execute(
+            "SELECT " + ",".join("k." + f for f in FIELDS) + ",t.label AS token_label "
+            "FROM service_keys k LEFT JOIN human_tokens t ON t.id=k.made_with_token "
+            "ORDER BY k.created_at DESC"
+        )
+    ]
 
 
 def create(c, auth, who, body):
@@ -76,10 +91,25 @@ def create(c, auth, who, body):
         raise Problem("forbidden", "Only the owner makes an update key: only the owner updates this install", 403)
     key, key_id, now = PREFIX + secrets.token_urlsafe(30), H.new_id(), H.now()
     made_with = who.token_id or None
-    c.execute("INSERT INTO service_keys(id,label,key_hash,created_at,created_by,scope,made_with_token) VALUES(?,?,?,?,?,?,?)",
-              (key_id, body.label, digest(key), now, who.actor, body.scope, made_with))
-    H.event(c, who.actor, "service_key.create", key_id, {"label": body.label, "scope": body.scope, "made_with_token": made_with})
-    return {"id": key_id, "key": key, "label": body.label, "scope": body.scope, "created_at": now, "made_with_token": made_with}
+    c.execute(
+        "INSERT INTO service_keys(id,label,key_hash,created_at,created_by,scope,made_with_token) VALUES(?,?,?,?,?,?,?)",
+        (key_id, body.label, digest(key), now, who.actor, body.scope, made_with),
+    )
+    H.event(
+        c,
+        who.actor,
+        "service_key.create",
+        key_id,
+        {"label": body.label, "scope": body.scope, "made_with_token": made_with},
+    )
+    return {
+        "id": key_id,
+        "key": key,
+        "label": body.label,
+        "scope": body.scope,
+        "created_at": now,
+        "made_with_token": made_with,
+    }
 
 
 def revoke(c, auth, who, key_id):
@@ -101,11 +131,18 @@ def _owner(c, value):
     if value.startswith(("human:", "bot:")):
         actor = H.resolve_actor(c, value)
     else:
-        row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (value.lower(),)).fetchone() if "@" in value else None
+        row = (
+            c.execute("SELECT id FROM humans WHERE lower(email)=?", (value.lower(),)).fetchone()
+            if "@" in value
+            else None
+        )
         actor = H.human_actor(row["id"]) if row else None
     if not actor:
-        raise Problem("owner", value + " is not a person or a bot on the roster: send human:<id>, bot:<slug> or "
-                      "a person's email", 422)
+        raise Problem(
+            "owner",
+            value + " is not a person or a bot on the roster: send human:<id>, bot:<slug> or a person's email",
+            422,
+        )
     return actor
 
 
@@ -128,8 +165,9 @@ def upsert(c, auth, who, body):
     key_id, footer = H.actor_id(who.actor), "\n\n_Filed by " + who.token_label + " (service key)._"
     if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
         raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
-    pair = c.execute("SELECT task_id FROM service_key_tasks WHERE key_id=? AND external_key=?",
-                     (key_id, body.key)).fetchone()
+    pair = c.execute(
+        "SELECT task_id FROM service_key_tasks WHERE key_id=? AND external_key=?", (key_id, body.key)
+    ).fetchone()
     row = H.task(c, pair["task_id"]) if pair else None
     if row and H.task_private(c, row):
         raise Problem("forbidden", "This work is unavailable to a service key", 403)
@@ -141,20 +179,37 @@ def upsert(c, auth, who, body):
         owner = _owner(c, body.owner)
         type_id, step = _type_and_step(c, body, None)
         # The pair is what makes it one task, so two pieces of work may share a title and an owner.
-        row = H.task_create(c, H.KEEPER, body.title, body.body, owner, body.due, deduplicate=False,
-                            conversation_id=rooms.task_conversation_id(c, auth, owner, H.KEEPER),
-                            labels=body.labels or [], type=type_id, step=step)
+        row = H.task_create(
+            c,
+            H.KEEPER,
+            body.title,
+            body.body,
+            owner,
+            body.due,
+            deduplicate=False,
+            conversation_id=rooms.task_conversation_id(c, auth, owner, H.KEEPER),
+            labels=body.labels or [],
+            type=type_id,
+            step=step,
+        )
         # Rule 7 above read the other system's own words; the line naming it is Tico's.
         c.execute("UPDATE tasks SET body=? WHERE id=?", (body.body + footer, row["id"]))
-        c.execute("INSERT INTO service_key_tasks(key_id,external_key,task_id,created_at) VALUES(?,?,?,?)",
-                  (key_id, body.key, row["id"], H.now()))
+        c.execute(
+            "INSERT INTO service_key_tasks(key_id,external_key,task_id,created_at) VALUES(?,?,?,?)",
+            (key_id, body.key, row["id"], H.now()),
+        )
         for url in dict.fromkeys(body.links):
             H.task_link(c, H.KEEPER, row["id"], url)
         created = changed = True
-    elif row and not (body.close and row["status"] == "closed"):     # closed, and to stay closed: as it is
+    elif row and not (body.close and row["status"] == "closed"):  # closed, and to stay closed: as it is
         changed = _apply(c, body, row, footer)
-    H.event(c, who.actor, "service_key.use", key_id, {"key": body.key, "task": row["id"] if row else None,
-                                                       "created": created, "changed": changed})
+    H.event(
+        c,
+        who.actor,
+        "service_key.use",
+        key_id,
+        {"key": body.key, "task": row["id"] if row else None, "created": created, "changed": changed},
+    )
     # A caller may write its own work, but cannot retrieve changes or attachments from teammates.
     return {"task": {"id": row["id"]} if row else None, "created": created, "changed": changed}
 
@@ -163,15 +218,25 @@ def _apply(c, body, row, footer):
     """Write what differs between the task and the call, reopening or closing it; whether anything did.
     The title is the create's: a later call leaves it as it is."""
     type_id, step = _type_and_step(c, body, row)
-    current = {"owner": row["owner_id"], "body": row["body"], "labels": H.task_labels(row), "due": row["due_at"],
-               "type": row["type_id"], "step": row["step_id"]}
-    wanted = {"owner": _owner(c, body.owner) if body.owner else None,
-              "body": body.body + footer if body.body is not None else None,
-              "labels": H._labels(body.labels) if body.labels is not None else None,
-              "due": body.due, "type": type_id, "step": step}
+    current = {
+        "owner": row["owner_id"],
+        "body": row["body"],
+        "labels": H.task_labels(row),
+        "due": row["due_at"],
+        "type": row["type_id"],
+        "step": row["step_id"],
+    }
+    wanted = {
+        "owner": _owner(c, body.owner) if body.owner else None,
+        "body": body.body + footer if body.body is not None else None,
+        "labels": H._labels(body.labels) if body.labels is not None else None,
+        "due": body.due,
+        "type": type_id,
+        "step": step,
+    }
     fields = {name: value for name, value in wanted.items() if value is not None and value != current[name]}
     if row["status"] == "closed" and "step" not in fields:
-        fields["status"] = "open"               # no `close`: the work is open again over there
+        fields["status"] = "open"  # no `close`: the work is open again over there
     if fields:
         H.task_update(c, H.KEEPER, row["id"], mover=True, **fields)
     have = {link["url"] for link in H.task_links(c, row["id"])}
@@ -197,11 +262,13 @@ def install_service_keys(app, store, auth, mutate):
         who = request.state.identity
         _admin(auth, who)
         secret = []
+
         def work(c):
             made = create(c, auth, who, body)
             # Idempotency stores only the acknowledgment; the one-time secret stays in this response.
             secret.append(made.pop("key"))
             return made
+
         made = mutate(request, body, work)
         return {**made, "key": secret[0]} if secret else made
 

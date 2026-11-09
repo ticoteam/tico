@@ -96,22 +96,42 @@ def test_the_tool_list_files_a_bots_alias_under_its_page_with_each_bots_write_le
     configure(api)
     machine = runner(api)
     assign(api, machine, "ops")
-    tools = [{"service": "close", "identity": "Acme's Close account", "can": ["read"], "env": "CLOSE_API_KEY", "credential": "missing"},
-             {"service": "slack", "identity": "Acme workspace", "can": ["read", "post"], "env": "SLACK_TOKEN", "credential": "present"},
-             {"service": "aside", "can": ["read"], "credential": "not-declared"}]
+    tools = [
+        {
+            "service": "close",
+            "identity": "Acme's Close account",
+            "can": ["read"],
+            "env": "CLOSE_API_KEY",
+            "credential": "missing",
+        },
+        {
+            "service": "slack",
+            "identity": "Acme workspace",
+            "can": ["read", "post"],
+            "env": "SLACK_TOKEN",
+            "credential": "present",
+        },
+        {"service": "aside", "can": ["read"], "credential": "not-declared"},
+    ]
     assert report(api, machine, "ops", tools).status_code == 200
     rows = {row["service"]: row for row in get(api, "tools")["integrations"]}
     assert "close" not in rows
     close = rows["close-crm"]
     assert close["title"] == "Close CRM" and close["bots"] == ["ops"] and close["status"] == "problem"
     [entry] = close["connections"]
-    assert (entry["write"], entry["env"], entry["problem"]) == ("never", "CLOSE_API_KEY", "Credential missing on Test Mac")
+    assert (entry["write"], entry["env"], entry["problem"]) == (
+        "never",
+        "CLOSE_API_KEY",
+        "Credential missing on Test Mac",
+    )
     assert [(c["bot"], c["write"]) for c in rows["slack"]["connections"]] == [("ops", "allowed")]
     assert "problem" not in rows["slack"]["connections"][0]
     # Aside allows writes, but this bot's entry may only read.
     assert [c["write"] for c in rows["aside"]["connections"]] == ["never"]
     # The model a bot runs on is a tool it uses, not one it writes through.
-    model = next(row for row in rows.values() if any(c.get("identity", "").endswith("gpt-6-luna") for c in row["connections"]))
+    model = next(
+        row for row in rows.values() if any(c.get("identity", "").endswith("gpt-6-luna") for c in row["connections"])
+    )
     assert model["writes"] == "never" and {c["write"] for c in model["connections"]} == {"never"}
 
 

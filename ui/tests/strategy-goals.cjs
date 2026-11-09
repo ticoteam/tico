@@ -1,4 +1,4 @@
-// Strategy › Goals (ui/app/goals.js goalSheetOpen, ui/goals-kpis.js goalsRender) against the fake hub in
+// Strategy › Goals (ui/app/goals.ts goalSheetOpen, ui/goals-kpis.ts goalsRender) against the fake hub in
 // support/strategy-fake.cjs (the Acme example): no Strategy line on top; "+ Goal" in the head; tapping a goal opens it
 // on its own (title, owner, colour, metric, target, due, Remove), a sheet on a phone and a side panel on a computer;
 // tapping a line opens its goal, or a new one for its owner when they have none; "+" on every line (and a long press on

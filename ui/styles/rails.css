@@ -1,4 +1,4 @@
-/* ui/styles/rails.css — The dragged edges of the sidebar and the bot page's right rail (ui/app/rails.js).
+/* ui/styles/rails.css — The dragged edges of the sidebar and the bot page's right rail (ui/app/rails.ts).
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* An 8px strip over the rail's border; a line shows on hover, while dragging and on keyboard focus. */
 .rail-edge{position:fixed;top:0;bottom:0;left:calc(var(--rail-left) - 4px);width:8px;z-index:21;cursor:col-resize;touch-action:none;outline:none}
