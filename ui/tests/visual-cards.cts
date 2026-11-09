@@ -10,6 +10,8 @@ const {html, uiFile} = require('./support/page.cjs') as typeof import('./support
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs') as typeof import('./support/threads-fake.cjs');
 const fs: typeof import('node:fs') = require('node:fs');
+// Element.prototype.moveBefore is newer than the DOM lib: a file-local view of the Element constructor.
+declare const Element: typeof globalThis.Element & {prototype: {moveBefore?(node: Node, child: Node | null): void}};
 
 // Page globals and window or element expandos the evaluated code uses (ui/app). Declared here so the spec
 // type-checks; none of it is emitted.

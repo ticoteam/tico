@@ -11,7 +11,9 @@ const fs: typeof import('node:fs') = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
 const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
-interface PageWin { __mb: Element['moveBefore'] }
+// Element.prototype.moveBefore is newer than the DOM lib: a file-local view of the Element constructor.
+declare const Element: typeof globalThis.Element & {prototype: {moveBefore?(node: Node, child: Node | null): void}};
+interface PageWin { __mb: typeof Element.prototype.moveBefore }
 
 function wav(seconds: number): Buffer {
   const rate = 8000, n = rate * seconds, data = Buffer.alloc(n * 2);
