@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const context = vm.createContext({});
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/task-pipelines.js'), 'utf8'), context);
-const held = context.pipelineStageHeld;
+const held = context.pipelineStageHeld as (tasks: {id: string; step_id: string; status: string}[], step: {id: string; unseen?: number}) => number;
 assert.equal(typeof held, 'function', 'pipelineStageHeld is defined');
 
 const tasks = [
@@ -28,7 +28,7 @@ console.log('stage-caps-unit: ok');
 const listSource = ['task-list.js', 'task-list-bulk.js']
   .map(name => fs.readFileSync(path.join(__dirname, '../../build/ui/app', name), 'utf8')).join('\n');
 // One function's source from the built list, read up to its closing brace.
-function listFunction(name) {
+function listFunction(name: string) {
   const start = listSource.indexOf(`async function ${name}(`);
   assert.ok(start >= 0, `${name} is defined`);
   let depth = 0, end = listSource.indexOf('{', start);
@@ -38,12 +38,12 @@ function listFunction(name) {
   }
   return listSource.slice(start, end + 1);
 }
-const warned = [];
+const warned: [string, unknown, unknown][] = [];
 const card = {id: 'T1', version: 3, type_id: 'line'};
 const rowContext = vm.createContext({
   tasksById: () => new Map([['T1', card]]),
   post: async () => ({over_cap: true, task: card}),
-  taskOverCapWarn: (task, body, data) => warned.push([task.id, body.step, data?.over_cap]),
+  taskOverCapWarn: (task: {id: string}, body: {step: string}, data?: {over_cap?: boolean}) => warned.push([task.id, body.step, data?.over_cap]),
   taskDoneMotion: () => {}, taskRefusedSet: () => {}, v2Get: async () => null, tasksLoad: async () => {},
   TASKS_ST: null,
 });
@@ -54,13 +54,13 @@ rowContext.tasksRowStatusSave({}, 'T1', () => ({step: 'doing'})).then(() => {
 });
 
 // A hand-picked bulk move (tasksBulkApply) says it too: one line per stage over its cap, however many cards went.
-const bulkWarned = [];
+const bulkWarned: [string, unknown, unknown][] = [];
 const picked = [{id: 'T1', version: 1, type_id: 'line'}, {id: 'T2', version: 1, type_id: 'line'}];
 const bulkContext = vm.createContext({
   tasksSelectedTasks: () => picked, tasksCanSelect: () => true, tasksMenuClose: () => {}, tasksBulkBar: () => {},
   post: async () => ({over_cap: true}), v2Get: async () => null, pipelineTypeId: () => 'line', actorSlug: () => '',
   taskRequester: () => '', TASKS_ST: null,
-  taskOverCapWarn: (task, body, data) => bulkWarned.push([task.id, body.step, data?.over_cap]),
+  taskOverCapWarn: (task: {id: string}, body: {step: string}, data?: {over_cap?: boolean}) => bulkWarned.push([task.id, body.step, data?.over_cap]),
 });
 vm.runInContext(listFunction('tasksBulkApply'), bulkContext);
 bulkContext.tasksBulkApply({}, {done: 'moved to Doing'}, () => ({step: 'doing'})).then(() => {
@@ -69,13 +69,13 @@ bulkContext.tasksBulkApply({}, {done: 'moved to Doing'}, () => ({step: 'doing'})
 });
 
 // A Status move names no stage: each card's landing stage (the returned task's step_id) gets its own line.
-const statusWarned = [];
+const statusWarned: [string, unknown, unknown][] = [];
 const twoLines = [{id: 'A1', version: 1, type_id: 'one'}, {id: 'B1', version: 1, type_id: 'two'}];
 const statusContext = vm.createContext({
   tasksSelectedTasks: () => twoLines, tasksCanSelect: () => true, tasksMenuClose: () => {}, tasksBulkBar: () => {},
-  post: async url => ({over_cap: true, task: {step_id: url.includes('A1') ? 'doing-one' : 'doing-two'}}),
+  post: async (url: string) => ({over_cap: true, task: {step_id: url.includes('A1') ? 'doing-one' : 'doing-two'}}),
   v2Get: async () => null, pipelineTypeId: () => 'line', actorSlug: () => '', taskRequester: () => '', TASKS_ST: null,
-  taskOverCapWarn: (task, body, data) => statusWarned.push([task.id, body.step, data?.over_cap]),
+  taskOverCapWarn: (task: {id: string}, body: {step: string}, data?: {over_cap?: boolean}) => statusWarned.push([task.id, body.step, data?.over_cap]),
 });
 vm.runInContext(listFunction('tasksBulkApply'), statusContext);
 statusContext.tasksBulkApply({}, {done: 'moved'}, () => ({status: 'doing'})).then(() => {

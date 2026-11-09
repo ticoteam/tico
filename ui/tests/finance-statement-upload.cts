@@ -3,6 +3,12 @@
 // (the tie-out, the rows with New and Already in Tico, the warning) and Post sends statement_post with the preview's token;
 // Cancel closes the review without a write; a card account offers the same; the "Charges show positive" box previews the
 // file again read the other way and the post sends that choice; no sideways scroll on a phone.
+import type {Browser, Page} from 'playwright';
+// The request bodies this spec's fake hub reads and checks.
+interface Body {kind?: string; signs?: string; money_account_id?: string; payload?: {money_account_id: string; preview_token: string; file: string; signs: string}}
+type Write = [string, string, Body];
+// Page global the open-page wait reads (declared here: each spec is its own module).
+declare var S: {me?: unknown; emps?: unknown[]};
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -34,22 +40,22 @@ const REVIEW = {token: 'tok-1', expires_at: '2026-10-15T12:30:00.000000Z', money
     {id: '20261009001', date: '2026-10-09', description: 'HOME DEPOT #4410', amount: -31840, vendor: {id: '', name: 'Home Depot'}, attribution: null, status: 'new'},
   ]};
 
-async function open(browser, {viewport = DESKTOP, hash = '#/finance/sources'} = {}) {
+async function open(browser: Browser, {viewport = DESKTOP, hash = '#/finance/sources'}: {viewport?: {width: number; height: number}; hash?: string} = {}) {
   const me = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true};
   const config = {company_name: 'Acme Lights'};
-  const writes = [];
+  const writes: Write[] = [];
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
     if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
-    const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
+    const body = (method === 'GET' ? null : req.postDataJSON?.() ?? null) as Body;
     if (method !== 'GET') writes.push([method, p + url.search, body]);
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
@@ -80,20 +86,20 @@ async function open(browser, {viewport = DESKTOP, hash = '#/finance/sources'} = 
 }
 
 // Opens the row's group if it is shut, selects the row, and opens its Upload statement dialog from the rail.
-async function openUpload(page, row = 'bank:m-chase', group = 'banks') {
+async function openUpload(page: Page, row = 'bank:m-chase', group = 'banks') {
   if (!(await page.locator(`tr[data-fin-src="${row}"]`).count())) await page.locator(`[data-fin-group="${group}"]`).click();
   await page.locator(`tr[data-fin-src="${row}"] .fin-src-name`).click();
   await page.locator('[data-fin-statement]').click();
   await page.locator('dialog.fin-dlg input[type=file]').waitFor();
 }
 
-async function previewFile(page) {
+async function previewFile(page: Page) {
   await page.locator('dialog.fin-dlg input[type=file]').setInputFiles({name: 'chase-oct.ofx', mimeType: 'application/x-ofx', buffer: Buffer.from(FILE_TEXT)});
   await page.locator('dialog.fin-dlg [type=submit]').click();
   await page.locator('dialog.fin-dlg [data-fin-stmt-review]:not([hidden])').waitFor();
 }
 
-const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+const sideways = (page: Page) => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
 
 (async () => {
   const browser = await chromium.launch();
@@ -122,9 +128,9 @@ const sideways = page => page.evaluate(() => [document.documentElement, document
       await page.locator('dialog.fin-dlg').waitFor({state: 'detached'});
       const post = writes.find(w => w[1] === '/api/v2/finance/actions' && w[2]?.kind === 'statement_post');
       assert.ok(post, tag + ': statement_post sent');
-      assert.equal(post[2].payload.money_account_id, 'm-chase', tag + ': to the account');
-      assert.equal(post[2].payload.preview_token, 'tok-1', tag + ': with the preview token');
-      assert.equal(post[2].payload.file, Buffer.from(FILE_TEXT).toString('base64'), tag + ': with the file');
+      assert.equal(post![2].payload!.money_account_id, 'm-chase', tag + ': to the account');
+      assert.equal(post![2].payload!.preview_token, 'tok-1', tag + ': with the preview token');
+      assert.equal(post![2].payload!.file, Buffer.from(FILE_TEXT).toString('base64'), tag + ': with the file');
       assert.equal(writes.filter(w => w[1] === '/api/v2/finance/statements/preview').length, 1, tag + ': previewed once');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
@@ -157,7 +163,7 @@ const sideways = page => page.evaluate(() => [document.documentElement, document
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.locator('dialog.fin-dlg').waitFor({state: 'detached'});
       const post = writes.find(w => w[2]?.kind === 'statement_post');
-      assert.equal(post?.[2].payload.signs, 'flipped', 'card: the post sends the same signs');
+      assert.equal(post?.[2].payload!.signs, 'flipped', 'card: the post sends the same signs');
       assert.deepEqual(errors, [], 'card: no page errors');
       await page.close();
     }

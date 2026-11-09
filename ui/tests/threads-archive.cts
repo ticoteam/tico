@@ -7,6 +7,14 @@
 // a task's thread leaves Threads when its task finishes, a rename does not bring it back, a post after the finish does;
 // an open Catch up drops a card whose task finished; a 1:1 DM archived in another window leaves Catch up and its count.
 // Screenshots go to TICO_SCREENSHOT_DIR (default: a threads-archive folder in the OS temp directory).
+import type {Browser, Page, Route} from 'playwright';
+// Page globals the Threads page exposes to these checks (declared here: each spec is its own module).
+declare var THREADS: {gen: number; dms: Record<string, number>};
+declare function toast(message: string): void;
+// What the fixture serves for a thread: the fields these checks read and change.
+interface Me {member: boolean; following: boolean; notify: string; last_read_seq: number; unread: number; activity: boolean; can_post: boolean; can_manage: boolean; pinned: boolean}
+interface Thread {id: string; title: string; audience: string; root_id: string; path: string[]; parent_id: string | null; last_seq: number; last_unread_seq: number; last_message_at: string; me: Me; members: {actor: string; role?: string}[]; pinned_for_everyone: boolean; task_id?: string; hidden?: boolean; archived_at?: string | null; deleted?: boolean; deletable?: boolean; dm_with?: {actor: string; name: string}[]; dm_with_count?: number}
+type Threads = Record<string, Thread>;
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -15,12 +23,12 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const shots = process.env.TICO_SCREENSHOT_DIR || path.join(require('node:os').tmpdir(), 'threads-archive-shots');
-const at = min => new Date(Date.now() - min * 60000).toISOString();
-const me = (extra = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 2, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
-const thread = (id, title, extra = {}) => ({id, title, audience: 'members', root_id: id, path: [id], parent_id: null, last_seq: 4, last_unread_seq: 4,
+const at = (min: number) => new Date(Date.now() - min * 60000).toISOString();
+const me = (extra: Partial<Me> = {}): Me => ({member: true, following: true, notify: 'live', last_read_seq: 2, unread: 0, activity: false, can_post: true, can_manage: false, pinned: false, ...extra});
+const thread = (id: string, title: string, extra: Partial<Thread> = {}): Thread => ({id, title, audience: 'members', root_id: id, path: [id], parent_id: null, last_seq: 4, last_unread_seq: 4,
   last_message_at: at(5), me: me(), members: [{actor: 'human:ana'}, {actor: 'human:ben'}], pinned_for_everyone: false, ...extra});
 // Each page gets fresh copies: a PATCH changes the copy the page reads.
-const world = () => ({
+const world = (): Threads => ({
   't-plan': thread('t-plan', 'Launch plan', {me: me({can_manage: true, unread: 2, activity: true})}),
   't-read': thread('t-read', 'Team lunch', {me: me({can_manage: false})}),
 });
@@ -30,31 +38,31 @@ const liveWorld = () => ({...world(), 't-task': thread('t-task', 'Pricing', {tas
 const only = process.env.TICO_ONLY || '';
 // What the server sends for a thread: `hidden` stands for its task having finished, which takes it off the list and out of
 // Catch up, and its view says so (`task_hidden`, present only then).
-const view = t => {
+const view = (t: Thread) => {
   const {hidden, ...rest} = t;
   return hidden ? {...rest, task_hidden: true} : rest;
 };
 
 // `threads` is the world the mock serves. `send(...blocks)` answers the newest live stream the page holds, as the server
 // would (the page then reconnects, and the next send finds the new stream); `block(event, data)` makes one SSE block.
-async function open(browser, {viewport = {width: 390, height: 844}, phone = true, threads = world()} = {}) {
+async function open(browser: Browser, {viewport = {width: 390, height: 844}, phone = true, threads = world()}: {viewport?: {width: number; height: number}; phone?: boolean; threads?: Threads} = {}) {
   const page = await browser.newPage({viewport, isMobile: phone, hasTouch: phone, serviceWorkers: 'block', reducedMotion: 'reduce'});
-  const seen = {errors: [], patches: [], deletes: []}, streams = [];
+  const seen: {errors: string[]; patches: Record<string, unknown>[]; deletes: string[]} = {errors: [], patches: [], deletes: []}, streams: {url: URL; route: Route}[] = [];
   let seq = 0;
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
-  const visible = t => !t.archived_at && !t.hidden && !t.deleted;
+  const visible = (t: Thread) => !t.archived_at && !t.hidden && !t.deleted;
   const rail = () => Object.values(threads).filter(t => visible(t) && t.audience !== 'personal').map(view);
   const catchUp = () => Object.values(threads).filter(t => visible(t) && t.me.unread > 0);
-  const dms = () => Object.fromEntries(Object.values(threads).filter(t => visible(t) && t.audience === 'personal').map(t => [t.dm_with[0].actor, t.me.unread]));
+  const dms = () => Object.fromEntries(Object.values(threads).filter(t => visible(t) && t.audience === 'personal').map(t => [t.dm_with![0]!.actor, t.me.unread]));
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    const body = () => JSON.parse(req.postData() || '{}');
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const body = () => JSON.parse(req.postData() || '{}') as Record<string, unknown>;
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [],
@@ -68,9 +76,9 @@ async function open(browser, {viewport = {width: 390, height: 844}, phone = true
     if (p === '/api/v2/threads/browse') return json({threads: [], next_cursor: null});
     if (p === '/api/v2/threads/archived') return json({threads: Object.values(threads).filter(t => t.archived_at && !t.deleted).map(view), next_cursor: null});
     const m = p.match(/^\/api\/v2\/threads\/([^/]+)(?:\/([a-z-]+))?$/);
-    const t = m && threads[m[1]];
+    const t = m && threads[m[1]!];
     if (t) {
-      const what = m[2];
+      const what = m![2];
       if (what === 'timeline') return json({thread: view(t), breadcrumb: [{id: t.id, title: t.title}], next_cursor: null,
         messages: [{id: 'x1-' + t.id, seq: 1, thread_id: t.id, sender_id: 'human:ben', body: 'Morning.', created_at: at(10), depth: 0}]});
       if (what === 'members') return json({members: [{actor: 'human:ana', role: 'owner'}, {actor: 'human:ben'}], next_cursor: null});
@@ -89,30 +97,30 @@ async function open(browser, {viewport = {width: 390, height: 844}, phone = true
     }
     return json(unrouted(p));
   });
-  const send = async (...blocks) => {
+  const send = async (...blocks: string[]) => {
     const deadline = Date.now() + 8000;
     while (!streams.length) {
       if (Date.now() > deadline) throw new Error('no live stream from the page');
       await new Promise(r => setTimeout(r, 50));
     }
-    const stream = streams.pop();
+    const stream = streams.pop()!;
     for (const old of streams.splice(0)) await old.route.abort().catch(() => {});
     await stream.route.fulfill({contentType: 'text/event-stream', body: blocks.join('')});
   };
-  const block = (event, data) => `id: ${++seq}\nevent: ${event}\ndata: ${JSON.stringify({seq, ...data})}\n\n`;
+  const block = (event: string, data: Record<string, unknown>) => `id: ${++seq}\nevent: ${event}\ndata: ${JSON.stringify({seq, ...data})}\n\n`;
   return {page, seen, send, block, threads};
 }
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   fs.mkdirSync(shots, {recursive: true});
   await page.screenshot({path: path.join(shots, `${name}.png`)});
 }
-const until = async (check, what) => {
+const until = async (check: () => unknown, what: string) => {
   for (let i = 0; i < 80; i++) { if (await check()) return; await new Promise(r => setTimeout(r, 50)); }
   assert.fail('timed out: ' + what);
 };
-const noSideways = page => page.evaluate(() => document.documentElement.scrollWidth <= 390);
+const noSideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= 390);
 
-let browser = null;
+let browser: Browser = null!;
 (async () => {
   browser = await chromium.launch();
 
@@ -126,7 +134,7 @@ let browser = null;
     const archive = page.locator('[data-tr-arch="t-plan"]');
     assert.equal(await archive.getAttribute('aria-label'), 'Archive');
     assert.equal(await archive.evaluate(el => getComputedStyle(el).opacity), '1', 'the phone always shows the row action');
-    const size = await archive.boundingBox();
+    const size = (await archive.boundingBox())!;
     assert.ok(size.width >= 44 && size.height >= 44, `a 44px target: ${JSON.stringify(size)}`);
     assert.equal(await page.locator('[data-tr-arch="t-read"]').count(), 0, 'a thread the viewer does not manage has no Archive');
     assert.equal(await page.locator('[data-tr-catch] .tr-badge').textContent(), '1');
@@ -162,7 +170,7 @@ let browser = null;
     await page.getByText('Morning.').waitFor();
     const headArchive = page.locator('.thv-head [data-thv-archive]');
     assert.equal(await headArchive.getAttribute('aria-label'), 'Archive');
-    const size = await headArchive.boundingBox();
+    const size = (await headArchive.boundingBox())!;
     assert.ok(size.width >= 44 && size.height >= 44, `a 44px header target: ${JSON.stringify(size)}`);
     await shot(page, 'threads-archive-phone-thread');
 
@@ -199,7 +207,7 @@ let browser = null;
     await until(async () => (await opacity()) === '0', 'the row Archive hides when the pointer leaves');
     await row.focus();
     await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement?.dataset.trArch), 't-plan', 'Tab from the row reaches its Archive');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.trArch), 't-plan', 'Tab from the row reaches its Archive');
     await until(async () => (await opacity()) === '1', 'the row Archive shows on keyboard focus');
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -210,7 +218,7 @@ let browser = null;
   // Browse threads' Archived tab lists the archived thread; Unarchive brings it back to Threads.
   if (!only || only === 'browse-archived') {
     const threads = world();
-    threads['t-plan'].archived_at = at(0);
+    threads['t-plan']!.archived_at = at(0);
     const {page, seen} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false, threads});
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('#thread-rail [data-tr-browse]').click();
@@ -229,7 +237,7 @@ let browser = null;
   // DELETE, and the thread leaves Threads.
   if (!only || only === 'header-delete') {
     const threads = world();
-    threads['t-plan'].deletable = true;
+    threads['t-plan']!.deletable = true;
     const {page, seen} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false, threads});
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('Morning.').waitFor();
@@ -245,7 +253,7 @@ let browser = null;
     const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('.tr-row[data-thread="t-task"]').waitFor();
-    threads['t-task'].hidden = true;
+    threads['t-task']!.hidden = true;
     await send(block('threads', {kind: 'activity', thread_id: 't-task', root_id: 't-task', message_id: 'n1', unread: false}));
     await until(async () => (await page.locator('.tr-row[data-thread="t-task"]').count()) === 0, 'a finished task leaves Threads on the live stream');
     assert.deepEqual(seen.errors, []);
@@ -255,13 +263,13 @@ let browser = null;
   // A rename of a finished task's thread does not put its row back: the view it sends still says the task hides it.
   if (!only || only === 'live-rename') {
     const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
-    threads['t-task'].hidden = true;
+    threads['t-task']!.hidden = true;
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'the finished task is not listed');
-    threads['t-task'].title = 'Pricing (renamed)';
+    threads['t-task']!.title = 'Pricing (renamed)';
     const gen = await page.evaluate(() => THREADS.gen);
-    await send(block('threads', {kind: 'renamed', thread_id: 't-task', root_id: 't-task', thread: view(threads['t-task'])}));
+    await send(block('threads', {kind: 'renamed', thread_id: 't-task', root_id: 't-task', thread: view(threads['t-task']!)}));
     await page.waitForFunction(was => THREADS.gen > was, gen);
     assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'a rename does not bring a finished task back');
     assert.deepEqual(seen.errors, []);
@@ -272,12 +280,12 @@ let browser = null;
   // not listed is read, and the thread's view says whether it is on the list now.
   if (!only || only === 'live-revive') {
     const {page, seen, send, block, threads} = await open(browser, {threads: liveWorld()});
-    threads['t-task'].hidden = true;
+    threads['t-task']!.hidden = true;
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('.tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('.tr-row[data-thread="t-task"]').count(), 0, 'the finished task is not listed');
-    threads['t-task'].hidden = false;
-    threads['t-task'].me.unread = 1;
+    threads['t-task']!.hidden = false;
+    threads['t-task']!.me.unread = 1;
     await send(block('threads', {kind: 'activity', thread_id: 't-task', root_id: 't-task', message_id: 'm9', unread: true, unread_count: 1,
       counters: {last_seq: 5, last_unread_seq: 5}}));
     await until(async () => (await page.locator('.tr-row[data-thread="t-task"]').count()) === 1, 'a post after the finish brings its row back');
@@ -295,7 +303,7 @@ let browser = null;
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('[data-tr-catch]').click();
     await page.locator('.cu-card[data-thread="t-task"]').waitFor();
-    threads['t-task'].hidden = true;
+    threads['t-task']!.hidden = true;
     await send(block('needs', {version: 'v2'}));
     await until(async () => (await page.locator('.cu-card[data-thread="t-task"]').count()) === 0, 'an open Catch up drops a card whose task finished');
     await page.locator('.cu-empty').waitFor();
@@ -316,8 +324,8 @@ let browser = null;
     await page.locator('.cu-card[data-thread="t-dm"]').waitFor();
     assert.equal(await page.locator('#nav-threads .nav-badge').textContent(), '1');
 
-    threads['t-dm'].archived_at = at(0);
-    await send(block('threads', {kind: 'archived', thread_id: 't-dm', root_id: 't-dm', thread: view(threads['t-dm'])}));
+    threads['t-dm']!.archived_at = at(0);
+    await send(block('threads', {kind: 'archived', thread_id: 't-dm', root_id: 't-dm', thread: view(threads['t-dm']!)}));
     await until(async () => (await page.locator('.cu-card[data-thread="t-dm"]').count()) === 0, 'an archived DM leaves the open Catch up');
     await until(async () => page.locator('#nav-threads .nav-badge').isHidden(), 'the Catch up badge clears');
     await until(async () => (await page.locator('.tree-dm').count()) === 0, "the teammate's unread count clears");
