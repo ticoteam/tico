@@ -15,10 +15,9 @@ def deck(api, n=5):
         {
             'name': 'Development',
             'steps': [
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Build', 'status': 'open'},
                 {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         },
     )['type']
@@ -58,7 +57,7 @@ def finish(api, machine, attempt, task):
     post(
         api,
         'tasks/' + task['id'],
-        {'step': 'Done', 'version': get(api, 'tasks/' + task['id'])['task']['version']},
+        {'status': 'done', 'note': 'Finished.', 'version': get(api, 'tasks/' + task['id'])['task']['version']},
         attempt['token'],
     )
     post(
@@ -80,7 +79,7 @@ def test_three_start_and_finishing_one_starts_next_by_rank(api):
     set_cap(api, 3)
     attempts = [take(api, machine) for _ in range(3)]
     assert [a['task']['id'] for a in attempts] == [t['id'] for t in reversed(tasks[2:])]
-    assert all(get(api, 'tasks/' + t['id'])['task']['step']['name'] == 'In Progress' for t in tasks[2:])
+    assert all(get(api, 'tasks/' + t['id'])['task']['step']['name'] == 'Build' for t in tasks[2:])
     assert take(api, machine) is None
     assert get(api, 'bots/ops')['task_flow'] == {'going': 3, 'waiting': 2}
     finish(api, machine, attempts[0], tasks[4])
@@ -164,7 +163,7 @@ def test_setting_revision_permissions_and_private_counters(api):
 
 
 @pytest.mark.parametrize(
-    'step,kind', [('Review 1', 'review'), ('Post Release QA', 'release_qa'), ('Second opinion', 'review')]
+    'step,kind', [('Review 1', 'review'), ('Watch 24h', 'release_qa'), ('Second opinion', 'review')]
 )
 def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api, step, kind):
     machine = task_bot(api, lanes=True, capacity=10)
@@ -265,11 +264,11 @@ def test_an_automatic_start_refused_by_a_requirement_leaves_the_card_and_logs_wh
     with api.app.state.store.transaction() as c:
         stage = c.execute(
             "SELECT s.id, s.type_id FROM task_steps s JOIN tasks t ON t.type_id=s.type_id "
-            "WHERE t.id=? AND s.name='On Deck'",
+            "WHERE t.id=? AND s.name='Build'",
             (task['id'],),
         ).fetchone()
         now = H.now()
-        # On Deck has a rule that is not met (no due date), so leaving it is refused for the automatic start too.
+        # Build has a rule that is not met (no due date), so leaving it is refused for the automatic start too.
         c.execute(
             "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, "
             "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -277,7 +276,7 @@ def test_an_automatic_start_refused_by_a_requirement_leaves_the_card_and_logs_wh
         )
     set_cap(api, 1)
     take(api, machine)
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'On Deck'
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Build'
     with api.app.state.store.transaction() as c:
         logged = c.execute(
             "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='auto_start_refused'",

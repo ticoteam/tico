@@ -47,7 +47,7 @@ an open check names its reviewer even after a push. Health calls the ticket flow
 whether to merge, move on or fix changes. A held or finished ticket calls for a ticket status check, with no advice
 to merge or move on. Health checks merge readiness before advising fixes, including a step's explicit skip tag
 such as `skip-qa`. Without that skip, a QA failure still stands after re-entering QA and passing at the same head,
-including when the ticket is back at QA Fixes; only a new head clears it. A QA title filed at a recorded Build step
+including when the ticket is back at Build; only a new head clears it. A QA title filed at a recorded Build step
 cannot approve a later QA step. Completed human subtasks do not count as check verdicts.
 Health keeps private check owners and verdicts hidden. When it cannot see all check evidence, it asks for a
 review status check instead of recommending a merge or move on. These clocks start when the existing GitHub sync

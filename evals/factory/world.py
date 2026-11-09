@@ -698,14 +698,11 @@ class World:
         return found[0]["title"] if found else "?"
 
     def slots(self, slug):
-        """Tickets the builder is actively working: at one of the board's work steps."""
+        """Tickets the builder is actively working: at one of the board's work steps and started (status doing). A
+        ticket claimed but not started, or waiting at a work step, is not in work."""
         work = [s.name for s in self.board.steps if s.work]
         return sum(
-            1
-            for t in self.tickets()
-            if t["owner_id"] == "bot:" + slug
-            and t["step"] in work
-            and t["status"] not in ("done", "closed", "declined")
+            1 for t in self.tickets() if t["owner_id"] == "bot:" + slug and t["step"] in work and t["status"] == "doing"
         )
 
     def cleared(self, task_id):
@@ -802,7 +799,7 @@ class World:
         return self.prs[pr]["head"] if pr else None
 
     def step_entered_at(self, task_id, claimed_by=None):
-        """When the task last changed step before this moment: the claim that just happened starts an On Deck task
+        """When the task last changed step before this moment: the claim that just happened starts an Build task
         (as `keeper`), and that is no reason to call the notice stale. Nor is a hold clearing: the ticket goes back
         to its step because of the news the notice brings."""
         hold = next((st["id"] for st in self.dev["steps"] if st["name"] == self.board.hold_step), "")

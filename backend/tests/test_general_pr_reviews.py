@@ -28,7 +28,7 @@ def setup(api, reviews=1, qa=False, limit=20):
         if qa:
             steps.append(
                 {
-                    "name": "In QA",
+                    "name": "QA",
                     "status": "review",
                     "check_pool": ["rev-c"],
                     "flow": {"check": "qa", "on_pass": "merge"},

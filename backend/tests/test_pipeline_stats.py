@@ -20,9 +20,9 @@ def board(api):
             H.KEEPER,
             "Builds",
             [
-                {"name": "On Deck", "status": "open"},
+                {"name": "Build", "status": "open"},
                 {"name": "Review", "status": "review"},
-                {"name": "Done", "status": "done"},
+                {"name": "Closed", "status": "closed"},
             ],
             numbered=True,
         )
@@ -55,8 +55,8 @@ def step(report, name):
 
 def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_readers(api):
     typ, steps = board(api)
-    old = ticket(api, typ, steps["On Deck"])
-    snoozed = ticket(api, typ, steps["On Deck"], owner="cpo")
+    old = ticket(api, typ, steps["Build"])
+    snoozed = ticket(api, typ, steps["Build"], owner="cpo")
     private = ticket(api, typ, steps["Review"], private=True)
     reviewed = ticket(api, typ, steps["Review"])
     done = ticket(api, typ, steps["Review"])
@@ -76,7 +76,7 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
             (H.shift(H.now(), hours=-30), old["id"]),
         )
         set_holds(c, snoozed["id"], snoozed_until=H.shift(H.now(), days=3))
-        c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Done"], done["id"]))
+        c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Closed"], done["id"]))
         c.execute(
             "INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
             (
@@ -92,8 +92,8 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
 
     shown = stats(api)  # Ana requested every ticket, the private one included
     assert shown["type"]["name"] == "Builds" and shown["total"] == 4 and shown["truncated"] is False
-    assert [s["name"] for s in shown["steps"]] == ["On Deck", "Review"]  # Done is finished, never counted
-    deck, review = step(shown, "On Deck"), step(shown, "Review")
+    assert [s["name"] for s in shown["steps"]] == ["Build", "Review"]  # Closed is finished, never counted
+    deck, review = step(shown, "Build"), step(shown, "Review")
     assert deck["count"] == 2 and deck["snoozed"] == 1 and deck["oldest"] == old["number"]
     assert 29.9 <= deck["oldest_hours"] <= 30.1 and deck["median_hours"] < deck["oldest_hours"]
     assert deck["by_owner"] == {"bot:ops": 1, "bot:cpo": 1}
@@ -110,8 +110,8 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     assert private["number"] not in step(hers, "Review")["ids"] and step(hers, "Review")["prs"]["open"] == 1
 
     # Filters: snoozed hidden, by owner, and a type named outright.
-    assert step(stats(api, query="snoozed=hide"), "On Deck")["count"] == 1
-    assert step(stats(api, query="owner=cpo"), "On Deck")["count"] == 1 and stats(api, query="owner=cpo")["total"] == 1
+    assert step(stats(api, query="snoozed=hide"), "Build")["count"] == 1
+    assert step(stats(api, query="owner=cpo"), "Build")["count"] == 1 and stats(api, query="owner=cpo")["total"] == 1
     assert get(api, "pipeline")["type"]["name"] == "Engineering"  # the engineering board unless one is named
     assert get(api, "pipeline?snoozed=maybe", expected=422)["error"]["code"] == "snoozed"
     assert get(api, "pipeline?since=30d", expected=422)["error"]["code"] == "since"

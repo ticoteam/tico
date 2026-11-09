@@ -70,7 +70,7 @@ def backfill(c):
 
 
 def forget_retired_resumes(c):
-    """A held engineering ticket resumes at On Deck, not at the step it would go back to, when that step is only where
+    """A held engineering ticket resumes at Build, not at the step it would go back to, when that step is only where
     retiring its waiting step put it: a step read from its history, often weeks old, that nobody chose. Its last move
     tells: retiring wrote it, and a hold moves nothing. A ticket held in Blocked by an older version has that hold's
     move after it, so its step and the move before it tell. Writes only when a ticket needs it, as stamp_builds does."""
@@ -96,7 +96,7 @@ def forget_retired_resumes(c):
 
 def leave_retired_blocked(c):
     """Holds an earlier version parked in its own Blocked step go back to a working step: the one they left when it
-    still exists, else the step its last move into Blocked came from (the history), else On Deck (after
+    still exists, else the step its last move into Blocked came from (the history), else Build (after
     forget_retired_resumes, so a stale step is already gone). The hold itself stays, reason and clock unchanged; a
     person's manual hold stays put. The Blocked step is left empty for the team to delete.
     Writes only when a ticket is in that step, as stamp_builds does."""
@@ -107,7 +107,7 @@ def leave_retired_blocked(c):
         "JOIN task_types ty ON ty.id=t.type_id JOIN task_steps s ON s.id=t.step_id "
         "JOIN task_holds h ON h.task_id=t.id AND h.kind='blocked' AND h.released_at IS NULL "
         "WHERE ty.role='engineering' AND t.status='waiting' "
-        "AND coalesce(h.cause,'')<>'manual' AND s.name='Blocked' AND s.status='waiting'"
+        "AND coalesce(h.cause,'')<>'manual' AND s.name='Build' AND s.status='waiting'"
     ).fetchall()
     for task_id, type_id, saved, step_id in rows:
         steps = {
@@ -128,9 +128,7 @@ def leave_retired_blocked(c):
             None,
         )
         if not target:
-            target = next(
-                (sid for sid, (name, status) in steps.items() if name == 'On Deck' and status == 'open'), None
-            )
+            target = next((sid for sid, (name, status) in steps.items() if name == 'Build' and status == 'open'), None)
         if not target:
             continue
         c.execute(

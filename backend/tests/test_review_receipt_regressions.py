@@ -48,7 +48,7 @@ def _row_ticket(api, receipt=None, **fields):
             'title': f'Improve messages, fold row {n}',
             'body': 'Build messages.',
             'type': typ['id'],
-            'step': 'In Progress',
+            'step': 'Build',
             'links': [PR],
             **fields,
         },

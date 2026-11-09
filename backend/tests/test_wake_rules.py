@@ -68,7 +68,7 @@ def as_cause(actor):
     return Cause()
 
 
-def news(c, task, body="Step moved: In Progress -> Review 1", refs=None):
+def news(c, task, body="Step moved: Build -> Review 1", refs=None):
     """A keeper notice about `task` to its owner, the kind a step move or relation change writes."""
     return H._wake(c, task, task["owner_id"], body, refs=refs)
 
@@ -134,7 +134,7 @@ def test_the_blocker_finishing_wakes_the_parked_task_and_that_run_carries_what_w
     with api.app.state.store.transaction() as c:
         task, blocker = parked_task(c)
         with as_cause("bot:ops"):
-            first = news(c, task, "Step moved: On Deck -> In Progress")
+            first = news(c, task, "Step moved: Build -> Review 1")
             second = news(c, task, "Relation added: Docs for 2/9")
         assert jobs(c, "cpo") == 0
         H.task_update(c, "bot:ops", blocker["id"], status="done")
@@ -150,7 +150,7 @@ def test_the_blocker_finishing_wakes_the_parked_task_and_that_run_carries_what_w
     assert attempt["task"]["id"] == task["id"]
     assert [n["message"] for n in attempt["notes"] if n.get("message")] == [first["id"], second["id"]]
     held = [n for n in attempt["notes"] if n.get("message") == first["id"]][0]
-    assert "On Deck -> In Progress" in held["text"] and f"({task['id']})" in held["text"]
+    assert "Build -> Review 1" in held["text"] and f"({task['id']})" in held["text"]
     with api.app.state.store.read() as c:
         assert all(
             c.execute("SELECT read_at FROM messages WHERE id=?", (m,)).fetchone()[0]
@@ -267,7 +267,7 @@ def test_a_notice_the_bots_own_write_caused_waits_on_any_of_its_tasks(api):
         c.execute("DELETE FROM jobs")
         with as_cause("bot:cpo"):
             for body in (
-                "Step moved: In Progress -> Review 1",
+                "Step moved: Build -> Review 1",
                 "Status: review",
                 "Relation added: Launch copy",
                 "Checkpoint saved",
@@ -326,7 +326,7 @@ def test_t4_a_persons_message_comment_and_approval_always_wake_a_parked_bot(api)
         assert jobs(c, "cpo") == before + 1
         # A keeper notice of a person's own act on the task (they moved its step) wakes it too.
         with as_cause("human:ana"):
-            news(c, task, "Step moved by Ana: On Deck -> In Progress")
+            news(c, task, "Step moved by Ana: Build -> Review 1")
         assert jobs(c, "cpo") == before + 2
         assert skips(c) == []
 

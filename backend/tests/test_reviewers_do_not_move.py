@@ -2,6 +2,7 @@
 
 import pytest
 
+from backend import step_flow as F
 from backend.hubdb import Refused
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
@@ -13,15 +14,17 @@ def ticket_with_checks(c):
         H.KEEPER,
         "Dev tickets",
         [
-            {"name": "In Progress", "status": "doing"},
+            {"name": "Build", "status": "doing"},
             {"name": "Review 1", "status": "review"},
-            {"name": "QA Fixes", "status": "doing"},
-            {"name": "Done", "status": "done"},
+            {"name": "QA", "status": "review"},
+            {"name": "Closed", "status": "done"},
         ],
         bots="work",
     )
+    # The Engineering board has no QA step: this board gives its own QA step the QA check's flow.
+    F.apply(c, typ["id"], {"QA": {"check": "qa", "on_pass": "merge", "on_fail": "Build", "timeout_hours": 2}})
     ticket = H.task_create(
-        c, "human:ana", "Improve messages", "Build.", "bot:cpo", type=typ["id"], step="In Progress", lint=False
+        c, "human:ana", "Improve messages", "Build.", "bot:cpo", type=typ["id"], step="Build", lint=False
     )
     review = H.task_create(
         c, "bot:cpo", "Look over messages", "Review.", "bot:finance", parent_id=ticket["id"], lint=False
@@ -57,8 +60,8 @@ def test_a_reviewer_or_security_cannot_move_the_ticket_and_is_told_to_give_a_ver
 def test_qa_the_builder_and_people_still_move_the_ticket(api):
     with api.app.state.store.transaction() as c:
         ticket, _, _, _ = ticket_with_checks(c)
-        H.task_update(c, "bot:ops", ticket["id"], step="QA Fixes")
-        H.task_update(c, "bot:cpo", ticket["id"], step="In Progress")
+        H.task_update(c, "bot:ops", ticket["id"], step="QA")
+        H.task_update(c, "bot:cpo", ticket["id"], step="Build")
         H.task_update(c, "human:ana", ticket["id"], step="Review 1")
         assert H.task(c, ticket["id"])["step_id"]
 
@@ -67,7 +70,5 @@ def test_a_reviewer_of_one_ticket_moves_an_unrelated_ticket_it_may_work_on(api):
     with api.app.state.store.transaction() as c:
         ticket_with_checks(c)
         typ = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()[0]
-        other = H.task_create(
-            c, "human:ana", "Other work", "Build.", "bot:cpo", type=typ, step="In Progress", lint=False
-        )
+        other = H.task_create(c, "human:ana", "Other work", "Build.", "bot:cpo", type=typ, step="Build", lint=False)
         H.task_update(c, "bot:finance", other["id"], step="Review 1")

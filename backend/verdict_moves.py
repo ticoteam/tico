@@ -183,7 +183,9 @@ def move(c, row, target, why, *, sources=()):
     c.execute("SAVEPOINT verdict_move")
     try:
         # The owner hears of the move on the hand-off that caused it, not again from a step rule.
-        H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],), strict=False)
+        H.task_update(
+            c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],), handoff=True, strict=False
+        )
         H._task_event(
             c,
             row["id"],
@@ -876,7 +878,7 @@ def skip(c, row):
     step = row and F.step(c, row.get("step_id"))
     if not step or not F.skip_target(c, row, step):
         return None
-    tag = F.of(step)["skip_tag"]
+    tag = F.skipped_by(row, step)
     H._task_event(c, row["id"], H.KEEPER, "step_skipped", None, step["name"], f"tagged {tag}")
     out = _passed(c, row, step, f"{step['name']} skipped: the ticket is tagged {tag}")
     if out.get("handoff"):

@@ -28,7 +28,7 @@ interface SettingsReleaseNowAnswer { sent?: boolean; tickets?: number; reason?: 
 let RELEASE_VIEW: SettingsReleaseSchedule | null = null, RELEASE_AT = 0;
 // The last answer under the card (Saved, or what Release now did) survives the repaint the fresh schedule causes.
 let RELEASE_NOTE = {text: '', failed: false};
-const RELEASE_REASONS: Record<string, string> = {nothing_pending: 'Nothing at Pending Release', already_open: 'Woke the open release task', no_release_manager: 'No Release Manager'};
+const RELEASE_REASONS: Record<string, string> = {nothing_pending: 'Nothing at Release', already_open: 'Woke the open release task', no_release_manager: 'No Release Manager'};
 async function releaseScheduleLoad(force?: boolean): Promise<SettingsReleaseSchedule> {
   if (!force && RELEASE_VIEW && Date.now() - RELEASE_AT < 60000) return RELEASE_VIEW;
   RELEASE_AT = Date.now();
@@ -50,9 +50,9 @@ function releaseBotPick(name: string, chosen: string | null | undefined, found: 
 }
 function releaseNowButtonHTML(v: SettingsReleaseSchedule | null | undefined, cls = 'ghost'): string {
   if (!v?.can_release) return '';
-  return `<button type="button" class="${cls}" data-release-now${v.pending ? '' : ' disabled title="Nothing at Pending Release"'}>Release now</button>`;
+  return `<button type="button" class="${cls}" data-release-now${v.pending ? '' : ' disabled title="Nothing at Release"'}>Release now</button>`;
 }
-// With a note the server asks even when nothing is at Pending Release (work merged without a Dev ticket), so the
+// With a note the server asks even when nothing is at Release (work merged without a Dev ticket), so the
 // card's field lights the button; the board's button has no field and stays off while nothing waits.
 function releaseNoteHTML(v: SettingsReleaseSchedule): string {
   return v.can_release ? '<input type="text" data-release-note maxlength="1000" placeholder="Note" aria-label="Release note">' : '';
@@ -144,7 +144,7 @@ async function renderReleaseCard(): Promise<void> {
   if (Array.isArray(RELEASE_VIEW?.times)) releaseCardPaint();
 }
 
-// The board's Pending Release column carries Release now for those who may ask (tasks.js draws the slot).
+// The board's Release column carries Release now for those who may ask (tasks.js draws the slot).
 function boardReleaseSlots(): void {
   const slots = document.querySelectorAll<HTMLElement>('[data-release-slot]');
   if (!slots.length) return;

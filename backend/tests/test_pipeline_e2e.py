@@ -42,7 +42,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 # The booted stage names (the preset's own names are overridden by the seed that a booted hub already has).
 STAGES = {
     "Product": ["On ice", "Ideas", "Specifying", "Review", "In development", "Validate", "Done", "Declined"],
-    "Engineering": ["Todo", "Doing", "In review", "Ready to ship", "Done"],
+    "Engineering": ["Build", "Review 1", "Review 2", "Merge queue", "Release", "Watch 24h", "Closed"],
     "Marketing": ["On deck", "In development", "Live", "Working", "Paused", "Review", "Ready", "Done", "Closed"],
     "Sales": ["Lead", "Talking", "Proposal", "Closing", "Won", "Lost"],
     "Success": ["Onboarding", "Active", "Referral asked", "Referred", "Closed"],
@@ -79,13 +79,16 @@ class Company:
         assert found is not None, f"{pipeline} has no stage {name!r}"
         return found[0]
 
-    def ticket(self, pipeline, stage, title="A ticket"):
+    def ticket(self, pipeline, stage, title="A ticket", status=None):
         """A ticket at `stage`. The app makes a ticket at its pipeline's first stage and then moves it, so a Product ticket
-        past Specifying is made at Ideas, moved to Specifying and given its Spec page (`spec`) before it moves on."""
+        past Specifying is made at Ideas, moved to Specifying and given its Spec page (`spec`) before it moves on. `status`
+        sets the ticket's status once it is there (a started Build card is doing; a queued one is open)."""
         past_spec = pipeline == "Product" and stage not in ("Ideas", "Specifying")
         row = H.task_create(
             self.c, ANA, title, "", BUILDER, type=self.type[pipeline], step=None if past_spec else stage, lint=False
         )
+        if status:
+            self.c.execute("UPDATE tasks SET status=? WHERE id=?", (status, row["id"]))
         self.c.commit()
         if past_spec:
             self.move(row["id"], "Specifying", actor=ANA)
@@ -317,11 +320,11 @@ def co(hub):
 # ----------------------------------------------------------------------------- the company
 def test_a_pipeline_with_no_requirements_moves_freely(co):
     """The off switch: no stage has a requirement, so a ticket walks its pipeline and no card carries a dot."""
-    task = co.ticket("Engineering", "Todo")
-    co.move(task, "Doing", actor=ANA)
-    co.move(task, "In review", actor=ANA)
-    co.move(task, "Ready to ship", actor=ANA)  # a person sets ready to ship; a bot may not (the merge sets it)
-    assert co.where(task) == ("Engineering", "Ready to ship")
+    task = co.ticket("Engineering", "Build")
+    co.move(task, "Review 1", actor=ANA)
+    co.move(task, "Review 2", actor=ANA)
+    co.move(task, "Release", actor=ANA)  # a person moves it to Release; a bot may not (the merge sets it)
+    assert co.where(task) == ("Engineering", "Release")
     assert pipeline_engine.dots_many(co.c, [H.task(co.c, task)]) == {}
 
 
@@ -438,7 +441,7 @@ def test_an_approved_spec_files_one_engineering_subtask_with_its_spec_and_moves_
     approve_spec(co, card)
     assert co.where(card) == ("Product", "In development")
     (d41,) = subtasks(co, card)
-    assert co.where(d41) == ("Engineering", "Todo")
+    assert co.where(d41) == ("Engineering", "Build")
     prefix = co.c.execute("SELECT prefix FROM task_types WHERE id = ?", (co.type["Engineering"],)).fetchone()[0]
     assert prefix == "D"
     assert H.task(co.c, d41)["requester_id"] == BUILDER
@@ -456,7 +459,7 @@ def test_the_subtask_tree_names_each_ticket_as_its_pipeline_does(co):
     co.c.execute("UPDATE tasks SET number = 41 WHERE id = ?", (d41,))  # a fresh hub numbers it D2; the plan says D41
     co.c.commit()
     (node,) = H.task_tree(co.c, card)
-    assert (node["label"], node["step"]) == ("D41", "Todo")
+    assert (node["label"], node["step"]) == ("D41", "Build")
     assert TR.parent_of(co.c, d41) == card
 
 
@@ -485,14 +488,13 @@ def test_the_full_loop_validates_and_is_done_when_both_subtasks_ship(co, monkeyp
         "",
         BUILDER,
         type=co.type["Engineering"],
-        step=co.stage("Engineering", "Todo"),
+        step=co.stage("Engineering", "Build"),
         parent_id=card,
         lint=False,
     )["id"]
     co.c.commit()
     assert subtasks(co, card) == [d41, d42]
 
-    co.move(d41, "Doing", actor=ANA)
     co.set_status(d41, "done")
     assert co.where(card) == ("Product", "In development")  # d42 is still open
     assert co.dots(card)["Engineering shipped"]["state"] == "waiting"
@@ -538,7 +540,6 @@ def test_not_validated_files_a_follow_up_and_returns_the_card_to_development(co)
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
     co.set_status(d41, "done")
     assert co.where(card) == ("Product", "Validate")
     checked = co.requirement("Product", "Validate", "Validated")
@@ -553,13 +554,12 @@ def test_not_validated_files_a_follow_up_and_returns_the_card_to_development(co)
     assert result["verdict"] == "failed" and result["moved_back_to"] == "In development"
     assert co.where(card) == ("Product", "In development")
     d43 = subtasks(co, card)[-1]
-    assert d43 != d41 and co.where(d43) == ("Engineering", "Todo")
+    assert d43 != d41 and co.where(d43) == ("Engineering", "Build")
     assert H.task(co.c, d43)["body"].startswith("Follow-up: Load time stayed over 4 s. ")
     assert co.count("pipeline_handoffs", "source_task_id = ? AND target_task_id = ?", card, d43) == 1
     assert co.count("stage_decisions", "task_id = ? AND verdict = 'failed'", card) == 1
     assert co.dots(card)["Engineering shipped"]["state"] == "waiting"  # D43 is open: not met yet
 
-    co.move(d43, "Doing", actor=ANA)
     co.set_status(d43, "done")
     assert co.where(card) == ("Product", "Validate")
 
@@ -577,12 +577,11 @@ def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_o
         "",
         BUILDER,
         type=co.type["Engineering"],
-        step=co.stage("Engineering", "Todo"),
+        step=co.stage("Engineering", "Build"),
         parent_id=card,
         lint=False,
     )["id"]
     co.c.commit()
-    co.move(d41, "Doing", actor=ANA)
     co.set_status(d41, "done")
     co.close(card, actor=ANA)
     assert H.task(co.c, card)["status"] == "closed"
@@ -592,7 +591,7 @@ def test_closing_a_product_card_closes_its_open_subtasks_and_keeps_the_shipped_o
 
 
 def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
-    """Finding R5: a subtask closed without finishing is cancelled, not shipped. A Close lands it in Engineering's Done
+    """Finding R5: a subtask closed without finishing is cancelled, not shipped. A Close lands it in Engineering's Closed
     column (status closed), and that must not meet "Engineering shipped" or move the card to Validate. A decline is
     the same: with nothing shipped the card does not pass."""
     card = review_card(co)
@@ -600,7 +599,7 @@ def test_subtasks_all_closed_with_none_shipped_does_not_pass(co):
     (d41,) = subtasks(co, card)
     co.close(d41, actor=ANA)
     assert H.task(co.c, d41)["status"] == "closed"
-    assert co.where(d41) == ("Engineering", "Done")
+    assert co.where(d41) == ("Engineering", "Closed")
     assert co.where(card) == ("Product", "In development")
     assert co.dots(card)["Engineering shipped"]["state"] == "failed"
     assert co.advance(card, actor=ANA)["moved"] is False
@@ -619,18 +618,18 @@ def test_a_subtask_starting_work_does_not_move_its_product_card(co):
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
+    co.set_status(d41, "doing", actor=ANA)  # starting work is a status write: the card does not move on
     assert co.where(card) == ("Product", "In development")
 
 
 def test_an_engineering_ticket_with_no_product_parent_ships_as_it_does_today(co):
     products = co.count("tasks", "type_id = ?", co.type["Product"])
-    ticket = co.ticket("Engineering", "Todo", "Hotfix login")
-    for stage in ("Doing", "In review", "Ready to ship"):
+    ticket = co.ticket("Engineering", "Build", "Hotfix login")
+    for stage in ("Review 1", "Release"):
         co.move(ticket, stage, actor=ANA)
     co.set_status(ticket, "done")
-    co.move(ticket, "Done", actor=ANA)
-    assert co.where(ticket) == ("Engineering", "Done")
+    co.move(ticket, "Closed", actor=ANA)
+    assert co.where(ticket) == ("Engineering", "Closed")
     assert co.count("tasks", "type_id = ?", co.type["Product"]) == products
     assert co.count("pipeline_handoffs", "source_task_id = ?", ticket) == 0
     assert H.TR.parent_of(co.c, ticket) is None
@@ -655,15 +654,15 @@ def test_setup_moves_a_card_out_of_the_old_approved_stage_into_in_development(hu
 
 
 def test_a_shipped_ticket_goes_back_to_product_through_its_move_link(co):
-    """Engineering's Ready to ship moves a ticket back into Product's first stage through a move link. The evidence on
-    Doing (a stage the ticket passed) must be met first, and the handoff is recorded (the flow map counts it)."""
-    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
-    co.link("Engineering", "Ready to ship", "Product")
-    task = co.ticket("Engineering", "Doing", "Dark mode")
+    """Engineering's Release moves a ticket back into Product's first stage through a move link. The evidence on
+    Build (a stage the ticket passed) must be met first, and the handoff is recorded (the flow map counts it)."""
+    shots = co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")
+    co.link("Engineering", "Release", "Product")
+    task = co.ticket("Engineering", "Build", "Dark mode")
     co.attach(task, shots)
     co.decide(task, shots, judge="llm", actor=PM)
-    co.move(task, "In review", actor=ANA)
-    co.move(task, "Ready to ship", actor=ANA)
+    co.move(task, "Review 1", actor=ANA)
+    co.move(task, "Release", actor=ANA)
     result = co.advance(task, actor=ANA)
     assert result["moved"] is True
     assert co.where(task) == ("Product", "Ideas")
@@ -683,37 +682,37 @@ def test_a_marketing_lead_is_handed_to_sales_when_approved(co):
 
 # ----------------------------------------------------------------------------- evidence
 def test_missing_evidence_blocks_the_move(co):
-    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
-    task = co.ticket("Engineering", "Doing")
-    assert co.refused(task, "In review")
+    shots = co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")
+    task = co.ticket("Engineering", "Build")
+    assert co.refused(task, "Review 1")
     assert co.dots(task)["Screenshots"]["state"] == "none"
     co.attach(task, shots)
     co.decide(task, shots, judge="llm", actor=PM)
-    assert not co.refused(task, "In review")
+    assert not co.refused(task, "Review 1")
 
 
 def test_evidence_goes_out_of_date_after_a_push(co):
-    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
-    task = co.ticket("Engineering", "Doing")
+    shots = co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")
+    task = co.ticket("Engineering", "Build")
     co.attach(task, shots)
     co.decide(task, shots, judge="llm", actor=PM)
     assert co.dots(task)["Screenshots"]["state"] == "met"
     co.push(task)
     assert co.dots(task)["Screenshots"]["state"] == "out_of_date"
-    assert co.refused(task, "In review")
+    assert co.refused(task, "Review 1")
 
 
 # ----------------------------------------------------------------------------- judges
 def test_an_unsure_judge_goes_to_a_person_and_never_passes(co):
     shots = co.require(
         "Engineering",
-        "Doing",
+        "Build",
         "Screenshots",
         reviewed_by="bot_then_person",
         reviewer_id=ANA,
         rubric="The screenshot shows the feature working",
     )
-    task = co.ticket("Engineering", "Doing")
+    task = co.ticket("Engineering", "Build")
     co.attach(task, shots)
 
     def unsure(model, state, questions, label):
@@ -733,10 +732,10 @@ def test_an_unsure_judge_goes_to_a_person_and_never_passes(co):
 def test_a_person_who_is_away_hands_the_review_to_the_backup(co):
     """The reviewer sits on it past Warn after: the manager asks the backup, who then sees it in the queue."""
     shots = co.require(
-        "Engineering", "In review", "Screenshots", reviewed_by="person", reviewer_id=ANA, backup_reviewer_id=BEN
+        "Engineering", "Review 1", "Screenshots", reviewed_by="person", reviewer_id=ANA, backup_reviewer_id=BEN
     )
-    co.warn_after("Engineering", "In review", 60)
-    task = co.ticket("Engineering", "In review")
+    co.warn_after("Engineering", "Review 1", 60)
+    task = co.ticket("Engineering", "Review 1")
     co.attach(task, shots)
     co.age_visit(task, 120)
     assert task not in [i["task_id"] for i in pipeline_review.queue_for(co.c, BEN)]
@@ -749,9 +748,9 @@ def test_a_person_who_is_away_hands_the_review_to_the_backup(co):
 def test_late_card_is_asked_once_and_the_factory_manager_sees_the_bottleneck(co):
     """Past Warn after the Pipeline Manager asks once per visit (two passes, one ask); the Factory Manager reads the stage
     with the most Late cards across the factory as its bottleneck."""
-    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
-    co.warn_after("Engineering", "Doing", 60)
-    tasks = [co.ticket("Engineering", "Doing", f"Late {n}") for n in range(3)]
+    shots = co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")
+    co.warn_after("Engineering", "Build", 60)
+    tasks = [co.ticket("Engineering", "Build", f"Late {n}", status="doing") for n in range(3)]
     for task in tasks:
         co.age_visit(task, 180)
     pipeline_manager.tick(co.store, NOW)
@@ -764,7 +763,7 @@ def test_late_card_is_asked_once_and_the_factory_manager_sees_the_bottleneck(co)
     late = [item["task_id"] for item in pipeline_manager.rail(co.c, co.type["Engineering"], NOW)["late"]]
     assert sorted(late) == sorted(tasks)
     bottleneck = factory_manager.factory_rail(co.c, co.factory["Product development"], NOW)["bottleneck"]
-    assert bottleneck["stage_id"] == co.stage("Engineering", "Doing")
+    assert bottleneck["stage_id"] == co.stage("Engineering", "Build")
 
 
 def test_a_pipeline_manager_that_stops_opens_one_botops_task(co):
@@ -790,9 +789,9 @@ def test_a_pipeline_manager_that_stops_opens_one_botops_task(co):
 
 
 def test_a_bot_that_never_answers_makes_the_card_late_not_silent(co):
-    co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
-    co.warn_after("Engineering", "Doing", 45)
-    task = co.ticket("Engineering", "Doing", "Stuck runner")
+    co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")
+    co.warn_after("Engineering", "Build", 45)
+    task = co.ticket("Engineering", "Build", "Stuck runner", status="doing")
     co.age_visit(task, 300)
     pipeline_manager.tick(co.store, NOW)
     rail = pipeline_manager.rail(co.c, co.type["Engineering"], NOW)
@@ -801,6 +800,9 @@ def test_a_bot_that_never_answers_makes_the_card_late_not_silent(co):
 
 
 # ----------------------------------------------------------------------------- merge queue
+HEAD40 = "abc123" + "0" * 34  # a full 40-character head: the review gate reads the head as a sha
+
+
 def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(co):
     """The real path: the queue's webhooks mark the removal for checking, the maintenance pass reads the pull request on
     GitHub, and a removal that was not a merge ejects the card a stage back with the reason."""
@@ -808,11 +810,11 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
 
     from backend import github as G
 
-    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")  # the pipeline has requirements
-    task = co.ticket("Engineering", "Doing", "Merge me")
+    shots = co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")  # the pipeline has requirements
+    task = co.ticket("Engineering", "Build", "Merge me")
     co.attach(task, shots)
     co.decide(task, shots, judge="llm", actor=PM)
-    co.move(task, "In review", actor=ANA)
+    co.move(task, "Review 2", actor=ANA)
     url = "https://github.com/acme/app/pull/7"
     co.insert("repositories", id="repo-acme-app", full_name="acme/app", enabled=1, reachable=1)
     co.insert(
@@ -826,14 +828,14 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
         state="open",
         added_by=BUILDER,
         created_at=stamp(),
-        detail=json.dumps({"head_sha": "abc123"}),
+        detail=json.dumps({"head_sha": HEAD40}),
     )
     co.c.commit()
-    pr = {"html_url": url, "number": 7, "state": "open", "merged": False, "head": {"sha": "abc123"}}
+    pr = {"html_url": url, "number": 7, "state": "open", "merged": False, "head": {"sha": HEAD40}}
     G.pull_request(co.c, {"action": "enqueued", "pull_request": pr})
     G.pull_request(co.c, {"action": "dequeued", "reason": "checks failed", "pull_request": pr})
     co.c.commit()
-    assert co.where(task) == ("Engineering", "In review")  # the webhook sends nothing for a removal that is not a merge
+    assert co.where(task) == ("Engineering", "Review 2")  # the webhook sends nothing for a removal that is not a merge
     assert (
         H.task_links(co.c, task)[0]["detail"]
         and "verify" in json.loads(H.task_links(co.c, task)[0]["detail"])["merge_queue"]
@@ -855,12 +857,19 @@ def test_a_pr_ejected_from_the_merge_queue_sends_the_card_back_with_the_reason(c
         def _call(self, method, path, headers=None, **kw):
             reads.append((method, path))
             return SimpleNamespace(
-                status_code=200, json=lambda: {"state": "open", "merged": False, "head": {"sha": "abc123"}}
+                status_code=200, json=lambda: {"state": "open", "merged": False, "head": {"sha": HEAD40}}
             )
 
+    # The card goes back to Review 1, which is gated on a green check at the head; this test is about the removal's path
+    # and reason, so that gate is taken off here.
+    co.c.execute(
+        "UPDATE task_steps SET flow = json_remove(flow, '$.gate') WHERE name = 'Review 1' AND type_id = ?",
+        (co.type["Engineering"],),
+    )
+    co.c.commit()
     G.refresh_queue_removals(GitHub())
     assert reads == [("GET", "/repos/acme/app/pulls/7")]
-    assert co.where(task) == ("Engineering", "Doing")
+    assert co.where(task) == ("Engineering", "Review 1")
     notes = [
         row[0]
         for row in co.c.execute(
@@ -879,7 +888,7 @@ def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_re
     will not move on until the requirement is checked again."""
     from backend import github as G
 
-    task = co.ticket("Engineering", "Doing", "Push me")
+    task = co.ticket("Engineering", "Build", "Push me")
     url = "https://github.com/acme/app/pull/8"
     co.insert(
         "task_links",
@@ -894,7 +903,7 @@ def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_re
         created_at=stamp(),
         detail=json.dumps({"head_sha": "abc123"}),
     )
-    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
+    shots = co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")
     co.attach(task, shots)
     co.decide(task, shots, judge="llm", actor=PM)
     assert co.dots(task)["Screenshots"]["state"] == "met"
@@ -913,7 +922,7 @@ def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_re
         (task, shots, "def456"),
     ).fetchone()
     assert check is not None and check[0] == "waiting"  # stored as waiting: not met, no failure
-    assert co.refused(task, "In review")
+    assert co.refused(task, "Review 1")
 
     G.pull_request(
         co.c, {"action": "synchronize", "pull_request": moved, "sender": {"login": "builder-bot"}}
@@ -924,8 +933,8 @@ def test_a_pr_head_that_moves_is_new_work_that_makes_evidence_out_of_date_and_re
 
 # ----------------------------------------------------------------------------- Mark met
 def test_the_owner_can_mark_met_and_a_bot_cannot(co):
-    shots = co.require("Engineering", "Doing", "Screenshots", reviewed_by="bot")
-    task = co.ticket("Engineering", "Doing")
+    shots = co.require("Engineering", "Build", "Screenshots", reviewed_by="bot")
+    task = co.ticket("Engineering", "Build")
     with pytest.raises(H.Refused):
         pipeline_review.mark_met(co.c, PM, task, shots, "looks fine")
     co.c.rollback()
@@ -961,10 +970,10 @@ def test_flow_map_numbers_equal_the_database(co):
     """Handoff counts per period, the cards in each pipeline, overdue and done are what the tables hold."""
     co.link("Marketing", "Review", "Sales")
     lead_ok = co.require("Marketing", "Review", "Lead has company and contact", kind="approval")
-    co.warn_after("Engineering", "Doing", 60)
+    co.warn_after("Engineering", "Build", 60)
     for n in range(3):  # three leads handed from Marketing to Sales inside the week
         co.approve(co.ticket("Marketing", "Review", f"Lead {n}"), lead_ok)
-    old = co.ticket("Engineering", "Doing", "Old")
+    old = co.ticket("Engineering", "Build", "Old", status="doing")
     co.age_visit(old, 500, base=datetime.now(UTC))  # the period is anchored at the real clock, so age from it
 
     seen = pipeline_overview.read(co.c, ANA, "7d")
@@ -1061,7 +1070,7 @@ def test_the_spawned_ticket_is_owned_as_the_engineering_intake_pool_assigns_it(c
     H.sync_registry(co.c, {"eng": {}}, None)
     co.c.execute(
         "UPDATE task_steps SET flow = ? WHERE id = ?",
-        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Todo")),
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Build")),
     )
     co.c.commit()
     card = review_card(co)
@@ -1077,7 +1086,7 @@ def test_a_spawn_with_no_free_pool_slot_goes_to_the_pool_not_the_manager(co):
     H.sync_registry(co.c, {"eng": {}}, None)
     co.c.execute(
         "UPDATE task_steps SET flow = ? WHERE id = ?",
-        (json.dumps({"assign": {"pool": ["eng"], "slots": 0}}), co.stage("Engineering", "Todo")),
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 0}}), co.stage("Engineering", "Build")),
     )
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
     co.c.commit()
@@ -1099,7 +1108,7 @@ def test_a_spawn_with_no_pool_bot_available_goes_to_the_filer_not_the_manager(co
     assert not task_allocator._available(co.c, "eng")  # the precondition: no pool bot is available
     co.c.execute(
         "UPDATE task_steps SET flow = ? WHERE id = ?",
-        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Todo")),
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Build")),
     )
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
     co.c.commit()
@@ -1117,7 +1126,7 @@ def test_a_spawn_whose_pool_has_no_role_holder_on_the_roster_goes_to_the_filer_n
     H.sync_registry(co.c, {"eng": {"status": "archived"}, "pipeline-manager": {"status": "active"}}, None)
     co.c.execute(
         "UPDATE task_steps SET flow = ? WHERE id = ?",
-        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Todo")),
+        (json.dumps({"assign": {"pool": ["eng"], "slots": 4}}), co.stage("Engineering", "Build")),
     )
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
     co.c.commit()
@@ -1130,11 +1139,11 @@ def test_a_spawn_whose_pool_has_no_role_holder_on_the_roster_goes_to_the_filer_n
 
 
 def test_a_spawn_on_a_stage_with_no_assign_rule_goes_to_the_filer_not_the_manager(co):
-    """Spec A5, as Engineering is set up in the Hub: its first stage (On Deck) has no assign rule, and its manager is
+    """Spec A5, as Engineering is set up in the Hub: its first stage (Build) has no assign rule, and its manager is
     another bot on the roster. No role holder resolves (task_types.role holds a role key, and no stored record links a
     bot to it), so the ticket is owned by its filer, never by the pipeline's manager."""
     H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
-    co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
+    co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Build")))
     co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
     co.c.commit()
     card = review_card(co)
@@ -1159,12 +1168,12 @@ def test_undoing_an_approval_closes_its_untouched_follow_up_and_a_picked_up_one_
     again = co.approve(card, co.requirement("Product", "Review", "Spec approved"))
     assert again["advanced"] is True
     open_now = [t for t in subtasks(co, card) if t != d41]
-    assert len(open_now) == 1 and co.where(open_now[0]) == ("Engineering", "Todo")
+    assert len(open_now) == 1 and co.where(open_now[0]) == ("Engineering", "Build")
 
     picked = review_card(co, title="Light mode")
     kept = co.approve(picked, co.requirement("Product", "Review", "Spec approved"))
     (d_picked,) = [t for t in subtasks(co, picked)]
-    co.move(d_picked, "Doing", actor=ANA)
+    co.set_status(d_picked, "doing", actor=ANA)
     with pytest.raises(pipeline_review.Declined) as caught:
         pipeline_review.undo(co.c, ANA, kept["decision_id"])
     co.c.rollback()
@@ -1179,7 +1188,6 @@ def test_undo_refuses_a_not_validated_decision(co):
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
     co.set_status(d41, "done")
     checked = co.requirement("Product", "Validate", "Validated")
     co.attach(card, checked, url=VALIDATION)
@@ -1232,45 +1240,42 @@ def standing_names(co, card, stage="In development"):
 
 
 def test_a_subtask_moved_into_the_engineering_done_stage_ships_its_product_card(co):
-    """Finding 6: the booted Engineering Done stage has status closed. A real move there is shipped, so Product leaves In
+    """Finding 6: the Engineering Closed stage has status closed. A real move there is shipped, so Product leaves In
     development for Validate without a status "done" write."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)
+    co.move(d41, "Closed", actor=ANA)
     assert H.task(co.c, d41)["status"] == "closed"
     assert co.where(card) == ("Product", "Validate")
 
 
 def test_a_step_move_into_engineering_done_is_held_to_a_waiting_approval(co):
-    """Finding F1: Engineering's Done stage has status closed, but a move into it is progress, not a cancellation. A named
-    person's approval waiting in Doing refuses the move, the subtask stays in Doing and the card does not advance."""
+    """Finding F1: Engineering's Closed stage has status closed, but a move into it is progress, not a cancellation. A named
+    person's approval waiting in Build refuses the move, the subtask stays in Build and the card does not advance."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.require("Engineering", "Doing", "Ana signs off", kind="approval", reviewed_by="person")
-    co.move(d41, "Doing", actor=ANA)
+    co.require("Engineering", "Build", "Ana signs off", kind="approval", reviewed_by="person")
     with pytest.raises(H.Refused):
-        co.move(d41, "Done", actor=ANA)
+        co.move(d41, "Closed", actor=ANA)
     co.c.rollback()
-    assert co.where(d41) == ("Engineering", "Doing")
+    assert co.where(d41) == ("Engineering", "Build")
     assert co.where(card) == ("Product", "In development")
 
 
 def test_a_status_done_on_an_engineering_subtask_is_held_to_a_waiting_approval(co):
-    """Finding B1: a status-only completion has no step of its own (booted Engineering's Done is closed, so `status=done`
-    resolves to none), and it is progress all the same. The waiting approval in Doing refuses it, the card does not
+    """Finding B1: a status-only completion has no step of its own (Engineering's Closed stage is closed, so `status=done`
+    resolves to none), and it is progress all the same. The waiting approval in Build refuses it, the card does not
     advance, and it goes through once the person has approved."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    signed = co.require("Engineering", "Doing", "Ana signs off", kind="approval", reviewed_by="person")
-    co.move(d41, "Doing", actor=ANA)
+    signed = co.require("Engineering", "Build", "Ana signs off", kind="approval", reviewed_by="person")
     with pytest.raises(H.Refused):
         co.set_status(d41, "done", actor=ANA)
     co.c.rollback()
-    assert co.where(d41) == ("Engineering", "Doing")
+    assert co.where(d41) == ("Engineering", "Build")
     assert co.where(card) == ("Product", "In development")
     co.approve(d41, signed)
     co.set_status(d41, "done", actor=ANA)
@@ -1279,21 +1284,21 @@ def test_a_status_done_on_an_engineering_subtask_is_held_to_a_waiting_approval(c
 
 
 def test_closing_into_done_then_marking_it_done_is_still_held_to_the_waiting_approval(co):
-    """Codex r5 blocker 1: a Close puts the subtask in Engineering's Done without its approval (a cancellation), and a
+    """Codex r5 blocker 1: a Close puts the subtask in Engineering's Closed without its approval (a cancellation), and a
     `status=done` there changed no stage, so neither gate ran: it shipped and Product reached Validate. Marking it done
     in place is held to its stages' requirements like any finish."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    signed = co.require("Engineering", "Todo", "Ana signs off", kind="approval", reviewed_by="person")
+    signed = co.require("Engineering", "Build", "Ana signs off", kind="approval", reviewed_by="person")
     co.close(d41, actor=ANA)
-    assert co.where(d41) == ("Engineering", "Done")
+    assert co.where(d41) == ("Engineering", "Closed")
     with pytest.raises(H.Refused):
         co.set_status(d41, "done", actor=ANA)
     co.c.rollback()
     assert H.task(co.c, d41)["status"] == "closed"
     assert co.where(card) == ("Product", "In development")
-    co.move(d41, "Todo", actor=ANA)  # reopened where its approval waits
+    co.move(d41, "Build", actor=ANA)  # reopened where its approval waits
     co.approve(d41, signed)
     co.set_status(d41, "done", actor=ANA)
     assert H.task(co.c, d41)["status"] == "done"
@@ -1343,18 +1348,18 @@ def test_a_subtask_that_shipped_then_closed_still_counts_as_shipped(co):
 
 
 def test_a_closed_subtask_reopened_and_finished_ships_the_card(co):
-    """Finding F6: shipment is judged per transition. The subtask's Close into Done is a cancellation; reopened and genuinely
-    moved into Done, it finished, so Engineering shipped is met."""
+    """Finding F6: shipment is judged per transition. The subtask's Close into Closed is a cancellation; reopened and genuinely
+    moved into Closed, it finished, so Engineering shipped is met."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
     # A requirement on Engineering's first stage makes its moves write stage visits, as a real pipeline's do.
-    signed = co.require("Engineering", "Todo", "Ana signs off", kind="approval", reviewed_by="person")
+    signed = co.require("Engineering", "Build", "Ana signs off", kind="approval", reviewed_by="person")
     co.approve(d41, signed)
     co.close(d41, actor=ANA)
     assert standing_names(co, card)["Engineering shipped"] == "failed"
     co.set_status(d41, "doing", actor=ANA)  # reopened
-    co.move(d41, "Done", actor=ANA)
+    co.move(d41, "Closed", actor=ANA)
     assert H.task(co.c, d41)["status"] == "closed"
     assert co.where(card) == ("Product", "Validate")
     assert standing_names(co, card)["Engineering shipped"] == "met"
@@ -1362,30 +1367,30 @@ def test_a_closed_subtask_reopened_and_finished_ships_the_card(co):
 
 def test_a_close_into_done_with_no_marker_from_before_the_update_does_not_ship(co):
     """Finding F6: a Close written before the stage_closed marker existed leaves no marker in history, and a pipeline with
-    no requirements writes no visit. The subtask sits in Done, so it must not count as shipped."""
+    no requirements writes no visit. The subtask sits in Closed, so it must not count as shipped."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
     co.close(d41, actor=ANA)
     co.c.execute("DELETE FROM history_events WHERE subject_id = ? AND kind = 'stage_closed'", (d41,))
     co.c.commit()
-    assert co.where(d41) == ("Engineering", "Done")
+    assert co.where(d41) == ("Engineering", "Closed")
     assert standing_names(co, card)["Engineering shipped"] == "failed"
     assert co.advance(card, actor=ANA)["moved"] is False
 
 
 def test_a_closed_subtask_with_its_close_marker_removed_still_does_not_ship(co):
-    """Finding B4: shipment is per transition, and a visit is not a finish. The Close of an unfinished subtask into Done
+    """Finding B4: shipment is per transition, and a visit is not a finish. The Close of an unfinished subtask into Closed
     writes a visit (this pipeline has requirements) and a `stage_closed` marker. With the marker gone the visit alone
     must not ship the card: the markerless fallback is dropped."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.require("Engineering", "Todo", "Ana signs off", kind="approval", reviewed_by="person")
+    co.require("Engineering", "Build", "Ana signs off", kind="approval", reviewed_by="person")
     co.close(d41, actor=ANA)
     co.c.execute("DELETE FROM history_events WHERE subject_id = ? AND kind = 'stage_closed'", (d41,))
     co.c.commit()
-    assert co.where(d41) == ("Engineering", "Done")
+    assert co.where(d41) == ("Engineering", "Closed")
     assert standing_names(co, card)["Engineering shipped"] == "failed"
     assert pipeline_engine.shipped(co.c, [d41]) == set()
 
@@ -1396,8 +1401,7 @@ def test_a_shipment_reports_the_moment_it_first_shipped(co):
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)
+    co.move(d41, "Closed", actor=ANA)
     finished = co.c.execute(
         "SELECT created_at FROM history_events WHERE subject_id = ? AND kind = 'stage_finished'", (d41,)
     ).fetchone()[0]
@@ -1405,13 +1409,12 @@ def test_a_shipment_reports_the_moment_it_first_shipped(co):
 
 
 def test_a_subtask_closed_in_done_after_it_shipped_still_counts_as_shipped(co):
-    """Finding F6 (the decision in pipeline_engine._shipped_ids): a ticket that finished and reached Done keeps its
+    """Finding F6 (the decision in pipeline_engine._shipped_ids): a ticket that finished and reached Closed keeps its
     shipment when someone later closes it in place. The finish is a marker, and a close in place writes nothing to take it back."""
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)
+    co.move(d41, "Closed", actor=ANA)
     assert co.where(card) == ("Product", "Validate")
     co.close(d41, actor=ANA)
     assert H.task(co.c, d41)["status"] == "closed"
@@ -1434,7 +1437,7 @@ def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
         "",
         CAL,
         type=co.type["Engineering"],
-        step=co.stage("Engineering", "Todo"),
+        step=co.stage("Engineering", "Build"),
         parent_id=card,
         lint=False,
     )["id"]
@@ -1458,7 +1461,7 @@ def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
         "",
         ANA,
         type=co.type["Engineering"],
-        step=co.stage("Engineering", "Todo"),
+        step=co.stage("Engineering", "Build"),
         parent_id=card,
         lint=False,
     )["id"]
@@ -1470,7 +1473,7 @@ def test_a_spawn_does_not_carry_a_members_only_source_to_a_non_member_owner(co):
 
 
 def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
-    """Finding 6: a subtask closed with its card is gone. d41 shipped through its Done visit; d42 closed with the card.
+    """Finding 6: a subtask closed with its card is gone. d41 shipped through its Closed visit; d42 closed with the card.
     The shipped one meets the requirement and the cascade-closed one neither counts nor blocks."""
     card = review_card(co)
     approve_spec(co, card)
@@ -1482,13 +1485,12 @@ def test_a_subtask_closed_by_a_cascade_is_neither_shipped_nor_blocking(co):
         "",
         BUILDER,
         type=co.type["Engineering"],
-        step=co.stage("Engineering", "Todo"),
+        step=co.stage("Engineering", "Build"),
         parent_id=card,
         lint=False,
     )["id"]
     co.c.commit()
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)  # shipped; d42 is still open, so the card waits in development
+    co.move(d41, "Closed", actor=ANA)  # shipped; d42 is still open, so the card waits in development
     assert co.where(card) == ("Product", "In development")
     co.close(card, actor=ANA)  # the cascade closes d42 with its card
     assert H.task(co.c, d42)["status"] == "closed"
@@ -1533,19 +1535,18 @@ def test_declining_a_product_card_closes_its_open_subtask_and_keeps_the_shipped_
         "",
         BUILDER,
         type=co.type["Engineering"],
-        step=co.stage("Engineering", "Todo"),
+        step=co.stage("Engineering", "Build"),
         parent_id=card,
         lint=False,
     )["id"]
     co.c.commit()
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)  # shipped: the card moves to Validate
+    co.move(d41, "Closed", actor=ANA)  # shipped: the card moves to Validate
     co.move(card, "Declined", actor=ANA, override_requirements=True, note="Dropped")
     assert co.where(card) == ("Product", "Declined")
     assert H.task(co.c, d42)["status"] == "closed"
     assert H.task(co.c, d42)["note"] == "Parent declined"
-    assert H.task(co.c, d41)["status"] == "closed"  # shipped stays shipped: it is in Done
-    assert co.where(d41) == ("Engineering", "Done")
+    assert H.task(co.c, d41)["status"] == "closed"  # shipped stays shipped: it is in Closed
+    assert co.where(d41) == ("Engineering", "Closed")
 
 
 # ----------------------------------------------------------------------------- finding 13: a named reviewer can decide
@@ -1555,8 +1556,7 @@ def test_a_named_reviewer_who_is_not_an_editor_can_file_not_validated(co):
     ben_card = review_card(co)
     approve_spec(co, ben_card)
     (d41,) = subtasks(co, ben_card)
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)
+    co.move(d41, "Closed", actor=ANA)
     assert co.where(ben_card) == ("Product", "Validate")
     checked = co.requirement("Product", "Validate", "Validated")
     co.c.execute("UPDATE stage_requirements SET reviewer_id = ? WHERE id = ?", (BEN, checked))
@@ -1582,8 +1582,7 @@ def test_a_person_who_is_neither_the_reviewer_nor_an_editor_cannot_file_not_vali
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)
+    co.move(d41, "Closed", actor=ANA)
     checked = co.requirement("Product", "Validate", "Validated")
     co.c.execute("UPDATE stage_requirements SET reviewer_id = ? WHERE id = ?", (BEN, checked))
     co.c.commit()
@@ -1602,20 +1601,19 @@ def test_not_validated_files_into_the_spawn_that_filed_the_subtasks_not_a_nearer
     card = review_card(co)
     approve_spec(co, card)
     (d41,) = subtasks(co, card)
-    co.move(d41, "Doing", actor=ANA)
-    co.move(d41, "Done", actor=ANA)
+    co.move(d41, "Closed", actor=ANA)
     co.create_spawn_link("Product", "In development", "Success")
     checked = co.requirement("Product", "Validate", "Validated")
     co.attach(card, checked, url=VALIDATION)
     result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
     co.c.commit()
-    assert co.where(result["follow_up"]) == ("Engineering", "Todo")
+    assert co.where(result["follow_up"]) == ("Engineering", "Build")
 
 
 def test_undo_closes_an_untouched_subtask_past_an_unmet_requirement_on_its_stage(co):
     """O3 (Codex): a move into a later Closed stage is cancellation, not forward progress. The subtask the approval filed
-    is still at Todo, which has an unmet due-date requirement. The undo closes it anyway, and the card returns to Review."""
-    co.require("Engineering", "Todo", "Due", kind="field", needs={"field": "due"})
+    is still at Build, which has an unmet due-date requirement. The undo closes it anyway, and the card returns to Review."""
+    co.require("Engineering", "Build", "Due", kind="field", needs={"field": "due"})
     card = review_card(co)
     approved = co.approve(card, co.requirement("Product", "Review", "Spec approved"))
     (d41,) = subtasks(co, card)
@@ -1628,13 +1626,13 @@ def test_undo_closes_an_untouched_subtask_past_an_unmet_requirement_on_its_stage
 def test_an_automatic_move_the_rules_refuse_is_logged_and_the_rest_of_the_write_stands(co):
     """Y1: an automatic step write refused by a stage requirement is undone alone. The card gets an auto_move_refused
     event with the reason, and a change made in the same transaction stands."""
-    co.require("Engineering", "Todo", "Due", kind="field", needs={"field": "due"})
-    task = co.ticket("Engineering", "Todo", "Dark mode")
+    co.require("Engineering", "Build", "Due", kind="field", needs={"field": "due"})
+    task = co.ticket("Engineering", "Build", "Dark mode")
     row = H.task(co.c, task)
     co.c.execute("UPDATE tasks SET note=? WHERE id=?", ("kept", task))
-    assert H.try_auto_move(co.c, H.KEEPER, row, step=co.stage("Engineering", "Doing")) is False
+    assert H.try_auto_move(co.c, H.KEEPER, row, step=co.stage("Engineering", "Review 1")) is False
     co.c.commit()
-    assert co.where(task) == ("Engineering", "Todo")
+    assert co.where(task) == ("Engineering", "Build")
     assert co.c.execute("SELECT note FROM tasks WHERE id=?", (task,)).fetchone()[0] == "kept"
     assert co.count("history_events", "subject_type='task' AND subject_id=? AND kind='auto_move_refused'", task) == 1
 
@@ -1671,14 +1669,13 @@ def test_not_validated_files_into_engineering_when_engineering_and_marketing_bot
     """Codex blocker 5, the other half: with Engineering shipped as well, Not validated files the follow-up into Engineering,
     the pipeline the requirement names, and not into Marketing, whose work also shipped through an earlier stage."""
     card, _, build = _card_with_marketing_and_engineering(co)
-    co.move(build, "Doing", actor=ANA)
-    co.move(build, "Done", actor=ANA)
+    co.move(build, "Closed", actor=ANA)
     assert co.where(card) == ("Product", "Validate")
     checked = co.requirement("Product", "Validate", "Validated")
     co.attach(card, checked, url=VALIDATION)
     result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
     co.c.commit()
-    assert co.where(result["follow_up"]) == ("Engineering", "Todo")
+    assert co.where(result["follow_up"]) == ("Engineering", "Build")
     assert co.where(card) == ("Product", "In development")
 
 
@@ -1707,14 +1704,13 @@ def test_not_validated_files_one_engineering_ticket_when_specifying_and_review_b
     builds = [kid for kid in subtasks(co, card) if co.where(kid)[0] == "Engineering"]
     assert len(builds) == 2
     for build in builds:
-        co.move(build, "Doing", actor=ANA)
-        co.move(build, "Done", actor=ANA)
+        co.move(build, "Closed", actor=ANA)
     assert co.where(card) == ("Product", "Validate")
     checked = co.requirement("Product", "Validate", "Validated")
     co.attach(card, checked, url=VALIDATION)
     result = pipeline_review.not_validated(co.c, ANA, card, checked, "Load time stayed over 4 s")
     co.c.commit()
-    assert co.where(result["follow_up"]) == ("Engineering", "Todo")
+    assert co.where(result["follow_up"]) == ("Engineering", "Build")
     filed = co.c.execute(
         "SELECT pipeline_link_id FROM pipeline_handoffs WHERE target_task_id=?", (result["follow_up"],)
     ).fetchone()[0]
@@ -1793,11 +1789,11 @@ def test_a_card_with_no_stage_in_product_is_held_to_the_spec_page_when_it_enters
 def test_a_bot_may_not_clear_the_stage_of_a_card_in_a_pipeline(co):
     """Codex GB2 finding 1: a bot clears a card's stage with step="" and is refused, as a backward move is. The card keeps
     its stage."""
-    card = co.ticket("Engineering", "Todo")
+    card = co.ticket("Engineering", "Build")
     with pytest.raises(H.Refused) as refused:
         H.task_update(co.c, BUILDER, card, step="")
     assert refused.value.rule == "requirement"
-    assert co.where(card) == ("Engineering", "Todo")
+    assert co.where(card) == ("Engineering", "Build")
 
 
 def test_a_pipeline_editor_keeps_the_override_for_a_card_with_no_stage(co):

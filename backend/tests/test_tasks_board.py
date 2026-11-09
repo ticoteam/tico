@@ -924,10 +924,10 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
         {
             'name': 'Dev ticket',
             'steps': [
-                {'name': 'On Deck', 'status': 'open'},
+                {'name': 'Build', 'status': 'open'},
                 {'name': 'PR Review', 'status': 'review'},
                 {'name': 'Shipped', 'status': 'ready'},
-                {'name': 'Done', 'status': 'closed'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         },
     )['type']
@@ -940,7 +940,7 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
             'title': 'Fix the guest message times',
             'body': 'Please.',
             'type': typ['id'],
-            'step': 'On Deck',
+            'step': 'Build',
         },
     )
     todo = post(api, 'tasks', {'owner': 'ben', 'title': 'Book the offsite', 'body': 'Please.'})
@@ -990,7 +990,7 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
     )
     assert moved['status'] == 'review' and moved['owner_id'] == 'human:priya'
     post(api, 'tasks/' + ticket['id'] + '/links', {'url': 'https://github.com/acme/app/pull/7'}, token=token)
-    for refused in ({'step': 'Shipped'}, {'step': 'Done'}, {'close': True}, {'labels': ['bug']}):
+    for refused in ({'step': 'Shipped'}, {'step': 'Closed'}, {'close': True}, {'labels': ['bug']}):
         r = api.post(
             '/api/v2/tasks/' + ticket['id'], json={'version': moved['version'], **refused}, headers=headers(token)
         )
@@ -998,7 +998,7 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
     shipped = post(api, 'tasks/' + ticket['id'], {'version': moved['version'], 'step': 'Shipped', 'owner': 'ben'})
     child = get(api, 'tasks/' + child['id'])['task']
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'close': True})
-    closed = post(api, 'tasks/' + ticket['id'], {'version': shipped['version'], 'step': 'Done'}, token=token)
+    closed = post(api, 'tasks/' + ticket['id'], {'version': shipped['version'], 'step': 'Closed'}, token=token)
     assert closed['status'] == 'closed'
     todo = get(api, 'tasks/' + todo['id'])['task']
     post(api, 'tasks/' + todo['id'], {'version': todo['version'], 'status': 'doing'}, token=token, expected=403)
@@ -1037,8 +1037,8 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
             'steps': [
                 {'name': 'Cant Replicate', 'status': 'closed'},
                 {'name': 'Backlog', 'status': 'open'},
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'Done', 'status': 'closed'},
+                {'name': 'Build', 'status': 'open'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         },
     )['type']
@@ -1051,7 +1051,7 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
             'title': 'Fix the guest message times',
             'body': 'Please.',
             'type': typ['id'],
-            'step': 'On Deck',
+            'step': 'Build',
         },
     )
     path, ops = 'tasks/' + ticket['id'], bot_token(api, 'ops')
@@ -1064,7 +1064,7 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
         api, 'task-questions', {'on': 'human:ana', 'question': 'Which page?', 'parent': ticket['id']}, token=ops
     )
     assert get(api, path)['task']['status'] == 'waiting'
-    assert get(api, path)['task']['step']['name'] == 'On Deck'
+    assert get(api, path)['task']['step']['name'] == 'Build'
     with api.app.state.store.read() as c:
         assert H.task(c, ticket['id'])['blocked_from_step'] == ticket['step_id']
     # A bot refused Done on more tickets than the quarantine limit is not quarantined: each names its ticket.
@@ -1073,12 +1073,12 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
         post(api, 'tasks/' + other['id'], {'version': other['version'], 'status': 'done'}, token=ops, expected=422)
     post(api, path + '/comments', {'text': 'Still on it.'}, token=ops)
     # A step move changes the status, Done included, and back out of it.
-    assert post(api, path, {'version': version(), 'step': 'Done'})['status'] == 'closed'
+    assert post(api, path, {'version': version(), 'step': 'Closed'})['status'] == 'closed'
     post(api, path, {'version': version(), 'status': 'open'}, expected=422)
     assert post(api, path, {'version': version(), 'step': 'Backlog'})['status'] == 'open'
     # A person can always close one: it lands on the last closed step, not the first.
     closed = post(api, path, {'version': version(), 'close': True})
-    assert (closed['status'], closed['step']['name']) == ('closed', 'Done')
+    assert (closed['status'], closed['step']['name']) == ('closed', 'Closed')
     assert post(api, path, {'version': version(), 'step': 'Backlog'})['status'] == 'open'
     # Off, the type keeps the bare status changes.
     post(api, 'task-types/' + typ['id'], {'steps_only': False})

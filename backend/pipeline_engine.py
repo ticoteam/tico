@@ -1681,6 +1681,7 @@ def _attachments_by_requirement(conn: sqlite3.Connection, task_id: str) -> dict[
 # ---------------------------------------------------------------------------------------------- boot
 SEEDED = "pipeline_engine.seeded"
 LATE_MINUTES = 240
+WORKING_STEP = "Build"  # the Dev tickets board's working step (backend/pipeline_stage_map.py)
 
 
 def seed_type(c: sqlite3.Connection, type_id: str) -> None:
@@ -1692,15 +1693,17 @@ def seed_type(c: sqlite3.Connection, type_id: str) -> None:
     role = c.execute("SELECT role FROM task_types WHERE id = ?", (type_id,)).fetchone()
     role = role[0] if role else None
     has_flow = any(r[1] == "flow" for r in c.execute("PRAGMA table_info(task_steps)"))  # step_flow adds it at boot
-    for step_id, status, flow in c.execute(
-        f"SELECT id, status, {'flow' if has_flow else 'NULL'} FROM task_steps WHERE type_id = ? AND limit_minutes IS NULL",
+    for step_id, step_name, status, flow in c.execute(
+        f"SELECT id, name, status, {'flow' if has_flow else 'NULL'} FROM task_steps WHERE type_id = ? AND limit_minutes IS NULL",
         (type_id,),
     ).fetchall():
         hours = _json(flow).get("late_hours")
         if isinstance(hours, (int, float)) and not isinstance(hours, bool) and hours > 0:
             minutes: int | None = round(hours * 60)
         else:
-            minutes = LATE_MINUTES if role == "engineering" and status == "doing" else None
+            # Build is the Dev board's working step: its default clock starts whatever the status it was made with.
+            working = status == "doing" or step_name == WORKING_STEP
+            minutes = LATE_MINUTES if role == "engineering" and working else None
         if minutes:
             c.execute("UPDATE task_steps SET limit_minutes = ? WHERE id = ?", (minutes, step_id))
     H.event(c, H.KEEPER, SEEDED, type_id, {})

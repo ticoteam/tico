@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import hubdb as H
+from backend import step_flow as F
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
@@ -65,19 +66,22 @@ def to(c, actor, task_id):
     )
 
 
-def in_qa_ticket(c, check_title="QA: PR #412"):
+def qa_ticket(c, check_title="QA: PR #412"):
+    """A Dev ticket at its QA step: the Engineering board has none, so the board gives its own QA step the QA flow."""
     typ = H.type_create(
         c,
         H.KEEPER,
         "Dev tickets",
         [
-            {"name": "In Progress", "status": "doing"},
-            {"name": "In QA", "status": "review"},
-            {"name": "Done", "status": "done"},
+            {"name": "Build", "status": "doing"},
+            {"name": "QA", "status": "review"},
+            {"name": "Watch 24h", "status": "review"},
+            {"name": "Closed", "status": "done"},
         ],
     )
+    F.apply(c, typ["id"], {"QA": {"check": "qa", "on_pass": "merge", "on_fail": "Build", "timeout_hours": 2}})
     c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (typ["id"],))
-    ticket = H.task_create(c, "human:ana", "Show the run log", "Build it.", "bot:cpo", type=typ["id"], step="In QA")
+    ticket = H.task_create(c, "human:ana", "Show the run log", "Build it.", "bot:cpo", type=typ["id"], step="QA")
     check = H.task_create(c, "bot:cpo", check_title, "Check the candidate.", "bot:qa", parent_id=ticket["id"])
     return H.task(c, ticket["id"]), check
 
@@ -88,7 +92,7 @@ def check_notices(c, ticket_id):
 
 def test_waiting_qa_check_blocks_its_ticket_and_resumes_it(api):
     with api.app.state.store.transaction() as c:
-        ticket, check = in_qa_ticket(c)
+        ticket, check = qa_ticket(c)
         in_qa = ticket["step_id"]
         assert ticket["status"] == "review"
         H.task_update(
@@ -117,20 +121,20 @@ def test_waiting_qa_check_blocks_its_ticket_and_resumes_it(api):
         assert row["step_id"] == in_qa and row["status"] == "review" and row["blocked_since"] is None
 
 
-def test_waiting_post_release_qa_check_is_shown_as_blocked_on_its_ticket(api):
+def test_waiting_watch_24h_check_is_shown_as_blocked_on_its_ticket(api):
     with api.app.state.store.transaction() as c:
-        ticket, check = in_qa_ticket(c, "Post Release QA: PR #412")
+        ticket, check = qa_ticket(c, "Watch 24h: PR #412")
         H.task_update(
             c, "bot:qa", check["id"], status="waiting", waiting_on="human:ana", note="Release runner is unavailable"
         )
         row = H.task(c, ticket["id"])
         assert row["status"] == "waiting"
-        assert row["blocked_reason"] == "Post Release QA blocked: Release runner is unavailable, waiting on Ana"
+        assert row["blocked_reason"] == "Watch 24h blocked: Release runner is unavailable, waiting on Ana"
 
 
 def test_check_its_bot_resumes_returns_the_ticket_and_a_new_hold_notifies_again(api):
     with api.app.state.store.transaction() as c:
-        ticket, check = in_qa_ticket(c)
+        ticket, check = qa_ticket(c)
         H.task_update(c, "bot:qa", check["id"], status="waiting", note="Runner pool is down")
         assert H.task(c, ticket["id"])["blocked_reason"] == "QA blocked: Runner pool is down"
         H.task_update(c, "bot:qa", check["id"], status="doing")
@@ -145,7 +149,7 @@ def test_sweep_finds_a_check_blocked_before_this_change(api):
     from backend import task_blocked
 
     with api.app.state.store.transaction() as c:
-        ticket, check = in_qa_ticket(c)
+        ticket, check = qa_ticket(c)
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (check["id"],))
         set_holds(c, check["id"], blocked_reason='GitHub refused the run')
         assert H.task(c, ticket["id"])["status"] == "review"
@@ -159,7 +163,7 @@ def test_check_blocked_by_an_open_task_blocks_its_ticket(api):
     from backend import task_relations as TR
 
     with api.app.state.store.transaction() as c:
-        ticket, check = in_qa_ticket(c)
+        ticket, check = qa_ticket(c)
         grant = H.task_create(c, "bot:qa", "Grant Actions write", "Only a person can.", "human:ana")
         TR.add_blocker(c, "bot:qa", check["id"], grant["id"])
         row = H.task(c, ticket["id"])
@@ -176,7 +180,7 @@ def test_a_check_that_merely_runs_keeps_the_ticket_at_its_step(api):
     from backend import task_blocked
 
     with api.app.state.store.transaction() as c:
-        ticket, check = in_qa_ticket(c)
+        ticket, check = qa_ticket(c)
         H.task_update(c, "bot:qa", check["id"], status="doing")
         task_blocked.sweep(c, H.now())
         assert H.task(c, ticket["id"])["status"] == "review"
@@ -399,7 +403,7 @@ def test_a_check_waiting_on_a_task_on_ice_asks_no_bot_about_the_ticket(api, chec
     from backend import task_holds, task_relations as TR, task_roundup
 
     with api.app.state.store.transaction() as c:
-        ticket, check = in_qa_ticket(c)
+        ticket, check = qa_ticket(c)
         dependency = H.task_create(c, "bot:qa", "Set up the runner", "The devops bot does it.", "bot:devops-engineer")
         TR.add_blocker(c, "bot:qa", check["id"], dependency["id"])
         if check_waits:

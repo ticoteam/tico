@@ -61,7 +61,7 @@ def test_self_filed_release_qa_keeps_the_filing_turn_hold(api, child):
             "task-types",
             {
                 "name": "Release flow",
-                "steps": [{"name": "Post Release QA", "status": "review", "flow": {"check": "release_qa"}}],
+                "steps": [{"name": "Watch 24h", "status": "review", "flow": {"check": "release_qa"}}],
             },
         )["type"]
         parent = post(
@@ -72,7 +72,7 @@ def test_self_filed_release_qa_keeps_the_filing_turn_hold(api, child):
                 "title": "Released work",
                 "body": "Verify it.",
                 "type": typ["id"],
-                "step": "Post Release QA",
+                "step": "Watch 24h",
             },
             token=active["token"],
         )

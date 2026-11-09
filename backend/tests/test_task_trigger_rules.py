@@ -84,8 +84,8 @@ def task_type(c, name="Dev tickets"):
         mover=True,
         steps=[
             {"name": "Open", "status": "open"},
-            {"name": "In QA", "status": "review"},
-            {"name": "Done", "status": "done"},
+            {"name": "Review 2", "status": "review"},
+            {"name": "Closed", "status": "closed"},
         ],
     )
 
@@ -293,7 +293,7 @@ def test_fifty_first_attempt_pauses_persistently_without_refusing_task_changes(a
         assert not history(c, later["id"])
 
 
-@pytest.mark.parametrize("placement", [None, "Open", "In QA"])
+@pytest.mark.parametrize("placement", [None, "Open", "Review 2"])
 def test_initial_step_follows_created_once_including_default_and_explicit_first(api, placement):
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
@@ -330,13 +330,13 @@ def test_decline_and_step_action_runs_only_after_final_task_write(api):
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
         task = make(c, type=typ["id"])
-    moved = rule(api, "task.declined", "move_step", {"step": "In QA"})
-    rule(api, "task.step_changed", when={"step": "In QA"}, params={"text": "Must not chain"})
+    moved = rule(api, "task.declined", "move_step", {"step": "Review 2"})
+    rule(api, "task.step_changed", when={"step": "Review 2"}, params={"text": "Must not chain"})
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ana", task["id"], status="declined", note="Declined")
         after = H.task(c, task["id"])
         assert after["status"] == "review" and after["step_id"] == next(
-            s["id"] for s in typ["steps"] if s["name"] == "In QA"
+            s["id"] for s in typ["steps"] if s["name"] == "Review 2"
         )
         assert moved["id"] in after["note"] and "Must not chain" not in after["note"]
 

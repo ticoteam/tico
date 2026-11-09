@@ -150,13 +150,13 @@ A failing check refuses the move and names the check. A failed GitHub check atte
 
 A refused move is remembered, and Tico makes it itself once what refused it changes: the checks on the PR, the ticket's note, or a new message on the ticket (a receipt posted). Nobody needs to ask for a retry. When GitHub cannot be read, the ticket keeps its current step and Tico tries again every 5 minutes. Timeouts, rate limits, permission errors, missing installation access and other upstream read failures do not file DevOps or manager tasks or wake the ticket owner. Engineering and Health each receive one deferred source notice when access is lost and one when it returns. A PR link Tico cannot resolve, or one with no recorded head, still needs its local record fixed. A remembered move is dropped when the ticket moves elsewhere or after three days.
 
-A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Post Release QA** subtask for a pull request head. A second request for the same check on the same head (or when the head is unknown) is refused with the open subtask's id; a push gives a new head and with it a new check. Reviewers and Security give a verdict and never move the ticket: a bot that owns a Review 1, Review 2 or Security subtask of a Dev ticket (and does not own the ticket) is refused a status, step or type change, and told to finish its review task with a verdict. The Builder, QA and people move the ticket.
+A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Watch 24h** subtask for a pull request head. A second request for the same check on the same head (or when the head is unknown) is refused with the open subtask's id; a push gives a new head and with it a new check. Reviewers and Security give a verdict and never move the ticket: a bot that owns a Review 1, Review 2 or Security subtask of a Dev ticket (and does not own the ticket) is refused a status, step or type change, and told to finish its review task with a verdict. The Builder, QA and people move the ticket.
 
 ### Check pools: who takes a ticket's check
 
-Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; on a board with QA steps, In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse` and Post Release QA `qa-engineer-copy`. A new company's Engineering pipeline (found by its `engineering` role once setup lays it out as the Dev board, with the Dev board's flow and hand-off rows) instead takes every `pr-reviewer` bot into Review 1 and Review 2, each once: a reviewer hired later joins when its seat is filled, and one a person takes out stays out. Until the first reviewer is hired those steps have no pool.
+Each check step (**Review 1**, **Review 2**, **Watch 24h**, and on a board set up before the stage map that still has them **In QA** and **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; Watch 24h `qa-engineer-copy`; on a board with QA steps, In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse` and Post Release QA `qa-engineer-copy`. A new company's Engineering pipeline (found by its `engineering` role once setup lays it out as the Dev board, with the Dev board's flow and hand-off rows) instead takes every `pr-reviewer` bot into Review 1 and Review 2, each once: a reviewer hired later joins when its seat is filled, and one a person takes out stays out. Until the first reviewer is hired those steps have no pool.
 
-When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Post Release QA: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. The model company is the Builder's company as its runs on the ticket actually ran (the Builder's configured company only while none of them is known), and a bot's company is the one a check given to it runs on: its task model's when it has one that can run now, else its configured model's, or what its last few such runs ran on. Each check step has an **Another model company** setting (`other_company` in its flow, see Step flow), `prefer` by default, and it decides what a bot of the Builder's company may do. With `prefer`, that bot takes the check only when no other pool bot is free, rather than the check waiting, for a review and a QA check alike, and a bot whose company Tico can't name comes after one of another company it can. With `require`, a bot of the Builder's company is never given the check, not even when it is the only free one: the check waits when every free bot runs on that company (the reason says so), and a bot of the Builder's company that finishes its own check does not take it. Require also never gives the check to a bot whose company Tico can't name (a model it doesn't know or a reseller picks, such as Cursor's auto, or part of a recent run on one), and while any part of the Builder's runs on the ticket is of unknown company the check waits for every bot. The bot is woken at once.
+When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Watch 24h: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. The model company is the Builder's company as its runs on the ticket actually ran (the Builder's configured company only while none of them is known), and a bot's company is the one a check given to it runs on: its task model's when it has one that can run now, else its configured model's, or what its last few such runs ran on. Each check step has an **Another model company** setting (`other_company` in its flow, see Step flow), `prefer` by default, and it decides what a bot of the Builder's company may do. With `prefer`, that bot takes the check only when no other pool bot is free, rather than the check waiting, for a review and a QA check alike, and a bot whose company Tico can't name comes after one of another company it can. With `require`, a bot of the Builder's company is never given the check, not even when it is the only free one: the check waits when every free bot runs on that company (the reason says so), and a bot of the Builder's company that finishes its own check does not take it. Require also never gives the check to a bot whose company Tico can't name (a model it doesn't know or a reseller picks, such as Cursor's auto, or part of a recent run on one), and while any part of the Builder's runs on the ticket is of unknown company the check waits for every bot. The bot is woken at once.
 
 With no free pool bot, the check waits on the ticket: its page shows **Waiting for a reviewer** (or **Waiting for QA**) with the reason, and the first bot in the pool to finish a check takes it. Tico also retries every minute, up to 20 waits per pass, so a bot coming online or gaining room can take a waiting check. Offline or full pools do not consume that batch. Pools take turns across passes, with the oldest waits first within each pool, so ineligible waits cannot keep another pool waiting. The retry reads a bounded part of each pool's queue through an index, skips past ineligible tickets on later passes, and leaves unchanged waits unwritten. Retry chooses the head once, from the latest saved PR links under the write lock. The gate, request and check record use that same head, even if a PR refresh changed it after the wait began. An older saved link cannot cancel a newer head's wait. When GitHub is connected, every retry, including QA and checks after release, first reads the PR head outside the write lock. That read must still match the saved link when the check is filed. A changed head or failed read leaves the check waiting for the next pass. Without a configured GitHub App, the saved links supply the head and review still needs a passing receipt for it. Review retries also read current CI, so fresh green checks can admit a waiting review without a written receipt, just as on entry. A gate that still refuses a wait leaves it alone without taking the write lock or recording another refusal. Each wait is checked again before filing to avoid duplicates. A pool member only takes checks this way. An empty pool waits the same way. A Builder that files the same check meanwhile is told it already exists. The wait ends when the check is filed or the ticket leaves the step.
 
@@ -198,24 +198,25 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) lists it on the task roundup of `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot (a named person is not told by the roundup). Relisted once every `every_hours` (4) while over. |
 | `can_hold` | `false`: a ticket here is never put on hold; a merged change is reverted or fixed forward. |
 | `gate` | Entering the step needs green CI and a test receipt at the head (the review gate above). |
-| `check` | The kind of check the step asks for: `review`, `qa` or `release_qa`. Review pools, the one-open-check rule, Review 2 never going to an earlier review's bot, QA waivers and blocked checks find their steps by this, so a renamed check step keeps working. A check request is titled with the step's name (`QA` for a QA step); `Review <n>`, `QA` and `Post Release QA` still name the board's nth review, its QA and its after-release check. |
+| `check` | The kind of check the step asks for: `review`, `qa` or `release_qa`. Review pools, the one-open-check rule, Review 2 never going to an earlier review's bot, QA waivers and blocked checks find their steps by this, so a renamed check step keeps working. A check request is titled with the step's name (`QA` for a QA step); `Review <n>`, `QA` and `Watch 24h` still name the board's nth review, its QA and its after-release check. |
 | `other_company` | On a check step only: `prefer` (the default, also when left out) or `require`. Prefer gives the check to a bot of another model company than the Builder's before one of the Builder's company, which takes it only when no other is free. Require never gives it to one of the Builder's company: the check waits when every free bot runs on that company. See Check pools. |
 
-A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks. Review 1 sends its
-feedback back to the Builder's Fixes step whichever way it goes. Review 2's approval goes to the merge, and a fix made
-after it merges once CI is green on its head. Without QA steps, Review 1 and Review 2 both time out after an hour with `on_timeout: refile`: an unanswered check is filed
-again to another reviewer, never passed on (see `on_timeout`). On a board with QA steps, Review 2 sends its feedback to Review 2 Fixes,
-In QA is `qa`, Post Release QA is `release_qa`, and In QA passes to the merge (skip tag `skip-qa`). Pending Release
-takes merged tickets, and released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
-Release to the next step, with the note "Shipped in vX.Y.Z", and closes the schedule's open Release task once nothing
-is left at Pending Release.
+A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks, and Watch 24h is
+`release_qa`. Reviews send their feedback to Build whichever way they go; Build is shared by the fixes, so a ticket goes
+back to the review it came from (the step events say which). Review 2 passes to the merge; the skip tags `review-1-only`
+and `skip-qa` pass Review 2. Release takes merged tickets, and released steps never hold. Change any of it on the steps.
+Review 1 and Review 2 time out after an hour with `on_timeout: refile`: an unanswered check is filed again to another
+reviewer, never passed on (see `on_timeout`). A board set up before the stage map keeps the flow its old steps were given
+(Review 2 Fixes, In QA and Pending Release). A published release moves the Dev tickets it carries (merged pull request in
+its repository) from Release to Watch 24h, with the note "Shipped in vX.Y.Z" (from Pending Release to the next step on a
+board set up before the stage map), and closes the schedule's open Release task once nothing is left at Release.
 
 GitHub access is reported restored only after a successful current head and checks read. An expired or canceled move stops retrying that move; its disappearance never proves access returned. Engineering and Health retain the single source notice while recovery remains unconfirmed.
 
 ## Automatic starts
 
 Assigned bot work starts as soon as its computer has a free turn. Tico picks the highest-ranked eligible
-On Deck task (or an open general task), moves it to In Progress, and uses that task's own session.
+Build task (or an open general task), moves it to In Progress, and uses that task's own session.
 Snoozed work, unfinished prerequisites and pending milestone waits stay parked. Existing snooze-end,
 blocker-done and milestone events make the task eligible again; no manual nudge is needed.
 
@@ -238,7 +239,7 @@ Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/ke
 the same permissions and revision check. **Automations → System jobs** lists **Start assigned tasks** using
 WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
 
-Hand a ready batch of On Deck tickets to builders in one pass. Each assigned ticket already has its
+Hand a ready batch of Build tickets to builders in one pass. Each assigned ticket already has its
 own session and can start on a free turn; it does not need another Lead turn for each ticket.
 The ordinary task cap and prerequisite checks still apply to the whole batch.
 
@@ -852,9 +853,10 @@ bot; writing `send_webhook` is for a person, or a bot with outbound sending on, 
 
 A task entering a step is the event `step_entered`; a rule's `when` can name the `step` and the `role` (`owner`,
 `requester`, `qa`, `release_manager`, `other`). A team with no `step_entered` rule writes nothing on a step move. A Dev
-tickets type is given its editable rows when it is created or renamed: **Pending Release** is a note to the Release
-Manager. A board with QA steps also gets **QA Fixes** (wakes the Builder that owns the ticket) and **In QA** (wakes QA
-only). Delete a row and it stays deleted.
+tickets type is given three editable rows when it is created or renamed: **Build** wakes the Builder that owns the
+ticket, **Release** is a note to the Release Manager, and **Review 2** wakes QA only. Delete a row and it stays deleted.
+A board set up before the stage map keeps the rows it was given (Pending Release is a note; a board with QA steps also
+has QA Fixes, which wakes the Builder, and In QA, which wakes QA only).
 
 A rule's `step` names a step of its type, by the step's name or its id (case ignored). Saving a wake rule that names a
 step its type does not have is refused (422), and the message lists the type's real steps. Renaming a step moves the
@@ -936,7 +938,7 @@ or choice question instead.
 
 An owner can reopen a Done task with `hub task update <id> --status doing`, or put it back
 with `hub task update <id> --status open --note "why it goes back"`. On Dev tickets, open is
-On Deck. A bot owner must include a note when returning work to open. Automatic starts wait
+Build. A bot owner must include a note when returning work to open. Automatic starts wait
 60 minutes after an owner puts work back, unless the task gets a comment, a new link, or a
 blocker finishes. Ordinary note edits and automatic notices do not end that wait. A linked
 blocker still holds the task. If a blocker arrives after Tico automatically started it and
@@ -1067,7 +1069,7 @@ hub task update <task-id> --step "Waiting for a test machine" --note "Waiting fo
 ```
 
 A ticket parked by hand in a team's waiting step stays a declared hold, and clearing it means moving it back
-to a working step. Deleting a waiting step returns its tickets to the step they were parked from, or to On Deck
+to a working step. Deleting a waiting step returns its tickets to the step they were parked from, or to Build
 when that step is gone, so no ticket is lost to a deleted column.
 
 A refused software review gate, an open dependency or a person/milestone wait also blocks the task.

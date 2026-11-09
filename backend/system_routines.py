@@ -182,7 +182,7 @@ ACTIONS = {
     ),
     "start_task": (
         "start the highest-ranked eligible assigned task in its own session",
-        ("task", "start", "assigned", "On Deck", "prerequisite"),
+        ("task", "start", "assigned", "Build", "prerequisite"),
     ),
     "recover_assignment": (
         "list an unattempted assignment once on its owner's task roundup after one hour; show it in Health and its manager's Needs you two hours later",
@@ -279,7 +279,7 @@ ACTIONS = {
         ("merge", "release", "wait", "wake"),
     ),
     "send_release_task": (
-        "send the Release Manager one task for what is at Pending Release",
+        "send the Release Manager one task for what is at Release",
         ("release", "manager", "pending"),
     ),
     "start_editions": (
@@ -735,7 +735,7 @@ JOBS = [
     Job(
         "release_hour",
         "Daily release",
-        "At the team's release hour, sends the Release Manager one task for what is at Pending Release.",
+        "At the team's release hour, sends the Release Manager one task for what is at Release.",
         HOUSEKEEPING,
         "At the release hour",
         then=("send_release_task",),

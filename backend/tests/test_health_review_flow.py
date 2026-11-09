@@ -27,11 +27,11 @@ def ticket(api, number=206, step='Second look'):
                     'flow': {'check': 'review', 'on_pass': 'Build', 'on_fail': 'Build'},
                 },
                 {
-                    'name': 'In QA',
+                    'name': 'QA',
                     'status': 'review',
-                    'flow': {'check': 'qa', 'on_pass': 'merge', 'on_fail': 'QA Fixes'},
+                    'flow': {'check': 'qa', 'on_pass': 'merge', 'on_fail': 'QA rework'},
                 },
-                {'name': 'QA Fixes', 'status': 'doing', 'flow': {'after_green': 'merge'}},
+                {'name': 'QA rework', 'status': 'doing', 'flow': {'after_green': 'merge'}},
             ],
         )
         task = H.task_create(
@@ -125,7 +125,7 @@ def _closed_changes_at_head_name_the_builder(api, n):
 
 
 def _approval_that_satisfies_merge_ready_names_the_builder_to_merge(api, n):
-    task = ticket(api, number=n, step='In QA')
+    task = ticket(api, number=n, step='QA')
     child(api, task, title=f'QA: PR #{n}', verdict='pass')
     [item] = items(api, task)
     assert item['whose_move'] == 'bot:builder'
@@ -148,7 +148,7 @@ def test_health_recommendations_use_the_flows_ticket_eligibility(environment, su
 def _health_recommendations_use_the_flows_ticket_eligibility(api, n, state, action):
     from backend import step_flow as F, task_holds, verdict_moves as V
 
-    source = 'Second look' if action in ('advance', 'shared_after_green') else 'In QA'
+    source = 'Second look' if action in ('advance', 'shared_after_green') else 'QA'
     task = ticket(api, number=n, step=source)
     child(
         api,
@@ -162,7 +162,7 @@ def _health_recommendations_use_the_flows_ticket_eligibility(api, n, state, acti
             c.execute(
                 'UPDATE task_steps SET flow=? WHERE id=?',
                 (
-                    json.dumps({'check': 'qa', 'on_pass': 'merge', 'on_fail': 'QA Fixes', 'skip_tag': 'skip-qa'}),
+                    json.dumps({'check': 'qa', 'on_pass': 'merge', 'on_fail': 'QA rework', 'skip_tag': 'skip-qa'}),
                     task['step_id'],
                 ),
             )
@@ -172,7 +172,7 @@ def _health_recommendations_use_the_flows_ticket_eligibility(api, n, state, acti
             )
             H._set_task_tags(c, 'human:morgan', task['id'], ['skip-qa'])
         elif 'after_green' in action:
-            fixes_name = 'Build' if action == 'shared_after_green' else 'QA Fixes'
+            fixes_name = 'Build' if action == 'shared_after_green' else 'QA rework'
             fixes = c.execute(
                 'SELECT id FROM task_steps WHERE type_id=? AND name=?', (task['type_id'], fixes_name)
             ).fetchone()[0]
@@ -215,14 +215,14 @@ def _a_qa_title_filed_at_build_cannot_approve_a_later_qa_step(api, n):
         H._task_event(c, task['id'], H.KEEPER, 'step', None, task['step_id'], '')
     early = child(api, task, title=f'QA: PR #{n}', verdict='pass')
     with api.app.state.store.transaction() as c:
-        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='In QA'", (task['type_id'],)).fetchone()[0]
+        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='QA'", (task['type_id'],)).fetchone()[0]
         c.execute("UPDATE tasks SET step_id=?,status='review' WHERE id=?", (qa, task['id']))
         H._task_event(c, task['id'], H.KEEPER, 'step', task['step_id'], qa, '')
         current = H.task(c, task['id'])
         assert F.check_step(c, H.task(c, early['id']), current) is None
         assert V.merge_ready(c, current) is None
     [item] = items(api, task)
-    assert item['whose_move'] == 'In QA pool'
+    assert item['whose_move'] == 'QA pool'
     assert 'no reviewer filed yet' in item['fix']
     assert 'merge PR' not in item['fix'] and 'move PR' not in item['fix']
 
@@ -270,7 +270,7 @@ def test_open_checks_name_their_owner_for_renamed_review_qa_and_security(environ
     api = setup(environment)
     for number, step, title in (
         (206, 'Second look', 'Second look: PR #206'),
-        (207, 'In QA', 'QA: PR #207'),
+        (207, 'QA', 'QA: PR #207'),
         (208, 'Second look', 'Security: PR #208'),
     ):
         task = ticket(api, number=number, step=step)
@@ -300,7 +300,7 @@ def _private_children_supply_no_owner_or_verdict_to_health(api, n):
 def _hidden_qa_failure_cannot_turn_a_public_pass_into_merge_readiness(api, n):
     from backend import verdict_moves as V
 
-    task = ticket(api, number=n, step='In QA')
+    task = ticket(api, number=n, step='QA')
     with api.app.state.store.transaction() as c:
         # With no failure target, the ticket stays at QA even after a failed check.
         c.execute(
@@ -312,7 +312,7 @@ def _hidden_qa_failure_cannot_turn_a_public_pass_into_merge_readiness(api, n):
     with api.app.state.store.read_transaction() as c:
         assert V.merge_ready(c, H.task(c, task['id'])) is None
     [item] = items(api, task)
-    assert item['whose_move'] == 'In QA pool'
+    assert item['whose_move'] == 'QA pool'
     assert 'merge PR' not in item['fix'] and 'move PR' not in item['fix']
     assert 'address review changes' not in item['fix']
     assert all(value not in json.dumps(item) for value in (hidden['id'], 'hidden-reviewer', 'QA again'))
@@ -430,7 +430,7 @@ def test_aged_review_reads_stay_constant_as_tickets_grow(environment):
 
 
 def _a_qa_pass_cannot_clear_a_failure_at_the_same_head(api, n):
-    task = ticket(api, number=n, step='In QA')
+    task = ticket(api, number=n, step='QA')
     child(api, task, title=f'QA: PR #{n}', verdict='fail')
     child(api, task, title=f'QA again: PR #{n}', verdict='pass')
     [item] = items(api, task)
@@ -439,11 +439,11 @@ def _a_qa_pass_cannot_clear_a_failure_at_the_same_head(api, n):
 
 
 def _green_new_head_at_a_fixes_step_uses_merge_ready(api, n):
-    task = ticket(api, number=n, step='In QA')
+    task = ticket(api, number=n, step='QA')
     child(api, task, title=f'QA: PR #{n}', verdict='fail', head=OLD)
     with api.app.state.store.transaction() as c:
         build = dict(
-            c.execute("SELECT * FROM task_steps WHERE type_id=? AND name='QA Fixes'", (task['type_id'],)).fetchone()
+            c.execute("SELECT * FROM task_steps WHERE type_id=? AND name='QA rework'", (task['type_id'],)).fetchone()
         )
         c.execute('UPDATE task_steps SET flow=? WHERE id=?', (json.dumps({'after_green': 'merge'}), build['id']))
         c.execute('UPDATE tasks SET step_id=?,status=? WHERE id=?', (build['id'], 'doing', task['id']))
@@ -456,7 +456,7 @@ def _green_new_head_at_a_fixes_step_uses_merge_ready(api, n):
 def _same_head_qa_reentry_keeps_health_at_changes_until_a_new_head(api, n):
     from backend import verdict_moves as V
 
-    task = ticket(api, number=n, step='In QA')
+    task = ticket(api, number=n, step='QA')
     store = api.app.state.store
     with store.transaction() as c:
         c.execute('UPDATE task_steps SET check_pool=NULL WHERE id=?', (task['step_id'],))
@@ -474,14 +474,14 @@ def _same_head_qa_reentry_keeps_health_at_changes_until_a_new_head(api, n):
                 c, 'bot:reviewer', check['id'], status='done', note='Reviewed.', verdict=value, verdict_head=HEAD
             )
             outcome = V.after_capture(c, check['id'], HEAD, attempt)
-            assert outcome and outcome['moved'] == 'QA Fixes'
-            assert V.step_of(c, H.task(c, task['id'])) == 'QA Fixes'
+            assert outcome and outcome['moved'] == 'QA rework'
+            assert V.step_of(c, H.task(c, task['id'])) == 'QA rework'
             assert V.merge_ready(c, H.task(c, task['id'])) is None
 
     finish('fail')
     assert 'address review changes' in items(api, task)[0]['fix']
     with store.transaction() as c:
-        H.task_update(c, 'bot:builder', task['id'], step='In QA')
+        H.task_update(c, 'bot:builder', task['id'], step='QA')
     finish('pass')
     [item] = items(api, task)
     assert item['whose_move'] == 'bot:builder'

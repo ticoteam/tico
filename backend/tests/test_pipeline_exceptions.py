@@ -18,6 +18,26 @@ HEAD = "a" * 40
 def board(c, profile="manager"):
     found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
     typ = H.type_get(c, found[0]) if found else dev_type(c)
+    return managed(c, typ, profile)
+
+
+def qa_board(c):
+    """A generic board with its own QA step (the QA check is an engine feature, not an Engineering stage): Build, QA, Closed."""
+    typ = H.type_create(
+        c,
+        H.KEEPER,
+        "QA board",
+        [
+            {"name": "Build", "status": "open"},
+            {"name": "QA", "status": "review"},
+            {"name": "Closed", "status": "closed"},
+        ],
+    )
+    c.execute("UPDATE task_types SET role='engineering' WHERE id=?", (typ["id"],))  # the list is an engineering type's
+    return managed(c, H.type_get(c, typ["id"]), "manager")
+
+
+def managed(c, typ, profile):
     c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
     BS.write(c, 'coo', {'name': 'coo', 'runtime': 'fake', 'status': 'active', 'profile': profile})
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
@@ -44,8 +64,11 @@ def doing(c, row):
     return H.task(c, row["id"])
 
 
-def ticket(c, typ, title="Fix the connection", step="In Progress", minutes=0):
+def ticket(c, typ, title="Fix the connection", step="Build", minutes=0):
     row = H.task_create(c, "bot:coo", title, "Build.", "bot:cpo", type=typ["id"], step=step, lint=False)
+    if step == "Build":
+        # A ticket being built is doing, as In Progress was; the Build step's own status is open.
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row["id"],))
     settled(c)
     if minutes:
         then = H.shift(H.now(), minutes=-minutes)
@@ -248,11 +271,13 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
 
     def routine(c, typ, title):
         # Both tickets first: making one settles the jobs queued so far, and every event below must stay counted.
-        row, late = ticket(c, typ, title), ticket(c, typ, title + " late")
+        # The Build step's Warn after (the default In Progress had): Build is open, so the default does not seed it.
+        c.execute("UPDATE task_steps SET limit_minutes=240 WHERE type_id=? AND name='Build'", (typ["id"],))
+        row, late = ticket(c, typ, title, step="Review 1"), ticket(c, typ, title + " late")
         check = check_of(c, row, "Review 1: PR #7")
         H.task_comment(c, "bot:ops", check["id"], "VERDICT: approve PR #7 head " + HEAD)
         H.task_update(c, "bot:ops", check["id"], status="done", note="approve")
-        H.task_update(c, "bot:cpo", row["id"], step="QA Fixes")
+        H.task_update(c, "bot:cpo", row["id"], step="Build")
         H.task_update(c, "bot:cpo", row["id"], status="waiting", note="Waits on QA")
         H.task_update(c, "bot:cpo", row["id"], status="doing", note="Back on it")
         # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
@@ -295,10 +320,10 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         assert any(e["key"] == "ticket:" + late["id"] + ":stuck" for e in listed(c, typ)), "it is on the list instead"
         # Entering a check step with no linked pull request files no review.
         c.execute(
-            "UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='In QA'", (json.dumps(["ops"]), typ["id"])
+            "UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='Review 2'", (json.dumps(["ops"]), typ["id"])
         )
         fresh = ticket(c, typ, "Fix Codex")
-        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='In QA'", (typ["id"],)).fetchone()[0]
+        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Review 2'", (typ["id"],)).fetchone()[0]
         c.execute("UPDATE tasks SET step_id=?, status='review' WHERE id=?", (qa, fresh["id"]))
         assert check_pools.entered(c, "bot:cpo", H.task(c, fresh["id"])) is None
         assert list(H.TR.child_ids(c, fresh["id"])) == []
@@ -424,22 +449,22 @@ def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_
     with api.app.state.store.transaction() as c:
         typ = board(c)
         c.execute(
-            "UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='In QA'", (json.dumps(["ops"]), typ["id"])
+            "UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='Review 2'", (json.dumps(["ops"]), typ["id"])
         )
-        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='In QA'", (typ["id"],)).fetchone()[0]
+        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Review 2'", (typ["id"],)).fetchone()[0]
         row = ticket(c, typ, "Fix Cursor", minutes=120)
         H.task_link(c, "bot:cpo", row["id"], "https://github.com/acme/app/pull/41", kind="pr")
         c.execute("UPDATE tasks SET step_id=?, status='review' WHERE id=?", (qa, row["id"]))
         settled(c)
         [missing] = listed(c, typ, "stuck")
-        assert "no check filed at In QA" in missing["cause"], "nothing filed: the missing check is the exception"
-        check = check_of(c, row, "QA: PR #41")
+        assert "no check filed at Review 2" in missing["cause"], "nothing filed: the missing check is the exception"
+        check = check_of(c, row, "Review 2: PR #41")
         ended = H.shift(H.now(), minutes=-60)
         c.execute("UPDATE tasks SET status='done', done_at=?, updated_at=? WHERE id=?", (ended, ended, check["id"]))
         settled(c)
         [entry] = listed(c, typ, "stuck")
         assert "no check filed" not in entry["cause"]
-        assert "QA: PR #41 finished and the ticket has not moved on (owner cpo)" in entry["cause"]
+        assert "Review 2: PR #41 finished and the ticket has not moved on (owner cpo)" in entry["cause"]
         assert entry["since"] == ended and entry["key"] == missing["key"]
         c.execute("UPDATE tasks SET done_at=?, updated_at=? WHERE id=?", (H.now(), H.now(), check["id"]))
         assert listed(c, typ, "stuck") == [], "a check that just finished: the builder has time to move it on"
@@ -467,7 +492,7 @@ def test_held_notes_alone_never_wake_a_manager(api):
 # wake. `finance` is a pool bot the manager does not manage; `ops` asks for its hidden tickets.
 
 
-def unread(c, typ, title, step="In QA", owner="bot:finance"):
+def unread(c, typ, title, step="QA", owner="bot:finance"):
     """A private ticket whose parties the manager neither is nor manages."""
     made = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step=step, lint=False)
     c.execute("UPDATE tasks SET private=1 WHERE id=?", (made["id"],))
@@ -496,19 +521,19 @@ def both_reads(api, c, typ, kind):
 
 def test_slots_count_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):
     with api.app.state.store.transaction() as c:
-        typ = board(c)
+        typ = qa_board(c)
         outside_the_chart(c, typ)
-        flow(c, typ, "In Progress", assign={"pool": ["finance"], "slots": 1})
+        flow(c, typ, "Build", assign={"pool": ["finance"], "slots": 1})
         for n in range(3):
             unread(c, typ, f"Hidden slot {n}")
         shown, body = both_reads(api, c, typ, "slots")
         assert shown == [] and "finance holds" not in body, "no visible ticket: no private workload count"
-        mine = ticket(c, typ, "Visible slot", step="In QA")
+        mine = ticket(c, typ, "Visible slot", step="QA")
         c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (mine["id"],))
         shown, body = both_reads(api, c, typ, "slots")
         assert shown == [] and "finance holds" not in body, "one readable ticket is within its one slot"
         # Authorized positive: a second readable ticket is over the slot, and the count is of readable ones only.
-        other = ticket(c, typ, "Visible slot 2", step="QA Fixes")
+        other = ticket(c, typ, "Visible slot 2", step="QA")
         c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (other["id"],))
         shown, body = both_reads(api, c, typ, "slots")
         assert [e["cause"].split(",")[0] for e in shown] == ["finance holds 2 tickets"]
@@ -517,25 +542,25 @@ def test_slots_count_only_the_tickets_the_manager_reads_in_pipeline_and_the_hour
 
 def test_a_steps_backlog_counts_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):
     with api.app.state.store.transaction() as c:
-        typ = board(c)
+        typ = qa_board(c)
         outside_the_chart(c, typ)
-        flow(c, typ, "In QA", backlog={"over": 1})
+        flow(c, typ, "QA", backlog={"over": 1})
         unread(c, typ, "Hidden backlog 1")
         unread(c, typ, "Hidden backlog 2")
-        ticket(c, typ, "Visible backlog 1", step="In QA")
+        ticket(c, typ, "Visible backlog 1", step="QA")
         shown, body = both_reads(api, c, typ, "backlog")
         assert shown == [] and "over its backlog" not in body, "one readable ticket is not over a backlog of 1"
-        ticket(c, typ, "Visible backlog 2", step="In QA")
+        ticket(c, typ, "Visible backlog 2", step="QA")
         shown, body = both_reads(api, c, typ, "backlog")
-        assert [e["cause"] for e in shown] == ["2 tickets at In QA, over its backlog of 1"]
-        assert "2 tickets at In QA, over its backlog of 1" in body
+        assert [e["cause"] for e in shown] == ["2 tickets at QA, over its backlog of 1"]
+        assert "2 tickets at QA, over its backlog of 1" in body
 
 
 def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):
     from backend import move_retry
 
     with api.app.state.store.transaction() as c:
-        typ = board(c)
+        typ = qa_board(c)
         outside_the_chart(c, typ)
         early, late = H.shift(H.now(), minutes=-30), H.shift(H.now(), minutes=-10)
 
@@ -549,9 +574,7 @@ def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeli
                     H.KEEPER,
                     move_retry.FIELD,
                     row["step_id"],
-                    json.dumps(
-                        {"state": "waiting", "outage": True, "since": since, "step": "Review 1", "kind": "github"}
-                    ),
+                    json.dumps({"state": "waiting", "outage": True, "since": since, "step": "QA", "kind": "github"}),
                 ),
             )
 
@@ -559,7 +582,7 @@ def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeli
         held(hidden, early)
         shown, body = both_reads(api, c, typ, "outage")
         assert [e for e in shown if e["key"] == "service:github:outage"] == [] and "GitHub cannot be read" not in body
-        mine = ticket(c, typ, "Visible outage", step="In QA")
+        mine = ticket(c, typ, "Visible outage", step="QA")
         held(mine, late)
         shown, body = both_reads(api, c, typ, "outage")
         [entry] = [e for e in shown if e["key"] == "service:github:outage"]

@@ -1,5 +1,5 @@
-"""Check pools: the bots that may do a check step (a step whose flow names its `check` kind: Review 1 and Review 2
-on the Dev board, plus In QA and Post Release QA on a board that still has them), set on the step in Settings > Tasks,
+"""Check pools: the bots that may do a check step (a step whose flow names its `check` kind: Review 1 and Review 2 and
+Watch 24h on the Dev board, plus In QA and Post Release QA on a board that still has them), set on the step in Settings > Tasks,
 and how Tico gives a ticket's check to one of them (Dev 534 A).
 
 When a ticket enters a step with a pool and has no open check there for its pull request head, Tico files the check
@@ -42,6 +42,7 @@ HELD = ("paused", "quarantined", "limited", "crashed")  # bot_status states that
 SEED = {
     "Review 1": ("pr-reviewer-sol", "reviewer-2", "reviewer-xai", "reviewer-muse"),
     "Review 2": ("pr-reviewer-sol", "reviewer-2", "reviewer-xai", "reviewer-muse"),
+    "Watch 24h": ("qa-engineer-copy",),
 }
 # The QA steps' pools. A step a board does not have takes no pool, so a board without QA steps is given only SEED.
 SEED_QA = {
@@ -677,7 +678,7 @@ def _pool_text(state):
 
 # ----------------------------------------------------------------------------------------------- filing
 def _prs(c, ticket, step):
-    """The pull requests a check at this step judges: the open ones, and after the merge (Post Release QA) the
+    """The pull requests a check at this step judges: the open ones, and after the merge (Watch 24h) the
     merged ones too."""
     from . import review_gate, step_flow
 

@@ -172,7 +172,7 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
     "title,parent_step,child",
     [
         ("Release QA: v1.2.3", None, False),
-        ("Verify shipped behavior", "Post Release QA", True),
+        ("Verify shipped behavior", "Watch 24h", True),
         ("Verify the change", "Second opinion", True),  # a renamed review step: its flow says it is a check
         ("Review 1: legacy request", None, True),
     ],
@@ -187,8 +187,8 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
         if parent_step:
             # Synthetic step: no production task, factory gate or PR is involved.
             kind = {
-                "Post Release QA": "release_qa",
-                "In QA": "qa",
+                "Watch 24h": "release_qa",
+                "QA": "qa",
                 "Review 1": "review",
                 "Review 2": "review",
                 "Second opinion": "review",
@@ -363,7 +363,7 @@ def test_the_title_classifier_reads_every_run_as_review_work_and_every_ordinary_
             made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent_for)
             assert P.is_review_task(c, H.task(c, made["id"])), title
             assert P.is_review_task(c, {"title": title, "owner_id": "bot:checker"}, parent_id=parent_for), title
-        for step, kind in (("Review 1", "review"), ("Review 2", "review"), ("In QA", "qa")):
+        for step, kind in (("Review 1", "review"), ("Review 2", "review"), ("QA", "qa")):
             step_id = "unit-" + step.replace(" ", "-").lower()
             c.execute(
                 "INSERT INTO task_steps(id,type_id,name,position,status,flow) VALUES(?,'general',?,98,'review',?)",

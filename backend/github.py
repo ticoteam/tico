@@ -697,7 +697,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             from . import review_pages, verdict_moves
 
             if not read_refresh:
-                # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
+                # The merge the builder was woken for: a ticket whose last check passed goes to Release.
                 verdict_moves.merged(c, task)
             # A merge read on refresh has no webhook behind it, so its page is queued here too. queue() is idempotent:
             # a second merge event finds the page already queued and changes nothing.

@@ -19,19 +19,19 @@ def dev_type(api, numbered=False):
             H.KEEPER,
             'Dev tickets',
             [
-                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Build', 'status': 'open'},
                 {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Pending Release', 'status': 'doing'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Release', 'status': 'review'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
             numbered=numbered,
         )
-        merge = next(s for s in typ['steps'] if s['name'] == 'Pending Release')
+        merge = next(s for s in typ['steps'] if s['name'] == 'Release')
         c.execute('UPDATE task_steps SET flow=? WHERE id=?', (json.dumps({'on_merge': True}), merge['id']))
     return typ
 
 
-def ticket(api, typ, step='In Progress', **fields):
+def ticket(api, typ, step='Build', **fields):
     return post(
         api,
         'tasks',
@@ -56,7 +56,7 @@ def test_merged_pr_satisfies_a_check_after_the_merge_but_not_a_review_before_it(
     )
     with api.app.state.store.transaction() as c:
         c.execute(
-            "UPDATE tasks SET step_id=(SELECT id FROM task_steps WHERE type_id=? AND name='In Progress') WHERE id=?",
+            "UPDATE tasks SET step_id=(SELECT id FROM task_steps WHERE type_id=? AND name='Build') WHERE id=?",
             (typ['id'], early['id']),
         )
         row = H.task(c, early['id'])
@@ -64,7 +64,7 @@ def test_merged_pr_satisfies_a_check_after_the_merge_but_not_a_review_before_it(
         refused = review_gate.problem(c, row, row['owner_id'], require_pr=True)
         assert refused and 'no linked PR' in refused[3]  # pre-merge: still wants an open PR
         c.execute(
-            "UPDATE tasks SET step_id=(SELECT id FROM task_steps WHERE type_id=? AND name='Pending Release') WHERE id=?",
+            "UPDATE tasks SET step_id=(SELECT id FROM task_steps WHERE type_id=? AND name='Release') WHERE id=?",
             (typ['id'], early['id']),
         )
         row = H.task(c, early['id'])
@@ -73,7 +73,7 @@ def test_merged_pr_satisfies_a_check_after_the_merge_but_not_a_review_before_it(
 
 def test_a_ticket_with_only_a_closed_pr_is_still_refused(api):
     typ = dev_type(api)
-    task = ticket(api, typ, step='Pending Release', links=[PR])
+    task = ticket(api, typ, step='Release', links=[PR])
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
     hook(api, 'pull_request', pr_event('closed', state='closed', head={'sha': HEAD}))
     with api.app.state.store.transaction() as c:

@@ -3,13 +3,33 @@
 
 import pytest
 
-from backend import hubdb as H, rules, verdict_moves as V
+from backend import hubdb as H, rules, step_flow as F, verdict_moves as V
 from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
 from backend.tests.usage_rows import segment
 from backend import bot_settings as BS
 
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [
+    ("Build", "open"),
+    ("Review 1", "review"),
+    ("Review 2", "review"),
+    ("Merge queue", "review"),
+    ("Release", "review"),
+    ("Watch 24h", "review"),
+    ("Closed", "closed"),
+]
+# A board with a QA check in Review 2's place: the Engineering board has none, so QA behaviour is tested on this one.
+QA_STEPS = [
+    ("Build", "open"),
+    ("Review 1", "review"),
+    ("QA", "review"),
+    ("Merge queue", "review"),
+    ("Release", "review"),
+    ("Watch 24h", "review"),
+    ("Closed", "closed"),
+]
+# The Dev board before the stage map, with its QA steps: a board that still has them keeps the timeout that skips a round.
+LEGACY_STEPS = [
     ("On Deck", "open"),
     ("In Progress", "doing"),
     ("Review 1", "review"),
@@ -62,10 +82,16 @@ def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runt
     return turn
 
 
-def ticket(api, step="Review 1", labels=(), steps=STEPS):
+def ticket(api, step="Review 1", labels=(), steps=STEPS, qa=False):
+    chosen = QA_STEPS if qa else steps
+    working = next(
+        n for n, _ in chosen if n in ("Build", "In Progress")
+    )  # where the ticket is created, then moved from
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in steps])
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in chosen])
         rules.seed_dev(c)
+        if qa:
+            F.apply(c, typ["id"], {"QA": {"check": "qa", "on_pass": "merge", "on_fail": "Build", "timeout_hours": 2}})
     task = post(
         api,
         "tasks",
@@ -74,7 +100,7 @@ def ticket(api, step="Review 1", labels=(), steps=STEPS):
             "title": "Improve messages",
             "body": "Build messages.",
             "type": typ["id"],
-            "step": "In Progress",
+            "step": working,
             "links": [PR],
         },
     )
@@ -160,14 +186,14 @@ def test_a_review_is_feedback_its_approval_goes_back_to_the_builder_once(api):
     task = ticket(api)
     review = check(api, task)
     verdict(api, review, "approve")
-    assert step(api, task) == "Review 1 Fixes", "a Dev review is feedback: the builder moves on when it is in"
+    assert step(api, task) == "Build", "a Dev review is feedback: the builder moves on when it is in"
     assert step_events(api, task)[-1][0] == H.KEEPER, "Tico moved it, not the reviewer"
     woke = builder_jobs(api)
     assert len(woke) == 1 and woke[0]["refs"][V.HANDOFF] == "verdict", woke
     # The builder's own move to the same step is the same move: nothing new is written.
     before = step_events(api, task)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="Review 1 Fixes")
+        H.task_update(c, "bot:cpo", task["id"], step="Build")
     assert step_events(api, task) == before
 
 
@@ -197,10 +223,10 @@ def test_a_verdict_after_the_builder_moved_on_moves_nothing(api):
 
 
 def test_post_release_qa_verdict_does_not_run_the_pre_release_step_mover(api):
-    task = ticket(api, step="Post Release QA")
+    task = ticket(api, step="Watch 24h")
     review = check(api, task, title="Post Release QA: PR #412")
     verdict(api, review, "pass")
-    assert step(api, task) == "Post Release QA", "Post Launch QA owns the parent ticket's disposition"
+    assert step(api, task) == "Watch 24h", "Post Launch QA owns the parent ticket's disposition"
 
 
 def test_duplicate_delivery_of_the_same_eligible_verdict_moves_only_once(api):
@@ -211,7 +237,7 @@ def test_duplicate_delivery_of_the_same_eligible_verdict_moves_only_once(api):
     with api.app.state.store.transaction() as c:
         once = V.after_verdict(c, H.task(c, review["id"]))
     assert once is None, "the ticket has already left the step the verdict judged"
-    assert step(api, task) == "Review 1 Fixes"
+    assert step(api, task) == "Build"
     assert len(step_events(api, task)) == len(before) + 1
 
 
@@ -219,7 +245,7 @@ def test_configured_other_family_checker_fallback_verdict_still_moves(api):
     task = ticket(api)
     review = check(api, task, model="gpt-6.1-sol", provider="openai")
     verdict(api, review, "approve")
-    assert step(api, task) == "Review 1 Fixes"
+    assert step(api, task) == "Build"
     with api.app.state.store.read() as c:
         check_row = H.task(c, review["id"])
         assert check_row["verdict"] == "approve" and check_row["verdict_head"] == HEAD
@@ -240,7 +266,7 @@ def test_unknown_executed_checker_family_is_recorded_but_does_not_block_verdict(
     task = ticket(api)
     review = check(api, task, model="synthetic-unknown-model", provider="unknown", runtime="claude")
     verdict(api, review, "approve")
-    assert step(api, task) == "Review 1 Fixes"
+    assert step(api, task) == "Build"
     with api.app.state.store.read() as c:
         row = H.task(c, review["id"])
         assert row["verdict"] == "approve"
@@ -269,9 +295,9 @@ def test_verdict_waits_for_its_exact_attempt_capture_then_moves_once(api):
 
         capture_attempt(c, task["id"], review["id"], HEAD, turn)
         moved = V.after_capture(c, review["id"], HEAD, turn)
-        assert moved and moved["moved"] == "Review 1 Fixes"
+        assert moved and moved["moved"] == "Build"
         assert V.after_capture(c, review["id"], HEAD, turn) is None
-        assert V.step_of(c, H.task(c, task["id"])) == "Review 1 Fixes"
+        assert V.step_of(c, H.task(c, task["id"])) == "Build"
 
 
 def test_post_capture_callback_ignores_a_different_or_obsolete_attempt(api):
@@ -291,52 +317,52 @@ def test_post_capture_callback_ignores_a_different_or_obsolete_attempt(api):
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
 
 
-def test_review_2_changes_moves_to_review_2_fixes_and_wakes_the_builder_once_with_verdict_and_head(api):
+def test_review_2_changes_moves_to_build_and_wakes_the_builder_once_with_verdict_and_head(api):
     task = ticket(api, step="Review 2")
     review = check(api, task, "Review 2: PR #412")
     verdict(api, review, "changes")
-    assert step(api, task) == "Review 2 Fixes"
+    assert step(api, task) == "Build"
     woke = [m for m in builder_jobs(api)]
     assert len(woke) == 1, woke
     refs = woke[0]["refs"]
     assert (refs["verdict"], refs["verdict_head"], refs[V.HANDOFF]) == ("changes", HEAD, "verdict")
-    assert "Review 2 Fixes" in woke[0]["body"] and HEAD in woke[0]["body"]
+    assert "Build" in woke[0]["body"] and HEAD in woke[0]["body"]
 
 
-def test_qa_fail_moves_to_qa_fixes_and_the_step_rule_does_not_wake_the_builder_twice(api):
-    task = ticket(api, step="In QA")
+def test_qa_fail_moves_to_build_and_the_step_rule_does_not_wake_the_builder_twice(api):
+    task = ticket(api, step="QA", qa=True)
     qa = check(api, task, "QA: PR #412")
     verdict(api, qa, "fail")
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     woke = builder_jobs(api)
     assert len(woke) == 1 and woke[0]["refs"][V.HANDOFF] == "verdict", woke
 
 
-def test_a_merge_at_in_qa_moves_the_ticket_on_and_a_later_qa_verdict_moves_nothing(api):
-    task = ticket(api, step="In QA")
+def test_a_merge_at_qa_moves_the_ticket_on_and_a_later_qa_verdict_moves_nothing(api):
+    task = ticket(api, step="QA", qa=True)
     qa = check(api, task, "QA: PR #412")
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
-    assert step(api, task) == "Pending Release"
+    assert step(api, task) == "Release"
     verdict(api, qa, "pass")
-    assert step(api, task) == "Pending Release"
+    assert step(api, task) == "Release"
 
 
 def test_qa_pass_before_the_merge_wakes_the_builder_to_merge_and_the_merge_moves_it_on(api):
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     qa = check(api, task, "QA: PR #412")
     verdict(api, qa, "pass")
-    assert step(api, task) == "In QA", "Tico does not merge; the builder does"
+    assert step(api, task) == "QA", "Tico does not merge; the builder does"
     woke = builder_jobs(api)
     assert len(woke) == 1 and woke[0]["refs"][V.HANDOFF] == "merge" and "--match-head-commit " + HEAD in woke[0]["body"]
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
-    assert step(api, task) == "Pending Release"
+    assert step(api, task) == "Release"
 
 
 def test_the_merge_notice_runs_the_merge_and_never_asks_for_a_merged_line_first(api):
     """Green means ready to enqueue: the builder runs the merge command, a repo with a merge queue queues the PR instead,
     and the ticket moves once GitHub reports the merge. No notice asks the builder to claim a merge before it happened."""
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     qa = check(api, task, "QA: PR #412")
     verdict(api, qa, "pass")
@@ -362,7 +388,7 @@ def test_a_board_without_qa_merges_after_its_last_review_once_ci_is_green(api):
     _suite(api, "github-actions", "completed", "success", sha=HEAD, id=7)
     assert len([m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]) == 1, "once per head"
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
-    assert step(api, task) == "Pending Release"
+    assert step(api, task) == "Release"
 
 
 def test_a_board_without_qa_merges_once_review_2_approves_and_ci_is_green(api):
@@ -404,12 +430,12 @@ def test_a_board_without_qa_files_an_unanswered_review_2_again_and_never_passes_
 
 
 def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_recorded(api):
-    task = ticket(api, step="QA Fixes", labels=["skip-qa"])
+    task = ticket(api, step="Build", labels=["skip-qa"])
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
-    assert step(api, task) == "In QA", "the merge is next, and Tico does not merge"
+        H.task_update(c, "bot:cpo", task["id"], step="Review 2")
+    assert step(api, task) == "Review 2", "the merge is next, and Tico does not merge"
     assert not checks_of(api, task), "a skipped step files no check"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["merge"]
     with api.app.state.store.read() as c:
@@ -418,19 +444,19 @@ def test_a_ticket_tagged_with_a_steps_skip_tag_passes_it_by_and_the_skip_is_reco
                 "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step_skipped'",
                 (task["id"],),
             ).fetchone()[0]
-            == "In QA"
+            == "Review 2"
         )
 
 
 def test_a_green_new_head_at_a_step_with_after_green_moves_on_to_the_next_check(api):
     task = ticket(api)
-    flow(api, task, "Review 1 Fixes", after_green="Review 2")
+    flow(api, task, "Build", after_green="Review 2")
     review = check(api, task)
     verdict(api, review, "changes")
-    assert step(api, task) == "Review 1 Fixes"
+    assert step(api, task) == "Build"
     # A re-run on the judged head is not a fix.
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
-    assert step(api, task) == "Review 1 Fixes"
+    assert step(api, task) == "Build"
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     receipt(api, task, NEW)
     _suite(api, "github-actions", "completed", "success", sha=NEW)
@@ -438,28 +464,28 @@ def test_a_green_new_head_at_a_step_with_after_green_moves_on_to_the_next_check(
     assert step_events(api, task)[-1][0] == H.KEEPER
 
 
-@pytest.mark.parametrize('target', ['merge', 'In QA'])
+@pytest.mark.parametrize('target', ['merge', 'Review 2'])
 def test_shared_fixes_waits_for_a_head_newer_than_the_review_that_returned_it(api, target):
     from backend import step_flow as F
 
     task = ticket(api)
-    flow(api, task, 'Review 2', on_pass='Review 1 Fixes', on_fail='Review 1 Fixes')
-    flow(api, task, 'Review 1 Fixes', after_green=target)
+    flow(api, task, 'Review 2', on_pass='Build', on_fail='Build')
+    flow(api, task, 'Build', after_green=target)
     verdict(api, check(api, task), 'approve')
-    assert step(api, task) == 'Review 1 Fixes'
+    assert step(api, task) == 'Build'
     hook(api, 'pull_request', pr_event('synchronize', head={'sha': NEW}))
     receipt(api, task, NEW)
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cpo', task['id'], step='Review 2')
     verdict(api, check(api, task, title='Review 2: PR #412'), 'changes', head=NEW)
-    assert step(api, task) == 'Review 1 Fixes'
+    assert step(api, task) == 'Build'
     with api.app.state.store.transaction() as c:
         current = H.task(c, task['id'])
         assert V._judged_by(c, current, F.step(c, current['step_id'])) == NEW
         assert V.merge_ready(c, current) is None
         c.execute('DELETE FROM jobs')
     _suite(api, 'github-actions', 'completed', 'success', sha=NEW)
-    assert step(api, task) == 'Review 1 Fixes'
+    assert step(api, task) == 'Build'
     assert not builder_jobs(api), 'green CI on the returned head must not skip its changes'
 
     fixed = 'e' * 40
@@ -467,10 +493,10 @@ def test_shared_fixes_waits_for_a_head_newer_than_the_review_that_returned_it(ap
     receipt(api, task, fixed)
     _suite(api, 'github-actions', 'completed', 'success', sha=fixed)
     if target == 'merge':
-        assert step(api, task) == 'Review 1 Fixes'
+        assert step(api, task) == 'Build'
         assert [m['refs'].get(V.HANDOFF) for m in builder_jobs(api)] == ['merge']
     else:
-        assert step(api, task) == 'In QA'
+        assert step(api, task) == 'Review 2'
 
 
 def test_on_the_dev_board_the_builder_moves_on_from_fixes_not_ci(api):
@@ -479,11 +505,11 @@ def test_on_the_dev_board_the_builder_moves_on_from_fixes_not_ci(api):
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     receipt(api, task, NEW)
     _suite(api, "github-actions", "completed", "success", sha=NEW)
-    assert step(api, task) == "Review 1 Fixes", "only the builder knows when the feedback is in"
+    assert step(api, task) == "Build", "only the builder knows when the feedback is in"
 
 
 def test_a_check_finished_with_no_verdict_is_feedback_and_goes_to_on_fail(api):
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     qa = check(api, task, "QA: PR #412")
     with api.app.state.store.transaction() as c:
         H.task_update(c, qa["owner_id"], qa["id"], status="done", note="Looked at it; the login form is odd.")
@@ -491,14 +517,14 @@ def test_a_check_finished_with_no_verdict_is_feedback_and_goes_to_on_fail(api):
 
         turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (qa["id"],)).fetchone()[0]
         check_pools.capture_attempt(c, turn)
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["verdict"], [
         (m["refs"], m["body"][:200]) for m in builder_jobs(api)
     ]
 
 
 def test_a_ticket_past_its_check_steps_timeout_has_its_check_closed_and_the_round_skipped(api):
-    task = ticket(api)
+    task = ticket(api, steps=LEGACY_STEPS)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c) == [], "not an hour yet"
@@ -511,7 +537,7 @@ def test_a_ticket_past_its_check_steps_timeout_has_its_check_closed_and_the_roun
 def test_a_check_timeout_keeps_unrelated_human_and_bot_subtasks_open(api):
     from backend import step_flow
 
-    task = ticket(api)
+    task = ticket(api, steps=LEGACY_STEPS)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
         children = [
@@ -628,16 +654,16 @@ def test_allocator_never_grants_a_pool_bot_access_to_an_unreadable_private_task(
 def test_a_merge_outside_the_flow_moves_the_ticket_to_the_merged_step_from_any_earlier_step(api):
     task = ticket(api, step="Review 1")
     hook(api, "pull_request", pr_event("closed", merged=True, merge_commit_sha="e" * 40, head={"sha": HEAD}))
-    assert step(api, task) == "Pending Release"
+    assert step(api, task) == "Release"
 
 
 def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_it(api):
     task = ticket(api)
-    flow(api, task, "Review 1 Fixes", after_green="Review 2")
+    flow(api, task, "Build", after_green="Review 2")
     verdict(api, check(api, task), "changes")
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     _suite(api, "github-actions", "completed", "success", sha=NEW)
-    assert step(api, task) == "Review 1 Fixes", "no receipt at the new head holds the ticket where it is"
+    assert step(api, task) == "Build", "no receipt at the new head holds the ticket where it is"
     with api.app.state.store.read() as c:
         told = c.execute(
             "SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs,'$.review_gate') IS NOT NULL",
@@ -653,13 +679,13 @@ def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_i
     assert step(api, task) == "Review 2"
 
 
-def test_qa_fixes_green_new_head_goes_back_to_in_qa(api):
-    task = ticket(api, step="In QA")
-    flow(api, task, "QA Fixes", after_green="In QA")
+def test_qa_fixes_green_new_head_goes_back_to_qa(api):
+    task = ticket(api, step="QA", qa=True)
+    flow(api, task, "Build", after_green="QA")
     verdict(api, check(api, task, "QA: PR #412"), "fail")
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     _suite(api, "github-actions", "completed", "success", sha=NEW)
-    assert step(api, task) == "In QA"
+    assert step(api, task) == "QA"
 
 
 def test_a_failed_check_at_a_review_step_is_a_builder_hand_off(api):
@@ -681,7 +707,7 @@ def test_a_failed_check_at_a_review_step_is_a_builder_hand_off(api):
 @pytest.mark.parametrize("hold", ["own subtask", "ask"])
 def test_a_verdict_given_while_the_ticket_was_held_moves_it_once_the_hold_clears(api, hold):
     """A person's open subtask holds the ticket at its step while its review is out: her own check-titled one, or an
-    ask its builder put to her. Once she finishes it, the ticket is back at Review 1, not On Deck, and the verdict
+    ask its builder put to her. Once she finishes it, the ticket is back at Review 1, not Build, and the verdict
     given meanwhile moves it on."""
     task = ticket(api)
     review = check(api, task)
@@ -718,7 +744,7 @@ def test_a_verdict_given_while_the_ticket_was_held_moves_it_once_the_hold_clears
             from backend import task_blocked
 
             task_blocked.sweep(c, H.now(), [task["id"]])
-    assert step(api, task) == "Review 1 Fixes", "back at Review 1, the verdict given meanwhile moves it on"
+    assert step(api, task) == "Build", "back at Review 1, the verdict given meanwhile moves it on"
     handoffs = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "verdict"]
     assert len(handoffs) == 1 and handoffs[0]["refs"]["verdict"] == "changes", builder_jobs(api)
 
@@ -761,7 +787,7 @@ def test_a_private_review_is_not_replayed_into_its_wider_parent_when_a_hold_clea
     assert step(api, task) == "Review 1"
 
 
-# Dev 646: a pass at the head stalled In QA while a suite GitHub queued for the head never started (zero check runs).
+# Dev 646: a pass at the head stalled QA while a suite GitHub queued for the head never started (zero check runs).
 STUCK = 109731401006
 
 
@@ -830,7 +856,7 @@ def _link(api, task):
 def _passed_at_head_behind_a_stuck_suite(api):
     """Dev 627's shape: green Actions, a Tico App suite queued for the head and never run, a QA check closed with no
     verdict at the head, then a pass at the head."""
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD, id=1)
     _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
     sibling = check(api, task, "QA: PR #412")
@@ -838,7 +864,7 @@ def _passed_at_head_behind_a_stuck_suite(api):
         H.task_close(c, H.KEEPER, sibling["id"], note="No verdict: same family as the builder.")
     verdict(api, check(api, task, "QA: PR #412"), "pass")
     assert _link(api, task)["checks"] == "pending"
-    assert step(api, task) == "In QA"
+    assert step(api, task) == "QA"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"], "CI is not green yet"
     return task
 
@@ -871,7 +897,7 @@ def test_a_pass_at_head_behind_a_suite_that_never_started_wakes_the_merge_on_the
     assert (
         len(merges) == 1 and merges[0]["refs"]["pr_head"] == HEAD and "--match-head-commit " + HEAD in merges[0]["body"]
     )
-    assert step(api, task) == "In QA", "Tico does not merge; the builder does"
+    assert step(api, task) == "QA", "Tico does not merge; the builder does"
     # Nothing is pending any more, so the next pass reads nothing and wakes nobody again.
     assert G.refresh_pending_checks(service) == []
     assert len([m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]) == 1
@@ -905,7 +931,7 @@ def test_a_task_read_finishes_a_failed_head_behind_a_suite_that_never_started(ap
     import threading
     from backend import github as G
 
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
     _suite(api, "github-actions", "completed", "cancelled", sha=HEAD, id=1)
     verdict(api, check(api, task, "QA: PR #412"), "pass")
@@ -976,21 +1002,21 @@ def test_a_round_timed_out_after_a_pass_at_the_head_says_it_passed(api):
 
 def test_a_round_timed_out_after_a_fail_at_the_head_goes_to_on_fail_and_never_to_the_merge(api):
     """A ticket back in QA at a head QA already failed, with a fresh round nobody judged: the round times out, and the
-    head is still failed, so the ticket goes to QA Fixes rather than being cleared to merge on green CI."""
-    task = ticket(api, step="In QA")
+    head is still failed, so the ticket goes to Build rather than being cleared to merge on green CI."""
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     verdict(api, check(api, task, "QA: PR #412"), "fail")
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
         c.execute("DELETE FROM jobs")
     check(api, task, "QA: PR #412")
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c, H.shift(H.now(), hours=24 * 7)) == [task["id"]]
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     handoffs = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF)]
     assert [m["refs"][V.HANDOFF] for m in handoffs] == ["verdict"], handoffs
-    assert handoffs[0]["refs"]["verdict"] == "fail" and "QA Fixes" in handoffs[0]["body"], handoffs[0]
+    assert handoffs[0]["refs"]["verdict"] == "fail" and "Build" in handoffs[0]["body"], handoffs[0]
 
 
 def test_timeout_keeps_the_private_qa_verdict_source(api):
@@ -998,7 +1024,7 @@ def test_timeout_keeps_the_private_qa_verdict_source(api):
     from backend import task_privacy
     from backend.tests.test_api import unrelated_task_managers
 
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
         qa = H.task_create(
@@ -1007,7 +1033,7 @@ def test_timeout_keeps_the_private_qa_verdict_source(api):
         usage(c, qa["id"], "cmo")
     verdict(api, qa, "fail")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
         c.execute("DELETE FROM jobs")
     check(api, task, "QA: PR #412")
     with api.app.state.store.transaction() as c:
@@ -1033,37 +1059,37 @@ def test_timeout_keeps_the_private_qa_verdict_source(api):
 
 def test_a_later_pass_at_a_failed_head_does_not_let_a_timed_out_round_clear_the_merge(api):
     """QA failed the head, a later round passed the same head without a fix, and the ticket came back once more: the
-    round that times out then finds the fail still standing, so the ticket goes to QA Fixes, never to the merge."""
-    task = ticket(api, step="In QA")
+    round that times out then finds the fail still standing, so the ticket goes to Build, never to the merge."""
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     verdict(api, check(api, task, "QA: PR #412"), "fail")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
     verdict(api, check(api, task, "QA: PR #412"), "pass")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
         c.execute("DELETE FROM jobs")
     check(api, task, "QA: PR #412")
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c, H.shift(H.now(), hours=24 * 7)) == [task["id"]]
         assert V.merge_ready(c, H.task(c, task["id"])) is None
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     assert [m["refs"][V.HANDOFF] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF)] == ["verdict"]
 
 
-def test_a_pass_at_a_head_a_fail_stands_on_goes_to_qa_fixes_and_only_a_new_head_clears_it(api):
-    """QA failed the head, the builder sent the ticket back to In QA without a push, and a new QA round passed the same
-    head. The fail still stands there: the ticket goes to QA Fixes and the builder is not woken to merge. A fix at a new
+def test_a_pass_at_a_head_a_fail_stands_on_goes_to_build_and_only_a_new_head_clears_it(api):
+    """QA failed the head, the builder sent the ticket back to QA without a push, and a new QA round passed the same
+    head. The fail still stands there: the ticket goes to Build and the builder is not woken to merge. A fix at a new
     head, passed, does clear it."""
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     verdict(api, check(api, task, "QA: PR #412"), "fail")
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
         c.execute("DELETE FROM jobs")
     verdict(api, check(api, task, "QA: PR #412"), "pass")
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     woke = builder_jobs(api)
     assert [m["refs"].get(V.HANDOFF) for m in woke] == ["verdict"], woke
     assert woke[0]["refs"]["verdict"] == "pass" and "only a new head clears it" in woke[0]["body"], woke[0]
@@ -1072,26 +1098,26 @@ def test_a_pass_at_a_head_a_fail_stands_on_goes_to_qa_fixes_and_only_a_new_head_
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     _suite(api, "github-actions", "completed", "success", sha=NEW)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
         c.execute("DELETE FROM jobs")
     verdict(api, check(api, task, "QA: PR #412"), "pass", head=NEW)
-    assert step(api, task) == "In QA", "Tico does not merge; the builder does"
+    assert step(api, task) == "QA", "Tico does not merge; the builder does"
     merges = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
     assert len(merges) == 1 and merges[0]["refs"]["pr_head"] == NEW, merges
 
 
 def test_a_short_head_pass_does_not_clear_a_fail_recorded_at_the_full_head(api):
     """A checker may write the head short: a pass recorded with the 7-character head does not clear a fail recorded with
-    the full SHA of the same commit, so the ticket goes to QA Fixes and is never cleared to merge."""
-    task = ticket(api, step="In QA")
+    the full SHA of the same commit, so the ticket goes to Build and is never cleared to merge."""
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     verdict(api, check(api, task, "QA: PR #412"), "fail")
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
         c.execute("DELETE FROM jobs")
     verdict(api, check(api, task, "QA: PR #412"), "pass", head=HEAD[:7])
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     woke = builder_jobs(api)
     assert [m["refs"].get(V.HANDOFF) for m in woke] == ["verdict"], woke
     assert "already gave fail" in woke[0]["body"] and "only a new head clears it" in woke[0]["body"], woke[0]
@@ -1101,16 +1127,16 @@ def test_a_short_head_pass_does_not_clear_a_fail_recorded_at_the_full_head(api):
 
 def test_a_full_head_pass_does_not_clear_a_fail_recorded_at_the_short_head(api):
     """The same commit named short first: a fail recorded with the 7-character head still stands over a pass recorded
-    with the full SHA, so the ticket goes to QA Fixes and is never cleared to merge."""
-    task = ticket(api, step="In QA")
+    with the full SHA, so the ticket goes to Build and is never cleared to merge."""
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     verdict(api, check(api, task, "QA: PR #412"), "fail", head=HEAD[:7])
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
         c.execute("DELETE FROM jobs")
     verdict(api, check(api, task, "QA: PR #412"), "pass")
-    assert step(api, task) == "QA Fixes"
+    assert step(api, task) == "Build"
     woke = builder_jobs(api)
     assert [m["refs"].get(V.HANDOFF) for m in woke] == ["verdict"], woke
     assert "already gave fail" in woke[0]["body"] and "only a new head clears it" in woke[0]["body"], woke[0]
@@ -1121,8 +1147,8 @@ def test_a_full_head_pass_does_not_clear_a_fail_recorded_at_the_short_head(api):
 def test_a_timed_out_round_after_a_fail_and_a_later_pass_clears_nothing_when_on_fail_has_no_target(api):
     """With no step to send a failed head to, the fail stays where it was given, and a later pass at that head does not
     clear it. A round that then times out at the head clears nothing either: the merge is not woken."""
-    task = ticket(api, step="In QA")
-    flow(api, task, "In QA", on_fail=None)
+    task = ticket(api, step="QA", qa=True)
+    flow(api, task, "QA", on_fail=None)
     _suite(api, "github-actions", "completed", "success", sha=HEAD)
     verdict(api, check(api, task, "QA: PR #412"), "fail")
     verdict(api, check(api, task, "QA: PR #412"), "pass")
@@ -1130,7 +1156,7 @@ def test_a_timed_out_round_after_a_fail_and_a_later_pass_clears_nothing_when_on_
     with api.app.state.store.transaction() as c:
         assert V.timeouts(c, H.shift(H.now(), hours=24 * 7)) == [task["id"]]
         assert V.merge_ready(c, H.task(c, task["id"])) is None
-    assert step(api, task) == "In QA"
+    assert step(api, task) == "QA"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"], builder_jobs(api)
 
 
@@ -1168,7 +1194,7 @@ def test_a_failed_head_behind_a_suite_that_never_started_hands_the_failure_to_th
     kept the webhook from finishing the head: no failed-check hand-off came, and the ticket sat for hours."""
     from backend import github as G
 
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)  # requested with the push, never started
     _suite(api, "github-actions", "completed", "cancelled", sha=HEAD, id=1)
     verdict(api, check(api, task, "QA: PR #412"), "pass")
@@ -1202,7 +1228,7 @@ def test_a_failed_head_with_a_check_still_running_on_github_is_not_finished_by_t
     still change, and the webhook finishes it when it lands."""
     from backend import github as G
 
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)  # requested with the push, never started
     _suite(api, "github-actions", "completed", "failure", sha=HEAD, id=1)
     service, _ = _github(
@@ -1225,7 +1251,7 @@ def test_a_pending_head_read_failing_with_a_check_still_running_finishes_only_wh
     not); the read that finds the last one done hands the failure over once."""
     from backend import github as G
 
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     _suite(api, "tico-team-bots", "queued", sha=HEAD, id=STUCK)
     verdict(api, check(api, task, "QA: PR #412"), "pass")
     assert _link(api, task)["checks"] == "pending"
@@ -1256,7 +1282,7 @@ def test_a_running_check_the_stored_copy_left_out_still_finishes_the_head_once(a
     failures and leaves the running one out. The read that finds it done hands the failure over once."""
     from backend import github as G
 
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     verdict(api, check(api, task, "QA: PR #412"), "pass")
     failed = G.CHECKS_KEPT + extra
     runs = [{"name": f"shard {n}", "status": "completed", "conclusion": "failure"} for n in range(failed)]
@@ -1289,7 +1315,7 @@ def test_a_check_starting_beside_a_truncated_finished_failure_is_saved_as_still_
     from backend import github as G
     from backend import stranded_resume as SR
 
-    task = ticket(api, step="In QA")
+    task = ticket(api, step="QA", qa=True)
     runs = [{"name": f"shard {n}", "status": "completed", "conclusion": "failure"} for n in range(G.CHECKS_KEPT + 1)]
     service, _ = _github(api, monkeypatch, [], runs)
     _quiet(api, task)

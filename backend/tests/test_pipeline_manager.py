@@ -411,8 +411,8 @@ def test_a_type_created_after_boot_gets_the_default_warn_after_on_its_working_st
             r[0]: r[1]
             for r in c.execute("SELECT name, limit_minutes FROM task_steps WHERE type_id=?", (typ["id"],)).fetchall()
         }
-    assert limits["In Progress"] == 240 and limits["QA Fixes"] == 240
-    assert limits["Done"] is None and limits["In QA"] is None
+    assert limits["Build"] == 240  # In Progress and QA Fixes both folded into Build
+    assert limits["Closed"] is None and limits["Review 2"] is None  # Done and In QA
 
 
 def test_a_ticket_with_no_visit_is_late_from_its_move_into_the_step_not_from_its_creation(api):

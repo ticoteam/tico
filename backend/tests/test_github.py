@@ -1007,7 +1007,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         'task-types',
         {
             'name': 'Dev',
-            'steps': [{'name': 'Pending Release', 'status': 'review'}, {'name': 'Post Release QA', 'status': 'review'}],
+            'steps': [{'name': 'Release', 'status': 'review'}, {'name': 'Watch 24h', 'status': 'review'}],
         },
     )['type']
     tasks = {}
@@ -1022,7 +1022,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
                 'body': 'x',
                 'links': [url],
                 'type': typ['id'],
-                'step': 'Pending Release',
+                'step': 'Release',
             },
         )
         _arm(api, tasks[n]['id'], url=url)
@@ -1541,10 +1541,10 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
             H.KEEPER,
             'Dev tickets',
             [
-                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Build', 'status': 'open'},
                 {'name': 'Review 1', 'status': 'review'},
                 {'name': 'Review 2', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Closed', 'status': 'done'},
             ],
         )
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
@@ -1560,7 +1560,7 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
         except H.Refused as refused:
             return str(refused)
 
-    assert move(type=dev['id'], step='In Progress') == 'doing'
+    assert move(type=dev['id'], step='Build') == 'open'
     # Moved to newer main and nothing more: no commit of the task's own, so nothing to refuse.
     with api.app.state.store.transaction() as c:
         for repo in repos:
@@ -1589,7 +1589,7 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     assert move(status='waiting') == 'waiting'
     assert 'ticoteam/tico branch' in move(step='Review 1')
     hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
-    still = move(step='Done')
+    still = move(step='Closed')
     assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
     post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
     hook(
@@ -1597,7 +1597,7 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     )
     # Linking is necessary; the review gate also needs a current passing receipt.
     assert move(note='Tests: head ' + 'b' * 40 + ': 9 passed, 0 failed') == 'waiting'
-    assert move(step='Review 2') == 'review' and move(step='Done') == 'done'
+    assert move(step='Review 2') == 'review' and move(step='Closed') == 'done'
 
 
 def test_a_hand_off_waits_for_a_branch_check_when_a_push_left_no_webhook_and_no_report(api, monkeypatch):

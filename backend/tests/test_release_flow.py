@@ -14,8 +14,8 @@ LEAVE_OUT = "do not ask anyone for their names"
 
 
 def _team(api, steps=None):
-    """cmo is the Release Manager and cpo the Technical Writer (by starter template); Dev tickets has a Pending Release.
-    `steps` replaces the QA board's steps, for a board without QA."""
+    """cmo is the Release Manager and cpo the Technical Writer (by starter template); Dev tickets has a Release.
+    `steps` replaces the Dev board's steps, for a board that differs from the stage map's."""
     with api.app.state.store.transaction() as c:
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
@@ -23,16 +23,16 @@ def _team(api, steps=None):
             c.execute('INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product', 'ana'))
             BS.write(c, slug, {**bots[slug], 'template': template})
         steps = steps or [
-            {"name": "In QA", "status": "review"},
-            {"name": "Pending Release", "status": "review"},
-            {"name": "Post Release QA", "status": "review"},
-            {"name": "Done", "status": "done"},
+            {"name": "Review 2", "status": "review"},
+            {"name": "Release", "status": "review"},
+            {"name": "Watch 24h", "status": "review"},
+            {"name": "Closed", "status": "done"},
         ]
         dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=steps)
     return dev
 
 
-def _ticket(api, dev, title, number=412, tags=(), owner="cpo"):
+def _ticket(api, dev, title, number=412, tags=(), owner="cpo", step="Release"):
     url = PR.replace("/412", f"/{number}")
     ticket = post(
         api,
@@ -43,7 +43,7 @@ def _ticket(api, dev, title, number=412, tags=(), owner="cpo"):
             "body": "x",
             "links": [url],
             "type": dev["id"],
-            "step": "Pending Release",
+            "step": step,
             "labels": list(tags),
         },
     )
@@ -93,7 +93,7 @@ def test_the_daily_hour_sends_one_task_and_nothing_when_nothing_is_pending(api):
     with store.transaction() as c:
         assert RF.tick(c, later)["sent"] is True
         assert RF.tick(c, later) is None, "an hour is handled once"
-    assert _tasks(api, "cmo") == ["Release: 2 tickets at Pending Release"]
+    assert _tasks(api, "cmo") == ["Release: 2 tickets at Release"]
 
 
 def test_release_now_is_for_those_who_move_dev_tickets_and_wakes_an_open_release_task(api):
@@ -108,7 +108,7 @@ def test_release_now_is_for_those_who_move_dev_tickets_and_wakes_an_open_release
         assert who("cmo") and who("cpo"), "the Release Manager and the Dev tickets type's manager may"
         assert not who("qab"), "any other bot, though bots may work Dev tickets, may not"
     first = post(api, "release/now", {"note": "hotfix"})
-    assert first["sent"] is True and _tasks(api, "cmo") == ["Release: 1 ticket at Pending Release"]
+    assert first["sent"] is True and _tasks(api, "cmo") == ["Release: 1 ticket at Release"]
     again = post(api, "release/now", {})
     assert again["reason"] == "already_open" and again["task"] == first["task"]
     assert len(_tasks(api, "cmo")) == 1, "a second Release task is never filed beside an open one"
@@ -126,7 +126,7 @@ def test_a_persons_release_now_with_a_note_goes_out_with_nothing_pending_and_nob
     assert len(_tasks(api, "cmo")) == 1 and _tasks(api, "cmo")[0].startswith("Release: requested by ")
     with api.app.state.store.read() as c:
         body = H.task(c, first["task"])["body"]
-    assert "PRs merged straight to main" in body and "Nothing is at Pending Release" in body
+    assert "PRs merged straight to main" in body and "Nothing is at Release" in body
     again = post(api, "release/now", {"note": "and one more"})
     assert again["reason"] == "already_open" and again["task"] == first["task"]
     assert len(_tasks(api, "cmo")) == 1, "an open Release task is woken, not doubled"
@@ -370,7 +370,7 @@ def test_a_published_release_moves_its_carried_tickets_to_post_release_qa(api):
     dev = _team(api)
     carried = _ticket(api, dev, "Visual replies", 412)
     _published(api)
-    assert _step_of(api, carried) == "Post Release QA"
+    assert _step_of(api, carried) == "Watch 24h"
     with api.app.state.store.read() as c:
         notes = [
             r[0]
@@ -381,12 +381,12 @@ def test_a_published_release_moves_its_carried_tickets_to_post_release_qa(api):
     assert any("Shipped in v1.2.3" in (n or "") for n in notes)
     # a second delivery for the same tag changes nothing; a ticket moved on by hand is left where it is
     _published(api)
-    assert _step_of(api, carried) == "Post Release QA"
+    assert _step_of(api, carried) == "Watch 24h"
 
 
 def test_a_published_release_on_a_board_without_qa_moves_its_carried_tickets_to_done(api):
     dev = _team(api, steps=[{"name": "Pending Release", "status": "review"}, {"name": "Done", "status": "done"}])
-    carried = _ticket(api, dev, "Visual replies", 412)
+    carried = _ticket(api, dev, "Visual replies", 412, step="Pending Release")
     _published(api)
     assert _step_of(api, carried) == "Done"
 
@@ -396,17 +396,17 @@ def test_a_ticket_without_a_merged_pull_request_in_the_repository_stays_at_pendi
     other = post(
         api,
         "tasks",
-        {"owner": "cpo", "title": "No PR", "body": "x", "type": dev["id"], "step": "Pending Release"},
+        {"owner": "cpo", "title": "No PR", "body": "x", "type": dev["id"], "step": "Release"},
     )
     _published(api)
-    assert _step_of(api, other) == "Pending Release"
+    assert _step_of(api, other) == "Release"
 
 
 def test_the_repository_name_is_compared_without_case(api):
     dev = _team(api)
     carried = _ticket(api, dev, "Visual replies", 412)
     _published(api, repo="TicoTeam/Tico")
-    assert _step_of(api, carried) == "Post Release QA"
+    assert _step_of(api, carried) == "Watch 24h"
     assert RF.norm_repo("https://github.com/TicoTeam/Tico.git/") == "ticoteam/tico"
 
 
@@ -420,5 +420,5 @@ def test_a_release_closes_the_schedule_filed_release_task_but_not_one_the_manage
     _published(api)
     with store.read() as c:
         rows = {r["title"]: r["status"] for r in c.execute("SELECT title, status FROM tasks WHERE owner_id='bot:cmo'")}
-    assert rows["Release: 1 ticket at Pending Release"] in ("closed", "done")
+    assert rows["Release: 1 ticket at Release"] in ("closed", "done")
     assert rows["Release: notes for the team"] not in ("closed", "done") and mine

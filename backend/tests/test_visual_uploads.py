@@ -1,4 +1,4 @@
-"""Visual replies 1/4 (Dev 245, QA Fixes): a bot's `--visual` / MCP `visuals` file goes up as bytes, not base64 JSON
+"""Visual replies 1/4 (Dev 245, Build): a bot's `--visual` / MCP `visuals` file goes up as bytes, not base64 JSON
 (a third bigger), so a 21 MB picture and a 2.5 MB page attach on both paths: a chat reply (raw body, 27 MB request
 limit) and a task comment (multipart; JSON there stops at 10 MB)."""
 

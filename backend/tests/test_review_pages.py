@@ -164,8 +164,8 @@ def dev_type(c, name: str) -> str:
         H.KEEPER,
         name,
         [
-            {"name": "In Progress", "status": "doing"},
-            {"name": "Pending Release", "status": "done", "flow": {"on_merge": True}},
+            {"name": "Build", "status": "open"},
+            {"name": "Release", "status": "review", "flow": {"on_merge": True}},
         ],
     )["id"]
 
@@ -184,7 +184,7 @@ def queued(api, owners: list[str], start: int = 100) -> list[str]:
                 "",
                 owner,
                 type=type_id,
-                step="In Progress",
+                step="Build",
                 private=False,
                 mover=True,
             )

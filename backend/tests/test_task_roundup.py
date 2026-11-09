@@ -940,9 +940,10 @@ def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_
             "Build.",
             "bot:cpo",
             type=typ["id"],
-            step="In Progress",
+            step="Build",
             lint=False,
         )
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row['id'],))
         c.execute(
             "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
             (ago(hours=5), row["id"]),
@@ -950,7 +951,7 @@ def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_
         c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (ago(hours=5), ago(hours=5), row["id"]))
         assert "coo" in task_roundup.run(c, DAY)["woke"]
         body = only_list(c, "coo")
-        assert named_in(body) == 1 and f"- {row['id'][:8]} Fix the connection: Late in In Progress: 5 h" in body
+        assert named_in(body) == 1 and f"- {row['id'][:8]} Fix the connection: Late in Build: 5 h" in body
         assert (
             c.execute(
                 "SELECT count(*) FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.task')=?",
@@ -960,7 +961,7 @@ def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_
         ), "no wake of its own: the list is its notice"
         assert "coo" not in task_roundup.run(c, NOON)["woke"], "not listed again before seven days"
         assert "coo" in task_roundup.run(c, H.shift(DAY, days=7))["woke"]
-        assert "Late in In Progress: 7 days" in lists(c, "coo")[-1]
+        assert "Late in Build: 7 days" in lists(c, "coo")[-1]
 
 
 def queued_roundups(c, slug):
@@ -981,9 +982,10 @@ def late_manager_ticket(c):
         "Build.",
         "bot:cpo",
         type=typ["id"],
-        step="In Progress",
+        step="Build",
         lint=False,
     )
+    c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row['id'],))
     c.execute(
         "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (ago(hours=5), row["id"])
     )
@@ -1016,7 +1018,7 @@ def test_a_list_held_as_a_note_is_not_sent_and_its_lines_are_listed_again_next_r
         assert "coo" not in task_roundup.run(c, DAY)["woke"], "a held note is not a sent list"
         monkeypatch.setattr(rules, "judge", real)
         assert "coo" in task_roundup.run(c, NOON)["woke"], "its line was not consumed: it is listed again next run"
-        assert "Late in In Progress" in lists(c, "coo")[-1]
+        assert "Late in Build" in lists(c, "coo")[-1]
 
 
 def test_a_late_ticket_its_manager_cannot_read_is_not_listed_first(api):
@@ -1031,10 +1033,11 @@ def test_a_late_ticket_its_manager_cannot_read_is_not_listed_first(api):
             "Build.",
             "bot:cpo",
             type=typ["id"],
-            step="In Progress",
+            step="Build",
             lint=False,
             private=True,
         )
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row['id'],))
         c.execute(
             "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
             (ago(hours=5), row["id"]),
@@ -1057,9 +1060,10 @@ def test_a_manager_with_a_late_ticket_and_an_over_backlog_gets_one_list_with_bot
             "Build.",
             "bot:cpo",
             type=typ["id"],
-            step="In Progress",
+            step="Build",
             lint=False,
         )
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (late['id'],))
         c.execute(
             "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
             (ago(hours=5), late["id"]),
@@ -1069,7 +1073,7 @@ def test_a_manager_with_a_late_ticket_and_an_over_backlog_gets_one_list_with_bot
         assert "coo" in task_roundup.run(c, DAY)["woke"]
         body = only_list(c, "coo")
         assert named_in(body) == 2
-        assert body.index("Late in In Progress: 5 h") < body.index("Backlog: 4 tickets wait at Inbox")
+        assert body.index("Late in Build: 5 h") < body.index("Backlog: 4 tickets wait at Inbox")
 
 
 def test_a_step_over_its_backlog_is_one_line_on_its_oldest_ticket_for_its_manager_once_per_every_hours_first(api):
@@ -1662,9 +1666,10 @@ def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_
             "Build.",
             "bot:cpo",
             type=typ["id"],
-            step="In Progress",
+            step="Build",
             lint=False,
         )
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row['id'],))
         c.execute(
             "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
             (ago(hours=5), row["id"]),
@@ -1672,7 +1677,7 @@ def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_
         c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (ago(hours=5), ago(hours=5), row["id"]))
         assert "coo" in task_roundup.run(c, DAY)["woke"]
         body = only_list(c, "coo")
-        assert named_in(body) == 1 and f"- {row['id'][:8]} Fix the connection: Late in In Progress: 5 h" in body
+        assert named_in(body) == 1 and f"- {row['id'][:8]} Fix the connection: Late in Build: 5 h" in body
         assert (
             c.execute(
                 "SELECT count(*) FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.task')=?",
@@ -1682,7 +1687,7 @@ def test_a_late_ticket_is_one_line_on_its_managers_list_with_no_wake_of_its_own_
         ), "no wake of its own: the list is its notice"
         assert "coo" not in task_roundup.run(c, NOON)["woke"], "not listed again before seven days"
         assert "coo" in task_roundup.run(c, H.shift(DAY, days=7))["woke"]
-        assert "Late in In Progress: 7 days" in lists(c, "coo")[-1]
+        assert "Late in Build: 7 days" in lists(c, "coo")[-1]
 
 
 def queued_roundups(c, slug):
@@ -1703,9 +1708,10 @@ def late_manager_ticket(c):
         "Build.",
         "bot:cpo",
         type=typ["id"],
-        step="In Progress",
+        step="Build",
         lint=False,
     )
+    c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row['id'],))
     c.execute(
         "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (ago(hours=5), row["id"])
     )
@@ -1738,7 +1744,7 @@ def test_a_list_held_as_a_note_is_not_sent_and_its_lines_are_listed_again_next_r
         assert "coo" not in task_roundup.run(c, DAY)["woke"], "a held note is not a sent list"
         monkeypatch.setattr(rules, "judge", real)
         assert "coo" in task_roundup.run(c, NOON)["woke"], "its line was not consumed: it is listed again next run"
-        assert "Late in In Progress" in lists(c, "coo")[-1]
+        assert "Late in Build" in lists(c, "coo")[-1]
 
 
 def test_a_late_ticket_its_manager_cannot_read_is_not_listed(api):
@@ -1753,10 +1759,11 @@ def test_a_late_ticket_its_manager_cannot_read_is_not_listed(api):
             "Build.",
             "bot:cpo",
             type=typ["id"],
-            step="In Progress",
+            step="Build",
             lint=False,
             private=True,
         )
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (row['id'],))
         c.execute(
             "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
             (ago(hours=5), row["id"]),
@@ -1779,9 +1786,10 @@ def test_a_manager_with_a_late_ticket_and_an_over_backlog_gets_one_list_with_bot
             "Build.",
             "bot:cpo",
             type=typ["id"],
-            step="In Progress",
+            step="Build",
             lint=False,
         )
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (late['id'],))
         c.execute(
             "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
             (ago(hours=5), late["id"]),
@@ -1791,7 +1799,7 @@ def test_a_manager_with_a_late_ticket_and_an_over_backlog_gets_one_list_with_bot
         assert "coo" in task_roundup.run(c, DAY)["woke"]
         body = only_list(c, "coo")
         assert named_in(body) == 2
-        assert body.index("Late in In Progress: 5 h") < body.index("Backlog: 4 tickets wait at Inbox")
+        assert body.index("Late in Build: 5 h") < body.index("Backlog: 4 tickets wait at Inbox")
 
 
 def test_a_step_over_its_backlog_is_one_line_on_its_oldest_ticket_for_its_manager_once_per_every_hours(api):

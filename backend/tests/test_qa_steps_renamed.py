@@ -6,13 +6,11 @@ from backend import hubdb as H
 from backend.tests import test_qa_waivers as waivers
 from backend.tests.test_qa_waivers import api  # noqa: F401  (api is a fixture)
 
+# The Dev board's review steps, and the board's own QA step (the Engineering board has none: see test_qa_waivers).
 RENAMED = {
     "Review 1": "First look",
-    "Review 1 Fixes": "First look Fixes",
     "Review 2": "Second look",
-    "Review 2 Fixes": "Second look Fixes",
-    "In QA": "Acceptance",
-    "QA Fixes": "Acceptance Fixes",
+    "QA": "Acceptance",
 }
 
 

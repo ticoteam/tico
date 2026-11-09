@@ -1,5 +1,5 @@
 """A Dev board whose check steps are renamed keeps every check rule: review, QA, waivers and pools find their steps by
-the step's flow (`check`: review, qa or release_qa), never by the names Review 1, Review 2, In QA or Post Release QA
+the step's flow (`check`: review, qa or release_qa), never by the names Review 1, Review 2, QA or Watch 24h
 (backend/step_flow.titled)."""
 
 import json
@@ -13,11 +13,8 @@ from backend.tests.test_github import api, get, headers  # noqa: F401  (api is a
 
 RENAMED = {
     "Review 1": "First look",
-    "Review 1 Fixes": "First look Fixes",
     "Review 2": "Second look",
-    "Review 2 Fixes": "Second look Fixes",
-    "In QA": "Acceptance",
-    "QA Fixes": "Acceptance Fixes",
+    "QA": "Acceptance",
 }
 
 
@@ -33,7 +30,8 @@ def test_the_dev_board_seeds_each_check_step_with_its_kind():
     def kinds(flows):
         return {n: f.get("check") for n, f in flows.items() if f.get("check")}
 
-    assert kinds(step_flow.DEV) == {"Review 1": "review", "Review 2": "review"}
+    assert kinds(step_flow.DEV) == {"Review 1": "review", "Review 2": "review", "Watch 24h": "release_qa"}
+    assert kinds(step_flow.LEGACY_DEV) == {"Review 1": "review", "Review 2": "review"}
     assert kinds(step_flow.QA_DEV) == {
         "Review 1": "review",
         "Review 2": "review",
@@ -192,19 +190,19 @@ def test_the_task_manager_finds_a_second_open_request_for_a_renamed_step(api):
 
 
 def test_renaming_a_step_keeps_the_boards_rules_on_it(api):
-    """The Dev board's "wake QA on In QA" row follows In QA to its new name."""
+    """The Dev board's "wake QA on Review 2" row follows Review 2 to its new name."""
     task = pools.ticket(api, None)
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
             "note,created_by,created_at,updated_at,revision) VALUES('r-qa','type',?,'step_entered',?,'wake','{}',1,1,"
             "'QA',?,?,?,1)",
-            (task["type_id"], json.dumps({"step": ["Review 2", "Done"], "role": "qa"}), H.KEEPER, H.now(), H.now()),
+            (task["type_id"], json.dumps({"step": ["Review 2", "Closed"], "role": "qa"}), H.KEEPER, H.now(), H.now()),
         )
     _renamed(api, task, {"Review 2": "Second look"})
     with api.app.state.store.read() as c:
         row = c.execute("SELECT condition, revision FROM rules WHERE id='r-qa'").fetchone()
-    assert json.loads(row[0]) == {"step": ["Second look", "Done"], "role": "qa"} and row[1] == 2
+    assert json.loads(row[0]) == {"step": ["Second look", "Closed"], "role": "qa"} and row[1] == 2
 
 
 def test_the_upgrade_finds_a_renamed_release_check_by_its_pool_after_the_merge_step(api):

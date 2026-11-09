@@ -139,7 +139,7 @@ def test_a_busy_owner_takes_its_resume_behind_its_other_work(api):
 
 
 def test_a_reviewer_bots_task_left_in_doing_is_resumed(api):
-    # The Post Release QA bot is a reviewer: it pulls no work of its own, so a check it left in doing sat there.
+    # The Watch 24h bot is a reviewer: it pulls no work of its own, so a check it left in doing sat there.
     with api.app.state.store.transaction() as c:
         add_bot(c, "checker")
         put(c, "checker", P.REVIEWER)
@@ -406,19 +406,17 @@ def test_health_stuck_task_check_leaves_a_task_the_sweep_just_resumed_to_it(api)
 
 
 DEV_STEPS = [
-    ("On Deck", "open"),
-    ("In Progress", "doing"),
+    ("Build", "open"),
     ("Review 1", "review"),
-    ("Review 1 Fixes", "doing"),
-    ("In QA", "review"),
-    ("QA Fixes", "doing"),
-    ("Pending Release", "review"),
-    ("Post Release QA", "review"),
-    ("Done", "done"),
+    ("QA", "review"),
+    ("Merge queue", "review"),
+    ("Release", "review"),
+    ("Watch 24h", "review"),
+    ("Closed", "done"),
 ]
 
 
-def dev_ticket(api, title, step="In QA", n=412, checks="failing", check=None):
+def dev_ticket(api, title, step="QA", n=412, checks="failing", check=None):
     """A Dev ticket `ops` builds, at `step`, with an open pull request whose CI reads `checks`. `check`: the status of
     a QA check filed under it by `cpo`, or None for no check."""
     from backend import rules
@@ -432,6 +430,10 @@ def dev_ticket(api, title, step="In QA", n=412, checks="failing", check=None):
                 c, H.KEEPER, "Dev tickets", [{"name": name, "status": status} for name, status in DEV_STEPS]
             )["id"]
         )
+        # The QA check on this board: a pass merges, a fail goes back to Build (the Engineering board has no QA step now).
+        from backend import step_flow as F
+
+        F.apply(c, typ, {"QA": {"check": "qa", "on_pass": F.MERGE, "on_fail": "Build", "timeout_hours": 2}})
         rules.seed_dev(c)
     url = f"https://github.com/ticoteam/tico/pull/{n}"
     tid = post(
@@ -442,7 +444,7 @@ def dev_ticket(api, title, step="In QA", n=412, checks="failing", check=None):
             "title": title,
             "body": "Build " + title + ".",
             "type": typ,
-            "step": "In Progress",
+            "step": "Build",
             "links": [url],
         },
     )["id"]
@@ -482,7 +484,7 @@ def wait_for_reviewer(c, tid):
 
 
 def test_a_bot_ticket_left_at_a_check_step_after_its_check_is_resumed(api):
-    """Nov 8, PR 3055: QA passed, CI was cancelled and the failure never reached the builder; the ticket sat at In QA
+    """Nov 8, PR 3055: QA passed, CI was cancelled and the failure never reached the builder; the ticket sat at QA
     for hours. With its check over, no CI going and nothing recorded to wait on, its builder hears of it."""
     online(api, "ops")
     tid = dev_ticket(api, "Pipeline manager 1/3", check="done")
@@ -494,19 +496,19 @@ def test_a_bot_ticket_left_at_a_check_step_after_its_check_is_resumed(api):
             "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state='queued' "
             "AND json_extract(m.refs,'$.stranded')=1"
         ).fetchone()[0]
-        assert "at In QA" in body and "re-run CI" in body
+        assert "at QA" in body and "re-run CI" in body
         assert SR.handles(c, H.task(c, tid)), "the roundup's quiet line leaves it to the sweep"
 
 
 def test_a_review_ticket_someone_else_moves_is_not_resumed(api):
     """An open check, CI still going, a merge queued, a check that finished within the hour, a step that is not a
-    check (Pending Release), and a review with no flow (a person's look) all wait on someone else."""
+    check (Release), and a review with no flow (a person's look) all wait on someone else."""
     online(api, "ops")
     checking = dev_ticket(api, "Check open", n=1, check="doing")
     ci = dev_ticket(api, "CI going", n=2, checks="pending")
     queued = dev_ticket(api, "Merge queued", n=3, checks="passing")
     fresh = dev_ticket(api, "Check just finished", n=4, check="done")
-    release = dev_ticket(api, "Merged", n=5, step="Pending Release", checks="passing")
+    release = dev_ticket(api, "Merged", n=5, step="Release", checks="passing")
     look = new_task(api, "A person's look")
     rerun = dev_ticket(api, "Failed, re-run going", n=7, checks="failing")
     pooled = dev_ticket(api, "No reviewer free", n=8, checks="passing")
@@ -575,7 +577,7 @@ def test_a_queued_review_resume_is_dropped_at_claim_once_ci_or_the_merge_queue_t
                 (tid,),
             )
         else:
-            H._task_event(c, tid, H.KEEPER, "step", "In QA", "QA Fixes")
+            H._task_event(c, tid, H.KEEPER, "step", "QA", "Build")
     attempt = claim(api, machine)
     assert attempt is None or attempt["job_id"] != job, "the claim does not hand the stale resume out"
     with api.app.state.store.read() as c:

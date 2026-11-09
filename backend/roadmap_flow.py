@@ -143,11 +143,13 @@ def ensure(c):
             'Engineering',
             LEGACY_MANAGERS[ENGINEERING],
             [
-                ('Todo', 'open'),
-                ('Doing', 'doing'),
-                ('In review', 'review'),
-                ('Ready to ship', 'ready'),
-                ('Done', 'closed'),
+                ('Build', 'open'),
+                ('Review 1', 'review'),
+                ('Review 2', 'review'),
+                ('Merge queue', 'review'),
+                ('Release', 'review'),
+                ('Watch 24h', 'review'),
+                ('Closed', 'closed'),
             ],
         ),
     ):
@@ -194,7 +196,7 @@ FLOW_NAMES = {
     'Ready to ship': (READY_STEP,),
     'Shipped': ('Shipped', 'Done'),
 }
-READY_FROM = 'pending release'  # a Dev tickets step: it and every step after it are "ready to ship"
+READY_FROM = 'release'  # a Dev tickets step: it and every step after it are "ready to ship"
 READY_MARKER = 'roadmap_ready_to_ship_step'
 
 
@@ -222,8 +224,8 @@ def stage(c, ticket, marks):
     A ticket shipped when it reached a done status. Closed counts too where the type has no done step (the default
     Engineering type's Done is closed), or when it was closed straight from done: accepting finished work closes it.
     One closed from any other status (a duplicate, superseded, or declined first) and a declined one count for nothing.
-    Started is any step after the type's first; ready is its Pending Release step or later (or a ready status).
-    Steps, not statuses: Review 1 and Pending Release are both review."""
+    Started is any step after the type's first; ready is its Release step or later (or a ready status).
+    Steps, not statuses: Review 1 and Release are both review."""
     _, status, type_id, position, closed_done, has_done = ticket
     if status == 'done' or status == 'closed' and (closed_done or not has_done):
         return 'shipped'
@@ -252,7 +254,7 @@ def stage(c, ticket, marks):
 
 def wanted(stages):
     """The roadmap step for these tickets' stages, or None when no ticket is linked. Linking alone moves nothing: the
-    item is Building once a ticket is In Progress or later, Ready to ship once every ticket that counts is at Pending
+    item is Building once a ticket is in Build or later, Ready to ship once every ticket that counts is at
     Release or later, Shipped once every one is done. It follows them back the same way on every change."""
     if not stages:
         return None

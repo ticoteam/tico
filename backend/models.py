@@ -3044,7 +3044,7 @@ class SettingsAsk(SettingsPlan):
 
 
 class ReleaseNow(Contract):
-    """Ask the Release Manager to release what is at Pending Release now; `note` goes in its task."""
+    """Ask the Release Manager to release what is at Release now; `note` goes in its task."""
 
     note: str | None = Field(default=None, max_length=1000)
 

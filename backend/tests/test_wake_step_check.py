@@ -12,7 +12,7 @@ from backend import redesign_migration as M
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_redesign_migration import db, first_start
 
-STEPS = [("Ready", "open"), ("QA/PR Rejected", "open"), ("Done", "done")]
+STEPS = [("Ready", "open"), ("QA/PR Rejected", "open"), ("Closed", "closed")]
 
 
 def build_type(api):
@@ -90,11 +90,11 @@ def patch(api, aid, body, expected=200):
 
 def test_a_rule_that_names_no_step_is_flagged_in_the_list_and_the_detail_and_still_converted(api):
     typ = build_type(api)
-    convert(api, typ, [("rule_qa", "QA Fixes")])
+    convert(api, typ, [("rule_qa", "Build")])
     aid = wake_id(api, typ)
     listed = [a for a in get(api, "automations?limit=500")["automations"] if a["id"] == aid][0]
     [problem] = listed["problems"]
-    assert problem["rule"] == "rule_qa" and problem["step"] == "QA Fixes"
+    assert problem["rule"] == "rule_qa" and problem["step"] == "Build"
     assert "QA/PR Rejected" in problem["why"] and "Ready" in problem["why"]
     assert detail(api, aid)["problems"] == listed["problems"]
 
@@ -105,7 +105,7 @@ def test_an_edit_that_names_a_step_the_type_does_not_have_is_refused_with_its_re
     aid = wake_id(api, typ)
     flow = detail(api, aid)
     r = patch(api, aid, {"steps": set_step(flow, 0, "Pending Review")}, expected=422)
-    assert "Pending Review" in r.text and "QA/PR Rejected" in r.text and "Done" in r.text
+    assert "Pending Review" in r.text and "QA/PR Rejected" in r.text and "Closed" in r.text
     assert detail(api, aid)["problems"] == [], "a refused edit saves nothing"
 
 
@@ -116,14 +116,14 @@ def test_a_valid_step_saves_by_name_ignoring_case_or_by_id(api):
     flow = detail(api, aid)
     patch(api, aid, {"steps": set_step(flow, 0, "qa/pr rejected")})
     assert detail(api, aid)["problems"] == []
-    patch(api, aid, {"steps": set_step(detail(api, aid), 0, step_id(typ, "Done"))})
-    assert rule_steps(detail(api, aid)) == [("rule_ok", step_id(typ, "Done"))]
+    patch(api, aid, {"steps": set_step(detail(api, aid), 0, step_id(typ, "Closed"))})
+    assert rule_steps(detail(api, aid)) == [("rule_ok", step_id(typ, "Closed"))]
     assert detail(api, aid)["problems"] == []
 
 
 def test_a_flagged_rule_does_not_block_an_unrelated_edit(api):
     typ = build_type(api)
-    convert(api, typ, [("rule_qa", "QA Fixes")])
+    convert(api, typ, [("rule_qa", "Build")])
     aid = wake_id(api, typ)
     patch(api, aid, {"name": "Renamed wakes"})
     patch(api, aid, {"steps": detail(api, aid)["steps"]})
@@ -214,4 +214,4 @@ def test_the_migration_helper_names_the_rules_a_step_is_named_by(api):
     with db(api).read() as c:
         named = M.wakes_naming(c, typ["id"], [(step_id(typ, "QA/PR Rejected"), "QA/PR Rejected")])
         assert named and named[0].endswith(": QA/PR Rejected")
-        assert M.wakes_naming(c, typ["id"], [(step_id(typ, "Done"), "Done")]) == []
+        assert M.wakes_naming(c, typ["id"], [(step_id(typ, "Closed"), "Closed")]) == []

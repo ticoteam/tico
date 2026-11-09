@@ -232,7 +232,7 @@ def test_wake_bot_also_runs_as_the_action_of_a_message_event_rule(api):
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Plain work", "Do it", "bot:cpo")
         c.execute("DELETE FROM jobs")
-        msg = H._wake(c, H.task(c, task["id"]), "bot:cpo", "Step moved: In Progress -> Review 1")
+        msg = H._wake(c, H.task(c, task["id"]), "bot:cpo", "Step moved: Build -> Review 1")
         assert msg["refs"]["rule"] == made["id"] and msg["refs"]["quiet"] is True
         assert jobs(c, "ops") == 1 and "Plain work moved" in last_message(c, "ops")["body"]
 

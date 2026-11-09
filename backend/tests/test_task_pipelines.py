@@ -130,9 +130,8 @@ def test_a_waiting_task_keeps_its_step_and_a_declined_one_closes_and_no_step_may
         H.KEEPER,
         'Dev tickets',
         [
-            {'name': 'On Deck', 'status': 'open'},
+            {'name': 'Build', 'status': 'open'},
             {'name': 'Review 1', 'status': 'review'},
-            {'name': 'Review 1 Fixes', 'status': 'doing'},
             {'name': 'Closed', 'status': 'closed'},
         ],
     )
@@ -144,10 +143,10 @@ def test_a_waiting_task_keeps_its_step_and_a_declined_one_closes_and_no_step_may
     state = lambda status: H._task_state(c, H.KEEPER, H.task(c, 't'), status=status)[1:]
     assert state('waiting') == (steps['Review 1'], 'waiting'), 'a held ticket keeps its step, no Blocked column'
     assert state('declined') == (steps['Closed'], 'declined')
-    c.execute("UPDATE tasks SET status='waiting',step_id=? WHERE id='t'", (steps['Review 1 Fixes'],))
-    assert state('doing') == (steps['Review 1 Fixes'], 'doing'), 'leaving waiting keeps a step of that status'
+    c.execute("UPDATE tasks SET status='waiting',step_id=? WHERE id='t'", (steps['Build'],))
+    assert state('open') == (steps['Build'], 'open'), 'leaving waiting keeps a step of that status'
     c.execute("UPDATE tasks SET status='closed',step_id=? WHERE id='t'", (steps['Closed'],))
-    assert state('waiting') == (steps['On Deck'], 'waiting'), (
+    assert state('waiting') == (steps['Build'], 'waiting'), (
         'a finished task brought back waiting starts at the first working step'
     )
     try:

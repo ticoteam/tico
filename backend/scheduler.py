@@ -690,7 +690,7 @@ class Scheduler:
             with locked("thread_bot_status") as c:
                 with isolated(c, "thread_bot_status", "trailing", failures):
                     thread_bot_status.send_trailing(c, trailing)
-        # The team's daily release hour: the Release Manager's one task for what is at Pending Release (backend/release_flow.py).
+        # The team's daily release hour: the Release Manager's one task for what is at Release (backend/release_flow.py).
         if not self.store.settings.rehearsal:
             from . import release_flow
 
@@ -705,7 +705,7 @@ class Scheduler:
                     if len(failures) > before:
                         run.error = "Failed: the release task could not be sent"
                     else:
-                        run.did("Release task sent" if (sent or {}).get("sent") else "Nothing at Pending Release")
+                        run.did("Release task sent" if (sent or {}).get("sent") else "Nothing at Release")
         longest = max(holds, default=(0, 0, None))
         with self.store.transaction() as c:
             c.execute(

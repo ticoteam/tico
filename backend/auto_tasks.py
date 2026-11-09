@@ -133,7 +133,7 @@ def startable(c, row, steps=None):
         name = step[0] if step else None
     else:
         name = steps.get(row.get('step_id'))
-    return row.get('type_id') == H.GENERAL_TYPE or name == 'On Deck'
+    return row.get('type_id') == H.GENERAL_TYPE or name == 'Build'
 
 
 def step_names(c, rows):
@@ -680,7 +680,21 @@ def started(c, row, *, message=None):
             else 'reopened from waiting',
         )
     steps = H.type_get(c, row['type_id'])['steps']
-    step = next((s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None)
+    step = next((s['id'] for s in steps if s['name'] == 'Build'), None)
+    # A start stays in the card's step (Build holds queued and started cards alike), so no leave check runs for it: the
+    # requirements of the step it waits in hold the start, as they would a move out of it.
+    from . import pipeline_engine
+
+    held = [
+        s.requirement['name']
+        for s in pipeline_engine.standings(c, [row]).get(row['id'], [])
+        if str(s.stage_id) == str(row.get('step_id')) and s.state != 'met'
+    ]
+    if held:
+        H.history_event(
+            c, 'task', row['id'], H.KEEPER, 'auto_start_refused', note="Can't start yet: " + ', '.join(held)
+        )
+        return H.task(c, row['id'])
     # A pipeline's requirements (or a subtask the rules won't file) hold the ticket where it is: the start is logged on
     # the ticket as auto_start_refused and nothing moves; the rest of the job goes on.
     if not H.try_auto_move(c, H.KEEPER, row, kind='auto_start_refused', status='doing', step=step, note=START_NOTE):

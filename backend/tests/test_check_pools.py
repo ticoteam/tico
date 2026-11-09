@@ -232,7 +232,7 @@ def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
             ).fetchone()[0]
             == 1
         )
-    assert moved_step == "Review 1 Fixes"
+    assert moved_step == "Build"
 
 
 def test_same_family_fallback_verdict_counts_and_advances_the_ticket(api):
@@ -317,7 +317,7 @@ def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
         _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
-        assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Review 1 Fixes"
+        assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Build"
         moves = c.execute(
             "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict_move' ORDER BY rowid",
             (check["id"],),
@@ -331,7 +331,7 @@ def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
         assert [
             json.loads(evidence[key]) for key in ("builder_families", "configured_families", "checker_families")
         ] == [["anthropic"], ["openai"], ["anthropic"]]
-    assert _step(c, task) == "Review 1 Fixes"
+    assert _step(c, task) == "Build"
 
 
 def test_unknown_or_same_family_provenance_does_not_create_a_verdict_wait(api):
@@ -345,7 +345,7 @@ def test_unknown_or_same_family_provenance_does_not_create_a_verdict_wait(api):
         waits = c.execute(
             "SELECT child_id,attempt_id FROM check_waits WHERE ticket_id=? AND state='waiting'", (task["id"],)
         ).fetchall()
-        assert _step(c, task) == "Review 1 Fixes"
+        assert _step(c, task) == "Build"
     assert waits == []
 
 
@@ -386,7 +386,7 @@ def test_same_family_verdict_does_not_become_an_unowned_wait(api):
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
         waiting = c.execute("SELECT * FROM check_waits WHERE ticket_id=? AND state='waiting'", (task["id"],)).fetchone()
     assert waiting is None
-    assert get(api, "tasks/" + task["id"])["task"]["step"]["name"] == "Review 1 Fixes"
+    assert get(api, "tasks/" + task["id"])["task"]["step"]["name"] == "Build"
     assert H.task(c, check["id"])["verdict"] == "approve"
 
 
@@ -636,7 +636,9 @@ def test_a_refiled_review_1_check_that_approves_moves_the_ticket_on(api):
     [again] = checks(api, task)
     with api.app.state.store.transaction() as c:
         _finish(c, "refiled-turn", again["owner_id"].split(":", 1)[1], again, "gpt-6-sol", "openai", "codex")
-        assert _step(c, task) == "Review 1 Fixes", "the refiled check's approval is the Review 1 verdict"
+        assert _step(c, task) == "Build", (
+            "the refiled check's approval is the Review 1 verdict: its ticket goes to Build"
+        )
 
 
 def test_one_check_per_head_a_builder_check_already_open_is_kept(api):
@@ -656,7 +658,7 @@ def test_pool_setting_is_checked_and_shown(api):
     kind = set_pool(api, task, "Review 1", ["bot:rev-a", "rev-a", "rev-b"], limit=3)
     step = next(s for s in kind["steps"] if s["name"] == "Review 1")
     assert step["check_pool"] == ["rev-a", "rev-b"] and step["check_limit"] == 3
-    other = next(s for s in kind["steps"] if s["name"] == "Review 1 Fixes")
+    other = next(s for s in kind["steps"] if s["name"] == "Build")
     assert other["check_pool"] == [] and other["check_limit"] == check_pools.DEFAULT_LIMIT
     with api.app.state.store.read() as c:
         assert check_pools.pool(c, other["id"]) is None, "a step saved beside a pool does not become a check step"
@@ -677,7 +679,7 @@ def test_dev_types_get_the_proposed_pools_once_with_the_bots_the_company_has(api
     with api.app.state.store.transaction() as c:
         bots = {
             slug: {"name": slug, "runtime": "fake", "status": "active"}
-            for slug in ("cpo", "cmo", "reviewer-muse", "pr-reviewer-sol", "qa-muse")
+            for slug in ("cpo", "cmo", "reviewer-muse", "pr-reviewer-sol", "qa-engineer-copy")
         }
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         kind = H.type_create(
@@ -685,19 +687,18 @@ def test_dev_types_get_the_proposed_pools_once_with_the_bots_the_company_has(api
             H.KEEPER,
             "Dev tickets",
             [
-                {"name": "In Progress", "status": "doing"},
+                {"name": "Build", "status": "doing"},
                 {"name": "Review 1", "status": "review"},
                 {"name": "Review 2", "status": "review"},
-                {"name": "In QA", "status": "review"},
-                {"name": "Post Release QA", "status": "review"},
-                {"name": "Done", "status": "done"},
+                {"name": "Watch 24h", "status": "review"},
+                {"name": "Closed", "status": "done"},
             ],
         )
         steps = {s["name"]: s for s in H.type_get(c, kind["id"])["steps"]}
         assert steps["Review 1"]["check_pool"] == ["pr-reviewer-sol", "reviewer-muse"]
         assert steps["Review 2"]["check_pool"] == ["pr-reviewer-sol", "reviewer-muse"]
-        assert steps["In QA"]["check_pool"] == ["qa-muse"] and steps["In QA"]["check_limit"] == 2
-        assert steps["Post Release QA"]["check_pool"] == [] and steps["In Progress"]["check_pool"] == []
+        assert steps["Watch 24h"]["check_pool"] == ["qa-engineer-copy"], "the release check's pool, once its bot exists"
+        assert steps["Build"]["check_pool"] == []
         # A person's change stands: the seed is given once.
         c.execute("UPDATE task_steps SET check_pool=NULL WHERE id=?", (steps["Review 1"]["id"],))
         check_pools.seed(c)
@@ -706,7 +707,7 @@ def test_dev_types_get_the_proposed_pools_once_with_the_bots_the_company_has(api
             c.execute(
                 "SELECT detail FROM events WHERE action=? AND target=?", (check_pools.SEEDED, kind["id"])
             ).fetchone()[0]
-        )["pools"]["In QA"] == ["qa-muse"]
+        )["pools"]["Watch 24h"] == ["qa-engineer-copy"]
 
 
 def test_an_engineering_board_found_by_role_takes_each_pr_reviewer_once_as_it_is_hired(api):
@@ -731,7 +732,7 @@ def test_an_engineering_board_found_by_role_takes_each_pr_reviewer_once_as_it_is
         assert all(p == [] for p in pools(c, engineering).values())  # no reviewer yet: no pool, as with no reviewer
         hire(c, "rev-one")
         assert pools(c, engineering)["Review 1"] == ["rev-one"] == pools(c, engineering)["Review 2"]
-        assert pools(c, engineering)["In Progress"] == [] and pools(c, engineering)["Pending Release"] == []
+        assert pools(c, engineering)["Build"] == [] and pools(c, engineering)["Release"] == []
         hire(c, "rev-two")
         assert pools(c, engineering)["Review 2"] == ["rev-one", "rev-two"]
         # A person takes rev-one out of Review 1: a later seed or hire does not put it back.
@@ -761,18 +762,30 @@ def test_a_reviewer_whose_last_run_fell_back_to_the_builders_company_is_passed_o
 
 
 # A QA check prefers a bot of another model company than the builder's, and takes a bot of the builder's company only
-# when no other is free.
+# when no other is free. The Engineering board has no QA step, so these tests run on a board of their own that has one.
+QA_STEPS = [
+    ("Build", "open"),
+    ("Review 1", "review"),
+    ("QA", "review"),
+    ("Merge queue", "review"),
+    ("Release", "review"),
+    ("Watch 24h", "review"),
+    ("Closed", "done"),
+]
+
+
 def qa_ticket(api, built=True, ran=("claude-opus-5-5", "anthropic", "claude")):
     """A Dev ticket on the full board, its PR built by cpo (configured on Anthropic), ready to enter In QA. `built`
     adds the builder's run on `ran` (model, provider, runtime: Anthropic); without it the ticket's only run has no usage
     record (provenance unknown)."""
-    from backend import rules
+    from backend import rules, step_flow as F
     from backend.tests.test_github import PR, hook, post, pr_event
-    from backend.tests.test_verdict_moves import STEPS
 
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in QA_STEPS])
         rules.seed_dev(c)
+        # The Engineering board has no QA step: a QA check is a board's own step, here named QA.
+        F.apply(c, typ["id"], {"QA": {"check": "qa", "on_pass": "merge", "on_fail": "Build", "timeout_hours": 2}})
     task = post(
         api,
         "tasks",
@@ -781,7 +794,7 @@ def qa_ticket(api, built=True, ran=("claude-opus-5-5", "anthropic", "claude")):
             "title": "Improve messages",
             "body": "Build messages.",
             "type": typ["id"],
-            "step": "In Progress",
+            "step": "Build",
             "links": [PR],
         },
     )
@@ -800,7 +813,7 @@ def qa_ticket(api, built=True, ran=("claude-opus-5-5", "anthropic", "claude")):
 
 def to_qa(api, task):
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="In QA")
+        H.task_update(c, "bot:cpo", task["id"], step="QA")
 
 
 def test_a_same_company_bot_finishing_a_check_leaves_a_waiting_one_to_a_free_bot_of_another_company(api):
@@ -808,7 +821,7 @@ def test_a_same_company_bot_finishing_a_check_leaves_a_waiting_one_to_a_free_bot
     pass seeing it; then rev-c, on the builder's company, finishes its check. rev-a takes the waiting one."""
     team(api)
     task = qa_ticket(api)
-    set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
+    set_pool(api, task, "QA", ["rev-c", "rev-a"], limit=1)
     held_a, held_c = busy(api, "rev-a"), busy(api, "rev-c")
     to_qa(api, task)
     assert checks(api, task) == []
@@ -821,7 +834,7 @@ def test_a_same_company_bot_finishing_a_check_leaves_a_waiting_one_to_a_free_bot
 def test_qa_goes_to_the_builders_company_bot_when_the_other_company_bot_is_at_its_limit(api):
     team(api)
     task = qa_ticket(api)
-    set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
+    set_pool(api, task, "QA", ["rev-c", "rev-a"], limit=1)
     busy(api, "rev-a")
     to_qa(api, task)
     [check] = checks(api, task)
@@ -832,7 +845,7 @@ def test_qa_goes_to_the_builders_company_bot_when_the_other_company_bot_is_at_it
 def test_a_pool_of_only_builder_company_qa_bots_takes_the_check_rather_than_waiting(api):
     team(api)
     task = qa_ticket(api)
-    set_pool(api, task, "In QA", ["rev-c"])
+    set_pool(api, task, "QA", ["rev-c"])
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"]
     assert get(api, "tasks/" + task["id"])["task"]["check_waits"] == []
@@ -844,7 +857,7 @@ def test_a_qa_bot_configured_elsewhere_whose_recent_runs_were_claude_ranks_behin
     one, and rev-b still goes first."""
     team(api)
     task = qa_ticket(api, built=False)
-    set_pool(api, task, "In QA", ["rev-a", "rev-b"])
+    set_pool(api, task, "QA", ["rev-a", "rev-b"])
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('qa-run','rev-a',?,?)", (H.now(), H.now())
@@ -860,7 +873,7 @@ def test_unknown_builder_provenance_prefers_qa_off_the_builders_configured_compa
     company still goes first, though it holds an open check and the same-company bot holds none."""
     team(api)
     task = qa_ticket(api, built=False)
-    set_pool(api, task, "In QA", ["rev-c", "rev-a"])
+    set_pool(api, task, "QA", ["rev-c", "rev-a"])
     busy(api, "rev-a")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
@@ -912,8 +925,8 @@ def test_require_keeps_the_builders_company_off_a_qa_check_until_another_company
     that reason; rev-a, of another company, takes it when its own check finishes."""
     team(api)
     task = qa_ticket(api)
-    set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-c", "rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     held = busy(api, "rev-a")
     to_qa(api, task)
     assert checks(api, task) == [], "rev-c is free, but it runs on the builder's company"
@@ -930,8 +943,8 @@ def test_a_same_company_bot_that_frees_up_does_not_take_a_require_check(api):
     rev-a, of another company, takes it when it frees up."""
     team(api)
     task = qa_ticket(api)
-    set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-c", "rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     held_c, held_a = busy(api, "rev-c"), busy(api, "rev-a")
     to_qa(api, task)
     assert checks(api, task) == [] and get(api, "tasks/" + task["id"])["task"]["check_waits"]
@@ -963,8 +976,8 @@ def test_require_on_a_review_step_keeps_the_builders_company_off_the_review(api)
 def test_other_company_prefer_gives_a_same_company_bot_the_check_when_no_other_is_free(api):
     team(api)
     task = qa_ticket(api)
-    set_pool(api, task, "In QA", ["rev-c"])
-    set_other_company(api, task, "In QA", "prefer")
+    set_pool(api, task, "QA", ["rev-c"])
+    set_other_company(api, task, "QA", "prefer")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"]
     assert get(api, "tasks/" + task["id"])["task"]["check_waits"] == []
@@ -995,8 +1008,8 @@ def test_require_goes_by_the_task_model_a_check_runs_on_not_the_bots_own_model(a
             "INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES('chat','rev-c',?,?)", (H.now(), H.now())
         )
         segment(c, 'chat', model='claude-haiku-5-5', provider='anthropic')
-    set_pool(api, task, "In QA", ["rev-a", "rev-c"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a", "rev-c"], limit=1)
+    set_other_company(api, task, "QA", "require")
     held = busy(api, "rev-c")
     to_qa(api, task)
     assert checks(api, task) == [], "rev-a is free, but its checks run on the builder's company"
@@ -1017,8 +1030,8 @@ def test_a_task_model_that_cannot_run_counts_the_bots_own_model_for_require(api)
             "UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
             (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"codex": {"installed": False}}}),),
         )
-    set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-c", "rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     held = busy(api, "rev-a")
     to_qa(api, task)
     assert checks(api, task) == [], "rev-c's check would run on the builder's company"
@@ -1045,8 +1058,8 @@ def test_a_recent_task_on_its_own_model_says_nothing_about_where_a_check_runs(ap
             (H.now(), H.now(), own["id"]),
         )
         segment(c, 'own', model='claude-haiku-5-5', provider='anthropic')
-    set_pool(api, task, "In QA", ["rev-c"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-c"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-c"]
 
@@ -1077,8 +1090,8 @@ def test_a_task_model_held_at_its_usage_limit_counts_the_bots_own_model_for_requ
         login_holds.record(
             c, "r1", login_holds.canonical(c, "r1", "", "codex"), "codex", H.now(), reset=H.shift(H.now(), hours=2)
         )
-    set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-c", "rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     held = busy(api, "rev-a")
     to_qa(api, task)
     assert checks(api, task) == [], "rev-c's check would run on the builder's company"
@@ -1105,8 +1118,8 @@ def test_a_task_model_that_cannot_run_counts_only_the_turns_on_the_bots_own_mode
             "UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
             (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),),
         )
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
@@ -1129,8 +1142,8 @@ def test_a_task_that_fell_back_to_the_builders_company_keeps_a_require_check_off
             "UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
             (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),),
         )
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
 
@@ -1146,8 +1159,8 @@ def test_require_never_gives_the_check_to_a_bot_on_a_model_a_reseller_picks(api)
             'rev-a',
             {'name': 'rev-a', 'runtime': 'cursor', 'model': 'cursor-auto', 'status': 'active', 'profile': 'reviewer'},
         )
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
 
@@ -1163,7 +1176,7 @@ def test_prefer_ranks_a_bot_of_another_company_ahead_of_one_whose_company_is_unk
             'rev-b',
             {'name': 'rev-b', 'runtime': 'cursor', 'model': 'cursor-auto', 'status': 'active', 'profile': 'reviewer'},
         )
-    set_pool(api, task, "In QA", ["rev-b", "rev-a"], limit=2)
+    set_pool(api, task, "QA", ["rev-b", "rev-a"], limit=2)
     busy(api, "rev-a")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
@@ -1197,8 +1210,8 @@ def test_require_never_gives_the_check_to_a_bot_whose_model_company_is_unknown(a
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
         BS.write(c, 'rev-a', {'name': 'rev-a', 'runtime': 'fake', 'status': 'active', 'profile': 'reviewer'})
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
     [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
@@ -1212,8 +1225,8 @@ def test_require_waits_while_the_builders_model_company_is_unknown(api):
     task = qa_ticket(api, built=False)
     with api.app.state.store.transaction() as c:
         BS.write(c, 'cpo', {'name': 'cpo', 'runtime': 'fake', 'status': 'active'})
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
     [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
@@ -1231,11 +1244,11 @@ def test_require_never_gives_the_check_to_a_bot_whose_recent_run_has_a_segment_o
         )
         segment(c, 'mixed', model='gpt-6.1-sol', provider='openai')
         segment(c, 'mixed', position=1, model='', provider='')
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
-    set_other_company(api, task, "In QA", "prefer")
+    set_other_company(api, task, "QA", "prefer")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
@@ -1247,8 +1260,8 @@ def test_require_waits_while_part_of_the_builders_run_is_of_unknown_company(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
         segment(c, "builder-" + task["id"], position=1, model='', provider='')
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
     [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
@@ -1266,8 +1279,8 @@ def test_require_never_gives_the_check_to_a_bot_now_on_a_model_of_unknown_compan
         )
         segment(c, 'before', model='gpt-6.1-sol', provider='openai')
         BS.write(c, 'rev-a', {"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"})
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert checks(api, task) == []
 
@@ -1290,8 +1303,8 @@ def test_a_recent_check_on_a_check_model_says_nothing_about_a_bot_with_no_task_m
             (H.now(), H.now(), own["id"]),
         )
         segment(c, 'checked', model='claude-haiku-5-5', provider='anthropic')
-    set_pool(api, task, "In QA", ["rev-a"], limit=1)
-    set_other_company(api, task, "In QA", "require")
+    set_pool(api, task, "QA", ["rev-a"], limit=1)
+    set_other_company(api, task, "QA", "require")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-a"]
 
@@ -1299,7 +1312,7 @@ def test_a_recent_check_on_a_check_model_says_nothing_about_a_bot_with_no_task_m
 def test_other_company_is_prefer_or_require_and_only_on_a_check_step(api):
     team(api)
     task = qa_ticket(api)
-    for step, rule in (("In QA", "maybe"), ("In Progress", "require")):
+    for step, rule in (("QA", "maybe"), ("Build", "require")):
         r = _save_other_company(api, task, step, rule)
         assert r.status_code == 422 and "other_company" in r.text, (step, rule, r.text)
 
@@ -1307,19 +1320,19 @@ def test_other_company_is_prefer_or_require_and_only_on_a_check_step(api):
 def test_the_other_company_rule_is_saved_shown_and_cleared_without_touching_the_rest_of_the_flow(api):
     team(api)
     task = qa_ticket(api)
-    kind = set_other_company(api, task, "In QA", "require")
-    step = next(s for s in kind["steps"] if s["name"] == "In QA")
+    kind = set_other_company(api, task, "QA", "require")
+    step = next(s for s in kind["steps"] if s["name"] == "QA")
     assert step["flow"]["other_company"] == "require" and step["flow"]["check"] == "qa"
-    assert step["flow"]["on_fail"] == "QA Fixes", "the rest of the flow is sent back as it was"
-    kind = set_pool(api, task, "In QA", ["rev-c"])
-    assert next(s for s in kind["steps"] if s["name"] == "In QA")["flow"]["other_company"] == "require", (
+    assert step["flow"]["on_fail"] == "Build", "the rest of the flow is sent back as it was"
+    kind = set_pool(api, task, "QA", ["rev-c"])
+    assert next(s for s in kind["steps"] if s["name"] == "QA")["flow"]["other_company"] == "require", (
         "saving the type without a flow for the step keeps the rule"
     )
-    kind = set_other_company(api, task, "In QA", "prefer")
-    assert next(s for s in kind["steps"] if s["name"] == "In QA")["flow"]["other_company"] == "prefer"
-    kind = set_other_company(api, task, "In QA", None)
-    step = next(s for s in kind["steps"] if s["name"] == "In QA")
-    assert "other_company" not in step["flow"] and step["flow"]["on_fail"] == "QA Fixes"
+    kind = set_other_company(api, task, "QA", "prefer")
+    assert next(s for s in kind["steps"] if s["name"] == "QA")["flow"]["other_company"] == "prefer"
+    kind = set_other_company(api, task, "QA", None)
+    step = next(s for s in kind["steps"] if s["name"] == "QA")
+    assert "other_company" not in step["flow"] and step["flow"]["on_fail"] == "Build"
 
 
 def test_scheduler_retries_an_offline_pool_once_when_a_member_comes_online(api):
@@ -1365,7 +1378,7 @@ def test_periodic_pool_retry_bounds_each_pass(api):
     first = ticket(api, RECEIPT)
     with api.app.state.store.transaction() as c:
         second = H.task_create(
-            c, "human:ana", "Another change", "Build it.", "bot:cpo", type=first["type_id"], step="In Progress"
+            c, "human:ana", "Another change", "Build it.", "bot:cpo", type=first["type_id"], step="Build"
         )
         original = next(p for p in H.task_links(c, first["id"]) if p["kind"] == "pr")
         link = H.task_link(c, "human:ana", second["id"], original["url"])

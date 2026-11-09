@@ -6,7 +6,7 @@ Open **Automations → System jobs** (`#/automations/system-jobs`), a built-in r
 
 Wake rules are automations now: **What wakes bots** (the built-in rules, read-only) and one **What wakes ...** automation per bot, team, task type, department or task, on the Automations page. A person's message, an ask, an answer, an approval, a needs-action flag, a reply and a gate verdict always wake.
 
-**Releases** turns the daily release on or off, sets one or two times (company time), names the Release Manager and Technical Writer (or finds them by template), and shows the next and last release hour and what waits at Pending Release. Owners and admins change it; someone who moves Dev tickets gets **Release now** here (with a note field; a note asks even when nothing is pending) and on the board's Pending Release column.
+**Releases** turns the daily release on or off, sets one or two times (company time), names the Release Manager and Technical Writer (or finds them by template), and shows the next and last release hour and what waits at Release. Owners and admins change it; someone who moves Dev tickets gets **Release now** here (with a note field; a note asks even when nothing is pending) and on the board's Release column.
 
 **Task Manager** shows whether it is on, its last run, and each department's last check, item count and open check task. The owner pauses and resumes it.
 
@@ -158,7 +158,7 @@ The jobs that must happen within seconds (due times, recovery and outside polls)
 | **Thread ranking** (AI) | Gives each thread with new messages in the last 14 days a level from 1 to 10, for the threads API's `sort=important` order, which no screen sends. In that order a thread that needs attention comes first, whatever its level. A thread is ranked at most once an hour, and at most 20 threads a pass and 40 an hour. A thread never ranked sits at 5; a failed call keeps its last level. That order otherwise leaves out level 1 threads, threads of finished tasks, and task threads no person owns or asked for. It also stops for the day once the server's Decide calls reach 80% of the bots' daily call budget, so the checks that act on tasks keep room. | Every 5 minutes | |
 | **Tico company heartbeat** | Tells app.tico.dev this server's version once a day. | Daily | a linked Tico company |
 | **Scheduled update** | Updates a hosted server to the release Tico support scheduled, once no bot turn runs. | Every minute | a hosted server |
-| **Daily release** | At the release hour, sends the Release Manager one task for what is at Pending Release. | At the release hour | the daily release on |
+| **Daily release** | At the release hour, sends the Release Manager one task for what is at Release. | At the release hour | the daily release on |
 | **Outside text check** | Screens outside text a restart left waiting. | Every 10 seconds | |
 | **Finance upkeep** | Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and finished approvals, watches documents and opens next month's period. | Every 10 seconds | |
 | **Hourly deadlines** | Turns off a webhook that failed for five days, retires replaced computers, and hands a person a support ticket or screened item that waited an hour. | Hourly | |

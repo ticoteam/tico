@@ -1,6 +1,6 @@
 """Bots attach screenshots to a requirement through the API; one bot re-attaches old shots after a push and they are refused.
 
-The Dev board's In Progress step has an attachment requirement (screenshot links, reviewed by nobody; the judge has its
+The Dev board's Build step has an attachment requirement (screenshot links, reviewed by nobody; the judge has its
 own tests). Builders attach their shots when their work is done, through the real API with their own attempt tokens. One
 builder pushes again after attaching and then attaches the old shots once more: shots taken before the push are out of
 date, so the engine must not count them. The judge's fake Decide engine is injected through the
@@ -19,11 +19,11 @@ the database, so they hold as written."""
 from evals.factory.scenarios import Scenario, standard, tickets
 
 REQUIREMENT = "Pipeline requirements"  # the product rules this scenario guards (backend/requirement_attachments.py)
-STAGE = "In Progress"
+STAGE = "Build"
 
 
 def seed_requirement(run, w, team):
-    """Four tickets and the screenshot requirement on the In Progress stage."""
+    """Four tickets and the screenshot requirement on the Build stage."""
     from backend import pipeline_requirements as R
 
     with w.store.transaction() as c:

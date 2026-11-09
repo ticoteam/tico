@@ -334,7 +334,7 @@
     "sells_software",
     "uses_slack"
    ],
-   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
+   "first_routine": "Dev ticket build · When a Dev ticket reaches Build",
    "tools": [
     "github"
    ],

@@ -111,12 +111,16 @@ PRESETS: dict[str, dict[str, Any]] = {
                 "prefix": "D",
                 "goal": "Implement specs safely and efficiently; into production and validated",
                 "stages": _stages(
-                    ("Queued", "open"),
-                    ("Building", "doing"),
-                    ("Review", "review"),
-                    ("Shipped", "done"),
+                    ("Build", "open"),
+                    ("Review 1", "review"),
+                    ("Review 2", "review"),
+                    ("Merge queue", "review"),
+                    ("Release", "review"),
+                    ("Watch 24h", "review"),
                     ("Closed", "closed"),
                 ),
+                # The Engineering stage map (backend/pipeline_stage_map.py) is applied on every setup run, a role holder too.
+                "stage_map": True,
                 "manager": ["Engineering Pipeline Manager", "Engineering Manager", "Engineering Factory Manager"],
             },
             {
@@ -252,24 +256,21 @@ PRESETS: dict[str, dict[str, Any]] = {
                 "factory": "Product",
                 "prefix": "D",
                 "goal": "Implement specs safely and efficiently; into production and validated",
-                # #2963's recommended no-QA board, so the review checks attach by stage name.
+                # The stage map's names (backend/pipeline_stage_map.py), so the Dev board's review checks attach by stage name.
                 "stages": _stages(
-                    ("On Deck", "open"),
-                    ("In Progress", "doing"),
+                    ("Build", "open"),
                     ("Review 1", "review"),
-                    ("Review 1 Fixes", "doing"),
                     ("Review 2", "review"),
-                    ("Review 2 Fixes", "doing"),
-                    ("Pending Release", "review"),
-                    ("Done", "done"),
+                    ("Merge queue", "review"),
+                    ("Release", "review"),
+                    ("Watch 24h", "review"),
                     ("Closed", "closed"),
                 ),
                 "adopt": {
                     "renamed": {
-                        "Todo": "On Deck",
-                        "Doing": "In Progress",
+                        "Todo": "Build",
                         "In review": "Review 1",
-                        "Ready to ship": "Pending Release",
+                        "Ready to ship": "Release",
                     }
                 },
                 "restage_empty_roles": True,
@@ -790,6 +791,7 @@ def _pipeline(
     replace: bool,
     made: list[str],
     unresolved: list[str],
+    notes: list[str],
     binding: Row | None = None,
 ) -> str:
     existing = _existing(conn, spec)
@@ -814,6 +816,11 @@ def _pipeline(
     # A role board nobody has used yet takes the preset's stages in full (its boot stages keep their ids by name).
     if existing is not None and spec.get("restage_empty_roles") and not _has_cards(conn, str(row["id"])):
         _restage(conn, actor, row, _pipeline_stages(spec), made)
+    if existing is not None and spec.get("stage_map"):
+        from . import pipeline_stage_map
+
+        state = pipeline_stage_map.apply(conn, actor, row, made, unresolved)
+        notes.append(f"{spec['name']} stages already match the stage map: nothing changed" if state == "same" else "")
     _seed_caps(conn, str(row["id"]), spec)
     ident = str(row["id"])
     _public_names(conn, ident, spec["name"], made)
@@ -941,6 +948,7 @@ def apply_factory_setup(
     spec = PRESETS[preset]
     made: list[str] = []
     unresolved: list[str] = []
+    notes: list[str] = []
     c.execute("SAVEPOINT pipeline_setup")
     try:
         factories = {f["name"]: _factory(c, actor, f, i, made) for i, f in enumerate(spec["factories"])}
@@ -949,7 +957,9 @@ def apply_factory_setup(
             if name not in names:
                 unresolved.append(f"{name} is not a pipeline of {preset}: its binding is ignored")
         pipelines = {
-            p["name"]: _pipeline(c, actor, p, factories, replace, made, unresolved, (bindings or {}).get(p["name"]))
+            p["name"]: _pipeline(
+                c, actor, p, factories, replace, made, unresolved, notes, (bindings or {}).get(p["name"])
+            )
             for p in spec["pipelines"]
         }
         _seed_dev_boards(c)
@@ -994,6 +1004,7 @@ def apply_factory_setup(
         "pipelines": pipelines,
         "changes": made,
         "unresolved": unresolved,
+        "notes": [n for n in notes if n],
     }
 
 

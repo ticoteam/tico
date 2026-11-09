@@ -16,11 +16,11 @@ def dev_type(c):
         H.KEEPER,
         "Dev tickets",
         [
-            {"name": "In Progress", "status": "doing"},
-            {"name": "In QA", "status": "review"},
-            {"name": "QA Fixes", "status": "doing"},
-            {"name": "Pending Release", "status": "review"},
-            {"name": "Done", "status": "done"},
+            {"name": "Build", "status": "open"},
+            {"name": "Review 1", "status": "review"},
+            {"name": "Review 2", "status": "review"},
+            {"name": "Release", "status": "review"},
+            {"name": "Closed", "status": "closed"},
         ],
         bots="work",
     )
@@ -67,13 +67,13 @@ def test_a_dev_tickets_type_is_seeded_once_and_a_deleted_row_stays_deleted(api):
     with api.app.state.store.transaction() as c:
         typ = dev_type(c)
         rows = seeded(c, typ["id"])
-        assert [(w, o) for _, w, o in rows] == [(w, o) for _, w, o in R.DEV_ROWS_QA]
+        assert [(w, o) for _, w, o in rows] == [(w, o) for _, w, o in R.DEV_ROWS]
         # Moved in the same write: nothing is left in the table, everything is in the type's What wakes automation.
         assert not c.execute("SELECT 1 FROM rules WHERE scope_id=?", (typ["id"],)).fetchone()
         aid, flow = wakes(c, typ["id"])
         assert len(flow["steps"]) == 3
-    # A person deletes the In QA row: its step in the automation.
-    edit_steps(api, aid, [s for s in flow["steps"] if not names_step(s, "In QA")])
+    # A person deletes the Review 2 row: its step in the automation.
+    edit_steps(api, aid, [s for s in flow["steps"] if not names_step(s, "Review 2")])
     with api.app.state.store.transaction() as c:
         R.seed_dev(c)
         H.type_update(c, H.KEEPER, typ["id"], name="Dev tickets")
@@ -101,19 +101,19 @@ def test_a_board_without_qa_steps_is_given_only_the_release_note(api):
             ],
             bots="work",
         )
-        assert seeded(c, typ["id"]) == list(R.DEV_ROWS), "no QA hand-off on a board with no QA step"
+        assert seeded(c, typ["id"]) == list(R.LEGACY_DEV_ROWS), "no QA hand-off on a board with no QA step"
 
 
 def test_renaming_a_step_moves_its_rows_in_the_what_wakes_automation_to_the_new_name(api):
     with api.app.state.store.transaction() as c:
         typ = dev_type(c)
         steps = [
-            {"id": s["id"], "name": "Acceptance" if s["name"] == "In QA" else s["name"], "status": s["status"]}
+            {"id": s["id"], "name": "Acceptance" if s["name"] == "Review 2" else s["name"], "status": s["status"]}
             for s in H.type_get(c, typ["id"])["steps"]
         ]
         H.type_update(c, H.KEEPER, typ["id"], steps=steps)
         named = [w.get("step") for _, w, _ in seeded(c, typ["id"])]
-        assert "Acceptance" in named and "In QA" not in named
+        assert "Acceptance" in named and "Review 2" not in named
         assert any(names_step(s, "Acceptance") for s in wakes(c, typ["id"])[1]["steps"])
 
 
@@ -121,7 +121,7 @@ def test_each_step_entry_reaches_only_the_bot_that_must_act(api):
     with api.app.state.store.transaction() as c:
         typ = dev_type(c)
         ticket = H.task_create(
-            c, "bot:coo", "Improve messages", "Build.", "bot:cpo", type=typ["id"], step="In Progress", lint=False
+            c, "bot:coo", "Improve messages", "Build.", "bot:cpo", type=typ["id"], step="Build", lint=False
         )
         H.task_create(c, "bot:cpo", "QA: messages", "Test.", "bot:finance", parent_id=ticket["id"], lint=False)
         release_flow.save(c, H.KEEPER, {"bot": "ops"})
@@ -140,14 +140,14 @@ def test_each_step_entry_reaches_only_the_bot_that_must_act(api):
                 },
             )
 
-        # QA alone is woken for In QA: neither the Builder who moved it nor the requester hears of it.
-        assert moved("bot:cpo", "In QA") == ({"finance"}, {"bot:finance"})
-        # The Builder is woken when QA sends it back.
-        assert moved("bot:finance", "QA Fixes") == ({"cpo"}, {"bot:cpo"})
+        # QA alone is woken for Review 2: neither the Builder who moved it nor the requester hears of it.
+        assert moved("bot:cpo", "Review 2") == ({"finance"}, {"bot:finance"})
+        # The Builder is woken when a fix sends it back to Build (Build is shared by every fixes step).
+        assert moved("bot:finance", "Build") == ({"cpo"}, {"bot:cpo"})
         # The Release Manager gets a note, no wake.
-        assert moved("bot:finance", "Pending Release") == (set(), {"bot:ops"})
+        assert moved("bot:finance", "Release") == (set(), {"bot:ops"})
         # Steps no rule names write nothing.
-        assert moved("bot:cpo", "In Progress") == (set(), set())
+        assert moved("bot:cpo", "Review 1") == (set(), set())
 
 
 def test_a_type_without_step_rules_writes_no_message_on_a_step_move(api):
@@ -201,33 +201,31 @@ def test_a_step_move_reaches_a_lead_only_through_a_row_that_names_it(api):
             c, "bot:boss", "Recruit an advisor", "x", "bot:cpo", type="Product roadmap", step="Suggested", lint=False
         )
         ticket = H.task_create(
-            c, "bot:boss", "Improve messages", "Build.", "bot:cpo", type=typ["id"], step="In Progress", lint=False
+            c, "bot:boss", "Improve messages", "Build.", "bot:cpo", type=typ["id"], step="Build", lint=False
         )
         # No row names the Release Manager or the Lead who asked for it: neither hears of it, not even in a digest.
         assert lead_moved(c, "bot:cpo", idea, "Exploring") == (set(), [])
         assert lead_moved(c, H.KEEPER, idea, "Suggested") == (set(), [])
         # The Release Manager's row: one note, no job.
-        pending = next(
-            r["id"] for r in rows_of(c, typ["id"]) if json.loads(r["condition"])["step"] == "Pending Release"
-        )
-        assert lead_moved(c, "bot:cpo", ticket, "Pending Release") == (set(), [("bot:release-manager", pending)])
+        pending = next(r["id"] for r in rows_of(c, typ["id"]) if json.loads(r["condition"])["step"] == "Release")
+        assert lead_moved(c, "bot:cpo", ticket, "Release") == (set(), [("bot:release-manager", pending)])
         aid, flow = wakes(c, typ["id"])
     # A Lead requester a row names hears it as the row says: here a wake.
-    fixes = next(s for s in flow["steps"] if names_step(s, "QA Fixes"))
+    fixes = next(s for s in flow["steps"] if names_step(s, "Build"))
     for cond in fixes["rules"][0]["when"]:
         if cond["field"] == "task.role":
             cond["value"] = "requester"
     edit_steps(api, aid, flow["steps"])
     with api.app.state.store.transaction() as c:
-        jobs, said = lead_moved(c, "bot:cpo", ticket, "QA Fixes")
+        jobs, said = lead_moved(c, "bot:cpo", ticket, "Build")
         assert jobs == {"boss"} and [to for to, _ in said] == ["bot:boss"]
     # A row that names the step with `ignore` (archive, in the automation) writes nothing at all.
     fixes["rules"][0]["then"][0]["do"] = "archive"
     edit_steps(api, aid, flow["steps"])
     with api.app.state.store.transaction() as c:
-        assert lead_moved(c, "bot:cpo", ticket, "QA Fixes") == (set(), [])
+        assert lead_moved(c, "bot:cpo", ticket, "Build") == (set(), [])
         # A step no row names: nothing for anyone.
-        assert lead_moved(c, "bot:cpo", ticket, "In Progress") == (set(), [])
+        assert lead_moved(c, "bot:cpo", ticket, "Review 1") == (set(), [])
 
 
 def test_the_release_managers_held_step_notices_are_dropped_once_and_nothing_else(api):

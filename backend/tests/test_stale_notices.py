@@ -138,7 +138,7 @@ def test_news_about_a_step_the_ticket_has_left_is_dropped(api):
         typ = dev_type(c)
         step = {st["name"]: st["id"] for st in typ["steps"]}
         left, still = (
-            H.task_create(c, "human:ana", title, "Build.", "bot:ops", type=typ["id"], step="QA Fixes", lint=False)
+            H.task_create(c, "human:ana", title, "Build.", "bot:ops", type=typ["id"], step="Build", lint=False)
             for title in ("Fix the connection", "Fix the login")
         )
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
@@ -147,13 +147,13 @@ def test_news_about_a_step_the_ticket_has_left_is_dropped(api):
                 c,
                 t,
                 "bot:ops",
-                "Tico moved this ticket to QA Fixes: QA gave changes.",
-                {"handoff": "verdict", "at_step": step["QA Fixes"]},
+                "Tico moved this ticket to Build: Review 2 gave changes.",
+                {"handoff": "verdict", "at_step": step["Build"]},
             )
             for t in (left, still)
         )
         # A person merged it by hand: the ticket is past the fixes, and the feedback with it.
-        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (step["Pending Release"], left["id"]))
+        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (step["Release"], left["id"]))
     claim(api, r)
     with api.app.state.store.read() as c:
         assert queued(c, old) == "canceled"
@@ -171,7 +171,7 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
         typ = dev_type(c)
         step = {st["name"]: st["id"] for st in typ["steps"]}
         moved, still = (
-            H.task_create(c, "human:ana", title, "Build.", "bot:ops", type=typ["id"], step="In Progress", lint=False)
+            H.task_create(c, "human:ana", title, "Build.", "bot:ops", type=typ["id"], step="Build", lint=False)
             for title in ("Fix the connection", "Fix the login")
         )
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
@@ -203,7 +203,7 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
         c.execute(
             "UPDATE messages SET created_at=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), old["id"], kept["id"])
         )
-        H._task_event(c, moved["id"], H.KEEPER, "step", step["In Progress"], step["Pending Release"])
+        H._task_event(c, moved["id"], H.KEEPER, "step", step["Build"], step["Release"])
     claim(api, r)
     with api.app.state.store.read() as c:
         assert queued(c, old) == "canceled"

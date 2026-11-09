@@ -1,4 +1,4 @@
-"""A person waives a Dev ticket's In QA step for one exact head (backend/qa_waivers.py): recorded as a waiver with its
+"""A person waives a ticket's QA step for one exact head (backend/qa_waivers.py): recorded as a waiver with its
 actor, reason, head, step and time, never as a QA verdict; CI and both reviews on that head stay required."""
 
 import json
@@ -7,7 +7,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import hubdb as H, qa_waivers, review_gate
+from backend import hubdb as H, qa_waivers, review_gate, step_flow as F
 from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
@@ -16,18 +16,18 @@ from backend.tests.test_github import SECRET, PR, hook, pr_event
 from backend import bot_settings as BS
 
 HEAD, NEW = 'a' * 40, 'b' * 40
+# The Engineering board has no QA step (QA is folded into Review 2), so a waiver is tested on a board with its own QA step.
 STEPS = [
     {'name': n, 'status': s}
     for n, s in (
-        ('In Progress', 'doing'),
+        ('Build', 'doing'),
         ('Review 1', 'review'),
-        ('Review 1 Fixes', 'doing'),
         ('Review 2', 'review'),
-        ('Review 2 Fixes', 'doing'),
-        ('In QA', 'review'),
-        ('QA Fixes', 'doing'),
-        ('Pending Release', 'ready'),
-        ('Done', 'done'),
+        ('QA', 'review'),
+        ('Merge queue', 'review'),
+        ('Release', 'ready'),
+        ('Watch 24h', 'review'),
+        ('Closed', 'done'),
     )
 ]
 
@@ -94,7 +94,8 @@ def api(tmp_path, monkeypatch):
             c.execute(
                 "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({'completed': '2026-01-01T00:00:00Z'}),)
             )
-            H.type_create(c, H.KEEPER, 'Dev tickets', STEPS)
+            typ = H.type_create(c, H.KEEPER, 'Dev tickets', STEPS)
+            F.apply(c, typ['id'], {'QA': {'check': 'qa', 'on_pass': 'merge', 'on_fail': 'Build', 'timeout_hours': 2}})
             # The bot signs in as an agent does (bot-test), so a refusal is the waiver's and not the credential's.
             c.execute(
                 "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('cpo','hermes','x',?,'human:ana')",
@@ -142,7 +143,7 @@ def green(api, checks=None):
 def ticket(
     api,
     owner='cpo',
-    step='In QA',
+    step='QA',
     checks=None,
     reviews=(('approve', HEAD), ('approve', HEAD)),
     title='Fix the checkout total',
@@ -204,7 +205,7 @@ def _owner_or_manager_waives(api, n, owner, token, actor):
         'actor': actor,
         'reason': 'Urgent fix, QA bot down',
         'head': HEAD,
-        'step': 'In QA',
+        'step': 'QA',
         'pr': PR,
         'current': True,
     }
@@ -215,10 +216,10 @@ def _owner_or_manager_waives(api, n, owner, token, actor):
     assert [plain(w) for w in detail['task']['qa_waivers']] == [plain(waiver)]
     event = next(e for e in detail['events'] if e['field'] == 'qa_waiver')
     assert event['actor'] == actor and event['note'] == 'Urgent fix, QA bot down'
-    assert json.loads(event['new']) == {'head': HEAD, 'step': 'In QA', 'pr': PR}
+    assert json.loads(event['new']) == {'head': HEAD, 'step': 'QA', 'pr': PR}
     # A waiver is not a verdict: nothing on the ticket or its QA subtask reads as a QA pass, and the ticket stays put.
     assert not any(e['field'] == 'verdict' for e in detail['events'])
-    assert detail['task']['verdict'] is None and detail['task']['step']['name'] == 'In QA'
+    assert detail['task']['verdict'] is None and detail['task']['step']['name'] == 'QA'
     qa = next(c for c in detail['children'] if c['title'].startswith('QA'))
     with api.app.state.store.read() as c:
         qa = H.task(c, qa['id'])
@@ -250,13 +251,13 @@ def test_a_non_owner_non_manager_or_a_bot_is_refused(api):
 def test_only_the_current_in_qa_step_is_waivable(api):
     for n, (step, asked, why) in enumerate(
         [
-            ('Review 2', None, 'not In QA'),
-            ('Pending Release', None, 'not In QA'),
-            ('In QA', 'Review 1', 'Review 1 is mandatory'),
-            ('In QA', 'Review 2', 'Review 2 is mandatory'),
-            ('In QA', 'CI', 'CI is mandatory'),
-            ('In QA', 'Release approval', 'Release approval is mandatory'),
-            ('In QA', 'Post Release QA', 'Only the In QA step'),
+            ('Review 2', None, 'not QA'),
+            ('Release', None, 'not QA'),
+            ('QA', 'Review 1', 'Review 1 is mandatory'),
+            ('QA', 'Review 2', 'Review 2 is mandatory'),
+            ('QA', 'CI', 'CI is mandatory'),
+            ('QA', 'Release approval', 'Release approval is mandatory'),
+            ('QA', 'Watch 24h', 'Only the QA step'),
         ]
     ):
         row = fresh(api, n, step=step)
@@ -493,7 +494,7 @@ def test_a_bot_acting_for_the_person_is_refused_and_records_nothing(api, token):
 
 def test_botops_in_the_owners_own_chat_cannot_waive_a_ticket_every_gate_allows(api):
     """A real BotOps run started by the company owner in her own BotOps chat, citing that turn: the middleware lends
-    it her actor and role, which alone pass the owner/manager test. The ticket is at In QA with every gate green, so
+    it her actor and role, which alone pass the owner/manager test. The ticket is at QA with every gate green, so
     only the caller's provenance refuses it: before GitHub is read, recording no waiver and waking nobody. The same
     request from Ana herself then goes through."""
     from backend.tests.test_api import assign, claim, post, ready, runner

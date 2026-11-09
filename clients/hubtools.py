@@ -6138,7 +6138,7 @@ def notice_list(api, args):
 @tool(
     "hub_release_schedule",
     "The team's release schedule: when the Release Manager is asked to release what is at "
-    "Pending Release (`times`, company time; `on`), who that bot is (`release_manager`) and the Technical Writer "
+    "Release (`times`, company time; `on`), who that bot is (`release_manager`) and the Technical Writer "
     "(`technical_writer`), the next hour, the last hour's result and how many tickets are pending now. Send any of "
     "`on`, `times` (one or two HH:MM), `bot`, `writer` (a bot slug, or \"\" to find it by starter template) to "
     "change it; an owner or an admin only.",
@@ -6166,10 +6166,10 @@ def release_schedule(api, args):
 
 @tool(
     "hub_release_now",
-    "Ask the Release Manager to cut a release of what is at Pending Release now, without waiting "
+    "Ask the Release Manager to cut a release of what is at Release now, without waiting "
     "for the daily hour (a hotfix, a midday release): ONE task listing the tickets, or a wake on its unfinished "
     "Release task. For a person who moves Dev tickets, the Release Manager or the Head of Engineering bot. `sent` is false with a `reason` "
-    "when nothing is pending or nobody was asked. A person's note asks even with nothing at Pending Release.",
+    "when nothing is pending or nobody was asked. A person's note asks even with nothing at Release.",
     {"note": _s("Why now; goes in the Release Manager's task")},
     writes=True,
 )

@@ -2579,7 +2579,7 @@ SCHEMAS = {
         step_id={"type": ["string", "null"]},
         step_since={
             "type": "string",
-            "description": "A Dev ticket at a working step (In Progress, a Fixes "
+            "description": "A Dev ticket at a working step (Build, a Fixes "
             "step): when it entered that step or came back to work; absent otherwise",
         },
         requirements={

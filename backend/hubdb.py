@@ -4348,13 +4348,13 @@ def _type_steps(conn, actor, type_id, steps):
             "Change or delete these wake rules first, they name a step being deleted: " + "; ".join(named),
         )
     # A ticket in a waiting step that goes goes back to the step its hold came from while that still exists and works,
-    # else to On Deck, before the step row does. Only steps that stay and keep their status are landing places.
+    # else to Build, before the step row does. Only steps that stay and keep their status are landing places.
     kept = sorted(
         (r for r in clean if r["id"] in existing and existing[r["id"]]["status"] == r["status"]),
         key=lambda r: (r["position"], r["id"]),
     )
     working = {r["id"] for r in kept if r["status"] in ("open", "doing", "review", "ready")}
-    deck = next((r["id"] for r in kept if r["name"] == "On Deck" and r["status"] == "open"), None) or next(
+    deck = next((r["id"] for r in kept if r["name"] == "Build" and r["status"] == "open"), None) or next(
         (r["id"] for r in kept if r["status"] == "open"), None
     )
     moving = []
@@ -4508,6 +4508,12 @@ def task_reopen_hint(conn, actor, row):
     return "ask the owner to reopen it with " + f"`hub task update {row['id']} --status doing`, or file a new task"
 
 
+def _working_step(step):
+    """Whether `step` is a Build step, the working step automatic starts take a ticket to (auto_tasks.startable): its cards
+    are queued (open) or started (doing) alike, so a status write on it keeps its status rather than the step's."""
+    return step.get("name") == "Build"
+
+
 def _task_state(conn, actor, row, status=None, type=None, step=None):
     """Resolve the step before checking permissions on its effective status."""
     from . import task_holds
@@ -4532,7 +4538,9 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
         if not chosen and step != "":
             refuse(conn, actor, "not-found", "No such step in this task type")
         if chosen:
-            effective = chosen["status"]
+            # Build holds both a queued card (open) and a started one (doing): a start or a status write keeps its status.
+            keeps = status in ("open", "doing") and _working_step(chosen)
+            effective = status if keeps else chosen["status"]
     elif (
         typ.get("role") == "engineering"
         and row.get("blocked_from_step")
@@ -4542,6 +4550,8 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
     ):
         chosen, effective = resume, resume["status"]
     elif current and current["status"] == effective:
+        chosen = current
+    elif current and effective in ("open", "doing") and _working_step(current):
         chosen = current
     elif typ.get("steps_only") and effective == "closed" and _closes_by_hand(actor):
         # A person's close on a steps-only type lands on its last closed step (Closed, Done), or none.
@@ -4560,7 +4570,7 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
             from .review_gate import engineering
 
             if engineering(conn, {**row, 'type_id': typ['id']}):
-                chosen = next((s for s in typ['steps'] if s['name'] == 'On Deck' and s['status'] == 'open'), chosen)
+                chosen = next((s for s in typ['steps'] if s['name'] == 'Build' and s['status'] == 'open'), chosen)
         if not chosen and effective == "waiting":
             # Waiting is not a column: the task stays in the working step it is in, or starts at the first.
             chosen = (
@@ -4889,7 +4899,7 @@ def _set_status(
 
         ticket_moved(conn, actor, row["id"], row.get("status"), effective)
     if step_id and row.get("step_id") != step_id and row.get("status") is not None:
-        # A step entered is news a type's rules may route (QA Fixes to the Builder, In QA to QA, ...).
+        # A step entered is news a type's rules may route (Build to the Builder, Review 2 to QA, ...).
         from . import rules as wake_rule_engine
 
         wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]), skip=skip_step_wake)
@@ -7480,6 +7490,7 @@ def task_update(
     verdict=None,
     verdict_head=None,
     skip_step_wake=(),
+    handoff=False,
     review_reader=None,
     receipt_owner=None,
     public_allowance=0,
@@ -7714,6 +7725,7 @@ def task_update(
                         if verdict_fields(source["text"]):
                             record_verdict(conn, row["owner_id"], row, text=source["text"])
                             row = task(conn, task_id)
+                            assert row is not None  # the task was just read
                             break
                 from . import step_flow
 
@@ -8132,7 +8144,7 @@ def task_update(
         if returned.get('blocked_since'):
             # Keep the live hold, but clearing it returns to the queue the owner selected.
             steps = type_get(conn, returned['type_id'])['steps']
-            deck = next((s for s in steps if s['name'] == 'On Deck' and s['status'] == 'open'), None)
+            deck = next((s for s in steps if s['name'] == 'Build' and s['status'] == 'open'), None)
             deck = deck or next((s for s in steps if s['status'] == 'open'), None)
             from . import task_holds
 
@@ -8221,6 +8233,7 @@ def task_update(
         {"status": status, "note": note, **({"children": ended} if ended and any(ended.values()) else {})},
     )
     after = isolate_private_task(conn, task(conn, task_id))
+    assert after is not None  # the task was just written
     if owner is not None or private is not None or task_private(conn, after) != task_private(conn, row):
         conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
     if task_private(conn, after) and not task_private(conn, row):
@@ -8388,7 +8401,12 @@ def task_update(
             f"Ready for review: {after['title']}" + (f"\n{note}" if note and not quiet else ""),
             {"news": "ready_for_review"} if review_gate.engineering(conn, after) else {"wake": "review_handback"},
         )
-    if (status == "open" or owner is not None and owner != row["owner_id"]) and actor != after["owner_id"]:
+    # A hand-off (a verdict moving the ticket back to Build) already woke its owner with the verdict: no second "Open".
+    if (
+        (status == "open" or owner is not None and owner != row["owner_id"])
+        and actor != after["owner_id"]
+        and not handoff
+    ):
         _wake(conn, after, after["owner_id"], f"Open: {after['title']}", {"news": "assignment"})
     # A bot's milestone goes to its main chat as one quiet line (task_report).
     if is_bot(after["owner_id"]):

@@ -19,11 +19,10 @@ def ticket(api, receipt=None, **fields):
             H.KEEPER,
             'Dev tickets',
             [
-                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Build', 'status': 'doing'},
                 {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Review 1 Fixes', 'status': 'doing'},
                 {'name': 'Review 2', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Closed', 'status': 'done'},
             ],
         )
     task = post(
@@ -34,7 +33,7 @@ def ticket(api, receipt=None, **fields):
             'title': 'Improve messages',
             'body': 'Build messages.',
             'type': typ['id'],
-            'step': 'In Progress',
+            'step': 'Build',
             'links': [PR],
             **fields,
         },
@@ -127,7 +126,7 @@ def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_w
         assert bool(c.execute("SELECT 1 FROM jobs WHERE bot_id='cmo'").fetchone()) is allowed
     if not allowed:
         current = get(api, 'tasks/' + task['id'])['task']
-        assert current['step']['name'] == 'In Progress' and current['version'] > task['version']
+        assert current['step']['name'] == 'Build' and current['version'] > task['version']
         assert HEAD in response.text and (OLD if receipt else 'no receipt') in response.text
         assert len(notices(api, task)) == 1  # child request and step retries share the fixed notice
 
@@ -421,7 +420,7 @@ def another_ticket(api, n, receipt=None, **fields):
             'title': f'Improve messages {n}',
             'body': 'Build messages.',
             'type': typ['id'],
-            'step': 'In Progress',
+            'step': 'Build',
             'links': [PR],
             **fields,
         },

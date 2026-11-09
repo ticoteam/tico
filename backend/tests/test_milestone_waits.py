@@ -47,16 +47,23 @@ def pair(api):
         {
             "name": "Dev",
             "steps": [
-                {"name": "Build", "status": "doing"},
-                {"name": "In QA", "status": "review"},
-                {"name": "Done", "status": "done"},
+                {"name": "Build", "status": "open"},
+                {"name": "Review 2", "status": "review"},
+                {"name": "Closed", "status": "closed"},
             ],
         },
     )["type"]
     upstream = post(
         api,
         "tasks",
-        {"owner": "cpo", "title": "Visual replies 3/4", "body": "x", "links": [PR], "type": typ["id"], "step": "In QA"},
+        {
+            "owner": "cpo",
+            "title": "Visual replies 3/4",
+            "body": "x",
+            "links": [PR],
+            "type": typ["id"],
+            "step": "Review 2",
+        },
     )
     waiter = post(api, "tasks", {"owner": "cmo", "title": "Visual replies 4/4", "body": "x"})
     return upstream, waiter

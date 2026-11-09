@@ -12,13 +12,13 @@ def dev_ticket(api, owner="bot:cpo", requester="bot:coo"):
             H.KEEPER,
             "Dev tickets",
             [
-                {"name": "In Progress", "status": "doing"},
+                {"name": "Build", "status": "open"},
                 {"name": "Review 1", "status": "review"},
-                {"name": "Done", "status": "done"},
+                {"name": "Closed", "status": "closed"},
             ],
         )
         task = H.task_create(
-            c, requester, "Improve messages", "Build messages.", owner, type=typ["id"], step="In Progress", lint=False
+            c, requester, "Improve messages", "Build messages.", owner, type=typ["id"], step="Build", lint=False
         )
         c.execute("DELETE FROM jobs")
     return task

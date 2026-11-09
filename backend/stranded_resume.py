@@ -25,7 +25,7 @@ or merge queued on an open pull request (`_ci_going`: github wakes the builder w
 on it or under it (a check finishing, so the verdict's move goes first) for REVIEW_QUIET_MINUTES. A queued resume is
 dropped at claim once CI starts, the merge is queued or a check under it changes. A resume dropped before it ran does
 not count toward NO_PROGRESS_LIMIT. Any other review (a
-person's look, Pending Release, Post Release QA) waits on someone else and is not the sweep's.
+person's look, Release, Watch 24h) waits on someone else and is not the sweep's.
 
 Such a task gets one wake for its owner on the task (`refs.wake` "resume", `refs.stranded` true) through the ordinary
 wake path, so the claim's fences (turn limits, budgets, back-off, lanes, the build limit) all still apply. As an awaited

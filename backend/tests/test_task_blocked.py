@@ -139,7 +139,7 @@ def test_gate_refusal_commits_block_without_advancing_review(api):
     assert move(api, task).status_code == 422
     current = get(api, 'tasks/' + task['id'])['task']
     # The hold is a mark on the ticket: it stays in the step it was at, and the refused move is not made.
-    assert current['step']['name'] == 'In Progress'
+    assert current['step']['name'] == 'Build'
     assert current['status'] == 'waiting'
     assert 'receipt' in hold(current)['reason'] and hold(current)['by'] == 'keeper'
     # The screen keeps a gate hold's own line instead of a bot wait's (ui/app/tasks.ts taskBotWait).
@@ -169,7 +169,7 @@ def test_two_dependencies_block_until_both_clear(api):
         for child in children:
             TR.add_blocker(c, H.KEEPER, task['id'], child['id'])
         assert H.task(c, task['id'])['status'] == 'waiting'
-        moved = H.task_update(c, task['owner_id'], task['id'], step='In Progress')
+        moved = H.task_update(c, task['owner_id'], task['id'], step='Build')
         assert 'remains Blocked' in moved['warnings'][0]
         assert H.task(c, task['id'])['status'] == 'waiting', 'an explicit move cannot bypass a live dependency'
         TR.remove_blocker(c, H.KEEPER, task['id'], children[0]['id'])
@@ -356,9 +356,9 @@ def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
     at = '2026-10-26T01:00:00.000000Z'
     monkeypatch.setattr(H, 'now', lambda: at)
     with api.app.state.store.transaction() as c:
-        fixes = c.execute(
-            "SELECT id FROM task_steps WHERE type_id=? AND name='Review 1 Fixes'", (task['type_id'],)
-        ).fetchone()[0]
+        fixes = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Build'", (task['type_id'],)).fetchone()[
+            0
+        ]
         c.execute('UPDATE tasks SET building_started_at=NULL,building_seconds=0 WHERE id=?', (task['id'],))
         H.task_update(c, task['owner_id'], task['id'], step=fixes)
         at = '2026-10-26T02:00:00.000000Z'
@@ -558,9 +558,9 @@ def test_pipeline_child_keeps_review_and_allows_fix_move(api, title):
         child = H.task_create(
             c, task['owner_id'], title, 'Check the current candidate.', 'bot:cmo', parent_id=task['id']
         )
-        fixes = c.execute(
-            "SELECT id FROM task_steps WHERE type_id=? AND name='Review 1 Fixes'", (task['type_id'],)
-        ).fetchone()[0]
+        fixes = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='Build'", (task['type_id'],)).fetchone()[
+            0
+        ]
         review_step = H.task(c, task['id'])['step_id']
     Scheduler(store, api.app.state.execution).tick(datetime.now(timezone.utc))
     with store.transaction() as c:
@@ -619,7 +619,7 @@ def test_scheduler_does_not_write_check_an_unheld_engineering_task(api, monkeypa
 
 
 def test_an_old_blocker_does_not_put_a_merged_ticket_back_on_hold(api):
-    """A step whose flow says can_hold false (Pending Release on a Dev board) is never held: a merged change is
+    """A step whose flow says can_hold false (Release on a Dev board) is never held: a merged change is
     reverted or fixed forward, not Blocked."""
     from backend import step_flow, task_relations as TR
 
@@ -634,42 +634,42 @@ def test_an_old_blocker_does_not_put_a_merged_ticket_back_on_hold(api):
         assert step_flow.can_hold(c, other), "other steps still hold"
 
 
-def _old_board(api, task):
-    """The board an earlier version left: its Blocked step, and an On Deck to fall back to."""
+def _retired_blocked(api, task):
+    """The retired Blocked step as the stage map leaves it: the Build step, kept waiting. A hold an earlier version
+    parked there is one leave_retired_blocked moves on (Build is the queue step too, so it has no open fallback)."""
     with api.app.state.store.transaction() as c:
-        typ = H.type_get(c, task['type_id'])
-        H.type_update(
-            c,
-            H.KEEPER,
-            typ['id'],
-            steps=[*typ['steps'], {'name': 'On Deck', 'status': 'open'}, {'name': 'Blocked', 'status': 'waiting'}],
-        )
+        c.execute("UPDATE task_steps SET status='waiting' WHERE type_id=? AND name='Build'", (task['type_id'],))
+        return next(s['id'] for s in H.type_get(c, task['type_id'])['steps'] if s['name'] == 'Build')
 
 
 def test_a_ticket_an_old_version_parked_in_blocked_returns_to_its_step_and_stays_held(api):
-    """A startup moves a held ticket out of the Blocked step an earlier version made, back to the step it left. The hold
-    stays as it was; a person's manual hold stays put; a from-step that is gone or finished falls back to On Deck; a
-    second start writes nothing."""
+    """A startup moves a held ticket out of the retired Blocked step back to the step it left. The hold stays as it was;
+    a person's manual hold stays put; a from-step that is finished leaves the ticket where it is (no open step to fall
+    back to). A second start writes nothing."""
     from backend import task_relations as TR, task_blocked
 
-    dependency = ticket(api)
-    _old_board(api, dependency)
+    dependency = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed')
     typ = dependency['type_id']
     manual, stale = (
-        post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Build it.', 'type': typ, 'step': 'In Progress'})
+        post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Build it.', 'type': typ, 'step': 'Build'})
         for title in ('Build the manual one', 'Build the stale one')
     )
     blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:
-        steps = {s['name']: s['id'] for s in H.type_get(c, dependency['type_id'])['steps']}
+        steps = {s['name']: s['id'] for s in H.type_get(c, typ)['steps']}
+        H.task_update(c, 'human:ana', dependency['id'], step='Review 1')
+        from_step = H.task(c, dependency['id'])['step_id']
         TR.relate(c, H.KEEPER, dependency['id'], blocker['id'], 'blocked_by')
         TR.relate(c, H.KEEPER, stale['id'], blocker['id'], 'blocked_by')
-        H.task_update(c, 'human:ana', manual['id'], step='Blocked', note='Waiting for a test machine')
         held = H.task(c, dependency['id'])
-        from_step = held['step_id']
         assert held['blocked_kind'] == 'dependency' and held['blocked_from_step'] == from_step
-        c.execute("UPDATE tasks SET step_id=? WHERE id IN (?,?)", (steps['Blocked'], dependency['id'], stale['id']))
-        set_holds(c, stale['id'], blocked_from_step=steps['Done'])
+    retired = _retired_blocked(api, dependency)
+    with api.app.state.store.transaction() as c:
+        # A person parks the manual one in the waiting step: a manual hold, which the startup leaves where it is.
+        H.task_update(c, 'human:ana', manual['id'], step=retired, note='Waiting for a test machine')
+        c.execute("UPDATE tasks SET step_id=? WHERE id IN (?,?)", (retired, dependency['id'], stale['id']))
+        set_holds(c, dependency['id'], blocked_from_step=from_step)
+        set_holds(c, stale['id'], blocked_from_step=steps['Closed'])
         task_blocked.leave_retired_blocked(c)
         back = H.task(c, dependency['id'])
         assert (
@@ -679,11 +679,8 @@ def test_a_ticket_an_old_version_parked_in_blocked_returns_to_its_step_and_stays
             back['blocked_since'],
             back['blocked_reason'],
         ) == (from_step, 'waiting', held['blocked_kind'], held['blocked_since'], held['blocked_reason'])
-        assert (
-            H.task(c, manual['id'])['step_id'] == steps['Blocked']
-            and H.task(c, manual['id'])['blocked_kind'] == 'manual'
-        )
-        assert H.task(c, stale['id'])['step_id'] == steps['On Deck']
+        assert H.task(c, manual['id'])['blocked_kind'] == 'manual'
+        assert H.task(c, stale['id'])['step_id'] == retired
         before = c.execute('SELECT total_changes()').fetchone()[0]
         task_blocked.leave_retired_blocked(c)
         assert c.execute('SELECT total_changes()').fetchone()[0] == before
@@ -692,13 +689,13 @@ def test_a_ticket_an_old_version_parked_in_blocked_returns_to_its_step_and_stays
 def test_a_move_made_while_held_is_where_the_hold_clears_to(api):
     from backend import task_relations as TR, task_blocked
 
-    task = ticket(api)
+    task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed')
     blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
         task_blocked.sweep(c, H.now())
-        review = next(s['id'] for s in H.type_get(c, task['type_id'])['steps'] if s['name'] == 'Review 1 Fixes')
-        H.task_update(c, 'human:ana', task['id'], step='Review 1 Fixes')
+        review = next(s['id'] for s in H.type_get(c, task['type_id'])['steps'] if s['name'] == 'Review 1')
+        H.task_update(c, 'human:ana', task['id'], step='Review 1')
         moved = H.task(c, task['id'])
         assert (moved['step_id'], moved['status'], moved['blocked_from_step']) == (review, 'waiting', review)
         H.task_update(c, H.KEEPER, blocker['id'], status='done')
@@ -708,39 +705,40 @@ def test_a_move_made_while_held_is_where_the_hold_clears_to(api):
 
 
 def _held_in_blocked_from(api, task, came_from):
-    """A held ticket an earlier version moved into its Blocked step with no saved step: its last step move is into
-    Blocked, from the step it came from."""
+    """A held ticket an earlier version moved into the retired Blocked step with no saved step: its last step move is
+    into that step, from the step it came from."""
     from backend import task_relations as TR
 
     blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
-    _team_blocked(api, task)
+    retired = _retired_blocked(api, task)
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
-        blocked = next(s['id'] for s in H.type_get(c, task['type_id'])['steps'] if s['name'] == 'Blocked')
-        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (blocked, task['id']))
+        c.execute("UPDATE tasks SET step_id=? WHERE id=?", (retired, task['id']))
         set_holds(c, task['id'], blocked_from_step=None)
-        H._task_event(c, task['id'], H.KEEPER, 'step', came_from, blocked, 'Waiting')
+        H._task_event(c, task['id'], H.KEEPER, 'step', came_from, retired, 'Waiting')
 
 
 def test_a_hold_without_a_saved_step_returns_to_the_step_its_history_shows(api):
     from backend import task_blocked
 
-    task = ticket(api)
-    _held_in_blocked_from(api, task, task['step_id'])
+    task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed')
     with api.app.state.store.transaction() as c:
-        assert 'On Deck' not in [s['name'] for s in H.type_get(c, task['type_id'])['steps']]
+        H.task_update(c, 'human:ana', task['id'], step='Review 1')
+        review = H.task(c, task['id'])['step_id']
+    _held_in_blocked_from(api, task, review)
+    with api.app.state.store.transaction() as c:
         held = H.task(c, task['id'])
         task_blocked.leave_retired_blocked(c)
         back = H.task(c, task['id'])
         assert (back['step_id'], back['status'], back['blocked_kind'], back['blocked_since']) == (
-            task['step_id'],
+            review,
             'waiting',
             held['blocked_kind'],
             held['blocked_since'],
         )
 
 
-def test_a_history_step_that_is_gone_stays_in_blocked_without_on_deck(api):
+def test_a_history_step_that_is_gone_stays_in_the_retired_step(api):
     from backend import task_blocked
 
     task = ticket(api)
@@ -751,21 +749,16 @@ def test_a_history_step_that_is_gone_stays_in_blocked_without_on_deck(api):
         assert H.task(c, task['id'])['step_id'] == blocked
 
 
-def test_a_history_step_that_is_waiting_falls_back_to_on_deck(api):
+def test_a_history_step_that_is_waiting_has_no_open_step_to_fall_back_to(api):
     from backend import task_blocked
 
     task = ticket(api)
     with api.app.state.store.transaction() as c:
         typ = H.type_get(c, task['type_id'])
-        H.type_update(
-            c,
-            H.KEEPER,
-            typ['id'],
-            steps=[*typ['steps'], {'name': 'Parked', 'status': 'waiting'}, {'name': 'On Deck', 'status': 'open'}],
-        )
+        H.type_update(c, H.KEEPER, typ['id'], steps=[*typ['steps'], {'name': 'Parked', 'status': 'waiting'}])
         parked = next(s['id'] for s in H.type_get(c, typ['id'])['steps'] if s['name'] == 'Parked')
     _held_in_blocked_from(api, task, parked)
     with api.app.state.store.transaction() as c:
+        retired = H.task(c, task['id'])['step_id']
         task_blocked.leave_retired_blocked(c)
-        on_deck = next(s['id'] for s in H.type_get(c, task['type_id'])['steps'] if s['name'] == 'On Deck')
-        assert H.task(c, task['id'])['step_id'] == on_deck
+        assert H.task(c, task['id'])['step_id'] == retired

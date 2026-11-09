@@ -16,7 +16,7 @@ class Board(World):
         return self._checks
 
     def check_step(self, check):
-        return 'In QA'
+        return 'QA'
 
     def sql(self, query, args=()):
         return [{'new': self._filed[args[0]]}] if 'review_head' in query and args[0] in self._filed else []
@@ -24,8 +24,8 @@ class Board(World):
 
 def test_a_check_done_with_only_comments_fails_the_head_it_was_filed_for():
     board = Board([{'id': 'qa1', 'status': 'done', 'verdict': None, 'verdict_head': None}], {'qa1': HEAD[:12] + ',x'})
-    assert board.failed_at('t1', 'In QA', HEAD) is True
-    assert board.failed_at('t1', 'In QA', 'f' * 40) is False
+    assert board.failed_at('t1', 'QA', HEAD) is True
+    assert board.failed_at('t1', 'QA', 'f' * 40) is False
 
 
 def test_a_pass_or_an_open_check_fails_nothing():
@@ -36,4 +36,4 @@ def test_a_pass_or_an_open_check_fails_nothing():
         ],
         {'qa2': HEAD},
     )
-    assert board.failed_at('t1', 'In QA', HEAD) is False
+    assert board.failed_at('t1', 'QA', HEAD) is False

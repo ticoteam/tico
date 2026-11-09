@@ -205,7 +205,7 @@ class Bot:
         if self.role == "builder":
             step = w.board.step(w.step_of(task))
             if step and step.work:
-                return "fix" if w.board.fixes_for(step.name) else "build"
+                return "fix" if self.fix_source(task, step) else "build"
             return "short"
         if self.role in ("reviewer", "qa", "architect") and w.parent_of(task["id"]):
             return {"reviewer": "review", "qa": "qa", "architect": "plan"}[self.role]
@@ -393,11 +393,16 @@ class Builder(Bot):
         if step.assign:
             if w.slots(self.slug) >= self.slots:
                 return None
-            nxt = board.steps[board.steps.index(step) + 1]
-            w.update(task["id"], token=self.token, step=nxt.name)
-            step = nxt
+            if step.work:
+                # Build holds the queue and the work: a claim starts the ticket there, as a ticket starts at Build.
+                if task["status"] != "doing":
+                    w.update(task["id"], token=self.token, status="doing")
+            else:
+                nxt = board.steps[board.steps.index(step) + 1]
+                w.update(task["id"], token=self.token, step=nxt.name)
+                step = nxt
         if step.work:
-            fixes = board.fixes_for(step.name)
+            fixes = self.fix_source(task, step)
             return self.fix(task, step, fixes, pr) if fixes else self.build(task, step, pr)
         if step.check:
             return self.at_check(task, step, pr, message)
@@ -423,14 +428,32 @@ class Builder(Bot):
                 return "asked the architect for a plan"
             if plan["status"] not in FINISHED:
                 return None
-        nxt = board.step(step.next)
-        if nxt and nxt.check:
+        nxt = step.next or board.first_check_after(step.name)
+        if board.step(nxt) and board.step(nxt).check:
             if not pr:
                 pr = w.open_pr(task["id"], token=self.token)
                 self.receipt(task["id"], pr)
             elif w.ci_state(pr) == "failing":
                 self.push(task, pr)
-        return self.move(task, step.next)
+        return self.move(task, nxt)
+
+    def fix_source(self, task, step):
+        """The review that sent the ticket to work step `step`: the newest judged check whose changes lead there, or None
+        for a ticket no review has judged (its first build)."""
+        found = [
+            (judged, check)
+            for check in self.world.board.fixes_for(step.name)
+            for judged in [self.world.judged(task["id"], check.name)]
+            if judged
+        ]
+        return max(found, key=lambda pair: pair[0]["created_at"])[1] if found else None
+
+    def fix_next(self, task, source):
+        """Where a ticket goes after its fixes: back to the review that sent it when that review failed the change (or
+        gave no verdict), else on to the next check, or the merge after the last one."""
+        judged = self.world.judged(task["id"], source.name)
+        failed = not judged or judged["verdict"] not in ("approve", "pass")
+        return source.name if failed else self.world.board.first_check_after(source.name)
 
     def fix(self, task, step, check_step, pr):
         """A fixes step: push fixes for the check's comments, whatever form they came in. On a step whose owner moves
@@ -455,15 +478,17 @@ class Builder(Bot):
                 w.update(task["id"], token=self.token, labels=sorted(labels(task) | {tag}))
             self.push(task, pr)
             pushed = "pushed fixes"
-        if step.next:
+        # A fixes step that waits for green CI (after_green) keeps that path; the shared Build step goes back to its review.
+        nxt = None if step.after_green else self.fix_next(task, check_step)
+        if nxt:
             if self.chance("forget_move"):
                 return pushed or "forgot to hand it on"
-            if step.next == MERGE:
+            if nxt == MERGE:
                 return self.merge(task, pr) or pushed
             return (
                 (pushed + ", " if pushed else "")
                 + ("disputed the fail, " if kept == "disputed" else "")
-                + self.move(task, step.next)
+                + self.move(task, nxt)
                 + self.try_waive(task, pr)
             )
         if pushed or w.ci_state(pr) != "passing":

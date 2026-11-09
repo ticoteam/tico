@@ -465,7 +465,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            one you may not change: on your yes, its Confirm card and a request go to
                                            one person who may (an admin, or the owner for the owner's); you're told
                                            when they confirm or say no
-    hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
+    hub release now [--note "..."]         ask the Release Manager to release what is at Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
     hub bot status set "<focus>" [--state waiting_human|blocked|...] [--task ID] [--bot X]
@@ -3947,12 +3947,10 @@ def parser():
     ).add_subparsers(dest="sub")
     s = release.add_parser(
         "now",
-        help="ask the Release Manager to release what is at Pending Release now (hotfix, "
+        help="ask the Release Manager to release what is at Release now (hotfix, "
         "midday release); one task listing the tickets",
     )
-    s.add_argument(
-        "--note", help="why now; goes in the task; a person's note asks even with nothing at Pending Release"
-    )
+    s.add_argument("--note", help="why now; goes in the task; a person's note asks even with nothing at Release")
     s.set_defaults(fn="release now")
     s = release.add_parser("schedule", help="show the daily release, or change it")
     on = s.add_mutually_exclusive_group()

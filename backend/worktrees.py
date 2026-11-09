@@ -306,13 +306,13 @@ def live_turn_cache(c, computer):
 
 def start_refusal(c, task):
     """Why no new worktree starts for this task now, or '': a coding step cannot run on a finished task, one not
-    started (On Deck, or any task still `open`) or one blocked by a task whose code is not merged yet (`unmerged`). A
+    started (Build, or any task still `open`) or one blocked by a task whose code is not merged yet (`unmerged`). A
     task being worked (`doing`), or one at a review or waiting while its fix-forward or a review fix runs, gets one; so
     does reassigned work."""
     if task['status'] in CLOSED:
         return f"This task is {task['status']}: a finished task gets no new worktree."
     if task['status'] == 'open':
-        return 'This task has not started: move it to In Progress first.'
+        return 'This task has not started: move it to Build first.'
     for row in TR.live_blockers(c, task['id'], H.ACTIVE_STATUSES):
         if why := unmerged(c, row):
             name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or row['id'])
@@ -322,9 +322,9 @@ def start_refusal(c, task):
 
 def unmerged(c, blocker):
     """Why an open blocker's code is not on main yet, in plain words, or '' when it is: a worktree builds from source,
-    so a blocker counts once it is merged, not once it ships. Merged means a ready status, its type's Pending Release
+    so a blocker counts once it is merged, not once it ships. Merged means a ready status, its type's Release
     step or a later one, or a merged pull request with none still open (one closed unmerged was abandoned). The cutoff
-    is the Pending Release step itself: a step with a ready status may come before work that still changes code."""
+    is the Release step itself: a step with a ready status may come before work that still changes code."""
     if blocker['status'] == 'ready':
         return ''
     step = c.execute('SELECT name,position FROM task_steps WHERE id=?', (blocker.get('step_id'),)).fetchone()

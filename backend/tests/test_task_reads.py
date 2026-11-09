@@ -138,7 +138,7 @@ def test_saving_a_big_types_steps_is_a_few_bulk_changes_not_one_per_task(api):
         "task-types",
         {
             "name": "Development",
-            "steps": [{"name": "On Deck", "status": "open"}, {"name": "In Progress", "status": "doing"}],
+            "steps": [{"name": "Build", "status": "open"}, {"name": "Review 1", "status": "review"}],
         },
     )["type"]
     seed = post(

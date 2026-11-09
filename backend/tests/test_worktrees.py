@@ -1376,7 +1376,7 @@ def test_a_new_worktree_starts_only_for_work_a_coding_step_can_run_on(prepared):
     api, tid, other = prepared
     path = f'tasks/{tid}/worktrees'
     for status, words in (
-        ('open', 'move it to In Progress first'),
+        ('open', 'move it to Build first'),
         ('done', 'finished task'),
         ('declined', 'finished task'),
     ):
@@ -1403,7 +1403,7 @@ def test_a_new_worktree_starts_only_for_work_a_coding_step_can_run_on(prepared):
 
 
 def test_a_blocker_counts_once_its_code_is_merged_not_once_it_ships(prepared):
-    """A worktree builds from source: a blocker at Pending Release (or later) or with its pull request merged lets the
+    """A worktree builds from source: a blocker at Release (or later) or with its pull request merged lets the
     dependent start; one still before the merge holds it, and the refusal says what is missing."""
     api, tid, other = prepared
     path = f'tasks/{tid}/worktrees'
@@ -1414,13 +1414,11 @@ def test_a_blocker_counts_once_its_code_is_merged_not_once_it_ships(prepared):
             'Dev tickets',
             numbered=True,
             steps=[
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Build', 'status': 'open'},
                 {'name': 'Review 1', 'status': 'review'},
                 {'name': 'Review 2', 'status': 'review'},
-                {'name': 'Pending Release', 'status': 'review'},
-                {'name': 'Post Release QA', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Release', 'status': 'review'},
+                {'name': 'Watch 24h', 'status': 'review'},
                 {'name': 'Closed', 'status': 'closed'},
             ],
         )
@@ -1452,8 +1450,8 @@ def test_a_blocker_counts_once_its_code_is_merged_not_once_it_ships(prepared):
         with api.app_state.store.transaction() as c:  # released, so the next check asks for a new tree
             c.execute("UPDATE task_links SET state='removed' WHERE id=?", (started.json()['link_id'],))
 
-    starts('Pending Release', 'merged')
-    for step, pr_state in (('Pending Release', 'open'), ('Post Release QA', 'open'), ('Review 2', 'merged')):
+    starts('Release', 'merged')
+    for step, pr_state in (('Release', 'open'), ('Watch 24h', 'open'), ('Review 2', 'merged')):
         starts(step, pr_state)  # the step alone, or the merged pull request alone, is enough
     # A closed, unmerged pull request was abandoned: it neither counts as merged nor holds a merged one back.
     with api.app_state.store.transaction() as c:
@@ -1476,11 +1474,11 @@ def test_a_blocker_counts_once_its_code_is_merged_not_once_it_ships(prepared):
             "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
             (later['id'], tid, H.now()),
         )
-    refused = at('Pending Release', 'merged')
+    refused = at('Release', 'merged')
     assert refused.json()['error']['detail'].startswith('This task is blocked by Later work, still at '), refused.text
 
 
-def test_only_the_pending_release_step_marks_a_blocker_merged(prepared):
+def test_only_the_release_step_marks_a_blocker_merged(prepared):
     """A step with a ready status can come before work that still changes code: a blocker there counts only by its
     status, and one moved on to a later doing step still holds the dependent."""
     api, tid, other = prepared
@@ -1494,8 +1492,8 @@ def test_only_the_pending_release_step_marks_a_blocker_merged(prepared):
                 {'name': 'Build', 'status': 'doing'},
                 {'name': 'Ready', 'status': 'ready'},
                 {'name': 'Follow-up', 'status': 'doing'},
-                {'name': 'Pending Release', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Release', 'status': 'review'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         )
         steps = {s['name']: s['id'] for s in flow['steps']}

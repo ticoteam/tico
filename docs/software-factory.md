@@ -90,44 +90,44 @@ The once-a-minute dispatcher also picks up older open bot PRs, oldest first, at 
 per hour and within each pool's open-check limit. A settled approval at the current head that has no saved outcome
 runs the next step once: Review 2 when needed, else the merge handoff when checks are green. This also applies when
 a hold clears; an old-head approval does not count. Conflicting PRs go back to the owner to resolve. A branch behind
-main does not: the merge queue tests it on current main. A ticket whose PR already merged needs no open PR for a check after the merge (Post Release QA, on a board that has that step); a review before the
+main does not: the merge queue tests it on current main. A ticket whose PR already merged needs no open PR for a check after the merge (Watch 24h, or Post Release QA on a board set up before the stage map that still has it); a review before the
 merge still needs one. A done task with an open PR returns to review. Private tasks stay private: a reviewer who cannot
 read the task gets no request. Health names visible bot PRs open over 24 hours without a review and the wait reason.
 
-In Settings → Tasks, rename the default **Engineering** type to **Dev tickets** and replace its steps with these.
+In Settings → Tasks, rename the default **Engineering** type to **Dev tickets** and set its stages to these (setup applies the stage map: each card moves to its new stage and keeps its status).
 Renaming keeps the type with Head of Engineering, so a roadmap item follows its Dev tickets (below), and so does a type
 you create named Dev tickets. Move any tasks off a step before you delete it or change its status.
 
-| Step | Status | Moved there by | What happens |
+| Stage | Status | Moved there by | What happens |
 |---|---|---|---|
-| On Deck | open | Head of Engineering | Ready to build, Builder picked |
-| In Progress | doing | Builder | Building |
-| Review 1 | review | Builder | Reviewer 1 comments |
-| Review 1 Fixes | doing | Builder | Builder acts on the feedback (skipped if there is none) |
-| Review 2 | review | Builder | Reviewer 2 comments on the updated change. Always runs. Its approval is the last review before the merge |
-| Review 2 Fixes | doing | Builder | Builder acts on the feedback; once CI is green on the new head, the ticket merges |
-| Pending Release | review | Merge | Merged; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake. A published release moves the ticket on to the next step by itself |
-| Done | done | Release | Shipped in a published release |
-| Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate, superseded or dropped ticket |
+| Build | open | Head of Engineering, or a failed review | Ready to build, or the Builder works it: the first time, after a failed Review 1 or Review 2, and after QA's rework. The Builder acts on the feedback and moves the ticket back to the review it came from |
+| Review 1 | review | Builder | Reviewer 1 comments. A fail sends the ticket to Build (skipped with an approval and no points to fix) |
+| Review 2 | review | Builder | Reviewer 2 comments on the updated change. A fail sends it to Build; a pass makes the merge next. Its skip tags (`review-1-only`, `skip-qa`) pass it by |
+| Merge queue | review | Builder | Reviewed and waiting for the merge. It starts empty |
+| Release | review | Merge | Merged, waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake. A published release moves the ticket on to Watch 24h by itself |
+| Watch 24h | review | Release Manager | Shipped; QA runs the *check live* tests and watches the *watch live* items for 48 hours |
+| Closed | closed | Head of Engineering | Finished (Watch 24h passed, or closed without shipping, e.g. a duplicate, superseded or dropped ticket). A done ticket stays done here |
 
-Done and Closed fold into one strip at the end of the board: those tickets are under the Done and Closed tabs. A waiting
+A board set up before the stage map keeps its old steps (On Deck to Done) until setup applies the map, which moves each card to the stage its step maps to.
+
+Closed is the strip at the end of the board: those tickets are under the Closed tab. A waiting
 ticket stays at its step with a Waiting tag.
 
-- **Review 2 always runs**, for every change.
-- **On a board without QA steps, an unanswered check is filed again, never passed on.** When a check passes its hour with
+- **Review 2 always runs**, for every change, unless its ticket carries a skip tag (`review-1-only` or `skip-qa`, for a change nobody will see).
+- **On the Dev board an unanswered check is filed again, never passed on.** When a check passes its hour with
   no verdict, Tico closes it, records who did not answer, and files the same check for the same head to another free pool
   bot, preferring another model family than the Builder. The bot that did not answer is passed over for that refile and
   taken again only when no other bot is free. A second review goes to a different bot than the first wherever one is
   free, in this order: a bot that has not timed out on the ticket; a bot that timed out earlier on the ticket, which may
   only have been busy; a bot that reviewed an earlier round, only when no other bot is left in the pool (a bot that timed
   out earlier counts as left); and last the bot just refiled. With every bot busy, rate-limited or offline the check waits
-  at its step as "Waiting for a reviewer", and the retry files it once one frees up. On a board with QA steps, an unanswered review keeps
-  its old timeout: the round is skipped and the ticket moves on.
-- **A board that already has QA steps** (In QA, QA Fixes, Post Release QA) keeps them. On it, Review 2's changes go to
-  Review 2 Fixes and the Builder moves the ticket to In QA, a QA pass makes the merge next, and a change nobody will see
-  skips In QA and QA Fixes with the `skip-qa` tag.
-- **A failure after release** goes back to QA Fixes for a hotfix on a board with QA steps; otherwise the Release Manager
-  rolls back.
+  at its step as "Waiting for a reviewer", and the retry files it once one frees up. On a board set up before the stage map
+  that still has QA steps, an unanswered review keeps its old timeout: the round is skipped and the ticket moves on.
+- **A board set up before the stage map that has QA steps** (In QA, QA Fixes, Post Release QA) keeps them until setup
+  applies the map. On it, Review 2's changes go to Review 2 Fixes and the Builder moves the ticket to In QA, a QA pass
+  makes the merge next, and a change nobody will see skips In QA and QA Fixes with the `skip-qa` tag.
+- **A failure after release** goes back to Build for a hotfix (QA Fixes on a board set up before the stage map that still
+  has QA steps); otherwise the Release Manager rolls back.
 - **Reviewers and Security only comment.** They never move a ticket: a reviewer or Security bot that tries is refused
   and told to finish its review task with a verdict (`hub task done <id> --verdict approve|changes --head <sha>`). QA
   gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged, even while the ticket
@@ -141,10 +141,12 @@ ticket stays at its step with a Waiting tag.
   Builder’s move to merge or move on. An old-head verdict needs a new review. A check still open names its owner
   even after a push, and an unfiled check names its pool and wait reason. Human subtasks are not check verdicts.
   Private check owners and verdicts stay hidden; incomplete evidence cannot approve a merge or move on.
-- **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with an editable rule: **Pending Release**
-  is a note to the Release Manager. A board with QA steps also gets **QA Fixes**, which wakes the Builder, and **In QA**,
-  which wakes QA only. Change them in the type's **What wakes** automation on the Automations page.
-- **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
+- **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **Build**
+  wakes the Builder who owns the ticket, **Review 2** wakes QA only, and **Release** is a note to the Release Manager.
+  A board set up before the stage map keeps the rules it was given (Pending Release is a note; a board with QA steps also
+  has QA Fixes, which wakes the Builder, and In QA, which wakes QA only). Change them in the type's **What wakes**
+  automation on the Automations page.
+- **A ticket at a working step (Build) shows its age at that step** on its card (`step_since`
   on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
   work. After 4 hours at the step, the type's manager (Head of Engineering), or else the owner's manager, is listed on the task roundup as late, to unblock or reroute it, and again every seven days while it stays late. Owners are not woken for a status: a quiet ticket is listed on its owner's task roundup, once per run (three times a day by default). A step's flow sets its own late hours (`late_hours`), on any board; a Dev step without one uses 4. `status_hours` no longer wakes anyone.
 - **Head of Engineering works by exception.** On the **Manager** profile it has no step on any ticket: a ticket's
@@ -173,8 +175,8 @@ ticket stays at its step with a Waiting tag.
 
 Feature ideas live in the **Product roadmap** type: Suggested → Exploring → Spec → Approved → Building → Ready to
 ship → Shipped (or Declined). Head of Product moves them. A roadmap item's Dev tickets are its children or the
-tickets it is blocked by, and the item moves to Building when the first one is In Progress, Ready to ship when every
-one is at Pending Release or later, and Shipped when every one is Done ([Public roadmaps](roadmaps.md) has the
+tickets it is blocked by, and the item moves to Building when the first one is in Build or later, Ready to ship when every
+one is at Release or later, and Shipped when every one is Done ([Public roadmaps](roadmaps.md) has the
 rule). In Settings → Tasks, give Spec and Approved the public step name "Planned", and Building and Ready to ship
 "In progress"; otherwise each step shows publicly under its own name. Shipped goes out with the release notes, after
 post-release QA. Publishing a roadmap is covered in [Public roadmaps](roadmaps.md).

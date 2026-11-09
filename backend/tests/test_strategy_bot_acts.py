@@ -213,8 +213,8 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
             "bots": "work",
             "steps": [
                 {"name": "Backlog", "status": "open"},
-                {"name": "On Deck", "status": "open"},
-                {"name": "Done", "status": "closed"},
+                {"name": "Build", "status": "open"},
+                {"name": "Closed", "status": "closed"},
             ],
         },
     )["type"]
@@ -226,7 +226,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
             "title": "Fix the guest message times",
             "body": "Please.",
             "type": typ["id"],
-            "step": "On Deck",
+            "step": "Build",
         },
     )["id"]
     with api.app.state.store.transaction() as c:

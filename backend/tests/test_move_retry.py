@@ -51,7 +51,7 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
     assert 'Tico retries this move itself when a passing test receipt' in refused.text
     assert [r['step'] for r in retries(api, task)] == ['Review 1']
     # Nothing changed: no retry, no new refusal.
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Build'
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert tick(api) == [task['id']]
@@ -88,17 +88,17 @@ def test_a_retry_still_refused_waits_for_the_next_change_and_stops_when_the_tick
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:  # a change, but not a receipt
         c.execute('UPDATE tasks SET note=? WHERE id=?', ('Still building the fix.', task['id']))
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Build'
     tries = retries(api, task)
     assert len(tries) == 2 and tries[-1]['tries'] == 1 and tries[-1]['state'] == 'waiting'
     assert tick(api) == [] and len(retries(api, task)) == 2  # same inputs: not tried again
     # The builder moves it elsewhere: the remembered move is dropped even when a receipt then arrives.
     fresh = get(api, 'tasks/' + task['id'])['task']
     with api.app.state.store.transaction() as c:
-        H.task_update(c, H.KEEPER, task['id'], step='Done')
+        H.task_update(c, H.KEEPER, task['id'], step='Closed')
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
-    assert fresh['step']['name'] == 'In Progress'
-    assert tick(api) == [] and step(api, task) == 'Done'
+    assert fresh['step']['name'] == 'Build'
+    assert tick(api) == [] and step(api, task) == 'Closed'
 
 
 def test_hint_names_what_clears_each_refusal():
@@ -417,7 +417,7 @@ def test_retries_refused_again_expire_three_days_after_the_first_refusal(api):
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert move_retry.tick(api.app.state.github_app, at=later(13 * 60), force=True) == []
-    assert step(api, task) == 'In Progress'
+    assert step(api, task) == 'Build'
 
 
 def test_a_private_tickets_outage_does_not_create_a_task_or_wake_a_manager(api, monkeypatch):
@@ -483,7 +483,7 @@ def test_a_retry_does_not_pass_on_evidence_the_mover_cannot_read(api):
     assert move(api, task).status_code == 422  # ana cannot read it
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET note='unrelated' WHERE id=?", (task['id'],))
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Build'
     assert retries(api, task)[-1]['by'] == 'human:ana'  # a refused retry keeps the mover it reads as
 
 
@@ -503,11 +503,11 @@ def test_a_refused_move_held_is_retried_even_when_the_blocked_sweep_runs_first(a
 
     task = ticket(api)
     assert move(api, task).status_code == 422
-    assert step(api, task) == 'In Progress'
+    assert step(api, task) == 'Build'
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
         task_blocked.sweep(c, H.now())
-    assert step(api, task) == 'In Progress'
+    assert step(api, task) == 'Build'
     assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
     with api.app.state.store.read() as c:
         assert H.task(c, task['id'])['blocked_since'] is None
@@ -528,7 +528,7 @@ def test_a_gate_hold_with_no_live_retry_goes_back_to_its_earlier_step(api):
         )
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
         task_blocked.sweep(c, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z')
-    assert step(api, task) == 'In Progress'
+    assert step(api, task) == 'Build'
 
 
 def test_a_retry_that_another_wait_keeps_on_blocked_claims_no_move_and_waits_for_a_change(api):
@@ -546,7 +546,7 @@ def test_a_retry_that_another_wait_keeps_on_blocked_claims_no_move_and_waits_for
 
     for _ in range(3):
         assert tick(api) == []
-    assert step(api, task) == 'In Progress' and claimed() == 0
+    assert step(api, task) == 'Build' and claimed() == 0
     assert len(retries(api, task)) == 2 and retries(api, task)[-1]['state'] == 'waiting'
     # The other wait ends: that is a change, and the remembered move is made.
     with api.app.state.store.transaction() as c:

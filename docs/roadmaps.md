@@ -152,13 +152,13 @@ The PM gathers requests and comments, researches and drafts a spec, and proposes
 existing Decide card. After approval, it moves the roadmap task to Approved and files Engineering
 children through Head of Engineering. The server moves an item between Approved, Building, Ready to ship and Shipped by its Dev tickets: its
 engineering children and the engineering tickets it is blocked by count alike, each once. Linking alone moves
-nothing. The item is at Building once one ticket is past its first step (In Progress or later), at Ready to ship
-once every ticket is at Pending Release or later (on a type without that step, a step with the ready status), and
+nothing. The item is at Building once one ticket is past its first step (Build or later), at Ready to ship
+once every ticket is at Release or later (on a type without that step, a step with the ready status), and
 at Shipped once every ticket shipped: at a done step, closed straight from it (accepting finished work closes it),
 or closed on a type with no done step (the default Engineering type's Done; there every close counts, since that
 type has no other closed step). A ticket closed from any other step, such as a duplicate or one declined first,
 and a declined one count for nothing; when no ticket counts, the item is at Approved. Steps decide, not statuses:
-Review 1 and Pending Release are both review. On every change the item takes the step its tickets call for, back
+Review 1 and Release are both review. On every change the item takes the step its tickets call for, back
 as well as forward: a ticket that reopens takes a Shipped item back to Building. An item at Suggested, Exploring, Spec
 or Declined is left alone, and with no Dev tickets manual steps remain unchanged. A Dev ticket that finishes
 stays linked to the item it blocked, so the item still counts it.
@@ -168,8 +168,8 @@ upgrade, with Building's public name, so publicly nothing changes until Shipped;
 it back, and without it an item goes from Building straight to Shipped.
 
 Each Dev ticket also leaves a quiet line when it first starts, gets a blocker that is still open, or reaches done:
-`Started: #143 Title. Step: In Progress. PR: <url>.`, `Blocked: #143 Title. Step: In Progress. Waits on #139 Title
-(On Deck). PR: <url>.`, `Done: #143 Title. Step: Done. PR: <url>.` (`PR: none.` without one). It goes to each
+`Started: #143 Title. Step: Build. PR: <url>.`, `Blocked: #143 Title. Step: Build. Waits on #139 Title
+(Build). PR: <url>.`, `Done: #143 Title. Step: Done. PR: <url>.` (`PR: none.` without one). It goes to each
 roadmap item the ticket delivers, addressed to the item's bot, else to the ticket's requester on the ticket (not
 when they made the change themselves); a private ticket's line stays on the ticket. It is quiet: no run is queued
 and nothing reaches Slack. Requesters remain on the roadmap task.

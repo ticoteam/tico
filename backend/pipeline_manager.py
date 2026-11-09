@@ -220,10 +220,15 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
             c.execute("SELECT id, limit_minutes FROM task_steps WHERE limit_minutes IS NOT NULL AND card_cap IS NOT 0")
         )  # a stage On ice (cap 0, D69) is never late
     }
+    engineering = {str(r["id"]) for r in H._rows(c.execute("SELECT id FROM task_types WHERE role = 'engineering'"))}
+    # A queued Dev ticket (open at Build) has no clock: only a started one (doing) is late, as on the old In Progress step.
     live = [
         r
         for r in rows
-        if r.get("status") in H.ACTIVE_STATUSES and r.get("status") != "waiting" and str(r.get("step_id")) in limits
+        if r.get("status") in H.ACTIVE_STATUSES
+        and r.get("status") != "waiting"
+        and str(r.get("step_id")) in limits
+        and not (r.get("status") == "open" and str(r.get("type_id")) in engineering)
     ]
     if not live:
         return {}

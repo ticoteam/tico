@@ -499,7 +499,7 @@ def test_retry_keeps_a_new_heads_wait_while_the_cached_heads_check_is_open(api, 
     assert response.status_code == 200, response.text
     [old_check] = checks(api, task)
     assert old_check['owner_id'] == 'bot:rev-a'
-    response = move(api, task, 'In Progress')
+    response = move(api, task, 'Build')
     assert response.status_code == 200, response.text
     store, service = api.app.state.store, api.app.state.github_app
     with store.transaction() as c:

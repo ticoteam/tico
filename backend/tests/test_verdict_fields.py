@@ -215,14 +215,14 @@ def test_a_builders_own_qa_child_and_work_handed_out_in_review_finish_without_a_
             H.KEEPER,
             "Dev tickets",
             [
-                {"name": "In Progress", "status": "doing"},
+                {"name": "Build", "status": "open"},
                 {"name": "Review 1", "status": "review"},
-                {"name": "Done", "status": "done"},
+                {"name": "Closed", "status": "closed"},
             ],
             bots="work",
         )
         ticket = H.task_create(
-            c, "human:ana", "Implement import", "Build.", "bot:ops", type=typ["id"], step="In Progress", lint=False
+            c, "human:ana", "Implement import", "Build.", "bot:ops", type=typ["id"], step="Build", lint=False
         )
         own = H.task_create(
             c, "bot:ops", "QA: add fixtures", "Fixtures.", "bot:ops", parent_id=ticket["id"], lint=False

@@ -337,7 +337,7 @@ def test_github_refusing_a_review_403_goes_to_the_tickets_type_manager_without_d
 
     settings, seen = configured(api, gh, tmp_path, monkeypatch)
     with api.app_state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "In Progress", "status": "doing"}])
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "Build", "status": "open"}])
         c.execute("UPDATE task_types SET manager='cpo' WHERE id=?", (typ["id"],))
         ticket = H.task_create(c, H.KEEPER, "Build the thing", "x", "bot:cfo", type=typ["id"], lint=False)
         c.execute(

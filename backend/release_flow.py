@@ -4,11 +4,11 @@ Three things, all in plain code, none asked of a model:
 
 - **The schedule** (`release-schedule`, a team setting): once a day at a set hour in company time (`updates.ZONE`),
   a second hour if the team wants one, or off. At each hour the Release Manager gets ONE task, "Release: <n> tickets
-  at Pending Release", listing them; with nothing at Pending Release nobody is woken. Pending Release arrivals are
+  at Release", listing them; with nothing at Release nobody is woken. Release arrivals are
   notes, so the Release Manager hears about the tickets only here (or from `release now`).
 - **Release now** (`hub release now`): a person or bot who moves Dev tickets asks for the same task at once, for a
   hotfix or a midday release. An unfinished Release task is woken instead of a second one being filed. A PERSON who
-  gives a note is heard even with nothing at Pending Release ("Release: requested by <name>", the note and an empty
+  gives a note is heard even with nothing at Release ("Release: requested by <name>", the note and an empty
   listing): work often reaches main as pull requests that were never Dev tickets. A bot, or a person with no note,
   gets `nothing_pending`; the daily hour never sends on an empty step.
 - **`release_published`**: when a release is published, each Dev ticket it carries wakes its QA owner (post-release
@@ -24,9 +24,9 @@ the team named in the schedule setting, else the one active bot built from the `
 `docs-writer`; QA: the owner of the ticket's `QA:` subtask, else its `qa` role, else the one `issue-triage` bot).
 With none found the feature is idle for that role and says so (`GET /api/v2/release-schedule`).
 
-A release carries the Dev tickets at the Pending Release step when it is published that have a pull request merged in
-its repository, and moves each to the step after Pending Release (Post Release QA), noting "Shipped in vX.Y.Z"; when
-nothing is left at Pending Release the schedule's open Release task closes. The rest of the factory's steps stay a
+A release carries the Dev tickets at the Release step when it is published that have a pull request merged in
+its repository, and moves each to the step after Release (Watch 24h), noting "Shipped in vX.Y.Z"; when
+nothing is left at Release the schedule's open Release task closes. The rest of the factory's steps stay a
 person's or bot's to move (docs/software-factory.md).
 """
 
@@ -50,7 +50,8 @@ PUBLIC_SUMMARY_MAX = 280  # characters of a private ticket's public summary a ta
 AT = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 TITLE = "Release: "
 MANAGER, WRITER, QA = "release-notes", "docs-writer", "issue-triage"  # starter templates (templates/catalog)
-PENDING = "pending release"
+# The step a release carries tickets from: Release, or Pending Release on a board set up before the stage map.
+PENDING = ("release", "pending release")
 QA_CHILD = re.compile(r"^QA\b", re.I)
 EVENT = "release_published"
 log = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ def _qa_room(c, ticket, qa):
 
 # ----------------------------------------------------------------------------- what is waiting for a release
 def pending(c):
-    """The Dev tickets at the Pending Release step, oldest first: dicts of the task row plus `prs` (its pull request
+    """The Dev tickets at the Release step, oldest first: dicts of the task row plus `prs` (its pull request
     links). Every one is listed; a task body names each ticket as `_ticket_line` allows."""
     from .roadmap_flow import ENGINEERING
 
@@ -182,9 +183,9 @@ def pending(c):
         H.task(c, r[0])
         for r in c.execute(
             "SELECT t.id FROM tasks t JOIN task_steps s ON s.id=t.step_id JOIN task_types y ON y.id=t.type_id "
-            f"WHERE lower(s.name)=? AND (y.role=? OR y.name='Dev tickets') AND t.status IN "
+            f"WHERE lower(s.name) IN (?, ?) AND (y.role=? OR y.name='Dev tickets') AND t.status IN "
             f"({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY t.created_at, t.id",
-            (PENDING, ENGINEERING, *H.ACTIVE_STATUSES),
+            (*PENDING, ENGINEERING, *H.ACTIVE_STATUSES),
         )
     ]
     return [{**r, "prs": [l for l in H.task_links(c, r["id"]) if l["kind"] == "pr"]} for r in rows if r]
@@ -244,12 +245,12 @@ def _listing(c, tickets, more_where):
 def _task_body(c, tickets, why):
     if not tickets:
         return (
-            f"{why}\n\nNothing is at Pending Release now; the work may be merged pull requests that were never Dev "
+            f"{why}\n\nNothing is at Release now; the work may be merged pull requests that were never Dev "
             "tickets. Cut a release for what is on main with your release playbook and docs/releasing.md."
         )
     return (
-        f"{why}\n\nAt Pending Release now:\n"
-        + _listing(c, tickets, 'with `hub task list --step "Pending Release"`')
+        f"{why}\n\nAt Release now:\n"
+        + _listing(c, tickets, 'with `hub task list --step "Release"`')
         + "\n\nCut one release for them with your release playbook and docs/releasing.md. When it is published, "
         "Tico wakes each ticket's QA owner and the Technical Writer by itself."
     )
@@ -267,10 +268,10 @@ def _unfinished(c, owner):
 
 
 def request(c, actor, *, source, note=""):
-    """Ask the Release Manager for a release of what is at Pending Release: ONE task, or a wake on its unfinished
+    """Ask the Release Manager for a release of what is at Release: ONE task, or a wake on its unfinished
     Release task. Returns `{sent, reason, task, tickets}`; `reason` says why nothing was sent (`no_release_manager`,
     `nothing_pending`) or that a wake went to the open task (`already_open`). A person's release now with a `note` goes
-    out even with nothing at Pending Release (`tickets` is 0); nobody else's does."""
+    out even with nothing at Release (`tickets` is 0); nobody else's does."""
     manager = release_manager(c)
     if not manager:
         return {"sent": False, "reason": "no_release_manager", "task": None, "tickets": 0}
@@ -283,7 +284,7 @@ def request(c, actor, *, source, note=""):
     else:
         who = f"Asked by {H.actor_name(c, actor)}" + (f": {note}" if note else ".")
     title = (
-        f"{TITLE}{len(tickets)} ticket{'s' if len(tickets) != 1 else ''} at Pending Release"
+        f"{TITLE}{len(tickets)} ticket{'s' if len(tickets) != 1 else ''} at Release"
         if tickets
         else f"{TITLE}requested by {H.actor_name(c, actor)}"
     )
@@ -382,7 +383,7 @@ def next_at(cfg, at):
 
 # ----------------------------------------------------------------------------- after a release
 def carried(c, repo):
-    """The Dev tickets a release in `repo` carries: at Pending Release with a pull request merged (or shipped) there."""
+    """The Dev tickets a release in `repo` carries: at Release with a pull request merged (or shipped) there."""
     repo = norm_repo(repo)
     return [
         t
@@ -398,16 +399,16 @@ def norm_repo(value):
 
 
 def _move_on(c, ticket, tag):
-    """Move a ticket a release carried from Pending Release to the step after it (Post Release QA when the type has
+    """Move a ticket a release carried from Release to the step after it (Watch 24h when the type has
     it, else the next step), as Tico, through the normal move so the step's own rules run. A ticket that is no longer
-    at Pending Release is left alone. Returns the step's name, or None when nothing moved."""
+    at Release is left alone. Returns the step's name, or None when nothing moved."""
     from . import step_flow as F
 
     row = H.task(c, ticket["id"])
     if row is None:
         return None
     here = F.step(c, row.get("step_id"))
-    if not here or here["name"].strip().lower() != PENDING:
+    if not here or here["name"].strip().lower() not in PENDING:
         return None
     after = next((s for s in F.steps(c, here["type_id"]) if s["position"] > here["position"]), None)
     if not after:
@@ -425,7 +426,7 @@ def _move_on(c, ticket, tag):
 
 
 def _close_release_tasks(c, tag):
-    """Nothing is at Pending Release any more: close the Release task(s) the schedule filed for the Release Manager,
+    """Nothing is at Release any more: close the Release task(s) the schedule filed for the Release Manager,
     naming the version. A task the manager made itself is none of ours. Returns the closed ids."""
     manager = release_manager(c)
     if not manager or pending(c):
@@ -441,7 +442,7 @@ def _close_release_tasks(c, tag):
         )
     ]
     for tid in ids:
-        H.task_close(c, H.KEEPER, tid, note=f"{tag} is published; nothing is left at Pending Release.", strict=False)
+        H.task_close(c, H.KEEPER, tid, note=f"{tag} is published; nothing is left at Release.", strict=False)
     return ids
 
 
@@ -691,9 +692,9 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/release/now")
     def release_now(request: Request, body: M.ReleaseNow):
-        """Ask the Release Manager to cut a release of what is at Pending Release now, without waiting for the daily
+        """Ask the Release Manager to cut a release of what is at Release now, without waiting for the daily
         hour (a hotfix, a midday release). ONE task, or a wake on its unfinished Release task. A person who moves Dev
-        tickets, or the Release Manager or Head of Engineering bot. With nothing at Pending Release a person's `note`
+        tickets, or the Release Manager or Head of Engineering bot. With nothing at Release a person's `note`
         still asks (work merged without a Dev ticket); otherwise `sent` is false, with a `reason`, when nobody was asked."""
         who = request.state.identity
         auth.domain(who)

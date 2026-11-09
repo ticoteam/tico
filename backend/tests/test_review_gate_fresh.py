@@ -110,7 +110,7 @@ def held(api, task):
     with api.app.state.store.read() as c:
         assert H.task(c, task['id'])['blocked_kind'] == 'gate'
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress'
+    assert current['step']['name'] == 'Build'
     return current
 
 
@@ -133,7 +133,7 @@ def test_renamed_review_step_reads_fresh_ci_before_refusing_move(api, monkeypatc
     assert response.status_code == 422 and 'CI failing at head ' + HEAD in response.text, response.text
     assert 'python' in response.text
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and 'CI failing' in hold(current)['reason']
+    assert current['step']['name'] == 'Build' and 'CI failing' in hold(current)['reason']
 
 
 def test_a_review_question_is_refused_unless_every_hosted_check_passes_then_filed_when_all_pass(api, subtests):
@@ -163,7 +163,7 @@ def _review_question_is_filed_when_every_hosted_check_passes_at_the_current_head
         task_blocked.sweep(c, H.now())
     current = get(api, 'tasks/' + task['id'])['task']
     # The task waits on Ana's question task as on any dependency, and on no review gate.
-    assert current['step']['name'] == 'In Progress' and hold(current).get('reason') == 'Waiting on a dependency'
+    assert current['step']['name'] == 'Build' and hold(current).get('reason') == 'Waiting on a dependency'
     with api.app.state.store.read() as c:
         assert H.task(c, task['id'])['blocked_kind'] != 'gate'
 
@@ -188,11 +188,11 @@ def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypat
         since = held_row['blocked_since']
     assert task_blocked.fresh(api.app.state.github_app, force=True) == []
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and hold(current)['since'] == since
+    assert current['step']['name'] == 'Build' and hold(current)['since'] == since
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cmo', check['id'], status='doing')
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
+    assert current['step']['name'] == 'Build' and not hold(current).get('since')
 
 
 def _review_question_is_refused_unless_every_hosted_check_passes(api, monkeypatch, task, token, result, refusal):
@@ -234,7 +234,7 @@ def _blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch, task):
     assert task_blocked.fresh(service, force=True) == [task['id']]
     assert any('/commits/' + HEAD + '/check-runs' in p for p in reads)
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
+    assert current['step']['name'] == 'Build' and not hold(current).get('since')
     assert current['version'] > parked['version']
 
 
@@ -243,7 +243,7 @@ def _blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once_per
     service = api.app.state.github_app
     reads = github(api, monkeypatch, {**GREEN, 'check 3': result})
     assert task_blocked.fresh(service, force=True) == []
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'In Progress'
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Build'
     count = len(reads)
     assert count and task_blocked.fresh(service, force=True) == []
     assert len(reads) == count, 'nothing the gate reads changed, so GitHub is not read again'
@@ -292,7 +292,7 @@ def test_a_same_head_failure_landing_during_the_read_keeps_the_hold(api, monkeyp
 
     monkeypatch.setattr(review_gate, 'snapshot', raced)
     assert task_blocked.fresh(service, force=True) == []
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'In Progress'
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Build'
 
 
 def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatch):
@@ -307,7 +307,7 @@ def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatc
             'title': 'Improve replies',
             'body': 'Build replies.',
             'type': first['type_id'],
-            'step': 'In Progress',
+            'step': 'Build',
             'links': [PR],
         },
     )
@@ -336,7 +336,7 @@ def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatc
         'one read a pass, and the failing hold does not take both'
     )
     assert [second['id']] in passes
-    assert get(api, 'tasks/' + first['id'])['task']['step']['name'] == 'In Progress'
+    assert get(api, 'tasks/' + first['id'])['task']['step']['name'] == 'Build'
     broken.clear()  # GitHub answers again: the failed hold is read on the next pass and clears
     assert task_blocked.fresh(service, force=True) == [first['id']]
 

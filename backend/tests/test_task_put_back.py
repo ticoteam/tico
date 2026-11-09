@@ -32,7 +32,7 @@ def test_owner_put_back_requires_note_and_holds_queued_and_missing_starts_for_an
     update(api, task, attempt['token'], 'open', expected=422)
     update(api, task, attempt['token'], 'open', '   ', expected=422)
     result = update(api, task, attempt['token'], 'open', 'Wait until the next work slot.')
-    assert result['status'] == 'open' and result['step']['name'] == 'On Deck'
+    assert result['status'] == 'open' and result['step']['name'] == 'Build'
     settle(api, machine, attempt)
     with api.app.state.store.transaction() as c:
         row = H.task(c, task['id'])
@@ -108,7 +108,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
         post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     rows = [get(api, 'tasks/' + t['id'])['task'] for t in tasks]
     assert [t['status'] for t in rows] == ['doing', 'doing', 'open']
-    assert rows[2]['step']['name'] == 'On Deck'
+    assert rows[2]['step']['name'] == 'Build'
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == jobs
         assert c.execute('SELECT count(*) FROM attempts').fetchone()[0] == turns
@@ -146,7 +146,8 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
             assert '--status doing' not in refused.value.detail
 
 
-def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only_done(api):
+def test_dev_return_lands_on_build_and_owner_can_reopen_steps_only_done(api):
+    # The Dev board has no Backlog or On Deck any more: Build is the one open step, so a return lands there.
     machine = task_bot(api, lanes=True)
     typ = post(
         api,
@@ -155,11 +156,9 @@ def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only
             'name': 'Dev tickets',
             'steps_only': True,
             'steps': [
-                {'name': 'Backlog', 'status': 'open'},
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Build', 'status': 'open'},
                 {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         },
     )['type']
@@ -171,24 +170,27 @@ def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only
             'title': 'Build requested feature',
             'body': 'Build the requested feature.',
             'type': typ['id'],
-            'step': 'On Deck',
+            'step': 'Build',
         },
     )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
     attempt = take(api, machine)
     result = update(api, task, attempt['token'], 'open', 'Defer until inputs are ready.')
-    assert result['step']['name'] == 'On Deck'
-    result = post(api, 'tasks/' + task['id'], {'version': result['version'], 'step': 'Done'}, attempt['token'])
-    result = update(api, task, attempt['token'], 'doing')
-    assert result['step']['name'] == 'In Progress' and result['done_at'] is None
-    result = post(api, 'tasks/' + task['id'], {'version': result['version'], 'step': 'Done'}, attempt['token'])
-    result = update(api, task, attempt['token'], 'open', 'Another input arrived.')
-    assert result['step']['name'] == 'On Deck' and result['done_at'] is None
+    assert result['step']['name'] == 'Build'
+    # Closed is a close: a bot on the ticket cannot make it by a step move, only the requester or a manager can.
+    version = get(api, 'tasks/' + task['id'])['task']['version']
+    post(api, 'tasks/' + task['id'], {'version': version, 'step': 'Closed'}, attempt['token'], expected=403)
+    update(api, task, attempt['token'], 'doing')
+    result = get(api, 'tasks/' + task['id'])['task']
+    assert result['status'] == 'doing' and result['step']['name'] == 'Build' and result['done_at'] is None
+    update(api, task, attempt['token'], 'open', 'Another input arrived.')
+    result = get(api, 'tasks/' + task['id'])['task']
+    assert result['step']['name'] == 'Build' and result['done_at'] is None
     # A ticket pulled back from review is held as a queue return, so it must land where automatic starts look.
     result = post(api, 'tasks/' + task['id'], {'version': result['version'], 'step': 'Review 1'}, attempt['token'])
     result = update(api, task, attempt['token'], 'open', 'Review needs inputs that are not ready.')
-    assert result['step']['name'] == 'On Deck'
+    assert result['step']['name'] == 'Build'
 
 
 @pytest.mark.parametrize('release', ['manual', 'remove', 'finish'])
@@ -202,10 +204,8 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
         {
             'name': 'Dev tickets',
             'steps': [
-                {'name': 'Backlog', 'status': 'open'},
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Build', 'status': 'open'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         },
     )['type']
@@ -217,7 +217,7 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
             'title': 'Build the queued feature',
             'body': 'Build it.',
             'type': typ['id'],
-            'step': 'In Progress',
+            'step': 'Build',
         },
     )
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Supply a dependency', 'body': 'Supply it.'})
@@ -238,11 +238,11 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
         returned = H.now()
         row = H.task(c, task['id'])
         if release == 'manual':
-            assert result['status'] == 'open' and result['step']['name'] == 'On Deck'
+            assert result['status'] == 'open' and result['step']['name'] == 'Build'
         else:
-            assert result['status'] == 'waiting' and result['step']['name'] == 'In Progress'
+            assert result['status'] == 'waiting' and result['step']['name'] == 'Build'
             resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))
-            assert resume['name'] == 'On Deck' and row['blocked_from_status'] == 'open'
+            assert resume['name'] == 'Build' and row['blocked_from_status'] == 'open'
             if release == 'remove':
                 TR.remove_blocker(c, H.KEEPER, task['id'], blocker['id'])
             else:
@@ -270,9 +270,8 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
         {
             'name': 'Dev tickets',
             'steps': [
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Build', 'status': 'open'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         },
     )['type']
@@ -284,7 +283,7 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
             'title': 'Build the dependent feature',
             'body': 'Build it.',
             'type': typ['id'],
-            'step': 'On Deck',
+            'step': 'Build',
         },
     )
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Prepare the dependency', 'body': 'Prepare it.'})
@@ -295,9 +294,9 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
         counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')]
     post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     result = get(api, 'tasks/' + task['id'])['task']
-    assert result['status'] == 'waiting' and result['step']['name'] == 'On Deck'
+    assert result['status'] == 'waiting' and result['step']['name'] == 'Build'
     with api.app.state.store.read() as c:
         row = H.task(c, task['id'])
         resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))
-        assert resume['name'] == 'On Deck' and row['blocked_from_status'] == 'open'
+        assert resume['name'] == 'Build' and row['blocked_from_status'] == 'open'
         assert [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')] == counts

@@ -18,10 +18,10 @@ def ticket(c, title="Fix the connection", owner="bot:cpo", manager="coo"):
         c.execute("UPDATE task_types SET manager=? WHERE id=?", (manager, typ["id"]))
     # The Warn after the boot gives an engineering type's working step (task_steps.limit_minutes, 4 hours).
     c.execute(
-        "UPDATE task_steps SET limit_minutes=240 WHERE type_id=? AND name='In Progress' AND limit_minutes IS NULL",
+        "UPDATE task_steps SET limit_minutes=240 WHERE type_id=? AND name='Build' AND limit_minutes IS NULL",
         (typ["id"],),
     )
-    row = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step="In Progress", lint=False)
+    row = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step="Build", lint=False)
     return H.task(c, row["id"])
 
 
@@ -39,7 +39,7 @@ def test_a_working_ticket_is_late_once_past_four_hours_at_its_step_and_its_manag
         assert late_ids(c, 2.5) == []
         assert late_ids(c, 4.5) == [row["id"]]
         [item] = SA.late_items(c, later(4.5))
-        assert (item["to"], item["step"]) == ("bot:coo", "In Progress")
+        assert (item["to"], item["step"]) == ("bot:coo", "Build")
 
 
 def test_time_away_from_work_is_not_counted_toward_the_limit(api):
@@ -79,7 +79,7 @@ def test_the_board_reads_when_a_working_ticket_entered_its_step(api):
     with api.app.state.store.transaction() as c:
         working = ticket(c)
         queued = H.task_create(
-            c, "bot:ops", "Next", "Later.", "bot:cpo", type=working["type_id"], step="In QA", lint=False
+            c, "bot:ops", "Next", "Later.", "bot:cpo", type=working["type_id"], step="Review 2", lint=False
         )
     rows = {t["id"]: t for t in get(api, "tasks?status=all&brief=true")["tasks"]}
     assert rows[working["id"]]["step_since"]

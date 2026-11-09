@@ -193,10 +193,9 @@ def test_urgent_notice_keeps_real_dependency_move_refusals(api):
             H.KEEPER,
             'Dev tickets',
             [
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
+                {'name': 'Build', 'status': 'open'},
                 {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
+                {'name': 'Closed', 'status': 'closed'},
             ],
         )
         task = H.task_create(
@@ -206,7 +205,7 @@ def test_urgent_notice_keeps_real_dependency_move_refusals(api):
             'Synthetic held work',
             'bot:cpo',
             type=typ['id'],
-            step='On Deck',
+            step='Build',
             labels=['incident'],
         )
         blocker = H.task_create(c, 'bot:ops', 'Prepare the machine', 'Synthetic prerequisite', 'bot:ops')
@@ -214,7 +213,7 @@ def test_urgent_notice_keeps_real_dependency_move_refusals(api):
         c.execute('DELETE FROM jobs')
         _, job = sent_job(c, H.task(c, task['id']), 'bot:cpo', 'The incident needs attention', {'news': 'step_entered'})
         assert job and job['held'] == 0
-        for fields in ({'status': 'doing'}, {'step': 'In Progress'}, {'step': 'Review 1'}):
+        for fields in ({'status': 'doing'}, {'step': 'Review 1'}):
             moved = H.task_update(c, 'bot:cpo', task['id'], **fields)
             assert H.task(c, task['id'])['status'] == 'waiting'
             assert any('remains Blocked' in warning for warning in moved.get('warnings', []))

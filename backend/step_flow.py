@@ -91,8 +91,8 @@ def clean(c, actor, raw, existing):
     for key in STEP_KEYS:
         if flow.get(key) not in (None, ""):
             out[key] = str(flow[key]).strip()
-    if flow.get("skip_tag") not in (None, ""):
-        out["skip_tag"] = str(flow["skip_tag"]).strip().lower()
+    if flow.get("skip_tag") not in (None, "", []):
+        out["skip_tag"] = skip_tags(flow)
     for key in HOURS:
         if flow.get(key) in (None, ""):
             continue
@@ -217,7 +217,7 @@ def is_check(s):
 
 # ----------------------------------------------------------------------------------------------- check kinds
 # A hand-filed request may still be titled the way the Dev board names its checks: `Review <n>` is the board's nth
-# review step, `QA` its QA step and `Post Release QA` its check after the release.
+# review step, `QA` its QA step and `Watch 24h` its check after the release.
 GENERIC = re.compile(r"^(?:review\s+(\d+)|(post[- ]release\s+qa)|(qa))(?=\b|:|$)", re.I)
 
 
@@ -308,7 +308,7 @@ def titled(c, type_id, title, *, board=None):
     if order not in ((1, 2) if kind == "review" else (1,)):
         return None
     # The board has no step of that kind (or no flow at all): the Dev board's own titles, Review 1 and 2, QA and
-    # Post Release QA, still name a kind of check, of no step.
+    # Watch 24h, still name a kind of check, of no step.
     return {
         "id": f"{kind}:{order}",
         "type_id": type_id,
@@ -500,21 +500,59 @@ def can_hold(c, step_id):
     return of(step(c, step_id)).get("can_hold", True) is not False
 
 
+def skip_tags(flow):
+    """The step's skip tags as a list: `skip_tag` is one tag or several (a step can fold two steps that each had one)."""
+    raw = flow.get("skip_tag")
+    values = raw if isinstance(raw, list) else [raw] if raw not in (None, "") else []
+    return [str(t).strip().lower() for t in values if str(t).strip()]
+
+
+def skipped_by(row, s):
+    """The skip tag the ticket carries that step `s` skips it by, or None."""
+    labels = {str(t).lower() for t in H.task_labels(row)}
+    return next((tag for tag in skip_tags(of(s)) if tag in labels), None)
+
+
 def skip_target(c, row, s):
-    """Where a ticket entering step `s` goes instead when it carries the step's skip tag: its `on_pass`, or None."""
-    flow = of(s)
-    tag = flow.get("skip_tag")
-    if not tag or tag not in {str(t).lower() for t in H.task_labels(row)}:
+    """Where a ticket entering step `s` goes instead when it carries one of the step's skip tags: its `on_pass`, or None."""
+    if not skipped_by(row, s):
         return None
-    return flow.get("on_pass")
+    return of(s).get("on_pass")
 
 
 # ----------------------------------------------------------------------------------------------- the Dev board
-# The recommended Dev board has no QA steps: Review 2 always runs, and its approval hands the ticket to the merge. A
-# change pushed after Review 2 merges once CI is green on its new head. A review that asks for changes is feedback:
-# the ticket goes to its fixes step, and the builder moves it on once the feedback is in. A check left unanswered for an
-# hour is filed again to another reviewer; the ticket never passes on by a timeout here.
-DEV = {  # the settings each Dev tickets type is given once; a person changes them on its steps
+# The Dev board: a review that asks for changes is feedback, not a gate, and the ticket goes back to Build (see DEV).
+# Review 2 always runs; a check left unanswered for an hour is filed again to another reviewer, never passed on.
+DEV = {  # the settings each Dev tickets type is given once, on the board named by the stage map; a person changes them on its steps
+    "Build": {"backlog": {"over": 10, "per": "step", "notify": ["manager"], "every_hours": 4}},
+    # A review is feedback, not a gate: whatever it says goes back to Build, where the builder works the feedback and moves
+    # the ticket on. Build is shared by every fixes step, so the review a ticket came from is read from its step events
+    # (`fixes_for`), not from a flow. Review 2 also takes In QA's place: its pass makes the merge next, and the skip tags
+    # `review-1-only` and `skip-qa` pass Review 2.
+    "Review 1": {
+        "on_pass": "Build",
+        "on_fail": "Build",
+        "timeout_hours": 1,
+        "on_timeout": REFILE,
+        "gate": True,
+        "check": "review",
+    },
+    "Review 2": {
+        "on_pass": MERGE,
+        "on_fail": "Build",
+        "timeout_hours": 1,
+        "on_timeout": REFILE,
+        "gate": True,
+        "skip_tag": ["review-1-only", "skip-qa"],
+        "check": "review",
+    },
+    "Release": {"on_merge": True, "can_hold": False},
+    "Watch 24h": {"can_hold": False, "check": "release_qa"},
+    "Closed": {"can_hold": False},
+}
+# The board before the stage map, by its old step names, until pipeline setup applies the map: the recommended board
+# without QA steps (Review 2 always runs; a change pushed after it merges once CI is green on its new head).
+LEGACY_DEV = {
     "On Deck": {"backlog": {"over": 10, "per": "step", "notify": ["manager"], "every_hours": 4}},
     "Review 1": {
         "on_pass": "Review 1 Fixes",
@@ -568,9 +606,30 @@ def has_qa(c, type_id):
     return any(s["name"] in QA_STEPS for s in steps(c, type_id))
 
 
+def is_staged(c, type_id):
+    """Whether a type's steps carry the stage map's names (Build is its working step): its Dev settings are DEV's."""
+    return any(s["name"] == "Build" for s in steps(c, type_id))
+
+
 def dev_flows(c, type_id):
-    """The Dev settings for one type: the QA board's when it has QA steps, else the recommended board's."""
-    return QA_DEV if has_qa(c, type_id) else DEV
+    """The Dev settings for one type: DEV once the stage map names its steps, else the QA board's when it has QA steps,
+    else the board before the map."""
+    if is_staged(c, type_id):
+        return DEV
+    return QA_DEV if has_qa(c, type_id) else LEGACY_DEV
+
+
+def resolved(flows, by_name):
+    """`flows` (a DEV entry) with each step name it refers to replaced by that step's id, from `by_name` (name: row).
+    A name no row carries is dropped."""
+    out = {}
+    for key, value in flows.items():
+        if key in STEP_KEYS and value not in (None, MERGE):
+            if value in by_name:
+                out[key] = by_name[value]["id"]
+        else:
+            out[key] = value
+    return out
 
 
 def seed(c):

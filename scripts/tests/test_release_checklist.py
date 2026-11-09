@@ -41,7 +41,7 @@ def complete():
         "number": 7,
         "title": "Improve tasks",
         "owner_id": "bot:builder",
-        "step": {"name": "Pending Release"},
+        "step": {"name": "Release"},
         "tags": [{"key": "qa", "label": "QA"}],
         "links": [{"kind": "pr", "url": PR["url"]}],
         "children": [child("Review 1"), child("Review 2"), child("QA"), child("Docs")],
@@ -59,7 +59,7 @@ def test_complete_qa_ticket_has_no_gap_and_outputs_evidence():
     result = build(complete())
     assert result["gaps"] == 0
     text = checklist.markdown(result)
-    assert "Pending Release" in text and f"approve {HEAD}" in text
+    assert "Release" in text and f"approve {HEAD}" in text
     assert "10 passed, 0 failed" in text and "Help updated" in text
     assert "Outside the release pipeline" in text
     assert result["prs"][0]["tickets"][0]["qa"] is True

@@ -412,7 +412,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
-/* Release now on the Pending Release column (ui/app/settings-release.ts) */
+/* Release now on the Release column (ui/app/settings-release.ts) */
 .board-release-slot:empty{display:none}
 .board-release-slot .board-release{padding:2px 8px;font-size:var(--t-sm);min-height:0}
 

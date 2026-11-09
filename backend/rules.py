@@ -1715,9 +1715,20 @@ def prune_events(conn):
 
 # ----------------------------------------------------------------------------- step entry and the Dev tickets rows
 # What a Dev ticket's hand-offs say, as editable type rows: (note, when, outcome). Seeded once per type (`seed_dev`);
-# a person edits or deletes them in Settings, and a type that lost them is not given them again. A board without QA
-# steps has no QA hand-off to write, so it gets DEV_ROWS; a board that still has QA steps gets DEV_ROWS_QA.
+# a person edits or deletes them in Settings, and a type that lost them is not given them again. The stage map's board
+# gets DEV_ROWS; a board set up before the map gets LEGACY_DEV_ROWS, or DEV_ROWS_QA while it still has QA steps.
 DEV_ROWS = (
+    ("Build entered: wake the Builder who owns the ticket", {"step": "Build", "role": "owner"}, WAKE),
+    (
+        "Release entered: a note to the Release Manager",
+        {"step": "Release", "role": "release_manager"},
+        NOTE,
+    ),
+    ("Review 2 entered: wake QA only", {"step": "Review 2", "role": "qa"}, WAKE),
+)
+# The rows of a board set up before the stage map, by its old step names: a board without QA steps (Pending Release is a
+# note to the Release Manager), and a board that still has QA steps (QA Fixes wakes the Builder, In QA wakes QA only).
+LEGACY_DEV_ROWS = (
     (
         "Pending Release entered: a note to the Release Manager",
         {"step": "Pending Release", "role": "release_manager"},
@@ -1770,14 +1781,14 @@ def seed_dev(conn):
     """Give every Dev board (roadmap_flow.dev_board) its hand-off rows once. A type that already has them recorded keeps
     what a person made of them. Quietly does nothing before the rules table or the events table exists."""
     from .roadmap_flow import dev_board
-    from .step_flow import has_qa
+    from .step_flow import has_qa, is_staged
 
     try:
         types = [r for r in conn.execute("SELECT id,name FROM task_types").fetchall() if dev_board(conn, *r)]
         for ident, _name in types:
             if conn.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (SEEDED, ident)).fetchone():
                 continue
-            rows = DEV_ROWS_QA if has_qa(conn, ident) else DEV_ROWS
+            rows = DEV_ROWS if is_staged(conn, ident) else (DEV_ROWS_QA if has_qa(conn, ident) else LEGACY_DEV_ROWS)
             at = H.now()
             for position, (note, when, outcome) in enumerate(rows, 1):
                 conn.execute(

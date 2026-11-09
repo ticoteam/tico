@@ -66,8 +66,14 @@ class Board:
         return [s for s in self.steps if s.check]
 
     def fixes_for(self, name):
-        """The check step a work step takes fixes for: the check whose `other` leads here."""
-        return next((s for s in self.steps if s.check and s.check.other == name), None)
+        """The check steps whose fixes lead to work step `name` (every review sends its changes to Build)."""
+        return [s for s in self.steps if s.check and s.check.other == name]
+
+    def first_check_after(self, name):
+        """The first check step after step `name` in board order, or MERGE when no check follows it."""
+        names = [s.name for s in self.steps]
+        after = [s for s in self.steps[names.index(name) + 1 :] if s.check]
+        return after[0].name if after else MERGE
 
     def merged_steps(self):
         return [s.name for s in self.steps if s.merged]
@@ -78,12 +84,55 @@ class Board:
 
 
 def dev_board(qa=False, review_timeout=1.0):
-    """The engineering board. A review is feedback, not a gate: whatever it says, the ticket goes back to its builder,
-    who moves it on once the feedback is in (only the builder knows when). Review 2 always runs; its approval makes the
-    merge next, and a fix made after it merges once CI is green on the new head. On this board an unanswered review is
-    filed again to another reviewer after its hour, and is never passed on. With `qa`, the board keeps its QA steps
-    instead: Review 2's changes go to In QA, which passes or fails, and its pass makes the merge next."""
-    refile = "refile" if not qa else None
+    """The engineering board, as Engineering has it after the stage map: Build (where a ticket starts, where the builder
+    works, and where every review's changes go back), Review 1, Review 2 (its pass makes the merge next), Merge queue,
+    Release (merged work), Watch 24h and Closed. A review is feedback, not a gate: whatever it says, the ticket goes to
+    Build, where the builder works the feedback and moves the ticket back to the review it came from (or on). Review 2
+    always runs. With `qa`, the board is the one a team that still runs QA has before the map: its QA steps are kept."""
+    if qa:
+        return _qa_board(review_timeout)
+    steps = [
+        Step("Build", "open", work=True, assign="builder", backlog={"over": 10, "per": "step", "notify": ["manager"]}),
+        Step(
+            "Review 1",
+            "review",
+            check=Check(
+                "reviewer",
+                "Build",
+                "Build",
+                timeout_hours=review_timeout,
+                on_timeout="refile",
+                gate=True,
+                kind="review",
+            ),
+        ),
+        Step(
+            "Review 2",
+            "review",
+            check=Check(
+                "reviewer",
+                MERGE,
+                "Build",
+                different_checker_from=("Review 1",),
+                timeout_hours=review_timeout,
+                on_timeout="refile",
+                gate=True,
+                skip_tag="skip-qa",
+                kind="review",
+            ),
+        ),
+        Step("Merge queue", "review"),
+        Step("Release", "review", can_hold=False, merged=True, release=True),
+        Step("Watch 24h", "review", can_hold=False, merged=True, release=True),
+        Step("Closed", "closed", can_hold=False),
+    ]
+    return Board("Dev tickets", steps, on_merge="Release")
+
+
+def _qa_board(review_timeout=1.0):
+    """The engineering board before the stage map, for a team that still runs QA: Review 2's changes go to Review 2 Fixes
+    and the Builder moves the ticket to In QA, whose pass makes the merge next. An unanswered review is skipped, not filed
+    again, on this board."""
     steps = [
         Step("On Deck", "open", assign="builder", backlog={"over": 10, "per": "step", "notify": ["manager"]}),
         Step("In Progress", "doing", work=True, next="Review 1"),
@@ -91,13 +140,7 @@ def dev_board(qa=False, review_timeout=1.0):
             "Review 1",
             "review",
             check=Check(
-                "reviewer",
-                "Review 1 Fixes",
-                "Review 1 Fixes",
-                timeout_hours=review_timeout,
-                on_timeout=refile,
-                gate=True,
-                kind="review",
+                "reviewer", "Review 1 Fixes", "Review 1 Fixes", timeout_hours=review_timeout, gate=True, kind="review"
             ),
         ),
         Step("Review 1 Fixes", "doing", work=True, next="Review 2", wake_after_hours=2),
@@ -106,30 +149,20 @@ def dev_board(qa=False, review_timeout=1.0):
             "review",
             check=Check(
                 "reviewer",
-                "Review 2 Fixes" if qa else MERGE,
+                "Review 2 Fixes",
                 "Review 2 Fixes",
                 different_checker_from=("Review 1",),
                 timeout_hours=review_timeout,
-                on_timeout=refile,
                 gate=True,
+                skip_tag="skip-qa",
                 kind="review",
             ),
         ),
-    ]
-    if qa:
-        steps += [
-            Step("Review 2 Fixes", "doing", work=True, next="In QA", wake_after_hours=2),
-            Step(
-                "In QA", "review", check=Check("qa", MERGE, "QA Fixes", timeout_hours=2, skip_tag="skip-qa", kind="qa")
-            ),
-            Step("QA Fixes", "doing", work=True, next="In QA", wake_after_hours=2),
-        ]
-    else:
-        steps.append(Step("Review 2 Fixes", "doing", work=True, after_green=MERGE, wake_after_hours=2))
-    steps.append(Step("Pending Release", "review", can_hold=False, merged=True, release=True))
-    if qa:
-        steps.append(Step("Post Release QA", "review", can_hold=False, merged=True, release=True))
-    steps += [
+        Step("Review 2 Fixes", "doing", work=True, next="In QA", wake_after_hours=2),
+        Step("In QA", "review", check=Check("qa", MERGE, "QA Fixes", timeout_hours=2, skip_tag="skip-qa", kind="qa")),
+        Step("QA Fixes", "doing", work=True, next="In QA", wake_after_hours=2),
+        Step("Pending Release", "review", can_hold=False, merged=True, release=True),
+        Step("Post Release QA", "review", can_hold=False, merged=True, release=True),
         Step("Done", "done", can_hold=False, merged=True),
         Step("Closed", "closed", can_hold=False),
     ]

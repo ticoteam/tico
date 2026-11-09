@@ -84,8 +84,8 @@ def stage_of(c, task_id):
 def test_a_seed_card_in_approved_moves_to_building_when_its_ticket_starts(tmp_path):
     c = seed(tmp_path)
     card = card_in(c, "Approved")
-    task = ticket(c, card, "Todo")
-    move(c, task, "Doing")
+    task = ticket(c, card, "Build")
+    move(c, task, "Review 1")
     assert stage_of(c, card) == "Building"
 
 
@@ -94,8 +94,8 @@ def test_after_setup_a_card_in_review_moves_to_in_development_when_its_ticket_st
     product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
     retire_requirements(c, product)
     card = card_in(c, "Review")
-    task = ticket(c, card, "Todo")
-    move(c, task, "Doing")
+    task = ticket(c, card, "Build")
+    move(c, task, "Review 1")
     assert stage_of(c, card) == "In development"
 
 
@@ -104,16 +104,16 @@ def test_after_setup_a_card_follows_its_shipped_ticket_to_done(tmp_path):
     product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
     retire_requirements(c, product)
     card = card_in(c, "In development")
-    task = ticket(c, card, "Todo")
-    move(c, task, "Done")
+    task = ticket(c, card, "Build")
+    move(c, task, "Closed")
     assert stage_of(c, card) == "Done"
 
 
 def test_after_setup_with_requirements_live_the_legacy_sync_moves_nothing(tmp_path):
     c = setup_ran(tmp_path)
     card = card_past_spec(c)
-    task = ticket(c, card, "Todo")
-    move(c, task, "Doing")
+    task = ticket(c, card, "Build")
+    move(c, task, "Review 1")
     assert stage_of(c, card) == "Review"
 
 

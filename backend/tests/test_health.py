@@ -1890,16 +1890,14 @@ def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
     api = environment()
     add_bot(api, "helper")
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "In Progress", "status": "doing"}], numbered=True)
+        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "Build", "status": "open"}], numbered=True)
         idle = H.task_create(
-            c, "human:morgan", "Idle ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
+            c, "human:morgan", "Idle ticket", "x", "bot:helper", type=typ["id"], step="Build", private=False
         )
         busy = H.task_create(
-            c, "human:morgan", "Busy ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
+            c, "human:morgan", "Busy ticket", "x", "bot:helper", type=typ["id"], step="Build", private=False
         )
-        H.task_create(
-            c, "human:morgan", "Fresh ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
-        )
+        H.task_create(c, "human:morgan", "Fresh ticket", "x", "bot:helper", type=typ["id"], step="Build", private=False)
         c.execute(
             "INSERT INTO conversations(id,kind,participants,created_at,task_id) VALUES('cvb','chat','[]',?,?)",
             (H.now(), busy["id"]),
@@ -1925,7 +1923,7 @@ def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
     assert check["status"] == "warn"
     [item] = check["items"]
     assert item["task"] == idle["id"] and item["ticket"] == idle["number"]
-    assert item["step"] == "In Progress" and item["hours"] >= 29
+    assert item["step"] == "Build" and item["hours"] >= 29
     assert item["fixes"][0]["href"] == "#/tasks/" + idle["id"]
 
 

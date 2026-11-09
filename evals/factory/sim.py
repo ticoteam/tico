@@ -451,7 +451,12 @@ class Run:
         for t in w.tickets():
             step = board.step(t["step"])
             if step and step.release:
-                w.update(t["id"], token="release-test", step=board.steps[board.steps.index(step) + 1].name)
+                nxt = board.steps[board.steps.index(step) + 1]
+                if nxt.status == "closed":
+                    # Closing a shipped ticket is the requester's act (Ana), as it was done at Done by the release.
+                    w.update(t["id"], token="ana-test", step=nxt.name, status="done")
+                else:
+                    w.update(t["id"], token="release-test", step=nxt.name)
 
     def assign(self, w, team):
         """An unowned ticket at an assigning step waits for the board to give it to a bot of that role. After 30

@@ -684,20 +684,19 @@ def test_a_card_held_back_from_done_is_named_only_where_the_caller_can_read_it(t
 
 # ----------------------------------------------------------------------------- company_default (the new-company org)
 
-NO_QA_BOARD = [
-    ("On Deck", "open"),
-    ("In Progress", "doing"),
+STAGE_BOARD = [
+    ("Build", "open"),
     ("Review 1", "review"),
-    ("Review 1 Fixes", "doing"),
     ("Review 2", "review"),
-    ("Review 2 Fixes", "doing"),
-    ("Pending Release", "review"),
-    ("Done", "done"),
+    ("Merge queue", "review"),
+    ("Release", "review"),
+    ("Watch 24h", "review"),
     ("Closed", "closed"),
 ]
-# The sha256 of PRESETS["tico_default"] (json.dumps, sort_keys) before company_default was added: re-running setup on an
-# existing team keeps what it had.
-TICO_DEFAULT_SHA256 = "da779296952efbb2ff491092bd97a090a976695f7b3a4fed461929b4139226d7"
+# The sha256 of PRESETS["tico_default"] (json.dumps, sort_keys). It changes only with a deliberate preset change, such as the
+# Engineering stage map (stage_map: its cards move by the map on every setup run); re-running setup on an existing team
+# keeps what it had.
+TICO_DEFAULT_SHA256 = "34f7dfb3d746312f56105cb84d73748b4ecc5ff9ab096c7e053a8703162f8819"
 
 
 def pipeline_id(c, name):
@@ -786,22 +785,15 @@ def test_company_default_is_the_nine_pipelines_in_three_factories_with_their_pre
     assert sorted(r["name"] for r in rows(c, "SELECT name FROM factories")) == ["Growth", "Product", "Success"]
 
 
-def test_company_default_restages_the_boot_engineering_board_to_the_no_qa_names_and_keeps_its_ids(tmp_path):
-    """Boot makes Engineering as Todo / Doing / In review / Ready to ship / Done (Done closed). On a fresh company the
-    board takes #2963's no-QA names; stages that keep a boot stage's job keep its id."""
+def test_company_default_keeps_the_boot_engineering_board_and_its_ids(tmp_path):
+    """Boot makes Engineering with the stage map's names, so company_default's Engineering takes the same stages and keeps
+    every boot step's id."""
     c = fresh(tmp_path)
     boot = step_ids(c, "Engineering")
-    assert set(boot) == {"Todo", "Doing", "In review", "Ready to ship", "Done"}
+    assert set(boot) == {name for name, _ in STAGE_BOARD}
     S.apply_factory_setup(c, ANA, preset="company_default")
-    assert stages_of(c, "Engineering") == NO_QA_BOARD
-    now = step_ids(c, "Engineering")
-    assert (now["On Deck"], now["In Progress"], now["Review 1"], now["Pending Release"], now["Done"]) == (
-        boot["Todo"],
-        boot["Doing"],
-        boot["In review"],
-        boot["Ready to ship"],
-        boot["Done"],
-    )
+    assert stages_of(c, "Engineering") == STAGE_BOARD
+    assert step_ids(c, "Engineering") == boot
 
 
 def test_company_default_adopts_the_product_board_and_keeps_its_requirements(tmp_path):
@@ -832,11 +824,11 @@ def test_a_board_that_already_holds_a_card_is_not_restaged_by_company_default(tm
     c = fresh(tmp_path)
     before = step_ids(c, "Engineering")
     card = H.task_create(
-        c, ANA, "Build the export", "", ANA, type=pipeline_id(c, "Engineering"), step="Doing", lint=False
+        c, ANA, "Build the export", "", ANA, type=pipeline_id(c, "Engineering"), step="Build", lint=False
     )["id"]
     S.apply_factory_setup(c, ANA, preset="company_default")
-    assert rows(c, "SELECT step_id FROM tasks WHERE id=?", card)[0]["step_id"] == before["Doing"]
-    assert ("Done", "closed") in stages_of(c, "Engineering")  # the live board keeps its boot statuses
+    assert rows(c, "SELECT step_id FROM tasks WHERE id=?", card)[0]["step_id"] == before["Build"]
+    assert ("Closed", "closed") in stages_of(c, "Engineering")  # the live board keeps its boot statuses
 
 
 def test_tico_default_is_unchanged(tmp_path):

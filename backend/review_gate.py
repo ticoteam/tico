@@ -249,7 +249,7 @@ def links(c, row):
 
 def merged_work(c, row):
     """Whether the ticket has a merged or shipped linked PR and is at or past its type's merge step. A check after the
-    merge (Post Release QA) judges merged work, so it needs no open PR; a review before the merge still does."""
+    merge (Watch 24h) judges merged work, so it needs no open PR; a review before the merge still does."""
     from . import hubdb as H, step_flow
 
     if not any(p["kind"] == "pr" and p.get("state") in ("merged", "shipped") for p in H.task_links(c, row["id"])):

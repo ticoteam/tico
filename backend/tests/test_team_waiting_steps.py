@@ -32,9 +32,9 @@ def _dev(tmp_path):
     c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets','x','x')")
     for position, (ident, name, status) in enumerate(
         [
-            ('deck', 'On Deck', 'open'),
-            ('progress', 'In Progress', 'doing'),
-            ('staging', 'Pending Push To Staging', 'doing'),
+            ('deck', 'Build', 'open'),
+            ('progress', 'Review 1', 'review'),
+            ('staging', 'Release', 'review'),
             ('closed', 'Closed', 'closed'),
         ]
     ):
@@ -86,8 +86,11 @@ def _held_on_a_blocker(api, task):
 def test_a_parked_ticket_stays_a_held_one_goes_manual_and_deleting_the_step_returns_it(api):
     parked = ticket(api)
     typ_id = parked['type_id']
+    with api.app.state.store.transaction() as c:
+        # The Dev board's Build is the open queue: a deleted waiting step's tickets fall back to it.
+        c.execute("UPDATE task_steps SET status='open' WHERE type_id=? AND name='Build'", (typ_id,))
 
-    def another(title, step='In Progress'):
+    def another(title, step='Build'):
         return post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Build it.', 'type': typ_id, 'step': step})
 
     held = another('Improve alerts')
@@ -107,10 +110,10 @@ def test_a_parked_ticket_stays_a_held_one_goes_manual_and_deleting_the_step_retu
         # A status write on the parked ticket keeps it in its step.
         H._set_status(c, H.KEEPER, H.task(c, parked['id']), 'waiting', note='Still waiting')
         assert H.task(c, parked['id'])['step_id'] == step
-    assert move(api, get(api, 'tasks/' + parked['id'])['task'], 'In Progress').status_code == 200
+    assert move(api, get(api, 'tasks/' + parked['id'])['task'], 'Build').status_code == 200
     with api.app.state.store.transaction() as c:
         row = H.task(c, parked['id'])
-        assert (row['status'], row['blocked_since']) == ('doing', None)
+        assert (row['status'], row['blocked_since']) == ('open', None)
 
     # A person parking a held ticket in a team's waiting step makes the hold manual.
     heldback = another('Held on a blocker')
@@ -136,13 +139,13 @@ def test_a_parked_ticket_stays_a_held_one_goes_manual_and_deleting_the_step_retu
         row = H.task(c, own['id'])
         assert (row['step_id'], row['status'], row['blocked_kind']) == (step, 'waiting', 'manual')
 
-    # Deleting the waiting step returns a parked ticket to the step it left, or to On Deck when that is gone too.
+    # Deleting the waiting step returns a parked ticket to the step it left, or to Build (the Dev board's queue) when that
+    # is gone too.
     back = another('Parked to return')
     gone = another('Return step gone')
     with api.app.state.store.transaction() as c:
         typ = H.type_get(c, typ_id)
-        H.type_update(c, H.KEEPER, typ_id, steps=[{'name': 'On Deck', 'status': 'open'}, *typ['steps']])
-        deck = next(s['id'] for s in H.type_get(c, typ_id)['steps'] if s['name'] == 'On Deck')
+        deck = next(s['id'] for s in typ['steps'] if s['name'] == 'Build')
     assert move(api, back, 'Waiting On Dependency').status_code == 200
     assert move(api, gone, 'Waiting On Dependency').status_code == 200
     with api.app.state.store.transaction() as c:
@@ -150,7 +153,7 @@ def test_a_parked_ticket_stays_a_held_one_goes_manual_and_deleting_the_step_retu
     _without_step(api, parked, step)
     with api.app.state.store.transaction() as c:
         row = H.task(c, back['id'])
-        assert (row['step_id'], row['status'], row['blocked_since']) == (back['step_id'], 'doing', None)
+        assert (row['step_id'], row['status'], row['blocked_since']) == (back['step_id'], 'open', None)
         row = H.task(c, gone['id'])
         assert (row['step_id'], row['status'], row['blocked_since']) == (deck, 'open', None)
 

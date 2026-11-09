@@ -64,23 +64,15 @@ def noise_under(share):
 
 
 def one_review_per_round(run):
-    """Linear reviews: a review step that sends changes to fixes, which then go on to another step, gets one review per
-    ticket; only a step whose fixes come back to it (QA) can have several. A check filed again with no verdict is not a
-    review, so only checks that gave a verdict count."""
-    board = run.w.board
-    once = {
-        s.name
-        for s in board.checks()
-        if s.name not in (board.step(s.check.other).after_green, board.step(s.check.other).next)
-    }
+    """A review is asked once per round: a second one comes only after its changes went back to Build, since the fixes
+    return the ticket to the review that sent them. Only checks that gave a verdict count: a check filed again with no
+    verdict is not a review."""
     extra = []
     for t in run.final:
-        kinds = Counter(
-            run.w.check_step(c)
-            for c in run.w.checks(t["id"])
-            if not c["title"].startswith("Plan:") and c.get("verdict")
-        )
-        extra += [f"{t['title']} {k} x{n}" for k, n in kinds.items() if k in once and n > 1]
+        checks = [c for c in run.w.checks(t["id"]) if not c["title"].startswith("Plan:")]
+        asked = Counter(run.w.check_step(c) for c in checks if c.get("verdict"))
+        changes = Counter(run.w.check_step(c) for c in checks if c.get("verdict") not in (None, "", "approve", "pass"))
+        extra += [f"{t['title']} {k} x{n}" for k, n in asked.items() if n > 1 + changes[k]]
     return not extra, ", ".join(extra[:6])
 
 
@@ -430,7 +422,7 @@ def outage(start, hours, slugs=None, kind="quota"):
 
 
 def close_many(when, count):
-    """A person triages the board: closes `count` On Deck tickets in one go."""
+    """A person triages the board: closes `count` Build tickets in one go."""
 
     def during(run, w, team, i):
         if w.now() != START + when:
@@ -611,6 +603,13 @@ SCENARIOS = [
         styles={"qa": {"fail": 0.33, "cant_test": 0.33}},
         checks=standard(),
         board=qa_board,
+    ),
+    Scenario(
+        "review_mixed",
+        "Review 2 fails a third of changes and passes another third.",
+        setup=lambda run, w, team: tickets(run, w, 8),
+        styles={"reviewer": {"fail": 0.33}},
+        checks=standard(),
     ),
     Scenario(
         "skip_qa",
