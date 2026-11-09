@@ -45,6 +45,12 @@ sentence on the task; its row stays for the next check, and no person is asked t
 
 **Watch** (system routine `bookkeeper_watch`) runs daily and **Rules digest** (`bookkeeper_rules_digest`) weekly, each on its own schedule. Neither is a switch in [System routines](system-routines.md), and the Bookkeeper's pause stops both from opening tasks. Watch reads runway under six months of average burn, a month at least twice the median of the three before it (and $100 more), two charges of one amount to one payee within three days, and a recurring charge that rose 10% (and $10 more). An unused subscription is a monthly charge seen three months running (the three calendar months before this one) on a card whose bot is archived or ran no turn in 30 days. Nothing new is a quiet run. A Watch finding is news once: a reviewed one is not listed again after a day, and comes back only when its facts change. The Watch task is private to the Bookkeeper. The digest task is private too: its readers are the company owner and the Bookkeeper, so teammates who are not the owner do not see the rule names it lists.
 
+## The weekly cash summary and Usage
+
+Every Monday at 08:30 team time (routine `weekly-cash-summary`), and when the owner asks, the Bookkeeper writes one page for the owner: cash now and the 13-week cash outlook rolled forward, what is late or due, the Usage line and the decisions needed. It reads the bank balances, the cash-flow report, the overdue and due items and the usage figures, and sends nothing outside the team. It sets no cash minimum, Usage limit or Finance budget; where none is set, the page says so and shows the lowest week without a comparison.
+
+The Usage page estimates what the bots' model runs cost against the limits the owner sets there. A bot's own credentials may see nothing on that page. When they do not, the page says the owner reads it on the Usage page, and the Bookkeeper goes on with the Finance budgets.
+
 ## The bills address
 
 The bills address is one email address per install that vendors send bills to. The owner or an admin sets it:

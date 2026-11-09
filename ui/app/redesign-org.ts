@@ -1,17 +1,26 @@
 /* ui/app/redesign-org.ts — Strategy › Org (redesign PLAN §6 wave 6): the org chart, top down, the same chart on a phone
    (pinch and pan) and a desktop. The owner on top; under them the teammates outside groups and every top-level group,
    a group a dashed outline with its name on a tab that folds it. Inside a group the lead comes first and teammates hang
-   under whoever they report to. Built-ins and explicitly marked helpers are off the chart.
+   under whoever they report to. The built-in bots sit in a Built-in group, folded until someone opens it; explicitly
+   marked helpers are off the chart.
    Tapping a teammate opens a sheet: their home group, and Move to… for the owner (any group) and a lead (the
-   groups it leads), which moves them at once (PATCH /api/v2/groups/{id}). Anyone else sees the group only; org changes
-   beyond that are asked of the person's Assistant, in words (redesign CONTRACT §3).
+   groups it leads), which moves them at once (PATCH /api/v2/groups/{id}). A built-in bot has no Move to… (the server
+   refuses it). Anyone else sees the group only; org changes beyond that are asked of the person's Assistant, in words
+   (redesign CONTRACT §3).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const RDO_FOLDED_KEY = 'tico.org.chart.folded';
+const RDO_FOLDED_KEY = 'tico.org.chart.folded.v2';
 let RDO = null;             // {groups: [GET /v2/groups rows], zoom, folded: Set of group ids, manual: zoomed or panned by hand}
 let RDO_SEQ = 0;
-const rdoFoldedLoad = () => { try { return new Set(JSON.parse(localStorage.getItem(RDO_FOLDED_KEY) || '[]')); } catch { return new Set(); } };
+// The Built-in group starts folded. A chart saved under the key before it (v1) keeps the folds it had, plus this one.
+const rdoFoldedLoad = (): Set<string> => {
+  try {
+    const saved = localStorage.getItem(RDO_FOLDED_KEY);
+    if (saved === null) return new Set<string>([...JSON.parse(localStorage.getItem('tico.org.chart.folded') || '[]'), BUILT_IN_GROUP]);
+    return new Set<string>(JSON.parse(saved));
+  } catch { return new Set<string>([BUILT_IN_GROUP]); }
+};
 const rdoFoldedSave = () => { try { localStorage.setItem(RDO_FOLDED_KEY, JSON.stringify([...RDO.folded])); } catch {} };
 
 // The groups with their leads: GET /v2/groups when it has answered (a list, or {groups} from an older hub), else the
@@ -29,10 +38,12 @@ function rdoRefName(ref) {
   if (kind === 'person' || kind === 'human') return (S.people || []).find(p => p.id === id)?.name || id;
   return botDisplayName(id);
 }
-// A teammate's home group: the `team` its roster row carries (backend/groups.py).
+// A teammate's home group: the `team` its roster row carries (backend/groups.py), else the group whose members list (GET
+// /v2/groups `bots`) holds the bot, which is where a built-in bot is.
 function rdoHome(ref) {
   const id = ref.slice(ref.indexOf(':') + 1);
-  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : botRow(id)?.team) || '';
+  if (ref.startsWith('person:')) return (S.people || []).find(p => p.id === id)?.team || '';
+  return botRow(id)?.team || rdoGroups().find((g: {id: string; bots?: string[]}) => (g.bots || []).includes(id))?.id || '';
 }
 const rdoLeadOf = ref => rdoGroups().filter(g => g.lead === ref).map(g => g.id);
 // The leads of a group and of every group above it.
@@ -60,11 +71,38 @@ function rdoTree(leadOf = id => rdoGroup(id)?.lead || '') {
   /** @type {Record<string, any[]>} */
   const by = {};
   for (const [k, kids] of Object.entries(orgTreeWithHelpers(orgTreeByParent()))) by[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
+  rdoMembers(by);
   orgChartShape(by, rdoKey, leadOf);
   orgSetupLift(by, ORG_FAC_BOTS);   // the Factories section draws these bots (org-factories.ts); their reports stay here
   by[''] = by[''] || [];
   return by;
 }
+// The members the server lists for each group (GET /v2/groups `bots`) that the chart's own rules left out: the built-in
+// bots, which orgTreeWithHelpers takes off the tree, and a group the roster does not carry yet. A bot already on the chart
+// stays where it is, and a bot the caller may not see is left out here as it is in the tree.
+function rdoMembers(by: OrgByParent): void {
+  const kidsOf = (key: string): OrgNode[] => {
+    const kids = by[key] || [];
+    by[key] = kids;
+    return kids;
+  };
+  const placed = new Set<string>(), groups = new Set<string>();
+  for (const kids of Object.values(by)) for (const n of kids) {
+    if (n.kind === 'bot') placed.add(n.id);
+    if (n.kind === 'group') groups.add(n.id);
+  }
+  for (const g of rdoGroups()) {
+    if (!groups.has(g.id)) { kidsOf(g.parent ? 'g:' + g.parent : '').push({kind: 'group', id: g.id, name: g.name, order: g.order || 0}); groups.add(g.id); }
+    for (const id of g.bots || []) {
+      const e = S.emps.find(row => row.id === id);
+      if (!e || placed.has(id) || !orgBranchVisible(e) || !orgMineKeep(e)) continue;
+      placed.add(id);
+      kidsOf('g:' + g.id).push({kind: 'bot', ...e});
+    }
+  }
+}
+// The server keeps the built-in bots in their group and refuses to move one (422), so the sheet offers no Move to….
+const rdoBuiltInBot = (id: string): boolean => (rdoGroups().find((g: {id: string; bots?: string[]}) => g.id === BUILT_IN_GROUP)?.bots || []).includes(id);
 const rdoTopPerson = () => orgChartTop();
 function rdoTop(by) {
   const roots = (by[''] || []).filter(n => n.kind === 'person'), person = rdoTopPerson();
@@ -121,10 +159,17 @@ function rdoChartHtml(by = rdoTree(), ctx: {seen: Set<unknown>; group?: typeof r
   const top = rdoTop(by);
   const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => rdoKey(n) !== rdoKey(top))] : (by[''] || []);
   if (top) ctx.seen.add(rdoKey(top));
-  const cols = rdoSorted(row, '').map(n => rdoNode(by, n, ctx, 0)).filter(Boolean);
+  // The Built-in group is a column in the row when the Rules map draws it (ctx.group). On the Strategy chart it sits under
+  // the row, centred on the owner: a folded tab then never widens the row, so the owner stays over the teams' middle.
+  type ChartNode = {kind: string; id: string};
+  const inTray = (n: ChartNode) => !ctx.group && n.kind === 'group' && n.id === BUILT_IN_GROUP;
+  const tray: ChartNode[] = row.filter(inTray);
+  const cols = rdoSorted(row.filter((n: ChartNode) => !inTray(n)), '').map((n: ChartNode) => rdoNode(by, n, ctx, 0)).filter(Boolean);
+  const under = tray.map(n => rdoNode(by, n, ctx, 0)).join('');
   if (!top && !cols.length) return '<p class="muted rd-empty">No one on the chart yet.</p>';
   return (top ? `<div class="rdo-top${cols.length ? ' has-row' : ''}">${rdoCard(top, {top: true})}</div>` : '')
-    + (cols.length ? `<ul class="rdo-row">${cols.map(c => `<li>${c}</li>`).join('')}</ul>` : '');
+    + (cols.length ? `<ul class="rdo-row">${cols.map(c => `<li>${c}</li>`).join('')}</ul>` : '')
+    + (under ? `<ul class="rdo-tray"><li>${under}</li></ul>` : '');
 }
 function rdoDraw({refit = false} = {}) {
   const cv = $('#rdo-cv'), pane = $('#rdo-pane');
@@ -365,7 +410,8 @@ function rdoGroupOptions(current, allowed) {
 }
 function rdoSheet(ref) {
   if (!rdoReady()) return;
-  const name = rdoRefName(ref), from = rdoHome(ref), led = rdoLeadOf(ref), targets = rdoMoveTargets(from);
+  const name = rdoRefName(ref), from = rdoHome(ref), led = rdoLeadOf(ref);
+  const targets = ref.startsWith('bot:') && rdoBuiltInBot(ref.slice(4)) ? [] : rdoMoveTargets(from);
   const may = !targets || targets.length > 0;
   const id = ref.slice(ref.indexOf(':') + 1), href = ref.startsWith('person:') ? `#/person/${encodeURIComponent(id)}` : `#/bot/${encodeURIComponent(id)}`;
   const body = `<div class="bd-fields rdo-sheet">

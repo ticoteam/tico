@@ -2,9 +2,9 @@
    bots into it, and watch the chart grow beside the conversation. The server has the departments and cards
    (GET /api/v2/setup/groups) and the suggestions (POST /api/v2/setup/recruit, from Tico HQ or its local
    recommender); this page shows them and keeps what is checked in the wizard's catalog state (`state.catalog.picked`),
-   from which ui/first-run.ts builds `selected`. Nothing exists until "Create my team". Built-ins and explicit catalog helpers
-   are not on the chart: the built-ins are always created, and a `kind: helper` card is
-   one switch under Message bots on the finished chart, off until someone turns it on. */
+   from which ui/first-run.ts builds `selected`. Nothing exists until "Create my team". The built-ins are always created and
+   sit in a Built-in group on the chart, folded until opened, with nothing to drag or add. A `kind: helper` card is not on
+   the chart: it is one switch under Message bots on the finished chart, off until someone turns it on. */
 'use strict';
 const OB_ICONS = {goal: 'flag', go: 'arrow_forward', why: 'auto_awesome', edit: 'edit', chart: 'account_tree',
                   bot: 'smart_toy', expand: 'expand_more'};
@@ -19,7 +19,7 @@ const OB_MIN_RECRUIT_MS = 900;
 const obBlank = () => ({loaded: false, loading: null, error: '', departments: [], cards: [], version: '',
   hq: {available: false, off_by: ''}, phase: 'pick', chosen: [], at: 0, step: 'ask', briefings: {}, results: {},
   asked: {}, skipped: new Set(), decided: new Set(), share: null, editing: '', seen: new Set(), open: false,
-  more: new Set(), touched: false});
+  more: new Set(), touched: false, builtinOpen: false});
 const obColor = id => OB_COLORS[id] || `hsl(${avHue(id)} 45% 45%)`;
 const obIcon = (name, cls = '') => `<span class="ob-ms ${cls}" aria-hidden="true">${esc(name || OB_ICONS.bot)}</span>`;
 const obDept = (org, id) => org.departments.find(row => row.id === id);
@@ -54,7 +54,7 @@ function obCounts(state, finished) {
   const org = state.org, sizes = org.chosen.filter(id => !org.skipped.has(id)).map(id => obPicked(state, id).length);
   return {depts: finished ? sizes.filter(Boolean).length : sizes.length, bots: sizes.reduce((a, b) => a + b, 0)};
 }
-const obStats = (state, finished) => { const {depts, bots} = obCounts(state, finished); return `${obPlural(depts, 'group')} · ${obPlural(bots, 'bot')}`; };
+const obStats = (state, finished?: boolean) => { const {depts, bots} = obCounts(state, finished); return `${obPlural(depts, 'group')} · ${obPlural(bots, 'bot')}`; };
 // A node animates in the first time it is drawn, never again.
 function obFresh(state, key) {
   if (state.org.seen.has(key)) return '';
@@ -142,18 +142,34 @@ function obCols(state, count) {
   const most = Math.max(1, Math.min(count || 1, 4, Math.floor((width - 40) / 220)));
   return Math.ceil((count || 1) / Math.ceil((count || 1) / most));
 }
-// The human at the top and each group hanging off one line with its bots below; built-ins and catalog helpers are off it.
-// Beside the conversation it is one column; the finished chart spreads the departments into rows.
+// The human at the top and each group hanging off one line with its bots below, the Built-in group last; catalog helpers
+// are off it. Beside the conversation it is one column; the finished chart spreads the departments into rows.
 function obChartHTML(state, big) {
   const org = state.org, me = S.me || {};
   const depts = big ? org.chosen.filter(id => obPicked(state, id).length) : org.chosen;
   const cols = big ? obCols(state, depts.length) : 1, rows = [];
   for (let i = 0; i < depts.length; i += cols) rows.push(depts.slice(i, i + cols));
+  const seats: ObBuiltIn[] = state.catalog.cards.filter((card: ObCatalogSeat) => card.required)
+    .map((card: ObCatalogSeat) => ({slug: card.slug, name: catalogName(state.catalog, card), icon: card.icon}));
   return `<div class="oc${big ? ' oc-big' : ''}" style="--cols:${cols}">
       <div class="oc-top"><div class="oc-node oc-owner" data-oc-owner>${personAvatar(me, 28)}<span class="oc-text"><strong>${esc(me.name || 'You')}</strong><small>CEO</small></span></div></div>
       ${rows.length ? `<div class="oc-rows">${rows.map(row => `<div class="oc-row" style="--k:${row.length}">${row.map(id => obDeptNodeHTML(state, id, big)).join('')}</div>`).join('')}</div>`
         : '<p class="oc-empty">Groups appear here.</p>'}
+      ${obBuiltInHTML(seats, org.builtinOpen)}
     </div>`;
+}
+// The built-in seats as one group: its count, folded until opened, then each built-in by name. Nothing here is a drag
+// source or an editor (no data-oc-bot or data-oc-edit): the server keeps built-ins in their group.
+interface ObCatalogSeat { slug: string; required?: boolean; icon?: string | undefined }
+interface ObBuiltIn { slug: string; name: string; icon: string | undefined }
+function obBuiltInHTML(seats: ObBuiltIn[], open: boolean): string {
+  if (!seats.length) return '';
+  return `<section class="oc-builtin" style="--dc:var(--muted)" data-oc-builtin>
+      <button type="button" class="oc-node oc-dnode" data-oc-builtin-toggle aria-expanded="${open}">
+        ${obIcon(OB_ICONS.bot, 'oc-icon')}<span class="oc-text"><strong>Built-in</strong></span>
+        <span class="oc-count">${seats.length}</span>${obIcon(open ? 'expand_less' : 'expand_more', 'oc-caret')}</button>
+      ${open ? `<ul class="oc-bots">${seats.map(seat => `<li class="oc-bot"><span class="oc-node oc-bnode">${obAvatar(seat.slug, seat, 24)}<span class="oc-text"><strong>${esc(seat.name)}</strong></span></span></li>`).join('')}</ul>` : ''}
+    </section>`;
 }
 function obEditHTML(state, slug) {
   const cat = state.catalog, card = catalogCard(cat, slug), current = frReports(state, slug);
@@ -296,7 +312,7 @@ function obStepHTML(state) {
       <div class="ob-main" id="ob-main">${obMainHTML(state)}</div>
     </div>`;
 }
-function obRenderChart(state, side) {
+function obRenderChart(state, side?: boolean) {
   const org = state.org;
   if (org.phase === 'finish' && !side) {
     const big = $('#ob-chart-big');
@@ -427,6 +443,14 @@ function obWire(state) {
       return;
     }
     if (target.closest('#ob-strip')) { org.open = !org.open; $('#ob-side')?.classList.toggle('open', org.open); $('#ob-strip')?.setAttribute('aria-expanded', String(org.open)); return; }
+    const builtin = target.closest('[data-oc-builtin-toggle]');
+    if (builtin) {                                         // the redraw replaces the button, so focus goes back to its copy
+      const host = builtin.closest('#ob-chart-big, #ob-chart-body');
+      org.builtinOpen = !org.builtinOpen;
+      obRenderChart(state);
+      host?.querySelector('[data-oc-builtin-toggle]')?.focus();
+      return;
+    }
     const open = target.closest('[data-oc-open]');
     if (open) {
       const at = org.chosen.indexOf(open.dataset.ocOpen);

@@ -1,8 +1,8 @@
-# Counsel. Installed with every environment: it reads a contract or terms a person adds and suggests the rules that bind us
+# The Rules Owner. Installed with every environment: it reads a contract or terms a person adds and suggests the rules that bind us
 # (docs/rules-plan.md §2, §5). A helper: the Assistant hands it "can I...?" questions, and it sits outside the org chart.
 template: tico-counsel
 slug: tico-counsel
-name: Counsel
+name: Rules Owner
 required: true
 bootstrap: true
 kind: helper
@@ -20,6 +20,6 @@ never:
 # The cheap model by default (new installs only; a running bot keeps its model): it reads a document and suggests rules a person accepts.
 model: claude-haiku-5-5
 reasoning_effort: high
-# Every task for Counsel is private to its requester and Counsel: a document's text and a question are a company's own.
+# Every task for the Rules Owner is private to its requester and Counsel: a document's text and a question are a company's own.
 private_tasks_default: true
 recommend_when: [never]

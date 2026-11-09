@@ -1767,13 +1767,13 @@ def steps_renamed(conn, type_id, renamed):
 
 
 def seed_dev(conn):
-    """Give every Dev tickets type its hand-off rows once. A type that already has them recorded keeps what a person
-    made of them. Quietly does nothing before the rules table or the events table exists."""
-    from .roadmap_flow import _dev
+    """Give every Dev board (roadmap_flow.dev_board) its hand-off rows once. A type that already has them recorded keeps
+    what a person made of them. Quietly does nothing before the rules table or the events table exists."""
+    from .roadmap_flow import dev_board
     from .step_flow import has_qa
 
     try:
-        types = [r for r in conn.execute("SELECT id,name FROM task_types").fetchall() if _dev(r)]
+        types = [r for r in conn.execute("SELECT id,name FROM task_types").fetchall() if dev_board(conn, *r)]
         for ident, _name in types:
             if conn.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (SEEDED, ident)).fetchone():
                 continue
