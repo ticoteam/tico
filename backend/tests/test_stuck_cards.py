@@ -3,6 +3,7 @@ spell, a person gets one question when it is still stuck, and a question to a pe
 Time moves by passing `at` to the sweeps; nothing waits."""
 
 from backend import ask_deadlines
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import question_tasks as QT
 from backend import stuck_cards
@@ -52,6 +53,21 @@ def questions(c, task_id):
             (task_id, H.KEEPER),
         )
     )
+
+
+def test_the_head_of_engineering_is_not_woken_for_a_stuck_card_but_the_card_stays_stuck_for_its_sweep(api):
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"template": "engineering-lead"})
+        pid = pipeline(c, "Dev", manager="ops")
+        row = card(c, pid)
+        assert stuck_cards.sweep(c, later(5))["woken"] == []
+        assert stuck_cards.sweep(c, later(9))["woken"] == []  # still stuck, still no wake
+        assert wakes(c, row["id"], "bot:ops") == []
+        # The spell stays open, so the card is listed on the Head of Engineering's sweep.
+        open_spells = c.execute(
+            "SELECT COUNT(*) FROM stuck_spells WHERE task_id=? AND ended_at IS NULL", (row["id"],)
+        ).fetchone()[0]
+        assert open_spells == 1
 
 
 def test_a_quiet_card_wakes_its_manager_once_and_progress_ends_the_spell(api):

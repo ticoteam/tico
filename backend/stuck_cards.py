@@ -257,7 +257,20 @@ def _hours(since: str, at: str) -> int:
     return max(0, int((now - began).total_seconds() // 3600)) if began and now else 0
 
 
+# The Head of Engineering's templates (backend/idea_triage.py engineering_bot). It runs on its schedule, and a stuck card
+# reaches it on that sweep, so a stuck card is never a wake for it (docs/tasks.md, Stuck cards).
+HEAD_OF_ENGINEERING = ("engineering-lead", "engineering-team-manager")
+
+
+def hears_on_sweep(c: "sqlite3.Connection", manager: str) -> bool:
+    """True when the manager is the Head of Engineering: a stuck card is left to its hourly sweep, with no wake."""
+    row = c.execute("SELECT template FROM bot_settings WHERE bot_id=?", (manager,)).fetchone()
+    return bool(row) and row[0] in HEAD_OF_ENGINEERING
+
+
 def _wake_manager(c: "sqlite3.Connection", card: Row, manager: str, spell: Row, at: str) -> bool:
+    if hears_on_sweep(c, manager):
+        return False
     hold = spell.get("hold_reason") or "No hold"
     text = (
         f"Stuck: {card['title']}\nNo progress in {_hours(spell['stuck_since'], at)} h. {hold}.\n"
